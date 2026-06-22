@@ -211,6 +211,26 @@ int main(int argc, char* argv[]) {
         std::string line;
         // Keep parsed programs alive so function closures can reference AST nodes
         std::vector<kex::ast::Program*> replPrograms;
+        // A line read ahead while chaining function clauses that turned out
+        // to belong to the next statement; replayed on the next iteration.
+        std::optional<std::string> pendingLine;
+
+        // If `s` looks like the start of a function clause definition
+        // (`let name(...` or `foul let name(...`), return the function name.
+        auto clauseFuncName = [](const std::string& s) -> std::optional<std::string> {
+            size_t offset;
+            if (s.rfind("foul let ", 0) == 0) offset = 9;
+            else if (s.rfind("let ", 0) == 0) offset = 4;
+            else return std::nullopt;
+
+            size_t i = offset;
+            while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_')) i++;
+            if (i == offset) return std::nullopt;
+            std::string name = s.substr(offset, i - offset);
+            if (i < s.size() && s[i] == '?') { name += '?'; i++; }
+            if (i < s.size() && s[i] == '(') return name;
+            return std::nullopt;
+        };
 
         // REPL settings
         bool showTypes = true;
@@ -248,7 +268,17 @@ int main(int argc, char* argv[]) {
         };
 
         while (true) {
-            auto [input, ok] = readLine("kex> ");
+            std::string input;
+            bool ok;
+            if (pendingLine) {
+                input = *pendingLine;
+                pendingLine.reset();
+                ok = true;
+            } else {
+                auto result = readLine("kex> ");
+                input = result.first;
+                ok = result.second;
+            }
             if (!ok) break;
             line = input;
             if (line == "exit" || line == ":exit" || line == ":quit" || line == ":q") break;
@@ -305,24 +335,30 @@ int main(int argc, char* argv[]) {
                 doCount += countBlocks(line);
             }
 
-            // After a multi-line block OR an assignment that might chain,
-            // keep reading until a blank line signals end of input.
-            bool hadBlock = (source.find("\n") != std::string::npos);
-            bool isAssignment = (source.find("let ") == 0 || source.find("var ") == 0) &&
-                                source.find('=') != std::string::npos;
-            if ((hadBlock || isAssignment) && doCount == 0) {
-                while (true) {
-                    auto [nextLine, nextOk] = readLine("...> ");
-                    if (!nextOk) break;
-                    if (nextLine.empty()) break;
-
-                    source += "\n" + nextLine;
-                    doCount += countBlocks(nextLine);
-                    while (doCount > 0) {
-                        auto [contLine2, contOk2] = readLine("...> ");
-                        if (!contOk2) break;
-                        source += "\n" + contLine2;
-                        doCount += countBlocks(contLine2);
+            // If this line starts a function clause definition, keep reading
+            // additional clauses for the *same* function so pattern-matching
+            // definitions like `let fact(1) = 1` / `let fact(n) = ...` are
+            // combined into one function. The first line that isn't another
+            // clause of the same function is replayed on the next iteration.
+            if (doCount == 0) {
+                if (auto name = clauseFuncName(source)) {
+                    while (true) {
+                        auto [contLine, contOk] = readLine("...> ");
+                        if (!contOk) break;
+                        auto nextName = clauseFuncName(contLine);
+                        if (nextName && *nextName == *name) {
+                            source += "\n" + contLine;
+                            int extra = countBlocks(contLine);
+                            while (extra > 0) {
+                                auto [contLine2, contOk2] = readLine("...> ");
+                                if (!contOk2) break;
+                                source += "\n" + contLine2;
+                                extra += countBlocks(contLine2);
+                            }
+                        } else {
+                            if (!contLine.empty()) pendingLine = contLine;
+                            break;
+                        }
                     }
                 }
             }

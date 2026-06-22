@@ -2,7 +2,7 @@
 
 A functional programming language with Ruby-like syntax, UFCS, immutability by default, and typed processes.
 
-```kex
+```rb
 record User do
   name : String
   age : Int
@@ -26,7 +26,7 @@ end
 
 `a.f(b)` is sugar for `f(a, b)`. This gives you method-call ergonomics and IDE code completion while keeping functions composable and free:
 
-```kex
+```rb
 let nums = [5, 3, 1, 4, 2]
 
 nums.sort.reverse.take(3)          # [5, 4, 3]
@@ -41,7 +41,7 @@ map(nums) { |x| x + 1 }
 
 Group functions by their receiver type. Same method name, different types — the compiler resolves based on the receiver:
 
-```kex
+```rb
 make Vec2 do
   let add(other: Vec2) -> Vec2 do
     return Vec2 { x: this.x + other.x, y: this.y + other.y }
@@ -67,7 +67,7 @@ let v3 = Vec3 { x: 1.0, y: 2.0, z: 3.0 }.add(Vec3 { x: 4.0, y: 5.0, z: 6.0 })
 
 Multi-clause functions with pattern matching on arguments and `this`:
 
-```kex
+```rb
 let factorial(0) = 1
 let factorial(n: Int) = n * factorial(n - 1)
 
@@ -82,7 +82,7 @@ end
 
 Match expressions with guards:
 
-```kex
+```rb
 let grade = match score do
   n if n >= 90 -> "A"
   n if n >= 80 -> "B"
@@ -95,7 +95,7 @@ end
 
 Everything is pure by default. Side effects must be marked:
 
-```kex
+```rb
 # Pure — no IO allowed
 let compute(x: Int) = x * 2 + 1
 
@@ -114,7 +114,7 @@ let bad(path: String) = readConfig(path)  # ERROR
 
 All bindings are immutable by default. `var` opts into local mutation. The `!` operator is sugar for reassignment:
 
-```kex
+```rb
 let x = 5
 x = 10          # compile error
 
@@ -130,7 +130,7 @@ The compiler can optimize `!` calls to in-place mutation when it can prove sole 
 
 Infinite lazy sequences with familiar collection methods:
 
-```kex
+```rb
 let naturals = Sequence(from: 0) { |n| n + 1 }
 let primes = Sequence(from: 2) { |n| n + 1 }
   .filter(&isPrime?)
@@ -147,7 +147,7 @@ primes.take(10)  # [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
 
 Universal type conversion via pattern matching on the target type:
 
-```kex
+```rb
 make Vec2 do
   let to(String) = "(${this.x}, ${this.y})"
   let to(List) = [this.x, this.y]
@@ -168,7 +168,7 @@ myVec.to(String)          # "(3.0, 4.0)"
 
 Records can have named constructors in `static do` blocks:
 
-```kex
+```rb
 record Vector2D do
   x : Float
   y : Float
@@ -191,7 +191,7 @@ let origin = Vector2D.Zero
 
 When a function's last parameter is `Block<[A]>`, each expression in the block is collected into a list:
 
-```kex
+```rb
 using Html.Language do
   html do
     head do
@@ -210,7 +210,7 @@ end
 
 Elixir-style typed actors with supervision:
 
-```kex
+```rb
 type CounterMsg = :increment | :reset | (:get, Process<Int>)
 
 foul let counter: Process<CounterMsg> = spawn do
