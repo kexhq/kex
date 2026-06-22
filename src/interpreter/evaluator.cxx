@@ -60,27 +60,41 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             // Register sum-type variant constructors with args (Just(A),
             // Ok(A), Error(E), Number(Int), ...) as callable functions that
             // build a RecordValue with positional fields "0", "1", ....
-            // Zero-arg variants (Fizz, Nothing, ...) need no registration —
-            // they already work as values and as patterns via the
-            // UpperIdentifier-as-Atom fallback in eval()/matchPattern().
+            // Zero-arg variants (Fizz, Nothing, ...) need no constructor
+            // registration — they already work as values and as patterns
+            // via the UpperIdentifier-as-Atom fallback in
+            // eval()/matchPattern(). Both kinds still need an entry in
+            // m_variantParent so `make TypeName do ... end` method dispatch
+            // can map the variant tag back to the declaring type.
             if (node->variants) {
                 for (const auto& variant : *node->variants) {
                     if (!variant) continue;
-                    auto* generic = std::get_if<ast::GenericType>(&variant->kind);
-                    if (!generic || generic->name.parts.empty()) continue;
-                    std::string ctorName = generic->name.parts.back();
-                    size_t arity = generic->args.size();
+                    std::string variantName;
+                    size_t arity = 0;
+                    if (auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {
+                        if (generic->name.parts.empty()) continue;
+                        variantName = generic->name.parts.back();
+                        arity = generic->args.size();
+                    } else if (auto* plain = std::get_if<ast::TypeName>(&variant->kind)) {
+                        if (plain->parts.empty()) continue;
+                        variantName = plain->parts.back();
+                    } else {
+                        continue;
+                    }
+
+                    m_variantParent[variantName] = node->name;
+
                     if (arity == 0) continue;
                     auto val = std::make_shared<Value>();
-                    val->data = FunctionValue{ctorName,
-                        [ctorName, arity](std::vector<ValuePtr> args) -> ValuePtr {
+                    val->data = FunctionValue{variantName,
+                        [variantName, arity](std::vector<ValuePtr> args) -> ValuePtr {
                             std::unordered_map<std::string, ValuePtr> fields;
                             for (size_t i = 0; i < arity; i++) {
                                 fields[std::to_string(i)] = i < args.size() ? args[i] : Value::none();
                             }
-                            return Value::record(ctorName, std::move(fields));
+                            return Value::record(variantName, std::move(fields));
                         }};
-                    m_env->define(ctorName, val);
+                    m_env->define(variantName, val);
                 }
             }
         }
@@ -427,7 +441,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             if (!isNamespaceCall) {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
-                    if (!m_env->get(upperIdent->name)) {
+                    // A known zero-arg ADT variant tag (Nothing, Fizz, ...)
+                    // is a value being used as a UFCS receiver, not a
+                    // namespace — let it fall through to the generic UFCS
+                    // path below (as an Atom) so receiverType resolution
+                    // there can map it to its declaring type.
+                    bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
+                    if (!isKnownVariant && !m_env->get(upperIdent->name)) {
                         isNamespaceCall = true;
                         namespaceName = upperIdent->name;
                     }
@@ -485,6 +505,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             std::string receiverType;
             if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
                 receiverType = rec->typeName;
+            } else if (auto* atom = std::get_if<AtomValue>(&receiver->data)) {
+                // Zero-arg ADT variant tags (Nothing, Fizz, ...) are Atoms —
+                // needed so `make TypeName do ... end` methods registered
+                // under "TypeName::method" can be found via m_variantParent
+                // below even though the value itself carries no type name.
+                receiverType = atom->name;
             } else if (std::holds_alternative<ListValue>(receiver->data)) {
                 receiverType = "List";
             } else if (std::holds_alternative<MapValue>(receiver->data)) {
@@ -500,6 +526,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 auto typed = receiverType + "::" + node.method;
                 if (m_env->get(typed)) {
                     mangledName = typed;
+                } else {
+                    // receiverType may be a variant tag (Just, Ok, Nothing,
+                    // ...) rather than the type that declared it (Option,
+                    // Result, ...) — methods from `make TypeName do ... end`
+                    // are registered under the declared type's name, so
+                    // fall back to that mapping before giving up.
+                    auto parentIt = m_variantParent.find(receiverType);
+                    if (parentIt != m_variantParent.end()) {
+                        auto typedByParent = parentIt->second + "::" + node.method;
+                        if (m_env->get(typedByParent)) {
+                            mangledName = typedByParent;
+                        }
+                    }
                 }
             }
 

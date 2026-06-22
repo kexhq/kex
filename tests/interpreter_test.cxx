@@ -526,6 +526,43 @@ int main() {
                 assertTrue(msg.find("Undefined function") != std::string::npos, msg);
             }
         });
+
+        it("make TypeName dispatches on an arg-carrying variant (regression)", []() {
+            // Regression test: `make Option<A> do let map(@Just(x), f) = ... end`
+            // registers under "Option::map", but a Just(5) value is tagged
+            // "Just" — dispatch must map the variant back to its declaring
+            // type, otherwise this silently falls back to the unrelated
+            // list `map` builtin.
+            auto result = run(
+                "type Option<A> = Just(A) | Nothing\n"
+                "make Option<A> do\n"
+                "  let map(@Just(x), f) = Just(f(x))\n"
+                "  let map(@Nothing, _) = Nothing\n"
+                "end\n"
+                "main do\n"
+                "  Just(5).map { |x| x * 2 }\n"
+                "end\n"
+            );
+            auto& rec = std::get<RecordValue>(result->data);
+            assertEqual(rec.typeName, std::string("Just"));
+            assertEqual(std::get<IntValue>(rec.fields.at("0")->data).value, int64_t(10));
+        });
+
+        it("make TypeName dispatches on a zero-arg variant (regression)", []() {
+            // Same as above, but for the zero-arg side (Nothing is an Atom,
+            // not a RecordValue) — needs the AtomValue receiverType case.
+            auto result = run(
+                "type Option<A> = Just(A) | Nothing\n"
+                "make Option<A> do\n"
+                "  let map(@Just(x), f) = Just(f(x))\n"
+                "  let map(@Nothing, _) = Nothing\n"
+                "end\n"
+                "main do\n"
+                "  Nothing.map { |x| x * 2 }\n"
+                "end\n"
+            );
+            assertTrue(std::get<AtomValue>(result->data).name == "Nothing");
+        });
     });
 
     describe("Interpreter — Streams", []() {

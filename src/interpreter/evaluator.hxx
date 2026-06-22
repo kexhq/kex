@@ -87,6 +87,12 @@ private:
     std::shared_ptr<Environment> m_globalEnv;
     std::string m_output;
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
+    // Maps a sum-type variant name (e.g. "Just", "Ok", "Fizz") to the type
+    // that declared it (e.g. "Option", "Result", "FizzBuzz"). Populated in
+    // execTopLevel's TypeDef handling. Lets method dispatch resolve
+    // `make Option<A> do let map(@Just(x), f) = ... end` (registered under
+    // "Option::map") when called on a `Just(...)` value (tagged "Just").
+    std::unordered_map<std::string, std::string> m_variantParent;
     bool m_replMode = false;
 };
 
