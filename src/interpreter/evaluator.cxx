@@ -667,24 +667,40 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             auto subject = node.subject ? eval(*node.subject) : Value::none();
             for (const auto& clause : node.clauses) {
                 pushEnv();
-                bool matched = false;
-                for (const auto& pat : clause.patterns) {
-                    if (matchPattern(*pat, subject)) {
-                        matched = true;
-                        break;
-                    }
-                }
-                if (matched) {
-                    if (clause.guard && *clause.guard) {
-                        auto guardVal = eval(**clause.guard);
-                        if (!guardVal->isTrue()) {
-                            popEnv();
-                            continue;
+                // Everything below must pop this scope before returning OR
+                // propagating an exception. Without the try/catch, a clause
+                // body containing `return` (extremely common — e.g. `_ ->
+                // return p`) would throw past the popEnv() below, leaking
+                // this scope permanently: m_env would stay one level too
+                // deep for the rest of the enclosing function call, and
+                // anything that function defined locally (e.g. `var p =
+                // this` in a helper called from a caller's loop) would
+                // become invisible/shadowed to the caller afterward —
+                // silently corrupting unrelated variables with the same
+                // name in the caller, or causing infinite loops.
+                try {
+                    bool matched = false;
+                    for (const auto& pat : clause.patterns) {
+                        if (matchPattern(*pat, subject)) {
+                            matched = true;
+                            break;
                         }
                     }
-                    auto result = clause.body ? eval(*clause.body) : Value::none();
+                    if (matched) {
+                        if (clause.guard && *clause.guard) {
+                            auto guardVal = eval(**clause.guard);
+                            if (!guardVal->isTrue()) {
+                                popEnv();
+                                continue;
+                            }
+                        }
+                        auto result = clause.body ? eval(*clause.body) : Value::none();
+                        popEnv();
+                        return result;
+                    }
+                } catch (...) {
                     popEnv();
-                    return result;
+                    throw;
                 }
                 popEnv();
             }
