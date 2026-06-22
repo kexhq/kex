@@ -97,6 +97,21 @@ auto Value::toString() const -> std::string {
             return "<Stream>";
         }
         else if constexpr (std::is_same_v<T, RecordValue>) {
+            // Positional constructor (Just(x), Ok(x), Number(n), ...): fields
+            // keyed "0", "1", ... — print as Name(v0, v1, ...) in index order
+            // rather than the unordered_map's unspecified iteration order.
+            bool positional = !v.fields.empty();
+            for (size_t i = 0; positional && i < v.fields.size(); i++) {
+                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
+            }
+            if (positional) {
+                std::string result = v.typeName + "(";
+                for (size_t i = 0; i < v.fields.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += v.fields.at(std::to_string(i))->toString();
+                }
+                return result + ")";
+            }
             std::string result = v.typeName + " { ";
             bool first = true;
             for (const auto& [key, val] : v.fields) {
@@ -146,6 +161,18 @@ auto Value::toRepr() const -> std::string {
             return std::to_string(v.start) + ".." + std::to_string(v.end);
         }
         else if constexpr (std::is_same_v<T, RecordValue>) {
+            bool positional = !v.fields.empty();
+            for (size_t i = 0; positional && i < v.fields.size(); i++) {
+                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
+            }
+            if (positional) {
+                std::string result = v.typeName + "(";
+                for (size_t i = 0; i < v.fields.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += v.fields.at(std::to_string(i))->toRepr();
+                }
+                return result + ")";
+            }
             std::string result = v.typeName + " { ";
             bool first = true;
             for (const auto& [key, val] : v.fields) {

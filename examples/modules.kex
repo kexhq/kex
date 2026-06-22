@@ -62,7 +62,7 @@ foul module Logger do
 
   let log(level: Level, msg: String) do
     let timestamp = Time.now.format("%Y-%m-%d %H:%M:%S")
-    IO.println("[${timestamp}] [${level}] ${msg}")
+    IO.printLine("[${timestamp}] [${level}] ${msg}")
   end
 
   let debug(msg: String) = log(:debug, msg)
@@ -78,7 +78,7 @@ module Database do
       host : String
       port : Int
       database : String
-      pool_size : Int = 10
+      poolSize : Int = 10
     end
 
     private do
@@ -89,7 +89,7 @@ module Database do
 
     foul let connect(config: Config) -> Result<Pool, DbError> do
       let url = buildUrl(config)
-      return BuiltIn.Postgres.connect(url, config.pool_size)
+      return BuiltIn.Postgres.connect(url, config.poolSize)
     end
   end
 

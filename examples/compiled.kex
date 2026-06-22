@@ -110,10 +110,10 @@ module Vec do
 
     VECS = ["Vec2", "Vec3"]
 
-    VECS.each do |vec_name|
-      make %vec_name do
-        OPS.each do |op_name, _|
-          let %op_name(other: This) -> This do
+    VECS.each do |vecName|
+      make %vecName do
+        OPS.each do |opName, _|
+          let %opName(other: This) -> This do
             # Implementation generated per-vec
           end
         end

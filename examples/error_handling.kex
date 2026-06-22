@@ -15,7 +15,7 @@ end
 
 # Chaining with ?
 foul let loadConfig(path: String) -> Result<Config, AppError> do
-  let content = File.read(path)?
+  let content = IO.read(path)?
   let parsed = Config.parse(content)?
   let port = parsePort(parsed.get("port"))?
   return Ok(Config { port: port, host: parsed.get("host") })

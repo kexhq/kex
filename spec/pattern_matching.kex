@@ -11,7 +11,7 @@ main do
     42 -> "the answer"
     _ -> "other"
   end
-  print(result)
+  IO.printLine(result)
 
   let grade = match 85 do
     n if n >= 90 -> "A"
@@ -19,11 +19,11 @@ main do
     n if n >= 70 -> "C"
     _ -> "F"
   end
-  print(grade)
+  IO.printLine(grade)
 
   let (a, b) = (10, 20)
-  print(a + b)
+  IO.printLine(a + b)
 
   let [first | rest] = ["hello", "world"]
-  print(first)
+  IO.printLine(first)
 end

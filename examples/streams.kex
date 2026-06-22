@@ -11,11 +11,11 @@ let doubled = (1..10).map { |x| x * 2 }
 let r = 1..100
 
 # Taking from streams materializes elements
-let first_ten = naturals.take(10)
-let next_five = naturals.drop(10).take(5)
+let firstTen = naturals.take(10)
+let nextFive = naturals.drop(10).take(5)
 
 # Streams are reusable — naturals hasn't changed
-let another_ten = naturals.take(10)
+let anotherTen = naturals.take(10)
 
 # Range operations
 let sum = (1..100).sum

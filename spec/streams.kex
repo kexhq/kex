@@ -19,18 +19,18 @@ end
 
 main do
   let naturals = Sequence(from: 0) { |n| n + 1 }
-  print(naturals.take(10))
+  IO.printLine(naturals.take(10))
 
   let powers = Sequence(from: 1) { |n| n * 2 }
-  print(powers.take(8))
+  IO.printLine(powers.take(8))
 
-  print(naturals.drop(5).take(5))
+  IO.printLine(naturals.drop(5).take(5))
 
-  print((1..10).map { |x| x * x })
-  print((1..100).sum)
-  print((1..10).filter(&even?))
+  IO.printLine((1..10).map { |x| x * x })
+  IO.printLine((1..100).sum)
+  IO.printLine((1..10).filter(&even?))
 
   let primes = Sequence(from: 2) { |n| n + 1 }
     .filter(&isPrime?)
-  print(primes.take(10))
+  IO.printLine(primes.take(10))
 end

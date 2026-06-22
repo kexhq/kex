@@ -58,7 +58,7 @@ Feeds are consumed — once you read from them, the data is gone:
 foul do
   let feed = File.feed("log.txt")
   feed.each do |line|
-    print(line) if line.contains?("ERROR")
+    IO.printLine(line) if line.contains?("ERROR")
   end
 end
 ```

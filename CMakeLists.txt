@@ -16,6 +16,13 @@ add_library(kex_lib
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
     src/interpreter/evaluator.cxx
+    src/interpreter/stdlib/adt.cxx
+    src/interpreter/stdlib/io.cxx
+    src/interpreter/stdlib/file.cxx
+    src/interpreter/stdlib/list.cxx
+    src/interpreter/stdlib/string.cxx
+    src/interpreter/stdlib/integer.cxx
+    src/interpreter/stdlib/stream.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)

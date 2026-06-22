@@ -10,7 +10,7 @@ let compute(x: Int) = x * 2 + 1
 
 # Foul — does IO
 foul let readConfig(path: String) -> Result<String, IOError> do
-  return File.read(path)
+  return IO.read(path)
 end
 ```
 
@@ -26,18 +26,18 @@ end
 
 ```kex
 # Per function
-foul let log(msg: String) = IO.println(msg)
+foul let log(msg: String) = IO.printLine(msg)
 
 # Per block
 foul do
-  let readConfig(path: String) = File.read(path)
+  let readConfig(path: String) = IO.read(path)
   let writeLog(msg: String) = Log.write(msg)
 end
 
 # Per module
 foul module IO do
-  let println(msg: String) = ...
-  let readLine -> String = ...
+  let printLine(msg: String) = ...
+  let getLine -> String = ...
 end
 ```
 

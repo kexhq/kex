@@ -65,33 +65,33 @@ main do
   let b = Vector2D { x: 1.0, y: 2.0 }
 
   let sum = vec2Add(a, b)
-  print("a + b = ${vec2Str(sum)}")
+  IO.printLine("a + b = ${vec2Str(sum)}")
 
   let scaled = vec2Scale(a, 2.0)
-  print("a * 2 = ${vec2Str(scaled)}")
+  IO.printLine("a * 2 = ${vec2Str(scaled)}")
 
   let d = vec2Dot(a, b)
-  print("a . b = ${d}")
+  IO.printLine("a . b = ${d}")
 
   let lenSq = vec2LengthSq(a)
-  print("|a|^2 = ${lenSq}")
+  IO.printLine("|a|^2 = ${lenSq}")
 
   # 3D vectors
   let v1 = Vector3D { x: 1.0, y: 0.0, z: 0.0 }
   let v2 = Vector3D { x: 0.0, y: 1.0, z: 0.0 }
 
   let cp = vec3Cross(v1, v2)
-  print("v1 x v2 = ${vec3Str(cp)}")
+  IO.printLine("v1 x v2 = ${vec3Str(cp)}")
 
   let v3 = Vector3D { x: 1.0, y: 2.0, z: 3.0 }
   let v4 = Vector3D { x: 4.0, y: 5.0, z: 6.0 }
 
   let sum3 = vec3Add(v3, v4)
-  print("v3 + v4 = ${vec3Str(sum3)}")
+  IO.printLine("v3 + v4 = ${vec3Str(sum3)}")
 
   let dot3 = vec3Dot(v3, v4)
-  print("v3 . v4 = ${dot3}")
+  IO.printLine("v3 . v4 = ${dot3}")
 
   let scaled3 = vec3Scale(v3, 0.5)
-  print("v3 * 0.5 = ${vec3Str(scaled3)}")
+  IO.printLine("v3 * 0.5 = ${vec3Str(scaled3)}")
 end

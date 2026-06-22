@@ -47,7 +47,7 @@ main do
   let profile = Profile { user: user, address: addr }
 
   let greeting = user.greet
-  let is_adult = user.adult?
+  let isAdult = user.adult?
   let city = profile.city
 
   # Destructuring

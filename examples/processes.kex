@@ -44,7 +44,7 @@ end
 # Supervision tree
 foul let startApp do
   Supervisor.start(strategy: :one_for_one) do
-    worker(Database, args: [config.db_url])
+    worker(Database, args: [config.dbUrl])
     worker(Cache)
     supervisor(strategy: :one_for_all) do
       worker(WebServer, args: [config.port])

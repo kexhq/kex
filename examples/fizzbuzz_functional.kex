@@ -1,0 +1,19 @@
+# FizzBuzz - Functional Pipeline Solution
+# Shows UFCS (Uniform Function Call Syntax) and method chaining
+
+# Elegant pattern matching directly in transformation
+let fizzBuzzString(n: Int) -> String do
+  match (n.modulo(3), n.modulo(5)) do
+    (0, 0) -> "FizzBuzz"
+    (0, _) -> "Fizz"
+    (_, 0) -> "Buzz"
+    (_, _) -> "${n}"
+  end
+end
+
+main do
+  # Showcase UFCS: chained method calls on the range itself
+  (1..100)
+    .map { |n| fizzBuzzString(n) }
+    .each { |output| IO.printLine(output) }
+end

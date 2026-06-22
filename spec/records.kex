@@ -43,14 +43,14 @@ end
 
 main do
   let user = User { name: "Alice", age: 30 }
-  print(user.name)
-  print(user.age)
+  IO.printLine(user.name)
+  IO.printLine(user.age)
 
   let a = Vec2 { x: 1.0, y: 2.0 }
   let b = Vec2 { x: 3.0, y: 4.0 }
-  print(a.add(b).to(String))
+  IO.printLine(a.add(b).to(String))
 
   let c = Vec3 { x: 1.0, y: 2.0, z: 3.0 }
   let d = Vec3 { x: 4.0, y: 5.0, z: 6.0 }
-  print(c.add(d).to(String))
+  IO.printLine(c.add(d).to(String))
 end

@@ -25,17 +25,17 @@ describe Integer do
 end
 
 describe User do
-  let sample_user = User { name: "Alice", age: 30 }
+  let sampleUser = User { name: "Alice", age: 30 }
 
   describe "greet" do
     it "greets by name" do
-      assert sample_user.greet == "Hi, Alice!"
+      assert sampleUser.greet == "Hi, Alice!"
     end
   end
 
   describe "adult?" do
     it "returns true for age >= 18" do
-      assert sample_user.adult?
+      assert sampleUser.adult?
     end
 
     it "returns false for age < 18" do

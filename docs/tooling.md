@@ -10,8 +10,8 @@ $ kex
 kex> 1 + 2
 => 3 : Int
 
-kex> let name = "Akos"
-=> "Akos" : String
+kex> let name = "John"
+=> "John" : String
 
 kex> name.length
 => 4 : Int
@@ -42,8 +42,8 @@ kex> :foul                # back to foul mode
 
 ```
 kex> :pure
-kex(pure)> File.read("x")
-=> error: File.read is foul, not available in pure mode
+kex(pure)> IO.read("x")
+=> error: IO.read is foul, not available in pure mode
 
 kex(pure)> 1 + 2
 => 3 : Int

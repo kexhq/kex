@@ -1,0 +1,33 @@
+# Console and file IO
+# Expected output:
+# hello
+# hi
+# false
+# true
+# true
+# ab
+# abcd
+# [abcd]
+# [abcd]
+# true
+# None
+
+main do
+  IO.printLine("hello")
+  IO.print("hi")
+  IO.printLine("")
+
+  let path = "spec/io_scratch.txt"
+  File.delete(path)
+
+  IO.printLine(File.exists?(path))
+  IO.printLine(IO.write(path, "ab"))
+  IO.printLine(File.exists?(path))
+  IO.printLine(IO.read(path))
+  File.append(path, "cd")
+  IO.printLine(IO.read(path))
+  IO.printLine(File.lines(path))
+  IO.printLine(File.feed(path).take(1))
+  IO.printLine(File.delete(path))
+  IO.printLine(IO.read(path))
+end

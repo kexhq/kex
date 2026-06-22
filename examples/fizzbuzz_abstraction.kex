@@ -1,0 +1,33 @@
+# FizzBuzz - Higher-Order Functions & Custom Abstraction
+# Shows composable predicates and abstraction layers
+
+# Reusable divisibility check
+let divisibleBy?(n: Int, divisor: Int) = n.modulo(divisor) == 0
+
+# Composable rule builder
+let fizzBuzzRule(n: Int, word: String, divisor: Int) -> String? do
+  if divisibleBy?(n, divisor) do
+    Just(word)
+  else do
+    None
+  end
+end
+
+# Combine multiple rules
+let fizzBuzzString(n: Int) -> String do
+  let fizz = fizzBuzzRule(n, "Fizz", 3)
+  let buzz = fizzBuzzRule(n, "Buzz", 5)
+  
+  match (fizz, buzz) do
+    (Just(f), Just(b)) -> f + b
+    (Just(f), None)    -> f
+    (None, Just(b))    -> b
+    (None, None)       -> "${n}"
+  end
+end
+
+main do
+  (1..100)
+    .map { |n| fizzBuzzString(n) }
+    .each { |s| IO.printLine(s) }
+end

@@ -2,6 +2,8 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/interpreter/evaluator.hxx"
+#include <filesystem>
+#include <sstream>
 
 using namespace kex;
 using namespace kex::interpreter;
@@ -213,7 +215,7 @@ int main() {
             auto output = runOutput(
                 "let greet(name, birthYear) do\n"
                 "  let age = 2026 - birthYear\n"
-                "  print(\"Hello, ${name} (${age})\")\n"
+                "  IO.printLine(\"Hello, ${name} (${age})\")\n"
                 "end\n"
                 "main do\n  greet(\"Alice\", 1994)\nend\n"
             );
@@ -341,25 +343,188 @@ int main() {
         });
     });
 
-    describe("Interpreter — Print", []() {
-        it("prints to output", []() {
-            auto output = runOutput("main do\n  print(\"hello\")\nend\n");
+    describe("Interpreter — IO", []() {
+        it("IO.printLine prints with trailing newline", []() {
+            auto output = runOutput("main do\n  IO.printLine(\"hello\")\nend\n");
             assertEqual(output, std::string("hello\n"));
         });
 
-        it("prints integers", []() {
-            auto output = runOutput("main do\n  print(42)\nend\n");
+        it("IO.print prints without trailing newline", []() {
+            auto output = runOutput("main do\n  IO.print(\"hello\")\nend\n");
+            assertEqual(output, std::string("hello"));
+        });
+
+        it("IO.printLine concatenates multiple args with no separator", []() {
+            auto output = runOutput("main do\n  IO.printLine(\"a\", \"b\")\nend\n");
+            assertEqual(output, std::string("ab\n"));
+        });
+
+        it("IO.printLine prints integers", []() {
+            auto output = runOutput("main do\n  IO.printLine(42)\nend\n");
             assertEqual(output, std::string("42\n"));
         });
 
-        it("prints multiple lines", []() {
-            auto output = runOutput(
+        it("IO.put/IO.putLine are aliases of IO.print/IO.printLine", []() {
+            auto output = runOutput("main do\n  IO.put(\"a\")\n  IO.putLine(\"b\")\nend\n");
+            assertEqual(output, std::string("ab\n"));
+        });
+
+        it("IO.getLine reads a line from stdin", []() {
+            std::istringstream input("hello\n");
+            auto* prevCin = std::cin.rdbuf(input.rdbuf());
+            auto result = run("main do\n  IO.getLine()\nend\n");
+            std::cin.rdbuf(prevCin);
+            assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
+        });
+
+        it("IO.getLine returns None at EOF", []() {
+            std::istringstream input("");
+            auto* prevCin = std::cin.rdbuf(input.rdbuf());
+            auto result = run("main do\n  IO.getLine()\nend\n");
+            std::cin.rdbuf(prevCin);
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+
+        it("IO.get reads a single character from stdin", []() {
+            std::istringstream input("ab");
+            auto* prevCin = std::cin.rdbuf(input.rdbuf());
+            auto result = run("main do\n  IO.get()\nend\n");
+            std::cin.rdbuf(prevCin);
+            assertEqual(std::get<StringValue>(result->data).value, std::string("a"));
+        });
+
+        it("IO.get returns None at EOF", []() {
+            std::istringstream input("");
+            auto* prevCin = std::cin.rdbuf(input.rdbuf());
+            auto result = run("main do\n  IO.get()\nend\n");
+            std::cin.rdbuf(prevCin);
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+    });
+
+    describe("Interpreter — File IO", []() {
+        auto scratchPath = []() -> std::string {
+            return (std::filesystem::temp_directory_path() / "kex_interpreter_test_file_io.txt").string();
+        };
+
+        it("writes and reads a file", [scratchPath]() {
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = run(
                 "main do\n"
-                "  print(\"one\")\n"
-                "  print(\"two\")\n"
+                "  IO.write(\"" + path + "\", \"hello\")\n"
+                "  IO.read(\"" + path + "\")\n"
                 "end\n"
             );
-            assertEqual(output, std::string("one\ntwo\n"));
+            assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
+            std::filesystem::remove(path);
+        });
+
+        it("exists? reflects write and delete", [scratchPath]() {
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto before = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            assertFalse(std::get<BoolValue>(before->data).value);
+
+            run("main do\n  IO.write(\"" + path + "\", \"x\")\nend\n");
+            auto afterWrite = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            assertTrue(std::get<BoolValue>(afterWrite->data).value);
+
+            auto deleted = run("main do\n  File.delete(\"" + path + "\")\nend\n");
+            assertTrue(std::get<BoolValue>(deleted->data).value);
+            auto afterDelete = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            assertFalse(std::get<BoolValue>(afterDelete->data).value);
+        });
+
+        it("appends to a file", [scratchPath]() {
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = run(
+                "main do\n"
+                "  IO.write(\"" + path + "\", \"a\")\n"
+                "  File.append(\"" + path + "\", \"b\")\n"
+                "  IO.read(\"" + path + "\")\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value, std::string("ab"));
+            std::filesystem::remove(path);
+        });
+
+        it("reading a nonexistent file returns None", []() {
+            auto result = run("main do\n  IO.read(\"/nonexistent/kex/path/xyz\")\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+
+        it("deleting a nonexistent file returns false", []() {
+            auto result = run("main do\n  File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
+            assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("lines materializes a list of lines", [scratchPath]() {
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = run(
+                "main do\n"
+                "  IO.write(\"" + path + "\", \"a\\nb\\nc\")\n"
+                "  File.lines(\"" + path + "\")\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(3));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
+            assertEqual(std::get<StringValue>(list.elements[2]->data).value, std::string("c"));
+            std::filesystem::remove(path);
+        });
+
+        it("feed wraps file lines in a stream", [scratchPath]() {
+            auto path = scratchPath();
+            std::filesystem::remove(path);
+            auto result = run(
+                "main do\n"
+                "  IO.write(\"" + path + "\", \"a\\nb\")\n"
+                "  File.feed(\"" + path + "\").take(2)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(2));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("a"));
+            assertEqual(std::get<StringValue>(list.elements[1]->data).value, std::string("b"));
+            std::filesystem::remove(path);
+        });
+
+        it("feed on a nonexistent file returns None", []() {
+            auto result = run("main do\n  File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+    });
+
+    describe("Interpreter — Namespace dispatch", []() {
+        it("Stream.Sequence works without corrupting the call (regression)", []() {
+            // Regression test: Stream isn't pre-registered as a namespace, so
+            // the receiver used to fall back to an Atom that got silently
+            // smuggled in as the step function's first argument, corrupting
+            // the stream ("Cannot add Atom and Int" on .take()).
+            auto result = run(
+                "main do\n"
+                "  let naturals = Stream.Sequence(from: 0) { |n| n + 1 }\n"
+                "  naturals.take(3)\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(3));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(0));
+            assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(2));
+        });
+
+        it("unresolved namespace call to a missing function errors cleanly", []() {
+            try {
+                run("main do\n  Math.PI\nend\n");
+                assertTrue(false, "expected an exception");
+            } catch (const std::exception& e) {
+                std::string msg = e.what();
+                assertTrue(msg.find("Undefined function") != std::string::npos, msg);
+            }
         });
     });
 

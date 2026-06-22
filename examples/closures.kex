@@ -17,7 +17,7 @@ let value = thunk()
 let names = users.map(&.name)
 let adults = users.filter(&.adult?)
 let lengths = words.map(&.length)
-let with_greeting = names.map(&.+ " hello")
+let withGreeting = names.map(&.+ " hello")
 
 # &function — passing named function as closure
 let parsed = strings.map(&parseInt)
@@ -55,5 +55,5 @@ let times(n: Int, block: Block<[()]>) do
 end
 
 times(3) do
-  print("hello")
+  IO.printLine("hello")
 end

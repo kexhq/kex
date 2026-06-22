@@ -67,8 +67,17 @@ private:
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
 
-    // Built-in functions
+    // Built-in functions — orchestrator defined in evaluator.cxx, domains
+    // implemented in src/interpreter/stdlib/*.cxx (same access as before,
+    // just split out of the core evaluator file by domain).
     auto registerBuiltins() -> void;
+    auto registerAdtConstructors() -> void;
+    auto registerIOBuiltins() -> void;
+    auto registerFileBuiltins() -> void;
+    auto registerListBuiltins() -> void;
+    auto registerStringBuiltins() -> void;
+    auto registerIntegerBuiltins() -> void;
+    auto registerStreamBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;

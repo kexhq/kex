@@ -127,51 +127,51 @@ end
 # --- Demo ---
 
 main do
-  print("=== Static Constructors ===")
-  print("")
+  IO.printLine("=== Static Constructors ===")
+  IO.printLine("")
 
   # Direct construction
   let a = Vector2D { x: 3.0, y: 4.0 }
-  print("Direct:              ${a.to(String)}")
+  IO.printLine("Direct:              ${a.to(String)}")
 
   # Static constructors — Polar(length, angle)
   let polar = Polar(5.0, pi / 4.0)
-  print("Polar(5, pi/4): ${polar.to(String)}")
+  IO.printLine("Polar(5, pi/4): ${polar.to(String)}")
 
   let unit30 = Angle(pi / 6.0)
-  print("Angle(pi/6):  ${unit30.to(String)}")
+  IO.printLine("Angle(pi/6):  ${unit30.to(String)}")
 
   let unit45 = Angle(pi / 4.0)
-  print("Angle(pi/4):  ${unit45.to(String)}")
+  IO.printLine("Angle(pi/4):  ${unit45.to(String)}")
 
   let unit90 = Angle(pi / 2.0)
-  print("Angle(pi/2):  ${unit90.to(String)}")
+  IO.printLine("Angle(pi/2):  ${unit90.to(String)}")
 
   # Constants — Zero, UnitX, etc.
-  print("")
-  print("Zero:  ${Zero.to(String)}")
-  print("UnitX: ${UnitX.to(String)}")
-  print("UnitY: ${UnitY.to(String)}")
-  print("One:   ${One.to(String)}")
+  IO.printLine("")
+  IO.printLine("Zero:  ${Zero.to(String)}")
+  IO.printLine("UnitX: ${UnitX.to(String)}")
+  IO.printLine("UnitY: ${UnitY.to(String)}")
+  IO.printLine("One:   ${One.to(String)}")
 
-  print("")
-  print("=== Instance Methods (lowercase) ===")
-  print("")
+  IO.printLine("")
+  IO.printLine("=== Instance Methods (lowercase) ===")
+  IO.printLine("")
 
   let p = Vector2D { x: 3.0, y: 4.0 }
   let q = Vector2D { x: 1.0, y: 2.0 }
 
-  print("p = ${p.to(String)}")
-  print("q = ${q.to(String)}")
-  print("p.add(q) = ${p.add(q).to(String)}")
-  print("p.scale(2) = ${p.scale(2.0).to(String)}")
-  print("p.dot(q) = ${p.dot(q)}")
-  print("p.length = ${p.length}")
-  print("p.normalize = ${p.normalize.to(String)}")
+  IO.printLine("p = ${p.to(String)}")
+  IO.printLine("q = ${q.to(String)}")
+  IO.printLine("p.add(q) = ${p.add(q).to(String)}")
+  IO.printLine("p.scale(2) = ${p.scale(2.0).to(String)}")
+  IO.printLine("p.dot(q) = ${p.dot(q)}")
+  IO.printLine("p.length = ${p.length}")
+  IO.printLine("p.normalize = ${p.normalize.to(String)}")
 
-  print("")
-  print("=== Polar to Cartesian ===")
-  print("")
+  IO.printLine("")
+  IO.printLine("=== Polar to Cartesian ===")
+  IO.printLine("")
 
   # Create vectors at regular angles around a circle
   let r = 3.0
@@ -180,28 +180,28 @@ main do
   let v120 = Polar(r, 2.0 * pi / 3.0)
   let v180 = Polar(r, pi)
 
-  print("r=3, angle=0:     ${v0.to(String)}")
-  print("r=3, angle=60:    ${v60.to(String)}")
-  print("r=3, angle=120:   ${v120.to(String)}")
-  print("r=3, angle=180:   ${v180.to(String)}")
+  IO.printLine("r=3, angle=0:     ${v0.to(String)}")
+  IO.printLine("r=3, angle=60:    ${v60.to(String)}")
+  IO.printLine("r=3, angle=120:   ${v120.to(String)}")
+  IO.printLine("r=3, angle=180:   ${v180.to(String)}")
 
-  print("")
-  print("=== Rotation ===")
-  print("")
+  IO.printLine("")
+  IO.printLine("=== Rotation ===")
+  IO.printLine("")
 
   let right = UnitX
-  print("UnitX rotated 45 deg: ${right.rotate(pi / 4.0).to(String)}")
-  print("UnitX rotated 90 deg: ${right.rotate(pi / 2.0).to(String)}")
+  IO.printLine("UnitX rotated 45 deg: ${right.rotate(pi / 4.0).to(String)}")
+  IO.printLine("UnitX rotated 90 deg: ${right.rotate(pi / 2.0).to(String)}")
 
-  print("")
-  print("=== Interpolation ===")
-  print("")
+  IO.printLine("")
+  IO.printLine("=== Interpolation ===")
+  IO.printLine("")
 
   let start = Zero
   let finish = Vector2D { x: 10.0, y: 5.0 }
-  print("lerp(0.0) = ${start.lerp(finish, 0.0).to(String)}")
-  print("lerp(0.25) = ${start.lerp(finish, 0.25).to(String)}")
-  print("lerp(0.5) = ${start.lerp(finish, 0.5).to(String)}")
-  print("lerp(0.75) = ${start.lerp(finish, 0.75).to(String)}")
-  print("lerp(1.0) = ${start.lerp(finish, 1.0).to(String)}")
+  IO.printLine("lerp(0.0) = ${start.lerp(finish, 0.0).to(String)}")
+  IO.printLine("lerp(0.25) = ${start.lerp(finish, 0.25).to(String)}")
+  IO.printLine("lerp(0.5) = ${start.lerp(finish, 0.5).to(String)}")
+  IO.printLine("lerp(0.75) = ${start.lerp(finish, 0.75).to(String)}")
+  IO.printLine("lerp(1.0) = ${start.lerp(finish, 1.0).to(String)}")
 end

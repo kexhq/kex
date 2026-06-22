@@ -1,0 +1,20 @@
+# FizzBuzz - Simple Imperative Solution
+# Shows basic loops and conditionals
+#
+# Kex has no `while`/`break` (only `loop do ... end`, which is infinite and
+# has no early-exit construct yet), so the "imperative" loop here is
+# range.each rather than a hand-rolled counter loop.
+
+main do
+  (1..100).each do |i|
+    if i.modulo(15) == 0 do
+      IO.printLine("FizzBuzz")
+    elif i.modulo(3) == 0 do
+      IO.printLine("Fizz")
+    elif i.modulo(5) == 0 do
+      IO.printLine("Buzz")
+    else do
+      IO.printLine("${i}")
+    end
+  end
+end

@@ -191,7 +191,7 @@ main do
   let input = "{\"name\": \"Alice\", \"age\": 30, \"hobbies\": [\"coding\", \"music\"]}"
 
   match Parser.parse(input) do
-    Ok(json) -> print("Parsed: ${json}")
-    Error(e) -> print("Error: ${e}")
+    Ok(json) -> IO.printLine("Parsed: ${json}")
+    Error(e) -> IO.printLine("Error: ${e}")
   end
 end

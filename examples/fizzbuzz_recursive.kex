@@ -1,0 +1,26 @@
+# FizzBuzz - Recursive Solution
+# Demonstrates recursion and tail-call optimization potential
+
+let fizzBuzzString(n: Int) -> String do
+  match (n.modulo(3), n.modulo(5)) do
+    (0, 0) -> "FizzBuzz"
+    (0, _) -> "Fizz"
+    (_, 0) -> "Buzz"
+    (_, _) -> "${n}"
+  end
+end
+
+# Recursive version with accumulator
+let fizzBuzzRecursive(n: Int, limit: Int, acc: [String]) -> [String] do
+  if n > limit do
+    acc
+  else do
+    let result = fizzBuzzString(n)
+    fizzBuzzRecursive(n + 1, limit, acc.push(result))
+  end
+end
+
+main do
+  let results = fizzBuzzRecursive(1, 100, [])
+  results.each { |s| IO.printLine(s) }
+end

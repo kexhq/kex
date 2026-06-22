@@ -8,20 +8,20 @@
 
 main do
   let x = 5 + 3
-  print(x)
+  IO.printLine(x)
 
   var count = 0
   count = count + 1
   count = count + 1
   count = count + 1
-  print(count)
+  IO.printLine(count)
 
   let name = "World"
-  print("Hello, ${name}!")
-  print("count = ${count}")
+  IO.printLine("Hello, ${name}!")
+  IO.printLine("count = ${count}")
 
   var list = [1, 2, 3]
   list = list.push(4)
   list = list.push(5)
-  print(list)
+  IO.printLine(list)
 end

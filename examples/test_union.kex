@@ -1,0 +1,12 @@
+type Result
+  = Ok(Int)
+  | Err
+
+let test() -> Result do
+  Ok(42)
+end
+
+main do
+  let r = test()
+  IO.printLine(r)
+end

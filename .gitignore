@@ -35,3 +35,6 @@ _deps/
 # OS
 .DS_Store
 Thumbs.db
+
+# Scratch files left behind by an interrupted `make spec` IO test run
+spec/io_scratch.txt

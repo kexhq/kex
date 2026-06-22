@@ -3,13 +3,13 @@
 let ages = { "alice": 30, "bob": 25, "charlie": 35 }
 
 # Bracket access returns Optional
-let alice_age = ages["alice"]   # -> Int? = Just(30)
+let aliceAge = ages["alice"]   # -> Int? = Just(30)
 let unknown = ages["dave"]      # -> Int? = None
 
 # Map operations (immutable — return new maps)
 let updated = ages.put("dave", 28)
 let removed = ages.delete("bob")
-let has_alice = ages.has?("alice")   # true
+let hasAlice = ages.has?("alice")   # true
 
 let keys = ages.keys       # ["alice", "bob", "charlie"]
 let values = ages.values   # [30, 25, 35]
@@ -34,4 +34,4 @@ let nested = {
   "db": { host: "localhost", port: 5432 },
   "cache": { host: "localhost", port: 6379 }
 }
-let db_host = nested["db"].map(&.host)   # -> String? = Just("localhost")
+let dbHost = nested["db"].map(&.host)   # -> String? = Just("localhost")
