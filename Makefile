@@ -76,7 +76,8 @@ run: build
 check: build
 	@$(KEX) --check $(F)
 
-install: build
+install:
+	@test -x "$(KEX)" || { echo "Missing $(KEX). Run 'make build' first."; exit 1; }
 	@mkdir -p "$(BINDIR)"
 	@install -m 755 "$(KEX)" "$(BINDIR)/kex"
 	@echo "Installed kex to $(BINDIR)/kex"
