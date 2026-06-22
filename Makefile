@@ -1,17 +1,21 @@
-.PHONY: build test spec clean repl run check help
+.PHONY: build test spec clean repl run check install uninstall help
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
 
 help:
 	@echo "Kex Language Compiler"
 	@echo ""
-	@echo "  make build    Build the compiler"
-	@echo "  make test     Run all unit tests"
-	@echo "  make spec     Run spec programs and verify output"
-	@echo "  make parse    Parse all examples (syntax check)"
-	@echo "  make repl     Start the REPL"
-	@echo "  make clean    Clean build artifacts"
+	@echo "  make build        Build the compiler"
+	@echo "  make test         Run all unit tests"
+	@echo "  make spec         Run spec programs and verify output"
+	@echo "  make parse        Parse all examples (syntax check)"
+	@echo "  make repl         Start the REPL"
+	@echo "  make install      Install kex to $(BINDIR)"
+	@echo "  make uninstall    Remove kex from $(BINDIR)"
+	@echo "  make clean        Clean build artifacts"
 	@echo "  make run F=<file>  Run a .kex file"
 	@echo "  make check F=<file>  Semantic check a .kex file"
 	@echo ""
@@ -71,6 +75,15 @@ run: build
 
 check: build
 	@$(KEX) --check $(F)
+
+install: build
+	@mkdir -p "$(BINDIR)"
+	@install -m 755 "$(KEX)" "$(BINDIR)/kex"
+	@echo "Installed kex to $(BINDIR)/kex"
+
+uninstall:
+	@rm -f "$(BINDIR)/kex"
+	@echo "Removed $(BINDIR)/kex"
 
 clean:
 	@rm -rf $(BUILD_DIR)
