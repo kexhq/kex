@@ -1,5 +1,7 @@
 #include "analyzer.hxx"
 
+#include <algorithm>
+
 namespace kex::semantic {
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {

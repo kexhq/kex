@@ -18,7 +18,7 @@ help:
 
 build:
 	@cmake -B $(BUILD_DIR) -G "Unix Makefiles" 2>/dev/null | tail -1
-	@cmake --build $(BUILD_DIR) 2>&1 | tail -3
+	@cmake --build $(BUILD_DIR)
 
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
