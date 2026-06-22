@@ -7,6 +7,7 @@
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
 
 #ifdef HAS_READLINE
 #include <readline/readline.h>
@@ -442,6 +443,13 @@ int main(int argc, char* argv[]) {
     auto source = readFile(filepath);
     if (source.empty()) return 1;
 
+    // Everything after the script path is the script's own argument list,
+    // exposed to Kex code via `main(args) do ... end`.
+    std::vector<std::string> scriptArgs;
+    for (int i = optind + 1; i < argc; i++) {
+        scriptArgs.push_back(argv[i]);
+    }
+
     kex::Lexer lexer(std::move(source), filepath);
     auto tokens = lexer.tokenizeAll();
 
@@ -468,6 +476,7 @@ int main(int argc, char* argv[]) {
 
         if (mode == "run") {
             kex::interpreter::Evaluator evaluator;
+            evaluator.setArgs(scriptArgs);
             evaluator.execute(program);
             return 0;
         }

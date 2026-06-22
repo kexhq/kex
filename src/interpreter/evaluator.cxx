@@ -30,6 +30,10 @@ auto Evaluator::setReplMode(bool enabled) -> void {
     m_replMode = enabled;
 }
 
+auto Evaluator::setArgs(std::vector<std::string> args) -> void {
+    m_scriptArgs = std::move(args);
+}
+
 auto Evaluator::output() const -> const std::string& {
     return m_output;
 }
@@ -278,6 +282,19 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
 
 auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
     if (!m_replMode) pushEnv();
+    // main(args) do ... end — bind the script's command-line arguments
+    // ([String], set via setArgs()) to the declared parameter, if any.
+    if (!block.params.empty()) {
+        std::vector<ValuePtr> elems;
+        for (const auto& arg : m_scriptArgs) elems.push_back(Value::string(arg));
+        auto argsValue = Value::list(std::move(elems));
+        const auto& param = block.params[0];
+        if (param.pattern && *param.pattern) {
+            matchPattern(**param.pattern, argsValue);
+        } else if (param.name) {
+            m_env->define(*param.name, argsValue);
+        }
+    }
     ValuePtr result;
     try {
         result = evalBody(block.body);
@@ -367,29 +384,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (!val) {
                 throw RuntimeError("Undefined variable: " + node.name, expr.location);
             }
-            // Auto-call zero-arg functions (constants defined as let name = expr)
-            // Only auto-call if the function is registered as having 0 params
-            if (auto* func = std::get_if<FunctionValue>(&val->data)) {
-                if (func->native) {
-                    auto defIt = m_functionDefs.find(node.name);
-                    bool isZeroArg = false;
-                    if (defIt != m_functionDefs.end() && !defIt->second.empty()) {
-                        isZeroArg = defIt->second[0]->clauses[0].params.empty();
-                    }
-                    if (isZeroArg) {
-                        auto savedEnv = m_env;
-                        try {
-                            auto result = func->native({});
-                            if (result && !std::holds_alternative<NoneValue>(result->data)) {
-                                return result;
-                            }
-                        } catch (...) {
-                            m_env = savedEnv;
-                        }
-                    }
-                }
-            }
-            return val;
+            return autoCallZeroArgConstant(node.name, val);
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
             auto value = node.value ? eval(*node.value) : Value::none();
@@ -406,10 +401,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                 }
             } else if (auto* recPat = std::get_if<ast::RecordPattern>(&node.pattern->kind)) {
+                // `field.pattern` holds the rename/sub-pattern for
+                // `{ "key": shortName }` or `{ field: subPattern }` — must
+                // bind/recurse through it when present; only fall back to
+                // `field.name` (the key itself) for the shorthand `{ name }`
+                // form with no explicit pattern.
                 if (auto* recVal = std::get_if<RecordValue>(&value->data)) {
                     for (const auto& field : recPat->fields) {
                         if (auto it = recVal->fields.find(field.name); it != recVal->fields.end()) {
-                            m_env->define(field.name, it->second);
+                            if (field.pattern && *field.pattern) {
+                                matchPattern(**field.pattern, it->second);
+                            } else {
+                                m_env->define(field.name, it->second);
+                            }
                         }
                     }
                 } else if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
@@ -417,7 +421,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         for (const auto& [k, v] : mapVal->entries) {
                             if (auto* sk = std::get_if<StringValue>(&k->data)) {
                                 if (sk->value == field.name) {
-                                    m_env->define(field.name, v);
+                                    if (field.pattern && *field.pattern) {
+                                        matchPattern(**field.pattern, v);
+                                    } else {
+                                        m_env->define(field.name, v);
+                                    }
                                 }
                             }
                         }
@@ -815,9 +823,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
-            // Look up in environment first (records, namespaces)
+            // Look up in environment first (records, namespaces, ALL_CAPS
+            // constants like `let MAX_RETRIES = 3`)
             auto val = m_env->get(node.name);
-            if (val) return val;
+            if (val) return autoCallZeroArgConstant(node.name, val);
             // Otherwise return as type tag (atom) for pattern matching
             return Value::atom(node.name);
         }
@@ -916,11 +925,13 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         case TokenType::LessEq:
             if (li && ri) return Value::boolean(li->value <= ri->value);
             if (lf && rf) return Value::boolean(lf->value <= rf->value);
+            if (ls && rs) return Value::boolean(ls->value <= rs->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::GreaterEq:
             if (li && ri) return Value::boolean(li->value >= ri->value);
             if (lf && rf) return Value::boolean(lf->value >= rf->value);
+            if (ls && rs) return Value::boolean(ls->value >= rs->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::AmpAmp:
@@ -1004,6 +1015,31 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     }
 
     throw RuntimeError("'" + name + "' is not callable", loc);
+}
+
+auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr& val) -> ValuePtr {
+    // Only acts on user-defined Kex functions (tracked in m_functionDefs);
+    // native builtins, namespace placeholders (RecordValue), and ADT
+    // constructors (registered directly via m_env->define, never through
+    // execFunctionDef) are absent from m_functionDefs and pass through
+    // unchanged here.
+    auto* func = std::get_if<FunctionValue>(&val->data);
+    if (!func || !func->native) return val;
+
+    auto defIt = m_functionDefs.find(name);
+    if (defIt == m_functionDefs.end() || defIt->second.empty()) return val;
+    if (!defIt->second[0]->clauses[0].params.empty()) return val;
+
+    auto savedEnv = m_env;
+    try {
+        auto result = func->native({});
+        if (result && !std::holds_alternative<NoneValue>(result->data)) {
+            return result;
+        }
+    } catch (...) {
+        m_env = savedEnv;
+    }
+    return val;
 }
 
 auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool {
@@ -1155,6 +1191,8 @@ auto Evaluator::registerBuiltins() -> void {
     registerStringBuiltins();
     registerIntegerBuiltins();
     registerStreamBuiltins();
+    registerMapBuiltins();
+    registerEnvBuiltins();
 }
 
 auto Evaluator::pushEnv() -> void {

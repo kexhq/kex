@@ -427,6 +427,7 @@ struct UsingBlock {
 
 struct MainBlock {
     SourceLocation location;
+    std::vector<Param> params;
     std::vector<ExprPtr> body;
 };
 

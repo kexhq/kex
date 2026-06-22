@@ -6,11 +6,9 @@ let divisibleBy?(n: Int, divisor: Int) = n.modulo(divisor) == 0
 
 # Composable rule builder
 let fizzBuzzRule(n: Int, word: String, divisor: Int) -> String? do
-  if divisibleBy?(n, divisor) do
-    Just(word)
-  else do
-    None
-  end
+  return Just(word) if divisibleBy?(n, divisor)
+
+  return None
 end
 
 # Combine multiple rules
@@ -22,7 +20,7 @@ let fizzBuzzString(n: Int) -> String do
     (Just(f), Just(b)) -> f + b
     (Just(f), None)    -> f
     (None, Just(b))    -> b
-    (None, None)       -> "${n}"
+    (None, None)       -> n.to(String)
   end
 end
 

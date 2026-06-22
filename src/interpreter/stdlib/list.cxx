@@ -175,10 +175,19 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("each", [this, &getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
-        auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::none();
 
+        // Map.each — yields (key, value) pairs, e.g.
+        // `someMap.each do |key, value| ... end`.
+        if (auto* map = std::get_if<MapValue>(&args[0]->data)) {
+            for (const auto& [k, v] : map->entries) {
+                fn->native({k, v});
+            }
+            return Value::none();
+        }
+
+        auto elems = getElements(args[0]);
         for (const auto& elem : elems) {
             fn->native({elem});
         }

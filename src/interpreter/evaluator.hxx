@@ -41,6 +41,9 @@ public:
     auto execute(const ast::Program& program) -> ValuePtr;
     auto setReplMode(bool enabled) -> void;
     auto output() const -> const std::string&;
+    // Script arguments (everything after the script path on the command
+    // line), exposed to Kex code via Args.all/Args.get/Args.count.
+    auto setArgs(std::vector<std::string> args) -> void;
 
 private:
     // Top-level
@@ -70,6 +73,12 @@ private:
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
 
+    // `let NAME = expr` at top level registers NAME as a zero-arg function
+    // (constant) — auto-call it on lookup so `NAME` reads as its value, not
+    // as the function itself. Shared by both Identifier (lowercase) and
+    // UpperIdentifier (ALL_CAPS constants like `let MAX = 10`) lookup.
+    auto autoCallZeroArgConstant(const std::string& name, const ValuePtr& val) -> ValuePtr;
+
     // Built-in functions — orchestrator defined in evaluator.cxx, domains
     // implemented in src/interpreter/stdlib/*.cxx (same access as before,
     // just split out of the core evaluator file by domain).
@@ -81,6 +90,8 @@ private:
     auto registerStringBuiltins() -> void;
     auto registerIntegerBuiltins() -> void;
     auto registerStreamBuiltins() -> void;
+    auto registerEnvBuiltins() -> void;
+    auto registerMapBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;
@@ -100,6 +111,7 @@ private:
     // declared field defaults (e.g. `pos : Int = 0`) for fields the
     // constructor call doesn't specify explicitly.
     std::unordered_map<std::string, const ast::RecordDef*> m_recordDefs;
+    std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
 };
 

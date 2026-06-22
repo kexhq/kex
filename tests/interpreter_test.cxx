@@ -2,6 +2,7 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/interpreter/evaluator.hxx"
+#include <cstdlib>
 #include <filesystem>
 #include <sstream>
 
@@ -26,6 +27,16 @@ auto runOutput(const std::string& source) -> std::string {
     Evaluator evaluator;
     evaluator.execute(program);
     return evaluator.output();
+}
+
+auto runWithArgs(const std::string& source, std::vector<std::string> args) -> ValuePtr {
+    Lexer lexer(source);
+    auto tokens = lexer.tokenizeAll();
+    Parser parser(std::move(tokens));
+    auto program = parser.parseProgram();
+    Evaluator evaluator;
+    evaluator.setArgs(std::move(args));
+    return evaluator.execute(program);
 }
 
 int main() {
@@ -129,6 +140,16 @@ int main() {
             assertTrue(std::get<BoolValue>(result->data).value);
         });
 
+        it("<= and >= work on strings (regression)", []() {
+            // Regression test: <= and >= only handled Int/Float, unlike <
+            // and > which already supported String — "9" <= "9" used to
+            // throw "Cannot compare String and String".
+            auto le = run("main do\n  \"5\" <= \"9\"\nend\n");
+            assertTrue(std::get<BoolValue>(le->data).value);
+            auto ge = run("main do\n  \"9\" >= \"5\"\nend\n");
+            assertTrue(std::get<BoolValue>(ge->data).value);
+        });
+
         it("logical and", []() {
             auto result = run("main do\n  true && false\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
@@ -142,6 +163,29 @@ int main() {
         it("logical not", []() {
             auto result = run("main do\n  !true\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("'and'/'or' are word-form aliases for &&/||", []() {
+            auto andResult = run("main do\n  true and false\nend\n");
+            assertFalse(std::get<BoolValue>(andResult->data).value);
+            auto orResult = run("main do\n  true or false\nend\n");
+            assertTrue(std::get<BoolValue>(orResult->data).value);
+        });
+
+        it("'not' is a word-form alias for !", []() {
+            auto result = run("main do\n  not true\nend\n");
+            assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("'not' binds looser than == (regression)", []() {
+            // Regression test: `not` was initially given the same tight
+            // precedence as `!` (unary level), so `not x == y` parsed as
+            // `(not x) == y`. It must bind looser, Python-style, so
+            // `not x == y` reads as `not (x == y)` — this is what makes
+            // `return if not ENV.get(key) == "true"`-style guards work
+            // without needing extra parens.
+            auto result = run("main do\n  not 1 == 2\nend\n");
+            assertTrue(std::get<BoolValue>(result->data).value);
         });
     });
 
@@ -298,6 +342,35 @@ int main() {
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(5));
+        });
+
+        it("return if COND (value-less guard) skips the body when true (regression)", []() {
+            // Regression test: `return if COND` (no value before `if`) used
+            // to fail to parse — `if` immediately after `return` was parsed
+            // as a primary if-expression requiring its own `do` block, not
+            // as a trailing guard. `return if COND` should short-circuit
+            // with None when COND is true, and otherwise fall through.
+            auto guarded = run(
+                "let f(skip: Bool) -> String do\n"
+                "  return if skip\n"
+                "  return \"ran\"\n"
+                "end\n"
+                "main do\n"
+                "  f(true)\n"
+                "end\n"
+            );
+            assertTrue(std::holds_alternative<NoneValue>(guarded->data));
+
+            auto notGuarded = run(
+                "let f(skip: Bool) -> String do\n"
+                "  return if skip\n"
+                "  return \"ran\"\n"
+                "end\n"
+                "main do\n"
+                "  f(false)\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(notGuarded->data).value, std::string("ran"));
         });
     });
 
@@ -650,6 +723,149 @@ int main() {
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(10));
+        });
+    });
+
+    describe("Interpreter — Args and Env", []() {
+        it("main(args) binds the script's command-line arguments", []() {
+            auto result = runWithArgs(
+                "main(args) do\n"
+                "  args\n"
+                "end\n",
+                {"foo", "bar"}
+            );
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(2));
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value, std::string("foo"));
+            assertEqual(std::get<StringValue>(list.elements[1]->data).value, std::string("bar"));
+        });
+
+        it("main without params still works (no args bound)", []() {
+            auto result = runWithArgs("main do\n  42\nend\n", {"ignored"});
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("main(args) is empty when no script args are set", []() {
+            auto result = run("main(args) do\n  args\nend\n");
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(list.elements.size(), size_t(0));
+        });
+
+        it("ENV.get returns Just(value) for a set variable", []() {
+            setenv("KEX_TEST_ENV_VAR", "hello", 1);
+            auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR\")\nend\n");
+            auto& rec = std::get<RecordValue>(result->data);
+            assertEqual(rec.typeName, std::string("Just"));
+            assertEqual(std::get<StringValue>(rec.fields.at("0")->data).value, std::string("hello"));
+            unsetenv("KEX_TEST_ENV_VAR");
+        });
+
+        it("ENV.get returns None for an unset variable", []() {
+            unsetenv("KEX_TEST_ENV_VAR_UNSET");
+            auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR_UNSET\")\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+
+        it("ENV.get with a default returns the default when unset", []() {
+            unsetenv("KEX_TEST_ENV_VAR_UNSET");
+            auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR_UNSET\", \"fallback\")\nend\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("fallback"));
+        });
+
+        it("ENV.get with a default still returns the real value when set", []() {
+            setenv("KEX_TEST_ENV_VAR", "hello", 1);
+            auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR\", \"fallback\")\nend\n");
+            assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
+            unsetenv("KEX_TEST_ENV_VAR");
+        });
+
+        it("ENV is a real Map, usable with generic Map ops", []() {
+            setenv("KEX_TEST_ENV_VAR", "hello", 1);
+            auto result = run("main do\n  ENV.has?(\"KEX_TEST_ENV_VAR\")\nend\n");
+            assertTrue(std::get<BoolValue>(result->data).value);
+            unsetenv("KEX_TEST_ENV_VAR");
+        });
+    });
+
+    describe("Interpreter — Map", []() {
+        it("get returns Just(value) when present", []() {
+            auto result = run("main do\n  { \"a\": 1 }.get(\"a\")\nend\n");
+            auto& rec = std::get<RecordValue>(result->data);
+            assertEqual(rec.typeName, std::string("Just"));
+            assertEqual(std::get<IntValue>(rec.fields.at("0")->data).value, int64_t(1));
+        });
+
+        it("get returns None when missing and no default given", []() {
+            auto result = run("main do\n  { \"a\": 1 }.get(\"b\")\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+
+        it("get(name, default) returns the default when missing (regression)", []() {
+            auto result = run("main do\n  { \"a\": 1 }.get(\"b\", 99)\nend\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(99));
+        });
+
+        it("get(name, default) returns the real value when present", []() {
+            auto result = run("main do\n  { \"a\": 1 }.get(\"a\", 99)\nend\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(1));
+        });
+
+        it("put adds a new key", []() {
+            auto result = run("main do\n  { \"a\": 1 }.put(\"b\", 2).get(\"b\", 0)\nend\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
+        });
+
+        it("put replaces an existing key", []() {
+            auto result = run("main do\n  { \"a\": 1 }.put(\"a\", 5).get(\"a\", 0)\nend\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(5));
+        });
+
+        it("delete removes a key", []() {
+            auto result = run("main do\n  { \"a\": 1, \"b\": 2 }.delete(\"a\").has?(\"a\")\nend\n");
+            assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("has? reflects presence", []() {
+            auto result = run("main do\n  { \"a\": 1 }.has?(\"a\")\nend\n");
+            assertTrue(std::get<BoolValue>(result->data).value);
+        });
+
+        it("keys and values", []() {
+            auto keysResult = run("main do\n  { \"a\": 1, \"b\": 2 }.keys\nend\n");
+            auto& keys = std::get<ListValue>(keysResult->data);
+            assertEqual(keys.elements.size(), size_t(2));
+
+            auto valuesResult = run("main do\n  { \"a\": 1, \"b\": 2 }.values\nend\n");
+            auto& values = std::get<ListValue>(valuesResult->data);
+            assertEqual(values.elements.size(), size_t(2));
+        });
+
+        it("each yields (key, value) pairs (regression)", []() {
+            // Regression test: Map.each used to be a silent no-op — `each`
+            // only handled List/Range via getElements(), never Map.
+            auto output = runOutput(
+                "main do\n"
+                "  { \"a\": 1 }.each do |key, value|\n"
+                "    IO.printLine(\"${key}=${value}\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(output, std::string("a=1\n"));
+        });
+
+        it("let { \"key\": renamed } = map binds the rename target (regression)", []() {
+            // Regression test: destructuring with a rename (`{ "key": x }`)
+            // used to bind a variable literally named after the map KEY
+            // ("key") instead of the rename target ("x") — field.pattern
+            // (the rename) was parsed but ignored at eval time.
+            auto result = run(
+                "main do\n"
+                "  let ages = { \"alice\": 30, \"bob\": 25 }\n"
+                "  let { \"alice\": a, \"bob\": b } = ages\n"
+                "  a + b\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(55));
         });
     });
 

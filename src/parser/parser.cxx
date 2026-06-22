@@ -784,7 +784,9 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 auto Parser::parseOr() -> ast::ExprPtr {
     auto left = parseAnd();
 
-    while (match(TokenType::PipePipe)) {
+    // `or` is a word-form alias for `||`.
+    while (check(TokenType::PipePipe) || check(TokenType::Or)) {
+        advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
         auto right = parseAnd();
@@ -796,17 +798,37 @@ auto Parser::parseOr() -> ast::ExprPtr {
 }
 
 auto Parser::parseAnd() -> ast::ExprPtr {
-    auto left = parseEquality();
+    auto left = parseNot();
 
-    while (match(TokenType::AmpAmp)) {
+    // `and` is a word-form alias for `&&`.
+    while (check(TokenType::AmpAmp) || check(TokenType::And)) {
+        advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
-        auto right = parseEquality();
+        auto right = parseNot();
         op->kind = ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
         left = std::move(op);
     }
 
     return left;
+}
+
+// `not` is a word-form alias for `!`, but — unlike `!`, which binds tightly
+// at the unary level (`!x == y` means `(!x) == y`) — `not` binds loosely,
+// Python-style: `not x == y` means `not (x == y)`. This is what makes
+// `return if not ENV.get(key) == "true"` read the way it looks: the whole
+// comparison is negated, not just the call.
+auto Parser::parseNot() -> ast::ExprPtr {
+    if (check(TokenType::Not)) {
+        auto loc = currentLocation();
+        advance();
+        auto operand = parseNot(); // allows chaining: not not x
+        auto expr = std::make_unique<ast::Expr>();
+        expr->location = loc;
+        expr->kind = ast::UnaryOp{TokenType::Bang, std::move(operand)};
+        return expr;
+    }
+    return parseEquality();
 }
 
 auto Parser::parseEquality() -> ast::ExprPtr {
@@ -871,6 +893,8 @@ auto Parser::parseMultiplication() -> ast::ExprPtr {
 }
 
 auto Parser::parseUnary() -> ast::ExprPtr {
+    // Note: `not` is handled at parseNot() (lower precedence, Python-style)
+    // rather than here — see parseNot() for why.
     if (check(TokenType::Minus) || check(TokenType::Bang)) {
         auto loc = currentLocation();
         auto opType = advance().type;
@@ -1510,6 +1534,26 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
     expr->location = currentLocation();
     expect(TokenType::Return, "Expected 'return'");
 
+    // `return if COND` — value-less guard-clause early return (returns
+    // None when COND is true, does nothing when false). Must be handled
+    // here, before falling into parseExpr(): `if` is itself a primary
+    // expression (`if COND do ... end`), so without this check the `if`
+    // immediately after `return` would be parsed as that instead, and
+    // fail since there's no `do` block to go with it.
+    //
+    // `return EXPR if COND` (a value, then a trailing guard) doesn't need
+    // special handling here — parseExpr() already produces
+    // TrailingIf{EXPR, COND} for that on its own.
+    if (check(TokenType::If)) {
+        advance(); // if
+        auto trailing = std::make_unique<ast::Expr>();
+        trailing->location = currentLocation();
+        auto condition = parseExpr();
+        trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
+        expr->kind = ast::ReturnExpr{std::move(trailing)};
+        return expr;
+    }
+
     auto value = parseExpr();
     expr->kind = ast::ReturnExpr{std::move(value)};
     return expr;
@@ -2049,6 +2093,16 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     auto block = std::make_unique<ast::MainBlock>();
     block->location = currentLocation();
     expect(TokenType::Main, "Expected 'main'");
+
+    // Optional params: main(args) do ... end — bound to the script's
+    // command-line arguments ([String]) when the body runs.
+    if (match(TokenType::LParen)) {
+        if (!check(TokenType::RParen)) {
+            block->params = parseParams();
+        }
+        expect(TokenType::RParen, "Expected ')' after main parameters");
+    }
+
     expect(TokenType::Do, "Expected 'do' after 'main'");
     skipNewlines();
 

@@ -23,6 +23,8 @@ add_library(kex_lib
     src/interpreter/stdlib/string.cxx
     src/interpreter/stdlib/integer.cxx
     src/interpreter/stdlib/stream.cxx
+    src/interpreter/stdlib/map.cxx
+    src/interpreter/stdlib/env.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)

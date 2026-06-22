@@ -146,7 +146,7 @@ type_annotation
 
 (* ===== Main ===== *)
 
-main_block = MAIN DO body END ;
+main_block = MAIN ( LPAREN params RPAREN )? DO body END ;
 
 (* ===== Compiled ===== *)
 
@@ -234,11 +234,11 @@ atom_literal = COLON LOWER_IDENT ;
 binary_op
   = PLUS | MINUS | STAR | SLASH | PERCENT
   | EQ_EQ | NOT_EQ | LESS_THAN | GREATER_THAN | LESS_EQ | GREATER_EQ
-  | AND_AND | PIPE_PIPE
+  | AND_AND | PIPE_PIPE | AND | OR        (* AND/OR are word-form aliases for AND_AND/PIPE_PIPE *)
   | DOT_DOT
   ;
 
-unary_op = MINUS | BANG ;
+unary_op = MINUS | BANG | NOT ;            (* NOT is a word-form alias for BANG *)
 
 (* ===== Collections ===== *)
 
@@ -356,6 +356,7 @@ arg
 
 (* Keywords *)
 AFTER    = "after" ;
+AND      = "and" ;
 BLOCK    = "Block" ;
 COMPILED = "compiled" ;
 DO       = "do" ;
@@ -373,6 +374,8 @@ MAKE     = "make" ;
 MATCH    = "match" ;
 MODULE   = "module" ;
 NONE     = "None" ;
+NOT      = "not" ;
+OR       = "or" ;
 PRIVATE  = "private" ;
 PUBLIC   = "public" ;
 RECEIVE  = "receive" ;

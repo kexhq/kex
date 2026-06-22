@@ -5,6 +5,7 @@ namespace kex {
 
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"after", TokenType::After},
+    {"and", TokenType::And},
     {"compiled", TokenType::Compiled},
     {"do", TokenType::Do},
     {"elif", TokenType::Elif},
@@ -20,6 +21,8 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"make", TokenType::Make},
     {"match", TokenType::Match},
     {"module", TokenType::Module},
+    {"not", TokenType::Not},
+    {"or", TokenType::Or},
     {"private", TokenType::Private},
     {"public", TokenType::Public},
     {"receive", TokenType::Receive},
@@ -53,7 +56,7 @@ auto Lexer::nextToken() -> Token {
     if (isLowerAlpha(c) || c == '_') return lexIdentifier();
     if (isUpperAlpha(c)) {
         std::string ident(1, c);
-        while (!atEnd() && (isAlpha(peek()) || isDigit(peek()))) {
+        while (!atEnd() && isIdentChar(peek())) {
             ident += advance();
         }
         if (ident == "None") return makeToken(TokenType::None, ident);

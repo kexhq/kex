@@ -15,6 +15,10 @@ record Parser do
   pos : Int = 0
 end
 
+let isDigit?(c: String) -> Bool do
+  return c >= "0" and c <= "9"
+end
+
 make Parser do
   let parse(input: String) -> Result<Json, ParseError> do
     let parser = Parser { input: input }
@@ -180,9 +184,6 @@ make Parser do
       end
     end
 
-    let isDigit?(c: String) -> Bool do
-      return c >= "0" && c <= "9"
-    end
   end
 end
 
