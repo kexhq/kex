@@ -1,0 +1,5 @@
+# Calling an undefined function is a runtime error.
+main do
+  IO.printLine("before")
+  IO.printLine(doesNotExist())
+end

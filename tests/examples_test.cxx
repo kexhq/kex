@@ -42,6 +42,18 @@ auto runFile(const std::string& path) -> std::string {
     return evaluator.output();
 }
 
+// Like runFile, but reports success/failure instead of throwing — used to
+// catch examples that parse fine but blow up at runtime (e.g. calling a
+// stdlib function that was never registered).
+auto runFileOk(const std::string& path) -> bool {
+    try {
+        runFile(path);
+        return true;
+    } catch (...) {
+        return false;
+    }
+}
+
 int main() {
     describe("Examples — All Parse", []() {
         it("basics.kex", []() { assertTrue(parseFile("examples/basics.kex")); });
@@ -63,6 +75,65 @@ int main() {
         it("types.kex", []() { assertTrue(parseFile("examples/types.kex")); });
         it("vectors.kex", []() { assertTrue(parseFile("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
+        it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
+        it("fizzbuzz.kex", []() { assertTrue(parseFile("examples/fizzbuzz.kex")); });
+        it("fizzbuzz_abstraction.kex", []() { assertTrue(parseFile("examples/fizzbuzz_abstraction.kex")); });
+        it("fizzbuzz_functional.kex", []() { assertTrue(parseFile("examples/fizzbuzz_functional.kex")); });
+        it("fizzbuzz_pattern_matching.kex", []() { assertTrue(parseFile("examples/fizzbuzz_pattern_matching.kex")); });
+        it("fizzbuzz_recursive.kex", []() { assertTrue(parseFile("examples/fizzbuzz_recursive.kex")); });
+        it("fizzbuzz_simple.kex", []() { assertTrue(parseFile("examples/fizzbuzz_simple.kex")); });
+        it("hello.kex", []() { assertTrue(parseFile("examples/hello.kex")); });
+        it("stdlib_demo.kex", []() { assertTrue(parseFile("examples/stdlib_demo.kex")); });
+        it("test_union.kex", []() { assertTrue(parseFile("examples/test_union.kex")); });
+    });
+
+    // Parsing is not enough to catch regressions like a stdlib function
+    // that's referenced but never registered — only running the example
+    // surfaces that. Every example is expected to run without throwing.
+    describe("Examples — All Run", []() {
+        it("basics.kex", []() { assertTrue(runFileOk("examples/basics.kex")); });
+        it("closures.kex", []() { assertTrue(runFileOk("examples/closures.kex")); });
+        it("compiled.kex", []() { assertTrue(runFileOk("examples/compiled.kex")); });
+        it("env.kex", []() { assertTrue(runFileOk("examples/env.kex")); });
+        it("error_handling.kex", []() { assertTrue(runFileOk("examples/error_handling.kex")); });
+        it("fizzbuzz.kex", []() { assertTrue(runFileOk("examples/fizzbuzz.kex")); });
+        it("fizzbuzz_abstraction.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_abstraction.kex")); });
+        it("fizzbuzz_functional.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_functional.kex")); });
+        it("fizzbuzz_pattern_matching.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_pattern_matching.kex")); });
+        it("fizzbuzz_recursive.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_recursive.kex")); });
+        it("fizzbuzz_simple.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_simple.kex")); });
+        it("generics.kex", []() { assertTrue(runFileOk("examples/generics.kex")); });
+        it("hello.kex", []() { assertTrue(runFileOk("examples/hello.kex")); });
+        it("html_dsl.kex", []() { assertTrue(runFileOk("examples/html_dsl.kex")); });
+        it("maps.kex", []() { assertTrue(runFileOk("examples/maps.kex")); });
+        it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
+        it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });
+        it("pattern_matching.kex", []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
+        it("processes.kex", []() { assertTrue(runFileOk("examples/processes.kex")); });
+        it("real_world.kex", []() { assertTrue(runFileOk("examples/real_world.kex")); });
+        it("records.kex", []() { assertTrue(runFileOk("examples/records.kex")); });
+        it("stdlib_demo.kex", []() { assertTrue(runFileOk("examples/stdlib_demo.kex")); });
+        it("streams.kex", []() { assertTrue(runFileOk("examples/streams.kex")); });
+        it("test_union.kex", []() { assertTrue(runFileOk("examples/test_union.kex")); });
+        it("types.kex", []() { assertTrue(runFileOk("examples/types.kex")); });
+        it("vectors.kex", []() { assertTrue(runFileOk("examples/vectors.kex")); });
+        it("vectors_advanced.kex", []() { assertTrue(runFileOk("examples/vectors_advanced.kex")); });
+
+        it("json_parser.kex", []() {
+            // Used to fail with "Undefined function: parse" — Float had no
+            // static `parse` (see registerIntegerBuiltins's Float::parse).
+            auto output = runFile("examples/json_parser.kex");
+            assertTrue(output.find("Parsed: JsonObject(") != std::string::npos, output);
+        });
+        it("testing.kex", []() {
+            // Rewritten to use real, parenthesized describe/it/assert
+            // calls (see registerTestBuiltins) against a User record and
+            // Integer.even?/odd? defined right in the example — the
+            // original relied on bare no-parens calls (unsupported) and on
+            // Mock/before/MyServer/Config/dividesBy?, none of which exist.
+            auto output = runFile("examples/testing.kex");
+            assertTrue(output.find("5 passed, 0 failed") != std::string::npos, output);
+        });
     });
 
     describe("Examples — Run (vectors.kex)", []() {

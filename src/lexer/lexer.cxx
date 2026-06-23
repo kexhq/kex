@@ -130,6 +130,7 @@ auto Lexer::nextToken() -> Token {
             return makeToken(TokenType::Percent);
 
         case '"': return lexString();
+        case '\'': return lexChar();
 
         default:
             return errorToken(std::string("Unexpected character: ") + c);
@@ -286,6 +287,35 @@ auto Lexer::lexString() -> Token {
     advance(); // closing "
 
     return makeToken(TokenType::String, str);
+}
+
+auto Lexer::lexChar() -> Token {
+    if (atEnd()) return errorToken("Unterminated char literal");
+
+    char c;
+    if (peek() == '\\') {
+        advance();
+        if (atEnd()) return errorToken("Unterminated char literal escape");
+        char escaped = advance();
+        switch (escaped) {
+            case 'n': c = '\n'; break;
+            case 'r': c = '\r'; break;
+            case 't': c = '\t'; break;
+            case '\\': c = '\\'; break;
+            case '\'': c = '\''; break;
+            case '0': c = '\0'; break;
+            default: c = escaped; break;
+        }
+    } else if (peek() == '\'') {
+        return errorToken("Empty char literal");
+    } else {
+        c = advance();
+    }
+
+    if (atEnd() || peek() != '\'') return errorToken("Unterminated char literal");
+    advance(); // closing '
+
+    return makeToken(TokenType::Char, std::string(1, c));
 }
 
 auto Lexer::lexAtom() -> Token {

@@ -143,6 +143,7 @@ struct Pattern {
 struct IntLiteral { std::string value; };
 struct FloatLiteral { std::string value; };
 struct StringLiteral { std::string value; };
+struct CharLiteral { char value; };
 struct BoolLiteral { bool value; };
 struct NoneLiteral {};
 struct AtomLiteral { std::string name; };
@@ -297,6 +298,7 @@ struct Expr {
         IntLiteral,
         FloatLiteral,
         StringLiteral,
+        CharLiteral,
         BoolLiteral,
         NoneLiteral,
         AtomLiteral,

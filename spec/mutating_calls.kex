@@ -1,0 +1,22 @@
+# `!` mutating calls rebind a `var` binding to a new value; the underlying
+# value itself is never touched in place, and `let` bindings reject `!`.
+main do
+  var x = [1, 2, 3]
+  x.push!(4)
+  IO.printLine(x)
+
+  # Aliasing: y starts out pointing at the same list as x, but mutating y
+  # rebinds only y — x's list is untouched.
+  var y = x
+  y.push!(5)
+  IO.printLine(x)
+  IO.printLine(y)
+
+  var name = "hello"
+  name.upcase!
+  IO.printLine(name)
+
+  let frozen = [1, 2, 3]
+  frozen.push!(4)
+  IO.printLine("unreachable")
+end

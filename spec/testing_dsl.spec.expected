@@ -1,0 +1,13 @@
+assert
+  ✓ passes silently on a truthy value
+  ✓ supports a custom failure message
+a group with one passing and one failing test
+  ✓ passes
+  ✗ fails: assertion failed: math is broken
+nesting
+  indents one level per describe
+    ✓ still runs
+it survives more than just failed asserts
+  ✗ catches an ordinary runtime error too, not just assert failures: spec/testing_dsl.spec.kex:36:12: runtime error: Undefined variable: doesNotExist
+  ✓ still runs after the previous test errored
+Parse error: assertion failed: assert outside of it propagates as an uncaught error

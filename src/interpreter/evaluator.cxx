@@ -1,6 +1,7 @@
 #include "evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
+#include <iostream>
 
 namespace kex::interpreter {
 
@@ -21,6 +22,15 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
         if (auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
             lastResult = execMainBlock(**main);
         }
+    }
+
+    // describe/it/assert summary — only printed if any `it` ran, so
+    // programs that don't use the testing DSL see no extra output.
+    if (m_testsPassed + m_testsFailed > 0) {
+        std::string summary = "\n" + std::to_string(m_testsPassed) + " passed, "
+            + std::to_string(m_testsFailed) + " failed\n";
+        m_output += summary;
+        std::cout << summary;
     }
 
     return lastResult;
@@ -80,8 +90,11 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
 
 auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     if (def.staticBlock) {
+        // Static constructors/constants are namespaced under the type
+        // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
+        // "Static Functions (Constructors)".
         for (const auto& func : def.staticBlock->functions) {
-            execFunctionDef(*func);
+            execFunctionDef(*func, def.name);
         }
     }
     // Register sum-type variant constructors with args (Just(A), Ok(A),
@@ -130,8 +143,11 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def) -> void {
     m_env->define(def.name, Value::record(def.name, {}));
     m_recordDefs[def.name] = &def;
     if (def.staticBlock) {
+        // Static constructors/constants are namespaced under the record
+        // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
+        // "Static Functions (Constructors)".
         for (const auto& func : def.staticBlock->functions) {
-            execFunctionDef(*func);
+            execFunctionDef(*func, def.name);
         }
     }
 }
@@ -232,6 +248,11 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                 }
 
                 if (matched) {
+                    // catch(...) (not just ReturnException) so a RuntimeError
+                    // — e.g. a failed `assert` caught higher up by `it` — still
+                    // pops this scope before propagating; otherwise m_env
+                    // leaks one level deep for the rest of the program (see
+                    // the identical guard on the MatchExpr clause loop above).
                     try {
                         auto result = evalBody(clause.body);
                         popEnv();
@@ -239,6 +260,9 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                     } catch (ReturnException& ret) {
                         popEnv();
                         return ret.value();
+                    } catch (...) {
+                        popEnv();
+                        throw;
                     }
                 }
 
@@ -363,6 +387,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             return Value::string(result);
         }
+        else if constexpr (std::is_same_v<T, ast::CharLiteral>) {
+            return Value::character(node.value);
+        }
         else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
             return Value::boolean(node.value);
         }
@@ -436,14 +463,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             auto value = node.value ? eval(*node.value) : Value::none();
-            m_env->define(node.name, value);
+            m_env->define(node.name, value, /*isMutable=*/true);
             return value;
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             auto value = node.value ? eval(*node.value) : Value::none();
-            if (!m_env->set(node.name, value)) {
+            if (!m_env->has(node.name)) {
                 throw RuntimeError("Undefined variable: " + node.name, expr.location);
             }
+            if (!m_env->isMutable(node.name)) {
+                throw RuntimeError("Cannot assign to immutable binding: " + node.name, expr.location);
+            }
+            m_env->set(node.name, value);
             return Value::none();
         }
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
@@ -599,10 +630,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
             // For mutating calls, reassign back
             if (node.mutating) {
-                auto result = callFunction(mangledName, args, namedArgs, expr.location);
-                if (auto* ident = std::get_if<ast::Identifier>(&node.receiver->kind)) {
-                    m_env->set(ident->name, result);
+                auto* ident = std::get_if<ast::Identifier>(&node.receiver->kind);
+                if (!ident) {
+                    throw RuntimeError("'!' requires a variable binding as the receiver", expr.location);
                 }
+                if (!m_env->has(ident->name)) {
+                    throw RuntimeError("Undefined variable: " + ident->name, expr.location);
+                }
+                if (!m_env->isMutable(ident->name)) {
+                    throw RuntimeError("Cannot use '!' on immutable binding: " + ident->name, expr.location);
+                }
+                auto result = callFunction(mangledName, args, namedArgs, expr.location);
+                m_env->set(ident->name, result);
                 return result;
             }
 
@@ -745,10 +784,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         m_env->define(paramNames[i], args[i]);
                     }
                     ValuePtr result;
+                    // catch(...) so a RuntimeError propagating through this
+                    // lambda (e.g. a failed `assert` caught higher up by
+                    // `it`) still restores m_env before unwinding further —
+                    // same reasoning as the MatchExpr/function-clause guards.
                     try {
                         result = evalBody(*bodyPtr);
                     } catch (ReturnException& ret) {
                         result = ret.value();
+                    } catch (...) {
+                        m_env = prevEnv;
+                        throw;
                     }
                     m_env = prevEnv;
                     return result;
@@ -875,12 +921,41 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
 auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right,
                              SourceLocation loc) -> ValuePtr {
+    // Operator overloading: `make Type do let +(other) -> Type ... end`
+    // registers "Type::+", dispatched here the same way method calls
+    // dispatch on receiver type, before any built-in handling.
+    if (auto* rec = std::get_if<RecordValue>(&left->data)) {
+        std::string opSymbol;
+        switch (op) {
+            case TokenType::Plus:       opSymbol = "+";  break;
+            case TokenType::Minus:      opSymbol = "-";  break;
+            case TokenType::Star:       opSymbol = "*";  break;
+            case TokenType::Slash:      opSymbol = "/";  break;
+            case TokenType::Percent:    opSymbol = "%";  break;
+            case TokenType::EqEq:       opSymbol = "=="; break;
+            case TokenType::NotEq:      opSymbol = "!="; break;
+            case TokenType::LessThan:   opSymbol = "<";  break;
+            case TokenType::GreaterThan: opSymbol = ">"; break;
+            case TokenType::LessEq:     opSymbol = "<="; break;
+            case TokenType::GreaterEq:  opSymbol = ">="; break;
+            default: break;
+        }
+        if (!opSymbol.empty()) {
+            auto mangled = rec->typeName + "::" + opSymbol;
+            if (m_env->get(mangled)) {
+                return callFunction(mangled, {left, right}, {}, loc);
+            }
+        }
+    }
+
     auto* li = std::get_if<IntValue>(&left->data);
     auto* ri = std::get_if<IntValue>(&right->data);
     auto* lf = std::get_if<FloatValue>(&left->data);
     auto* rf = std::get_if<FloatValue>(&right->data);
     auto* ls = std::get_if<StringValue>(&left->data);
     auto* rs = std::get_if<StringValue>(&right->data);
+    auto* lc = std::get_if<CharValue>(&left->data);
+    auto* rc = std::get_if<CharValue>(&right->data);
     auto* lb = std::get_if<BoolValue>(&left->data);
     auto* rb = std::get_if<BoolValue>(&right->data);
 
@@ -890,7 +965,15 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (lf && rf) return Value::floating(lf->value + rf->value);
             if (li && rf) return Value::floating(li->value + rf->value);
             if (lf && ri) return Value::floating(lf->value + ri->value);
-            if (ls && rs) return Value::string(ls->value + rs->value);
+            // String/Char/[Char] concatenate as text — e.g. 'a' + 'b' ==
+            // "ab", "ab" + 'c' == "abc". This is broader than the Char/
+            // String *equality* rule (Char isn't a String for ==) — here
+            // we just want "what text does this contribute", which a bare
+            // Char answers fine; see textContent vs. stringOrCharListText
+            // in value.cxx.
+            if (auto lt = textContent(left)) {
+                if (auto rt = textContent(right)) return Value::string(*lt + *rt);
+            }
             throw RuntimeError("Cannot add " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Minus:
@@ -930,24 +1013,28 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value < ri->value);
             if (lf && rf) return Value::boolean(lf->value < rf->value);
             if (ls && rs) return Value::boolean(ls->value < rs->value);
+            if (lc && rc) return Value::boolean(lc->value < rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::GreaterThan:
             if (li && ri) return Value::boolean(li->value > ri->value);
             if (lf && rf) return Value::boolean(lf->value > rf->value);
             if (ls && rs) return Value::boolean(ls->value > rs->value);
+            if (lc && rc) return Value::boolean(lc->value > rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::LessEq:
             if (li && ri) return Value::boolean(li->value <= ri->value);
             if (lf && rf) return Value::boolean(lf->value <= rf->value);
             if (ls && rs) return Value::boolean(ls->value <= rs->value);
+            if (lc && rc) return Value::boolean(lc->value <= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::GreaterEq:
             if (li && ri) return Value::boolean(li->value >= ri->value);
             if (lf && rf) return Value::boolean(lf->value >= rf->value);
             if (ls && rs) return Value::boolean(ls->value >= rs->value);
+            if (lc && rc) return Value::boolean(lc->value >= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::AmpAmp:
@@ -1085,6 +1172,12 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 auto* sv = std::get_if<StringValue>(&value->data);
                 return sv && sv->value == pat.literal.value;
             }
+            if (pat.literal.type == TokenType::Char) {
+                // Char is its own type, not a 1-character String — a
+                // char-literal pattern only matches a Char value.
+                auto* cv = std::get_if<CharValue>(&value->data);
+                return cv && cv->value == (pat.literal.value.empty() ? '\0' : pat.literal.value[0]);
+            }
             if (pat.literal.type == TokenType::True) {
                 auto* bv = std::get_if<BoolValue>(&value->data);
                 return bv && bv->value;
@@ -1209,6 +1302,8 @@ auto Evaluator::registerBuiltins() -> void {
     registerStreamBuiltins();
     registerMapBuiltins();
     registerEnvBuiltins();
+    registerMathBuiltins();
+    registerTestBuiltins();
 }
 
 auto Evaluator::pushEnv() -> void {

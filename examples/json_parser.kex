@@ -15,10 +15,6 @@ record Parser do
   pos : Int = 0
 end
 
-let isDigit?(c: String) -> Bool do
-  return c >= "0" and c <= "9"
-end
-
 make Parser do
   let parse(input: String) -> Result<Json, ParseError> do
     let parser = Parser { input: input }
@@ -27,7 +23,7 @@ make Parser do
   end
 
   private do
-    let current({ input, pos }) -> String? do
+    let current({ input, pos }) -> Char? do
       return None if pos >= input.length
       return Just(input.at(pos))
     end
@@ -40,9 +36,9 @@ make Parser do
       var p = this
       loop do
         match p.current do
-          Just(" ") -> p = p.advance
-          Just("\n") -> p = p.advance
-          Just("\t") -> p = p.advance
+          Just(' ') -> p = p.advance
+          Just('\n') -> p = p.advance
+          Just('\t') -> p = p.advance
           _ -> return p
         end
       end
@@ -53,50 +49,58 @@ make Parser do
 
       match p.current do
         None -> Error(UnexpectedEnd)
-        Just("n") -> p.parseNull
-        Just("t") -> p.parseBool
-        Just("f") -> p.parseBool
-        Just("\"") -> p.parseString
-        Just("[") -> p.parseArray
-        Just("{") -> p.parseObject
-        Just(c) if isDigit?(c) || c == "-" -> p.parseNumber
-        Just(c) -> Error(UnexpectedChar(c, p.pos))
+        Just('n') -> p.parseLiteral("null", JsonNull)
+        Just('t') -> p.parseLiteral("true", JsonBool(true))
+        Just('f') -> p.parseLiteral("false", JsonBool(false))
+        Just('"') -> p.parseString
+        Just('[') -> p.parseArray
+        Just('{') -> p.parseObject
+        Just(c) if c.digit? || c == '-' -> p.parseNumber
+        Just(c) -> Error(UnexpectedChar("${c}", p.pos))
       end
     end
 
-    let parseNull() -> Result<(Json, Parser), ParseError> do
-      # consume "null"
-      let p = this.advance.advance.advance.advance
-      return Ok((JsonNull, p))
+    # Checks that the next `word.length` characters are exactly `word`
+    # (e.g. "null", "true", "false") and returns the parser positioned
+    # just past it — without this, `parseNull`/`parseBool` would accept
+    # any input starting with 'n'/'t'/'f' (e.g. "nul" or "txyz") as a
+    # valid literal, since they only ever checked the first character.
+    let expectLiteral(word: String) -> Result<Parser, ParseError> do
+      var p = this
+      var i = 0
+      loop do
+        if i >= word.length do
+          return Ok(p)
+        end
+        if p.current == Just(word.at(i)) do
+          p = p.advance
+          i = i + 1
+        else do
+          return Error(UnexpectedChar(word, this.pos))
+        end
+      end
     end
 
-    let parseBool() -> Result<(Json, Parser), ParseError> do
-      match this.current do
-        Just("t") -> do
-          let p = this.advance.advance.advance.advance
-          return Ok((JsonBool(true), p))
-        end
-        Just("f") -> do
-          let p = this.advance.advance.advance.advance.advance
-          return Ok((JsonBool(false), p))
-        end
-        _ -> Error(UnexpectedChar("", this.pos))
-      end
+    # null/true/false are all "match a fixed word, then produce a fixed
+    # value" — one helper instead of a near-identical function per literal.
+    let parseLiteral(word: String, value: Json) -> Result<(Json, Parser), ParseError> do
+      let p = this.expectLiteral(word)?
+      return Ok((value, p))
     end
 
     let parseString() -> Result<(Json, Parser), ParseError> do
       var p = this.advance   # skip opening quote
-      var chars: [String] = []
+      var chars: [Char] = []
 
       loop do
         match p.current do
           None -> return Error(UnexpectedEnd)
-          Just("\"") -> return Ok((JsonString(chars.join("")), p.advance))
-          Just("\\") -> do
+          Just('"') -> return Ok((JsonString(chars.join("")), p.advance))
+          Just('\\') -> do
             p = p.advance
             match p.current do
-              Just("n") -> chars.push!("\n")
-              Just("t") -> chars.push!("\t")
+              Just('n') -> chars.push!('\n')
+              Just('t') -> chars.push!('\t')
               Just(c) -> chars.push!(c)
               None -> return Error(UnexpectedEnd)
             end
@@ -114,7 +118,7 @@ make Parser do
       var p = this.advance.skipWhitespace   # skip [
       var items: [Json] = []
 
-      if p.current == Just("]") do
+      if p.current == Just(']') do
         return Ok((JsonArray([]), p.advance))
       end
 
@@ -124,8 +128,8 @@ make Parser do
         p = nextP.skipWhitespace
 
         match p.current do
-          Just(",") -> p = p.advance.skipWhitespace
-          Just("]") -> return Ok((JsonArray(items), p.advance))
+          Just(',') -> p = p.advance.skipWhitespace
+          Just(']') -> return Ok((JsonArray(items), p.advance))
           _ -> return Error(UnexpectedChar("expected , or ]", p.pos))
         end
       end
@@ -135,7 +139,7 @@ make Parser do
       var p = this.advance.skipWhitespace   # skip {
       var obj: { String: Json } = {}
 
-      if p.current == Just("}") do
+      if p.current == Just('}') do
         return Ok((JsonObject({}), p.advance))
       end
 
@@ -151,8 +155,8 @@ make Parser do
         p = afterValue.skipWhitespace
 
         match p.current do
-          Just(",") -> p = p.advance.skipWhitespace
-          Just("}") -> return Ok((JsonObject(obj), p.advance))
+          Just(',') -> p = p.advance.skipWhitespace
+          Just('}') -> return Ok((JsonObject(obj), p.advance))
           _ -> return Error(UnexpectedChar("expected , or }", p.pos))
         end
       end
@@ -160,16 +164,16 @@ make Parser do
 
     let parseNumber() -> Result<(Json, Parser), ParseError> do
       var p = this
-      var chars: [String] = []
+      var chars: [Char] = []
 
-      if p.current == Just("-") do
-        chars.push!("-")
+      if p.current == Just('-') do
+        chars.push!('-')
         p = p.advance
       end
 
       loop do
         match p.current do
-          Just(c) if isDigit?(c) || c == "." -> do
+          Just(c) if c.digit? || c == '.' -> do
             chars.push!(c)
             p = p.advance
           end

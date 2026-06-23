@@ -1,0 +1,2 @@
+before
+Parse error: spec/error_division_by_zero.kex:4:20: runtime error: Division by zero

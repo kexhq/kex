@@ -1,0 +1,12 @@
+# Float.parse / Integer.parse — namespaced under the primitive type, same
+# convention as Math.sqrt etc. Trailing garbage after a valid number is
+# rejected (Float.parse("3.14xyz") errors rather than silently truncating).
+main do
+  IO.printLine(Float.parse("3.14"))
+  IO.printLine(Float.parse("-2"))
+  IO.printLine(Float.parse("abc"))
+  IO.printLine(Float.parse("3.14xyz"))
+  IO.printLine(Integer.parse("42"))
+  IO.printLine(Integer.parse("-7"))
+  IO.printLine(Integer.parse("4.5"))
+end

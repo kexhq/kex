@@ -28,6 +28,7 @@ private:
     auto lexIdentifier() -> Token;
     auto lexNumber() -> Token;
     auto lexString() -> Token;
+    auto lexChar() -> Token;
     auto lexAtom() -> Token;
     auto lexSpliceIdent() -> Token;
 

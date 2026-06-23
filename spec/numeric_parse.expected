@@ -1,0 +1,7 @@
+Ok(3.14)
+Ok(-2.0)
+Error(invalid float: abc)
+Error(invalid float: 3.14xyz)
+Ok(42)
+Ok(-7)
+Error(invalid integer: 4.5)

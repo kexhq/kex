@@ -77,6 +77,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Integer: return "Integer";
         case TokenType::Float: return "Float";
         case TokenType::String: return "String";
+        case TokenType::Char: return "Char";
         case TokenType::Atom: return "Atom";
         case TokenType::Newline: return "Newline";
         case TokenType::Eof: return "Eof";

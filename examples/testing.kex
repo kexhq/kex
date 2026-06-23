@@ -1,65 +1,61 @@
-# Testing — RSpec-style, stdlib framework
+# Testing — describe/it/assert, the stdlib's RSpec-style framework.
+#
+# Calls are parenthesized (`describe("name") do`, not `describe "name" do`)
+# — the grammar has no support for a bare positional argument without
+# parens. No `main do...end` wrapper is needed: a bare top-level expression
+# like `describe(...) do ... end` is already wrapped into one by the parser.
+#
+# `before`/`Mock.*`/`using Test` and a `kex test` subcommand are sketched in
+# docs/testing.md but not implemented yet — this example sticks to what's
+# real today.
 
-using Test
+record User do
+  name : String
+  age : Int
+end
 
-describe Integer do
-  describe "dividesBy?" do
-    it "returns true when divisible" do
-      assert 10.dividesBy?(5)
-      assert 12.dividesBy?(3)
-    end
-
-    it "returns false when not divisible" do
-      assert !7.dividesBy?(3)
-      assert !10.dividesBy?(3)
-    end
+make User do
+  let greet -> String do
+    "Hi, ${@name}!"
   end
 
-  describe "even?" do
-    it "identifies even numbers" do
-      assert 4.even?
-      assert 0.even?
-      assert !3.even?
+  let adult? -> Bool do
+    @age >= 18
+  end
+end
+
+describe("Integer") do
+  describe("even?/odd?") do
+    it("identifies even numbers") do
+      assert(4.even?)
+      assert(0.even?)
+      assert(!3.even?)
+    end
+
+    it("identifies odd numbers") do
+      assert(3.odd?)
+      assert(!4.odd?)
     end
   end
 end
 
-describe User do
+describe("User") do
   let sampleUser = User { name: "Alice", age: 30 }
 
-  describe "greet" do
-    it "greets by name" do
-      assert sampleUser.greet == "Hi, Alice!"
+  describe("greet") do
+    it("greets by name") do
+      assert(sampleUser.greet == "Hi, Alice!")
     end
   end
 
-  describe "adult?" do
-    it "returns true for age >= 18" do
-      assert sampleUser.adult?
+  describe("adult?") do
+    it("returns true for age >= 18") do
+      assert(sampleUser.adult?)
     end
 
-    it "returns false for age < 18" do
+    it("returns false for age < 18") do
       let child = User { name: "Kid", age: 10 }
-      assert !child.adult?
-    end
-  end
-end
-
-describe MyServer do
-  before do
-    Mock.File.expect(:read, "config.toml", returns: Ok("port=8080\nhost=localhost"))
-  end
-
-  describe "loadConfig" do
-    it "parses config file" do
-      let config = MyServer.loadConfig("config.toml")
-      assert config == Ok(Config { port: 8080, host: "localhost" })
-    end
-
-    it "returns error for missing file" do
-      Mock.File.expect(:read, "missing.toml", returns: Error(IOError(:not_found)))
-      let result = MyServer.loadConfig("missing.toml")
-      assert result.error?
+      assert(!child.adult?)
     end
   end
 end

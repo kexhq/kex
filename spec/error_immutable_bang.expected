@@ -1,0 +1,2 @@
+[1, 2, 3]
+Parse error: spec/error_immutable_bang.kex:6:15: runtime error: Cannot use '!' on immutable binding: frozen

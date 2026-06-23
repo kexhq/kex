@@ -41,6 +41,38 @@ auto readFile(const std::string& path) -> std::string {
     return buffer.str();
 }
 
+// Convention: `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need
+// to redeclare its types/records/functions — running the spec auto-loads
+// the base file's declarations (skipping its own `main` block(s), so its
+// demo output/side effects don't run) into the same scope first. Looked up
+// next to the spec file, and — since this project keeps specs in spec/
+// alongside examples in a sibling examples/ — also under examples/ if the
+// spec's directory is named "spec".
+auto specBaseCandidates(const std::string& filepath) -> std::vector<std::string> {
+    static const std::string suffix = ".spec.kex";
+    if (filepath.size() <= suffix.size()) return {};
+    if (filepath.compare(filepath.size() - suffix.size(), suffix.size(), suffix) != 0) return {};
+
+    std::string stem = filepath.substr(0, filepath.size() - suffix.size());
+    auto slash = stem.find_last_of('/');
+    std::string dir = slash == std::string::npos ? "" : stem.substr(0, slash);
+    std::string name = slash == std::string::npos ? stem : stem.substr(slash + 1);
+
+    std::vector<std::string> candidates = {stem + ".kex"};
+    const std::string specSuffix = "spec";
+    if (dir.size() >= specSuffix.size() &&
+        dir.compare(dir.size() - specSuffix.size(), specSuffix.size(), specSuffix) == 0) {
+        std::string parent = dir.substr(0, dir.size() - specSuffix.size());
+        candidates.push_back(parent + "examples/" + name + ".kex");
+    }
+    return candidates;
+}
+
+auto fileExists(const std::string& path) -> bool {
+    std::ifstream probe(path);
+    return probe.good();
+}
+
 auto printAst(const kex::ast::Program& program) -> void {
     std::cout << "Program (" << program.items.size() << " items)\n";
     for (const auto& item : program.items) {
@@ -103,6 +135,8 @@ auto colorValue(const kex::interpreter::ValuePtr& val) -> std::string {
         }
         else if constexpr (std::is_same_v<T, StringValue>)
             return std::string(color::green) + "\"" + v.value + "\"" + color::reset;
+        else if constexpr (std::is_same_v<T, CharValue>)
+            return std::string(color::green) + "'" + std::string(1, v.value) + "'" + color::reset;
         else if constexpr (std::is_same_v<T, BoolValue>)
             return std::string(color::magenta) + (v.value ? "true" : "false") + color::reset;
         else if constexpr (std::is_same_v<T, NoneValue>)
@@ -139,6 +173,21 @@ auto colorValue(const kex::interpreter::ValuePtr& val) -> std::string {
         else if constexpr (std::is_same_v<T, StreamValue>)
             return std::string(color::cyan) + "<Stream>" + color::reset;
         else if constexpr (std::is_same_v<T, RecordValue>) {
+            // Positional constructor (Just(x), Ok(x), Number(n), ...): fields
+            // keyed "0", "1", ... — print as Name(v0, v1, ...), matching
+            // Value::toRepr()'s convention, instead of the raw field dump.
+            bool positional = !v.fields.empty();
+            for (size_t i = 0; positional && i < v.fields.size(); i++) {
+                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
+            }
+            if (positional) {
+                std::string result = std::string(color::cyan) + v.typeName + color::reset + "(";
+                for (size_t i = 0; i < v.fields.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += colorValue(v.fields.at(std::to_string(i)));
+                }
+                return result + ")";
+            }
             std::string result = std::string(color::cyan) + v.typeName + color::reset + " { ";
             bool first = true;
             for (const auto& [key, val] : v.fields) {
@@ -477,6 +526,33 @@ int main(int argc, char* argv[]) {
         if (mode == "run") {
             kex::interpreter::Evaluator evaluator;
             evaluator.setArgs(scriptArgs);
+
+            // Must outlive `evaluator.execute(program)` below: the
+            // evaluator keeps raw `const ast::FunctionDef*` pointers into
+            // whatever Program owns these nodes (see m_functionDefs), so a
+            // Program that goes out of scope before the evaluator is done
+            // leaves those pointers dangling — declaring it here, not
+            // inside the loop, keeps it alive for the rest of this block.
+            kex::ast::Program declarationsOnly;
+            for (const auto& candidate : specBaseCandidates(filepath)) {
+                if (!fileExists(candidate)) continue;
+
+                auto baseSource = readFile(candidate);
+                kex::Lexer baseLexer(std::move(baseSource), candidate);
+                auto baseTokens = baseLexer.tokenizeAll();
+                kex::Parser baseParser(std::move(baseTokens), candidate);
+                auto baseProgram = baseParser.parseProgram();
+
+                declarationsOnly.items.reserve(baseProgram.items.size());
+                for (auto& item : baseProgram.items) {
+                    if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item)) {
+                        declarationsOnly.items.push_back(std::move(item));
+                    }
+                }
+                evaluator.execute(declarationsOnly);
+                break;
+            }
+
             evaluator.execute(program);
             return 0;
         }

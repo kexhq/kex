@@ -1,0 +1,7 @@
+# Using a `!` mutating call on a `let` binding is a runtime error; only
+# `var` bindings may be mutated this way.
+main do
+  let frozen = [1, 2, 3]
+  IO.printLine(frozen)
+  frozen.push!(4)
+end

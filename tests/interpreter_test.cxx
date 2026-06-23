@@ -628,7 +628,7 @@ int main() {
 
         it("unresolved namespace call to a missing function errors cleanly", []() {
             try {
-                run("main do\n  Math.PI\nend\n");
+                run("main do\n  NotANamespace.bogus\nend\n");
                 assertTrue(false, "expected an exception");
             } catch (const std::exception& e) {
                 std::string msg = e.what();
@@ -870,14 +870,24 @@ int main() {
     });
 
     describe("Interpreter — String at", []() {
-        it("returns the character at an index", []() {
+        it("returns the Char at an index", []() {
             auto result = run("main do\n  \"hello\".at(1)\nend\n");
-            assertEqual(std::get<StringValue>(result->data).value, std::string("e"));
+            assertEqual(std::get<CharValue>(result->data).value, 'e');
         });
 
-        it("returns empty string out of range", []() {
+        it("returns None out of range", []() {
             auto result = run("main do\n  \"hi\".at(5)\nend\n");
-            assertEqual(std::get<StringValue>(result->data).value, std::string(""));
+            assertTrue(std::holds_alternative<NoneValue>(result->data));
+        });
+
+        it("Char is its own type, not a 1-char String", []() {
+            auto result = run("main do\n  \"hello\".at(1) == \"e\"\nend\n");
+            assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("but [Char] IS String", []() {
+            auto result = run("main do\n  ['h', 'i'] == \"hi\"\nend\n");
+            assertTrue(std::get<BoolValue>(result->data).value);
         });
     });
 

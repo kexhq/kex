@@ -108,6 +108,8 @@ make_item
 function_def
   = FOUL? LET LOWER_IDENT function_clauses
   | FOUL? LET LOWER_IDENT QUESTION function_clauses  (* predicate functions *)
+  | FOUL? LET UPPER_IDENT function_clauses           (* static constructors, e.g. `let Polar(...) ... end` *)
+  | FOUL? LET binary_op function_clauses             (* operator overload inside `make`, e.g. `let +(other) ... end` *)
   ;
 
 function_clauses
@@ -181,6 +183,8 @@ expr
   | LOWER_IDENT
   | UPPER_IDENT
   | THIS
+  | AT LOWER_IDENT                               (* @field shorthand for this.field, inside make/record functions *)
+  | AT LOWER_IDENT LPAREN args RPAREN            (* @method(args) shorthand for this.method(args) *)
   | expr DOT LOWER_IDENT                         (* UFCS method call *)
   | expr DOT LOWER_IDENT LPAREN args RPAREN      (* UFCS method call with args *)
   | expr DOT LOWER_IDENT block                   (* UFCS method call with block *)

@@ -1,0 +1,22 @@
+# `==` does structural equality on records/ADTs and maps (compares
+# typeName + fields, or entries, recursively) — not just primitives.
+# Previously fell through to `false` for any RecordValue/MapValue,
+# silently breaking comparisons like `Just(x) == Just(y)`.
+type Option = Just(String) | Nothing
+
+record Point do
+  x : Int
+  y : Int
+end
+
+main do
+  IO.printLine(Just("a") == Just("a"))
+  IO.printLine(Just("a") == Just("b"))
+  IO.printLine(Point { x: 1, y: 2 } == Point { x: 1, y: 2 })
+  IO.printLine(Point { x: 1, y: 2 } == Point { x: 1, y: 3 })
+  IO.printLine(Ok(1) == Ok(1))
+  IO.printLine(Ok(1) == Error(1))
+  IO.printLine({ "a": 1, "b": 2 } == { "b": 2, "a": 1 })
+  IO.printLine({ "a": 1 } == { "a": 2 })
+  IO.printLine([Just(1), Just(2)] == [Just(1), Just(2)])
+end

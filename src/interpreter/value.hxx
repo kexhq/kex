@@ -2,6 +2,7 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -16,6 +17,7 @@ struct NoneValue {};
 struct IntValue { int64_t value; };
 struct FloatValue { double value; };
 struct StringValue { std::string value; };
+struct CharValue { char value; };
 struct BoolValue { bool value; };
 struct AtomValue { std::string name; };
 
@@ -55,6 +57,7 @@ struct Value {
         IntValue,
         FloatValue,
         StringValue,
+        CharValue,
         BoolValue,
         AtomValue,
         ListValue,
@@ -71,6 +74,7 @@ struct Value {
     static auto integer(int64_t v) -> ValuePtr;
     static auto floating(double v) -> ValuePtr;
     static auto string(std::string v) -> ValuePtr;
+    static auto character(char v) -> ValuePtr;
     static auto boolean(bool v) -> ValuePtr;
     static auto atom(std::string name) -> ValuePtr;
     static auto list(std::vector<ValuePtr> elems) -> ValuePtr;
@@ -84,5 +88,11 @@ struct Value {
 };
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
+
+// Text content of a String, a Char, or a ListValue whose elements are all
+// Char — nullopt for anything else. String/Char/[Char] are meant to be
+// interchangeable from the language user's standpoint; this is the shared
+// extraction point for that (see valuesEqual, toString(), `+`).
+auto textContent(const ValuePtr& v) -> std::optional<std::string>;
 
 } // namespace kex::interpreter

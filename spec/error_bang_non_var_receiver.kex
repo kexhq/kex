@@ -1,0 +1,6 @@
+# `!` mutating calls only work on a plain variable binding, since the
+# point is to rebind it; a non-variable receiver is a runtime error.
+main do
+  IO.printLine("before")
+  [1, 2, 3].push!(4)
+end

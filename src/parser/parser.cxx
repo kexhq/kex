@@ -543,9 +543,9 @@ auto Parser::parseParam() -> ast::Param {
 
     // Literal pattern
     if (check(TokenType::Integer) || check(TokenType::Float) ||
-        check(TokenType::String) || check(TokenType::True) ||
-        check(TokenType::False) || check(TokenType::None) ||
-        check(TokenType::Atom)) {
+        check(TokenType::String) || check(TokenType::Char) ||
+        check(TokenType::True) || check(TokenType::False) ||
+        check(TokenType::None) || check(TokenType::Atom)) {
         param.pattern = parsePattern();
         return param;
     }
@@ -1040,6 +1040,11 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         expr->kind = ast::StringLiteral{advance().value};
         return expr;
     }
+    if (check(TokenType::Char)) {
+        auto val = advance().value;
+        expr->kind = ast::CharLiteral{val.empty() ? '\0' : val[0]};
+        return expr;
+    }
     if (match(TokenType::True)) {
         expr->kind = ast::BoolLiteral{true};
         return expr;
@@ -1060,6 +1065,39 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     // this
     if (match(TokenType::This)) {
         expr->kind = ast::ThisExpr{};
+        return expr;
+    }
+
+    // @field / @method(args) — shorthand for this.field / this.method(args),
+    // for use inside make/record functions.
+    if (check(TokenType::At) && peekNext().type == TokenType::LowerIdent) {
+        advance(); // @
+        auto name = advance().value;
+
+        auto thisExpr = std::make_unique<ast::Expr>();
+        thisExpr->location = loc;
+        thisExpr->kind = ast::ThisExpr{};
+
+        std::vector<ast::ExprPtr> args;
+        std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+        if (match(TokenType::LParen)) {
+            if (!check(TokenType::RParen)) {
+                do {
+                    if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) || check(TokenType::Type) || check(TokenType::Match) || check(TokenType::Loop)) && peekNext().type == TokenType::Colon) {
+                        auto argName = advance().value;
+                        advance(); // :
+                        namedArgs.push_back({argName, parseExpr()});
+                    } else {
+                        args.push_back(parseExpr());
+                    }
+                } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')' after arguments");
+        }
+
+        expr->kind = ast::MethodCall{
+            std::move(thisExpr), name, std::move(args),
+            std::move(namedArgs), std::nullopt, false};
         return expr;
     }
 
@@ -1912,9 +1950,9 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 
     // Literals
     if (check(TokenType::Integer) || check(TokenType::Float) ||
-        check(TokenType::String) || check(TokenType::True) ||
-        check(TokenType::False) || check(TokenType::None) ||
-        check(TokenType::Atom)) {
+        check(TokenType::String) || check(TokenType::Char) ||
+        check(TokenType::True) || check(TokenType::False) ||
+        check(TokenType::None) || check(TokenType::Atom)) {
         pattern->kind = ast::LiteralPattern{advance()};
         return pattern;
     }
@@ -2176,6 +2214,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::Integer:
         case TokenType::Float:
         case TokenType::String:
+        case TokenType::Char:
         case TokenType::True:
         case TokenType::False:
         case TokenType::None:

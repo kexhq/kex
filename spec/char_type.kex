@@ -1,0 +1,40 @@
+# Char ('a', '\n', ...) is its own distinct type — NOT a 1-character
+# String. [Char] (a list of Char), however, *is* String: same type, fully
+# interchangeable for comparison, concatenation, and display. See
+# docs/types.md.
+main do
+  let c = "hello".at(1)
+  IO.printLine(c)
+  IO.printLine(c == 'e')
+  IO.printLine(c == "e")        # false — Char is not a 1-char String
+  IO.printLine('e' == c)
+  IO.printLine('0' <= '5')      # Char orders against Char
+
+  IO.printLine('a' + 'b')       # concatenation still produces a String
+  IO.printLine("ab" + 'c')
+  IO.printLine('a' + "bc")
+
+  let letters = ['h', 'i']
+  IO.printLine(letters)         # displays as text, not [h, i]
+  IO.printLine(letters == "hi") # true — [Char] IS String
+  IO.printLine("hi" == letters)
+  IO.printLine(letters == "hI")
+
+  IO.printLine("abc".at(1) == 'b')
+  IO.printLine("abc".at(1) == "b")  # false — Char vs String
+  IO.printLine("abc".at(10))        # None — out of range
+  IO.printLine("abc".chars)         # [Char] displays as "abc"
+
+  match "x" do
+    "x" -> IO.printLine("string pattern matches string value")
+    _ -> IO.printLine("no match")
+  end
+
+  match "abc".at(0) do
+    'a' -> IO.printLine("char pattern matches char value")
+    _ -> IO.printLine("no match")
+  end
+
+  IO.printLine('5'.digit?)
+  IO.printLine('a'.digit?)
+end

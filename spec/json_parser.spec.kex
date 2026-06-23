@@ -1,0 +1,98 @@
+# describe/it/assert spec for examples/json_parser.kex's Parser.parse.
+#
+# `<name>.spec.kex` is a spec for `<name>.kex` by convention — running this
+# file auto-loads examples/json_parser.kex's declarations (types, records,
+# make blocks) into scope first, skipping its own `main` block. See
+# specBaseCandidates in src/main.cxx. No `main do...end` wrapper is needed
+# here either: a bare top-level expression (like `describe(...) do ... end`)
+# already gets wrapped into one by the parser.
+
+describe("Parser.parse") do
+  describe("literals") do
+    it("parses null") do
+      assert(Parser.parse("null") == Ok(JsonNull))
+    end
+
+    it("parses true") do
+      assert(Parser.parse("true") == Ok(JsonBool(true)))
+    end
+
+    it("parses false") do
+      assert(Parser.parse("false") == Ok(JsonBool(false)))
+    end
+
+    it("rejects a truncated null") do
+      assert(!Parser.parse("nul").ok?)
+    end
+
+    it("rejects a literal-like prefix that isn't the literal") do
+      assert(!Parser.parse("txyz").ok?)
+    end
+  end
+
+  describe("numbers") do
+    it("parses an integer") do
+      assert(Parser.parse("42") == Ok(JsonNumber(42.0)))
+    end
+
+    it("parses a negative decimal") do
+      assert(Parser.parse("-3.5") == Ok(JsonNumber(-3.5)))
+    end
+  end
+
+  describe("strings") do
+    it("parses a simple string") do
+      assert(Parser.parse("\"hi\"") == Ok(JsonString("hi")))
+    end
+
+    it("handles escape sequences") do
+      assert(Parser.parse("\"a\\nb\"") == Ok(JsonString("a\nb")))
+    end
+  end
+
+  describe("arrays") do
+    it("parses an empty array") do
+      assert(Parser.parse("[]") == Ok(JsonArray([])))
+    end
+
+    it("parses a non-empty array") do
+      assert(Parser.parse("[1, 2, 3]") == Ok(JsonArray([JsonNumber(1.0), JsonNumber(2.0), JsonNumber(3.0)])))
+    end
+  end
+
+  describe("objects") do
+    it("parses an empty object") do
+      assert(Parser.parse("{}") == Ok(JsonObject({})))
+    end
+
+    it("parses a non-empty object") do
+      assert(Parser.parse("{\"a\": 1}") == Ok(JsonObject({ "a": JsonNumber(1.0) })))
+    end
+  end
+
+  describe("nested structures") do
+    it("parses the README-style example") do
+      let input = "{\"name\": \"Alice\", \"age\": 30, \"hobbies\": [\"coding\", \"music\"]}"
+      let expected = JsonObject({
+        "name": JsonString("Alice"),
+        "age": JsonNumber(30.0),
+        "hobbies": JsonArray([JsonString("coding"), JsonString("music")])
+      })
+      assert(Parser.parse(input) == Ok(expected))
+    end
+  end
+
+  describe("error cases") do
+    it("rejects empty input") do
+      assert(!Parser.parse("").ok?)
+    end
+
+    it("rejects an unterminated array") do
+      assert(!Parser.parse("[1, 2").ok?)
+    end
+
+    it("rejects an unexpected character") do
+      assert(!Parser.parse("@@@").ok?)
+    end
+  end
+end

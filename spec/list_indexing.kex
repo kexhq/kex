@@ -1,0 +1,13 @@
+# list[i] / list.get(i) — was silently broken: the shared `get` builtin
+# only checked MapValue, so any list index returned None instead of the
+# element. Indexing returns the raw element directly (or None/the given
+# default when out of range) — same convention as String.at(i), not
+# Map.get's Just(value)-wrapping.
+main do
+  let list = [10, 20, 30]
+  IO.printLine(list[0])
+  IO.printLine(list[2])
+  IO.printLine(list.get(1))
+  IO.printLine(list[10])
+  IO.printLine(list.get(10, 99))
+end

@@ -1,0 +1,18 @@
+# Math module — constants and functions, modeled on Ruby's Math.
+main do
+  IO.printLine(Math.PI)
+  IO.printLine(Math.sqrt(16.0))
+  IO.printLine(Math.sin(0.0))
+  IO.printLine(Math.cos(0.0))
+  IO.printLine(Math.tan(0.0))
+  IO.printLine(Math.atan2(1.0, 1.0))
+  IO.printLine(Math.log(Math.E))   # natural log
+  IO.printLine(Math.log2(8.0))
+  IO.printLine(Math.log10(1000.0))
+  IO.printLine(Math.log(8.0, 2.0)) # log base 2
+  IO.printLine(Math.hypot(3.0, 4.0))
+  IO.printLine(Math.pow(2.0, 10.0))
+  IO.printLine(Math.cbrt(27.0))
+  IO.printLine(Math.exp(0.0))
+  IO.printLine(Math.sqrt(2))       # Int args coerce to Float
+end

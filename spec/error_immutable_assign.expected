@@ -1,0 +1,2 @@
+1
+Parse error: spec/error_immutable_assign.kex:6:3: runtime error: Cannot assign to immutable binding: x

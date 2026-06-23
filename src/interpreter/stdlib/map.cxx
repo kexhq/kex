@@ -16,8 +16,20 @@ auto Evaluator::registerMapBuiltins() -> void {
 
     // get(map, key) -> V? (Just(value) / None)
     // get(map, key, default) -> V (the default itself if key is missing)
+    //
+    // Also doubles as list indexing — `list[i]` desugars to `list.get(i)`
+    // (see parsePostfix's bracket-access handling) — returning the raw
+    // element directly (or None/the default if out of range), the same
+    // convention as String.at(i), not Map's Just(value)-wrapping.
     reg("get", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
+        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
+            auto* idx = std::get_if<IntValue>(&args[1]->data);
+            if (!idx || idx->value < 0 || static_cast<size_t>(idx->value) >= list->elements.size()) {
+                return args.size() >= 3 ? args[2] : Value::none();
+            }
+            return list->elements[static_cast<size_t>(idx->value)];
+        }
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return args.size() >= 3 ? args[2] : Value::none();
         for (const auto& [k, v] : map->entries) {

@@ -25,6 +25,8 @@ add_library(kex_lib
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/env.cxx
+    src/interpreter/stdlib/math.cxx
+    src/interpreter/stdlib/test.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -76,3 +78,13 @@ add_executable(repl_test tests/repl_test.cxx)
 target_link_libraries(repl_test PRIVATE kex_lib)
 target_include_directories(repl_test PRIVATE tests)
 add_test(NAME repl_test COMMAND repl_test)
+
+# Drives the real `kex` binary's REPL loop (prompt, multi-line continuation,
+# colorValue rendering) over stdin — repl_test.cxx's ReplSession bypasses
+# main.cxx entirely, so it can't catch bugs in that loop or in colorValue().
+add_executable(repl_cli_test tests/repl_cli_test.cxx)
+target_link_libraries(repl_cli_test PRIVATE kex_lib)
+target_include_directories(repl_cli_test PRIVATE tests)
+target_compile_definitions(repl_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(repl_cli_test kex)
+add_test(NAME repl_cli_test COMMAND repl_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

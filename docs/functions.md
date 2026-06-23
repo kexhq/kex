@@ -128,7 +128,7 @@ record Vector2D do
 
   static do
     let Polar(length: Float, angle: Float) -> Vector2D do
-      return Vector2D { x: length * cos(angle), y: length * sin(angle) }
+      return Vector2D { x: length * Math.cos(angle), y: length * Math.sin(angle) }
     end
 
     let Zero = Vector2D { x: 0.0, y: 0.0 }

@@ -1,5 +1,6 @@
 #include "../evaluator.hxx"
 #include <cctype>
+#include <stdexcept>
 
 namespace kex::interpreter {
 
@@ -10,15 +11,40 @@ auto Evaluator::registerStringBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
+    // String.at(i) -> Char (not a 1-char String) — Char and String are
+    // interchangeable for comparisons/concatenation (see valuesEqual/+),
+    // so existing code comparing the result against a string literal
+    // keeps working either way.
     reg("at", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::string("");
+        if (args.size() < 2) return Value::none();
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* idx = std::get_if<IntValue>(&args[1]->data);
-        if (!str || !idx) return Value::string("");
+        if (!str || !idx) return Value::none();
         if (idx->value < 0 || static_cast<size_t>(idx->value) >= str->value.size()) {
-            return Value::string("");
+            return Value::none();
         }
-        return Value::string(std::string(1, str->value[static_cast<size_t>(idx->value)]));
+        return Value::character(str->value[static_cast<size_t>(idx->value)]);
+    });
+
+    // c.digit? -> Bool — true for '0'..'9'. UFCS-callable on a Char.
+    // Throws for a non-Char receiver rather than silently answering
+    // `false` — "hello".digit? or 5.digit? are caller bugs, not "no".
+    reg("digit?", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("digit? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("digit? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(c->value >= '0' && c->value <= '9');
+    });
+
+    // String.chars -> [Char]
+    reg("chars", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        if (!str) return Value::list({});
+        std::vector<ValuePtr> elems;
+        elems.reserve(str->value.size());
+        for (char c : str->value) elems.push_back(Value::character(c));
+        return Value::list(std::move(elems));
     });
 
     reg("contains?", [](std::vector<ValuePtr> args) -> ValuePtr {

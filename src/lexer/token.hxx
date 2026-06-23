@@ -84,6 +84,7 @@ enum class TokenType {
     Integer,
     Float,
     String,
+    Char,         // 'c'
     Atom,         // :identifier
 
     // Special

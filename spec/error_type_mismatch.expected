@@ -1,0 +1,2 @@
+before
+Parse error: spec/error_type_mismatch.kex:4:20: runtime error: Cannot add Int and String

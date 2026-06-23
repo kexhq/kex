@@ -81,6 +81,12 @@ int main() {
             assertEqual(repl.eval("\"hello\""), std::string("\"hello\""));
             assertEqual(repl.eval("true"), std::string("true"));
             assertEqual(repl.eval(":ok"), std::string(":ok"));
+            // Regression: the actual CLI's REPL value printer (colorValue
+            // in main.cxx, not exercised by this ReplSession harness) had
+            // no CharValue case and printed every Char as a bare "?" —
+            // this only catches Value::toRepr() missing a case the same
+            // way; see spec/char_type.kex for the rest of Char's behavior.
+            assertEqual(repl.eval("'a'"), std::string("'a'"));
         });
 
         it("evaluates arithmetic", []() {

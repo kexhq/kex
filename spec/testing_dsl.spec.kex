@@ -1,0 +1,47 @@
+# describe/it/assert — minimal RSpec-style testing DSL (registerTestBuiltins).
+# Failing assertions mark the enclosing `it` failed without aborting the
+# rest of the suite; nesting is purely organizational (indentation only).
+
+describe("assert") do
+  it("passes silently on a truthy value") do
+    assert(true)
+    assert(1 == 1)
+  end
+
+  it("supports a custom failure message") do
+    assert(true, "this message is unused since the assertion passes")
+  end
+end
+
+describe("a group with one passing and one failing test") do
+  it("passes") do
+    assert(1 + 1 == 2)
+  end
+
+  it("fails") do
+    assert(1 + 1 == 3, "math is broken")
+  end
+end
+
+describe("nesting") do
+  describe("indents one level per describe") do
+    it("still runs") do
+      assert(true)
+    end
+  end
+end
+
+describe("it survives more than just failed asserts") do
+  it("catches an ordinary runtime error too, not just assert failures") do
+    assert(doesNotExist == 1)
+  end
+
+  it("still runs after the previous test errored") do
+    assert(true)
+  end
+end
+
+# Outside of `it`, a failed assert is just an ordinary uncaught error —
+# there's nothing here to catch it, so the program stops.
+assert(false, "assert outside of it propagates as an uncaught error")
+IO.printLine("unreachable")

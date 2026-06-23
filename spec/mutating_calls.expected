@@ -1,0 +1,5 @@
+[1, 2, 3, 4]
+[1, 2, 3, 4]
+[1, 2, 3, 4, 5]
+HELLO
+Parse error: spec/mutating_calls.kex:20:15: runtime error: Cannot use '!' on immutable binding: frozen

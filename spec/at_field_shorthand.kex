@@ -1,0 +1,33 @@
+# @field / @method(args) inside make blocks are shorthand for this.field /
+# this.method(args).
+record User do
+  name : String
+  age : Int
+end
+
+make User do
+  let adult? do
+    @age >= 18
+  end
+
+  let greet do
+    "Hi, ${@name}!"
+  end
+
+  let birthday -> User do
+    return User { name: @name, age: @age + 1 }
+  end
+
+  let describe -> String do
+    # @method(args) form, and chaining off an @field
+    @greet.upcase
+  end
+end
+
+main do
+  let alice = User { name: "Alice", age: 17 }
+  IO.printLine(alice.adult?)
+  IO.printLine(alice.greet)
+  IO.printLine(alice.birthday.adult?)
+  IO.printLine(alice.describe)
+end

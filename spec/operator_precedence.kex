@@ -1,0 +1,15 @@
+# Standard precedence: * / % bind tighter than + -, which bind tighter
+# than comparisons, which bind tighter than equality, which binds tighter
+# than && and ||. `not` is the loosest of all (Python-style): `not x == y`
+# means `not (x == y)`.
+main do
+  IO.printLine(2 + 3 * 4)        # * before +
+  IO.printLine((2 + 3) * 4)      # parens override precedence
+  IO.printLine(10 - 2 - 3)       # left-associative
+  IO.printLine(2 * 3 + 4 * 5)
+  IO.printLine(1 + 2 < 4)        # + before <
+  IO.printLine(1 < 2 == true)    # < before ==
+  IO.printLine(true || false && false)  # && before ||
+  IO.printLine(not true == false)       # == before not
+  IO.printLine(not (1 == 1))
+end

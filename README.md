@@ -1,172 +1,76 @@
 # Kex
 
-A functional programming language with Ruby-like syntax, UFCS, immutability by default, and typed processes.
+Kex is a small functional programming language with Ruby-like syntax, immutable data by default, UFCS method chains, type-directed `make` blocks, pattern matching, and explicit side-effect boundaries.
+
+It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
 ```rb
-record User do
-  name : String
-  age : Int
+record Vector2D do
+  x : Float
+  y : Float
 end
 
-make User do
-  let greet({ name }) = "Hi, ${name}!"
-  let adult?({ age }) = age >= 18
+make Vector2D do
+  let +(other: Vector2D) -> Vector2D do
+    return Vector2D { x: @x + other.x, y: @y + other.y }
+  end
+
+  let *(factor: Float) -> Vector2D do
+    return Vector2D { x: @x * factor, y: @y * factor }
+  end
+
+  let near?(other: Vector2D) -> Bool do
+    (@x - other.x).abs < 0.01 && (@y - other.y).abs < 0.01
+  end
+
+  let to(String) -> String do
+    "(${@x}, ${@y})"
+  end
 end
 
 main do
-  let user = User { name: "Alice", age: 30 }
-  print(user.greet)       # "Hi, Alice!"
-  print(user.adult?)      # true
+  let position = Vector2D { x: 3.0, y: 4.0 }
+  let velocity = Vector2D { x: 1.0, y: -0.5 }
+
+  let next = position + velocity * 2.0
+  IO.printLine("next position: ${next.to(String)}")
+  IO.printLine("arrived? ${next.near?(Vector2D { x: 5.0, y: 3.0 })}")
 end
 ```
 
-## Key Features
+## Why Kex
 
-### UFCS (Uniform Function Call Syntax)
+Kex tries to make the common path feel light:
 
-`a.f(b)` is sugar for `f(a, b)`. This gives you method-call ergonomics and IDE code completion while keeping functions composable and free:
+- Functions compose through method syntax with UFCS: `items.filter(...).map(...).take(10)`.
+- Domain behavior lives near the type through `make`, without classes or inheritance-heavy hierarchies. `@field` is shorthand for `this.field` inside those blocks, and operators (`+`, `==`, ...) can be overloaded the same way.
+- Pattern matching works in function clauses, `match` expressions, and receiver patterns.
+- Effects are visible: functions are pure unless marked `foul`, and `main` is the effect boundary.
+- Records, sum types, optional values, result values, ranges, streams, maps, and lists are built into the language model.
 
-```rb
-let nums = [5, 3, 1, 4, 2]
+## Language Tour
 
-nums.sort.reverse.take(3)          # [5, 4, 3]
-nums.filter(&even?).map { |x| x * 2 }  # [4, 8, 2]
+## The Good Parts In Code
 
-# These are equivalent:
-nums.map { |x| x + 1 }
-map(nums) { |x| x + 1 }
-```
+### Pipelines Over Real Data
 
-### Type Dispatch via `make`
-
-Group functions by their receiver type. Same method name, different types — the compiler resolves based on the receiver:
+Uniform Function Call Syntax means `value.f(arg)` is equivalent to `f(value, arg)`. You get fluent pipelines while keeping functions as plain functions.
 
 ```rb
-make Vec2 do
-  let add(other: Vec2) -> Vec2 do
-    return Vec2 { x: this.x + other.x, y: this.y + other.y }
-  end
+let suspicious = requests
+  .filter { |req| req.path.startsWith?("/admin") }
+  .reject(&.authenticated?)
+  .map { |req| SecurityEvent.from(req) }
+  .take(20)
 
-  let to(String) = "(${this.x}, ${this.y})"
-end
-
-make Vec3 do
-  let add(other: Vec3) -> Vec3 do
-    return Vec3 { x: this.x + other.x, y: this.y + other.y, z: this.z + other.z }
-  end
-
-  let to(String) = "(${this.x}, ${this.y}, ${this.z})"
-end
-
-# No conflict — dispatches by receiver type
-let v2 = Vec2 { x: 1.0, y: 2.0 }.add(Vec2 { x: 3.0, y: 4.0 })
-let v3 = Vec3 { x: 1.0, y: 2.0, z: 3.0 }.add(Vec3 { x: 4.0, y: 5.0, z: 6.0 })
+# Equivalent forms; pick whichever reads better locally.
+requests.map(&normalize)
+map(requests, &normalize)
 ```
 
-### Pattern Matching
+### Type-Directed Behavior Without Classes
 
-Multi-clause functions with pattern matching on arguments and `this`:
-
-```rb
-let factorial(0) = 1
-let factorial(n: Int) = n * factorial(n - 1)
-
-make [A] do
-  let first(@[]) = None
-  let first(@[x | _]) = x
-
-  let empty?(@[]) = true
-  let empty?(@_) = false
-end
-```
-
-Match expressions with guards:
-
-```rb
-let grade = match score do
-  n if n >= 90 -> "A"
-  n if n >= 80 -> "B"
-  n if n >= 70 -> "C"
-  _ -> "F"
-end
-```
-
-### Purity with `foul`
-
-Everything is pure by default. Side effects must be marked:
-
-```rb
-# Pure — no IO allowed
-let compute(x: Int) = x * 2 + 1
-
-# Foul — does IO
-foul let readConfig(path: String) do
-  return File.read(path)
-end
-
-# Pure can't call foul — compile error:
-let bad(path: String) = readConfig(path)  # ERROR
-```
-
-`main` is implicitly foul. The compiler enforces the boundary.
-
-### Immutability and `!`
-
-All bindings are immutable by default. `var` opts into local mutation. The `!` operator is sugar for reassignment:
-
-```rb
-let x = 5
-x = 10          # compile error
-
-var list = [1, 2, 3]
-list.push!(4)   # sugar for: list = list.push(4)
-list.filter!(&even?)
-# list is now [2, 4]
-```
-
-The compiler can optimize `!` calls to in-place mutation when it can prove sole ownership.
-
-### Lazy Streams
-
-Infinite lazy sequences with familiar collection methods:
-
-```rb
-let naturals = Sequence(from: 0) { |n| n + 1 }
-let primes = Sequence(from: 2) { |n| n + 1 }
-  .filter(&isPrime?)
-
-primes.take(10)  # [2, 3, 5, 7, 11, 13, 17, 19, 23, 29]
-
-(1..100)
-  .filter { |x| x.modulo(3) == 0 }
-  .map { |x| x * x }
-  .take(5)       # [9, 36, 81, 144, 225]
-```
-
-### The `to` Convention
-
-Universal type conversion via pattern matching on the target type:
-
-```rb
-make Vec2 do
-  let to(String) = "(${this.x}, ${this.y})"
-  let to(List) = [this.x, this.y]
-end
-
-make Integer do
-  let to(String) = ...
-  let to(String, base: Integer) = ...
-  let to(Float) = ...
-end
-
-42.to(String)             # "42"
-42.to(String, base: 16)   # "2a"
-myVec.to(String)          # "(3.0, 4.0)"
-```
-
-### Static Constructors
-
-Records can have named constructors in `static do` blocks:
+`make` blocks attach behavior to a type. The same method name — even an operator — can exist for different receiver types; dispatch is based on the receiver. Inside a `make` block, `@field` is shorthand for `this.field`.
 
 ```rb
 record Vector2D do
@@ -174,74 +78,280 @@ record Vector2D do
   y : Float
 
   static do
-    let Polar(length: Float, angle: Float) -> Vector2D do
-      return Vector2D { x: length * cos(angle), y: length * sin(angle) }
-    end
-
     let Zero = Vector2D { x: 0.0, y: 0.0 }
     let UnitX = Vector2D { x: 1.0, y: 0.0 }
   end
 end
 
-let v = Vector2D.Polar(5.0, angle: Math.PI / 4.0)
-let origin = Vector2D.Zero
+record Vector3D do
+  x : Float
+  y : Float
+  z : Float
+end
+
+make Vector2D do
+  let +(other: Vector2D) -> Vector2D do
+    return Vector2D { x: @x + other.x, y: @y + other.y }
+  end
+
+  let *(factor: Float) -> Vector2D do
+    return Vector2D { x: @x * factor, y: @y * factor }
+  end
+
+  let dot(other: Vector2D) -> Float do
+    return @x * other.x + @y * other.y
+  end
+
+  let to(String) -> String do
+    return "(${@x}, ${@y})"
+  end
+end
+
+make Vector3D do
+  let +(other: Vector3D) -> Vector3D do
+    return Vector3D { x: @x + other.x, y: @y + other.y, z: @z + other.z }
+  end
+
+  let to(String) -> String do
+    return "(${@x}, ${@y}, ${@z})"
+  end
+end
+
+let shot = (Vector2D.UnitX * 2.0 + Vector2D { x: 0.0, y: 5.0 }).to(String)
+# "(2.0, 5.0)" — `*` resolves through Vector2D::*, `+` through Vector2D::+
 ```
 
-### DSL Support with `Block<[A]>`
+### Pattern Matching As Control Flow
 
-When a function's last parameter is `Block<[A]>`, each expression in the block is collected into a list:
+Kex supports multi-clause functions, `match` expressions, destructuring, and `@pattern` to match on the receiver itself (separate from the `@field` shorthand shown above).
 
 ```rb
-using Html.Language do
-  html do
-    head do
-      title "My Page"
-    end
-    body do
-      h1 "Hello"
-      p "Welcome" if showWelcome?
-      ...items.map { |i| li(i.name) }
+let fizzBuzz(n: Int) -> String do
+  match (n.modulo(3), n.modulo(5)) do
+    (0, 0) -> "FizzBuzz"
+    (0, _) -> "Fizz"
+    (_, 0) -> "Buzz"
+    (_, _) -> n.to(String)
+  end
+end
+
+main do
+  (1..100)
+    .map(&fizzBuzz)
+    .each { |s| IO.printLine(s) }
+end
+```
+
+### Records, Sum Types, Optional, Result
+
+Data modeling is direct: records for product types, `type` for unions, `?` for optional values, and `Result` for fallible flows.
+
+```rb
+type ParseError = InvalidFormat(String) | Overflow | EmptyInput
+
+let parseInt(s: String) -> Result<Int, ParseError> do
+  return Error(EmptyInput) if s.empty?
+  return BuiltIn.parseInt(s).mapError { |_| InvalidFormat(s) }
+end
+
+let parsePort(s: String) -> Result<Int, ParseError> do
+  let n = parseInt(s)?
+  return Error(Overflow) if n > 65535
+  return Ok(n)
+end
+
+foul let loadConfig(path: String) -> Result<Config, AppError> do
+  let content = IO.read(path)?
+  let parsed = Config.parse(content)?
+  let port = parsePort(parsed.get("port"))?
+  return Ok(Config { port: port, host: parsed.get("host") })
+end
+```
+
+### Purity Is the Default
+
+Functions are pure unless marked `foul`. Pure code cannot call foul code, so side effects stay visible in the type of the program.
+
+```rb
+let compute(x: Int) = x * 2 + 1
+
+foul let readConfig(path: String) do
+  return File.read(path)
+end
+
+# Compile error: pure code cannot call foul code.
+let bad(path: String) = readConfig(path)
+```
+
+`main` is implicitly foul, so programs still have a natural place for IO.
+
+### Local Mutation With `var` and `!`
+
+Bindings are immutable by default. `var` opts into local mutation, and `!` is reassignment sugar for methods that return an updated value — it rebinds the variable rather than mutating the underlying value in place, so aliases never see the change.
+
+```rb
+let frozen = [1, 2, 3]
+# frozen.push!(4)
+# runtime error: Cannot use '!' on immutable binding: frozen
+
+var list = [1, 2, 3, 4, 5]
+list.push!(6)
+list.filter!(&.even?)
+list.map! { |x| x * 10 }
+# list is now [20, 40, 60]
+```
+
+### Lazy Streams and Ranges
+
+Ranges and streams share collection-style operations. Infinite streams stay lazy until consumed.
+
+```rb
+let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+
+let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+  .filter do |n|
+    (2..n - 1).all? { |d| n.modulo(d) != 0 }
+  end
+
+let firstTenPrimes = primes.take(10)
+
+let squaresOfMultiplesOfThree = (1..100)
+  .filter { |x| x.modulo(3) == 0 }
+  .map { |x| x * x }
+  .take(5)
+```
+
+### DSL-Friendly Builders
+
+Kex is intended to make embedded DSLs feel native. `Block<[A]>` lets a function collect each expression in a block into a list, which is useful for document builders, UI descriptions, tests, and routes.
+
+```rb
+module App do
+  using Http do
+    let router = Router.Config {}
+      .use(&logRequests)
+      .get("/", &home)
+      .get("/users", &listUsers)
+      .post("/users", &createUser)
+
+    let createUser(req: Request) -> Response do
+      match req.body do
+        Just(body) -> do
+          match UserService.create(body) do
+            Ok(user) -> Response.json(user.to(String))
+            Error(e) -> Response { status: 400, body: e.message }
+          end
+        end
+        None -> Response { status: 400, body: "Body required" }
+      end
     end
   end
 end
 ```
 
-### Processes (Planned)
+### Static Constructors and Constants
 
-Elixir-style typed actors with supervision:
+Records can define type-level constructors and constants in `static do` blocks. Constructors are capitalized `let`s that build an instance; constants are capitalized `let`s that just hold a value.
 
 ```rb
-type CounterMsg = :increment | :reset | (:get, Process<Int>)
+record Temperature do
+  celsius : Float
 
-foul let counter: Process<CounterMsg> = spawn do
-  var state = 0
-  loop do
-    receive do
-      :increment -> state = state + 1
-      :reset -> state = 0
-      (:get, sender) -> sender.send(state)
+  static do
+    let Celsius(value: Float) -> Temperature do
+      return Temperature { celsius: value }
     end
+
+    let Fahrenheit(value: Float) -> Temperature do
+      return Temperature { celsius: (value - 32.0) * 5.0 / 9.0 }
+    end
+
+    let Freezing = Temperature { celsius: 0.0 }
   end
 end
+
+make Temperature do
+  let to(String) -> String do
+    return "${@celsius}C"
+  end
+end
+
+let boiling = Temperature.Fahrenheit(212.0).to(String)  # "100.0C"
+let zero = Temperature.Freezing.to(String)              # "0.0C"
 ```
 
-## Building
+## Try It
 
-```
-make build       # Build the compiler
-make test        # Run unit tests
-make spec        # Run spec programs (verify output)
-make parse       # Parse all examples (syntax check)
-make repl        # Start interactive REPL
-make run F=file  # Run a .kex file
-make check F=file  # Semantic analysis
+Build the compiler:
+
+```sh
+make build
 ```
 
-Requires: CMake 3.20+, C++20 compiler (Clang/GCC).
+Run a file:
+
+```sh
+make run F=examples/fizzbuzz.kex
+build/kex examples/vectors_advanced.kex
+```
+
+Start the REPL:
+
+```sh
+make repl
+```
+
+Install the binary somewhere on your `PATH`:
+
+```sh
+make build
+sudo make install
+```
+
+By default, `make install` copies the existing `build/kex` to `/usr/local/bin/kex`. It intentionally does not build as root. To install elsewhere:
+
+```sh
+make install PREFIX=$HOME/.local
+```
+
+## Commands
+
+```sh
+make build          # Build the compiler
+make test           # Run C++ unit tests
+make spec           # Run executable language specs
+make parse          # Parse all examples
+make repl           # Start the interactive REPL
+make run F=file     # Run a .kex file
+make check F=file   # Run semantic analysis
+make install        # Install build/kex to /usr/local/bin/kex
+make uninstall      # Remove the installed binary
+make clean          # Remove build artifacts
+```
+
+Requires CMake 3.20+ and a C++20 compiler. Readline is optional.
+
+## Examples
+
+Good starting points:
+
+- `examples/basics.kex` - core syntax
+- `examples/vectors_advanced.kex` - records, static constructors, UFCS methods
+- `examples/streams.kex` - lazy ranges and streams
+- `examples/html_dsl.kex` - DSL-oriented blocks
+- `examples/error_handling.kex` - `Result`, optional values, and `?`
+- `spec/type_dispatch.kex` - dispatch through `make` and receiver patterns
+- `spec/operator_overloading.kex` - overloading `+`, `*`, `==` per receiver type
+- `spec/at_field_shorthand.kex` - `@field`/`@method(...)` inside `make` blocks
+- `spec/mutating_calls.kex` - `var`/`let` and `!` mutation semantics
+- `spec/static_namespacing.kex` - static constructors/constants stay namespaced under their type
+- `spec/math.kex` - the `Math` module (`Math.PI`, `Math.sqrt`, trig, logs, ...)
+- `spec/testing_dsl.kex` - the `describe`/`it`/`assert` testing DSL itself
+- `spec/json_parser.spec.kex` - a spec for `examples/json_parser.kex` using `describe`/`it`/`assert` (see "Specs for example files" in `docs/testing.md`)
 
 ## Project Structure
 
-```
+```text
 src/
   lexer/        Tokenizer
   parser/       Recursive descent parser
@@ -250,7 +360,7 @@ src/
   interpreter/  Tree-walk interpreter
   main.cxx      CLI entry point
 
-examples/       Language showcase (.kex files — tested for parsing)
+examples/       Language showcase files
 spec/           Runnable programs with expected output
 tests/          C++ unit tests
 docs/           Language reference documentation
@@ -261,35 +371,46 @@ grammar.ebnf    Formal grammar specification
 
 The compiler is written in C++20 with no external dependencies beyond the standard library and optional readline.
 
-**Code style:**
-- `.hxx` headers, `.cxx` sources
-- `camelCase` functions, `m_member` fields
-- `auto foo() -> ReturnType` trailing return style
-- Namespace: `kex`
+Source flows through:
 
-**Architecture:**
+```text
+Lexer -> Parser -> AST -> Analyzer -> Evaluator
+```
 
-Source → `Lexer` → tokens → `Parser` → AST → `Analyzer` (scope/purity/types) → `Evaluator` (tree-walk)
+The current evaluator is a tree-walk interpreter. There is no bytecode or IR yet.
 
-The interpreter evaluates directly from the AST. No bytecode or IR yet — the next step is either WASM codegen or a bytecode VM.
+Key implementation choices:
 
-**Key design decisions:**
-- `std::variant` for AST nodes and runtime values (no inheritance hierarchies)
-- Function dispatch via name mangling: `make Vec2 do let add(...) end` registers as `Vec2::add`
-- UFCS resolved at call time by checking receiver type → mangled name lookup
-- `Block<[A]>` collection semantics determined by the type system, not special syntax
-- Purity enforced in a separate semantic pass before evaluation
-
-**Test suite:**
-- 6 C++ test suites (lexer, parser, semantic, interpreter, examples, REPL)
-- 8 spec programs with expected output verification
-- All 20 example files tested for successful parsing
+- AST nodes and runtime values use `std::variant`.
+- `make Vec2 do let add(...) end` registers behavior as `Vec2::add`.
+- UFCS resolves by checking the receiver type and looking up the mangled method name.
+- Purity is enforced in a semantic pass before evaluation.
 
 ## Status
 
-Working: lexer, parser, semantic analysis (purity + type checking), tree-walk interpreter with stdlib (collections, strings, streams, ranges), REPL with readline support.
+Working today:
 
-Next: WASM codegen, proper namespace resolution (`Stream.Sequence`, `Vector2D.Polar`), generic type inference.
+- Lexer, parser, AST, semantic analysis, and tree-walk evaluation
+- Records, sum types, functions, lambdas, pattern matching, destructuring
+- Lists, maps, ranges, streams, strings, numbers, optional values, result values
+- UFCS, `make` dispatch, `to` conversion convention, operator overloading
+- `@field`/`@method(...)` shorthand for `this` inside `make` blocks
+- `foul` purity boundaries, and local `var` mutation enforced at runtime (`let` bindings reject `=` and `!`)
+- REPL with optional readline support
+
+Test coverage:
+
+- 6 C++ test suites
+- 35 executable spec programs (`make spec`)
+- 29 examples parsed and executed in CI
+
+Planned or incomplete:
+
+- Bytecode VM or WASM codegen
+- More complete namespace/import resolution
+- Generic type inference
+- Full process/actor runtime
+- Compiled metaprogramming beyond the parser/design sketch
 
 ## License
 

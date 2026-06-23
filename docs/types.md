@@ -5,8 +5,26 @@
 - `Int` — integer
 - `Float` — floating point
 - `String` — UTF-8 string
+- `Char` — a single character, written `'a'`, `'\n'`, etc.
 - `Bool` — `true` or `false`
 - `None` — absence of value (not falsy, must be pattern matched)
+
+### `[Char]` is String — but `Char` is not
+
+`[Char]` (a list of `Char`) *is* `String` — the same type, fully interchangeable for comparison, concatenation, and display. A single `Char`, however, is its own distinct type: `'a'` is not a 1-character `String`, and `==`/ordering between a `Char` and a `String` either return `false` or — for ordering — throw, the same as comparing any other two unrelated types. `Char` only compares/orders against another `Char`.
+
+```kex
+let c = "hello".at(1)        # Char: 'e' — String.at(i) returns the i'th
+                              # element of the list, which is a Char
+c == 'e'                     # true (Char == Char)
+c == "e"                     # false — Char is not a String
+'a' + 'b'                    # "ab" — concatenation still builds a String
+"ab" + 'c'                   # "abc"
+['h', 'i'] == "hi"           # true — [Char] IS String
+IO.printLine(['h', 'i'])     # prints "hi", not "[h, i]"
+```
+
+Internally `Char` and `String`/`[Char]` stay separate runtime representations — only `String` and `[Char]` are the same type; `Char` is the distinct element type you get from indexing into one.
 
 ## Generics
 

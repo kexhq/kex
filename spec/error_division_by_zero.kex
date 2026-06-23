@@ -1,0 +1,5 @@
+# Division by zero is a runtime error.
+main do
+  IO.printLine("before")
+  IO.printLine(1 / 0)
+end

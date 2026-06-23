@@ -1,0 +1,27 @@
+Parser.parse
+  literals
+    ✓ parses null
+    ✓ parses true
+    ✓ parses false
+    ✓ rejects a truncated null
+    ✓ rejects a literal-like prefix that isn't the literal
+  numbers
+    ✓ parses an integer
+    ✓ parses a negative decimal
+  strings
+    ✓ parses a simple string
+    ✓ handles escape sequences
+  arrays
+    ✓ parses an empty array
+    ✓ parses a non-empty array
+  objects
+    ✓ parses an empty object
+    ✓ parses a non-empty object
+  nested structures
+    ✓ parses the README-style example
+  error cases
+    ✓ rejects empty input
+    ✓ rejects an unterminated array
+    ✓ rejects an unexpected character
+
+17 passed, 0 failed

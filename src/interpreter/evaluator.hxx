@@ -92,6 +92,8 @@ private:
     auto registerStreamBuiltins() -> void;
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;
+    auto registerMathBuiltins() -> void;
+    auto registerTestBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;
@@ -113,6 +115,13 @@ private:
     std::unordered_map<std::string, const ast::RecordDef*> m_recordDefs;
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
+
+    // describe/it/assert (registerTestBuiltins) — nesting depth for
+    // indentation, and pass/fail counters for the summary line printed
+    // after the program finishes if any test ran.
+    int m_testDepth = 0;
+    int m_testsPassed = 0;
+    int m_testsFailed = 0;
 };
 
 } // namespace kex::interpreter

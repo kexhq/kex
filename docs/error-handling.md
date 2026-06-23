@@ -41,7 +41,7 @@ end
 
 ## The `?` Operator
 
-`?` works only on `Result` — unwraps `Ok` or short-circuits with `Error`:
+`?` works on both `Result` and `Optional` — unwraps `Ok`/`Just`, or short-circuits the enclosing function with `Error`/`None`:
 
 ```kex
 foul let loadConfig(path: String) -> Result<Config, AppError> do
@@ -50,9 +50,22 @@ foul let loadConfig(path: String) -> Result<Config, AppError> do
   let port = parsePort(parsed["port"])?
   return Ok(Config { port: port })
 end
+
+foul let greetUser(id: Int) -> String? do
+  let user = findUser(id)?                # returns None early if not found
+  return "Hello, ${user.name}"
+end
 ```
 
-`?` does NOT work on `Optional`. Use `match`, `.map`, or `.flatMap` instead.
+## Checking Without Unwrapping
+
+`ok?`/`error?` (on `Result`) and `some?`/`none?` (on `Optional`) ask "did this succeed" without a `match`:
+
+```kex
+if parseInt(input).ok? do
+  ...
+end
+```
 
 ## Combining
 
