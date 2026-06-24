@@ -3,6 +3,8 @@
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
 #include "../src/semantic/types.hxx"
+#include "../src/semantic/traits.hxx"
+#include "../src/semantic/stdlib_signatures.hxx"
 
 using namespace kex;
 using namespace test;
@@ -707,6 +709,101 @@ int main() {
 
         it("does not equate Char with Integer", []() {
             assertFalse(typesEqual(Type::charT(), Type::integer()));
+        });
+    });
+
+    describe("Types — trait registry", []() {
+        using namespace kex::semantic;
+        auto traits = TraitRegistry::withBuiltins();
+
+        it("satisfies Number/Integer for every sized int and arbitrary-precision Integer", [traits]() {
+            assertTrue(traits.satisfies(Type::integer(), "Integer"));
+            assertTrue(traits.satisfies(Type::integer(), "Number"));
+            assertTrue(traits.satisfies(Type::int8(), "Integer"));
+            assertTrue(traits.satisfies(Type::byte(), "Number"));
+        });
+
+        it("satisfies Float/Number for sized floats only", [traits]() {
+            assertTrue(traits.satisfies(Type::float32(), "Float"));
+            assertTrue(traits.satisfies(Type::float64(), "Number"));
+            assertFalse(traits.satisfies(Type::float64(), "Integer"));
+        });
+
+        it("rejects Char/Bool for Integer and Number", [traits]() {
+            assertFalse(traits.satisfies(Type::charT(), "Integer"));
+            assertFalse(traits.satisfies(Type::boolean(), "Number"));
+        });
+
+        it("matches Ruby: even?'s Integer constraint rejects Float", [traits]() {
+            assertTrue(traits.satisfies(Type::int64(), "Integer"));
+            assertFalse(traits.satisfies(Type::float64(), "Integer"));
+        });
+
+        it("satisfies Comparable for ordered primitives but not Bool", [traits]() {
+            assertTrue(traits.satisfies(Type::int64(), "Comparable"));
+            assertTrue(traits.satisfies(Type::string(), "Comparable"));
+            assertFalse(traits.satisfies(Type::boolean(), "Comparable"));
+        });
+
+        it("satisfies Equatable/Showable for primitives", [traits]() {
+            assertTrue(traits.satisfies(Type::boolean(), "Equatable"));
+            assertTrue(traits.satisfies(Type::atom(), "Showable"));
+        });
+
+        it("satisfies Equatable for a list/tuple by recursing into element types", [traits]() {
+            assertTrue(traits.satisfies(Type::list(Type::integer()), "Equatable"));
+            assertTrue(traits.satisfies(Type::tuple({Type::integer(), Type::boolean()}), "Equatable"));
+        });
+
+        it("does not satisfy Equatable for a list of an unregistered type", [traits]() {
+            assertFalse(traits.satisfies(Type::list(Type::named("MysteryType")), "Equatable"));
+        });
+
+        it("satisfies Resultable/Optionable via the prelude ADT bridge", [traits]() {
+            assertTrue(traits.satisfies(Type::named("Ok"), "Resultable"));
+            assertTrue(traits.satisfies(Type::named("Error"), "Resultable"));
+            assertTrue(traits.satisfies(Type::named("Just"), "Optionable"));
+            assertFalse(traits.satisfies(Type::named("Ok"), "Optionable"));
+        });
+
+        it("does not satisfy an unregistered trait for a NamedType", [traits]() {
+            assertFalse(traits.satisfies(Type::named("Ok"), "Showable"));
+        });
+
+        it("exposes built-in trait definitions by name", [traits]() {
+            assertTrue(traits.get("Comparable") != nullptr);
+            assertTrue(traits.get("NoSuchTrait") == nullptr);
+        });
+    });
+
+    describe("Types — stdlib signature table", []() {
+        using namespace kex::semantic;
+        auto table = SignatureTable::withStdlib();
+
+        it("knows even?/odd? take one Integer-constrained param and return Bool", [table]() {
+            auto* sigs = table.lookup("even?");
+            assertTrue(sigs != nullptr);
+            assertEqual(sigs->size(), size_t(1));
+            assertEqual((*sigs)[0].params.size(), size_t(1));
+            assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
+        });
+
+        it("knows ok?/error?/some?/none? return Bool", [table]() {
+            for (const auto& name : {"ok?", "error?", "some?", "none?"}) {
+                auto* sigs = table.lookup(name);
+                assertTrue(sigs != nullptr);
+                assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
+            }
+        });
+
+        it("registers `or` as two overloads, one per prelude ADT family", [table]() {
+            auto* sigs = table.lookup("or");
+            assertTrue(sigs != nullptr);
+            assertEqual(sigs->size(), size_t(2));
+        });
+
+        it("returns nullptr for a function not in the table", [table]() {
+            assertTrue(table.lookup("not_a_real_stdlib_fn") == nullptr);
         });
     });
 

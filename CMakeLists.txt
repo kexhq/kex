@@ -12,6 +12,8 @@ add_library(kex_lib
     src/semantic/symbol.cxx
     src/semantic/analyzer.cxx
     src/semantic/types.cxx
+    src/semantic/traits.cxx
+    src/semantic/stdlib_signatures.cxx
     src/semantic/typechecker.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx

@@ -62,6 +62,15 @@ struct TypeVar {
 
 struct UnknownType {};
 
+// A signature-table placeholder meaning "any type satisfying `traitName`"
+// (e.g. `even? : T -> Bool` where T is constrained to Integer). `varName`
+// is for display only ("T"); the constraint itself is consulted via
+// TraitRegistry::satisfies, not stored structurally on the Type.
+struct ConstrainedType {
+    std::string varName;
+    std::string traitName;
+};
+
 struct Type {
     std::variant<
         PrimitiveType,
@@ -75,7 +84,8 @@ struct Type {
         OptionalType,
         UnionType,
         TypeVar,
-        UnknownType
+        UnknownType,
+        ConstrainedType
     > kind;
 
     static auto integer() -> TypePtr;  // arbitrary precision
@@ -92,6 +102,7 @@ struct Type {
     static auto map(TypePtr key, TypePtr value) -> TypePtr;
     static auto optional(TypePtr inner) -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
+    static auto constrained(const std::string& varName, const std::string& traitName) -> TypePtr;
 
     // Sized integers — explicit opt-ins for fixed width.
     static auto byte() -> TypePtr;     // UInt8

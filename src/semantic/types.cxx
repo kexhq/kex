@@ -102,6 +102,10 @@ auto Type::float64() -> TypePtr {
     return std::make_shared<Type>(Type{SizedFloatType{64}});
 }
 
+auto Type::constrained(const std::string& varName, const std::string& traitName) -> TypePtr {
+    return std::make_shared<Type>(Type{ConstrainedType{varName, traitName}});
+}
+
 auto typeToString(const TypePtr& type) -> std::string {
     if (!type) return "?";
 
@@ -197,6 +201,9 @@ auto typeToString(const TypePtr& type) -> std::string {
         else if constexpr (std::is_same_v<T, TypeVar>) {
             return "T" + std::to_string(t.id);
         }
+        else if constexpr (std::is_same_v<T, ConstrainedType>) {
+            return t.varName;
+        }
         else {
             return "unknown";
         }
@@ -254,6 +261,9 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
         }
         else if constexpr (std::is_same_v<AT, TypeVar>) {
             return at.id == bt->id;
+        }
+        else if constexpr (std::is_same_v<AT, ConstrainedType>) {
+            return at.varName == bt->varName && at.traitName == bt->traitName;
         }
         else {
             return false;
