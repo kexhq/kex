@@ -560,11 +560,13 @@ auto Parser::parseParam() -> ast::Param {
         return param;
     }
 
-    // Literal pattern
+    // Literal pattern (including negative numeric literals, e.g. -10)
     if (check(TokenType::Integer) || check(TokenType::Float) ||
         check(TokenType::String) || check(TokenType::Char) ||
         check(TokenType::True) || check(TokenType::False) ||
-        check(TokenType::None) || check(TokenType::Atom)) {
+        check(TokenType::None) || check(TokenType::Atom) ||
+        (check(TokenType::Minus) &&
+         (peekNext().type == TokenType::Integer || peekNext().type == TokenType::Float))) {
         param.pattern = parsePattern();
         return param;
     }
@@ -587,6 +589,12 @@ auto Parser::parseParam() -> ast::Param {
 
     // Constructor pattern
     if (check(TokenType::UpperIdent)) {
+        param.pattern = parsePattern();
+        return param;
+    }
+
+    // name.._ / name..name — range pattern with a var-bound start
+    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::DotDot) {
         param.pattern = parsePattern();
         return param;
     }
@@ -2031,7 +2039,15 @@ auto Parser::parsePattern() -> ast::PatternPtr {
         return pattern;
     }
 
-    return parsePatternPrimary();
+    auto first = parsePatternPrimary();
+    if (match(TokenType::DotDot)) {
+        auto end = parsePatternPrimary();
+        auto rangePattern = std::make_unique<ast::Pattern>();
+        rangePattern->location = first->location;
+        rangePattern->kind = ast::RangePattern{std::move(first), std::move(end)};
+        return rangePattern;
+    }
+    return first;
 }
 
 auto Parser::parsePatternPrimary() -> ast::PatternPtr {
@@ -2042,6 +2058,16 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     // Wildcard
     if (match(TokenType::Underscore)) {
         pattern->kind = ast::WildcardPattern{};
+        return pattern;
+    }
+
+    // Negative numeric literal: -10, -3.5
+    if (check(TokenType::Minus) &&
+        (peekNext().type == TokenType::Integer || peekNext().type == TokenType::Float)) {
+        advance(); // consume '-'
+        Token lit = advance();
+        lit.value = "-" + lit.value;
+        pattern->kind = ast::LiteralPattern{std::move(lit)};
         return pattern;
     }
 
@@ -2116,7 +2142,8 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
         return pattern;
     }
 
-    // Tuple pattern: (a, b)
+    // Tuple pattern: (a, b) — or just a grouped pattern (a) / (a..b) if there's
+    // no comma, matching how grouped expressions vs. tuples are parsed.
     if (match(TokenType::LParen)) {
         std::vector<ast::PatternPtr> elements;
         if (!check(TokenType::RParen)) {
@@ -2126,6 +2153,9 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
             }
         }
         expect(TokenType::RParen, "Expected ')'");
+        if (elements.size() == 1) {
+            return std::move(elements[0]);
+        }
         pattern->kind = ast::TuplePattern{std::move(elements)};
         return pattern;
     }

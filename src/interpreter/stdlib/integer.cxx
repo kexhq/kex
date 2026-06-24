@@ -39,6 +39,22 @@ auto Evaluator::registerIntegerBuiltins() -> void {
         return args[0];
     });
 
+    // n.in?(range) / c.in?(range) — inclusive range membership for an Int
+    // or Char receiver against an Int or Char range.
+    reg("in?", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto* range = std::get_if<RangeValue>(&args[1]->data);
+        if (!range) return Value::boolean(false);
+        if (auto* i = std::get_if<IntValue>(&args[0]->data)) {
+            return Value::boolean(i->value >= range->start && i->value <= range->end);
+        }
+        if (auto* c = std::get_if<CharValue>(&args[0]->data)) {
+            auto code = static_cast<int64_t>(static_cast<unsigned char>(c->value));
+            return Value::boolean(code >= range->start && code <= range->end);
+        }
+        return Value::boolean(false);
+    });
+
     reg("even?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* i = std::get_if<IntValue>(&args[0]->data);

@@ -124,6 +124,11 @@ struct TuplePattern {
     std::vector<PatternPtr> elements;
 };
 
+struct RangePattern {
+    PatternPtr start;
+    PatternPtr end;
+};
+
 struct Pattern {
     SourceLocation location;
     std::variant<
@@ -134,7 +139,8 @@ struct Pattern {
         ConstructorPattern,
         RecordPattern,
         ListPattern,
-        TuplePattern
+        TuplePattern,
+        RangePattern
     > kind;
 };
 

@@ -1,0 +1,22 @@
+make Range do
+  let first(x.._) = x
+  let last(_..y) = y
+end
+
+let r = 1..10
+IO.printLine(r.first)
+IO.printLine(r.last)
+
+let az = 'a'..'z'
+
+match az do
+  ('b'..'f') -> IO.printLine("Lowercase letters, only b to f")
+  ('a'..'z') -> IO.printLine("All lowercase letters")
+  ('A'..'Z') -> IO.printLine("All uppercase letters")
+end
+
+match r do
+  (-10..-1) -> IO.printLine("Negative range")
+  (x..y) when x > 0 && y > 0 -> IO.printLine("Positive range")
+end
+

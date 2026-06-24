@@ -1,0 +1,14 @@
+# n.in?(range) / c.in?(range) — inclusive range membership, for both
+# Int and Char receivers against Int and Char ranges.
+main do
+  IO.printLine(5.in?(1..10))
+  IO.printLine(1.in?(1..10))
+  IO.printLine(10.in?(1..10))
+  IO.printLine(11.in?(1..10))
+  IO.printLine(0.in?(1..10))
+
+  IO.printLine('c'.in?('a'..'z'))
+  IO.printLine('a'.in?('a'..'z'))
+  IO.printLine('z'.in?('a'..'z'))
+  IO.printLine('A'.in?('a'..'z'))
+end

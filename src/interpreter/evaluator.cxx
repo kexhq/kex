@@ -621,6 +621,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 receiverType = "Float";
             } else if (std::holds_alternative<StringValue>(receiver->data)) {
                 receiverType = "String";
+            } else if (std::holds_alternative<RangeValue>(receiver->data)) {
+                receiverType = "Range";
             }
             if (!receiverType.empty()) {
                 auto typed = receiverType + "::" + node.method;
@@ -693,11 +695,21 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             auto* e = std::get_if<IntValue>(&end->data);
             if (s && e) {
                 auto range = std::make_shared<Value>();
-                range->data = RangeValue{s->value, e->value};
+                range->data = RangeValue{s->value, e->value, false};
+                return range;
+            }
+            auto* sc = std::get_if<CharValue>(&start->data);
+            auto* ec = std::get_if<CharValue>(&end->data);
+            if (sc && ec) {
+                auto range = std::make_shared<Value>();
+                range->data = RangeValue{
+                    static_cast<int64_t>(static_cast<unsigned char>(sc->value)),
+                    static_cast<int64_t>(static_cast<unsigned char>(ec->value)),
+                    true};
                 return range;
             }
             auto range = std::make_shared<Value>();
-            range->data = RangeValue{0, 0};
+            range->data = RangeValue{0, 0, false};
             return range;
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
@@ -1268,6 +1280,15 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             for (size_t i = 0; i < pat.elements.size(); i++) {
                 if (!matchPattern(*pat.elements[i], tv->elements[i])) return false;
             }
+            return true;
+        }
+        else if constexpr (std::is_same_v<T, ast::RangePattern>) {
+            auto* rv = std::get_if<RangeValue>(&value->data);
+            if (!rv) return false;
+            auto startVal = rv->isChar ? Value::character(static_cast<char>(rv->start)) : Value::integer(rv->start);
+            auto endVal = rv->isChar ? Value::character(static_cast<char>(rv->end)) : Value::integer(rv->end);
+            if (!matchPattern(*pat.start, startVal)) return false;
+            if (!matchPattern(*pat.end, endVal)) return false;
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {

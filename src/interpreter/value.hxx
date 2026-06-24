@@ -24,7 +24,7 @@ struct AtomValue { std::string name; };
 struct ListValue { std::vector<ValuePtr> elements; };
 struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
-struct RangeValue { int64_t start; int64_t end; };
+struct RangeValue { int64_t start; int64_t end; bool isChar = false; };
 
 using StreamGenerator = std::function<std::shared_ptr<struct Value>(int64_t index)>;
 struct StreamValue {

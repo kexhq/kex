@@ -109,6 +109,10 @@ auto Value::toString() const -> std::string {
             return result + " }";
         }
         else if constexpr (std::is_same_v<T, RangeValue>) {
+            if (v.isChar) {
+                return std::string("'") + static_cast<char>(v.start) + "'.." +
+                       "'" + static_cast<char>(v.end) + "'";
+            }
             return std::to_string(v.start) + ".." + std::to_string(v.end);
         }
         else if constexpr (std::is_same_v<T, StreamValue>) {
@@ -179,6 +183,10 @@ auto Value::toRepr() const -> std::string {
             return result + " }";
         }
         else if constexpr (std::is_same_v<T, RangeValue>) {
+            if (v.isChar) {
+                return std::string("'") + static_cast<char>(v.start) + "'.." +
+                       "'" + static_cast<char>(v.end) + "'";
+            }
             return std::to_string(v.start) + ".." + std::to_string(v.end);
         }
         else if constexpr (std::is_same_v<T, RecordValue>) {

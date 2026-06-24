@@ -15,7 +15,7 @@ auto Evaluator::registerListBuiltins() -> void {
     auto rangeToList = [](const RangeValue& r) -> std::vector<ValuePtr> {
         std::vector<ValuePtr> elems;
         for (int64_t i = r.start; i <= r.end; i++) {
-            elems.push_back(Value::integer(i));
+            elems.push_back(r.isChar ? Value::character(static_cast<char>(i)) : Value::integer(i));
         }
         return elems;
     };
@@ -355,34 +355,36 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(sorted));
     });
 
-    reg("min", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("min", [&getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            if (list->elements.empty()) return Value::none();
-            auto result = list->elements[0];
-            for (size_t i = 1; i < list->elements.size(); i++) {
-                auto* ri = std::get_if<IntValue>(&result->data);
-                auto* ei = std::get_if<IntValue>(&list->elements[i]->data);
-                if (ri && ei && ei->value < ri->value) result = list->elements[i];
-            }
-            return result;
+        auto elems = getElements(args[0]);
+        if (elems.empty()) return Value::none();
+        auto result = elems[0];
+        for (size_t i = 1; i < elems.size(); i++) {
+            auto* ri = std::get_if<IntValue>(&result->data);
+            auto* ei = std::get_if<IntValue>(&elems[i]->data);
+            if (ri && ei && ei->value < ri->value) { result = elems[i]; continue; }
+            auto* rc = std::get_if<CharValue>(&result->data);
+            auto* ec = std::get_if<CharValue>(&elems[i]->data);
+            if (rc && ec && ec->value < rc->value) result = elems[i];
         }
-        return args[0];
+        return result;
     });
 
-    reg("max", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("max", [&getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            if (list->elements.empty()) return Value::none();
-            auto result = list->elements[0];
-            for (size_t i = 1; i < list->elements.size(); i++) {
-                auto* ri = std::get_if<IntValue>(&result->data);
-                auto* ei = std::get_if<IntValue>(&list->elements[i]->data);
-                if (ri && ei && ei->value > ri->value) result = list->elements[i];
-            }
-            return result;
+        auto elems = getElements(args[0]);
+        if (elems.empty()) return Value::none();
+        auto result = elems[0];
+        for (size_t i = 1; i < elems.size(); i++) {
+            auto* ri = std::get_if<IntValue>(&result->data);
+            auto* ei = std::get_if<IntValue>(&elems[i]->data);
+            if (ri && ei && ei->value > ri->value) { result = elems[i]; continue; }
+            auto* rc = std::get_if<CharValue>(&result->data);
+            auto* ec = std::get_if<CharValue>(&elems[i]->data);
+            if (rc && ec && ec->value > rc->value) result = elems[i];
         }
-        return args[0];
+        return result;
     });
 
     reg("sum", [&getElements](std::vector<ValuePtr> args) -> ValuePtr {
