@@ -807,5 +807,42 @@ int main() {
         });
     });
 
+    describe("Semantic — Stdlib call checking", []() {
+        it("rejects 'c'.even? — Char doesn't satisfy the Integer constraint", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x = 'c'.even?\n"
+                "end\n",
+                "even?"
+            ));
+        });
+
+        it("accepts 4.even?", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let x = 4.even?\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects a wrong-arity stdlib call", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x = even?(1, 2)\n"
+                "end\n",
+                "argument"
+            ));
+        });
+
+        it("does not check calls to unknown/user-defined functions", []() {
+            assertTrue(noErrors(
+                "let myFunc(x) = x\n"
+                "main do\n"
+                "  myFunc(1)\n"
+                "end\n"
+            ));
+        });
+    });
+
     return runAll();
 }

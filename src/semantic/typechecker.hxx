@@ -1,7 +1,9 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "stdlib_signatures.hxx"
 #include "symbol.hxx"
+#include "traits.hxx"
 #include "types.hxx"
 #include <string>
 #include <vector>
@@ -30,6 +32,16 @@ private:
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
                        SourceLocation loc) -> TypePtr;
 
+    // Call checking (FunctionCall and MethodCall, the latter desugared to
+    // the same path with the receiver prepended as the first argument).
+    // Resolves `name` against the stdlib signature table only — user-
+    // defined functions don't have real Signatures yet (phase 5), so an
+    // unrecognized name still falls back to Type::unknown() unchanged.
+    auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
+                   SourceLocation loc) -> TypePtr;
+    auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
+
     // Scope management
     auto pushScope() -> void;
     auto popScope() -> void;
@@ -44,6 +56,8 @@ private:
     TypeEnv m_globals;
     std::vector<TypeEnv> m_scopeStack;
     int m_nextTypeVar = 0;
+    TraitRegistry m_traits = TraitRegistry::withBuiltins();
+    SignatureTable m_stdlib = SignatureTable::withStdlib();
 
     auto freshTypeVar() -> TypePtr;
 };

@@ -127,6 +127,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
             return Type::boolean();
         }
+        else if constexpr (std::is_same_v<T, ast::CharLiteral>) {
+            return Type::charT();
+        }
         else if constexpr (std::is_same_v<T, ast::NoneLiteral>) {
             return Type::named("None");
         }
@@ -186,25 +189,27 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+            std::vector<TypePtr> argTypes;
             for (const auto& arg : node.args) {
-                if (arg) inferExpr(*arg);
+                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
             }
             for (const auto& [_, arg] : node.namedArgs) {
                 if (arg) inferExpr(*arg);
             }
             if (node.block) inferExpr(**node.block);
-            return Type::unknown();
+            return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            if (node.receiver) inferExpr(*node.receiver);
+            std::vector<TypePtr> argTypes;
+            argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
             for (const auto& arg : node.args) {
-                if (arg) inferExpr(*arg);
+                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
             }
             for (const auto& [_, arg] : node.namedArgs) {
                 if (arg) inferExpr(*arg);
             }
             if (node.block) inferExpr(**node.block);
-            return Type::unknown();
+            return checkCall(node.method, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             TypePtr elemType = Type::unknown();
@@ -466,6 +471,87 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         default:
             return Type::unknown();
     }
+}
+
+auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {
+    auto isPermissive = [](const TypePtr& t) {
+        return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
+    };
+    if (isPermissive(argType) || isPermissive(paramType)) return true;
+    if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {
+        return m_traits.satisfies(argType, constrained->traitName);
+    }
+    return typesEqual(argType, paramType);
+}
+
+auto TypeChecker::displaySignature(const std::string& name, const Signature& sig) const -> std::string {
+    // A ConstrainedType param displays as its trait name ("Integer"), not
+    // its placeholder var name ("T") — readers want to know what's
+    // required, not the table's internal variable naming.
+    auto displayType = [](const TypePtr& t) -> std::string {
+        if (auto* constrained = std::get_if<ConstrainedType>(&t->kind)) return constrained->traitName;
+        return typeToString(t);
+    };
+    std::string result = name + " : ";
+    for (const auto& param : sig.params) {
+        result += displayType(param) + " -> ";
+    }
+    result += displayType(sig.result);
+    return result;
+}
+
+auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
+                            SourceLocation loc) -> TypePtr {
+    auto* sigs = m_stdlib.lookup(name);
+    if (!sigs) return Type::unknown();  // user-defined function: not checked yet (phase 5)
+
+    std::vector<const Signature*> arityMatches;
+    std::vector<const Signature*> fullMatches;
+    for (const auto& sig : *sigs) {
+        if (sig.params.size() != argTypes.size()) continue;
+        arityMatches.push_back(&sig);
+
+        bool allMatch = true;
+        for (size_t i = 0; i < sig.params.size(); i++) {
+            if (!argMatchesParam(argTypes[i], sig.params[i])) {
+                allMatch = false;
+                break;
+            }
+        }
+        if (allMatch) fullMatches.push_back(&sig);
+    }
+
+    if (fullMatches.size() == 1) return fullMatches[0]->result;
+    if (fullMatches.size() > 1) return fullMatches[0]->result;  // no overlapping cases exist today
+
+    if (arityMatches.empty()) {
+        error(loc, "`" + name + "` expects " + std::to_string((*sigs)[0].params.size()) +
+              " argument(s), got " + std::to_string(argTypes.size()));
+        return (*sigs)[0].result;
+    }
+
+    // Zero matches with at least one arity match: find the first
+    // mismatching argument against the first arity-matching candidate for
+    // the headline message, then list every candidate signature tried,
+    // Elm-style.
+    const Signature& first = *arityMatches[0];
+    std::string detail = "different arguments";
+    for (size_t i = 0; i < first.params.size(); i++) {
+        if (!argMatchesParam(argTypes[i], first.params[i])) {
+            auto* constrained = std::get_if<ConstrainedType>(&first.params[i]->kind);
+            std::string expected = constrained ? constrained->traitName : typeToString(first.params[i]);
+            detail = "argument " + std::to_string(i + 1) + " to be " + expected +
+                      ", but got " + typeToString(argTypes[i]);
+            break;
+        }
+    }
+
+    std::string message = "`" + name + "` expects " + detail;
+    for (const auto& sig : *sigs) {
+        message += "\n\n" + displaySignature(name, sig);
+    }
+    error(loc, message);
+    return arityMatches[0]->result;
 }
 
 auto TypeChecker::pushScope() -> void {
