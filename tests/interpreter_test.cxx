@@ -313,8 +313,8 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  match 85 do\n"
-                "    n if n >= 90 -> \"A\"\n"
-                "    n if n >= 80 -> \"B\"\n"
+                "    n when n >= 90 -> \"A\"\n"
+                "    n when n >= 80 -> \"B\"\n"
                 "    _ -> \"F\"\n"
                 "  end\n"
                 "end\n"

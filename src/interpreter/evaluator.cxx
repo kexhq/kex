@@ -706,6 +706,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             auto subject = node.subject ? eval(*node.subject) : Value::none();
             for (const auto& clause : node.clauses) {
                 pushEnv();
+                if (node.subjectBinding) {
+                    m_env->define(*node.subjectBinding, subject);
+                }
                 // Everything below must pop this scope before returning OR
                 // propagating an exception. Without the try/catch, a clause
                 // body containing `return` (extremely common — e.g. `_ ->

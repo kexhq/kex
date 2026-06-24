@@ -90,6 +90,7 @@ private:
     // Helpers
     auto parseBlock() -> std::optional<ast::ExprPtr>;
     auto parseMatchClause() -> ast::MatchClause;
+    auto parseMatchClauseBody() -> ast::ExprPtr;
     auto isAtExprStart() const -> bool;
 
     // Error handling

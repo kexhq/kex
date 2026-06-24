@@ -14,9 +14,9 @@ main do
   IO.printLine(result)
 
   let grade = match 85 do
-    n if n >= 90 -> "A"
-    n if n >= 80 -> "B"
-    n if n >= 70 -> "C"
+    n when n >= 90 -> "A"
+    n when n >= 80 -> "B"
+    n when n >= 70 -> "C"
     _ -> "F"
   end
   IO.printLine(grade)

@@ -1388,6 +1388,13 @@ auto Parser::parseMatchExpr() -> ast::ExprPtr {
     auto subject = parseExpr();
     m_noDoBlocks = false;
     expect(TokenType::Do, "Expected 'do' after match subject");
+
+    std::optional<std::string> subjectBinding;
+    if (match(TokenType::Pipe)) {
+        subjectBinding = expect(TokenType::LowerIdent, "Expected name in match subject binding").value;
+        expect(TokenType::Pipe, "Expected '|' after match subject binding");
+    }
+
     skipNewlines();
 
     std::vector<ast::MatchClause> clauses;
@@ -1398,12 +1405,26 @@ auto Parser::parseMatchExpr() -> ast::ExprPtr {
 
     expect(TokenType::End, "Expected 'end' to close match");
 
-    expr->kind = ast::MatchExpr{std::move(subject), std::move(clauses)};
+    expr->kind = ast::MatchExpr{std::move(subject), std::move(subjectBinding), std::move(clauses)};
     return expr;
 }
 
 auto Parser::parseMatchClause() -> ast::MatchClause {
     ast::MatchClause clause;
+
+    // Bare `when cond -> ...` = sugar for `_ when cond -> ...`
+    if (check(TokenType::When)) {
+        auto wildcard = std::make_unique<ast::Pattern>();
+        wildcard->location = currentLocation();
+        wildcard->kind = ast::WildcardPattern{};
+        clause.patterns.push_back(std::move(wildcard));
+        advance(); // when
+        clause.guard = parseExpr();
+
+        expect(TokenType::Arrow, "Expected '->' in match clause");
+        clause.body = parseMatchClauseBody();
+        return clause;
+    }
 
     clause.patterns.push_back(parsePattern());
     while (match(TokenType::Comma)) {
@@ -1411,12 +1432,17 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
     }
 
     // Guard
-    if (match(TokenType::If)) {
+    if (match(TokenType::When)) {
         clause.guard = parseExpr();
     }
 
     expect(TokenType::Arrow, "Expected '->' in match clause");
+    clause.body = parseMatchClauseBody();
 
+    return clause;
+}
+
+auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
     // Body can be single expr or a do...end block
     if (match(TokenType::Do)) {
         skipNewlines();
@@ -1430,12 +1456,9 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
         auto blockExpr = std::make_unique<ast::Expr>();
         blockExpr->location = currentLocation();
         blockExpr->kind = ast::BlockExpr{std::move(body)};
-        clause.body = std::move(blockExpr);
-    } else {
-        clause.body = parseExpr();
+        return blockExpr;
     }
-
-    return clause;
+    return parseExpr();
 }
 
 auto Parser::parseReceiveExpr() -> ast::ExprPtr {

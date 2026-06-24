@@ -256,9 +256,13 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return thenType;
         }
         else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-            if (node.subject) inferExpr(*node.subject);
+            TypePtr subjectType = node.subject ? inferExpr(*node.subject) : Type::unknown();
             TypePtr resultType = Type::unknown();
             for (const auto& clause : node.clauses) {
+                pushScope();
+                if (node.subjectBinding) {
+                    defineVar(*node.subjectBinding, subjectType);
+                }
                 if (clause.guard && *clause.guard) inferExpr(**clause.guard);
                 if (clause.body) {
                     auto t = inferExpr(*clause.body);
@@ -266,6 +270,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         resultType = t;
                     }
                 }
+                popScope();
             }
             return resultType;
         }

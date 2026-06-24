@@ -68,11 +68,11 @@ make Line do
   let vertical?({ start: { x: x1 }, end: { x: x2 } }) = x1 == x2
 end
 
-# Guards in match (trailing if)
+# Guards in match
 let classify(n: Int) -> String do
   match n do
     0 -> "zero"
-    n if n > 0 -> "positive"
+    n when n > 0 -> "positive"
     _ -> "negative"
   end
 end

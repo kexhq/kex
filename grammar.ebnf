@@ -143,6 +143,8 @@ param
 type_annotation
   = LOWER_IDENT TYPE_ANNOTATION type_expr
   | LOWER_IDENT COLON type_expr
+  | binary_op TYPE_ANNOTATION type_expr           (* operator signatures, e.g. == :> This -> Bool *)
+  | binary_op COLON type_expr                     (* e.g. == : This -> This -> Bool *)
   ;
 
 
@@ -271,9 +273,12 @@ if_expr
   | IF expr DO body ( ELIF expr DO body )* ELSE DO body END
   ;
 
-match_expr = MATCH expr DO match_clause+ END ;
+match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
 
-match_clause = pattern ( COMMA pattern )* ARROW expr ;
+match_clause
+  = pattern ( COMMA pattern )* ( WHEN expr )? ARROW expr
+  | WHEN expr ARROW expr   (* bare when = _ when *)
+  ;
 
 receive_expr
   = RECEIVE DO match_clause+ END
@@ -393,6 +398,7 @@ TRUE     = "true" ;
 TYPE     = "type" ;
 USING    = "using" ;
 VAR      = "var" ;
+WHEN     = "when" ;
 
 (* Symbols *)
 ARROW        = "->" ;

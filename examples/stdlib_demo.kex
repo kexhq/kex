@@ -97,10 +97,10 @@ main do
   IO.printLine("=== Pattern Matching ===")
 
   let grade = match 87 do
-    n if n >= 90 -> "A"
-    n if n >= 80 -> "B"
-    n if n >= 70 -> "C"
-    n if n >= 60 -> "D"
+    n when n >= 90 -> "A"
+    n when n >= 80 -> "B"
+    n when n >= 70 -> "C"
+    n when n >= 60 -> "D"
     _ -> "F"
   end
   IO.printLine("grade for 87: ${grade}")

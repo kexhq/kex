@@ -257,6 +257,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.subject) analyzeExpr(*node.subject);
             for (const auto& clause : node.clauses) {
                 m_symbols.pushScope(m_inFoulContext);
+                if (node.subjectBinding) {
+                    m_symbols.define(Symbol{
+                        *node.subjectBinding, SymbolKind::Variable, false, false, true, expr.location});
+                }
                 if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();

@@ -40,6 +40,7 @@ enum class TokenType {
     Type,
     Using,
     Var,
+    When,
 
     // Symbols
     Arrow,        // ->

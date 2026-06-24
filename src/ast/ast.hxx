@@ -226,6 +226,7 @@ struct MatchClause {
 
 struct MatchExpr {
     ExprPtr subject;
+    std::optional<std::string> subjectBinding; // |n|
     std::vector<MatchClause> clauses;
 };
 

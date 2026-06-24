@@ -55,7 +55,7 @@ make Parser do
         Just('"') -> p.parseString
         Just('[') -> p.parseArray
         Just('{') -> p.parseObject
-        Just(c) if c.digit? || c == '-' -> p.parseNumber
+        Just(c) when c.digit? || c == '-' -> p.parseNumber
         Just(c) -> Error(UnexpectedChar("${c}", p.pos))
       end
     end
@@ -173,7 +173,7 @@ make Parser do
 
       loop do
         match p.current do
-          Just(c) if c.digit? || c == '.' -> do
+          Just(c) when c.digit? || c == '.' -> do
             chars.push!(c)
             p = p.advance
           end
