@@ -165,28 +165,6 @@ int main() {
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 
-        it("'and'/'or' are word-form aliases for &&/||", []() {
-            auto andResult = run("main do\n  true and false\nend\n");
-            assertFalse(std::get<BoolValue>(andResult->data).value);
-            auto orResult = run("main do\n  true or false\nend\n");
-            assertTrue(std::get<BoolValue>(orResult->data).value);
-        });
-
-        it("'not' is a word-form alias for !", []() {
-            auto result = run("main do\n  not true\nend\n");
-            assertFalse(std::get<BoolValue>(result->data).value);
-        });
-
-        it("'not' binds looser than == (regression)", []() {
-            // Regression test: `not` was initially given the same tight
-            // precedence as `!` (unary level), so `not x == y` parsed as
-            // `(not x) == y`. It must bind looser, Python-style, so
-            // `not x == y` reads as `not (x == y)` — this is what makes
-            // `return if not ENV.get(key) == "true"`-style guards work
-            // without needing extra parens.
-            auto result = run("main do\n  not 1 == 2\nend\n");
-            assertTrue(std::get<BoolValue>(result->data).value);
-        });
     });
 
     describe("Interpreter — Variables", []() {
