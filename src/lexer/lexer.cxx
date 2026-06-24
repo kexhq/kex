@@ -34,6 +34,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"using", TokenType::Using},
     {"var", TokenType::Var},
     {"when", TokenType::When},
+    {"while", TokenType::While},
 };
 
 Lexer::Lexer(std::string source, std::string_view filename)
@@ -63,10 +64,17 @@ auto Lexer::nextToken() -> Token {
     if (isDigit(c)) return lexNumber();
 
     switch (c) {
-        case '\n': return makeToken(TokenType::Newline);
+        // Inside parens, newlines are insignificant whitespace — this is
+        // what lets multiline conditions like `if (a\n && b)` work without
+        // a continuation marker.
+        case '\n':
+            if (m_parenDepth > 0) return nextToken();
+            return makeToken(TokenType::Newline);
 
-        case '(': return makeToken(TokenType::LParen);
-        case ')': return makeToken(TokenType::RParen);
+        case '(': m_parenDepth++; return makeToken(TokenType::LParen);
+        case ')':
+            if (m_parenDepth > 0) m_parenDepth--;
+            return makeToken(TokenType::RParen);
         case '{': return makeToken(TokenType::LBrace);
         case '}': return makeToken(TokenType::RBrace);
         case '[': return makeToken(TokenType::LBracket);

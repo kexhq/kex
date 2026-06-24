@@ -249,7 +249,7 @@ int main() {
         it("if true branch", []() {
             auto result = run(
                 "main do\n"
-                "  if true do\n    1\n  else do\n    2\n  end\n"
+                "  if true\n    1\n  else\n    2\n  end\n"
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(1));
@@ -258,7 +258,7 @@ int main() {
         it("if false branch", []() {
             auto result = run(
                 "main do\n"
-                "  if false do\n    1\n  else do\n    2\n  end\n"
+                "  if false\n    1\n  else\n    2\n  end\n"
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
@@ -268,7 +268,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  let x = 10\n"
-                "  if x > 5 do\n    \"big\"\n  else do\n    \"small\"\n  end\n"
+                "  if x > 5\n    \"big\"\n  else\n    \"small\"\n  end\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("big"));
@@ -308,8 +308,8 @@ int main() {
             auto result = run(
                 "let countTo(limit: Int) -> Int do\n"
                 "  var i = 0\n"
-                "  loop do\n"
-                "    if i >= limit do\n"
+                "  loop\n"
+                "    if i >= limit\n"
                 "      return i\n"
                 "    end\n"
                 "    i = i + 1\n"
@@ -949,7 +949,7 @@ int main() {
         it("computes primes via lazy filter", []() {
             auto result = run(
                 "let isPrime?(n: Int) do\n"
-                "  if n < 2 do\n"
+                "  if n < 2\n"
                 "    return false\n"
                 "  end\n"
                 "  return (2..n - 1).all? { |d| n.modulo(d) != 0 }\n"

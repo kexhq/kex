@@ -72,6 +72,7 @@ private:
     auto parseMatchExpr() -> ast::ExprPtr;
     auto parseReceiveExpr() -> ast::ExprPtr;
     auto parseLoopExpr() -> ast::ExprPtr;
+    auto parseWhileExpr() -> ast::ExprPtr;
     auto parseLetExpr() -> ast::ExprPtr;
     auto parseVarExpr() -> ast::ExprPtr;
     auto parseReturnExpr() -> ast::ExprPtr;

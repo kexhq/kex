@@ -7,13 +7,13 @@
 
 main do
   (1..100).each do |i|
-    if i.modulo(15) == 0 do
+    if i.modulo(15) == 0
       IO.printLine("FizzBuzz")
-    elif i.modulo(3) == 0 do
+    elif i.modulo(3) == 0
       IO.printLine("Fizz")
-    elif i.modulo(5) == 0 do
+    elif i.modulo(5) == 0
       IO.printLine("Buzz")
-    else do
+    else
       IO.printLine("${i}")
     end
   end

@@ -28,7 +28,7 @@ let countErrors(lines: [String]) -> Int do
   var errors = []
 
   lines.each do |line|
-    if line.contains?("ERROR") do
+    if line.contains?("ERROR")
       count = count + 1
       errors.push!(line)
     end
@@ -42,7 +42,7 @@ foul startAccumulator -> Process<(:add, Int) | :get> do
   return spawn do
     var items: [Int] = []
 
-    loop do
+    loop
       receive do
         (:add, n) -> items.push!(n)
         (:get, sender) -> sender.send(items)

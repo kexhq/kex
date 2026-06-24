@@ -270,9 +270,9 @@ int main() {
         it("parses if expression", []() {
             auto program = parse(
                 "main do\n"
-                "  if x > 0 do\n"
+                "  if x > 0\n"
                 "    x\n"
-                "  else do\n"
+                "  else\n"
                 "    -x\n"
                 "  end\n"
                 "end\n"
@@ -304,7 +304,7 @@ int main() {
             auto program = parse(
                 "main do\n"
                 "  let pid = spawn do\n"
-                "    loop do\n"
+                "    loop\n"
                 "      receive do\n"
                 "        :ping -> :pong\n"
                 "      end\n"

@@ -34,7 +34,7 @@ make Parser do
 
     let skipWhitespace() -> Parser do
       var p = this
-      loop do
+      loop
         match p.current do
           Just(' ') -> p = p.advance
           Just('\n') -> p = p.advance
@@ -68,14 +68,14 @@ make Parser do
     let expectLiteral(word: String) -> Result<Parser, ParseError> do
       var p = this
       var i = 0
-      loop do
-        if i >= word.length do
+      loop
+        if i >= word.length
           return Ok(p)
         end
-        if p.current == Just(word.at(i)) do
+        if p.current == Just(word.at(i))
           p = p.advance
           i = i + 1
-        else do
+        else
           return Error(UnexpectedChar(word, this.pos))
         end
       end
@@ -92,7 +92,7 @@ make Parser do
       var p = this.advance   # skip opening quote
       var chars: [Char] = []
 
-      loop do
+      loop
         match p.current do
           None -> return Error(UnexpectedEnd)
           Just('"') -> return Ok((JsonString(chars.join("")), p.advance))
@@ -118,11 +118,11 @@ make Parser do
       var p = this.advance.skipWhitespace   # skip [
       var items: [Json] = []
 
-      if p.current == Just(']') do
+      if p.current == Just(']')
         return Ok((JsonArray([]), p.advance))
       end
 
-      loop do
+      loop
         let (value, nextP) = p.parseValue()?
         items.push!(value)
         p = nextP.skipWhitespace
@@ -139,11 +139,11 @@ make Parser do
       var p = this.advance.skipWhitespace   # skip {
       var obj: { String: Json } = {}
 
-      if p.current == Just('}') do
+      if p.current == Just('}')
         return Ok((JsonObject({}), p.advance))
       end
 
-      loop do
+      loop
         let (JsonString(key), afterKey) = p.parseString()?
         p = afterKey.skipWhitespace
 
@@ -166,12 +166,12 @@ make Parser do
       var p = this
       var chars: [Char] = []
 
-      if p.current == Just('-') do
+      if p.current == Just('-')
         chars.push!('-')
         p = p.advance
       end
 
-      loop do
+      loop
         match p.current do
           Just(c) when c.digit? || c == '.' -> do
             chars.push!(c)

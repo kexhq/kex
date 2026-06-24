@@ -1,0 +1,29 @@
+# Alternative syntax for 'make List do', with a one-letter Type substitute
+make [X] do
+  # This refers to [X], while this would refer to the instance
+  # If not specified make implicitly passes this : This
+  head : This -> X?
+
+  # We can pattern match on this via @. This means match on
+  # the empty list itself:
+  let head(@[]) = None
+  let head(@[_|xs]) = Just(x)
+
+  tail : This -> This
+  let tail(@[]) = []
+  let tail(@[_|xs]) = xs
+
+  tail : This -> Integer
+  let count(@[]) = 0
+  let count(@[x|xs]) = 1 + xs.count
+end
+
+main do
+  let r = 1..10
+  let list = r.to(List)
+
+  IO.printLine("list = ${list}")
+  IO.printLine("head = ${list.head}")
+  IO.printLine("tail = ${list.tail}")
+  IO.printLine("count = ${list.count}")
+end

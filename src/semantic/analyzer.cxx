@@ -269,6 +269,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
             analyzeBody(node.body);
         }
+        else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            if (node.condition) analyzeExpr(*node.condition);
+            analyzeBody(node.body);
+        }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
             if (node.value) analyzeExpr(*node.value);
         }

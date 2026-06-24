@@ -123,7 +123,7 @@ module Database do
       let toSql({ table, columns, conditions, limit }) -> String do
         var sql = "SELECT ${columns.join(", ")} FROM ${table}"
 
-        if !conditions.empty? do
+        if !conditions.empty?
           sql = sql + " WHERE ${conditions.join(" AND ")}"
         end
 

@@ -35,6 +35,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Using: return "using";
         case TokenType::Var: return "var";
         case TokenType::When: return "when";
+        case TokenType::While: return "while";
         case TokenType::Arrow: return "->";
         case TokenType::Amp: return "&";
         case TokenType::At: return "@";

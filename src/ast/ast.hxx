@@ -240,6 +240,11 @@ struct LoopExpr {
     std::vector<ExprPtr> body;
 };
 
+struct WhileExpr {
+    ExprPtr condition;
+    std::vector<ExprPtr> body;
+};
+
 struct LetExpr {
     PatternPtr pattern;
     ExprPtr value;
@@ -320,6 +325,7 @@ struct Expr {
         MatchExpr,
         ReceiveExpr,
         LoopExpr,
+        WhileExpr,
         LetExpr,
         VarExpr,
         AssignExpr,

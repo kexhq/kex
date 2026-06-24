@@ -82,7 +82,7 @@ int main() {
             assertTrue(noErrors(
                 "foul start do\n"
                 "  spawn do\n"
-                "    loop do\n"
+                "    loop\n"
                 "    end\n"
                 "  end\n"
                 "end\n"
@@ -207,7 +207,7 @@ int main() {
         it("rejects non-Bool in if condition", []() {
             assertTrue(hasError(
                 "main do\n"
-                "  if 42 do\n"
+                "  if 42\n"
                 "    \"oops\"\n"
                 "  end\n"
                 "end\n",
@@ -218,7 +218,7 @@ int main() {
         it("accepts Bool in if condition", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  if true do\n"
+                "  if true\n"
                 "    \"ok\"\n"
                 "  end\n"
                 "end\n"
@@ -454,7 +454,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let x = 5 > 3\n"
-                "  if x do\n"
+                "  if x\n"
                 "    1\n"
                 "  end\n"
                 "end\n"
@@ -500,14 +500,14 @@ int main() {
     describe("Semantic — Type Checking (If/Elif)", []() {
         it("rejects String as condition", []() {
             assertTrue(hasError(
-                "main do\n  if \"yes\" do\n    1\n  end\nend\n",
+                "main do\n  if \"yes\"\n    1\n  end\nend\n",
                 "Bool"
             ));
         });
 
         it("rejects Float as condition", []() {
             assertTrue(hasError(
-                "main do\n  if 3.14 do\n    1\n  end\nend\n",
+                "main do\n  if 3.14\n    1\n  end\nend\n",
                 "Bool"
             ));
         });
@@ -516,7 +516,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let n = 5\n"
-                "  if n > 0 do\n"
+                "  if n > 0\n"
                 "    n\n"
                 "  end\n"
                 "end\n"
@@ -527,7 +527,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let done = false\n"
-                "  if !done do\n"
+                "  if !done\n"
                 "    1\n"
                 "  end\n"
                 "end\n"
@@ -594,7 +594,7 @@ int main() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let flag = true\n"
-                "  if flag do\n"
+                "  if flag\n"
                 "    1\n"
                 "  end\n"
                 "end\n"

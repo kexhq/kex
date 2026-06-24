@@ -49,6 +49,7 @@ private:
     int m_column = 1;
     int m_tokenStartLine = 1;
     int m_tokenStartColumn = 1;
+    int m_parenDepth = 0;
 };
 
 } // namespace kex

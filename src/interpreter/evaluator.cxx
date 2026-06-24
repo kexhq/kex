@@ -887,6 +887,21 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 popEnv();
             }
         }
+        else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            while (true) {
+                auto cond = node.condition ? eval(*node.condition) : Value::boolean(false);
+                if (!cond->isTrue()) break;
+                pushEnv();
+                try {
+                    evalBody(node.body);
+                } catch (...) {
+                    popEnv();
+                    throw;
+                }
+                popEnv();
+            }
+            return Value::none();
+        }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
             // Look up in environment first (records, namespaces, ALL_CAPS
             // constants like `let MAX_RETRIES = 3`)

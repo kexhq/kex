@@ -11,7 +11,7 @@
 let even?(n: Int) = n.modulo(2) == 0
 
 let isPrime?(n: Int) do
-  if n < 2 do
+  if n < 2
     return false
   end
   return (2..n - 1).all? { |d| n.modulo(d) != 0 }

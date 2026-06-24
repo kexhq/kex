@@ -5,7 +5,7 @@ type CounterMessage = :increment | :reset | (:get, Process<Int>)
 foul startCounter -> Process<CounterMessage> do
   return spawn do
     var state = 0
-    loop do
+    loop
       receive do
         :increment -> state = state + 1
         :reset -> state = 0
@@ -59,7 +59,7 @@ type ChatMessage = (:join, String) | (:leave, String) | (:msg, String, String)
 foul startChat -> Process<ChatMessage> do
   return spawn do
     var users: [String] = []
-    loop do
+    loop
       receive do
         (:join, name) -> users = [name | users]
         (:leave, name) -> users = users.reject { |u| u == name }

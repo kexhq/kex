@@ -298,6 +298,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             inferBody(node.body);
             return Type::unit();
         }
+        else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            if (node.condition) {
+                auto condType = inferExpr(*node.condition);
+                if (!std::holds_alternative<UnknownType>(condType->kind) &&
+                    !typesEqual(condType, Type::boolean())) {
+                    error(expr.location, "While condition must be Bool, got " +
+                          typeToString(condType));
+                }
+            }
+            inferBody(node.body);
+            return Type::unit();
+        }
         else if constexpr (std::is_same_v<T, ast::ErrorPropagate>) {
             if (node.inner) return inferExpr(*node.inner);
             return Type::unknown();

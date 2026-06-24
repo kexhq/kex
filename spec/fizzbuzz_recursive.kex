@@ -12,9 +12,9 @@ end
 
 # Recursive version with accumulator
 let fizzBuzzRecursive(n: Int, limit: Int, acc: [String]) -> [String] do
-  if n > limit do
+  if n > limit
     acc
-  else do
+  else
     let result = fizzBuzzString(n)
     fizzBuzzRecursive(n + 1, limit, acc.push(result))
   end

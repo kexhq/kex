@@ -1107,7 +1107,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     if (check(TokenType::If)) return parseIfExpr();
     if (check(TokenType::Match)) return parseMatchExpr();
     if (check(TokenType::Receive)) return parseReceiveExpr();
-    if (check(TokenType::Loop) && peekNext().type == TokenType::Do) return parseLoopExpr();
+    if (check(TokenType::Loop) && peekNext().type != TokenType::LParen) return parseLoopExpr();
+    if (check(TokenType::While)) return parseWhileExpr();
     if (check(TokenType::Let)) return parseLetExpr();
     if (check(TokenType::Var)) return parseVarExpr();
     if (check(TokenType::Return)) return parseReturnExpr();
@@ -1192,8 +1193,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     }
 
     // Keywords that can be used as identifiers in expression context
-    if ((check(TokenType::Loop) || check(TokenType::Match)) &&
-        peekNext().type != TokenType::Do) {
+    if ((check(TokenType::Loop) && peekNext().type == TokenType::LParen) ||
+        (check(TokenType::Match) && peekNext().type != TokenType::Do)) {
         auto name = advance().value;
         if (match(TokenType::LParen)) {
             std::vector<ast::ExprPtr> args;
@@ -1318,8 +1319,6 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     auto condition = parseExpr();
     m_noDoBlocks = false;
     skipNewlines();
-    expect(TokenType::Do, "Expected 'do' after if condition");
-    skipNewlines();
 
     std::vector<ast::ExprPtr> thenBody;
     while (!check(TokenType::End) && !check(TokenType::Else) &&
@@ -1330,8 +1329,9 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
 
     std::vector<std::pair<ast::ExprPtr, std::vector<ast::ExprPtr>>> elifs;
     while (match(TokenType::Elif)) {
+        m_noDoBlocks = true;
         auto elifCond = parseExpr();
-        expect(TokenType::Do, "Expected 'do' after elif condition");
+        m_noDoBlocks = false;
         skipNewlines();
         std::vector<ast::ExprPtr> elifBody;
         while (!check(TokenType::End) && !check(TokenType::Else) &&
@@ -1344,7 +1344,6 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
 
     std::optional<std::vector<ast::ExprPtr>> elseBody;
     if (match(TokenType::Else)) {
-        expect(TokenType::Do, "Expected 'do' after else");
         skipNewlines();
         elseBody = std::vector<ast::ExprPtr>{};
         while (!check(TokenType::End) && !atEnd()) {
@@ -1480,7 +1479,6 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
     expect(TokenType::Loop, "Expected 'loop'");
-    expect(TokenType::Do, "Expected 'do' after 'loop'");
     skipNewlines();
 
     std::vector<ast::ExprPtr> body;
@@ -1492,6 +1490,28 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
     expect(TokenType::End, "Expected 'end' to close loop");
 
     expr->kind = ast::LoopExpr{std::move(body)};
+    return expr;
+}
+
+auto Parser::parseWhileExpr() -> ast::ExprPtr {
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+    expect(TokenType::While, "Expected 'while'");
+
+    m_noDoBlocks = true;
+    auto condition = parseExpr();
+    m_noDoBlocks = false;
+    skipNewlines();
+
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
+
+    expect(TokenType::End, "Expected 'end' to close while");
+
+    expr->kind = ast::WhileExpr{std::move(condition), std::move(body)};
     return expr;
 }
 

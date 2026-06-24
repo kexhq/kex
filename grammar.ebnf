@@ -210,6 +210,7 @@ expr
   | match_expr
   | receive_expr
   | loop_expr
+  | while_expr
   | let_expr
   | var_expr
   | assign_expr
@@ -267,10 +268,12 @@ range_expr = expr DOT_DOT expr ;
 
 (* ===== Control Flow ===== *)
 
+(* Multiline conditions require parens, e.g. `if (a\n && b)`, since
+   newlines are only insignificant inside ( ). *)
 if_expr
-  = IF expr DO body END
-  | IF expr DO body ELSE DO body END
-  | IF expr DO body ( ELIF expr DO body )* ELSE DO body END
+  = IF expr NEWLINE body END
+  | IF expr NEWLINE body ELSE NEWLINE body END
+  | IF expr NEWLINE body ( ELIF expr NEWLINE body )* ELSE NEWLINE body END
   ;
 
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
@@ -285,7 +288,9 @@ receive_expr
   | RECEIVE TIMEOUT COLON expr DO match_clause+ AFTER ARROW expr END
   ;
 
-loop_expr = LOOP DO body END ;
+loop_expr = LOOP NEWLINE body END ;
+
+while_expr = WHILE expr NEWLINE body END ;
 
 (* ===== Let / Var / Assignment ===== *)
 
@@ -396,6 +401,7 @@ TYPE     = "type" ;
 USING    = "using" ;
 VAR      = "var" ;
 WHEN     = "when" ;
+WHILE    = "while" ;
 
 (* Symbols *)
 ARROW        = "->" ;
