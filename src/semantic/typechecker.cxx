@@ -1,13 +1,55 @@
 #include "typechecker.hxx"
 #include "analyzer.hxx"
+#include <set>
 
 namespace kex::semantic {
+
+namespace {
+
+// A sum-type variant is constructor-shaped (TypeName or GenericType with a
+// single-part name) if it's a bare `Name` or `Name(Args...)` — anything
+// else (tuple/list/function/union/atom type exprs) means the TypeDef is a
+// type alias, not a real ADT, and the whole def is skipped for exhaustiveness.
+auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<std::string> {
+    if (!variant) return std::nullopt;
+    if (auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
+        if (tn->parts.size() == 1) return tn->parts[0];
+    }
+    if (auto* gt = std::get_if<ast::GenericType>(&variant->kind)) {
+        if (gt->name.parts.size() == 1) return gt->name.parts[0];
+    }
+    return std::nullopt;
+}
+
+} // namespace
 
 auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
     m_scopeStack.clear();
     pushScope();
+
+    // Built-in prelude ADTs (see src/interpreter/stdlib/adt.cxx) — Just/
+    // None and Ok/Error are bare constructors, not declared via a user
+    // `type ... = ...`, so they're registered here rather than discovered
+    // by walking TypeDefs below.
+    m_adtVariants["Option"] = {"Just", "None"};
+    m_adtOfConstructor["Just"] = "Option";
+    m_adtOfConstructor["None"] = "Option";
+    m_adtVariants["Result"] = {"Ok", "Error"};
+    m_adtOfConstructor["Ok"] = "Result";
+    m_adtOfConstructor["Error"] = "Result";
+
+    for (const auto& item : program.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                registerAdt(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                registerAdtsInModule(*node);
+            }
+        }, item);
+    }
 
     // Register built-in types
     m_globals.set("Int", Type::int64());
@@ -34,6 +76,116 @@ auto TypeChecker::check(const ast::Program& program,
     }
 
     popScope();
+}
+
+auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
+    if (!def.variants) return;
+
+    std::vector<std::string> names;
+    for (const auto& variant : *def.variants) {
+        auto name = extractConstructorName(variant);
+        if (!name) return;  // not constructor-shaped — a type alias, skip entirely
+        names.push_back(*name);
+    }
+    if (names.empty()) return;
+
+    m_adtVariants[def.name] = names;
+    for (const auto& name : names) {
+        m_adtOfConstructor[name] = def.name;
+    }
+}
+
+auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
+    for (const auto& item : mod.body) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                registerAdt(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                registerAdtsInModule(*node);
+            }
+        }, item);
+    }
+}
+
+auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void {
+    bool hasUnguardedCatchAll = false;
+    std::set<std::string> covered;
+    std::string adtName;
+    bool inconclusive = false;
+
+    for (const auto& clause : node.clauses) {
+        bool guarded = clause.guard && *clause.guard;
+        for (const auto& pat : clause.patterns) {
+            if (!pat) continue;
+            if (std::holds_alternative<ast::WildcardPattern>(pat->kind) ||
+                std::holds_alternative<ast::VarPattern>(pat->kind)) {
+                if (!guarded) hasUnguardedCatchAll = true;
+                continue;
+            }
+            auto* ctor = std::get_if<ast::ConstructorPattern>(&pat->kind);
+            if (!ctor) continue;  // literal/list/tuple/record/range patterns don't drive ADT exhaustiveness
+
+            auto it = m_adtOfConstructor.find(ctor->name);
+            if (it == m_adtOfConstructor.end()) {
+                inconclusive = true;  // unregistered constructor — can't prove the closed set
+                continue;
+            }
+            if (adtName.empty()) adtName = it->second;
+            else if (adtName != it->second) inconclusive = true;  // patterns span more than one ADT
+            if (!guarded) covered.insert(ctor->name);
+        }
+    }
+
+    if (hasUnguardedCatchAll || inconclusive || adtName.empty()) return;
+
+    std::vector<std::string> missing;
+    for (const auto& ctorName : m_adtVariants[adtName]) {
+        if (!covered.count(ctorName)) missing.push_back(ctorName);
+    }
+    if (missing.empty()) return;
+
+    std::string list;
+    for (size_t i = 0; i < missing.size(); i++) {
+        if (i) list += ", ";
+        list += missing[i];
+    }
+    error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
+}
+
+auto TypeChecker::bindPatternVars(const ast::Pattern& pat) -> void {
+    std::visit([this](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::VarPattern>) {
+            if (node.name != "_") defineVar(node.name, freshTypeVar());
+        }
+        else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            if (node.inner) bindPatternVars(*node.inner);
+        }
+        else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+            for (const auto& arg : node.args) {
+                if (arg) bindPatternVars(*arg);
+            }
+        }
+        else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            for (const auto& field : node.fields) {
+                if (field.pattern) bindPatternVars(**field.pattern);
+                else if (!field.isStringKey) defineVar(field.name, freshTypeVar());
+            }
+        }
+        else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            for (const auto& elem : node.elements) {
+                if (elem) bindPatternVars(*elem);
+            }
+            if (node.rest) bindPatternVars(**node.rest);
+        }
+        else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+            for (const auto& elem : node.elements) {
+                if (elem) bindPatternVars(*elem);
+            }
+        }
+        // LiteralPattern, WildcardPattern, RangePattern introduce nothing.
+    }, pat.kind);
 }
 
 auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
@@ -282,6 +434,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (node.subjectBinding) {
                     defineVar(*node.subjectBinding, subjectType);
                 }
+                for (const auto& pat : clause.patterns) {
+                    if (pat) bindPatternVars(*pat);
+                }
                 if (clause.guard && *clause.guard) inferExpr(**clause.guard);
                 if (clause.body) {
                     auto t = inferExpr(*clause.body);
@@ -291,6 +446,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 popScope();
             }
+            checkMatchExhaustiveness(node, expr.location);
             return resultType;
         }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {

@@ -844,5 +844,85 @@ int main() {
         });
     });
 
+    describe("Semantic — Match exhaustiveness", []() {
+        it("rejects a user sum type match missing a constructor", []() {
+            assertTrue(hasError(
+                "type Shape = Circle(Float) | Rectangle(Float, Float) | Triangle(Float, Float, Float)\n"
+                "main do\n"
+                "  let s = Circle(1.0)\n"
+                "  match s do\n"
+                "    Circle(r) -> r\n"
+                "    Rectangle(w, h) -> w * h\n"
+                "  end\n"
+                "end\n",
+                "Non-exhaustive"
+            ));
+        });
+
+        it("accepts a fully-covered user sum type match", []() {
+            assertTrue(noErrors(
+                "type Shape = Circle(Float) | Rectangle(Float, Float)\n"
+                "main do\n"
+                "  let s = Circle(1.0)\n"
+                "  match s do\n"
+                "    Circle(r) -> r\n"
+                "    Rectangle(w, h) -> w * h\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("accepts a match covered by an unguarded wildcard clause", []() {
+            assertTrue(noErrors(
+                "type Shape = Circle(Float) | Rectangle(Float, Float) | Triangle(Float, Float, Float)\n"
+                "main do\n"
+                "  let s = Circle(1.0)\n"
+                "  match s do\n"
+                "    Circle(r) -> r\n"
+                "    _ -> 0.0\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects an Option match missing None", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x = Just(1)\n"
+                "  match x do\n"
+                "    Just(v) -> v\n"
+                "  end\n"
+                "end\n",
+                "Non-exhaustive"
+            ));
+        });
+
+        it("does not count a guarded clause alone as covering its constructor", []() {
+            assertTrue(hasError(
+                "type Shape = Circle(Float) | Rectangle(Float, Float)\n"
+                "main do\n"
+                "  let s = Circle(1.0)\n"
+                "  match s do\n"
+                "    Circle(r) when r > 0.0 -> r\n"
+                "    Rectangle(w, h) -> w * h\n"
+                "  end\n"
+                "end\n",
+                "Non-exhaustive"
+            ));
+        });
+
+        it("binds constructor pattern args so they're not flagged as undefined", []() {
+            assertTrue(noErrors(
+                "type Pair = Pair(Int, Int)\n"
+                "main do\n"
+                "  let p = Pair(1, 2)\n"
+                "  match p do\n"
+                "    Pair(a, b) -> a + b\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+    });
+
     return runAll();
 }

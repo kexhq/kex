@@ -34,6 +34,12 @@ private:
     auto analyzeExpr(const ast::Expr& expr) -> void;
     auto analyzeBody(const std::vector<ast::ExprPtr>& body) -> void;
 
+    // Defines every variable a pattern introduces (VarPattern, shorthand
+    // record fields, nested constructor/list/tuple args) as a Symbol in
+    // the current scope — mirrors TypeChecker::bindPatternVars, just
+    // populating SymbolTable instead of TypeEnv.
+    auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void;
+
     // Purity
     auto isInFoulContext() const -> bool;
     auto checkPurity(const std::string& callee, SourceLocation loc) -> void;

@@ -6,6 +6,7 @@
 #include "traits.hxx"
 #include "types.hxx"
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kex::semantic {
@@ -20,6 +21,20 @@ private:
     // Top-level
     auto checkTopLevel(const ast::TopLevelItem& item) -> void;
     auto checkModule(const ast::ModuleDef& mod) -> void;
+
+    // ADT registry (sum types with a known, closed constructor set), for
+    // match exhaustiveness checking. Populated in a pass over the whole
+    // program before any function body is checked, so forward references
+    // work the same way `m_globals` already does.
+    auto registerAdt(const ast::TypeDef& def) -> void;
+    auto registerAdtsInModule(const ast::ModuleDef& mod) -> void;
+    auto checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void;
+
+    // Defines every variable a pattern introduces (VarPattern, shorthand
+    // record fields, nested constructor/list/tuple args) in the current
+    // scope as a fresh type var — mirrors how checkFunctionDef already
+    // treats untyped params, just recursing into pattern structure.
+    auto bindPatternVars(const ast::Pattern& pat) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
     auto checkMainBlock(const ast::MainBlock& block) -> void;
@@ -58,6 +73,10 @@ private:
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     SignatureTable m_stdlib = SignatureTable::withStdlib();
+
+    // typeName -> constructor names; constructorName -> owning typeName.
+    std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
+    std::unordered_map<std::string, std::string> m_adtOfConstructor;
 
     auto freshTypeVar() -> TypePtr;
 };

@@ -4,6 +4,45 @@
 
 namespace kex::semantic {
 
+auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void {
+    std::visit([this, loc](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::VarPattern>) {
+            if (node.name != "_") {
+                m_symbols.define(Symbol{node.name, SymbolKind::Variable, false, false, true, loc});
+            }
+        }
+        else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            if (node.inner) bindPatternVars(*node.inner, loc);
+        }
+        else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+            for (const auto& arg : node.args) {
+                if (arg) bindPatternVars(*arg, loc);
+            }
+        }
+        else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            for (const auto& field : node.fields) {
+                if (field.pattern) bindPatternVars(**field.pattern, loc);
+                else if (!field.isStringKey) {
+                    m_symbols.define(Symbol{field.name, SymbolKind::Variable, false, false, true, loc});
+                }
+            }
+        }
+        else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            for (const auto& elem : node.elements) {
+                if (elem) bindPatternVars(*elem, loc);
+            }
+            if (node.rest) bindPatternVars(**node.rest, loc);
+        }
+        else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+            for (const auto& elem : node.elements) {
+                if (elem) bindPatternVars(*elem, loc);
+            }
+        }
+        // LiteralPattern, WildcardPattern, RangePattern introduce nothing.
+    }, pat.kind);
+}
+
 auto Analyzer::analyze(const ast::Program& program) -> bool {
     // Phase 1: scope resolution and purity checking
     for (const auto& item : program.items) {
@@ -261,6 +300,9 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                     m_symbols.define(Symbol{
                         *node.subjectBinding, SymbolKind::Variable, false, false, true, expr.location});
                 }
+                for (const auto& pat : clause.patterns) {
+                    if (pat) bindPatternVars(*pat, expr.location);
+                }
                 if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
@@ -300,6 +342,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
             for (const auto& clause : node.clauses) {
                 m_symbols.pushScope(m_inFoulContext);
+                for (const auto& pat : clause.patterns) {
+                    if (pat) bindPatternVars(*pat, expr.location);
+                }
+                if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
             }
