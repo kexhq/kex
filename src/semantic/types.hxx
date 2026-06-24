@@ -12,8 +12,17 @@ struct Type;
 using TypePtr = std::shared_ptr<Type>;
 
 struct PrimitiveType {
-    enum Kind { Int, Float, String, Bool, Atom, Unit };
+    enum Kind { Integer, Char, Bool, Atom, Unit };  // Integer = arbitrary precision
     Kind kind;
+};
+
+struct SizedIntType {
+    int bits;       // 8, 16, 32, 64
+    bool isSigned;  // Byte == SizedIntType{8, false}
+};
+
+struct SizedFloatType {
+    int bits;  // 32, 64
 };
 
 struct NamedType {
@@ -56,6 +65,8 @@ struct UnknownType {};
 struct Type {
     std::variant<
         PrimitiveType,
+        SizedIntType,
+        SizedFloatType,
         NamedType,
         FuncType,
         TupleType,
@@ -67,9 +78,9 @@ struct Type {
         UnknownType
     > kind;
 
-    static auto integer() -> TypePtr;
-    static auto floating() -> TypePtr;
-    static auto string() -> TypePtr;
+    static auto integer() -> TypePtr;  // arbitrary precision
+    static auto charT() -> TypePtr;
+    static auto string() -> TypePtr;   // alias for list(charT())
     static auto boolean() -> TypePtr;
     static auto atom() -> TypePtr;
     static auto unit() -> TypePtr;
@@ -81,6 +92,23 @@ struct Type {
     static auto map(TypePtr key, TypePtr value) -> TypePtr;
     static auto optional(TypePtr inner) -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
+
+    // Sized integers — explicit opt-ins for fixed width.
+    static auto byte() -> TypePtr;     // UInt8
+    static auto int8() -> TypePtr;
+    static auto int16() -> TypePtr;
+    static auto int32() -> TypePtr;
+    static auto int64() -> TypePtr;    // "Int" is a name alias for this
+    static auto uint8() -> TypePtr;
+    static auto uint16() -> TypePtr;
+    static auto uint32() -> TypePtr;
+    static auto uint64() -> TypePtr;
+
+    // Sized floats — Float64 is the default for a plain float literal.
+    // There is no arbitrary-precision float and no bare "Float" Type
+    // (it exists only as a trait name in the TraitRegistry).
+    static auto float32() -> TypePtr;
+    static auto float64() -> TypePtr;
 };
 
 auto typeToString(const TypePtr& type) -> std::string;

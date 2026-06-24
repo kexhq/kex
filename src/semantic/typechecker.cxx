@@ -10,10 +10,24 @@ auto TypeChecker::check(const ast::Program& program,
     pushScope();
 
     // Register built-in types
-    m_globals.set("Int", Type::integer());
-    m_globals.set("Float", Type::floating());
+    m_globals.set("Int", Type::int64());
+    m_globals.set("Integer", Type::integer());
+    m_globals.set("Char", Type::charT());
     m_globals.set("String", Type::string());
     m_globals.set("Bool", Type::boolean());
+    m_globals.set("Byte", Type::byte());
+    m_globals.set("Int8", Type::int8());
+    m_globals.set("Int16", Type::int16());
+    m_globals.set("Int32", Type::int32());
+    m_globals.set("Int64", Type::int64());
+    m_globals.set("UInt8", Type::uint8());
+    m_globals.set("UInt16", Type::uint16());
+    m_globals.set("UInt32", Type::uint32());
+    m_globals.set("UInt64", Type::uint64());
+    m_globals.set("Float32", Type::float32());
+    m_globals.set("Float64", Type::float64());
+    // Note: no "Float" entry — it's not a concrete Type, only a trait
+    // name (TraitRegistry, phase 3), satisfied by Float32 and Float64.
 
     for (const auto& item : program.items) {
         checkTopLevel(item);
@@ -105,7 +119,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::integer();
         }
         else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
-            return Type::floating();
+            return Type::float64();
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
             return Type::string();
@@ -374,22 +388,37 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         }
     }
 
-    auto* leftPrim = std::get_if<PrimitiveType>(&left->kind);
-    auto* rightPrim = std::get_if<PrimitiveType>(&right->kind);
+    auto isString = [](const TypePtr& t) {
+        auto* list = std::get_if<ListType>(&t->kind);
+        if (!list) return false;
+        auto* elemPrim = std::get_if<PrimitiveType>(&list->element->kind);
+        return elemPrim && elemPrim->kind == PrimitiveType::Char;
+    };
+    auto isFloat = [](const TypePtr& t) { return std::holds_alternative<SizedFloatType>(t->kind); };
+    auto isIntegerLike = [](const TypePtr& t) {
+        if (auto* prim = std::get_if<PrimitiveType>(&t->kind)) return prim->kind == PrimitiveType::Integer;
+        return std::holds_alternative<SizedIntType>(t->kind);
+    };
+    auto isBool = [](const TypePtr& t) {
+        auto* prim = std::get_if<PrimitiveType>(&t->kind);
+        return prim && prim->kind == PrimitiveType::Bool;
+    };
+
+    bool leftIsString = isString(left), rightIsString = isString(right);
+    bool leftIsFloat = isFloat(left), rightIsFloat = isFloat(right);
+    bool leftIsInt = isIntegerLike(left), rightIsInt = isIntegerLike(right);
 
     switch (op) {
         case TokenType::Plus:
-            if (leftPrim && rightPrim) {
-                if (leftPrim->kind == PrimitiveType::Int && rightPrim->kind == PrimitiveType::Int)
-                    return Type::integer();
-                if (leftPrim->kind == PrimitiveType::Float || rightPrim->kind == PrimitiveType::Float)
-                    return Type::floating();
-                if (leftPrim->kind == PrimitiveType::String && rightPrim->kind == PrimitiveType::String)
-                    return Type::string();
-                if (leftPrim->kind == PrimitiveType::String || rightPrim->kind == PrimitiveType::String) {
-                    error(loc, "Cannot add " + typeToString(left) + " and " + typeToString(right));
-                    return Type::string();
-                }
+            if (leftIsInt && rightIsInt)
+                return Type::integer();
+            if ((leftIsFloat || rightIsFloat) && (leftIsFloat || leftIsInt) && (rightIsFloat || rightIsInt))
+                return Type::float64();
+            if (leftIsString && rightIsString)
+                return Type::string();
+            if (leftIsString || rightIsString) {
+                error(loc, "Cannot add " + typeToString(left) + " and " + typeToString(right));
+                return Type::string();
             }
             if (!typesEqual(left, right)) {
                 error(loc, "Operator '+' requires matching types, got " +
@@ -401,15 +430,13 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         case TokenType::Star:
         case TokenType::Slash:
         case TokenType::Percent:
-            if (leftPrim && rightPrim) {
-                if (leftPrim->kind == PrimitiveType::Int && rightPrim->kind == PrimitiveType::Int)
-                    return Type::integer();
-                if (leftPrim->kind == PrimitiveType::Float || rightPrim->kind == PrimitiveType::Float)
-                    return Type::floating();
-                if (leftPrim->kind == PrimitiveType::String || rightPrim->kind == PrimitiveType::String) {
-                    error(loc, "Cannot use arithmetic operator on String");
-                    return Type::integer();
-                }
+            if (leftIsInt && rightIsInt)
+                return Type::integer();
+            if ((leftIsFloat || rightIsFloat) && (leftIsFloat || leftIsInt) && (rightIsFloat || rightIsInt))
+                return Type::float64();
+            if (leftIsString || rightIsString) {
+                error(loc, "Cannot use arithmetic operator on String");
+                return Type::integer();
             }
             return left;
 
@@ -421,17 +448,17 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         case TokenType::GreaterThan:
         case TokenType::LessEq:
         case TokenType::GreaterEq:
-            if (leftPrim && leftPrim->kind == PrimitiveType::Bool) {
+            if (isBool(left)) {
                 error(loc, "Cannot compare Bool values with '<', '>', '<=', '>='");
             }
             return Type::boolean();
 
         case TokenType::AmpAmp:
         case TokenType::PipePipe:
-            if (leftPrim && leftPrim->kind != PrimitiveType::Bool) {
+            if (!isBool(left)) {
                 error(loc, "Logical operator requires Bool, got " + typeToString(left));
             }
-            if (rightPrim && rightPrim->kind != PrimitiveType::Bool) {
+            if (!isBool(right)) {
                 error(loc, "Logical operator requires Bool, got " + typeToString(right));
             }
             return Type::boolean();

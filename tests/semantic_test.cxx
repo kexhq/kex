@@ -2,6 +2,7 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
+#include "../src/semantic/types.hxx"
 
 using namespace kex;
 using namespace test;
@@ -650,6 +651,62 @@ int main() {
                 "  name = \"world\"\n"
                 "end\n"
             ));
+        });
+    });
+
+    describe("Types — numeric tower", []() {
+        using namespace kex::semantic;
+
+        it("prints Integer for the arbitrary-precision default", []() {
+            assertEqual(typeToString(Type::integer()), std::string("Integer"));
+        });
+
+        it("prints Int (not Int64) for the 64-bit signed alias", []() {
+            assertEqual(typeToString(Type::int64()), std::string("Int"));
+        });
+
+        it("prints sized integer names by table lookup", []() {
+            assertEqual(typeToString(Type::byte()), std::string("Byte"));
+            assertEqual(typeToString(Type::int8()), std::string("Int8"));
+            assertEqual(typeToString(Type::int16()), std::string("Int16"));
+            assertEqual(typeToString(Type::int32()), std::string("Int32"));
+            assertEqual(typeToString(Type::uint8()), std::string("Byte"));  // UInt8 == Byte
+            assertEqual(typeToString(Type::uint16()), std::string("UInt16"));
+            assertEqual(typeToString(Type::uint32()), std::string("UInt32"));
+            assertEqual(typeToString(Type::uint64()), std::string("UInt64"));
+        });
+
+        it("prints sized float names, with no plain Float type", []() {
+            assertEqual(typeToString(Type::float32()), std::string("Float32"));
+            assertEqual(typeToString(Type::float64()), std::string("Float64"));
+        });
+
+        it("prints String for [Char], not [Char]", []() {
+            assertEqual(typeToString(Type::string()), std::string("String"));
+            assertEqual(typeToString(Type::list(Type::charT())), std::string("String"));
+        });
+
+        it("prints [Char] verbatim for lists of non-Char types as [T]", []() {
+            assertEqual(typeToString(Type::list(Type::integer())), std::string("[Integer]"));
+        });
+
+        it("treats String as a list of Char structurally", []() {
+            assertTrue(typesEqual(Type::string(), Type::list(Type::charT())));
+        });
+
+        it("distinguishes sized ints by bit width and signedness", []() {
+            assertFalse(typesEqual(Type::int8(), Type::uint8()));
+            assertFalse(typesEqual(Type::int32(), Type::int64()));
+            assertTrue(typesEqual(Type::int64(), Type::int64()));
+        });
+
+        it("distinguishes sized floats by bit width", []() {
+            assertFalse(typesEqual(Type::float32(), Type::float64()));
+            assertTrue(typesEqual(Type::float64(), Type::float64()));
+        });
+
+        it("does not equate Char with Integer", []() {
+            assertFalse(typesEqual(Type::charT(), Type::integer()));
         });
     });
 

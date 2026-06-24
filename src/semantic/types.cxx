@@ -3,15 +3,15 @@
 namespace kex::semantic {
 
 auto Type::integer() -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Int}});
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Integer}});
 }
 
-auto Type::floating() -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Float}});
+auto Type::charT() -> TypePtr {
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Char}});
 }
 
 auto Type::string() -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::String}});
+    return Type::list(Type::charT());
 }
 
 auto Type::boolean() -> TypePtr {
@@ -58,6 +58,50 @@ auto Type::typeVar(int id) -> TypePtr {
     return std::make_shared<Type>(Type{TypeVar{id}});
 }
 
+auto Type::byte() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{8, false}});
+}
+
+auto Type::int8() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{8, true}});
+}
+
+auto Type::int16() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{16, true}});
+}
+
+auto Type::int32() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{32, true}});
+}
+
+auto Type::int64() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{64, true}});
+}
+
+auto Type::uint8() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{8, false}});
+}
+
+auto Type::uint16() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{16, false}});
+}
+
+auto Type::uint32() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{32, false}});
+}
+
+auto Type::uint64() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedIntType{64, false}});
+}
+
+auto Type::float32() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedFloatType{32}});
+}
+
+auto Type::float64() -> TypePtr {
+    return std::make_shared<Type>(Type{SizedFloatType{64}});
+}
+
 auto typeToString(const TypePtr& type) -> std::string {
     if (!type) return "?";
 
@@ -66,12 +110,36 @@ auto typeToString(const TypePtr& type) -> std::string {
 
         if constexpr (std::is_same_v<T, PrimitiveType>) {
             switch (t.kind) {
-                case PrimitiveType::Int: return "Int";
-                case PrimitiveType::Float: return "Float";
-                case PrimitiveType::String: return "String";
+                case PrimitiveType::Integer: return "Integer";
+                case PrimitiveType::Char: return "Char";
                 case PrimitiveType::Bool: return "Bool";
                 case PrimitiveType::Atom: return "Atom";
                 case PrimitiveType::Unit: return "()";
+            }
+            return "?";
+        }
+        else if constexpr (std::is_same_v<T, SizedIntType>) {
+            if (!t.isSigned) {
+                switch (t.bits) {
+                    case 8: return "Byte";
+                    case 16: return "UInt16";
+                    case 32: return "UInt32";
+                    case 64: return "UInt64";
+                }
+            } else {
+                switch (t.bits) {
+                    case 8: return "Int8";
+                    case 16: return "Int16";
+                    case 32: return "Int32";
+                    case 64: return "Int";  // Int is the canonical name for 64-bit signed
+                }
+            }
+            return "?";
+        }
+        else if constexpr (std::is_same_v<T, SizedFloatType>) {
+            switch (t.bits) {
+                case 32: return "Float32";
+                case 64: return "Float64";
             }
             return "?";
         }
@@ -106,6 +174,10 @@ auto typeToString(const TypePtr& type) -> std::string {
             return result;
         }
         else if constexpr (std::is_same_v<T, ListType>) {
+            if (auto* elemPrim = std::get_if<PrimitiveType>(&t.element->kind);
+                elemPrim && elemPrim->kind == PrimitiveType::Char) {
+                return "String";
+            }
             return "[" + typeToString(t.element) + "]";
         }
         else if constexpr (std::is_same_v<T, MapType>) {
@@ -142,6 +214,12 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
 
         if constexpr (std::is_same_v<AT, PrimitiveType>) {
             return at.kind == bt->kind;
+        }
+        else if constexpr (std::is_same_v<AT, SizedIntType>) {
+            return at.bits == bt->bits && at.isSigned == bt->isSigned;
+        }
+        else if constexpr (std::is_same_v<AT, SizedFloatType>) {
+            return at.bits == bt->bits;
         }
         else if constexpr (std::is_same_v<AT, NamedType>) {
             if (at.name != bt->name) return false;
