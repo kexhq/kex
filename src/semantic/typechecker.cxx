@@ -336,6 +336,20 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
             return inferBody(node.body);
         }
+        else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+            if (node.condition) {
+                auto condType = inferExpr(*node.condition);
+                if (!std::holds_alternative<UnknownType>(condType->kind) &&
+                    !std::holds_alternative<TypeVar>(condType->kind) &&
+                    !typesEqual(condType, Type::boolean())) {
+                    error(expr.location, "then/else condition must be Bool, got " +
+                          typeToString(condType));
+                }
+            }
+            auto thenType = node.thenExpr ? inferExpr(*node.thenExpr) : Type::unknown();
+            if (node.elseExpr) inferExpr(*node.elseExpr);
+            return thenType;
+        }
         else {
             return Type::unknown();
         }

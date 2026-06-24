@@ -811,6 +811,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             return Value::none();
         }
+        else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+            auto cond = node.condition ? eval(*node.condition) : Value::boolean(false);
+            if (cond->isTrue()) {
+                return node.thenExpr ? eval(*node.thenExpr) : Value::none();
+            }
+            return node.elseExpr ? eval(*node.elseExpr) : Value::none();
+        }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
             std::unordered_map<std::string, ValuePtr> fields;
             for (const auto& [name, val] : node.fields) {

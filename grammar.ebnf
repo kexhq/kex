@@ -220,7 +220,13 @@ expr
   | shorthand_lambda
   | spread_expr
   | expr IF expr                                 (* trailing conditional *)
+  | then_else_expr
   ;
+
+(* Ternary replacement, lowest precedence. Both branches must stay on the
+   same line as THEN/ELSE unless the whole expression is parenthesized.
+   Nesting another then/else requires parens. *)
+then_else_expr = expr THEN expr ELSE expr ;
 
 (* ===== Literals ===== *)
 
@@ -394,6 +400,7 @@ RECORD   = "record" ;
 RETURN   = "return" ;
 SPAWN    = "spawn" ;
 STATIC   = "static" ;
+THEN     = "then" ;
 THIS     = "this" ;
 TIMEOUT  = "timeout" ;
 TRUE     = "true" ;

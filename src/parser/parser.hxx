@@ -92,6 +92,7 @@ private:
     auto parseMatchClause() -> ast::MatchClause;
     auto parseMatchClauseBody() -> ast::ExprPtr;
     auto isAtExprStart() const -> bool;
+    auto hasDoBeforeNewline() const -> bool;
 
     // Error handling
     [[noreturn]] auto error(const std::string& message) -> void;

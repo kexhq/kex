@@ -757,6 +757,23 @@ auto Parser::parseExpr() -> ast::ExprPtr {
     // Trailing if handled after parsing the main expr
     auto expr = parseAssignment();
 
+    // `cond then a else b` — ternary replacement, lowest precedence. Both
+    // branches parse at the assignment level (not parseExpr), so nesting
+    // another then/else requires parens — exactly the rule we want. It
+    // must stay on the same line as `then`/`else` unless the whole thing
+    // is parenthesized, which falls out for free: newlines are only
+    // suppressed inside ( ), so a bare `then` on the next line simply
+    // won't be there to match() below.
+    if (match(TokenType::Then)) {
+        auto thenElse = std::make_unique<ast::Expr>();
+        thenElse->location = expr->location;
+        auto thenExpr = parseAssignment();
+        expect(TokenType::Else, "Expected 'else' after 'then'");
+        auto elseExpr = parseAssignment();
+        thenElse->kind = ast::ThenElseExpr{std::move(expr), std::move(thenExpr), std::move(elseExpr)};
+        expr = std::move(thenElse);
+    }
+
     if (match(TokenType::If)) {
         auto trailing = std::make_unique<ast::Expr>();
         trailing->location = expr->location;
@@ -1270,6 +1287,34 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                 block = parsePrimary();
             }
 
+            expr->kind = ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
+            return expr;
+        }
+
+        // Function call with bare positional args (no parens): name a, b
+        // do...end. Only taken when a `do` actually follows at bracket
+        // depth 0 on this line — otherwise plain calls still require
+        // parens, so this can't swallow unrelated adjacent statements.
+        if (!m_noDoBlocks && isAtExprStart() && !check(TokenType::Do) &&
+            !check(TokenType::LBrace) && hasDoBeforeNewline()) {
+            std::vector<ast::ExprPtr> args;
+            std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
+            m_noDoBlocks = true;
+            do {
+                if ((check(TokenType::LowerIdent) || check(TokenType::Timeout) ||
+                     check(TokenType::Type) || check(TokenType::Match) ||
+                     check(TokenType::Loop)) &&
+                    peekNext().type == TokenType::Colon) {
+                    auto argName = advance().value;
+                    advance(); // :
+                    namedArgs.push_back({argName, parseExpr()});
+                } else {
+                    args.push_back(parseExpr());
+                }
+            } while (match(TokenType::Comma));
+            m_noDoBlocks = false;
+
+            std::optional<ast::ExprPtr> block = parsePrimary(); // positioned at `do`, confirmed by hasDoBeforeNewline
             expr->kind = ast::FunctionCall{name, std::move(args), std::move(namedArgs), std::move(block)};
             return expr;
         }
@@ -2232,6 +2277,41 @@ auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
         skipNewlines();
     }
     return body;
+}
+
+// Looks ahead (without consuming) for a `do` token on the current logical
+// line, at bracket depth 0 — i.e. not inside a nested ( ), [ ], or { }. Used
+// to decide whether `name arg1, arg2` should be parsed as bare positional
+// call arguments (only valid when a do-block actually follows) versus left
+// alone as separate statements/expressions.
+auto Parser::hasDoBeforeNewline() const -> bool {
+    int depth = 0;
+    for (int i = m_pos; i < static_cast<int>(m_tokens.size()); i++) {
+        const auto& t = m_tokens[i];
+        switch (t.type) {
+            case TokenType::LParen:
+            case TokenType::LBracket:
+            case TokenType::LBrace:
+                depth++;
+                break;
+            case TokenType::RParen:
+            case TokenType::RBracket:
+            case TokenType::RBrace:
+                if (depth > 0) depth--;
+                break;
+            case TokenType::Do:
+                if (depth == 0) return true;
+                break;
+            case TokenType::Newline:
+            case TokenType::End:
+            case TokenType::Eof:
+                if (depth == 0) return false;
+                break;
+            default:
+                break;
+        }
+    }
+    return false;
 }
 
 auto Parser::isAtExprStart() const -> bool {

@@ -341,6 +341,11 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.expr) analyzeExpr(*node.expr);
             if (node.condition) analyzeExpr(*node.condition);
         }
+        else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+            if (node.condition) analyzeExpr(*node.condition);
+            if (node.thenExpr) analyzeExpr(*node.thenExpr);
+            if (node.elseExpr) analyzeExpr(*node.elseExpr);
+        }
         else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
             if (node.inner) analyzeExpr(*node.inner);
         }

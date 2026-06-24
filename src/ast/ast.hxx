@@ -294,6 +294,12 @@ struct TrailingIf {
     ExprPtr condition;
 };
 
+struct ThenElseExpr {
+    ExprPtr condition;
+    ExprPtr thenExpr;
+    ExprPtr elseExpr;
+};
+
 struct BlockExpr {
     std::vector<ExprPtr> body;
 };
@@ -335,6 +341,7 @@ struct Expr {
         ShorthandLambda,
         SpreadExpr,
         TrailingIf,
+        ThenElseExpr,
         BlockExpr
     > kind;
 };

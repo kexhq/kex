@@ -28,6 +28,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Return: return "return";
         case TokenType::Spawn: return "spawn";
         case TokenType::Static: return "static";
+        case TokenType::Then: return "then";
         case TokenType::This: return "this";
         case TokenType::Timeout: return "timeout";
         case TokenType::True: return "true";
