@@ -93,7 +93,7 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     if (check(TokenType::Main)) return parseMainBlock();
     if (check(TokenType::HashLBracket)) return parsePragma();
 
-    if (check(TokenType::Foul) && peekNext().type == TokenType::Let) {
+    if (check(TokenType::Foul)) {
         advance(); // consume foul
         return parseFunctionDef(true);
     }
@@ -153,7 +153,7 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
             mod->body.push_back(parseUsingBlock());
         } else if (check(TokenType::Public) || check(TokenType::Private)) {
             mod->body.push_back(parseVisibilityBlock());
-        } else if (check(TokenType::Foul) && peekNext().type == TokenType::Let) {
+        } else if (check(TokenType::Foul)) {
             advance();
             mod->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
@@ -433,7 +433,7 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     while (!check(TokenType::End) && !atEnd()) {
         if (check(TokenType::Public) || check(TokenType::Private)) {
             def->body.push_back(parseVisibilityBlock());
-        } else if (check(TokenType::Foul) && peekNext().type == TokenType::Let) {
+        } else if (check(TokenType::Foul)) {
             advance();
             def->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
@@ -457,7 +457,9 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
     def->location = currentLocation();
     def->isFoul = isFoul;
 
-    expect(TokenType::Let, "Expected 'let'");
+    if (!isFoul) {
+        expect(TokenType::Let, "Expected 'let'");
+    }
 
     // Function name can be a lower ident, upper ident (static constructors),
     // keyword-as-name, splice ident, or operator
@@ -784,8 +786,7 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 auto Parser::parseOr() -> ast::ExprPtr {
     auto left = parseAnd();
 
-    // `or` is a word-form alias for `||`.
-    while (check(TokenType::PipePipe) || check(TokenType::Or)) {
+    while (check(TokenType::PipePipe)) {
         advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
@@ -798,37 +799,18 @@ auto Parser::parseOr() -> ast::ExprPtr {
 }
 
 auto Parser::parseAnd() -> ast::ExprPtr {
-    auto left = parseNot();
+    auto left = parseEquality();
 
-    // `and` is a word-form alias for `&&`.
-    while (check(TokenType::AmpAmp) || check(TokenType::And)) {
+    while (check(TokenType::AmpAmp)) {
         advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
-        auto right = parseNot();
+        auto right = parseEquality();
         op->kind = ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
         left = std::move(op);
     }
 
     return left;
-}
-
-// `not` is a word-form alias for `!`, but — unlike `!`, which binds tightly
-// at the unary level (`!x == y` means `(!x) == y`) — `not` binds loosely,
-// Python-style: `not x == y` means `not (x == y)`. This is what makes
-// `return if not ENV.get(key) == "true"` read the way it looks: the whole
-// comparison is negated, not just the call.
-auto Parser::parseNot() -> ast::ExprPtr {
-    if (check(TokenType::Not)) {
-        auto loc = currentLocation();
-        advance();
-        auto operand = parseNot(); // allows chaining: not not x
-        auto expr = std::make_unique<ast::Expr>();
-        expr->location = loc;
-        expr->kind = ast::UnaryOp{TokenType::Bang, std::move(operand)};
-        return expr;
-    }
-    return parseEquality();
 }
 
 auto Parser::parseEquality() -> ast::ExprPtr {
@@ -2199,7 +2181,7 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
-        if (check(TokenType::Foul) && peekNext().type == TokenType::Let) {
+        if (check(TokenType::Foul)) {
             advance();
             block->items.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {

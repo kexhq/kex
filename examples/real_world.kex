@@ -133,7 +133,7 @@ module App do
     end
   end
 
-  foul let start do
+  foul start do
     Logger.info("Starting server on port 8080")
     Http.Server.listen(8080, router)
   end

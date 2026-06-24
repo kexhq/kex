@@ -106,10 +106,10 @@ make_item
 (* ===== Functions ===== *)
 
 function_def
-  = FOUL? LET LOWER_IDENT function_clauses
-  | FOUL? LET LOWER_IDENT QUESTION function_clauses  (* predicate functions *)
-  | FOUL? LET UPPER_IDENT function_clauses           (* static constructors, e.g. `let Polar(...) ... end` *)
-  | FOUL? LET binary_op function_clauses             (* operator overload inside `make`, e.g. `let +(other) ... end` *)
+  = ( FOUL | LET ) LOWER_IDENT function_clauses
+  | ( FOUL | LET ) LOWER_IDENT QUESTION function_clauses  (* predicate functions *)
+  | ( FOUL | LET ) UPPER_IDENT function_clauses           (* static constructors, e.g. `let Polar(...) ... end` *)
+  | ( FOUL | LET ) binary_op function_clauses             (* operator overload inside `make`, e.g. `foul +(other) ... end` *)
   ;
 
 function_clauses

@@ -87,7 +87,7 @@ module Database do
       end
     end
 
-    foul let connect(config: Config) -> Result<Pool, DbError> do
+    foul connect(config: Config) -> Result<Pool, DbError> do
       let url = buildUrl(config)
       return BuiltIn.Postgres.connect(url, config.poolSize)
     end

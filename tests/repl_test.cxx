@@ -17,11 +17,13 @@ public:
     auto eval(const std::string& input) -> std::string {
         // Detect if this is a function def
         bool isFuncDef = false;
-        if (input.substr(0, 4) == "let " || input.substr(0, 9) == "foul let ") {
-            auto offset = input.find("let ") + 4;
-            auto parenPos = input.find('(', offset);
-            auto eqPos = input.find('=', offset);
-            auto doPos = input.find(" do", offset);
+        size_t defOffset = std::string::npos;
+        if (input.substr(0, 4) == "let ") defOffset = 4;
+        else if (input.substr(0, 5) == "foul ") defOffset = 5;
+        if (defOffset != std::string::npos) {
+            auto parenPos = input.find('(', defOffset);
+            auto eqPos = input.find('=', defOffset);
+            auto doPos = input.find(" do", defOffset);
             isFuncDef = (parenPos != std::string::npos &&
                          (eqPos == std::string::npos || parenPos < eqPos) &&
                          (doPos == std::string::npos || parenPos < doPos));

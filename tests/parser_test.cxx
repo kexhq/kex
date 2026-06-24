@@ -59,7 +59,7 @@ int main() {
         });
 
         it("parses foul function", []() {
-            auto program = parse("foul let readFile(path: String) = BuiltIn.read(path)");
+            auto program = parse("foul readFile(path: String) = BuiltIn.read(path)");
             assertTrue(firstItemIs<std::unique_ptr<ast::FunctionDef>>(program));
             auto& func = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertTrue(func->isFoul);

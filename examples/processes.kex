@@ -2,7 +2,7 @@
 
 type CounterMessage = :increment | :reset | (:get, Process<Int>)
 
-foul let startCounter -> Process<CounterMessage> do
+foul startCounter -> Process<CounterMessage> do
   return spawn do
     var state = 0
     loop do
@@ -16,7 +16,7 @@ foul let startCounter -> Process<CounterMessage> do
 end
 
 # Functional style (no var)
-foul let startCounterPure -> Process<CounterMessage> do
+foul startCounterPure -> Process<CounterMessage> do
   return spawn do
     let loop(state: Int) do
       receive do
@@ -33,7 +33,7 @@ foul let startCounterPure -> Process<CounterMessage> do
 end
 
 # Tasks for simple async
-foul let fetchAll(ids: [Int]) -> [Result<User, Error>] do
+foul fetchAll(ids: [Int]) -> [Result<User, Error>] do
   let tasks = ids.map do |id|
     Task.start { fetchUser(id) }
   end
@@ -42,7 +42,7 @@ foul let fetchAll(ids: [Int]) -> [Result<User, Error>] do
 end
 
 # Supervision tree
-foul let startApp do
+foul startApp do
   Supervisor.start(strategy: :one_for_one) do
     worker(Database, args: [config.dbUrl])
     worker(Cache)
@@ -56,7 +56,7 @@ end
 # Typed process that only accepts specific messages
 type ChatMessage = (:join, String) | (:leave, String) | (:msg, String, String)
 
-foul let startChat -> Process<ChatMessage> do
+foul startChat -> Process<ChatMessage> do
   return spawn do
     var users: [String] = []
     loop do

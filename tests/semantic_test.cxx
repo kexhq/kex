@@ -41,7 +41,7 @@ int main() {
     describe("Semantic — Purity", []() {
         it("allows foul calls in main (implicitly foul)", []() {
             assertTrue(noErrors(
-                "foul let readFile(path: String) = path\n"
+                "foul readFile(path: String) = path\n"
                 "main do\n"
                 "  readFile(\"test\")\n"
                 "end\n"
@@ -50,7 +50,7 @@ int main() {
 
         it("rejects foul calls in pure functions", []() {
             assertTrue(hasError(
-                "foul let readFile(path: String) = path\n"
+                "foul readFile(path: String) = path\n"
                 "let pure_func(x: Int) do\n"
                 "  readFile(\"test\")\n"
                 "end\n",
@@ -60,8 +60,8 @@ int main() {
 
         it("allows foul calls in foul functions", []() {
             assertTrue(noErrors(
-                "foul let readFile(path: String) = path\n"
-                "foul let loadConfig(path: String) do\n"
+                "foul readFile(path: String) = path\n"
+                "foul loadConfig(path: String) do\n"
                 "  readFile(path)\n"
                 "end\n"
             ));
@@ -80,7 +80,7 @@ int main() {
 
         it("allows spawn in foul context", []() {
             assertTrue(noErrors(
-                "foul let start do\n"
+                "foul start do\n"
                 "  spawn do\n"
                 "    loop do\n"
                 "    end\n"
@@ -320,7 +320,7 @@ int main() {
 
         it("allows receive in foul context", []() {
             assertTrue(noErrors(
-                "foul let handler(x: Int) do\n"
+                "foul handler(x: Int) do\n"
                 "  receive do\n"
                 "    :msg -> x\n"
                 "  end\n"
@@ -337,8 +337,8 @@ int main() {
 
         it("foul propagates through call chain", []() {
             assertTrue(hasError(
-                "foul let read(path: String) = path\n"
-                "foul let load(path: String) = read(path)\n"
+                "foul read(path: String) = path\n"
+                "foul load(path: String) = read(path)\n"
                 "let process(path: String) do\n"
                 "  load(path)\n"
                 "end\n",

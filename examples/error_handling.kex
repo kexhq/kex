@@ -14,7 +14,7 @@ let parsePort(s: String) -> Result<Int, ParseError> do
 end
 
 # Chaining with ?
-foul let loadConfig(path: String) -> Result<Config, AppError> do
+foul loadConfig(path: String) -> Result<Config, AppError> do
   let content = IO.read(path)?
   let parsed = Config.parse(content)?
   let port = parsePort(parsed.get("port"))?
@@ -34,7 +34,7 @@ let greetUser(users: [User], name: String) -> String do
 end
 
 # Combining Result and Optional
-foul let getUserEmail(id: Int) -> Result<String, AppError> do
+foul getUserEmail(id: Int) -> Result<String, AppError> do
   let user = fetchUser(id)?
   match user.email do
     Just(email) -> Ok(email)

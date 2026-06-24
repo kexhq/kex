@@ -266,10 +266,10 @@ int main(int argc, char* argv[]) {
         std::optional<std::string> pendingLine;
 
         // If `s` looks like the start of a function clause definition
-        // (`let name(...` or `foul let name(...`), return the function name.
+        // (`let name(...` or `foul name(...`), return the function name.
         auto clauseFuncName = [](const std::string& s) -> std::optional<std::string> {
             size_t offset;
-            if (s.rfind("foul let ", 0) == 0) offset = 9;
+            if (s.rfind("foul ", 0) == 0) offset = 5;
             else if (s.rfind("let ", 0) == 0) offset = 4;
             else return std::nullopt;
 
@@ -445,12 +445,14 @@ int main(int argc, char* argv[]) {
 
             // Detect if this is a top-level definition (not an expression)
             bool isFuncDef = false;
-            if (source.substr(0, 4) == "let " || source.substr(0, 9) == "foul let ") {
-                // It's a function def if: let name( ... )  with parens before =
-                auto offset = source.find("let ") + 4;
-                auto parenPos = source.find('(', offset);
-                auto eqPos = source.find('=', offset);
-                auto doPos = source.find(" do", offset);
+            size_t defOffset = std::string::npos;
+            if (source.substr(0, 4) == "let ") defOffset = 4;
+            else if (source.substr(0, 5) == "foul ") defOffset = 5;
+            if (defOffset != std::string::npos) {
+                // It's a function def if: let/foul name( ... )  with parens before =
+                auto parenPos = source.find('(', defOffset);
+                auto eqPos = source.find('=', defOffset);
+                auto doPos = source.find(" do", defOffset);
                 isFuncDef = (parenPos != std::string::npos &&
                              (eqPos == std::string::npos || parenPos < eqPos) &&
                              (doPos == std::string::npos || parenPos < doPos));

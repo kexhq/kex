@@ -58,7 +58,6 @@ private:
     auto parseAssignment() -> ast::ExprPtr;
     auto parseOr() -> ast::ExprPtr;
     auto parseAnd() -> ast::ExprPtr;
-    auto parseNot() -> ast::ExprPtr;
     auto parseEquality() -> ast::ExprPtr;
     auto parseComparison() -> ast::ExprPtr;
     auto parseAddition() -> ast::ExprPtr;

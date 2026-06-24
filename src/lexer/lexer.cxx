@@ -5,7 +5,6 @@ namespace kex {
 
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"after", TokenType::After},
-    {"and", TokenType::And},
     {"compiled", TokenType::Compiled},
     {"do", TokenType::Do},
     {"elif", TokenType::Elif},
@@ -21,8 +20,6 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"make", TokenType::Make},
     {"match", TokenType::Match},
     {"module", TokenType::Module},
-    {"not", TokenType::Not},
-    {"or", TokenType::Or},
     {"private", TokenType::Private},
     {"public", TokenType::Public},
     {"receive", TokenType::Receive},

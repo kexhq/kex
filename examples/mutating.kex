@@ -38,7 +38,7 @@ let countErrors(lines: [String]) -> Int do
 end
 
 # Process state mutation
-foul let startAccumulator -> Process<(:add, Int) | :get> do
+foul startAccumulator -> Process<(:add, Int) | :get> do
   return spawn do
     var items: [Int] = []
 
