@@ -260,6 +260,12 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                     } catch (ReturnException& ret) {
                         popEnv();
                         return ret.value();
+                    } catch (const BreakException&) {
+                        popEnv();
+                        throw RuntimeError("'break' used outside a loop", funcDef->location);
+                    } catch (const NextException&) {
+                        popEnv();
+                        throw RuntimeError("'next' used outside a loop", funcDef->location);
                     } catch (...) {
                         popEnv();
                         throw;
@@ -324,6 +330,12 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
         result = evalBody(block.body);
     } catch (ReturnException& ret) {
         result = ret.value();
+    } catch (const BreakException&) {
+        if (!m_replMode) popEnv();
+        throw RuntimeError("'break' used outside a loop", block.location);
+    } catch (const NextException&) {
+        if (!m_replMode) popEnv();
+        throw RuntimeError("'next' used outside a loop", block.location);
     }
     if (!m_replMode) popEnv();
     return result;
@@ -877,22 +889,29 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return evalBody(node.body);
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            // `loop do ... end` runs forever — Kex has no break/continue,
-            // so the only way out is `return` (ReturnException, which
-            // unwinds to the enclosing function's call site and is caught
-            // there) or an uncaught error. Each iteration gets its own
-            // scope so `var`s declared inside the loop body don't leak
-            // across iterations (mirrors how other block bodies push/pop).
+            // `loop\n...end` runs forever — the only ways out are `break`
+            // (BreakException), `return` (ReturnException, which unwinds to
+            // the enclosing function's call site and is caught there), or
+            // an uncaught error. Each iteration gets its own scope so
+            // `var`s declared inside the loop body don't leak across
+            // iterations (mirrors how other block bodies push/pop).
             while (true) {
                 pushEnv();
                 try {
                     evalBody(node.body);
+                } catch (const BreakException&) {
+                    popEnv();
+                    break;
+                } catch (const NextException&) {
+                    popEnv();
+                    continue;
                 } catch (...) {
                     popEnv();
                     throw;
                 }
                 popEnv();
             }
+            return Value::none();
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
             while (true) {
@@ -901,6 +920,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 pushEnv();
                 try {
                     evalBody(node.body);
+                } catch (const BreakException&) {
+                    popEnv();
+                    break;
+                } catch (const NextException&) {
+                    popEnv();
+                    continue;
                 } catch (...) {
                     popEnv();
                     throw;
@@ -908,6 +933,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 popEnv();
             }
             return Value::none();
+        }
+        else if constexpr (std::is_same_v<T, ast::BreakExpr>) {
+            throw BreakException{};
+        }
+        else if constexpr (std::is_same_v<T, ast::NextExpr>) {
+            throw NextException{};
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
             // Look up in environment first (records, namespaces, ALL_CAPS

@@ -38,6 +38,9 @@ private:
     auto isInFoulContext() const -> bool;
     auto checkPurity(const std::string& callee, SourceLocation loc) -> void;
 
+    // Loop control
+    auto checkLoopControl(SourceLocation loc, const std::string& keyword) -> void;
+
     // Helpers
     auto error(SourceLocation loc, const std::string& msg) -> void;
     auto warning(SourceLocation loc, const std::string& msg) -> void;
@@ -45,6 +48,13 @@ private:
     SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;
     bool m_inFoulContext = false;
+
+    // break/next bind to the nearest enclosing Loop marker, but a Closure
+    // marker in between makes them illegal — they don't cross into a
+    // do-block passed to another function. `match`/`receive` clauses don't
+    // push a marker, so break/next see through them to the loop.
+    enum class LoopScope { Loop, Closure };
+    std::vector<LoopScope> m_loopScopes;
 };
 
 } // namespace kex::semantic

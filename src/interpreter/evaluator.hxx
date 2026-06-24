@@ -20,6 +20,9 @@ private:
     ValuePtr m_value;
 };
 
+class BreakException : public std::exception {};
+class NextException : public std::exception {};
+
 class RuntimeError : public std::runtime_error {
 public:
     RuntimeError(const std::string& msg, SourceLocation loc)

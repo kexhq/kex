@@ -245,6 +245,9 @@ struct WhileExpr {
     std::vector<ExprPtr> body;
 };
 
+struct BreakExpr {};
+struct NextExpr {};
+
 struct LetExpr {
     PatternPtr pattern;
     ExprPtr value;
@@ -332,6 +335,8 @@ struct Expr {
         ReceiveExpr,
         LoopExpr,
         WhileExpr,
+        BreakExpr,
+        NextExpr,
         LetExpr,
         VarExpr,
         AssignExpr,

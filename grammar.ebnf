@@ -216,6 +216,8 @@ expr
   | assign_expr
   | return_expr
   | spawn_expr
+  | break_expr
+  | next_expr
   | lambda
   | shorthand_lambda
   | spread_expr
@@ -312,6 +314,12 @@ return_expr = RETURN expr ;
 
 spawn_expr = SPAWN DO body END ;
 
+(* break/next apply to the nearest enclosing while/loop only — not to
+   each blocks or other closures. Using them inside a closure (a do-block
+   passed to a function) or outside a loop is a compile error. *)
+break_expr = BREAK ;
+next_expr  = NEXT ;
+
 (* ===== Lambdas ===== *)
 
 lambda
@@ -377,6 +385,7 @@ arg
 (* Keywords *)
 AFTER    = "after" ;
 BLOCK    = "Block" ;
+BREAK    = "break" ;
 COMPILED = "compiled" ;
 DO       = "do" ;
 ELIF     = "elif" ;
@@ -392,6 +401,7 @@ MAIN     = "main" ;
 MAKE     = "make" ;
 MATCH    = "match" ;
 MODULE   = "module" ;
+NEXT     = "next" ;
 NONE     = "None" ;
 PRIVATE  = "private" ;
 PUBLIC   = "public" ;

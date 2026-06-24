@@ -5,6 +5,7 @@ namespace kex {
 auto tokenTypeName(TokenType type) -> std::string_view {
     switch (type) {
         case TokenType::After: return "after";
+        case TokenType::Break: return "break";
         case TokenType::Compiled: return "compiled";
         case TokenType::Do: return "do";
         case TokenType::Elif: return "elif";
@@ -20,6 +21,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Make: return "make";
         case TokenType::Match: return "match";
         case TokenType::Module: return "module";
+        case TokenType::Next: return "next";
         case TokenType::None: return "None";
         case TokenType::Private: return "private";
         case TokenType::Public: return "public";

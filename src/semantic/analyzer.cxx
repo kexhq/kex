@@ -267,11 +267,21 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+            m_loopScopes.push_back(LoopScope::Loop);
             analyzeBody(node.body);
+            m_loopScopes.pop_back();
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
             if (node.condition) analyzeExpr(*node.condition);
+            m_loopScopes.push_back(LoopScope::Loop);
             analyzeBody(node.body);
+            m_loopScopes.pop_back();
+        }
+        else if constexpr (std::is_same_v<T, ast::BreakExpr>) {
+            checkLoopControl(expr.location, "break");
+        }
+        else if constexpr (std::is_same_v<T, ast::NextExpr>) {
+            checkLoopControl(expr.location, "next");
         }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
             if (node.value) analyzeExpr(*node.value);
@@ -302,7 +312,9 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                         param.name, SymbolKind::Variable, false, false, true, expr.location});
                 }
             }
+            m_loopScopes.push_back(LoopScope::Closure);
             analyzeBody(node.body);
+            m_loopScopes.pop_back();
             m_symbols.popScope();
         }
         else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
@@ -363,6 +375,19 @@ auto Analyzer::checkPurity(const std::string& callee, SourceLocation loc) -> voi
     if (sym && sym->isFoul) {
         error(loc, "Cannot call foul function '" + callee + "' from pure context");
     }
+}
+
+auto Analyzer::checkLoopControl(SourceLocation loc, const std::string& keyword) -> void {
+    for (auto it = m_loopScopes.rbegin(); it != m_loopScopes.rend(); ++it) {
+        if (*it == LoopScope::Closure) {
+            error(loc, "'" + keyword + "' cannot be used inside a closure");
+            return;
+        }
+        if (*it == LoopScope::Loop) {
+            return;
+        }
+    }
+    error(loc, "'" + keyword + "' used outside a loop");
 }
 
 auto Analyzer::error(SourceLocation loc, const std::string& msg) -> void {

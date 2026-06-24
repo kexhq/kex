@@ -1130,6 +1130,16 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     if (check(TokenType::Var)) return parseVarExpr();
     if (check(TokenType::Return)) return parseReturnExpr();
     if (check(TokenType::Spawn)) return parseSpawnExpr();
+    if (check(TokenType::Break)) {
+        advance();
+        expr->kind = ast::BreakExpr{};
+        return expr;
+    }
+    if (check(TokenType::Next)) {
+        advance();
+        expr->kind = ast::NextExpr{};
+        return expr;
+    }
 
     // Do block (standalone lambda)
     if (check(TokenType::Do)) {

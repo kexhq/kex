@@ -8,6 +8,7 @@ namespace kex {
 enum class TokenType {
     // Keywords
     After,
+    Break,
     Compiled,
     Do,
     Elif,
@@ -23,6 +24,7 @@ enum class TokenType {
     Make,
     Match,
     Module,
+    Next,
     None,
     Private,
     Public,
