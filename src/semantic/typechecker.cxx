@@ -153,6 +153,80 @@ auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLoc
     error(loc, "Non-exhaustive match on " + adtName + ": missing case(s) " + list);
 }
 
+auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
+                                   std::unordered_map<std::string, TypePtr>& genericVars) -> TypePtr {
+    return std::visit([this, &genericVars](const auto& node) -> TypePtr {
+        using T = std::decay_t<decltype(node)>;
+
+        if constexpr (std::is_same_v<T, ast::TypeName>) {
+            if (node.parts.empty()) return Type::unknown();
+            const std::string& last = node.parts.back();
+            // Single-letter identifiers are generic type variables (docs/
+            // types.md Generics) — reuse the same TypeVar for repeated
+            // occurrences of the same letter within this clause.
+            if (last.size() == 1 && node.parts.size() == 1) {
+                auto it = genericVars.find(last);
+                if (it != genericVars.end()) return it->second;
+                auto var = freshTypeVar();
+                genericVars[last] = var;
+                return var;
+            }
+            if (auto known = m_globals.get(last)) return known;
+            return Type::named(last);  // unregistered record/ADT name — nameable, not yet structurally known
+        }
+        else if constexpr (std::is_same_v<T, ast::GenericType>) {
+            std::vector<TypePtr> args;
+            for (const auto& arg : node.args) {
+                args.push_back(arg ? resolveTypeExpr(*arg, genericVars) : Type::unknown());
+            }
+            std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
+            return Type::named(name, std::move(args));
+        }
+        else if constexpr (std::is_same_v<T, ast::FunctionType>) {
+            TypePtr param = node.param ? resolveTypeExpr(*node.param, genericVars) : Type::unknown();
+            TypePtr result = node.result ? resolveTypeExpr(*node.result, genericVars) : Type::unknown();
+            return Type::func({param}, result);
+        }
+        else if constexpr (std::is_same_v<T, ast::TupleType>) {
+            std::vector<TypePtr> elements;
+            for (const auto& elem : node.elements) {
+                elements.push_back(elem ? resolveTypeExpr(*elem, genericVars) : Type::unknown());
+            }
+            return Type::tuple(std::move(elements));
+        }
+        else if constexpr (std::is_same_v<T, ast::ListType>) {
+            return Type::list(node.element ? resolveTypeExpr(*node.element, genericVars) : Type::unknown());
+        }
+        else if constexpr (std::is_same_v<T, ast::MapType>) {
+            return Type::map(node.key ? resolveTypeExpr(*node.key, genericVars) : Type::unknown(),
+                              node.value ? resolveTypeExpr(*node.value, genericVars) : Type::unknown());
+        }
+        else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+            return Type::optional(node.inner ? resolveTypeExpr(*node.inner, genericVars) : Type::unknown());
+        }
+        else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            std::vector<TypePtr> members;
+            members.push_back(node.left ? resolveTypeExpr(*node.left, genericVars) : Type::unknown());
+            members.push_back(node.right ? resolveTypeExpr(*node.right, genericVars) : Type::unknown());
+            return std::make_shared<Type>(Type{UnionType{std::move(members)}});
+        }
+        else if constexpr (std::is_same_v<T, ast::AtomType>) {
+            return Type::atom();
+        }
+        else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+            auto it = genericVars.find(node.name);
+            if (it != genericVars.end()) return it->second;
+            auto var = freshTypeVar();
+            genericVars[node.name] = var;
+            return var;
+        }
+        else {
+            // BlockType — not modeled as a distinct semantic::Type yet.
+            return Type::unknown();
+        }
+    }, typeExpr.kind);
+}
+
 auto TypeChecker::bindPatternVars(const ast::Pattern& pat) -> void {
     std::visit([this](const auto& node) {
         using T = std::decay_t<decltype(node)>;
@@ -224,20 +298,39 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     auto returnType = freshTypeVar();
     defineVar(def.name, returnType);
 
+    std::vector<Signature> signatures;
     for (const auto& clause : def.clauses) {
         pushScope();
+        std::unordered_map<std::string, TypePtr> genericVars;
+        std::vector<TypePtr> paramTypes;
         for (const auto& param : clause.params) {
+            TypePtr paramType = param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar();
+            paramTypes.push_back(paramType);
             if (param.name.has_value() && *param.name != "_") {
-                defineVar(*param.name, freshTypeVar());
+                defineVar(*param.name, paramType);
+            }
+            if (param.pattern) {
+                bindPatternVars(**param.pattern);
             }
         }
         auto bodyType = inferBody(clause.body);
         popScope();
+        signatures.push_back(Signature{def.name, std::move(paramTypes), bodyType});
+    }
+
+    // make-block methods have an implicit `this` receiver, not a regular
+    // param — checkCall's UFCS desugaring (receiver as argument 0) would
+    // mis-count their arity, so they're checked (body inference still
+    // runs above) but not registered for call-site checking.
+    if (!m_inMakeBlock) {
+        m_userSignatures[def.name] = std::move(signatures);
     }
 }
 
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     pushScope();
+    bool wasInMakeBlock = m_inMakeBlock;
+    m_inMakeBlock = true;
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -246,6 +339,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
             }
         }, item);
     }
+    m_inMakeBlock = wasInMakeBlock;
     popScope();
 }
 
@@ -637,6 +731,15 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {
         return m_traits.satisfies(argType, constrained->traitName);
     }
+    // Sized ints/floats and arbitrary-precision Integer aren't distinguished
+    // at runtime yet (IntValue is one int64_t, FloatValue one double — see
+    // the type-system plan's Runtime representation section), so don't
+    // hard-error on a width/precision distinction the runtime doesn't keep:
+    // any two Integer-trait members are compatible with each other, and
+    // likewise for Float. Integer-vs-Float itself stays a real mismatch —
+    // that distinction *is* runtime-backed today.
+    if (m_traits.satisfies(argType, "Integer") && m_traits.satisfies(paramType, "Integer")) return true;
+    if (m_traits.satisfies(argType, "Float") && m_traits.satisfies(paramType, "Float")) return true;
     return typesEqual(argType, paramType);
 }
 
@@ -658,8 +761,12 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
                             SourceLocation loc) -> TypePtr {
-    auto* sigs = m_stdlib.lookup(name);
-    if (!sigs) return Type::unknown();  // user-defined function: not checked yet (phase 5)
+    const std::vector<Signature>* sigs = m_stdlib.lookup(name);
+    if (!sigs) {
+        auto it = m_userSignatures.find(name);
+        if (it != m_userSignatures.end()) sigs = &it->second;
+    }
+    if (!sigs) return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
 
     std::vector<const Signature*> arityMatches;
     std::vector<const Signature*> fullMatches;

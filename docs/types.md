@@ -94,7 +94,7 @@ type Shape
   | Rectangle(Float, Float)
   | Triangle(Float, Float, Float)
 
-type Option<A> = Just(A) | Nothing
+type Option<A> = Just(A) | None
 type Result<A, E> = Ok(A) | Error(E)
 ```
 

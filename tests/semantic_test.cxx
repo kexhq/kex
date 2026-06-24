@@ -924,5 +924,64 @@ int main() {
         });
     });
 
+    describe("Semantic — User-defined function signatures", []() {
+        it("rejects a call that violates a declared param annotation", []() {
+            assertTrue(hasError(
+                "let greet(name: String) = name\n"
+                "main do\n"
+                "  let x = greet(42)\n"
+                "end\n",
+                "greet"
+            ));
+        });
+
+        it("accepts a call matching a declared param annotation", []() {
+            assertTrue(noErrors(
+                "let greet(name: String) = name\n"
+                "main do\n"
+                "  let x = greet(\"world\")\n"
+                "end\n"
+            ));
+        });
+
+        it("does not hard-error Int vs Integer — not runtime-distinguished yet", []() {
+            assertTrue(noErrors(
+                "let double(n: Int) = n * 2\n"
+                "let quad(n: Int) = double(double(n))\n"
+            ));
+        });
+
+        it("treats a single-letter param annotation as generic, usable at multiple call-site types", []() {
+            assertTrue(noErrors(
+                "let identity(a: A) = a\n"
+                "main do\n"
+                "  let x = identity(1)\n"
+                "  let y = identity(\"hi\")\n"
+                "end\n"
+            ));
+        });
+
+        it("does not check a call to a function defined later in the file (forward reference)", []() {
+            assertTrue(noErrors(
+                "let useIt(x: Int) = laterFunc(x)\n"
+                "let laterFunc(s: String) = s\n"
+                "main do\n"
+                "  useIt(1)\n"
+                "end\n"
+            ));
+        });
+
+        it("does not register make-block methods for call checking (implicit `this` receiver)", []() {
+            assertTrue(noErrors(
+                "make Int do\n"
+                "  let describe(label: String) = label\n"
+                "end\n"
+                "main do\n"
+                "  let x = 5.describe(42)\n"
+                "end\n"
+            ));
+        });
+    });
+
     return runAll();
 }
