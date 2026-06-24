@@ -1,0 +1,4 @@
+# `break` outside any loop is a runtime error.
+main do
+  break
+end

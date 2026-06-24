@@ -1,0 +1,5 @@
+# Nesting `then`/`else` without parens is not allowed.
+main do
+  let x = true then 1 then 2 else 3 else 4
+  IO.printLine(x)
+end

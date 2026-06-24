@@ -1,0 +1,1 @@
+Parse error: spec/error_loop_with_do.kex:6:4: Expected 'end' to close main block, got Eof

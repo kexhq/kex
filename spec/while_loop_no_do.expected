@@ -1,0 +1,22 @@
+while/end: 0
+while/end: 1
+while/end: 2
+while with break: 1
+while with break: 2
+while with break: 3
+while with next: 1
+while with next: 3
+while with next: 5
+loop/end: 1
+loop/end: 2
+loop with break: 1
+loop with break: 2
+loop with break: 3
+nested loop inside while: outer=1 inner=1
+nested loop inside while: outer=1 inner=2
+nested loop inside while: outer=2 inner=1
+nested loop inside while: outer=2 inner=2
+nested while inside loop: a=1 b=1
+nested while inside loop: a=1 b=2
+nested while inside loop: a=2 b=1
+nested while inside loop: a=2 b=2

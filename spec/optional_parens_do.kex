@@ -1,0 +1,75 @@
+# Optional parens before `do` blocks — when a call is immediately followed
+# by `do`, parens around its arguments become optional.
+let foo(a, b, c, block) do
+  IO.printLine("foo: a=${a} b=${b} c=${c}")
+  block()
+end
+
+let withKeyword(target, restart, block) do
+  IO.printLine("withKeyword: target=${target} restart=${restart}")
+  block()
+end
+
+let withItems(items, block) do
+  IO.printLine("withItems: ${items}")
+  block()
+end
+
+let withHandler(name, handler, block) do
+  IO.printLine("withHandler: ${name} -> ${handler(3)}")
+  block()
+end
+
+let worker(target, restart, block) do
+  IO.printLine("worker: target=${target} restart=${restart}")
+  block()
+end
+
+main do
+  # String arg, no parens
+  describe "no-paren describe" do
+    IO.printLine("inside describe")
+  end
+
+  # Multiple bare positional args
+  foo 1, 2, 3 do
+    IO.printLine("block for foo")
+  end
+
+  # Bare positional atom args, no parens
+  withKeyword :database, :always do
+    IO.printLine("block for withKeyword")
+  end
+
+  # Real named (key: value) args, no parens
+  worker target: "Database", restart: :always do
+    IO.printLine("block for worker")
+  end
+
+  # Mix of positional + named args, no parens
+  worker "Database", restart: :always do
+    IO.printLine("block for worker (positional + named)")
+  end
+
+  # Nested do blocks
+  describe "outer" do
+    it "inner" do
+      assert(true)
+    end
+  end
+
+  # Mixed with parens — still works
+  foo(4, 5, 6) do
+    IO.printLine("block for foo with parens")
+  end
+
+  # Arg with brackets, no parens
+  withItems [1, 2, 3] do
+    IO.printLine("block for withItems")
+  end
+
+  # Arg with braces (inline lambda), no parens
+  withHandler "double", { |x| x * 2 } do
+    IO.printLine("block for withHandler")
+  end
+end

@@ -1,0 +1,32 @@
+# `&&`, `||`, `!` only — `and`/`or`/`not` are fully unreserved (now valid
+# identifiers).
+let done?(x) = x > 10
+
+main do
+  IO.printLine(true && false)
+  IO.printLine(true || false)
+  IO.printLine(!true)
+  IO.printLine(true && false || true)
+  IO.printLine(0 > 0 && 10 < 20)
+
+  if true && true
+    IO.printLine("in if condition")
+  end
+
+  var i = 0
+  while !done?(i)
+    i = i + 1
+  end
+  IO.printLine("while loop with !: ${i}")
+
+  IO.printLine(!(1 == 2))
+
+  # Precedence: !a && b || c = ((!a) && b) || c
+  IO.printLine(!false && true || false)
+
+  # and/or/not are now plain identifiers, not keywords
+  let and = 1
+  let or = 2
+  let not = 3
+  IO.printLine(and + or + not)
+end

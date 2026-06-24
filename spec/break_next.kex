@@ -1,0 +1,76 @@
+# `break`/`next` loop control — apply to the nearest enclosing while/loop.
+main do
+  var i = 0
+  while i < 10
+    i = i + 1
+    break if i > 3
+  end
+  IO.printLine("while break: ${i}")
+
+  var n = 0
+  loop
+    n = n + 1
+    break if n > 3
+  end
+  IO.printLine("loop break: ${n}")
+
+  var sum = 0
+  var k = 0
+  while k < 10
+    k = k + 1
+    next if k.modulo(2) == 0
+    sum = sum + k
+  end
+  IO.printLine("while next: sum=${sum}")
+
+  var sum2 = 0
+  var m = 0
+  loop
+    m = m + 1
+    break if m > 10
+    next if m.modulo(2) == 0
+    sum2 = sum2 + m
+  end
+  IO.printLine("loop next: sum2=${sum2}")
+
+  # break if condition (trailing if)
+  var j = 0
+  while j < 100
+    j = j + 1
+    break if j == 5
+  end
+  IO.printLine("break if trailing: ${j}")
+
+  # next if condition (trailing if)
+  var total = 0
+  var p = 0
+  while p < 5
+    p = p + 1
+    next if p == 3
+    total = total + p
+  end
+  IO.printLine("next if trailing: total=${total}")
+
+  # break inside match inside while — exits the while
+  var q = 0
+  while q < 10
+    q = q + 1
+    match q do
+      5 -> break
+      _ -> IO.printLine("match q=${q}")
+    end
+  end
+  IO.printLine("while exited via break in match: ${q}")
+
+  # Nested loops: break only exits the inner loop
+  var outerN = 0
+  while outerN < 2
+    outerN = outerN + 1
+    var innerN = 0
+    while innerN < 10
+      innerN = innerN + 1
+      break if innerN > 1
+    end
+    IO.printLine("outer=${outerN} inner stopped at=${innerN}")
+  end
+end

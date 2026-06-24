@@ -1,0 +1,20 @@
+no-paren describe
+inside describe
+foo: a=1 b=2 c=3
+block for foo
+withKeyword: target=:database restart=:always
+block for withKeyword
+worker: target=Database restart=:always
+block for worker
+worker: target=Database restart=:always
+block for worker (positional + named)
+outer
+  ✓ inner
+foo: a=4 b=5 c=6
+block for foo with parens
+withItems: [1, 2, 3]
+block for withItems
+withHandler: double -> 6
+block for withHandler
+
+1 passed, 0 failed

@@ -1,0 +1,5 @@
+# `then` always requires a matching `else` — it can't be a one-armed ternary.
+main do
+  let x = 5 > 0 then 1
+  IO.printLine(x)
+end

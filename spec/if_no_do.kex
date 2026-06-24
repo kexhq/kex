@@ -1,0 +1,61 @@
+# `if`/`elif`/`else` without `do` — newline-delimited blocks instead.
+main do
+  if true
+    IO.printLine("basic if")
+  end
+
+  if false
+    IO.printLine("not shown")
+  else
+    IO.printLine("if/else")
+  end
+
+  if false
+    IO.printLine("not shown")
+  elif true
+    IO.printLine("if/elif/else - elif branch")
+  else
+    IO.printLine("not shown")
+  end
+
+  if false
+    IO.printLine("a")
+  elif false
+    IO.printLine("b")
+  elif true
+    IO.printLine("multiple elif chains - third branch")
+  else
+    IO.printLine("not shown")
+  end
+
+  if true
+    if true
+      IO.printLine("nested if inside if")
+    end
+  end
+
+  loop
+    if true
+      IO.printLine("if inside loop")
+    end
+    break
+  end
+
+  # Multiline condition with parens
+  if (1 > 0
+      && 2 > 1)
+    IO.printLine("multiline condition with parens")
+  end
+
+  # Single-line condition with complex expression
+  if 1 > 0 && 2 < 10
+    IO.printLine("single-line complex condition")
+  end
+
+  let x = if true
+    1
+  else
+    2
+  end
+  IO.printLine("if as expression: ${x}")
+end

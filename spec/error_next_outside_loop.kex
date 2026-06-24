@@ -1,0 +1,4 @@
+# `next` outside any loop is a runtime error.
+main do
+  next
+end

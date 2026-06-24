@@ -1,0 +1,64 @@
+# `when` for match guards, bare `when`, and subject binding.
+let classify(n) = match n do
+  n when n >= 90 -> "A"
+  n when n >= 80 -> "B"
+  _ -> "F"
+end
+
+let complex(n) = match n do
+  n when n > 0 && n < 100 -> "in range"
+  _ -> "out of range"
+end
+
+let withCall(s) = match s do
+  s when s.length > 0 -> "non-empty"
+  _ -> "empty"
+end
+
+let multiPattern(pair) = match pair do
+  (:ok, val) when val > 0 -> "ok positive"
+  _ -> "other"
+end
+
+# Subject binding with bare when
+let withBinding(n) = match n do |x|
+  100 -> "wow"
+  when x >= 65 -> "senior"
+  when x >= 18 -> "adult"
+  _ -> "minor"
+end
+
+let mixed(n) = match n do
+  100 -> "exactly 100"
+  n when n > 50 -> "over 50"
+  _ -> "other"
+end
+
+let withResult(r) = match r do |x|
+  Ok(val) when val > 0 -> "ok-positive: ${val}"
+  Error(e) when x.ok? -> "unreachable"
+  Error(e) -> "error: ${e}"
+end
+
+main do
+  IO.printLine(classify(95))
+  IO.printLine(classify(85))
+  IO.printLine(classify(10))
+
+  IO.printLine(complex(50))
+
+  IO.printLine(withCall("hi"))
+
+  IO.printLine(multiPattern((:ok, 5)))
+
+  IO.printLine(withBinding(100))
+  IO.printLine(withBinding(70))
+  IO.printLine(withBinding(20))
+  IO.printLine(withBinding(5))
+
+  IO.printLine(mixed(100))
+  IO.printLine(mixed(60))
+
+  IO.printLine(withResult(Ok(5)))
+  IO.printLine(withResult(Error("bad")))
+end

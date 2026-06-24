@@ -1,0 +1,6 @@
+# `if` no longer takes a `do` — the old syntax fails to parse.
+main do
+  if true do
+    IO.printLine("x")
+  end
+end

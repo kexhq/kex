@@ -1,0 +1,38 @@
+# `then`/`else` inline conditional expression (ternary replacement).
+let list = [1, 2, 3]
+let inArgs(v) = v
+
+main do
+  let x = 5
+  let basic = x > 0 then "positive" else "non-positive"
+  IO.printLine(basic)
+
+  let precedence = x + 1 > 0 then 1 + 1 else 0 - 1
+  IO.printLine(precedence)
+
+  let nestedThen = x > 0 then (x > 10 then "big" else "small") else "non-positive"
+  IO.printLine(nestedThen)
+
+  let nestedElse = x > 100 then "huge" else (x > 0 then "small" else "negative")
+  IO.printLine(nestedElse)
+
+  IO.printLine(inArgs(x > 0 then "yes" else "no"))
+
+  let assigned = x.modulo(2) == 0 then "even" else "odd"
+  IO.printLine(assigned)
+
+  let withMethodCalls = list.empty? then "none" else "${list.length} items"
+  IO.printLine(withMethodCalls)
+
+  let parenMultiline = (x > 0
+    then "still positive"
+    else "still non-positive")
+  IO.printLine(parenMultiline)
+
+  if x > 0
+    let y = x > 1 then "a" else "b"
+    IO.printLine(y)
+  else
+    IO.printLine("not reached")
+  end
+end

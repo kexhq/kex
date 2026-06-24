@@ -1136,16 +1136,18 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                 auto it = m_functionDefs.find(name);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
                     const auto& firstClause = it->second[0]->clauses[0];
-                    // Build full arg list: start with positional, fill in named
+                    // Build full arg list: place named args by matching
+                    // param names first, then fill whatever slots remain
+                    // (in order) from the positional args. Named-first
+                    // matters because `args` may include a trailing
+                    // do-block appended as an extra positional value (see
+                    // "Handle block as last arg" above) — its destination
+                    // param is often last, not at the front, so it must
+                    // land in whichever slot is actually still open rather
+                    // than wherever index 0 happens to be.
                     size_t totalParams = firstClause.params.size();
                     std::vector<ValuePtr> fullArgs(totalParams, nullptr);
 
-                    // Place positional args first
-                    for (size_t i = 0; i < args.size() && i < totalParams; i++) {
-                        fullArgs[i] = std::move(args[i]);
-                    }
-
-                    // Place named args by matching param names
                     for (auto& [argName, argVal] : namedArgs) {
                         for (size_t i = 0; i < firstClause.params.size(); i++) {
                             if (firstClause.params[i].name.has_value() &&
@@ -1154,6 +1156,13 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                                 break;
                             }
                         }
+                    }
+
+                    size_t nextSlot = 0;
+                    for (auto& a : args) {
+                        while (nextSlot < totalParams && fullArgs[nextSlot]) nextSlot++;
+                        if (nextSlot >= totalParams) break;
+                        fullArgs[nextSlot] = std::move(a);
                     }
 
                     // Fill any remaining nulls with None

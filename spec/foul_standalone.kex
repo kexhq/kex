@@ -1,0 +1,40 @@
+# `foul` as a standalone function keyword — no `let` needed.
+foul printHello = IO.printLine("Hello!")
+
+foul fetchValue(id: Int) -> Int do
+  id * 2
+end
+
+module Worker do
+  foul start do
+    IO.printLine("worker started")
+  end
+end
+
+make [X] do
+  foul +(other) do
+    IO.printLine("adding")
+  end
+end
+
+module Visibility do
+  private do
+    foul secretHelper(n) do
+      n * 2
+    end
+  end
+
+  public do
+    foul publicHelper(n) do
+      n * 3
+    end
+  end
+end
+
+let pureDouble(n) = n * 2
+
+main do
+  printHello
+  IO.printLine(fetchValue(5))
+  IO.printLine(pureDouble(10))
+end

@@ -1,0 +1,58 @@
+# `while`/`loop` without `do`, plus `break`/`next`.
+main do
+  var i = 0
+  while i < 3
+    IO.printLine("while/end: ${i}")
+    i = i + 1
+  end
+
+  var j = 0
+  while j < 10
+    j = j + 1
+    break if j > 3
+    IO.printLine("while with break: ${j}")
+  end
+
+  var k = 0
+  while k < 5
+    k = k + 1
+    next if k.modulo(2) == 0
+    IO.printLine("while with next: ${k}")
+  end
+
+  var m = 0
+  loop
+    m = m + 1
+    IO.printLine("loop/end: ${m}")
+    break if m >= 2
+  end
+
+  var n = 0
+  loop
+    n = n + 1
+    break if n > 3
+    IO.printLine("loop with break: ${n}")
+  end
+
+  var outer = 0
+  while outer < 2
+    outer = outer + 1
+    var inner = 0
+    loop
+      inner = inner + 1
+      break if inner > 2
+      IO.printLine("nested loop inside while: outer=${outer} inner=${inner}")
+    end
+  end
+
+  var a = 0
+  loop
+    a = a + 1
+    var b = 0
+    while b < 2
+      b = b + 1
+      IO.printLine("nested while inside loop: a=${a} b=${b}")
+    end
+    break if a >= 2
+  end
+end

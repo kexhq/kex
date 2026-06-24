@@ -1,0 +1,8 @@
+# `and`/`or`/`not` are no longer operators — they're plain identifiers now,
+# so using them where an operator was expected fails (here: as an undefined
+# variable reference, since `and` just becomes the start of the next bare
+# statement instead of continuing the expression).
+main do
+  let x = true and false
+  IO.printLine(x)
+end
