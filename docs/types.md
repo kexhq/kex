@@ -2,8 +2,8 @@
 
 ## Primitives
 
-- `Int` — integer
-- `Float` — floating point
+- `Int` — integer (alias for `Int64`; arbitrary-precision `Integer` is the default for a plain literal — see Numeric Tower below)
+- `Float64` — floating point (the default for a plain float literal, e.g. `3.14`)
 - `String` — UTF-8 string
 - `Char` — a single character, written `'a'`, `'\n'`, etc.
 - `Bool` — `true` or `false`
@@ -37,26 +37,54 @@ let identity(a: A) = a
 let map(list: [A], f: A -> B) -> [B] = ...
 ```
 
-## Type Hierarchy
+## Type Hierarchy (Traits)
 
-Types use open inheritance with multiple parents:
+Type contracts are declared with `trait`, not nominal `type X < Y` blocks —
+see `plan-effects-traits.md` for the full design. A trait lists required
+method signatures (`:`); a type opts in by implementing it in a `make` block,
+not by declaring a parent on the type itself:
 
 ```kex
-type Comparable do
-  compare :> This -> Int
+trait Comparable do
+  compare : This -> Comparison
 end
 
-type Number < Comparable do
-  add :> This -> This
+trait Hashable do
+  hash : This -> Int
 end
 
-type Integer < Number, Hashable
-type Float < Number
+make Point implement: Comparable, Hashable do
+  let compare(other) -> Comparison = ...
+  let hash -> Int = ...
+end
 ```
 
-- Abstract types declare required functions — children must implement them
-- `This` resolves to the concrete type in `make` blocks
-- Compile error on diamond ambiguity (must resolve explicitly)
+Built-in numeric traits (`Number`, `Integer`, `Float`) work the same way, but
+membership is structural/built-in rather than declared via `make implement:`
+— every sized integer type (`Byte`, `Int8`..`UInt64`) and the
+arbitrary-precision `Integer` type itself satisfy `Integer` (and
+transitively `Number`); `Float32`/`Float64` satisfy `Float` (and `Number`)
+the same way. `Integer` is unusual in that it's both the trait name *and*
+one of its own concrete members — see `type-system-plan.md`'s Numeric Tower
+section for the full tower (`Number` / `Integer` / `Float` / sized types /
+the deferred `Rational`/`Decimal`):
+
+```kex
+Int8.is?(Integer)      # true
+Int8.is?(Number)       # true
+Float32.is?(Float)     # true
+Float32.is?(Integer)   # false
+Integer.is?(Integer)   # true
+```
+
+- Required methods (`name : type`) must be implemented; a `let name(...) = ...`
+  inside the `trait` block itself is a default implementation, overridable
+  by `make`.
+- `This` resolves to the concrete implementing type, in both trait
+  signatures and `make` blocks; `this` is the value-level instance.
+- No nominal multiple-inheritance/diamond concern — trait membership is
+  structural (`TraitRegistry.satisfies`), not class-style parent chains, so
+  there's nothing to disambiguate when a type implements several traits.
 
 ## Sum Types (Enums)
 
@@ -139,11 +167,30 @@ r.map { |x| x * 2 }
 
 ## Enumerable Hierarchy
 
+`Range`, `[A]` (lists), and `Stream` all implement the `Enumerable` trait,
+the same `trait`/`make implement:` mechanism as the Type Hierarchy section
+above — not nominal inheritance:
+
 ```kex
-type Range<A> < Enumerable<A>
-type [A] < Enumerable<A>
-type Stream<A> < Enumerable<A>
+trait Enumerable do
+  each : (This, A -> Unit) -> Unit
+end
+
+make Range implement: Enumerable do
+  let each(f) = ...
+end
+
+make [A] implement: Enumerable do
+  let each(f) = ...
+end
+
+make Stream implement: Enumerable do
+  let each(f) = ...
+end
 ```
+
+(Required methods beyond `each` — whatever `.map`/`.min`/`.max` etc. need —
+aren't fully enumerated here.)
 
 ## Atoms
 

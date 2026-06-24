@@ -1317,17 +1317,22 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                     if (atom->name == pat.name) return true;
                 }
 
-                // Match type names as type patterns (for runtime type checking)
-                if (pat.name == "String") return std::holds_alternative<StringValue>(value->data);
-                if (pat.name == "Int" || pat.name == "Integer") return std::holds_alternative<IntValue>(value->data);
-                if (pat.name == "Float") return std::holds_alternative<FloatValue>(value->data);
-                if (pat.name == "Bool") return std::holds_alternative<BoolValue>(value->data);
-                if (pat.name == "Atom") return std::holds_alternative<AtomValue>(value->data);
-                if (pat.name == "List") return std::holds_alternative<ListValue>(value->data);
-                if (pat.name == "Map") return std::holds_alternative<MapValue>(value->data);
-                if (pat.name == "Tuple") return std::holds_alternative<TupleValue>(value->data);
-                if (pat.name == "Range") return std::holds_alternative<RangeValue>(value->data);
-                if (pat.name == "Stream") return std::holds_alternative<StreamValue>(value->data);
+                // Match type names as type patterns (for runtime type checking).
+                // These `if (holds_alternative) return true;` rather than
+                // `return holds_alternative(...)` so that e.g. a bare `Integer`
+                // expression — which resolves to the Integer::parse namespace
+                // RecordValue, not an IntValue — still falls through to the
+                // record-typeName check below instead of failing outright.
+                if (pat.name == "String" && std::holds_alternative<StringValue>(value->data)) return true;
+                if ((pat.name == "Int" || pat.name == "Integer") && std::holds_alternative<IntValue>(value->data)) return true;
+                if (pat.name == "Float" && std::holds_alternative<FloatValue>(value->data)) return true;
+                if (pat.name == "Bool" && std::holds_alternative<BoolValue>(value->data)) return true;
+                if (pat.name == "Atom" && std::holds_alternative<AtomValue>(value->data)) return true;
+                if (pat.name == "List" && std::holds_alternative<ListValue>(value->data)) return true;
+                if (pat.name == "Map" && std::holds_alternative<MapValue>(value->data)) return true;
+                if (pat.name == "Tuple" && std::holds_alternative<TupleValue>(value->data)) return true;
+                if (pat.name == "Range" && std::holds_alternative<RangeValue>(value->data)) return true;
+                if (pat.name == "Stream" && std::holds_alternative<StreamValue>(value->data)) return true;
                 // Match record type name
                 if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                     if (rec->typeName == pat.name) return true;

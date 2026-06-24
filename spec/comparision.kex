@@ -1,0 +1,20 @@
+type Comparison = Less | Equal | Greater
+
+make Comparison do
+  let to(@Less, Integer) = -1
+  let to(@Equal, Integer) = 0
+  let to(@Greater, Integer) = 1
+end
+
+let asMatchString(m: Comparison) -> String do
+  match m do
+    Less -> "Less"
+    Equal -> "Equal"
+    Greater -> "Greater"
+  end
+end
+
+let comps = [Less, Equal, Greater]
+
+comps.each { |m| IO.printLine(m.to(Integer)) }
+comps.each { |m| IO.printLine(m.asMatchString) }

@@ -2,14 +2,35 @@
 
 ## Enumerable Hierarchy
 
+`Range`, `[A]` (lists), and `Stream` all implement the `Enumerable` trait —
+structural trait membership via `make implement:`, not nominal type
+inheritance (see `docs/types.md`'s Type Hierarchy / Enumerable Hierarchy
+sections for the full pattern):
+
 ```kex
-type Enumerable<A>     # parent
-type Range<A> < Enumerable<A>
-type [A] < Enumerable<A>
-type Stream<A> < Enumerable<A>
+trait Enumerable do
+  each : (This, A -> Unit) -> Unit
+end
+
+make Range implement: Enumerable do
+  let each(f) = ...
+end
+
+make [A] implement: Enumerable do
+  let each(f) = ...
+end
+
+make Stream implement: Enumerable do
+  let each(f) = ...
+end
 ```
 
-Functions that accept `Enumerable<A>` work with any of these.
+Functions that accept any `Enumerable` work with all of these — the
+parameter is constrained by the trait, not a concrete type:
+
+```kex
+let sumAll(xs: Enumerable) -> Int = ...
+```
 
 ## Stream — Pure and Lazy
 
