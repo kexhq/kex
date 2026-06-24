@@ -1,0 +1,9 @@
+# `:>` (implicit-This signature) only makes sense inside `make T do ... end`,
+# where T is the known implicit-first-param type. At top level there's no
+# such T, so it's a parse error — use `:` instead.
+foo :> Int -> Int
+let foo(n) = n
+
+main do
+  IO.printLine(foo(5))
+end

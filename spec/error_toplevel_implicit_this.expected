@@ -1,0 +1,1 @@
+Parse error: spec/error_toplevel_implicit_this.kex:4:1: ':>' (implicit-This signature) is only valid inside 'make T do ... end' — use ':' at top level instead

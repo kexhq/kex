@@ -1,0 +1,24 @@
+# Chained `|` in list patterns: `[a | b | rest]` desugars to
+# `[a, b | rest]` — each extra `|` peels one more head element off, and
+# only the last segment is the actual rest pattern.
+let firstTwo([a | b | _]) = (a, b)
+let firstTwo(_) = (None, None)
+
+let firstThree([a | b | c | rest]) = (a, b, c, rest)
+let firstThree(_) = (None, None, None, [])
+
+main do
+  let (a, b) = firstTwo([1, 2, 3, 4])
+  IO.printLine("${a}, ${b}")
+
+  let (x, y, z, rest) = firstThree([10, 20, 30, 40, 50])
+  IO.printLine("${x}, ${y}, ${z}, ${rest}")
+
+  # Equivalent to the comma form
+  let [h, t | tail] = [1, 2, 3, 4, 5]
+  IO.printLine("${h}, ${t}, ${tail}")
+
+  # Too few elements — falls through to the catch-all clause
+  let (p, q) = firstTwo([1])
+  IO.printLine("${p}, ${q}")
+end

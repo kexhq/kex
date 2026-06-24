@@ -1,0 +1,14 @@
+# `name : Type` is a valid full type signature at top level (not just
+# inside module/make/visibility bodies). `:>` (implicit-This) is NOT valid
+# here — see error_toplevel_implicit_this.kex.
+double : Int -> Int
+let double(n) = n * 2
+
+minMax : [Int] -> (Int, Int)
+let minMax(xs) = (xs.min, xs.max)
+
+main do
+  IO.printLine(double(21))
+  let (lo, hi) = minMax([3, 1, 4, 1, 5, 9, 2, 6])
+  IO.printLine("${lo}, ${hi}")
+end

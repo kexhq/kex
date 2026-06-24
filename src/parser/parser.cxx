@@ -111,6 +111,23 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
         return parseFunctionDef();
     }
 
+    // Top-level type annotation: `name : Type` — must be checked before
+    // the generic expression fallback below, since a bare LowerIdent is
+    // also a valid expression start (e.g. a bare function call). A
+    // LowerIdent immediately followed by `:` is unambiguous: no expression
+    // construct starts that way.
+    //
+    // `:>` (implicit-This signature) is deliberately NOT accepted here —
+    // it only makes sense inside `make T do ... end`, where T is known to
+    // be the implicit first param's type. At top level there's no such T.
+    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
+        return parseTypeAnnotation();
+    }
+    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::TypeAnnotation) {
+        error("':>' (implicit-This signature) is only valid inside 'make T do ... end' — "
+              "use ':' at top level instead");
+    }
+
     // Top-level expression (e.g. describe blocks in tests, bare function calls)
     if (isAtExprStart()) {
         auto mainBlock = std::make_unique<ast::MainBlock>();
@@ -2082,8 +2099,15 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
             while (match(TokenType::Comma)) {
                 elements.push_back(parsePattern());
             }
+            // `[a | b | rest]` chains like cons: each extra `|` peels one
+            // more head element off, and only the last segment ends up as
+            // the actual rest pattern.
             if (match(TokenType::Pipe)) {
                 rest = parsePattern();
+                while (match(TokenType::Pipe)) {
+                    elements.push_back(std::move(*rest));
+                    rest = parsePattern();
+                }
             }
         }
 

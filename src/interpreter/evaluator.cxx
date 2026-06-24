@@ -470,6 +470,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         }
                     }
                 }
+            } else if (std::get_if<ast::ListPattern>(&node.pattern->kind)) {
+                matchPattern(*node.pattern, value);
             }
             return value;
         }

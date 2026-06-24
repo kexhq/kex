@@ -487,7 +487,8 @@ using TopLevelItem = std::variant<
     std::unique_ptr<CompiledBlock>,
     std::unique_ptr<UsingBlock>,
     std::unique_ptr<MainBlock>,
-    std::unique_ptr<Pragma>
+    std::unique_ptr<Pragma>,
+    std::unique_ptr<TypeAnnotation>
 >;
 
 struct Program {
