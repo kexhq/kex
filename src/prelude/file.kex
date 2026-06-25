@@ -1,0 +1,64 @@
+module File do
+  # Appends +content+ to +path+, creating the file if it does not exist.
+  # Returns +true+ on success.
+  # This is a foul function — it performs file I/O.
+  #
+  # @param path    [String]
+  # @param content [String]
+  # @return [Bool]
+  #
+  # @example
+  #   File.append("log.txt", "new entry\n")
+  append : (String, String) -> Bool
+
+  # Returns +true+ if +path+ exists in the filesystem.
+  # This is a foul function — it queries the filesystem.
+  #
+  # @param path [String]
+  # @return [Bool]
+  #
+  # @example
+  #   File.exists?("config.kex")   # => true or false
+  exists? : String -> Bool
+
+  # Deletes +path+. Returns +true+ if the file was removed.
+  # This is a foul function — it modifies the filesystem.
+  #
+  # @param path [String]
+  # @return [Bool]
+  #
+  # @example
+  #   File.delete("tmp.txt")
+  delete : String -> Bool
+
+  # Reads all lines of +path+ into a +[String]+.
+  # Returns +None+ if the file cannot be opened.
+  # Lines do not include the trailing newline character.
+  # This is a foul function — it performs file I/O.
+  #
+  # @param path [String]
+  # @return [[String]?]
+  #
+  # @example
+  #   match File.lines("words.txt") do
+  #     Just(lines) -> lines.each { |l| IO.printLine(l) }
+  #     None -> IO.printLine("not found")
+  #   end
+  lines : String -> [String]?
+
+  # Opens +path+ and returns a lazy +Stream<String>+ of its lines.
+  # Returns +None+ if the file cannot be opened.
+  # The entire file is read eagerly at call time; the stream supports
+  # index-based access but is not a true single-consumption feed.
+  # This is a foul function — it performs file I/O.
+  #
+  # @param path [String]
+  # @return [Stream<String>?]
+  #
+  # @example
+  #   match File.feed("big.log") do
+  #     Just(s) -> s.take(10).each { |l| IO.printLine(l) }
+  #     None -> IO.printLine("not found")
+  #   end
+  feed : String -> Stream<String>?
+end

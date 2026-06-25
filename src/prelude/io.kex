@@ -1,0 +1,71 @@
+module IO do
+  # Writes each argument to stdout followed by a newline.
+  # Multiple arguments are printed consecutively with no separator.
+  # This is a foul function — it performs console output.
+  #
+  # @param msg [String]  one or more values (coerced to String)
+  # @return [Unit]
+  #
+  # @example
+  #   IO.printLine("hello")      # prints: hello
+  #   IO.printLine("x = ", 42)   # prints: x = 42
+  printLine : String -> Unit
+
+  # Writes each argument to stdout without a trailing newline.
+  # This is a foul function — it performs console output.
+  #
+  # @param msg [String]  one or more values (coerced to String)
+  # @return [Unit]
+  #
+  # @example
+  #   IO.print("hello ")
+  #   IO.print("world")   # stdout: hello world
+  print : String -> Unit
+
+  # Alias for +printLine+.
+  putLine : String -> Unit
+
+  # Alias for +print+.
+  put : String -> Unit
+
+  # Reads one line from stdin. Returns +None+ at end-of-input.
+  # This is a foul function — it reads from stdin.
+  #
+  # @return [String?]
+  #
+  # @example
+  #   let line = IO.getLine.or("")
+  getLine : String?
+
+  # Reads a single character from stdin. Returns +None+ at end-of-input.
+  # This is a foul function — it reads from stdin.
+  #
+  # @return [String?]
+  get : String?
+
+  # Reads the entire contents of +path+ into a +String+.
+  # Returns +None+ if the file cannot be opened.
+  # This is a foul function — it performs file I/O.
+  #
+  # @param path [String]
+  # @return [String?]
+  #
+  # @example
+  #   match IO.read("config.txt") do
+  #     Just(contents) -> IO.printLine(contents)
+  #     None -> IO.printLine("not found")
+  #   end
+  read : String -> String?
+
+  # Writes +content+ to +path+, overwriting any existing file.
+  # Returns +true+ on success.
+  # This is a foul function — it performs file I/O.
+  #
+  # @param path    [String]
+  # @param content [String]
+  # @return [Bool]
+  #
+  # @example
+  #   IO.write("out.txt", "hello\n")
+  write : (String, String) -> Bool
+end

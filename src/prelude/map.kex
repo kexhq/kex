@@ -1,0 +1,86 @@
+# Maps are immutable key-value stores. Mutation methods (suffixed +!+)
+# return a new map and rebind the receiver variable — they do not modify
+# in place. Keys are compared by structural equality.
+make Map<K, V> do
+  # Returns the value for +key+ wrapped in +Just+, or +None+ if absent.
+  # When a +default+ is supplied, returns the raw unwrapped value instead.
+  #
+  # @param key     [K]
+  # @param default [V]  (optional)
+  # @return [V?] without default; [V] with default
+  #
+  # @example
+  #   m = { name: "Alice", age: 32 }
+  #   m.get(:name)         # => Just("Alice")
+  #   m.get(:missing)      # => None
+  #   m.get(:missing, 0)   # => 0
+  get :> K -> V?
+  get :> (K, V) -> V
+
+  # Returns a new map with +key+ mapped to +value+.
+  # If +key+ already exists its old value is replaced.
+  # Use +put!+ to rebind the receiver variable in place.
+  #
+  # @param key   [K]
+  # @param value [V]
+  # @return [Map<K, V>]
+  #
+  # @example
+  #   m = {}
+  #   m.put!(:x, 1)
+  #   m   # => { x: 1 }
+  put :> (K, V) -> Map<K, V>
+
+  # Returns a new map without +key+. No-op if the key is absent.
+  # Use +delete!+ to rebind the receiver variable in place.
+  #
+  # @param key [K]
+  # @return [Map<K, V>]
+  #
+  # @example
+  #   { a: 1, b: 2 }.delete(:a)   # => { b: 2 }
+  delete :> K -> Map<K, V>
+
+  # Returns +true+ if +key+ exists in the map.
+  #
+  # @param key [K]
+  # @return [Bool]
+  #
+  # @example
+  #   { a: 1 }.has?(:a)   # => true
+  #   { a: 1 }.has?(:b)   # => false
+  has? :> K -> Bool
+
+  # Returns +true+ if the map has no entries.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   {}.empty?        # => true
+  #   { a: 1 }.empty?  # => false
+  empty? :> Bool
+
+  # Returns the number of key-value pairs.
+  #
+  # @return [Integer]
+  #
+  # @example
+  #   { a: 1, b: 2 }.count   # => 2
+  count :> Integer
+
+  # Returns all keys as a list, in insertion order.
+  #
+  # @return [[K]]
+  #
+  # @example
+  #   { a: 1, b: 2 }.keys   # => [:a, :b]
+  keys :> [K]
+
+  # Returns all values as a list, in insertion order.
+  #
+  # @return [[V]]
+  #
+  # @example
+  #   { a: 1, b: 2 }.values   # => [1, 2]
+  values :> [V]
+end

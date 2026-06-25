@@ -1,0 +1,183 @@
+# The +Math+ module provides standard mathematical constants and functions.
+# All trigonometric functions operate in radians. Domain errors
+# (e.g. +Math.sqrt(-1.0)+) produce +NaN+ or +Infinity+ rather than raising,
+# matching IEEE 754 semantics.
+module Math do
+  # Math.PI : Float
+  # Ratio of a circle's circumference to its diameter.
+  # Native constant — not redeclarable in Kex.
+  #
+  # @example
+  #   Math.PI   # => 3.141592653589793
+
+  # Math.E : Float
+  # Base of the natural logarithm.
+  # Native constant — not redeclarable in Kex.
+  #
+  # @example
+  #   Math.E   # => 2.718281828459045
+
+  # Square root of +x+. Returns +NaN+ for negative input.
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.sqrt(9.0)    # => 3.0
+  #   Math.sqrt(-1.0)   # => NaN
+  sqrt : Number -> Float
+
+  # Cube root of +x+.
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.cbrt(27.0)   # => 3.0
+  cbrt : Number -> Float
+
+  # Sine of +x+ (radians).
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.sin(Math.PI / 2.0)   # => 1.0
+  sin : Number -> Float
+
+  # Cosine of +x+ (radians).
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.cos(0.0)   # => 1.0
+  cos : Number -> Float
+
+  # Tangent of +x+ (radians).
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.tan(Math.PI / 4.0)   # => 1.0
+  tan : Number -> Float
+
+  # Inverse sine (arc sine) of +x+, result in radians.
+  #
+  # @param x [Number]  must be in [-1, 1]
+  # @return [Float]
+  #
+  # @example
+  #   Math.asin(1.0)   # => 1.5707963267948966
+  asin : Number -> Float
+
+  # Inverse cosine (arc cosine) of +x+, result in radians.
+  #
+  # @param x [Number]  must be in [-1, 1]
+  # @return [Float]
+  #
+  # @example
+  #   Math.acos(1.0)   # => 0.0
+  acos : Number -> Float
+
+  # Inverse tangent (arc tangent) of +x+, result in radians in (-π/2, π/2).
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.atan(1.0)   # => 0.7853981633974483
+  atan : Number -> Float
+
+  # Two-argument arc tangent. Returns the angle of vector (+x+, +y+) in (-π, π].
+  # Handles the sign of both arguments to place the result in the correct quadrant.
+  #
+  # @param y [Number]
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.atan2(1.0, 1.0)    # => 0.7853981633974483
+  #   Math.atan2(1.0, -1.0)   # => 2.356194490192345
+  atan2 : (Number, Number) -> Float
+
+  # Hyperbolic sine.
+  #
+  # @param x [Number]
+  # @return [Float]
+  sinh : Number -> Float
+
+  # Hyperbolic cosine.
+  #
+  # @param x [Number]
+  # @return [Float]
+  cosh : Number -> Float
+
+  # Hyperbolic tangent.
+  #
+  # @param x [Number]
+  # @return [Float]
+  tanh : Number -> Float
+
+  # Natural logarithm of +x+ (base e).
+  # With two arguments, computes log base +base+.
+  #
+  # @param x    [Number]
+  # @param base [Number]  (optional)
+  # @return [Float]
+  #
+  # @example
+  #   Math.log(Math.E)     # => 1.0
+  #   Math.log(8.0, 2.0)   # => 3.0
+  log : Number -> Float
+  log : (Number, Number) -> Float
+
+  # Base-2 logarithm of +x+.
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.log2(8.0)   # => 3.0
+  log2 : Number -> Float
+
+  # Base-10 logarithm of +x+.
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.log10(1000.0)   # => 3.0
+  log10 : Number -> Float
+
+  # +e+ raised to the power +x+.
+  #
+  # @param x [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.exp(1.0)   # => 2.718281828459045
+  exp : Number -> Float
+
+  # +x+ raised to the power +y+.
+  #
+  # @param x [Number]
+  # @param y [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.pow(2.0, 10.0)   # => 1024.0
+  pow : (Number, Number) -> Float
+
+  # Euclidean distance — equivalent to +sqrt(x*x + y*y)+ but avoids
+  # intermediate overflow for large values.
+  #
+  # @param x [Number]
+  # @param y [Number]
+  # @return [Float]
+  #
+  # @example
+  #   Math.hypot(3.0, 4.0)   # => 5.0
+  hypot : (Number, Number) -> Float
+end

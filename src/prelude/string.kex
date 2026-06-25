@@ -1,0 +1,144 @@
+make String do
+  # Returns the number of characters in the string.
+  #
+  # @return [Integer]
+  #
+  # @example
+  #   "hello".count   # => 5
+  #   "".count        # => 0
+  count :> Integer
+
+  # Returns +true+ if the string contains no characters.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   "".empty?       # => true
+  #   "hi".empty?     # => false
+  empty? :> Bool
+
+  # Returns the character at position +i+ (0-based), or +None+ if out of range.
+  #
+  # @param i [Integer]
+  # @return [Char?]
+  #
+  # @example
+  #   "hello".at(1)   # => Just('e')
+  #   "hello".at(9)   # => None
+  at :> Integer -> Char?
+
+  # Returns a list of the individual characters in the string.
+  #
+  # @return [[Char]]
+  #
+  # @example
+  #   "hi".chars   # => ['h', 'i']
+  chars :> [Char]
+
+  # Splits on every occurrence of +sep+. With no argument, splits into
+  # individual characters.
+  #
+  # @param sep [String]
+  # @return [[String]]
+  #
+  # @example
+  #   "a,b,c".split(",")   # => ["a", "b", "c"]
+  #   "hi".split           # => ["h", "i"]
+  split :> String -> [String]
+  split :> [String]
+
+  # Removes leading and trailing whitespace.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "  hello  ".trim   # => "hello"
+  trim :> String
+
+  # Returns the string with all characters converted to upper case.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "hello".upperCase   # => "HELLO"
+  upperCase :> String
+
+  # Returns the string with all characters converted to lower case.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "HELLO".lowerCase   # => "hello"
+  lowerCase :> String
+
+  # Returns the string with its characters in reverse order.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "hello".reverse   # => "olleh"
+  reverse :> String
+
+  # Returns +true+ if +sub+ appears anywhere within the string.
+  #
+  # @param sub [String]
+  # @return [Bool]
+  #
+  # @example
+  #   "hello world".contains?("world")   # => true
+  #   "hello world".contains?("xyz")     # => false
+  contains? :> String -> Bool
+
+  # Returns +true+ if the string begins with +prefix+.
+  #
+  # @param prefix [String]
+  # @return [Bool]
+  #
+  # @example
+  #   "hello".startsWith?("hel")   # => true
+  #   "hello".startsWith?("llo")   # => false
+  startsWith? :> String -> Bool
+
+  # Returns +true+ if the string ends with +suffix+.
+  #
+  # @param suffix [String]
+  # @return [Bool]
+  #
+  # @example
+  #   "hello".endsWith?("llo")   # => true
+  #   "hello".endsWith?("hel")   # => false
+  endsWith? :> String -> Bool
+
+  # Converts to another type. The most common target is +Integer+ or +Float+.
+  # Returns +None+ when conversion is not possible.
+  #
+  # @param type [Y]
+  # @return [Unknown]
+  #
+  # @example
+  #   "42".to(Integer)    # => 42
+  #   "3.14".to(Float)    # => 3.14
+  #   "abc".to(Integer)   # => None
+  to :> Y -> Unknown
+end
+
+make Char do
+  # Returns +true+ if the character is a decimal digit (+0+..+9+).
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   '3'.digit?   # => true
+  #   'a'.digit?   # => false
+  digit? :> Bool
+
+  # Returns +true+ if the character falls within the given range (inclusive).
+  #
+  # @param range [Range<Char>]
+  # @return [Bool]
+  #
+  # @example
+  #   'b'.in?('a'..'z')   # => true
+  #   'B'.in?('a'..'z')   # => false
+  in? :> Range<Char> -> Bool
+end

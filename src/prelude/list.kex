@@ -1,63 +1,351 @@
-
 type List<X> = [X]
 
 make [X] do
+  # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
+  #
+  # @return [X?]
+  #
+  # @example
+  #   [1, 2, 3].first   # => Just(1)
+  #   [].first          # => None
   first :> X?
   let first(@[]) = None
   let first(@[x|_]) = Just(x)
 
+  # Returns all elements after the first. Returns +[]+ for an empty or
+  # single-element list.
+  #
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3].rest   # => [2, 3]
+  #   [1].rest         # => []
+  #   [].rest          # => []
   rest :> [X]
   let rest(@[]) = []
   let rest(@[_|xs]) = xs
 
-  length :> Integer
-  let length(@[]) = 0
-  let length(@[_|xs]) = 1 + xs.length
+  # Returns the last element wrapped in +Just+, or +None+ if the list is empty.
+  #
+  # @return [X?]
+  #
+  # @example
+  #   [1, 2, 3].last   # => Just(3)
+  #   [].last          # => None
+  last :> X?
+  let last(@[]) = None
+  let last(@[x]) = Just(x)
+  let last(@[_|xs]) = xs.last
 
-  find :> X -> X?
+  # Returns the number of elements.
+  # When given a predicate, returns the count of elements for which it holds.
+  #
+  # @return [Integer]
+  #
+  # @example
+  #   [1, 2, 3].count              # => 3
+  #   [1, 2, 3, 4].count(&even?)   # => 2
+  count :> Integer
+  let count(@[]) = 0
+  let count(@[_|xs]) = 1 + xs.count
+
+  count :> (X -> Bool) -> Integer
+  let count(@[], _) = 0
+  let count(@[x|xs], pred) = (pred(x) then 1 else 0) + xs.count(pred)
+
+  # Returns +true+ if the list contains no elements.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   [].empty?      # => true
+  #   [1, 2].empty?  # => false
+  empty? :> Bool
+  let empty?(@[]) = true
+  let empty?(@[_|_]) = false
+
+  # Returns the first element satisfying the predicate wrapped in +Just+,
+  # or +None+ if no element matches.
+  #
+  # @param pred [X -> Bool]
+  # @return [X?]
+  #
+  # @example
+  #   [1, 2, 3].find { |x| x > 1 }   # => Just(2)
+  #   [1, 2, 3].find { |x| x > 9 }   # => None
+  find :> (X -> Bool) -> X?
   let find(@[], _) = None
-  let find(@[x|xs], y) do
-    return Just(x) if x == y
-
-    return xs.find(y)
+  let find(@[x|xs], pred) do
+    return Just(x) if pred(x)
+    return xs.find(pred)
   end
 
-  # any? : Bool
-  # let any?(@[]) = false
-  # let any?(@[_|_]) = true
+  # Returns +true+ if at least one element satisfies the predicate.
+  #
+  # @param pred [X -> Bool]
+  # @return [Bool]
+  #
+  # @example
+  #   [1, 2, 3].any? { |x| x > 2 }   # => true
+  #   [1, 2, 3].any? { |x| x > 9 }   # => false
+  any? :> (X -> Bool) -> Bool
+  let any?(@[], _) = false
+  let any?(@[x|xs], pred) = pred(x) then true else xs.any?(pred)
+
+  # Returns +true+ if every element satisfies the predicate.
+  #
+  # @param pred [X -> Bool]
+  # @return [Bool]
+  #
+  # @example
+  #   [1, 2, 3].all? { |x| x > 0 }   # => true
+  #   [1, 2, 3].all? { |x| x > 1 }   # => false
+  all? :> (X -> Bool) -> Bool
+  let all?(@[], _) = true
+  let all?(@[x|xs], pred) = pred(x) then xs.all?(pred) else false
+
+  # Transforms each element by applying +f+.
+  #
+  # @param f [X -> Y]
+  # @return [[Y]]
+  #
+  # @example
+  #   [1, 2, 3].map { |x| x * 2 }   # => [2, 4, 6]
+  map :> (X -> Y) -> [Y]
+  let map(@[], _) = []
+  let map(@[x|xs], f) = [f(x) | xs.map(f)]
+
+  # Returns a new list containing only the elements for which +pred+ is +true+.
+  #
+  # @param pred [X -> Bool]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3, 4].filter { |x| x.even? }   # => [2, 4]
+  filter :> (X -> Bool) -> [X]
+  let filter(@[], _) = []
+  let filter(@[x|xs], pred) do
+    return [x | xs.filter(pred)] if pred(x)
+    return xs.filter(pred)
+  end
+
+  # Returns a new list with all elements for which +pred+ is +true+ removed.
+  # The inverse of +filter+.
+  #
+  # @param pred [X -> Bool]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3, 4].reject { |x| x.even? }   # => [1, 3]
+  reject :> (X -> Bool) -> [X]
+  let reject(@[], _) = []
+  let reject(@[x|xs], pred) do
+    return xs.reject(pred) if pred(x)
+    return [x | xs.reject(pred)]
+  end
+
+  # Calls +f+ with each element for its side effects. Returns unit.
+  #
+  # @param f [X -> Unit]
+  # @return [Unit]
+  #
+  # @example
+  #   [1, 2, 3].each { |x| IO.printLine(x) }
+  each :> (X -> Unit) -> Unit
+  let each(@[], _) = ()
+  let each(@[x|xs], f) do
+    f(x)
+    xs.each(f)
+  end
+
+  # Folds the list from the left, starting with +acc+ and combining each
+  # element via +f+.
+  #
+  # @param acc [Acc]   initial accumulator value
+  # @param f   [Acc, X -> Acc]
+  # @return [Acc]
+  #
+  # @example
+  #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
+  #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
+  reduce :> (Acc, (Acc, X -> Acc)) -> Acc
+  let reduce(@[], acc, _) = acc
+  let reduce(@[x|xs], acc, f) = xs.reduce(f(acc, x), f)
+
+  # Returns the first +n+ elements.
+  #
+  # @param n [Integer]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3, 4, 5].take(3)   # => [1, 2, 3]
+  take :> Integer -> [X]
+  let take(@[], _) = []
+  let take(@_, 0) = []
+  let take(@[x|xs], n) = [x | xs.take(n - 1)]
+
+  # Drops the first +n+ elements.
+  #
+  # @param n [Integer]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3, 4, 5].drop(2)   # => [3, 4, 5]
+  drop :> Integer -> [X]
+  let drop(@[], _) = []
+  let drop(@xs, 0) = xs
+  let drop(@[_|xs], n) = xs.drop(n - 1)
+
+  # Returns a new list with +x+ appended at the end.
+  #
+  # @param x [X]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2].push(3)   # => [1, 2, 3]
+  push :> X -> [X]
+  let push(@[], x) = [x]
+  let push(@[h|t], x) = [h | t.push(x)]
+
+  # Returns the elements in reverse order.
+  #
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 3].reverse   # => [3, 2, 1]
+  reverse :> [X]
+  let reverse(@[]) = []
+  let reverse(@[x|xs]) = xs.reverse.push(x)
+
+  # Pairs each element of this list with the corresponding element of +other+.
+  # Stops at the end of the shorter list.
+  #
+  # @param other [[Y]]
+  # @return [[(X, Y)]]
+  #
+  # @example
+  #   [1, 2, 3].zip(["a", "b", "c"])   # => [(1, "a"), (2, "b"), (3, "c")]
+  zip :> [Y] -> [(X, Y)]
+  let zip(@[], _) = []
+  let zip(@_, @[]) = []
+  let zip(@[x|xs], @[y|ys]) = [(x, y) | xs.zip(ys)]
+
+  # Flattens exactly one level of nesting. Only valid on lists of lists.
+  #
+  # @return [[Y]]
+  #
+  # @example
+  #   [[1, 2], [3, 4]].flatten   # => [1, 2, 3, 4]
+  flatten :> [X]
+  let flatten(@[]) = []
+  let flatten(@[xs|xss]) = xs + xss.flatten
+
+  # Returns the elements sorted in ascending natural order.
+  #
+  # @return [[X]]
+  #
+  # @example
+  #   [3, 1, 2].sort   # => [1, 2, 3]
+  sort :> [X]
+
+  # Returns the elements sorted using a custom comparator.
+  # +comp+ should return +true+ when its first argument should come before
+  # its second.
+  #
+  # @param comp [(X, X) -> Bool]
+  # @return [[X]]
+  #
+  # @example
+  #   [3, 1, 2].sort { |a, b| a > b }   # => [3, 2, 1]
+  sort :> ((X, X) -> Bool) -> [X]
+
+  # Converts the collection to another representation.
+  # Most commonly used to materialise a +Range+ into a +List+.
+  #
+  # @param type [Y]
+  # @return [Unknown]
+  #
+  # @example
+  #   (1..5).to(List)    # => [1, 2, 3, 4, 5]
+  #   "42".to(Integer)   # => 42
+  to :> Y -> Unknown
 end
 
 make [Number] do
+  # Sums all elements. Returns +0+ for an empty list.
+  #
+  # @return [Number]
+  #
+  # @example
+  #   [1, 2, 3].sum   # => 6
+  #   [].sum          # => 0
   sum :> Number
   let sum(@[]) = 0
   let sum(@[x|xs]) = x + xs.sum
 
+  # Multiplies all elements. Returns +1+ for an empty list.
+  #
+  # @return [Number]
+  #
+  # @example
+  #   [1, 2, 3].product   # => 6
+  #   [].product          # => 1
   product :> Number
   let product(@[]) = 1
   let product(@[x|xs]) = x * xs.product
 
-  # min : Number?
-  # let min(@[]) = None
-  # let min(@[x|xs]) do
-  #   return match xs.min do
-  #     None -> Just(x)
-  #     Just(y) -> Just(x < y then x else y)
-  #   end
-  # end
+  # Returns the smallest element wrapped in +Just+, or +None+ for an empty list.
+  #
+  # @return [Number?]
+  #
+  # @example
+  #   [3, 1, 2].min   # => Just(1)
+  #   [].min          # => None
+  min :> Number?
+  let min(@[]) = None
+  let min(@[x]) = Just(x)
+  let min(@[x|xs]) do
+    return match xs.min do
+      None    -> Just(x)
+      Just(y) -> Just(x < y then x else y)
+    end
+  end
 
-  # max : Number?
-  # let max(@[]) = None
-  # let max(@[x|xs]) do
-  #   return match xs.max do
-  #     None -> Just(x)
-  #     Just(y) -> Just(x > y then x else y)
-  #   end
-  # end
+  # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
+  #
+  # @return [Number?]
+  #
+  # @example
+  #   [3, 1, 2].max   # => Just(3)
+  #   [].max          # => None
+  max :> Number?
+  let max(@[]) = None
+  let max(@[x]) = Just(x)
+  let max(@[x|xs]) do
+    return match xs.max do
+      None    -> Just(x)
+      Just(y) -> Just(x > y then x else y)
+    end
+  end
 end
 
 make [String | Char] do
-  join :> This -> String
+  # Concatenates all elements, placing +sep+ between each adjacent pair.
+  # With no separator the elements are joined directly.
+  #
+  # @param sep [String]
+  # @return [String]
+  #
+  # @example
+  #   ["hello", "world", "kex"].join(", ")   # => "hello, world, kex"
+  #   ["a", "b", "c"].join                   # => "abc"
+  join :> String -> String
+  let join(@[]) = ""
+  let join(@[x], _) = x
+  let join(@[x|xs], sep) = x + sep + xs.join(sep)
+
+  join :> String
   let join(@[]) = ""
   let join(@[x]) = x
-  let join(@[x|xs]) = x + sep + xs.join(sep)
+  let join(@[x|xs]) = x + xs.join
 end

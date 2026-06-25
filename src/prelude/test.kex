@@ -1,0 +1,64 @@
+# Kex ships a minimal RSpec-style testing DSL: +describe+, +it+, and
+# +assert+. These are always in scope — no import needed.
+#
+# A test file typically looks like:
+#
+# @example
+#   describe "arithmetic" do
+#     it "adds numbers" do
+#       assert(1 + 1 == 2)
+#     end
+#
+#     it "multiplies numbers" do
+#       assert(3 * 4 == 12, "expected 12")
+#     end
+#   end
+#
+# Run with:
+#   kex my_test.kex
+#
+# Output uses ✓ / ✗ markers and nests by describe depth.
+
+# Groups related test cases under a label. Calls the block immediately.
+# +describe+ blocks may be nested. This is a foul function — it prints output.
+#
+# @param label [String]
+# @param block [Block]
+# @return [Unit]
+#
+# @example
+#   describe "String" do
+#     describe "count" do
+#       it "returns character count" do
+#         assert("hello".count == 5)
+#       end
+#     end
+#   end
+describe : (String, Block<Unit>) -> Unit
+
+# Defines a single test case. The block is run and any exception thrown
+# inside it (typically a failed +assert+) marks the test failed without
+# aborting the rest of the suite. This is a foul function — it prints output.
+#
+# @param label [String]
+# @param block [Block]
+# @return [Unit]
+#
+# @example
+#   it "returns true for even numbers" do
+#     assert(2.even?)
+#     assert(!3.even?)
+#   end
+it : (String, Block<Unit>) -> Unit
+
+# Throws a runtime error if +value+ is falsy, failing the enclosing +it+.
+# The optional +message+ is included in the failure output.
+#
+# @param value   [Bool]
+# @param message [String]  (optional)
+# @return [Bool]
+#
+# @example
+#   assert(42 == 42)
+#   assert("hello".count == 5, "count should be 5")
+assert : Bool -> Bool

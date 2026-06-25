@@ -1,0 +1,75 @@
+module Stream do
+  # Creates an infinite stream starting at +from+, applying +step+ to
+  # produce each successive element.
+  # Registered as +Sequence+ (uppercase) — called as +Stream.Sequence(...)+ via UFCS.
+  #
+  # @param from [A]       the first element
+  # @param step [A -> A]  produces the next element from the current one
+  # @return [Stream<A>]
+  #
+  # @example
+  #   let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
+  #   naturals.take(5)   # => [0, 1, 2, 3, 4]
+  #
+  #   let powers = Stream.Sequence(from: 1) { |n| n * 2 }
+  #   powers.take(6)     # => [1, 2, 4, 8, 16, 32]
+  #
+  # Sequence : (A, A -> A) -> Stream<A>   (UpperIdent — not expressible as a signature here)
+
+  # Creates an infinite stream seeded with +seed+, applying +f+ to each
+  # element to produce the next. Equivalent to +Sequence+; use whichever
+  # reads more clearly at the call site.
+  # Registered as +Iterate+ (uppercase) — called as +Stream.Iterate(...)+ via UFCS.
+  #
+  # @param seed [A]
+  # @param f    [A -> A]
+  # @return [Stream<A>]
+  #
+  # @example
+  #   let odds = Stream.Iterate(1) { |n| n + 2 }
+  #   odds.take(5)   # => [1, 3, 5, 7, 9]
+  #
+  # Iterate : (A, A -> A) -> Stream<A>   (UpperIdent — not expressible as a signature here)
+end
+
+make Stream<A> do
+  # Returns the first +n+ elements as a list. Evaluates the stream up to
+  # that point.
+  #
+  # @param n [Integer]
+  # @return [[A]]
+  #
+  # @example
+  #   Stream.Sequence(from: 1) { |n| n + 1 }.take(3)   # => [1, 2, 3]
+  take :> Integer -> [A]
+
+  # Skips the first +n+ elements and returns a new stream offset by +n+.
+  #
+  # @param n [Integer]
+  # @return [Stream<A>]
+  #
+  # @example
+  #   Stream.Sequence(from: 0) { |n| n + 1 }.drop(3).take(3)   # => [3, 4, 5]
+  drop :> Integer -> Stream<A>
+
+  # Returns a new stream applying +f+ to each element.
+  #
+  # @param f [A -> B]
+  # @return [Stream<B>]
+  #
+  # @example
+  #   Stream.Sequence(from: 1) { |n| n + 1 }.map { |n| n * n }.take(4)
+  #   # => [1, 4, 9, 16]
+  map :> (A -> B) -> Stream<B>
+
+  # Returns a new stream keeping only elements for which +pred+ is +true+.
+  # Note: consuming +n+ elements may require evaluating many upstream elements.
+  #
+  # @param pred [A -> Bool]
+  # @return [Stream<A>]
+  #
+  # @example
+  #   let evens = Stream.Sequence(from: 0) { |n| n + 1 }.filter { |n| n.even? }
+  #   evens.take(4)   # => [0, 2, 4, 6]
+  filter :> (A -> Bool) -> Stream<A>
+end

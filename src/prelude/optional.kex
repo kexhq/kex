@@ -1,29 +1,137 @@
-type Optional<X> = Just<X> | None
+# +X?+ is shorthand for +Optional<X>+.
+# +Just(x)+ wraps a value; +None+ represents absence.
+type Optional<X> = Just(X) | Nothing
 
-type Result<X, E> = Ok<X> | Error<E>
+# +Result<X, E>+ represents a computation that either succeeded with +Ok(x)+
+# or failed with +Error(e)+.
+type Result<X, E> = Ok(X) | Error(E)
 
-trait Okayable<X> do 
-  ok? :> Bool
+make Optional<X> do
+  # Returns +true+ if this optional contains a value.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Just(42).some?   # => true
+  #   None.some?       # => false
+  some? :> Bool
+  let some?(@Just(_)) = true
+  let some?(@None) = false
 
-  or :> X -> X
-end
+  # Returns +true+ if this optional is empty.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   None.none?       # => true
+  #   Just(42).none?   # => false
+  none? :> Bool
+  let none?(@Just(_)) = false
+  let none?(@None) = true
 
-make Optional<X>, implement: Okayable<X> do
-  ok? :> Bool
-  let ok?(@Just(_)) = true
-  let ok?(@None) = false
-
+  # Unwraps the value, returning +default+ when +None+.
+  #
+  # @param default [X]
+  # @return [X]
+  #
+  # @example
+  #   Just(42).or(0)   # => 42
+  #   None.or(0)       # => 0
   or :> X -> X
   let or(@Just(x), _) = x
   let or(@None, default) = default
+
+  # Applies +f+ to the wrapped value, leaving +None+ unchanged.
+  #
+  # @param f [X -> Y]
+  # @return [Y?]
+  #
+  # @example
+  #   Just(2).map { |x| x * 3 }   # => Just(6)
+  #   None.map { |x| x * 3 }      # => None
+  map :> (X -> Y) -> Y?
+  let map(@None, _) = None
+  let map(@Just(x), f) = Just(f(x))
+
+  # Chains optional-returning functions, short-circuiting on +None+.
+  #
+  # @param f [X -> Y?]
+  # @return [Y?]
+  #
+  # @example
+  #   Just(4).flatMap { |x| x > 0 then Just(x * 2) else None }   # => Just(8)
+  #   None.flatMap { |x| Just(x * 2) }                           # => None
+  flatMap :> (X -> Y?) -> Y?
+  let flatMap(@None, _) = None
+  let flatMap(@Just(x), f) = f(x)
 end
 
-make Result<X, E>, implement: Okayable<X> do
+make Result<X, E> do
+  # Returns +true+ if the result is +Ok+.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Ok(42).ok?      # => true
+  #   Error("!").ok?  # => false
   ok? :> Bool
   let ok?(@Ok(_)) = true
   let ok?(@Error(_)) = false
 
+  # Returns +true+ if the result is +Error+.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Error("oops").error?   # => true
+  #   Ok(42).error?          # => false
+  error? :> Bool
+  let error?(@Ok(_)) = false
+  let error?(@Error(_)) = true
+
+  # Unwraps the +Ok+ value, returning +default+ on +Error+.
+  #
+  # @param default [X]
+  # @return [X]
+  #
+  # @example
+  #   Ok(42).or(0)       # => 42
+  #   Error("!").or(0)   # => 0
   or :> X -> X
   let or(@Ok(x), _) = x
   let or(@Error(_), default) = default
+
+  # Applies +f+ to the +Ok+ value, passing +Error+ through unchanged.
+  #
+  # @param f [X -> Y]
+  # @return [Result<Y, E>]
+  #
+  # @example
+  #   Ok(2).map { |x| x * 3 }      # => Ok(6)
+  #   Error("oops").map { |x| x }   # => Error("oops")
+  map :> (X -> Y) -> Result<Y, E>
+  let map(@Error(e), _) = Error(e)
+  let map(@Ok(x), f) = Ok(f(x))
+
+  # Chains result-returning functions, propagating +Error+.
+  #
+  # @param f [X -> Result<Y, E>]
+  # @return [Result<Y, E>]
+  #
+  # @example
+  #   Ok(4).flatMap { |x| x > 0 then Ok(x * 2) else Error("neg") }   # => Ok(8)
+  flatMap :> (X -> Result<Y, E>) -> Result<Y, E>
+  let flatMap(@Error(e), _) = Error(e)
+  let flatMap(@Ok(x), f) = f(x)
+
+  # Converts to +Optional+, discarding the error value on failure.
+  #
+  # @return [X?]
+  #
+  # @example
+  #   Ok(42).toOptional        # => Just(42)
+  #   Error("oops").toOptional # => None
+  toOptional :> X?
+  let toOptional(@Ok(x)) = Just(x)
+  let toOptional(@Error(_)) = None
 end
