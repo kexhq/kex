@@ -313,8 +313,8 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
 
 auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
     if (!m_replMode && !block.synthetic) pushEnv();
-    // main(args) do ... end — bind the script's command-line arguments
-    // ([String], set via setArgs()) to the declared parameter, if any.
+    // main(args) or main(args, env) — bind script arguments and optionally
+    // the ENV snapshot (Map<String, String>) to the declared parameters.
     if (!block.params.empty()) {
         std::vector<ValuePtr> elems;
         for (const auto& arg : m_scriptArgs) elems.push_back(Value::string(arg));
@@ -324,6 +324,12 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
             matchPattern(**param.pattern, argsValue);
         } else if (param.name) {
             m_env->define(*param.name, argsValue);
+        }
+        if (block.params.size() >= 2) {
+            auto envValue = m_globalEnv->get("ENV");
+            if (!envValue) { envValue = std::make_shared<Value>(); envValue->data = MapValue{}; }
+            const auto& envParam = block.params[1];
+            if (envParam.name) m_env->define(*envParam.name, envValue);
         }
     }
     ValuePtr result;

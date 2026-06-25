@@ -1,0 +1,7 @@
+main(args, env) do
+  IO.printLine("args count: ${args.count}")
+  IO.printLine("has PATH? ${env.has?("PATH")}")
+  IO.printLine("env count > 0? ${env.count > 0}")
+  let logLevel = env.get("KEX_EXAMPLE_LOG_LEVEL", "info")
+  IO.printLine("log level: ${logLevel}")
+end
