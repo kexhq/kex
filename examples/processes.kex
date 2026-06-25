@@ -41,6 +41,13 @@ foul fetchAll(ids: [Int]) -> [Result<User, Error>] do
   return tasks.map { |t| t.await(timeout: 5000) }
 end
 
+record AppConfig do
+  dbUrl : String
+  port  : Integer
+end
+
+let config = AppConfig { dbUrl: "postgres://localhost/app", port: 8080 }
+
 # Supervision tree
 foul startApp do
   Supervisor.start(strategy: :one_for_one) do

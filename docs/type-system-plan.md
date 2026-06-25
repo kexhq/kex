@@ -1,15 +1,11 @@
 # Kex Type System Plan
 
-Status (2026-06-25): phases 1, 2 (bignum half only), 3, 4, 4.5, and 5
-(scoped) are implemented. Phase 6 was attempted as a 6a audit (rounds 1
-and 2) and a 6b round (this session): `kex --check` now passes all 30
-example files except 4 with genuinely undefined identifiers in illustrative
-pseudocode (`closures.kex` users/words/strings/items, `maps.kex` users,
-`processes.kex` config, `real_world.kex` router) — zero checker false
-positives. Gating `kex run` on a clean check is now viable with a narrow
-allow-list or by fixing those 4 examples. Phase 7 untouched. See the
-per-phase notes in Rollout phases for exactly what shipped vs. was scoped
-out. Originally written 2026-06-23.
+Status (2026-06-26): phases 1, 2 (bignum half only), 3, 4, 4.5, 5
+(scoped), and 6 are implemented. `kex run` now gates on `kex --check` by
+default (zero checker false positives across all 30 example files); use
+`--no-check` to skip. Phase 7 untouched. See the per-phase notes in
+Rollout phases for exactly what shipped vs. was scoped out. Originally
+written 2026-06-23.
 
 ## Problem
 
@@ -849,7 +845,13 @@ running the whole pipeline. Concretely:
      produces this when params are unannotated — that's the right safe
      default until 5c adds the real tie-break, not a bug to "fix" by
      erroring.
-6. **NOT YET VIABLE — two 6a audit rounds done, false-positive rate much
+6. **DONE. `kex run` gates on `kex --check`; `--no-check` skips.**
+   Two 6a audit rounds and a 6b round (prior session + this session)
+   brought checker false positives to zero across all 30 example files;
+   all genuinely-undefined pseudocode references in `processes.kex` and
+   `real_world.kex` fixed. `--strict` flag replaced by making checking the
+   default; `--no-check` is the new escape hatch. Original note follows:
+   **NOT YET VIABLE — two 6a audit rounds done, false-positive rate much
    lower but not zero.** The actual blocker turned out not to be phase 2
    (the bignum half landed cleanly, see above) but the false-positive rate
    of `kex check` itself — running it over every example for the first

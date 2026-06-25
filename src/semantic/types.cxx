@@ -210,9 +210,20 @@ auto typeToString(const TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+// TupleType{} (empty tuple, from parsing `()` in a type annotation) and
+// PrimitiveType{Unit} (from Type::unit() in stdlib signatures) represent
+// the same concept. Normalize both to Unit before comparing.
+static auto isUnit(const TypePtr& t) -> bool {
+    if (!t) return false;
+    if (auto* p = std::get_if<PrimitiveType>(&t->kind)) return p->kind == PrimitiveType::Unit;
+    if (auto* tup = std::get_if<TupleType>(&t->kind)) return tup->elements.empty();
+    return false;
+}
+
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     if (!a || !b) return false;
     if (a.get() == b.get()) return true;
+    if (isUnit(a) && isUnit(b)) return true;
 
     return std::visit([&b](const auto& at) -> bool {
         using AT = std::decay_t<decltype(at)>;

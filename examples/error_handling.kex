@@ -4,7 +4,7 @@ type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 
 let parseInt(s: String) -> Result<Int, ParseError> do
   return Error(EmptyInput) if s.empty?
-  return BuiltIn.parseInt(s).mapError { |_| InvalidFormat(s) }
+  return Integer.parse(s).mapError { |_| InvalidFormat(s) }
 end
 
 let parsePort(s: String) -> Result<Int, ParseError> do

@@ -621,7 +621,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto varType = lookupVar(node.name);
             if (varType && !std::holds_alternative<UnknownType>(varType->kind) &&
                 !std::holds_alternative<TypeVar>(varType->kind)) {
-                if (!typesEqual(varType, valueType) &&
+                if (!argMatchesParam(valueType, varType) &&
                     !std::holds_alternative<UnknownType>(valueType->kind) &&
                     !std::holds_alternative<TypeVar>(valueType->kind)) {
                     typeMismatch(expr.location, varType, valueType);
@@ -994,6 +994,35 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         auto* argOpt = std::get_if<OptionalType>(&argType->kind);
         return argOpt && argMatchesParam(argOpt->inner, paramOpt->inner);
     }
+    // FunctionType param — e.g. `(T-1) -> Bool` vs `(T81) -> Bool`. Without
+    // this branch both sides fall to typesEqual which fails on mismatched
+    // TypeVar ids even though both are permissive. Recurse into params and
+    // result so lambda arguments to map/filter/each pass the checker.
+    if (auto* paramFn = std::get_if<FuncType>(&paramType->kind)) {
+        auto* argFn = std::get_if<FuncType>(&argType->kind);
+        if (!argFn) return isPermissive(argType);
+        if (argFn->params.size() == paramFn->params.size()) {
+            for (size_t i = 0; i < paramFn->params.size(); i++) {
+                if (!argMatchesParam(argFn->params[i], paramFn->params[i])) return false;
+            }
+            return argMatchesParam(argFn->result, paramFn->result);
+        }
+        // Curried arg: `(A) -> (B) -> C` matches `(A, B) -> C`.
+        // Haskell-style annotations write multi-arg callbacks as `B -> A -> B`;
+        // the stdlib signatures use multi-param FuncType.
+        if (argFn->params.size() == 1 && paramFn->params.size() > 1) {
+            if (auto* inner = std::get_if<FuncType>(&argFn->result->kind)) {
+                if (inner->params.size() == paramFn->params.size() - 1) {
+                    if (!argMatchesParam(argFn->params[0], paramFn->params[0])) return false;
+                    for (size_t i = 0; i < inner->params.size(); i++) {
+                        if (!argMatchesParam(inner->params[i], paramFn->params[i + 1])) return false;
+                    }
+                    return argMatchesParam(inner->result, paramFn->result);
+                }
+            }
+        }
+        return false;
+    }
     // UnionType param (e.g. type alias `Level = :a | :b | :c`) — arg
     // matches if it matches any branch of the union.
     if (auto* paramUnion = std::get_if<UnionType>(&paramType->kind)) {
@@ -1055,6 +1084,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     for (const auto& argType : argTypes) {
         if (auto* named = std::get_if<NamedType>(&argType->kind); named && named->name == "This") {
             return Type::unknown();
+        }
+    }
+
+    // Namespace call heuristic: `BuiltIn.foo(x)` or any call where the
+    // receiver resolves to Unknown (an undefined namespace sentinel like
+    // `BuiltIn`). The UFCS desugaring adds the receiver as argTypes[0], but
+    // if the receiver is Unknown and no overload matches the full arity while
+    // overloads DO match with the receiver dropped, treat it as a plain
+    // function call through a namespace — drop argTypes[0] and re-check.
+    if (!argTypes.empty() &&
+        (std::holds_alternative<UnknownType>(argTypes[0]->kind) ||
+         std::holds_alternative<TypeVar>(argTypes[0]->kind))) {
+        bool anyFullArityMatch = false;
+        bool anyDroppedArityMatch = false;
+        for (const auto& sig : *sigs) {
+            if (sig.params.size() == argTypes.size()) anyFullArityMatch = true;
+            if (sig.params.size() == argTypes.size() - 1) anyDroppedArityMatch = true;
+        }
+        if (!anyFullArityMatch && anyDroppedArityMatch) {
+            return checkCall(name, {argTypes.begin() + 1, argTypes.end()}, loc);
         }
     }
 

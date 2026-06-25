@@ -155,12 +155,14 @@ type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 
 let parseInt(s: String) -> Result<Int, ParseError> do
   return Error(EmptyInput) if s.empty?
-  return BuiltIn.parseInt(s).mapError { |_| InvalidFormat(s) }
+
+  return Integer.parse(s).mapError { |_| InvalidFormat(s) }
 end
 
 let parsePort(s: String) -> Result<Int, ParseError> do
   let n = parseInt(s)?
   return Error(Overflow) if n > 65535
+
   return Ok(n)
 end
 
@@ -326,8 +328,8 @@ make test           # Run C++ unit tests
 make spec           # Run executable language specs
 make parse          # Parse all examples
 make repl           # Start the interactive REPL
-make run F=file     # Run a .kex file
-make check F=file         # Run semantic analysis
+make run F=file     # Run a .kex file (type-checks first; use --no-check to skip)
+make check F=file         # Run semantic analysis only
 make check-prelude        # Type-check all src/prelude/*.kex files
 make install              # Install build/kex to /usr/local/bin/kex
 make uninstall      # Remove the installed binary
