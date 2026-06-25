@@ -3,8 +3,8 @@
 let ages = { "alice": 30, "bob": 25, "charlie": 35 }
 
 # Bracket access returns Optional
-let aliceAge = ages["alice"]   # -> Int? = Just(30)
-let unknown = ages["dave"]      # -> Int? = None
+let aliceAge = ages["alice"]   # Just(30)
+let unknown = ages["dave"]     # None
 
 # Map operations (immutable — return new maps)
 let updated = ages.put("dave", 28)
@@ -12,26 +12,32 @@ let removed = ages.delete("bob")
 let hasAlice = ages.has?("alice")   # true
 
 let keys = ages.keys       # ["alice", "bob", "charlie"]
-let values = ages.values   # [30, 25, 35]
-
-# Map destructuring
-let { "alice": a, "bob": b } = ages
+let vals = ages.values     # [30, 25, 35]
 
 # Atom-keyed maps
 let config = { host: "localhost", port: 8080, debug: true }
-let { host, port } = config
-
-# Iteration
-let descriptions = ages.map { |name, age| "${name} is ${age}" }
-
-# Building maps
-let userMap = users.reduce({}) do |map, user|
-  map.put(user.id, user)
-end
+let cfgHost = config[:host]
+let cfgPort = config[:port]
 
 # Nested maps
 let nested = {
   "db": { host: "localhost", port: 5432 },
   "cache": { host: "localhost", port: 6379 }
 }
-let dbHost = nested["db"].map(&.host)   # -> String? = Just("localhost")
+let dbConfig = nested["db"]
+
+# Building a lookup table via reduce
+let words = ["kex", "is", "fast"]
+let wordLengths = words.reduce({}) do |map, word|
+  map.put(word, word.count)
+end
+
+main do
+  IO.printLine("alice age: ${aliceAge}")
+  IO.printLine("dave age (unknown): ${unknown}")
+  IO.printLine("has alice: ${hasAlice}")
+  IO.printLine("keys count: ${keys.count}")
+  IO.printLine("host: ${cfgHost}, port: ${cfgPort}")
+  IO.printLine("db config: ${dbConfig}")
+  IO.printLine("word lengths: ${wordLengths}")
+end

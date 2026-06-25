@@ -13,11 +13,11 @@ kex> 1 + 2
 kex> let name = "John"
 => "John" : String
 
-kex> name.length
+kex> name.count
 => 4 : Int
 
 kex> name.
-# tab completion shows: .length .upcase .downcase .split .trim .reverse ...
+# tab completion shows: .count .upperCase .lowerCase .split .trim .reverse ...
 ```
 
 ### Features

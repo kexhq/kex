@@ -2,8 +2,8 @@
 
 ## Primitives
 
-- `Int` — integer (alias for `Int64`; arbitrary-precision `Integer` is the default for a plain literal — see Numeric Tower below)
-- `Float64` — floating point (the default for a plain float literal, e.g. `3.14`)
+- `Integer` — arbitrary-precision integer (backed by GMP); the default for plain integer literals. `Int` is an alias for the fixed-width 64-bit form.
+- `Float` — 64-bit floating point (the default for a plain float literal, e.g. `3.14`)
 - `String` — UTF-8 string
 - `Char` — a single character, written `'a'`, `'\n'`, etc.
 - `Bool` — `true` or `false`
@@ -94,7 +94,7 @@ type Shape
   | Rectangle(Float, Float)
   | Triangle(Float, Float, Float)
 
-type Option<A> = Just(A) | None
+type Optional<A> = Just(A) | None
 type Result<A, E> = Ok(A) | Error(E)
 ```
 
@@ -108,7 +108,7 @@ let handle(input: String | Int) = ...
 
 ## Optional
 
-`String?` is sugar for `Optional<String>`. `None` is the empty value.
+`String?` is sugar for `Optional<String>`. `None` is the empty optional value.
 
 ```kex
 let email: String? = None

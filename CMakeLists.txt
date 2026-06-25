@@ -80,6 +80,23 @@ endif()
 
 enable_testing()
 
+# Type-check all .kex files under src/prelude/ using `kex --check`.
+# Run with: cmake --build build --target check-prelude
+file(GLOB PRELUDE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
+add_custom_target(check-prelude
+    COMMAND ${CMAKE_COMMAND} -E echo "Checking prelude..."
+    DEPENDS kex
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+)
+foreach(src IN LISTS PRELUDE_SOURCES)
+    cmake_path(GET src FILENAME fname)
+    add_custom_command(TARGET check-prelude POST_BUILD
+        COMMAND $<TARGET_FILE:kex> --check ${src}
+        COMMENT "  ${fname}"
+        VERBATIM
+    )
+endforeach()
+
 add_executable(lexer_test tests/lexer_test.cxx)
 target_link_libraries(lexer_test PRIVATE kex_lib)
 target_include_directories(lexer_test PRIVATE tests)

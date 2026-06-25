@@ -13,25 +13,15 @@ end
 let thunk = { 42 }
 let value = thunk()
 
-# Shorthand lambdas
-let names = users.map(&.name)
-let adults = users.filter(&.adult?)
-let lengths = words.map(&.count)
-let withGreeting = names.map(&.+ " hello")
-
-# &function — passing named function as closure
-let parsed = strings.map(&parseInt)
-let sorted = items.sort(&compare)
-
 # Closures capture values, not references
-let makeGreeter(prefix: String) -> (String -> String) do
+let makeGreeter(prefix: String) do
   return { |name| "${prefix}, ${name}!" }
 end
 
 let hello = makeGreeter("Hello")
 let hi = makeGreeter("Hi")
 hello("Alice")   # "Hello, Alice!"
-hi("World")     # "Hi, World!"
+hi("World")      # "Hi, World!"
 
 # Closures over var capture the value at creation time
 let demonstrate do
@@ -42,18 +32,15 @@ let demonstrate do
 end
 
 # Higher-order functions
-let compose(f: A -> B, g: B -> C) -> (A -> C) do
-  return { |x| g(f(x)) }
-end
+let applyTwice(f, x) = f(f(x))
+let addOne(n) = n + 1
+applyTwice(&addOne, 5)   # 7
 
-let doubleAndToString = compose(&.* 2, &.to(String))
-doubleAndToString(5)   # "10"
-
-# Functions accepting blocks
-let times(n: Int, block: Block<[()]>) do
-  (1..n).each { |_| block() }
-end
-
-times(3) do
-  IO.printLine("hello")
+main do
+  IO.printLine("doubled: ${doubled}")
+  IO.printLine("processed: ${processed}")
+  IO.printLine("thunk: ${value}")
+  IO.printLine(hello("Alice"))
+  IO.printLine(hi("World"))
+  IO.printLine("applyTwice: ${applyTwice(&addOne, 5)}")
 end

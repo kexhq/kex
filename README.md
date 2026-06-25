@@ -327,8 +327,9 @@ make spec           # Run executable language specs
 make parse          # Parse all examples
 make repl           # Start the interactive REPL
 make run F=file     # Run a .kex file
-make check F=file   # Run semantic analysis
-make install        # Install build/kex to /usr/local/bin/kex
+make check F=file         # Run semantic analysis
+make check-prelude        # Type-check all src/prelude/*.kex files
+make install              # Install build/kex to /usr/local/bin/kex
 make uninstall      # Remove the installed binary
 make clean          # Remove build artifacts
 ```
@@ -362,6 +363,7 @@ src/
   ast/          AST node types
   semantic/     Scope resolution, purity checking, type checking
   interpreter/  Tree-walk interpreter
+  prelude/      Kex-language specs for the built-in prelude (documented with RDoc-style comments)
   main.cxx      CLI entry point
 
 examples/       Language showcase files
@@ -400,13 +402,8 @@ Working today:
 - UFCS, `make` dispatch, `to` conversion convention, operator overloading
 - `@field`/`@method(...)` shorthand for `this` inside `make` blocks
 - `foul` purity boundaries, and local `var` mutation enforced at runtime (`let` bindings reject `=` and `!`)
+- Type system: arbitrary-precision `Integer` (GMP), numeric tower, type-directed dispatch, traits
 - REPL with optional readline support
-
-Test coverage:
-
-- 6 C++ test suites
-- 35 executable spec programs (`make spec`)
-- 29 examples parsed and executed in CI
 
 Planned or incomplete:
 
