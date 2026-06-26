@@ -874,7 +874,7 @@ auto Parser::parseExpr() -> ast::ExprPtr {
     // is parenthesized, which falls out for free: newlines are only
     // suppressed inside ( ), so a bare `then` on the next line simply
     // won't be there to match() below.
-    if (match(TokenType::Then)) {
+    if (!m_noThenExpr && match(TokenType::Then)) {
         auto thenElse = std::make_unique<ast::Expr>();
         thenElse->location = expr->location;
         auto thenExpr = parseAssignment();
@@ -1481,15 +1481,24 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     expect(TokenType::If, "Expected 'if'");
 
     m_noDoBlocks = true;
+    m_noThenExpr = true;
     auto condition = parseExpr();
     m_noDoBlocks = false;
-    skipNewlines();
+    m_noThenExpr = false;
+
+    // Accept `if cond then body end` (single-line) OR `if cond\n body\n end`
+    // (multiline). The `then` keyword acts as an inline body separator so
+    // that `if n == 0 then true else false end` parses correctly without
+    // consuming `then` as a ternary operator inside the condition.
+    bool inlineThen = match(TokenType::Then);
+    if (!inlineThen) skipNewlines();
 
     std::vector<ast::ExprPtr> thenBody;
     while (!check(TokenType::End) && !check(TokenType::Else) &&
            !check(TokenType::Elif) && !atEnd()) {
         thenBody.push_back(parseExpr());
-        skipNewlines();
+        if (!inlineThen) skipNewlines();
+        else break; // inline: only one expression in then-branch
     }
 
     std::vector<std::pair<ast::ExprPtr, std::vector<ast::ExprPtr>>> elifs;
@@ -1509,11 +1518,15 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
 
     std::optional<std::vector<ast::ExprPtr>> elseBody;
     if (match(TokenType::Else)) {
-        skipNewlines();
+        if (!inlineThen) skipNewlines();
         elseBody = std::vector<ast::ExprPtr>{};
-        while (!check(TokenType::End) && !atEnd()) {
-            elseBody->push_back(parseExpr());
-            skipNewlines();
+        if (inlineThen) {
+            elseBody->push_back(parseExpr()); // single expression before `end`
+        } else {
+            while (!check(TokenType::End) && !atEnd()) {
+                elseBody->push_back(parseExpr());
+                skipNewlines();
+            }
         }
     }
 

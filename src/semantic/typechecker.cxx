@@ -1,6 +1,8 @@
 #include "typechecker.hxx"
 #include "analyzer.hxx"
+#include <functional>
 #include <set>
+#include <unordered_set>
 
 namespace kex::semantic {
 
@@ -79,8 +81,156 @@ auto TypeChecker::check(const ast::Program& program,
     registerDeclaredSignatures(program);
     preRegisterFunctionSigs(program);
 
-    for (const auto& item : program.items) {
-        checkTopLevel(item);
+    // Topological ordering: check functions whose callees are all known
+    // before checking their callers, so forward-reference calls use real
+    // (post-body-check) result types rather than provisional TypeVars.
+    // SCCs (mutual recursion) are detected via back-edges in the DFS and
+    // kept in their original relative order — pre-registration handles them.
+    {
+        // Collect names of all user-defined top-level functions.
+        std::unordered_set<std::string> userFns;
+        for (const auto& item : program.items) {
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (n) userFns.insert(n->name);
+                }
+            }, item);
+        }
+
+        // Collect direct call-dependencies for each FunctionDef.
+        // Only user-defined function names are tracked (stdlib is always
+        // checked before any user function, so it never needs ordering).
+        std::function<void(const ast::Expr&, std::set<std::string>&)> collectCalls =
+            [&](const ast::Expr& e, std::set<std::string>& out) {
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+                    if (userFns.count(n.name)) out.insert(n.name);
+                    for (const auto& a : n.args) if (a) collectCalls(*a, out);
+                    if (n.block) collectCalls(**n.block, out);
+                } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                    if (userFns.count(n.method)) out.insert(n.method);
+                    if (n.receiver) collectCalls(*n.receiver, out);
+                    for (const auto& a : n.args) if (a) collectCalls(*a, out);
+                    if (n.block) collectCalls(**n.block, out);
+                } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
+                    if (n.left) collectCalls(*n.left, out);
+                    if (n.right) collectCalls(*n.right, out);
+                } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
+                    if (n.operand) collectCalls(*n.operand, out);
+                } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                    if (n.condition) collectCalls(*n.condition, out);
+                    for (const auto& ex : n.thenBody) if (ex) collectCalls(*ex, out);
+                    for (const auto& [c, b] : n.elifs) {
+                        if (c) collectCalls(*c, out);
+                        for (const auto& ex : b) if (ex) collectCalls(*ex, out);
+                    }
+                    if (n.elseBody)
+                        for (const auto& ex : *n.elseBody) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                    if (n.subject) collectCalls(*n.subject, out);
+                    for (const auto& cl : n.clauses) {
+                        if (cl.guard && *cl.guard) collectCalls(**cl.guard, out);
+                        if (cl.body) collectCalls(*cl.body, out);
+                    }
+                } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+                    if (n.value) collectCalls(*n.value, out);
+                } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
+                    if (n.value) collectCalls(*n.value, out);
+                } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+                    if (n.value) collectCalls(*n.value, out);
+                } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+                    if (n.condition) collectCalls(*n.condition, out);
+                    if (n.thenExpr) collectCalls(*n.thenExpr, out);
+                    if (n.elseExpr) collectCalls(*n.elseExpr, out);
+                } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
+                    if (n.expr) collectCalls(*n.expr, out);
+                    if (n.condition) collectCalls(*n.condition, out);
+                } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
+                    if (n.value) collectCalls(*n.value, out);
+                } else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
+                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+                    if (n.condition) collectCalls(*n.condition, out);
+                    for (const auto& ex : n.body) if (ex) collectCalls(*ex, out);
+                } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
+                    if (n.inner) collectCalls(*n.inner, out);
+                }
+            }, e.kind);
+        };
+
+        std::unordered_map<std::string, std::set<std::string>> deps;
+        // Keep a stable list of (name, item-index) for ordering.
+        std::vector<std::pair<std::string, size_t>> fnOrder;
+        for (size_t i = 0; i < program.items.size(); i++) {
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (!n) return;
+                    std::set<std::string> d;
+                    for (const auto& clause : n->clauses)
+                        for (const auto& ex : clause.body) if (ex) collectCalls(*ex, d);
+                    d.erase(n->name); // self-recursion: don't depend on self
+                    deps[n->name] = std::move(d);
+                    fnOrder.emplace_back(n->name, i);
+                }
+            }, program.items[i]);
+        }
+
+        // DFS post-order toposort (handles cycles via visited/onStack sets;
+        // back-edge functions are left in original order — pre-registration
+        // ensures they still type-check via shared TypeVar unification).
+        std::unordered_set<std::string> visited, onStack;
+        std::vector<std::string> sorted;
+        std::function<void(const std::string&)> dfs = [&](const std::string& name) {
+            if (visited.count(name)) return;
+            if (onStack.count(name)) return; // back edge: cycle, skip
+            onStack.insert(name);
+            if (deps.count(name))
+                for (const auto& dep : deps.at(name)) dfs(dep);
+            onStack.erase(name);
+            visited.insert(name);
+            sorted.push_back(name);
+        };
+        for (const auto& [name, _] : fnOrder) dfs(name);
+
+        // Build check order: sorted fn names first (deps before callers),
+        // then any non-fn top-level items in their original positions.
+        // We do two passes: first check all FunctionDefs in sorted order,
+        // then check everything else (types, records, make blocks, main).
+        std::unordered_set<std::string> fnChecked;
+        for (const auto& name : sorted) {
+            // Check ALL FunctionDefs with this name (handles overloaded functions
+            // sharing a name — both overloads must be checked and appended to the
+            // same overload set). Mark the name done only after the full sweep.
+            for (const auto& item : program.items) {
+                std::visit([&](const auto& n) {
+                    using T = std::decay_t<decltype(n)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                        if (n && n->name == name) checkTopLevel(item);
+                    }
+                }, item);
+            }
+            fnChecked.insert(name);
+        }
+        // Non-function items and any unchecked functions (e.g. inside modules).
+        for (const auto& item : program.items) {
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (n && !fnChecked.count(n->name)) checkTopLevel(item);
+                } else {
+                    checkTopLevel(item);
+                }
+            }, item);
+        }
     }
 
     popScope();

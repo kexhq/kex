@@ -109,6 +109,7 @@ private:
     std::string_view m_filename;
     int m_pos = 0;
     bool m_noDoBlocks = false;
+    bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
 };
 
 } // namespace kex

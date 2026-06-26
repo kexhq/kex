@@ -1345,6 +1345,62 @@ int main() {
         });
     });
 
+    describe("forward reference type checking", []() {
+        it("calling a forward-declared function with correct types passes", []() {
+            assertTrue(noErrors(
+                "let b(x) = a(x) + 1\n"
+                "let a(x) = x * 2\n"
+                "main do IO.printLine(b(5)) end\n"
+            ));
+        });
+
+        it("type error in forward-declared function call is detected", []() {
+            assertTrue(hasError(
+                "let b(x) = a(x) + \"world\"\n"
+                "let a(x) = x * 2\n"
+                "main do IO.printLine(b(5)) end\n"
+            , "Cannot add"));
+        });
+
+        it("mutual recursion type checks correctly", []() {
+            assertTrue(noErrors(
+                "let isEven(n) = if n == 0 then true else isOdd(n - 1) end\n"
+                "let isOdd(n) = if n == 0 then false else isEven(n - 1) end\n"
+                "main do IO.printLine(isEven(4)) end\n"
+            ));
+        });
+    });
+
+    describe("inline if-then-else", []() {
+        it("if cond then a else b end parses and runs", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let x = 5\n"
+                "  let r = if x > 3 then \"big\" else \"small\" end\n"
+                "  IO.printLine(r)\n"
+                "end\n"
+            ));
+        });
+
+        it("branch type mismatch in inline if-then-else is an error", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let x = 5\n"
+                "  let r = if x > 3 then \"big\" else 42 end\n"
+                "  IO.printLine(r)\n"
+                "end\n"
+            , "Branch type mismatch"));
+        });
+
+        it("mutual recursion with inline if-then-else works", []() {
+            assertTrue(noErrors(
+                "let isEven(n) = if n == 0 then true else isOdd(n - 1) end\n"
+                "let isOdd(n) = if n == 0 then false else isEven(n - 1) end\n"
+                "main do IO.printLine(isEven(4)) end\n"
+            ));
+        });
+    });
+
     describe("ShorthandLambda typing", []() {
         it("&.method on correct element type passes", []() {
             assertTrue(noErrors(

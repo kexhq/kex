@@ -1,7 +1,8 @@
 # Kex Type System Plan
 
 Status (2026-06-26): phases 1, 2 (bignum half only), 3, 4, 4.5, 5
-(scoped + 5a extended + lambda inference + make-block GenericType fix), 6,
+(scoped + 5a extended + lambda inference + make-block GenericType fix +
+5b topological ordering for forward references), 6,
 and 7 (infrastructure) are implemented. `kex run` gates on `kex --check`
 by default; use `--no-check` to skip (also honoured via `# kex: no-check`
 file pragma). spec suite is 78/78. All 30 examples checker-clean. See the per-phase notes in Rollout phases for exactly what
@@ -870,13 +871,19 @@ running the whole pipeline. Concretely:
      `skipCheck = true` if found — needed so files like
      `spec/mutating_calls.kex` and `spec/testing_dsl.spec.kex` run without
      the checker blocking intentionally-runtime-only behaviour). 78/78 specs.
-   - **5b. NOT STARTED.** Mutual recursion via call-graph grouping.
-     Build the call graph
-     across `FunctionDef`s, compute strongly-connected components, and
-     infer/generalize each SCC as a unit before moving on in topological
-     order — inferring functions one at a time in textual order breaks the
-     moment two functions call each other, which is ordinary in idiomatic
-     Kex (e.g. mutually recursive parser combinators).
+   - **5b. DONE (topological ordering).** Forward-reference type checking:
+     functions are now checked in dependency order (callee before caller)
+     via a DFS post-order toposort of the call graph. Back edges (cycles)
+     are handled by the existing pre-registration mechanism — mutually
+     recursive functions still type-check correctly via shared TypeVar
+     unification. Concretely: `let b(x) = a(x) + "world"; let a(x) = x * 2`
+     now correctly reports a type error on line 1 (Integer + String) rather
+     than silently passing. The call-graph traversal handles FunctionCall,
+     MethodCall, IfExpr, MatchExpr, Lambda, BinaryOp, etc. SCCs (e.g.
+     `isEven`/`isOdd`) still check correctly — the pre-registered TypeVar
+     result gets unified across both function bodies before either is
+     finalized, same as before. Overloaded functions (same name, multiple
+     FunctionDefs) are all checked as a group under one sorted slot.
    - **5c. NOT STARTED.** Parameter-type overload resolution
      (Function overloading
      section), once 5a/5b produce a real signature per function — resolving

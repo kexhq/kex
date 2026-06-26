@@ -296,6 +296,8 @@ if_expr
   = IF expr NEWLINE body END
   | IF expr NEWLINE body ELSE NEWLINE body END
   | IF expr NEWLINE body ( ELIF expr NEWLINE body )* ELSE NEWLINE body END
+  | IF expr THEN expr END                          (* single-line: if n == 0 then 0 end *)
+  | IF expr THEN expr ELSE expr END                (* single-line: if n == 0 then 0 else 1 end *)
   ;
 
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
