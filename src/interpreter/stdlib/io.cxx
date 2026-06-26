@@ -33,7 +33,7 @@ auto Evaluator::registerIOBuiltins() -> void {
         }
         m_output += "\n";
         std::cout << "\n";
-        return Value::none();
+        return Value::unit();
     });
 
     // IO.print(msg...) — like printLine but without the trailing newline.
@@ -43,7 +43,18 @@ auto Evaluator::registerIOBuiltins() -> void {
             m_output += str;
             std::cout << str;
         }
-        return Value::none();
+        return Value::unit();
+    });
+
+    // IO.inspect(val) — pretty-prints an inspect representation to stderr
+    // (colorful, with type name), then returns the value unchanged so it can
+    // be inserted mid-pipeline: `xs.map(&double).inspect.filter(&even?)`.
+    // Treated as pure for purity checking (compiler ignores it as a foul call).
+    reg("IO::inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::unit();
+        const auto& val = args[0];
+        std::cerr << val->inspect(true) << " \033[90m:\033[0m \033[36m" << val->typeName() << "\033[0m\n";
+        return val;
     });
 
     // IO.put/IO.putLine — aliases of IO.print/IO.printLine.
