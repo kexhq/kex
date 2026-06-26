@@ -742,6 +742,59 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
     return {};
 }
 
+auto TypeChecker::resolveArgHints(const std::string& name,
+                                   const std::vector<TypePtr>& argTypes,
+                                   size_t slArgIdx) -> std::vector<TypePtr> {
+    const std::vector<Signature>* sigs = m_stdlib.lookup(name);
+    if (!sigs) {
+        auto it = m_userSignatures.find(name);
+        if (it != m_userSignatures.end()) sigs = &it->second;
+    }
+    if (!sigs) return {};
+
+    for (const auto& sig : *sigs) {
+        if (sig.params.size() != argTypes.size()) continue;
+        if (slArgIdx >= sig.params.size()) continue;
+        auto* funcParam = std::get_if<FuncType>(&sig.params[slArgIdx]->kind);
+        if (!funcParam) continue;
+
+        // All non-SL positions must match.
+        bool allMatch = true;
+        for (size_t i = 0; i < argTypes.size(); i++) {
+            if (i == slArgIdx) continue;
+            if (!argMatchesParam(argTypes[i], sig.params[i])) { allMatch = false; break; }
+        }
+        if (!allMatch) continue;
+
+        // Build generic substitution from the concrete args.
+        std::unordered_map<int, TypePtr> sub;
+        for (size_t i = 0; i < argTypes.size(); i++) {
+            if (i == slArgIdx) continue;
+            const auto& sigP = sig.params[i];
+            const auto& argT = resolve(argTypes[i]);
+            if (auto* tv = std::get_if<TypeVar>(&sigP->kind); tv && tv->id < 0)
+                sub.emplace(tv->id, argT);
+            else if (auto* lt = std::get_if<ListType>(&sigP->kind))
+                if (auto* tv2 = std::get_if<TypeVar>(&lt->element->kind); tv2 && tv2->id < 0)
+                    if (auto* argLt = std::get_if<ListType>(&argT->kind))
+                        sub.emplace(tv2->id, resolve(argLt->element));
+        }
+
+        auto applySubst = [&](const TypePtr& t) -> TypePtr {
+            if (auto* tv = std::get_if<TypeVar>(&t->kind)) {
+                auto it2 = sub.find(tv->id);
+                if (it2 != sub.end()) return it2->second;
+            }
+            return t;
+        };
+
+        std::vector<TypePtr> hints;
+        for (const auto& p : funcParam->params) hints.push_back(applySubst(p));
+        return hints;
+    }
+    return {};
+}
+
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
@@ -772,6 +825,24 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         auto bodyType = inferBody(lam->body);
         popScope();
         return Type::func(std::move(paramTypes), resolve(bodyType));
+    }
+    if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
+        TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
+        if (std::holds_alternative<TypeVar>(paramType->kind) ||
+            std::holds_alternative<UnknownType>(paramType->kind))
+            paramType = freshTypeVar();
+        TypePtr resultType;
+        if (sl->kind == ast::ShorthandLambda::Kind::Function) {
+            resultType = checkCall(sl->name, {paramType}, blockExpr.location);
+        } else {
+            // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
+            std::vector<TypePtr> callArgs = {paramType};
+            for (const auto& arg : sl->args) {
+                if (arg) callArgs.push_back(inferExpr(*arg));
+            }
+            resultType = checkCall(sl->name, callArgs, blockExpr.location);
+        }
+        return Type::func({paramType}, resolve(resultType));
     }
     // BlockExpr (no param list) — infer body for side effects, stay permissive.
     inferExpr(blockExpr);
@@ -879,11 +950,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             std::vector<TypePtr> argTypes;
-            for (const auto& arg : node.args) {
-                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            // First pass: infer concrete args; record ShorthandLambda positions.
+            std::vector<size_t> slPositions;
+            for (size_t i = 0; i < node.args.size(); i++) {
+                if (node.args[i] &&
+                    std::holds_alternative<ast::ShorthandLambda>(node.args[i]->kind)) {
+                    argTypes.push_back(Type::unknown()); // placeholder
+                    slPositions.push_back(i);
+                } else {
+                    argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
+                }
             }
             for (const auto& [_, arg] : node.namedArgs) {
                 argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            }
+            // Second pass: infer ShorthandLambda args with type hints from sig.
+            for (size_t rawIdx : slPositions) {
+                auto hints = resolveArgHints(node.name, argTypes, rawIdx);
+                argTypes[rawIdx] = inferBlock(*node.args[rawIdx], hints);
             }
             if (node.block) {
                 auto hints = resolveBlockHints(node.name, argTypes);
@@ -894,11 +978,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             std::vector<TypePtr> argTypes;
             argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
-            for (const auto& arg : node.args) {
-                argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            // First pass: infer concrete args; record ShorthandLambda positions.
+            std::vector<size_t> slPositions;
+            for (size_t i = 0; i < node.args.size(); i++) {
+                if (node.args[i] &&
+                    std::holds_alternative<ast::ShorthandLambda>(node.args[i]->kind)) {
+                    argTypes.push_back(Type::unknown()); // placeholder
+                    slPositions.push_back(1 + i); // +1 for receiver
+                } else {
+                    argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
+                }
             }
             for (const auto& [_, arg] : node.namedArgs) {
                 argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
+            }
+            // Second pass: infer ShorthandLambda args with type hints from sig.
+            for (size_t argIdx : slPositions) {
+                auto hints = resolveArgHints(node.method, argTypes, argIdx);
+                argTypes[argIdx] = inferBlock(*node.args[argIdx - 1], hints);
             }
             if (node.block) {
                 auto hints = resolveBlockHints(node.method, argTypes);
@@ -1131,6 +1228,21 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             }
             return resolve(thenType);
+        }
+        else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
+            // &.method → (T) -> result; T unknown until used in context.
+            auto paramType = freshTypeVar();
+            TypePtr resultType;
+            if (node.kind == ast::ShorthandLambda::Kind::Function) {
+                resultType = checkCall(node.name, {paramType}, expr.location);
+            } else {
+                std::vector<TypePtr> callArgs = {paramType};
+                for (const auto& arg : node.args) {
+                    if (arg) callArgs.push_back(inferExpr(*arg));
+                }
+                resultType = checkCall(node.name, callArgs, expr.location);
+            }
+            return Type::func({paramType}, resolve(resultType));
         }
         else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
             // Inside a make block, `this` / `@field` has the record type.

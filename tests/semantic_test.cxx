@@ -1345,5 +1345,47 @@ int main() {
         });
     });
 
+    describe("ShorthandLambda typing", []() {
+        it("&.method on correct element type passes", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let words = [\"hello world\", \"foo\"]\n"
+                "  let parts = words.map(&.split(\" \"))\n"
+                "  IO.printLine(parts.join(\", \"))\n"
+                "end\n"
+            ));
+        });
+
+        it("&.method on wrong element type is an error", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let nums = [1, 2, 3]\n"
+                "  let result = nums.map(&.split(\" \"))\n"
+                "  IO.printLine(result.join(\", \"))\n"
+                "end\n"
+            , "expects argument 1 to be String, but got Integer"));
+        });
+
+        it("&function on correct element type passes", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let nums = [1, 2, 3, 4]\n"
+                "  let evens = nums.filter(&even?)\n"
+                "  IO.printLine(evens.join(\", \"))\n"
+                "end\n"
+            ));
+        });
+
+        it("&function on wrong element type is an error", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let words = [\"a\", \"b\"]\n"
+                "  let evens = words.filter(&even?)\n"
+                "  IO.printLine(evens.join(\", \"))\n"
+                "end\n"
+            , "expects argument 1 to be Integer, but got String"));
+        });
+    });
+
     return runAll();
 }

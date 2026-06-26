@@ -1,0 +1,5 @@
+main do
+  let nums = [1, 2, 3]
+  let result = nums.map(&.split(" "))
+  IO.printLine(result.join(", "))
+end

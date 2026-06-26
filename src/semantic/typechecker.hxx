@@ -92,6 +92,12 @@ private:
     // types. Returns the resolved block param types, or empty if not found.
     auto resolveBlockHints(const std::string& name,
                            const std::vector<TypePtr>& nonBlockArgTypes) -> std::vector<TypePtr>;
+    // Like resolveBlockHints but for an inline ShorthandLambda at a specific arg index.
+    // Returns the FuncType param hints for that position, applying generic substitution
+    // from the other (already-known) arg types.
+    auto resolveArgHints(const std::string& name,
+                         const std::vector<TypePtr>& argTypes,
+                         size_t slArgIdx) -> std::vector<TypePtr>;
 
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
