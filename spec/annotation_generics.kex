@@ -1,0 +1,17 @@
+# Single uppercase letters in an annotation are type parameters (not
+# concrete types), so `identity : A -> A` works for any type.
+identity : A -> A
+let identity(x) = x
+
+pair : A -> B -> (A, B)
+let pair(a, b) = (a, b)
+
+even : Integer -> Bool
+let even(n) = n.even?
+
+main do
+  IO.printLine(identity(42))
+  IO.printLine(identity("hi"))
+  IO.printLine(even(4))
+  IO.printLine(even(7))
+end

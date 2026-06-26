@@ -1,0 +1,8 @@
+# A top-level type annotation's declared return type is verified against
+# the function body — a mismatch is a compile-time error, not a runtime one.
+wrong_return : Integer -> Integer
+let wrong_return(x) = "not an integer"
+
+main do
+  IO.printLine(wrong_return(1))
+end

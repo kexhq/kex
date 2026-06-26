@@ -1,0 +1,2 @@
+spec/error_annotation_return_type.kex:4:1: error: `wrong_return` declared to return Integer but body returns String
+Aborted: fix type errors before running (use --no-check to skip).
