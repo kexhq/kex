@@ -1,0 +1,14 @@
+# Mutually recursive functions: isEven calls isOdd and vice versa.
+# This also validates that && and || short-circuit (infinite recursion
+# without short-circuit once n passes 0).
+let isEven(n) = n == 0 || isOdd(n - 1)
+let isOdd(n) = n != 0 && isEven(n - 1)
+
+main do
+  IO.printLine(isEven(0))
+  IO.printLine(isEven(4))
+  IO.printLine(isEven(7))
+  IO.printLine(isOdd(1))
+  IO.printLine(isOdd(3))
+  IO.printLine(isOdd(8))
+end

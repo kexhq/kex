@@ -505,6 +505,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::none();
         }
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
+            // Short-circuit && and || before evaluating rhs.
+            if (node.op == TokenType::AmpAmp) {
+                auto left = node.left ? eval(*node.left) : Value::none();
+                if (!left || !left->isTrue()) return Value::boolean(false);
+                auto right = node.right ? eval(*node.right) : Value::none();
+                return Value::boolean(right && right->isTrue());
+            }
+            if (node.op == TokenType::PipePipe) {
+                auto left = node.left ? eval(*node.left) : Value::none();
+                if (left && left->isTrue()) return Value::boolean(true);
+                auto right = node.right ? eval(*node.right) : Value::none();
+                return Value::boolean(right && right->isTrue());
+            }
             auto left = node.left ? eval(*node.left) : Value::none();
             auto right = node.right ? eval(*node.right) : Value::none();
             return evalBinaryOp(node.op, left, right, expr.location);
