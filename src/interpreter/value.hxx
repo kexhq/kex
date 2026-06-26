@@ -14,7 +14,8 @@ namespace kex::interpreter {
 struct Value;
 using ValuePtr = std::shared_ptr<Value>;
 
-struct NoneValue {};
+struct NoneValue {};  // Kex `None` — the empty Optional
+struct UnitValue {};  // Kex `()` — void return from IO/effectful operations
 struct IntValue { int64_t value; };
 // The arbitrary-precision case of `Integer` — only ever constructed once a
 // value no longer fits in IntValue's int64_t (see integerResult/asInteger
@@ -61,6 +62,7 @@ struct LambdaValue {
 struct Value {
     std::variant<
         NoneValue,
+        UnitValue,
         IntValue,
         BigIntValue,
         FloatValue,
@@ -79,6 +81,7 @@ struct Value {
     > data;
 
     static auto none() -> ValuePtr;
+    static auto unit() -> ValuePtr;
     static auto integer(int64_t v) -> ValuePtr;
     static auto bigInteger(mpz_class v) -> ValuePtr;
     static auto floating(double v) -> ValuePtr;
@@ -94,6 +97,9 @@ struct Value {
     auto toString() const -> std::string;
     auto toRepr() const -> std::string;
     auto typeName() const -> std::string;
+    // Pretty-printed inspect representation (value only, no type suffix).
+    // Used by the REPL and IO.inspect. Pass colored=false to strip ANSI codes.
+    auto inspect(bool colored = true) const -> std::string;
 };
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;

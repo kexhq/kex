@@ -28,6 +28,22 @@ module IO do
   # Alias for +print+.
   put : String -> Unit
 
+  # Pretty-prints a colored inspect representation of +val+ to stderr,
+  # showing the value and its type (e.g. +42 : Int+, +None : None+,
+  # +Ok(5) : Ok+). Returns +val+ unchanged so it can be inserted into
+  # any pipeline without changing the result.
+  # Treated as pure by the compiler — purity checking ignores this call.
+  # In release builds this call and its argument are fully eliminated.
+  #
+  # @param val [A]  any value
+  # @return [A]     the same value, unchanged
+  #
+  # @example
+  #   IO.inspect(xs.first)                  # stderr: None : None
+  #   IO.inspect(user)                      # stderr: User { name: "Alice" } : User
+  #   xs.map(&double).inspect.filter(&even?)  # inspect mid-pipeline
+  inspect : A -> A
+
   # Reads one line from stdin. Returns +None+ at end-of-input.
   # This is a foul function — it reads from stdin.
   #
