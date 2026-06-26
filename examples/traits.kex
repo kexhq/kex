@@ -1,0 +1,94 @@
+# Traits — declare type contracts with optional default implementations.
+# `make Type, implement: Trait do ... end` satisfies the contract.
+# `make X, implement: TraitA, TraitB do ... end` satisfies multiple traits at once.
+
+# --- Basic trait with default method ---
+
+trait Describable do
+  describe : () -> String
+  let shout = this.describe.upperCase
+end
+
+record Circle do
+  radius : Float64
+end
+
+record Rectangle do
+  width  : Float64
+  height : Float64
+end
+
+make Circle, implement: Describable do
+  let describe = "Circle(r=" + @radius.to(String) + ")"
+end
+
+make Rectangle, implement: Describable do
+  let describe = "Rectangle(" + @width.to(String) + "x" + @height.to(String) + ")"
+  let shout = "BIG RECTANGLE"  # override default
+end
+
+# --- Multiple required methods + defaults ---
+
+type Comparison = Less | Equal | Greater
+
+trait Comparable do
+  compare : This -> Comparison
+  let lessThan?(other)    = this.compare(other) == Less
+  let greaterThan?(other) = this.compare(other) == Greater
+  let equalTo?(other)     = this.compare(other) == Equal
+end
+
+record Version do
+  major : Integer
+  minor : Integer
+  patch : Integer
+end
+
+make Version, implement: Describable, Comparable do
+  let describe = @major.to(String) + "." + @minor.to(String) + "." + @patch.to(String)
+
+  let compare(@{major: ma, minor: mi, patch: pa}, other) do
+    if ma < other.major
+      Less
+    elif ma > other.major
+      Greater
+    elif mi < other.minor
+      Less
+    elif mi > other.minor
+      Greater
+    elif pa < other.patch
+      Less
+    elif pa > other.patch
+      Greater
+    else
+      Equal
+    end
+  end
+end
+
+# --- Trait-constrained function ---
+
+foul printDescription(thing: Describable) do
+  IO.printLine(thing.describe)
+end
+
+main do
+  let c = Circle { radius: 5.0 }
+  let r = Rectangle { width: 3.0, height: 4.0 }
+
+  IO.printLine(c.describe)
+  IO.printLine(c.shout)    # default: uppercases describe
+  IO.printLine(r.describe)
+  IO.printLine(r.shout)    # overridden
+
+  printDescription(c)
+  printDescription(r)
+
+  let v1 = Version { major: 1, minor: 2, patch: 0 }
+  let v2 = Version { major: 1, minor: 3, patch: 0 }
+
+  IO.printLine(v1.describe)
+  IO.printLine(v1.lessThan?(v2))
+  IO.printLine(v2.greaterThan?(v1))
+  IO.printLine(v1.equalTo?(v1))
+end

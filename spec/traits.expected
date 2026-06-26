@@ -1,1 +1,7 @@
-trait check ok
+Player(Alice)
+PLAYER: ALICE
+42
+true
+Bot#7
+BOT#7
+false

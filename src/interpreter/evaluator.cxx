@@ -61,6 +61,8 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             execRecordDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
             execTypeDef(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+            execTraitDef(*node);
         }
     }, item);
 }
@@ -81,10 +83,23 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 execVisibilityBlock(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
+                execTraitDef(*node);
             }
             // CompiledBlock/UsingBlock: not implemented yet (separate,
             // larger features — metaprogramming and module imports).
         }, item);
+    }
+}
+
+auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
+    // Register default method implementations from the trait body.
+    // A `make X, implement: Trait` block that overrides a default registers
+    // its own function after this, which naturally shadows the default.
+    for (const auto& item : def.body) {
+        if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            execFunctionDef(**fn);
+        }
     }
 }
 

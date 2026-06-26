@@ -3,10 +3,12 @@
 
 trait Describable do
   describe : () -> String
+  let shout = this.describe.upperCase
 end
 
 trait Scorable do
   score : () -> Integer
+  let passing? = this.score > 0
 end
 
 record Player do
@@ -17,8 +19,38 @@ end
 make Player, implement: Describable, Scorable do
   let describe = "Player(${@name})"
   let score = @points
+  let shout = "PLAYER: " + @name.upperCase  # override default
+end
+
+record Bot do
+  id : Integer
+end
+
+make Bot, implement: Describable, Scorable do
+  let describe = "Bot#" + @id.to(String)
+  let score = 0
+  # uses default shout and passing?
 end
 
 main do
-  IO.printLine("trait check ok")
+  let p = Player { name: "Alice", points: 42 }
+  let b = Bot { id: 7 }
+
+  IO.printLine(p.describe)
+  IO.printLine(p.shout)
+  IO.printLine(p.score)
+  IO.printLine(p.passing?)
+
+  IO.printLine(b.describe)
+  IO.printLine(b.shout)
+  IO.printLine(b.passing?)
+
+  assert(p.describe == "Player(Alice)", "describe includes name")
+  assert(p.shout == "PLAYER: ALICE", "shout overridden")
+  assert(p.score == 42, "score from field")
+  assert(p.passing?, "positive score is passing")
+
+  assert(b.describe == "Bot#7", "bot describe")
+  assert(b.shout == "BOT#7", "bot uses default shout")
+  assert(!b.passing?, "zero score is not passing")
 end
