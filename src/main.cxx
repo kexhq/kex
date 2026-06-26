@@ -110,100 +110,7 @@ auto printAst(const kex::ast::Program& program) -> void {
 namespace color {
     constexpr auto reset   = "\033[0m";
     constexpr auto dim     = "\033[90m";
-    constexpr auto yellow  = "\033[33m";
-    constexpr auto green   = "\033[32m";
-    constexpr auto magenta = "\033[35m";
-    constexpr auto purple  = "\033[95m";
     constexpr auto cyan    = "\033[36m";
-}
-
-auto colorValue(const kex::interpreter::ValuePtr& val) -> std::string {
-    using namespace kex::interpreter;
-    return std::visit([](const auto& v) -> std::string {
-        using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, IntValue>)
-            return std::string(color::yellow) + std::to_string(v.value) + color::reset;
-        else if constexpr (std::is_same_v<T, FloatValue>) {
-            auto s = std::to_string(v.value);
-            auto dot = s.find('.');
-            if (dot != std::string::npos) {
-                auto last = s.find_last_not_of('0');
-                if (last == dot) last++;
-                s = s.substr(0, last + 1);
-            }
-            return std::string(color::yellow) + s + color::reset;
-        }
-        else if constexpr (std::is_same_v<T, StringValue>)
-            return std::string(color::green) + "\"" + v.value + "\"" + color::reset;
-        else if constexpr (std::is_same_v<T, CharValue>)
-            return std::string(color::green) + "'" + std::string(1, v.value) + "'" + color::reset;
-        else if constexpr (std::is_same_v<T, BoolValue>)
-            return std::string(color::magenta) + (v.value ? "true" : "false") + color::reset;
-        else if constexpr (std::is_same_v<T, NoneValue>)
-            return std::string(color::dim) + "None" + color::reset;
-        else if constexpr (std::is_same_v<T, AtomValue>)
-            return std::string(color::purple) + ":" + v.name + color::reset;
-        else if constexpr (std::is_same_v<T, ListValue>) {
-            std::string result = "[";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += colorValue(v.elements[i]);
-            }
-            return result + "]";
-        }
-        else if constexpr (std::is_same_v<T, TupleValue>) {
-            std::string result = "(";
-            for (size_t i = 0; i < v.elements.size(); i++) {
-                if (i > 0) result += ", ";
-                result += colorValue(v.elements[i]);
-            }
-            return result + ")";
-        }
-        else if constexpr (std::is_same_v<T, MapValue>) {
-            std::string result = "{ ";
-            for (size_t i = 0; i < v.entries.size(); i++) {
-                if (i > 0) result += ", ";
-                result += colorValue(v.entries[i].first) + ": " + colorValue(v.entries[i].second);
-            }
-            return result + " }";
-        }
-        else if constexpr (std::is_same_v<T, RangeValue>)
-            return std::string(color::yellow) + std::to_string(v.start) + color::reset
-                   + ".." + std::string(color::yellow) + std::to_string(v.end) + color::reset;
-        else if constexpr (std::is_same_v<T, StreamValue>)
-            return std::string(color::cyan) + "<Stream>" + color::reset;
-        else if constexpr (std::is_same_v<T, RecordValue>) {
-            // Positional constructor (Just(x), Ok(x), Number(n), ...): fields
-            // keyed "0", "1", ... — print as Name(v0, v1, ...), matching
-            // Value::toRepr()'s convention, instead of the raw field dump.
-            bool positional = !v.fields.empty();
-            for (size_t i = 0; positional && i < v.fields.size(); i++) {
-                if (v.fields.find(std::to_string(i)) == v.fields.end()) positional = false;
-            }
-            if (positional) {
-                std::string result = std::string(color::cyan) + v.typeName + color::reset + "(";
-                for (size_t i = 0; i < v.fields.size(); i++) {
-                    if (i > 0) result += ", ";
-                    result += colorValue(v.fields.at(std::to_string(i)));
-                }
-                return result + ")";
-            }
-            std::string result = std::string(color::cyan) + v.typeName + color::reset + " { ";
-            bool first = true;
-            for (const auto& [key, val] : v.fields) {
-                if (!first) result += ", ";
-                result += key + ": " + colorValue(val);
-                first = false;
-            }
-            return result + " }";
-        }
-        else if constexpr (std::is_same_v<T, FunctionValue>)
-            return std::string(color::dim) + "<function:" + v.name + ">" + color::reset;
-        else if constexpr (std::is_same_v<T, LambdaValue>)
-            return std::string(color::dim) + "<lambda>" + color::reset;
-        else
-            return "?";
-    }, val->data);
 }
 
 auto printUsage(const char* progName) -> void {
@@ -441,8 +348,8 @@ int main(int argc, char* argv[]) {
             };
 
             auto showResult = [&](const kex::interpreter::ValuePtr& result) {
-                if (result && !std::holds_alternative<kex::interpreter::NoneValue>(result->data)) {
-                    std::cout << color::dim << "=> " << color::reset << colorValue(result);
+                if (result && !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
+                    std::cout << color::dim << "=> " << color::reset << result->inspect(true);
                     if (showTypes) {
                         std::cout << " " << color::dim << ":" << color::reset
                                   << " " << color::cyan << result->typeName() << color::reset;

@@ -1,0 +1,4 @@
+spec/error_annotation_arg_type.kex:7:16: error: `add` expects argument 1 to be Integer, but got String
+
+add : Integer -> Integer -> Integer
+Aborted: fix type errors before running (use --no-check to skip).

@@ -1,11 +1,10 @@
 # Kex Type System Plan
 
 Status (2026-06-26): phases 1, 2 (bignum half only), 3, 4, 4.5, 5
-(scoped), and 6 are implemented. `kex run` now gates on `kex --check` by
-default (zero checker false positives across all 30 example files); use
-`--no-check` to skip. Phase 7 untouched. See the per-phase notes in
-Rollout phases for exactly what shipped vs. was scoped out. Originally
-written 2026-06-23.
+(scoped), 6, and 7 (infrastructure) are implemented. `kex run` gates on
+`kex --check` by default; use `--no-check` to skip. spec suite is 61/61.
+See the per-phase notes in Rollout phases for exactly what shipped vs.
+was scoped out. Originally written 2026-06-23.
 
 ## Problem
 
@@ -994,10 +993,15 @@ running the whole pipeline. Concretely:
      pseudocode (`closures.kex`, `maps.kex`, `processes.kex`,
      `real_world.kex`) — `kex check` correctly flags them. Wiring `kex
      check` into `kex run` (phase 6's actual goal) is now viable.
-7. **NOT STARTED, BLOCKED on phases 1-6 being load-bearing enough to be worth querying.**
-   Tooling consumers (LSP/formatter/lint) start querying the
-   `TypedProgram` map and signature table built in phases 1-4; no new
-   inference logic, just new front ends.
+7. **INFRASTRUCTURE DONE.** `TypeChecker::inferExpr` records every inferred
+   `TypePtr` into `m_typeMap[&expr]` before returning. Public API:
+   `typeOf(const ast::Expr*)` and `typeMap()`. `Analyzer` promotes
+   `TypeChecker` from a local variable to a `m_checker` member so the map
+   survives `analyze()`, and delegates both accessors. `main.cxx` gains a
+   `--types` flag that dumps the full map (sorted by source location) when
+   used with `--check`. Tooling consumers (LSP hover, formatter, REPL
+   completion) can now query the map directly — no new inference logic needed,
+   just new front ends reading from `analyzer.typeMap()`.
 
 This is the full rollout — there is no phase 8. Bidirectional checking
 and return-type overloading are explicitly out of scope (see Function

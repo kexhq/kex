@@ -7,6 +7,10 @@ auto Value::none() -> ValuePtr {
     return std::make_shared<Value>(Value{NoneValue{}});
 }
 
+auto Value::unit() -> ValuePtr {
+    return std::make_shared<Value>(Value{UnitValue{}});
+}
+
 auto Value::integer(int64_t v) -> ValuePtr {
     return std::make_shared<Value>(Value{IntValue{v}});
 }
@@ -68,6 +72,7 @@ auto Value::isTrue() const -> bool {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, BoolValue>) return v.value;
         if constexpr (std::is_same_v<T, NoneValue>) return false;
+        if constexpr (std::is_same_v<T, UnitValue>) return false;
         return true;
     }, data);
 }
@@ -76,6 +81,7 @@ auto Value::toString() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, NoneValue>) return "None";
+        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return std::to_string(v.value);
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) {
@@ -245,6 +251,7 @@ auto Value::typeName() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, NoneValue>) return "None";
+        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return "Int";
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
@@ -371,6 +378,124 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         }
         else return false;
     }, a->data);
+}
+
+auto Value::inspect(bool colored) const -> std::string {
+    // ANSI color helpers — applied only when colored=true.
+    auto c = [colored](const char* code) -> const char* {
+        return colored ? code : "";
+    };
+    constexpr auto reset   = "\033[0m";
+    constexpr auto dim     = "\033[90m";
+    constexpr auto yellow  = "\033[33m";
+    constexpr auto green   = "\033[32m";
+    constexpr auto magenta = "\033[35m";
+    constexpr auto purple  = "\033[95m";
+    constexpr auto cyan    = "\033[36m";
+
+    // Recursive helper — captures color mode.
+    std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
+        return std::visit([&](const auto& node) -> std::string {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, NoneValue>)
+                return std::string(c(dim)) + "None" + c(reset);
+            else if constexpr (std::is_same_v<T, UnitValue>)
+                return std::string(c(dim)) + "()" + c(reset);
+            else if constexpr (std::is_same_v<T, IntValue>)
+                return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
+            else if constexpr (std::is_same_v<T, BigIntValue>)
+                return std::string(c(yellow)) + node.value.get_str() + c(reset);
+            else if constexpr (std::is_same_v<T, FloatValue>) {
+                auto s = std::to_string(node.value);
+                auto dot = s.find('.');
+                if (dot != std::string::npos) {
+                    auto last = s.find_last_not_of('0');
+                    if (last == dot) last++;
+                    s = s.substr(0, last + 1);
+                }
+                return std::string(c(yellow)) + s + c(reset);
+            }
+            else if constexpr (std::is_same_v<T, StringValue>)
+                return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
+            else if constexpr (std::is_same_v<T, CharValue>)
+                return std::string(c(green)) + "'" + std::string(1, node.value) + "'" + c(reset);
+            else if constexpr (std::is_same_v<T, BoolValue>)
+                return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
+            else if constexpr (std::is_same_v<T, AtomValue>)
+                return std::string(c(purple)) + ":" + node.name + c(reset);
+            else if constexpr (std::is_same_v<T, ListValue>) {
+                // [Char] displays as a quoted string
+                bool allChars = !node.elements.empty();
+                for (const auto& el : node.elements)
+                    if (!std::holds_alternative<CharValue>(el->data)) { allChars = false; break; }
+                if (allChars) {
+                    std::string s;
+                    for (const auto& el : node.elements) s += std::get<CharValue>(el->data).value;
+                    return std::string(c(green)) + "\"" + s + "\"" + c(reset);
+                }
+                std::string result = "[";
+                for (size_t i = 0; i < node.elements.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += rec(*node.elements[i]);
+                }
+                return result + "]";
+            }
+            else if constexpr (std::is_same_v<T, TupleValue>) {
+                std::string result = "(";
+                for (size_t i = 0; i < node.elements.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += rec(*node.elements[i]);
+                }
+                return result + ")";
+            }
+            else if constexpr (std::is_same_v<T, MapValue>) {
+                std::string result = "{ ";
+                for (size_t i = 0; i < node.entries.size(); i++) {
+                    if (i > 0) result += ", ";
+                    result += rec(*node.entries[i].first) + ": " + rec(*node.entries[i].second);
+                }
+                return result + " }";
+            }
+            else if constexpr (std::is_same_v<T, RangeValue>) {
+                if (node.isChar) {
+                    return std::string(c(green)) + "'" + static_cast<char>(node.start) + "'" + c(reset)
+                           + ".." + std::string(c(green)) + "'" + static_cast<char>(node.end) + "'" + c(reset);
+                }
+                return std::string(c(yellow)) + std::to_string(node.start) + c(reset)
+                       + ".." + std::string(c(yellow)) + std::to_string(node.end) + c(reset);
+            }
+            else if constexpr (std::is_same_v<T, StreamValue>)
+                return std::string(c(dim)) + "<Stream>" + c(reset);
+            else if constexpr (std::is_same_v<T, RecordValue>) {
+                // Positional constructor (Just(x), Ok(x)): fields keyed "0", "1", ...
+                bool positional = !node.fields.empty();
+                for (size_t i = 0; positional && i < node.fields.size(); i++)
+                    if (node.fields.find(std::to_string(i)) == node.fields.end()) positional = false;
+                if (positional) {
+                    std::string result = std::string(c(cyan)) + node.typeName + c(reset) + "(";
+                    for (size_t i = 0; i < node.fields.size(); i++) {
+                        if (i > 0) result += ", ";
+                        result += rec(*node.fields.at(std::to_string(i)));
+                    }
+                    return result + ")";
+                }
+                std::string result = std::string(c(cyan)) + node.typeName + c(reset) + " { ";
+                bool first = true;
+                for (const auto& [key, val] : node.fields) {
+                    if (!first) result += ", ";
+                    result += key + ": " + rec(*val);
+                    first = false;
+                }
+                return result + " }";
+            }
+            else if constexpr (std::is_same_v<T, FunctionValue>)
+                return std::string(c(dim)) + "<function:" + node.name + ">" + c(reset);
+            else if constexpr (std::is_same_v<T, LambdaValue>)
+                return std::string(c(dim)) + "<lambda>" + c(reset);
+            else return "?";
+        }, v.data);
+    };
+    return rec(*this);
 }
 
 } // namespace kex::interpreter
