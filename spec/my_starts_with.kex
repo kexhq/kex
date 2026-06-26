@@ -1,0 +1,28 @@
+type HelloWorld = Underscore | Dash | Nope
+
+make String do
+  startsWith_ :> (HelloWorld, String)
+  let startsWith_(@['_' | rest]) = (Underscore, rest)
+  let startsWith_(@['-' | rest]) = (Dash, rest)
+  let startsWith_(@[]) = (Nope, "")
+end
+
+main do
+  let (hw, rest) = "__wooo".startsWith_
+  IO.printLine(hw)
+  IO.printLine(rest.startsWith_)
+  IO.printLine("".startsWith_)
+  IO.printLine("-wooo".startsWith_)
+
+  assert(hw == Underscore, "first char of \"__wooo\" should be Underscore")
+  assert(rest == "_wooo", "rest after first _ should be \"_wooo\"")
+  let (hw2, rest2) = rest.startsWith_
+  assert(hw2 == Underscore, "second _ also Underscore")
+  assert(rest2 == "wooo", "rest after second _ should be \"wooo\"")
+  let (nope_hw, nope_rest) = "".startsWith_
+  assert(nope_hw == Nope, "empty string should be Nope")
+  assert(nope_rest == "", "empty string rest should be empty")
+  let (dash_hw, dash_rest) = "-wooo".startsWith_
+  assert(dash_hw == Dash, "dash string should be Dash")
+  assert(dash_rest == "wooo", "dash rest should be \"wooo\"")
+end

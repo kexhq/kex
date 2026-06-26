@@ -97,10 +97,16 @@ auto Evaluator::registerStreamBuiltins() -> void {
             newStream->data = StreamValue{stream->generator, stream->offset + n->value};
             return newStream;
         }
+        auto* n = std::get_if<IntValue>(&args[1]->data);
+        if (!n) return Value::list({});
+        // String.drop — treat as char sequence
+        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
+            auto skip = std::min(static_cast<size_t>(n->value), str->value.size());
+            return Value::string(str->value.substr(skip));
+        }
         // List.drop
         auto* list = std::get_if<ListValue>(&args[0]->data);
-        auto* n = std::get_if<IntValue>(&args[1]->data);
-        if (!list || !n) return Value::list({});
+        if (!list) return Value::list({});
         auto skip = std::min(static_cast<size_t>(n->value), list->elements.size());
         std::vector<ValuePtr> result(list->elements.begin() + skip, list->elements.end());
         return Value::list(std::move(result));

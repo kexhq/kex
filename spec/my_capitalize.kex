@@ -1,0 +1,11 @@
+make String do
+  let myCapitalize(@[]) = ""
+  let myCapitalize(@[x | rest]) = x.upperCase + rest
+end
+
+main do
+  IO.printLine("hello".myCapitalize)
+  IO.printLine("WORLD".myCapitalize)
+  IO.printLine("".myCapitalize)
+  IO.printLine("HelloWorld".myCapitalize)
+end

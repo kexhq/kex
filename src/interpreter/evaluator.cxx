@@ -1362,18 +1362,40 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             return true;
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
-            auto* lv = std::get_if<ListValue>(&value->data);
-            if (!lv) return false;
-            if (pat.elements.empty() && !pat.rest) {
-                return lv->elements.empty();
+            // Strings are stored as StringValue but are semantically [Char],
+            // so a list pattern against a String treats it as a char sequence.
+            std::vector<ValuePtr> chars;
+            const std::vector<ValuePtr>* elements = nullptr;
+            if (auto* sv = std::get_if<StringValue>(&value->data)) {
+                chars.reserve(sv->value.size());
+                for (unsigned char c : sv->value)
+                    chars.push_back(Value::character(static_cast<char>(c)));
+                elements = &chars;
+            } else if (auto* lv = std::get_if<ListValue>(&value->data)) {
+                elements = &lv->elements;
+            } else {
+                return false;
             }
-            if (lv->elements.size() < pat.elements.size()) return false;
+            if (pat.elements.empty() && !pat.rest) {
+                return elements->empty();
+            }
+            if (elements->size() < pat.elements.size()) return false;
             for (size_t i = 0; i < pat.elements.size(); i++) {
-                if (!matchPattern(*pat.elements[i], lv->elements[i])) return false;
+                if (!matchPattern(*pat.elements[i], (*elements)[i])) return false;
             }
             if (pat.rest) {
-                std::vector<ValuePtr> rest(lv->elements.begin() + pat.elements.size(), lv->elements.end());
-                if (!matchPattern(**pat.rest, Value::list(std::move(rest)))) return false;
+                // Reconstruct tail: if original was a String, tail is also a String
+                if (std::get_if<StringValue>(&value->data)) {
+                    std::string tail;
+                    for (size_t i = pat.elements.size(); i < elements->size(); i++) {
+                        if (auto* cv = std::get_if<CharValue>(&(*elements)[i]->data))
+                            tail += cv->value;
+                    }
+                    if (!matchPattern(**pat.rest, Value::string(tail))) return false;
+                } else {
+                    std::vector<ValuePtr> rest(elements->begin() + pat.elements.size(), elements->end());
+                    if (!matchPattern(**pat.rest, Value::list(std::move(rest)))) return false;
+                }
             }
             return true;
         }

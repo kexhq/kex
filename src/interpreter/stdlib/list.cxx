@@ -24,7 +24,26 @@ auto Evaluator::registerListBuiltins() -> void {
     auto getElements = [rangeToList](const ValuePtr& val) -> std::vector<ValuePtr> {
         if (auto* list = std::get_if<ListValue>(&val->data)) return list->elements;
         if (auto* range = std::get_if<RangeValue>(&val->data)) return rangeToList(*range);
+        if (auto* str = std::get_if<StringValue>(&val->data)) {
+            std::vector<ValuePtr> chars;
+            chars.reserve(str->value.size());
+            for (unsigned char c : str->value)
+                chars.push_back(Value::character(static_cast<char>(c)));
+            return chars;
+        }
         return {};
+    };
+
+    // If every element is a Char, collapse to String — preserves String identity
+    // through map/filter/etc. so `"hello".map(&.upperCase)` returns a String.
+    auto repackChars = [](std::vector<ValuePtr> elems) -> ValuePtr {
+        std::string s;
+        s.reserve(elems.size());
+        for (const auto& e : elems) {
+            if (auto* cv = std::get_if<CharValue>(&e->data)) { s += cv->value; }
+            else return Value::list(std::move(elems));
+        }
+        return Value::string(std::move(s));
     };
 
     // to(Type) — universal conversion.
@@ -89,7 +108,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return args[0];
     });
 
-    reg("map", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("map", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -103,15 +122,16 @@ auto Evaluator::registerListBuiltins() -> void {
             }, 0};
             return newStream;
         }
+        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
         std::vector<ValuePtr> result;
         for (const auto& elem : elems) result.push_back(fn->native({elem}));
-        return Value::list(std::move(result));
+        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
-    reg("filter", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("filter", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -134,6 +154,7 @@ auto Evaluator::registerListBuiltins() -> void {
             }, 0};
             return newStream;
         }
+        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
@@ -141,11 +162,12 @@ auto Evaluator::registerListBuiltins() -> void {
         for (const auto& elem : elems) {
             if (fn->native({elem})->isTrue()) result.push_back(elem);
         }
-        return Value::list(std::move(result));
+        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
-    reg("reject", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("reject", [this, getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
+        bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::list({});
@@ -153,7 +175,7 @@ auto Evaluator::registerListBuiltins() -> void {
         for (const auto& elem : elems) {
             if (!fn->native({elem})->isTrue()) result.push_back(elem);
         }
-        return Value::list(std::move(result));
+        return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
     reg("reduce", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
@@ -208,6 +230,10 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("first", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
+        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
+            if (str->value.empty()) return Value::none();
+            return Value::record("Just", {{"0", Value::character(str->value[0])}});
+        }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
             return Value::record("Just", {{"0", list->elements[0]}});
@@ -217,6 +243,8 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("rest", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
+        if (auto* str = std::get_if<StringValue>(&args[0]->data))
+            return Value::string(str->value.size() <= 1 ? "" : str->value.substr(1));
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.size() <= 1) return Value::list({});
             return Value::list({list->elements.begin() + 1, list->elements.end()});
@@ -226,6 +254,10 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("last", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
+        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
+            if (str->value.empty()) return Value::none();
+            return Value::record("Just", {{"0", Value::character(str->value.back())}});
+        }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
             return Value::record("Just", {{"0", list->elements.back()}});
@@ -259,18 +291,28 @@ auto Evaluator::registerListBuiltins() -> void {
 
     reg("take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
+        auto n = std::get_if<IntValue>(&args[1]->data);
+        if (!n) return Value::list({});
+        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
+            auto cnt = std::min(static_cast<size_t>(n->value), str->value.size());
+            return Value::string(str->value.substr(0, cnt));
+        }
         auto* list = std::get_if<ListValue>(&args[0]->data);
-        auto* n = std::get_if<IntValue>(&args[1]->data);
-        if (!list || !n) return Value::list({});
+        if (!list) return Value::list({});
         auto cnt = std::min(static_cast<size_t>(n->value), list->elements.size());
         return Value::list({list->elements.begin(), list->elements.begin() + cnt});
     });
 
     reg("drop", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
+        auto n = std::get_if<IntValue>(&args[1]->data);
+        if (!n) return Value::list({});
+        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
+            auto skip = std::min(static_cast<size_t>(n->value), str->value.size());
+            return Value::string(str->value.substr(skip));
+        }
         auto* list = std::get_if<ListValue>(&args[0]->data);
-        auto* n = std::get_if<IntValue>(&args[1]->data);
-        if (!list || !n) return Value::list({});
+        if (!list) return Value::list({});
         auto skip = std::min(static_cast<size_t>(n->value), list->elements.size());
         return Value::list({list->elements.begin() + skip, list->elements.end()});
     });

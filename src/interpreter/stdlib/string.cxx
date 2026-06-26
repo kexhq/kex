@@ -108,6 +108,9 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     reg("upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
+        // Char -> Char (so map(&.upperCase) on a String round-trips back to String)
+        if (auto* cv = std::get_if<CharValue>(&args[0]->data))
+            return Value::character(static_cast<char>(std::toupper(cv->value)));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
         std::string result = str->value;
@@ -117,6 +120,9 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     reg("lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
+        // Char -> Char (so map(&.lowerCase) on a String round-trips back to String)
+        if (auto* cv = std::get_if<CharValue>(&args[0]->data))
+            return Value::character(static_cast<char>(std::tolower(cv->value)));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
         std::string result = str->value;

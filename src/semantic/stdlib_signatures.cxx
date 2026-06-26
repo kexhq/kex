@@ -71,15 +71,24 @@ auto SignatureTable::withStdlib() -> SignatureTable {
 
     // src/interpreter/stdlib/list.cxx
     sig("first", {Type::list(genA())}, Type::optional(genA()));
+    sig("first", {Type::string()},     Type::optional(Type::charT()));
     sig("last",  {Type::list(genA())}, Type::optional(genA()));
+    sig("last",  {Type::string()},     Type::optional(Type::charT()));
     sig("rest",  {Type::list(genA())}, Type::list(genA()));
+    sig("rest",  {Type::string()},     Type::string());
     sig("take",  {Type::list(genA()), Type::integer()}, Type::list(genA()));
+    sig("take",  {Type::string(),      Type::integer()}, Type::string());
     sig("drop",  {Type::list(genA()), Type::integer()}, Type::list(genA()));
+    sig("drop",  {Type::string(),      Type::integer()}, Type::string());
     sig("push",  {Type::list(genA()), genA()}, Type::list(genA()));
     sig("map",   {Type::list(genA()), Type::func({genA()}, genE())}, Type::list(genE()));
+    sig("map",   {Type::string(),     Type::func({Type::charT()}, Type::charT())}, Type::string());
     sig("filter",{Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::list(genA()));
+    sig("filter",{Type::string(),     Type::func({Type::charT()}, Type::boolean())}, Type::string());
     sig("reject",{Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::list(genA()));
+    sig("reject",{Type::string(),     Type::func({Type::charT()}, Type::boolean())}, Type::string());
     sig("each",  {Type::list(genA()), Type::func({genA()}, Type::unit())}, Type::unit());
+    sig("each",  {Type::string(),     Type::func({Type::charT()}, Type::unit())}, Type::unit());
     sig("each",  {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::unit())}, Type::unit());
     sig("reduce",{Type::list(genA()), genE(), Type::func({genE(), genA()}, genE())}, genE());
     sig("any?",  {Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::boolean());
@@ -108,12 +117,25 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("empty?", {Type::list(genA())}, Type::boolean());
     sig("empty?", {Type::string()}, Type::boolean());
     sig("has?",   {Type::map(genA(), genE()), genA()}, Type::boolean());
+    // at — element access by index
+    sig("at",     {Type::string(), Type::integer()}, Type::optional(Type::charT()));
+    sig("at",     {Type::list(genA()), Type::integer()}, Type::optional(genA()));
+    // find — first element matching predicate
+    sig("find",   {Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::optional(genA()));
+    // map operations
+    sig("get",    {Type::map(genA(), genE()), genA()}, Type::optional(genE()));
+    sig("put",    {Type::map(genA(), genE()), genA(), genE()}, Type::map(genA(), genE()));
+    sig("delete", {Type::map(genA(), genE()), genA()}, Type::map(genA(), genE()));
+    sig("keys",   {Type::map(genA(), genE())}, Type::list(genA()));
+    sig("values", {Type::map(genA(), genE())}, Type::list(genE()));
 
     // src/interpreter/stdlib/string.cxx
     sig("split",      {Type::string(), Type::string()}, Type::list(Type::string()));
     sig("trim",       {Type::string()}, Type::string());
     sig("upperCase",   {Type::string()}, Type::string());
-    sig("lowerCase", {Type::string()}, Type::string());
+    sig("upperCase",   {Type::charT()},  Type::charT());
+    sig("lowerCase",   {Type::string()}, Type::string());
+    sig("lowerCase",   {Type::charT()},  Type::charT());
     sig("reverse",    {Type::string()}, Type::string());
     sig("reverse",    {Type::list(genA())}, Type::list(genA()));
     sig("startsWith?", {Type::string(), Type::string()}, Type::boolean());
@@ -123,6 +145,10 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("printLine", {genA()}, Type::unit());
     sig("print",     {genA()}, Type::unit());
     sig("readLine",  {}, Type::string());
+    sig("inspect",   {genA()}, genA());  // passes value through, prints to stderr
+    // assert / it — test helpers
+    sig("assert",    {Type::boolean()}, Type::unit());
+    sig("assert",    {Type::boolean(), Type::string()}, Type::unit());
     // die — never returns (diverges), so typed as Void (bottom type)
     sig("die",       {Type::string()}, Type::voidType());
 
