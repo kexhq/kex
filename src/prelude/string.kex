@@ -123,6 +123,8 @@ make Char do
   #   '3'.digit?   # => true
   #   'a'.digit?   # => false
   digit? :> Bool
+  alpha? :> Bool
+  space? :> Bool
 
   # Returns +true+ if the character falls within the given range (inclusive).
   #

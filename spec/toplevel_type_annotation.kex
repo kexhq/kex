@@ -4,7 +4,7 @@
 double : Int -> Int
 let double(n) = n * 2
 
-minMax : [Int] -> (Int, Int)
+minMax : [Int] -> (Int?, Int?)
 let minMax(xs) = (xs.min, xs.max)
 
 main do

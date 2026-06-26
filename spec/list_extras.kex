@@ -1,0 +1,31 @@
+main do
+  # uniq
+  IO.printLine([1, 2, 3, 2, 1].uniq)
+  IO.printLine([1].uniq)
+  IO.printLine([].uniq)
+  IO.printLine("aabbcc".uniq)
+
+  # partition
+  let (evens, odds) = [1, 2, 3, 4, 5].partition { |n| n.modulo(2) == 0 }
+  IO.printLine(evens)
+  IO.printLine(odds)
+
+  let (big, small) = ["apple", "fig", "banana", "kiwi"].partition { |s| s.count > 4 }
+  IO.printLine(big)
+  IO.printLine(small)
+
+  # indexOf
+  IO.printLine([10, 20, 30].indexOf(20))
+  IO.printLine([10, 20, 30].indexOf(99))
+  IO.printLine(["a", "b", "c"].indexOf("b"))
+
+  # contains? on list
+  IO.printLine([1, 2, 3].contains?(2))
+  IO.printLine([1, 2, 3].contains?(9))
+
+  # contains? on range
+  IO.printLine((1..10).contains?(5))
+  IO.printLine((1..10).contains?(11))
+  IO.printLine(('a'..'z').contains?('m'))
+  IO.printLine(('a'..'z').contains?('Z'))
+end

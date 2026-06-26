@@ -163,8 +163,8 @@ int main() {
             auto output = runFile("examples/stdlib_demo.kex");
             assertTrue(output.find("sorted: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]") != std::string::npos);
             assertTrue(output.find("sum: 55") != std::string::npos);
-            assertTrue(output.find("min: 1") != std::string::npos);
-            assertTrue(output.find("max: 10") != std::string::npos);
+            assertTrue(output.find("min: Just(1)") != std::string::npos);
+            assertTrue(output.find("max: Just(10)") != std::string::npos);
         });
 
         it("higher-order functions work", []() {

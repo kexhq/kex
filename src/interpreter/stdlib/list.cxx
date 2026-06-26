@@ -343,6 +343,42 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
+    reg("uniq", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        auto elems = getElements(args[0]);
+        std::vector<ValuePtr> result;
+        for (const auto& elem : elems) {
+            bool found = false;
+            for (const auto& seen : result)
+                if (valuesEqual(seen, elem)) { found = true; break; }
+            if (!found) result.push_back(elem);
+        }
+        if (std::get_if<StringValue>(&args[0]->data)) return repackChars(result);
+        return Value::list(std::move(result));
+    });
+
+    reg("partition", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::tuple({Value::list({}), Value::list({})});
+        auto elems = getElements(args[0]);
+        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+        if (!fn || !fn->native) return Value::tuple({Value::list({}), Value::list({})});
+        std::vector<ValuePtr> yes, no;
+        for (const auto& elem : elems) {
+            if (fn->native({elem})->isTrue()) yes.push_back(elem);
+            else no.push_back(elem);
+        }
+        return Value::tuple({Value::list(std::move(yes)), Value::list(std::move(no))});
+    });
+
+    reg("indexOf", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto elems = getElements(args[0]);
+        for (size_t i = 0; i < elems.size(); i++)
+            if (valuesEqual(elems[i], args[1]))
+                return Value::record("Just", {{"0", Value::integer(static_cast<int64_t>(i))}});
+        return Value::none();
+    });
+
     reg("any?", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto elems = getElements(args[0]);
@@ -420,7 +456,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Less") result = elems[i];
-        return result;
+        return Value::record("Just", {{"0", result}});
     });
 
     reg("max", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
@@ -430,17 +466,43 @@ auto Evaluator::registerListBuiltins() -> void {
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Greater") result = elems[i];
-        return result;
+        return Value::record("Just", {{"0", result}});
     });
 
     reg("sum", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto elems = getElements(args[0]);
-        int64_t total = 0;
-        for (const auto& elem : elems) {
-            if (auto* i = std::get_if<IntValue>(&elem->data)) total += i->value;
+        bool hasFloat = false;
+        for (const auto& e : elems)
+            if (std::holds_alternative<FloatValue>(e->data)) { hasFloat = true; break; }
+        if (hasFloat) {
+            double total = 0.0;
+            for (const auto& e : elems) {
+                if (auto* f = std::get_if<FloatValue>(&e->data)) total += f->value;
+                else if (auto* i = std::get_if<IntValue>(&e->data)) total += static_cast<double>(i->value);
+            }
+            return Value::floating(total);
         }
+        int64_t total = 0;
+        for (const auto& e : elems)
+            if (auto* i = std::get_if<IntValue>(&e->data)) total += i->value;
         return Value::integer(total);
+    });
+
+    reg("flatMap", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::list({});
+        auto elems = getElements(args[0]);
+        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+        if (!fn || !fn->native) return Value::list({});
+        std::vector<ValuePtr> result;
+        for (const auto& elem : elems) {
+            auto mapped = fn->native({elem});
+            if (auto* inner = std::get_if<ListValue>(&mapped->data))
+                for (const auto& e : inner->elements) result.push_back(e);
+            else
+                result.push_back(mapped);
+        }
+        return Value::list(std::move(result));
     });
 }
 

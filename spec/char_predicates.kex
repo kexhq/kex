@@ -1,0 +1,23 @@
+main do
+  # digit?
+  IO.printLine('5'.digit?)
+  IO.printLine('a'.digit?)
+
+  # alpha?
+  IO.printLine('a'.alpha?)
+  IO.printLine('Z'.alpha?)
+  IO.printLine('3'.alpha?)
+  IO.printLine(' '.alpha?)
+
+  # space?
+  IO.printLine(' '.space?)
+  IO.printLine('\n'.space?)
+  IO.printLine('\t'.space?)
+  IO.printLine('a'.space?)
+
+  # useful with filter
+  let word = "h3ll0 w0rld"
+  IO.printLine(word.filter(&alpha?))
+  IO.printLine(word.filter(&digit?))
+  IO.printLine("  trim me  ".filter { |c| !c.space? })
+end

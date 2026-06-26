@@ -99,21 +99,31 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("count", {Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::integer());
     sig("sort",  {Type::list(genA())}, Type::list(genA()));
     sig("sort",  {Type::list(genA()), Type::func({genA(), genA()}, Type::boolean())}, Type::list(genA()));
-    sig("min",   {Type::list(genA())}, genA());
-    sig("max",   {Type::list(genA())}, genA());
+    sig("min",   {Type::list(genA())}, Type::optional(genA()));
+    sig("max",   {Type::list(genA())}, Type::optional(genA()));
     sig("sum",   {Type::list(numberLike())}, numberLike());
+    sig("flatMap", {Type::list(genA()), Type::func({genA()}, Type::list(genE()))}, Type::list(genE()));
     sig("join",  {Type::list(Type::string()), Type::string()}, Type::string());
     sig("join",  {Type::list(Type::string())}, Type::string());
     sig("join",  {Type::string(), Type::string()}, Type::string());
     sig("join",  {Type::string()}, Type::string());
-    sig("flatten",{Type::list(Type::list(genA()))}, Type::list(genA()));
+    sig("flatten",  {Type::list(Type::list(genA()))}, Type::list(genA()));
+    sig("uniq",     {Type::list(genA())}, Type::list(genA()));
+    sig("uniq",     {Type::string()}, Type::string());
+    sig("partition",{Type::list(genA()), Type::func({genA()}, Type::boolean())},
+                    Type::tuple({Type::list(genA()), Type::list(genA())}));
+    sig("indexOf",  {Type::list(genA()), genA()}, Type::optional(Type::integer()));
     sig("zip",   {Type::list(genA()), Type::list(genE())},
                  Type::list(Type::tuple({genA(), genE()})));
     sig("to",    {genA(), genE()}, Type::unknown());
 
     // src/interpreter/stdlib/string.cxx, list.cxx, map.cxx
     sig("digit?",  {Type::charT()}, Type::boolean());
+    sig("alpha?",  {Type::charT()}, Type::boolean());
+    sig("space?",  {Type::charT()}, Type::boolean());
     sig("contains?", {Type::string(), Type::string()}, Type::boolean());
+    sig("contains?", {Type::list(genA()), genA()}, Type::boolean());
+    sig("contains?", {Type::named("Range", {genA()}), genA()}, Type::boolean());
     sig("empty?", {Type::list(genA())}, Type::boolean());
     sig("empty?", {Type::string()}, Type::boolean());
     sig("has?",   {Type::map(genA(), genE()), genA()}, Type::boolean());

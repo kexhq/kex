@@ -36,6 +36,20 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
+    reg("alpha?", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("alpha? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+    });
+
+    reg("space?", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(std::isspace(static_cast<unsigned char>(c->value)) != 0);
+    });
+
     reg("startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);
@@ -54,9 +68,26 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     reg("contains?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
+        // String.contains?(substr)
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* sub = std::get_if<StringValue>(&args[1]->data);
         if (str && sub) return Value::boolean(str->value.find(sub->value) != std::string::npos);
+        // [A].contains?(elem)
+        auto* list = std::get_if<ListValue>(&args[0]->data);
+        if (list) {
+            for (const auto& elem : list->elements)
+                if (valuesEqual(elem, args[1])) return Value::boolean(true);
+            return Value::boolean(false);
+        }
+        // Range.contains?(n)
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data)) {
+            if (auto* i = std::get_if<IntValue>(&args[1]->data))
+                return Value::boolean(i->value >= range->start && i->value <= range->end);
+            if (auto* c = std::get_if<CharValue>(&args[1]->data))
+                return Value::boolean(range->isChar &&
+                    static_cast<int64_t>(c->value) >= range->start &&
+                    static_cast<int64_t>(c->value) <= range->end);
+        }
         return Value::boolean(false);
     });
 
