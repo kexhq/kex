@@ -1500,6 +1500,7 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
         if (!inlineThen) skipNewlines();
         else break; // inline: only one expression in then-branch
     }
+    if (inlineThen) skipNewlines(); // allow elif/else on next line after inline body
 
     std::vector<std::pair<ast::ExprPtr, std::vector<ast::ExprPtr>>> elifs;
     while (match(TokenType::Elif)) {
@@ -1517,6 +1518,7 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
             if (!elifInline) skipNewlines();
             else break;
         }
+        if (elifInline) skipNewlines(); // allow elif/else/end on next line
         elifs.push_back({std::move(elifCond), std::move(elifBody)});
     }
 

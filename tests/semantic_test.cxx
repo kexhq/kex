@@ -1343,6 +1343,49 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("trait default method using this is callable without override", []() {
+            assertTrue(noErrors(
+                "trait Describable do\n"
+                "  describe : () -> String\n"
+                "  let shout = this.describe.upperCase\n"
+                "end\n"
+                "record Dog do name : String end\n"
+                "make Dog, implement: Describable do\n"
+                "  let describe = \"Dog: \" + @name\n"
+                "end\n"
+                "main do\n"
+                "  let d = Dog { name: \"Rex\" }\n"
+                "  IO.printLine(d.describe)\n"
+                "  IO.printLine(d.shout)\n"
+                "end\n"
+            ));
+        });
+
+        it("overriding a trait default method uses the override", []() {
+            assertTrue(noErrors(
+                "trait Describable do\n"
+                "  describe : () -> String\n"
+                "  let shout = this.describe.upperCase\n"
+                "end\n"
+                "record Cat do name : String end\n"
+                "make Cat, implement: Describable do\n"
+                "  let describe = \"Cat: \" + @name\n"
+                "  let shout = \"MEOW: \" + @name.upperCase\n"
+                "end\n"
+                "main do IO.printLine(Cat { name: \"w\" }.shout) end\n"
+            ));
+        });
+
+        it("Comparison stdlib type: Less/Equal/Greater are available without declaration", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  IO.printLine(Less)\n"
+                "  IO.printLine(Equal)\n"
+                "  IO.printLine(Greater)\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("forward reference type checking", []() {
@@ -1404,6 +1447,18 @@ int main() {
             assertTrue(noErrors(
                 "let classify(n) = if n > 0 then \"pos\" elif n < 0 then \"neg\" else \"zero\" end\n"
                 "main do IO.printLine(classify(5)) end\n"
+            ));
+        });
+
+        it("inline elif chains can span multiple lines", []() {
+            assertTrue(noErrors(
+                "let classify(n) do\n"
+                "  if n < 0 then :neg\n"
+                "  elif n == 0 then :zero\n"
+                "  else :pos\n"
+                "  end\n"
+                "end\n"
+                "main do IO.printLine(classify(0)) end\n"
             ));
         });
 

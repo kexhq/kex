@@ -23,6 +23,17 @@ auto Evaluator::registerAdtConstructors() -> void {
     regCtor1("Ok");
     regCtor1("Error");
 
+    // Comparison — the result type of Comparable.compare.
+    // Less/Equal/Greater are zero-arg constructors (atoms), same as None.
+    auto regAtom = [this](const std::string& name) {
+        auto val = std::make_shared<Value>();
+        val->data = AtomValue{name};
+        m_globalEnv->define(name, val);
+    };
+    regAtom("Less");
+    regAtom("Equal");
+    regAtom("Greater");
+
     // ok?/error? (Result<T, E> = Ok(T) | Error(E)) and some?/none?
     // (T? = Just(T) | None) — predicates over the same prelude ADTs, so
     // callers don't have to hand-write a `match` just to ask "did this

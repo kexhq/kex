@@ -41,6 +41,10 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtVariants["Result"] = {"Ok", "Error"};
     m_adtOfConstructor["Ok"] = "Result";
     m_adtOfConstructor["Error"] = "Result";
+    m_adtVariants["Comparison"] = {"Less", "Equal", "Greater"};
+    m_adtOfConstructor["Less"] = "Comparison";
+    m_adtOfConstructor["Equal"] = "Comparison";
+    m_adtOfConstructor["Greater"] = "Comparison";
 
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {

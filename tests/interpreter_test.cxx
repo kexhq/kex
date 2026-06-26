@@ -1180,5 +1180,61 @@ int main() {
         });
     });
 
+    describe("Interpreter — Traits and Comparable", []() {
+        it("trait default method is callable", []() {
+            auto result = run(
+                "trait Describable do\n"
+                "  describe : () -> String\n"
+                "  let shout = this.describe.upperCase\n"
+                "end\n"
+                "record Dog do name : String end\n"
+                "make Dog, implement: Describable do\n"
+                "  let describe = \"Dog: \" + @name\n"
+                "end\n"
+                "main do Dog { name: \"rex\" }.shout end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value, std::string("DOG: REX"));
+        });
+
+        it("Less/Equal/Greater are stdlib builtins", []() {
+            auto result = run("main do Less end\n");
+            assertEqual(std::get<AtomValue>(result->data).name, std::string("Less"));
+        });
+
+        it("sort uses Comparable.compare for user records", []() {
+            auto result = run(
+                "trait Comparable do\n"
+                "  compare : This -> Comparison\n"
+                "end\n"
+                "record Box do n : Integer end\n"
+                "make Box, implement: Comparable do\n"
+                "  let compare(other) do\n"
+                "    if @n < other.n then Less\n"
+                "    elif @n > other.n then Greater\n"
+                "    else Equal\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let sorted = [Box { n: 3 }, Box { n: 1 }, Box { n: 2 }].sort\n"
+                "  sorted.map { |b| b.n }\n"
+                "end\n"
+            );
+            auto& list = std::get<ListValue>(result->data).elements;
+            assertEqual(std::get<IntValue>(list[0]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list[1]->data).value, int64_t(2));
+            assertEqual(std::get<IntValue>(list[2]->data).value, int64_t(3));
+        });
+
+        it("sort with custom comparator (2-arg form)", []() {
+            auto result = run(
+                "main do [3, 1, 4, 1, 5].sort { |a, b| a > b } end\n"
+            );
+            auto& list = std::get<ListValue>(result->data).elements;
+            assertEqual(std::get<IntValue>(list[0]->data).value, int64_t(5));
+            assertEqual(std::get<IntValue>(list[1]->data).value, int64_t(4));
+        });
+    });
+
     return runAll();
 }

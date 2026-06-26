@@ -300,6 +300,8 @@ if_expr
   | IF expr THEN expr ELSE expr END                                    (* single-line with else *)
   | IF expr THEN expr ( ELIF expr THEN expr )+ END                    (* single-line multi-branch *)
   | IF expr THEN expr ( ELIF expr THEN expr )+ ELSE expr END          (* single-line multi-branch with else *)
+  (* mixed: inline-then bodies, each branch on its own line *)
+  | IF expr THEN expr NEWLINE ( ELIF expr THEN expr NEWLINE )* ( ELSE expr NEWLINE )? END
   ;
 
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;

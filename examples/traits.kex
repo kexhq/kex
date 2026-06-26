@@ -19,17 +19,16 @@ record Rectangle do
 end
 
 make Circle, implement: Describable do
-  let describe = "Circle(r=" + @radius.to(String) + ")"
+  let describe = "Circle(r=${@radius})"
 end
 
 make Rectangle, implement: Describable do
-  let describe = "Rectangle(" + @width.to(String) + "x" + @height.to(String) + ")"
+  let describe = "Rectangle(${@width}x${@height})"
   let shout = "BIG RECTANGLE"  # override default
 end
 
 # --- Multiple required methods + defaults ---
-
-type Comparison = Less | Equal | Greater
+# Comparison (Less | Equal | Greater) and Comparable are stdlib builtins.
 
 trait Comparable do
   compare : This -> Comparison
@@ -45,20 +44,20 @@ record Version do
 end
 
 make Version, implement: Describable, Comparable do
-  let describe = @major.to(String) + "." + @minor.to(String) + "." + @patch.to(String)
+  let describe = "${@major}.${@minor}.${@patch}"
 
-  let compare(@{major: ma, minor: mi, patch: pa}, other) do
-    if ma < other.major
+  let compare(other) do
+    if @major < other.major
       Less
-    elif ma > other.major
+    elif @major > other.major
       Greater
-    elif mi < other.minor
+    elif @minor < other.minor
       Less
-    elif mi > other.minor
+    elif @minor > other.minor
       Greater
-    elif pa < other.patch
+    elif @patch < other.patch
       Less
-    elif pa > other.patch
+    elif @patch > other.patch
       Greater
     else
       Equal

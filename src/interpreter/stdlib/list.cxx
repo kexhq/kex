@@ -365,21 +365,48 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::boolean(true);
     });
 
-    reg("sort", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("sort", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
-        auto* list = std::get_if<ListValue>(&args[0]->data);
-        if (!list) return Value::list({});
-        auto sorted = list->elements;
-        std::sort(sorted.begin(), sorted.end(), [](const ValuePtr& a, const ValuePtr& b) {
-            if (auto* ai = std::get_if<IntValue>(&a->data))
-                if (auto* bi = std::get_if<IntValue>(&b->data)) return ai->value < bi->value;
-            if (auto* af = std::get_if<FloatValue>(&a->data))
-                if (auto* bf = std::get_if<FloatValue>(&b->data)) return af->value < bf->value;
-            if (auto* as = std::get_if<StringValue>(&a->data))
-                if (auto* bs = std::get_if<StringValue>(&b->data)) return as->value < bs->value;
-            return false;
-        });
-        return Value::list(std::move(sorted));
+        auto elems = getElements(args[0]);
+        if (elems.empty()) return Value::list({});
+
+        // 2-arg form: sort(list, comparator) where comparator(a,b) -> Bool
+        if (args.size() >= 2) {
+            auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+            if (fn && fn->native) {
+                auto cmp = fn->native;
+                std::stable_sort(elems.begin(), elems.end(),
+                    [&cmp](const ValuePtr& a, const ValuePtr& b) {
+                        return cmp({a, b})->isTrue();
+                    });
+                return Value::list(std::move(elems));
+            }
+        }
+
+        // 1-arg form: natural order for primitives, or Comparable.compare for records
+        SourceLocation loc{};
+        std::stable_sort(elems.begin(), elems.end(),
+            [this, &loc](const ValuePtr& a, const ValuePtr& b) {
+                if (auto* ai = std::get_if<IntValue>(&a->data))
+                    if (auto* bi = std::get_if<IntValue>(&b->data)) return ai->value < bi->value;
+                if (auto* af = std::get_if<FloatValue>(&a->data))
+                    if (auto* bf = std::get_if<FloatValue>(&b->data)) return af->value < bf->value;
+                if (auto* as = std::get_if<StringValue>(&a->data))
+                    if (auto* bs = std::get_if<StringValue>(&b->data)) return as->value < bs->value;
+                if (auto* ac = std::get_if<CharValue>(&a->data))
+                    if (auto* bc = std::get_if<CharValue>(&b->data)) return ac->value < bc->value;
+                // Comparable.compare fallback: try TypeName::compare (UFCS mangled)
+                if (auto* rec = std::get_if<RecordValue>(&a->data)) {
+                    auto mangled = rec->typeName + "::compare";
+                    try {
+                        auto result = callFunction(mangled, {a, b}, {}, loc);
+                        if (auto* atom = std::get_if<AtomValue>(&result->data))
+                            return atom->name == "Less";
+                    } catch (...) {}
+                }
+                return false;
+            });
+        return Value::list(std::move(elems));
     });
 
     reg("min", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
