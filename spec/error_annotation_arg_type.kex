@@ -1,0 +1,8 @@
+# A declared annotation constrains call sites — passing the wrong type
+# is caught statically before the program runs.
+add : Integer -> Integer -> Integer
+let add(a, b) = a + b
+
+main do
+  IO.printLine(add("oops", 1))
+end
