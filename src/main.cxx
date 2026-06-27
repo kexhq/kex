@@ -51,6 +51,94 @@ auto isIdentChar(char c) -> bool {
     return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
 }
 
+// ===== TypeExpr pretty-printer =====
+
+auto typeExprToString(const kex::ast::TypeExpr& te) -> std::string;
+
+auto typeNameToString(const kex::ast::TypeName& tn) -> std::string {
+    std::string r;
+    for (size_t i = 0; i < tn.parts.size(); i++) {
+        if (i) r += ".";
+        r += tn.parts[i];
+    }
+    return r;
+}
+
+auto typeExprToString(const kex::ast::TypeExpr& te) -> std::string {
+    return std::visit([](const auto& node) -> std::string {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, kex::ast::TypeName>) {
+            return typeNameToString(node);
+        } else if constexpr (std::is_same_v<T, kex::ast::GenericType>) {
+            std::string r = typeNameToString(node.name) + "<";
+            for (size_t i = 0; i < node.args.size(); i++) {
+                if (i) r += ", ";
+                if (node.args[i]) r += typeExprToString(*node.args[i]);
+            }
+            return r + ">";
+        } else if constexpr (std::is_same_v<T, kex::ast::FunctionType>) {
+            std::string l = node.param ? typeExprToString(*node.param) : "?";
+            std::string r = node.result ? typeExprToString(*node.result) : "?";
+            return l + " -> " + r;
+        } else if constexpr (std::is_same_v<T, kex::ast::TupleType>) {
+            std::string r = "(";
+            for (size_t i = 0; i < node.elements.size(); i++) {
+                if (i) r += ", ";
+                if (node.elements[i]) r += typeExprToString(*node.elements[i]);
+            }
+            return r + ")";
+        } else if constexpr (std::is_same_v<T, kex::ast::ListType>) {
+            return "[" + (node.element ? typeExprToString(*node.element) : "?") + "]";
+        } else if constexpr (std::is_same_v<T, kex::ast::MapType>) {
+            std::string k = node.key ? typeExprToString(*node.key) : "?";
+            std::string v = node.value ? typeExprToString(*node.value) : "?";
+            return "Map<" + k + ", " + v + ">";
+        } else if constexpr (std::is_same_v<T, kex::ast::UnionType>) {
+            std::string l = node.left ? typeExprToString(*node.left) : "?";
+            std::string r = node.right ? typeExprToString(*node.right) : "?";
+            return l + " | " + r;
+        } else if constexpr (std::is_same_v<T, kex::ast::OptionalType>) {
+            return (node.inner ? typeExprToString(*node.inner) : "?") + "?";
+        } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
+            return "Block<" + (node.inner ? typeExprToString(*node.inner) : "?") + ">";
+        } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
+            return ":" + node.name;
+        } else if constexpr (std::is_same_v<T, kex::ast::GenericVar>) {
+            return node.name;
+        }
+        return "?";
+    }, te.kind);
+}
+
+// ===== JSON helpers (no external dep — hand-rolled) =====
+
+auto jsonEscape(const std::string& s) -> std::string {
+    std::string out;
+    out.reserve(s.size() + 4);
+    for (char c : s) {
+        switch (c) {
+            case '"':  out += "\\\""; break;
+            case '\\': out += "\\\\"; break;
+            case '\n': out += "\\n";  break;
+            case '\r': out += "\\r";  break;
+            case '\t': out += "\\t";  break;
+            default:   out += c;
+        }
+    }
+    return out;
+}
+
+// Extract the "did you mean `X`?" portion from a diagnostic message, if any.
+auto extractHint(const std::string& msg) -> std::string {
+    const std::string needle = "did you mean `";
+    auto pos = msg.find(needle);
+    if (pos == std::string::npos) return "";
+    pos += needle.size();
+    auto end = msg.find('`', pos);
+    if (end == std::string::npos) return "";
+    return msg.substr(pos, end - pos);
+}
+
 // Syntax-highlights a diagnostic message body using a palette kept distinct
 // from Value::inspect's literal coloring: type names / type vars become cyan
 // (matching the REPL/IO.inspect type suffix), function names become bold
@@ -214,6 +302,8 @@ auto printUsage(const char* progName) -> void {
               << "  -l, --lex         Print token stream\n"
               << "  -p, --parse       Print AST\n"
               << "  -c, --check       Run semantic analysis only\n"
+              << "  -j, --json        With --check: output diagnostics as JSON\n"
+              << "  -s, --summary     Print public API signatures (Kex syntax)\n"
               << "  -t, --types       With --check: dump inferred expression types\n"
               << "  -h, --help        Show this help\n"
               << "  -v, --version     Show version\n"
@@ -231,6 +321,8 @@ int main(int argc, char* argv[]) {
         {"lex",      no_argument, nullptr, 'l'},
         {"parse",    no_argument, nullptr, 'p'},
         {"check",    no_argument, nullptr, 'c'},
+        {"json",     no_argument, nullptr, 'j'},
+        {"summary",  no_argument, nullptr, 's'},
         {"types",    no_argument, nullptr, 't'},
         {"help",     no_argument, nullptr, 'h'},
         {"version",  no_argument, nullptr, 'v'},
@@ -241,15 +333,19 @@ int main(int argc, char* argv[]) {
     std::string mode = "run";
     bool skipCheck = false;
     bool dumpTypes = false;
+    bool jsonOutput = false;
+    bool summaryMode = false;
     int opt;
 
-    while ((opt = getopt_long(argc, argv, "rnlcpthv", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "rnlcjspthv", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'r': mode = "run"; break;
             case 'n': skipCheck = true; break;
             case 'l': mode = "lex"; break;
             case 'p': mode = "parse"; break;
             case 'c': mode = "check"; break;
+            case 'j': jsonOutput = true; mode = "check"; break;
+            case 's': summaryMode = true; mode = "check"; break;
             case 't': dumpTypes = true; break;
             case 'h': printUsage(argv[0]); return 0;
             case 'v': printVersion(); return 0;
@@ -671,7 +767,85 @@ int main(int argc, char* argv[]) {
         kex::semantic::Analyzer analyzer;
         bool ok = analyzer.analyze(program);
 
-        // Merge diagnostics: SemanticDB first, then Analyzer
+        // Collect all diagnostics
+        std::vector<kex::semantic::Diagnostic> allDiags;
+        bool dbOk = true;
+        for (const auto& d : db.diagnosticsFor(filepath)) {
+            if (d.level == kex::semantic::Diagnostic::Level::Error) dbOk = false;
+            allDiags.push_back(d);
+        }
+        for (const auto& d : analyzer.diagnostics())
+            allDiags.push_back(d);
+
+        bool allOk = ok && dbOk;
+
+        if (jsonOutput) {
+            // Machine-readable JSON — one object per diagnostic
+            std::cout << "[\n";
+            for (size_t i = 0; i < allDiags.size(); i++) {
+                const auto& d = allDiags[i];
+                bool isErr = d.level == kex::semantic::Diagnostic::Level::Error;
+                std::string hint = extractHint(d.message);
+                std::cout << "  {\n"
+                          << "    \"file\": \""    << jsonEscape(std::string(d.location.file)) << "\",\n"
+                          << "    \"line\": "      << d.location.line << ",\n"
+                          << "    \"column\": "    << d.location.column << ",\n"
+                          << "    \"severity\": \"" << (isErr ? "error" : "warning") << "\",\n"
+                          << "    \"message\": \"" << jsonEscape(d.message) << "\"";
+                if (!hint.empty())
+                    std::cout << ",\n    \"hint\": \"" << jsonEscape(hint) << "\"";
+                std::cout << "\n  }" << (i + 1 < allDiags.size() ? "," : "") << "\n";
+            }
+            std::cout << "]\n";
+            return allOk ? 0 : 1;
+        }
+
+        if (summaryMode) {
+            // Output the public API signatures of the file in Kex syntax.
+            // Walk the AST for TypeAnnotation + FunctionDef nodes; group by module.
+            std::string currentModule;
+            bool inModule = false;
+            auto closeModule = [&]() {
+                if (inModule) { std::cout << "end\n"; inModule = false; }
+            };
+            auto openModule = [&](const std::string& name, bool isFoul) {
+                closeModule();
+                std::cout << (isFoul ? "foul " : "") << "module " << name << " do\n";
+                inModule = true;
+                currentModule = name;
+            };
+
+            for (const auto& item : program.items) {
+                std::visit([&](const auto& ptr) {
+                    using T = std::decay_t<decltype(*ptr)>;
+                    if constexpr (std::is_same_v<T, kex::ast::TypeAnnotation>) {
+                        if (inModule) std::cout << "  ";
+                        std::cout << (ptr->isFoul ? "foul " : "")
+                                  << ptr->name << " : ";
+                        if (ptr->type) std::cout << typeExprToString(*ptr->type);
+                        std::cout << "\n";
+                    } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
+                        openModule(ptr->name, ptr->isFoul);
+                        for (const auto& mitem : ptr->body) {
+                            std::visit([&](const auto& mptr) {
+                                using MT = std::decay_t<decltype(*mptr)>;
+                                if constexpr (std::is_same_v<MT, kex::ast::TypeAnnotation>) {
+                                    std::cout << "  " << (mptr->isFoul ? "foul " : "")
+                                              << mptr->name << " : ";
+                                    if (mptr->type) std::cout << typeExprToString(*mptr->type);
+                                    std::cout << "\n";
+                                }
+                            }, mitem);
+                        }
+                        closeModule();
+                    }
+                }, item);
+            }
+            closeModule();
+            return allOk ? 0 : 1;
+        }
+
+        // Normal colored output
         auto printDiag = [&](const kex::semantic::Diagnostic& diag) {
             bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
             std::cerr << kex::color::apply(kex::color::gray)
@@ -683,14 +857,7 @@ int main(int argc, char* argv[]) {
                       << kex::color::apply(kex::color::reset) << " "
                       << colorizeMessage(diag.message) << "\n";
         };
-        bool dbOk = true;
-        for (const auto& diag : db.diagnosticsFor(filepath)) {
-            if (diag.level == kex::semantic::Diagnostic::Level::Error) dbOk = false;
-            printDiag(diag);
-        }
-        for (const auto& diag : analyzer.diagnostics()) {
-            printDiag(diag);
-        }
+        for (const auto& d : allDiags) printDiag(d);
 
         if (dumpTypes) {
             // Collect and sort by source location so output is readable top-to-bottom.
@@ -711,7 +878,6 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        bool allOk = ok && dbOk;
         if (allOk && !dumpTypes) {
             std::cout << "No errors found.\n";
         } else if (allOk) {
