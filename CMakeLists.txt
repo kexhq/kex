@@ -136,3 +136,14 @@ target_include_directories(repl_cli_test PRIVATE tests)
 target_compile_definitions(repl_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(repl_cli_test kex)
 add_test(NAME repl_cli_test COMMAND repl_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# Verifies ANSI coloring is consistent across the REPL, IO.inspect, and error
+# diagnostics by driving the real `kex` binary. colorizeMessage() and the
+# diagnostic print loops live in main.cxx, unreachable from the in-process
+# test harness, so this asserts on the binary's raw output bytes.
+add_executable(color_cli_test tests/color_cli_test.cxx)
+target_link_libraries(color_cli_test PRIVATE kex_lib)
+target_include_directories(color_cli_test PRIVATE tests)
+target_compile_definitions(color_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(color_cli_test kex)
+add_test(NAME color_cli_test COMMAND color_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

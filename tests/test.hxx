@@ -1,5 +1,6 @@
 #pragma once
 
+#include "../src/common/color.hxx"
 #include <functional>
 #include <iostream>
 #include <sstream>
@@ -44,10 +45,10 @@ inline auto runAll() -> int {
             try {
                 tc.fn();
                 passes++;
-                std::cout << "    \033[32m✓\033[0m " << tc.name << "\n";
+                std::cout << "    " << kex::color::apply(kex::color::green) << "✓" << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
             } catch (const std::exception& e) {
                 failures++;
-                std::cout << "    \033[31m✗\033[0m " << tc.name << "\n";
+                std::cout << "    " << kex::color::apply(kex::color::red) << "✗" << kex::color::apply(kex::color::reset) << " " << tc.name << "\n";
                 std::cout << "      " << e.what() << "\n";
             }
         }

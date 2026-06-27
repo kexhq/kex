@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/color.hxx"
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -53,7 +54,11 @@ auto Evaluator::registerIOBuiltins() -> void {
     reg("IO::inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
-        std::cerr << val->inspect(true) << " \033[90m:\033[0m \033[36m" << val->typeName() << "\033[0m\n";
+        std::cerr << val->inspect() << " "
+                  << kex::color::apply(kex::color::gray) << ":"
+                  << kex::color::apply(kex::color::reset) << " "
+                  << kex::color::apply(kex::color::cyan) << val->typeName()
+                  << kex::color::apply(kex::color::reset) << "\n";
         return val;
     });
 

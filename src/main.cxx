@@ -1,7 +1,9 @@
+#include "common/color.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
 #include "interpreter/evaluator.hxx"
+#include <cctype>
 #include <fstream>
 #include <getopt.h>
 #include <iostream>
@@ -40,6 +42,89 @@ auto readFile(const std::string& path) -> std::string {
     buffer << file.rdbuf();
     return buffer.str();
 }
+
+namespace {
+
+auto isIdentChar(char c) -> bool {
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+// Syntax-highlights a diagnostic message body using a palette kept distinct
+// from Value::inspect's literal coloring: type names / type vars become cyan
+// (matching the REPL/IO.inspect type suffix), function names become bold
+// (backtick spans and signature heads), arrows (->) become magenta, and
+// backtick delimiters become gray. Cyan-vs-bold keeps functions and types
+// distinguishable. Honors kex::color::enabled.
+auto colorizeMessage(const std::string& msg) -> std::string {
+    using namespace kex::color;
+    std::string out;
+    out.reserve(msg.size() * 2);
+    const auto n = msg.size();
+    bool atLineStart = true;
+    for (size_t i = 0; i < n; ) {
+        char c = msg[i];
+
+        if (c == '`') {
+            size_t end = msg.find('`', i + 1);
+            if (end == std::string::npos) { out += c; i++; continue; }
+            out += apply(gray); out += '`'; out += apply(reset);
+            out += apply(bold);
+            out.append(msg, i + 1, end - i - 1);
+            out += apply(reset);
+            out += apply(gray); out += '`'; out += apply(reset);
+            i = end + 1;
+            atLineStart = false;
+            continue;
+        }
+
+        if (atLineStart) {
+            bool startsLower = std::isalpha(static_cast<unsigned char>(c)) && std::islower(static_cast<unsigned char>(c));
+            bool identStart = std::isalpha(static_cast<unsigned char>(c)) || c == '_';
+            if (startsLower || (c == '_' && identStart)) {
+                size_t j = i + 1;
+                while (j < n && isIdentChar(msg[j])) j++;
+                if (j < n && (msg[j] == '?' || msg[j] == '!')) j++;
+                size_t k = j;
+                while (k < n && msg[k] == ' ') k++;
+                if (k < n && msg[k] == ':') {
+                    out += apply(bold);
+                    out.append(msg, i, j - i);
+                    out += apply(reset);
+                    i = j;
+                    atLineStart = false;
+                    continue;
+                }
+            }
+        }
+
+        if (c == '-' && i + 1 < n && msg[i + 1] == '>') {
+            out += apply(magenta);
+            out += "->";
+            out += apply(reset);
+            i += 2;
+            atLineStart = false;
+            continue;
+        }
+
+        if (std::isupper(static_cast<unsigned char>(c)) && (i == 0 || !isIdentChar(msg[i - 1]))) {
+            size_t j = i + 1;
+            while (j < n && isIdentChar(msg[j])) j++;
+            out += apply(cyan);
+            out.append(msg, i, j - i);
+            out += apply(reset);
+            i = j;
+            atLineStart = false;
+            continue;
+        }
+
+        if (c == '\n') { out += c; i++; atLineStart = true; continue; }
+        out += c; i++;
+        atLineStart = false;
+    }
+    return out;
+}
+
+} // namespace
 
 // Convention: `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need
 // to redeclare its types/records/functions — running the spec auto-loads
@@ -107,12 +192,6 @@ auto printAst(const kex::ast::Program& program) -> void {
     }
 }
 
-namespace color {
-    constexpr auto reset   = "\033[0m";
-    constexpr auto dim     = "\033[90m";
-    constexpr auto cyan    = "\033[36m";
-}
-
 auto printUsage(const char* progName) -> void {
     std::cerr << "Usage: " << progName << " [options] <file.kex>\n"
               << "\n"
@@ -124,7 +203,8 @@ auto printUsage(const char* progName) -> void {
               << "  -c, --check       Run semantic analysis only\n"
               << "  -t, --types       With --check: dump inferred expression types\n"
               << "  -h, --help        Show this help\n"
-              << "  -v, --version     Show version\n";
+              << "  -v, --version     Show version\n"
+              << "  --no-colors       Disable ANSI color output\n";
 }
 
 auto printVersion() -> void {
@@ -141,6 +221,7 @@ int main(int argc, char* argv[]) {
         {"types",    no_argument, nullptr, 't'},
         {"help",     no_argument, nullptr, 'h'},
         {"version",  no_argument, nullptr, 'v'},
+        {"no-colors",no_argument, nullptr, 'N'},
         {nullptr,    0,           nullptr,  0 }
     };
 
@@ -159,6 +240,7 @@ int main(int argc, char* argv[]) {
             case 't': dumpTypes = true; break;
             case 'h': printUsage(argv[0]); return 0;
             case 'v': printVersion(); return 0;
+            case 'N': kex::color::enabled = false; break;
             default: printUsage(argv[0]); return 1;
         }
     }
@@ -349,10 +431,13 @@ int main(int argc, char* argv[]) {
 
             auto showResult = [&](const kex::interpreter::ValuePtr& result) {
                 if (result && !std::holds_alternative<kex::interpreter::UnitValue>(result->data)) {
-                    std::cout << color::dim << "=> " << color::reset << result->inspect(true);
+                    std::cout << kex::color::apply(kex::color::gray) << "=> "
+                              << kex::color::apply(kex::color::reset) << result->inspect();
                     if (showTypes) {
-                        std::cout << " " << color::dim << ":" << color::reset
-                                  << " " << color::cyan << result->typeName() << color::reset;
+                        std::cout << " " << kex::color::apply(kex::color::gray) << ":"
+                                  << kex::color::apply(kex::color::reset)
+                                  << " " << kex::color::apply(kex::color::cyan)
+                                  << result->typeName() << kex::color::apply(kex::color::reset);
                     }
                     std::cout << "\n";
                 }
@@ -399,7 +484,8 @@ int main(int argc, char* argv[]) {
                     showResult(result);
                 }
             } catch (const std::exception& e) {
-                std::cerr << "  error: " << e.what() << "\n";
+                std::cerr << "  " << kex::color::apply(kex::color::red) << "error:"
+                          << kex::color::apply(kex::color::reset) << " " << e.what() << "\n";
             }
         }
         return 0;
@@ -457,14 +543,21 @@ int main(int argc, char* argv[]) {
             kex::semantic::Analyzer analyzer;
             bool ok = analyzer.analyze(program);
             for (const auto& diag : analyzer.diagnostics()) {
-                auto prefix = diag.level == kex::semantic::Diagnostic::Level::Error
-                    ? "error" : "warning";
-                std::cerr << diag.location.file << ":" << diag.location.line << ":"
-                          << diag.location.column << ": " << prefix << ": "
-                          << diag.message << "\n";
+                bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+                std::cerr << kex::color::apply(kex::color::gray)
+                          << diag.location.file << ":" << diag.location.line << ":"
+                          << diag.location.column << ":" << kex::color::apply(kex::color::reset)
+                          << " " << kex::color::apply(kex::color::bold)
+                          << (isError ? kex::color::apply(kex::color::red) : kex::color::apply(kex::color::magenta))
+                          << (isError ? "error" : "warning") << ":"
+                          << kex::color::apply(kex::color::reset) << " "
+                          << colorizeMessage(diag.message) << "\n";
             }
             if (!ok) {
-                std::cerr << "Aborted: fix type errors before running (use --no-check to skip).\n";
+                std::cerr << kex::color::apply(kex::color::bold)
+                          << kex::color::apply(kex::color::magenta)
+                          << "Aborted:" << kex::color::apply(kex::color::reset)
+                          << " fix type errors before running (use --no-check to skip).\n";
                 return 1;
             }
         }
@@ -508,11 +601,15 @@ int main(int argc, char* argv[]) {
         bool ok = analyzer.analyze(program);
 
         for (const auto& diag : analyzer.diagnostics()) {
-            auto prefix = diag.level == kex::semantic::Diagnostic::Level::Error
-                ? "error" : "warning";
-            std::cerr << diag.location.file << ":" << diag.location.line << ":"
-                      << diag.location.column << ": " << prefix << ": "
-                      << diag.message << "\n";
+            bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+            std::cerr << kex::color::apply(kex::color::gray)
+                      << diag.location.file << ":" << diag.location.line << ":"
+                      << diag.location.column << ":" << kex::color::apply(kex::color::reset)
+                      << " " << kex::color::apply(kex::color::bold)
+                      << (isError ? kex::color::apply(kex::color::red) : kex::color::apply(kex::color::magenta))
+                      << (isError ? "error" : "warning") << ":"
+                      << kex::color::apply(kex::color::reset) << " "
+                      << colorizeMessage(diag.message) << "\n";
         }
 
         if (dumpTypes) {
@@ -542,7 +639,9 @@ int main(int argc, char* argv[]) {
 
         return ok ? 0 : 1;
     } catch (const std::runtime_error& e) {
-        std::cerr << "Parse error: " << e.what() << "\n";
+        std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
+                  << "Parse error:" << kex::color::apply(kex::color::reset)
+                  << " " << e.what() << "\n";
         return 1;
     }
 

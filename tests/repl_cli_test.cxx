@@ -40,7 +40,7 @@ auto runRepl(const std::string& input) -> std::string {
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " < " + tmpPath + " 2>&1";
+    std::string cmd = std::string(KEX_BINARY_PATH) + " --no-colors < " + tmpPath + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {

@@ -134,6 +134,9 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("find",   {Type::list(genA()), Type::func({genA()}, Type::boolean())}, Type::optional(genA()));
     // map operations
     sig("get",    {Type::map(genA(), genE()), genA()}, Type::optional(genE()));
+    sig("get",    {Type::map(genA(), genE()), genA(), genE()}, genE());
+    sig("get",    {Type::list(genA()), Type::integer()}, Type::optional(genA()));
+    sig("get",    {Type::list(genA()), Type::integer(), genA()}, genA());
     sig("put",    {Type::map(genA(), genE()), genA(), genE()}, Type::map(genA(), genE()));
     sig("delete", {Type::map(genA(), genE()), genA()}, Type::map(genA(), genE()));
     sig("keys",   {Type::map(genA(), genE())}, Type::list(genA()));

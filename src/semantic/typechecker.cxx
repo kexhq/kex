@@ -80,6 +80,8 @@ auto TypeChecker::check(const ast::Program& program,
     // Note: no "Float" entry — it's not a concrete Type, only a trait
     // name (TraitRegistry, phase 3), satisfied by Float32 and Float64.
 
+    m_globals.set("ENV", Type::map(Type::string(), Type::string()));
+
     registerTraits(program);
     registerRecordFields(program);
     registerDeclaredSignatures(program);
@@ -831,9 +833,13 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
 
 auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
     if (!block.synthetic) pushScope();
-    for (const auto& param : block.params) {
+    for (size_t i = 0; i < block.params.size(); i++) {
+        const auto& param = block.params[i];
         if (param.name.has_value() && *param.name != "_") {
-            defineVar(*param.name, freshTypeVar());
+            TypePtr type = (i == 0) ? Type::list(Type::string())
+                         : (i == 1) ? Type::map(Type::string(), Type::string())
+                                    : freshTypeVar();
+            defineVar(*param.name, std::move(type));
         }
         if (param.pattern) {
             bindPatternVars(**param.pattern);

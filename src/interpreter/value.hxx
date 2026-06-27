@@ -98,8 +98,8 @@ struct Value {
     auto toRepr() const -> std::string;
     auto typeName() const -> std::string;
     // Pretty-printed inspect representation (value only, no type suffix).
-    // Used by the REPL and IO.inspect. Pass colored=false to strip ANSI codes.
-    auto inspect(bool colored = true) const -> std::string;
+    // Used by the REPL and IO.inspect. ANSI colors honor the global kex::color::enabled flag.
+    auto inspect() const -> std::string;
 };
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;

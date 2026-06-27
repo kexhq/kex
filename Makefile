@@ -35,8 +35,8 @@ spec: build
 	for f in spec/*.kex; do \
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
-		kex_flags=""; \
-		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="--no-check"; fi; \
+		kex_flags="--no-colors"; \
+		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		actual=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \

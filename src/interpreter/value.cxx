@@ -1,4 +1,5 @@
 #include "value.hxx"
+#include "../common/color.hxx"
 #include <optional>
 
 namespace kex::interpreter {
@@ -380,27 +381,19 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
     }, a->data);
 }
 
-auto Value::inspect(bool colored) const -> std::string {
-    // ANSI color helpers — applied only when colored=true.
-    auto c = [colored](const char* code) -> const char* {
-        return colored ? code : "";
+auto Value::inspect() const -> std::string {
+    using namespace kex::color;
+    auto c = [](const char* code) -> const char* {
+        return apply(code);
     };
-    constexpr auto reset   = "\033[0m";
-    constexpr auto dim     = "\033[90m";
-    constexpr auto yellow  = "\033[33m";
-    constexpr auto green   = "\033[32m";
-    constexpr auto magenta = "\033[35m";
-    constexpr auto purple  = "\033[95m";
-    constexpr auto cyan    = "\033[36m";
 
-    // Recursive helper — captures color mode.
     std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
         return std::visit([&](const auto& node) -> std::string {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, NoneValue>)
-                return std::string(c(dim)) + "None" + c(reset);
+                return std::string(c(gray)) + "None" + c(reset);
             else if constexpr (std::is_same_v<T, UnitValue>)
-                return std::string(c(dim)) + "()" + c(reset);
+                return std::string(c(gray)) + "()" + c(reset);
             else if constexpr (std::is_same_v<T, IntValue>)
                 return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
             else if constexpr (std::is_same_v<T, BigIntValue>)
@@ -424,7 +417,6 @@ auto Value::inspect(bool colored) const -> std::string {
             else if constexpr (std::is_same_v<T, AtomValue>)
                 return std::string(c(purple)) + ":" + node.name + c(reset);
             else if constexpr (std::is_same_v<T, ListValue>) {
-                // [Char] displays as a quoted string
                 bool allChars = !node.elements.empty();
                 for (const auto& el : node.elements)
                     if (!std::holds_alternative<CharValue>(el->data)) { allChars = false; break; }
@@ -465,9 +457,8 @@ auto Value::inspect(bool colored) const -> std::string {
                        + ".." + std::string(c(yellow)) + std::to_string(node.end) + c(reset);
             }
             else if constexpr (std::is_same_v<T, StreamValue>)
-                return std::string(c(dim)) + "<Stream>" + c(reset);
+                return std::string(c(gray)) + "<Stream>" + c(reset);
             else if constexpr (std::is_same_v<T, RecordValue>) {
-                // Positional constructor (Just(x), Ok(x)): fields keyed "0", "1", ...
                 bool positional = !node.fields.empty();
                 for (size_t i = 0; positional && i < node.fields.size(); i++)
                     if (node.fields.find(std::to_string(i)) == node.fields.end()) positional = false;
@@ -489,9 +480,9 @@ auto Value::inspect(bool colored) const -> std::string {
                 return result + " }";
             }
             else if constexpr (std::is_same_v<T, FunctionValue>)
-                return std::string(c(dim)) + "<function:" + node.name + ">" + c(reset);
+                return std::string(c(gray)) + "<function:" + node.name + ">" + c(reset);
             else if constexpr (std::is_same_v<T, LambdaValue>)
-                return std::string(c(dim)) + "<lambda>" + c(reset);
+                return std::string(c(gray)) + "<lambda>" + c(reset);
             else return "?";
         }, v.data);
     };
