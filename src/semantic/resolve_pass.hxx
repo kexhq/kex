@@ -30,6 +30,8 @@ private:
     auto bindParams(const std::vector<ast::Param>& params) -> void;
 
     auto isKnown(const std::string& name) const -> bool;
+    // If `name` resolves to a top-level symbol, record `loc` as a reference.
+    auto recordRef(const std::string& name, SourceLocation loc) -> void;
     auto suggest(const std::string& name) const -> std::string;
 
     auto pushScope() -> void;

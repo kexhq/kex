@@ -1113,6 +1113,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             return inner;
         }
+        else if constexpr (std::is_same_v<T, ast::ErrorNode>) {
+            throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
+                               expr.location);
+        }
         else {
             return Value::none();
         }

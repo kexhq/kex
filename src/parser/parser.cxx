@@ -3,8 +3,22 @@
 
 namespace kex {
 
+// Internal exception: thrown by error(), caught at the two recovery
+// boundaries (parseProgram and parseBody). Never escapes the parser.
+struct ParseError : std::exception {
+    SourceLocation location;
+    std::string message;
+    ParseError(SourceLocation loc, std::string msg)
+        : location(std::move(loc)), message(std::move(msg)) {}
+    const char* what() const noexcept override { return message.c_str(); }
+};
+
 Parser::Parser(std::vector<Token> tokens, std::string_view filename)
     : m_tokens(std::move(tokens)), m_filename(filename) {}
+
+auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic>& {
+    return m_diagnostics;
+}
 
 // ===== Token Navigation =====
 
@@ -61,9 +75,36 @@ auto Parser::currentLocation() const -> SourceLocation {
 
 auto Parser::error(const std::string& message) -> void {
     auto loc = currentLocation();
-    throw std::runtime_error(
-        std::string(loc.file) + ":" + std::to_string(loc.line) + ":"
-        + std::to_string(loc.column) + ": " + message);
+    m_diagnostics.push_back({loc, message});
+    throw ParseError{loc, message};
+}
+
+auto Parser::syncToTopLevel() -> void {
+    while (!atEnd()) {
+        switch (peek().type) {
+            case TokenType::Let:
+            case TokenType::Foul:
+            case TokenType::Module:
+            case TokenType::Type:
+            case TokenType::Record:
+            case TokenType::Trait:
+            case TokenType::Make:
+            case TokenType::Main:
+            case TokenType::Compiled:
+            case TokenType::Using:
+            case TokenType::HashLBracket:
+                return;
+            default:
+                advance();
+        }
+    }
+}
+
+auto Parser::syncToStatement() -> void {
+    while (!atEnd() && !check(TokenType::End)
+           && !check(TokenType::Newline) && !check(TokenType::Eof)) {
+        advance();
+    }
 }
 
 // ===== Program =====
@@ -73,7 +114,13 @@ auto Parser::parseProgram() -> ast::Program {
     skipNewlines();
 
     while (!atEnd()) {
-        program.items.push_back(parseTopLevelItem());
+        try {
+            program.items.push_back(parseTopLevelItem());
+        } catch (const ParseError&) {
+            // Diagnostic already recorded in m_diagnostics; skip to the next
+            // safe top-level keyword and continue parsing.
+            syncToTopLevel();
+        }
         skipNewlines();
     }
 
@@ -2480,7 +2527,17 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
     std::vector<ast::ExprPtr> body;
     while (!check(TokenType::End) && !atEnd()) {
-        body.push_back(parseExpr());
+        try {
+            body.push_back(parseExpr());
+        } catch (const ParseError& e) {
+            // Insert an ErrorNode so the AST body stays complete, then sync
+            // to the next statement boundary before continuing.
+            auto errExpr = std::make_unique<ast::Expr>();
+            errExpr->location = e.location;
+            errExpr->kind = ast::ErrorNode{e.message};
+            body.push_back(std::move(errExpr));
+            syncToStatement();
+        }
         skipNewlines();
     }
     return body;

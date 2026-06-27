@@ -160,6 +160,17 @@ auto fileExists(const std::string& path) -> bool {
     return probe.good();
 }
 
+auto loadPrelude(kex::semantic::SemanticDB& db) -> void {
+#ifdef KEX_PRELUDE_DIR
+    std::filesystem::path preludeDir(KEX_PRELUDE_DIR);
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(preludeDir, ec)) {
+        if (entry.path().extension() == ".kex")
+            db.updateFile(entry.path().string(), readFile(entry.path().string()));
+    }
+#endif
+}
+
 auto printAst(const kex::ast::Program& program) -> void {
     std::cout << "Program (" << program.items.size() << " items)\n";
     for (const auto& item : program.items) {
@@ -255,6 +266,18 @@ int main(int argc, char* argv[]) {
     if (mode == "repl") {
         std::cout << "kex 0.1.0 — interactive REPL\n";
         std::cout << "Type :help for available commands, exit to quit.\n\n";
+
+#ifdef HAS_READLINE
+        std::string historyFile;
+        if (const char* home = std::getenv("HOME")) {
+            std::filesystem::path histDir = std::filesystem::path(home) / ".config" / "kex";
+            std::error_code ec;
+            std::filesystem::create_directories(histDir, ec);
+            historyFile = (histDir / "history").string();
+            read_history(historyFile.c_str());
+        }
+#endif
+
         kex::interpreter::Evaluator evaluator;
         evaluator.setReplMode(true);
         std::string line;
@@ -490,6 +513,10 @@ int main(int argc, char* argv[]) {
                           << kex::color::apply(kex::color::reset) << " " << e.what() << "\n";
             }
         }
+#ifdef HAS_READLINE
+        if (!historyFile.empty())
+            write_history(historyFile.c_str());
+#endif
         return 0;
     }
 
@@ -536,15 +563,34 @@ int main(int argc, char* argv[]) {
         kex::Parser parser(std::move(tokens), filepath);
         auto program = parser.parseProgram();
 
+        // In --run mode, print parse errors and abort — SemanticDB is not
+        // invoked there so we're the only place that can report them.
+        // In --check mode the SemanticDB re-parses and reports them itself;
+        // printing here would duplicate every message.
+        if (!parser.diagnostics().empty() && mode == "run") {
+            for (const auto& pd : parser.diagnostics()) {
+                std::cerr << kex::color::apply(kex::color::gray)
+                          << pd.location.file << ":" << pd.location.line << ":"
+                          << pd.location.column << ":" << kex::color::apply(kex::color::reset)
+                          << " " << kex::color::apply(kex::color::bold)
+                          << kex::color::apply(kex::color::red) << "error:"
+                          << kex::color::apply(kex::color::reset) << " "
+                          << colorizeMessage(pd.message) << "\n";
+            }
+            std::cerr << kex::color::apply(kex::color::bold)
+                      << kex::color::apply(kex::color::magenta)
+                      << "Aborted:" << kex::color::apply(kex::color::reset)
+                      << " fix syntax errors before running.\n";
+            return 1;
+        }
+
         if (mode == "parse") {
             printAst(program);
             return 0;
         }
 
         if (mode == "run" && !skipCheck) {
-            kex::semantic::Analyzer analyzer;
-            bool ok = analyzer.analyze(program);
-            for (const auto& diag : analyzer.diagnostics()) {
+            auto printRunDiag = [&](const kex::semantic::Diagnostic& diag) {
                 bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
                 std::cerr << kex::color::apply(kex::color::gray)
                           << diag.location.file << ":" << diag.location.line << ":"
@@ -554,8 +600,25 @@ int main(int argc, char* argv[]) {
                           << (isError ? "error" : "warning") << ":"
                           << kex::color::apply(kex::color::reset) << " "
                           << colorizeMessage(diag.message) << "\n";
+            };
+
+            // Pass 1+2: SemanticDB undefined-name detection
+            kex::semantic::SemanticDB runDb;
+            loadPrelude(runDb);
+            runDb.updateFile(filepath, readFile(filepath));
+            bool dbOk = true;
+            for (const auto& diag : runDb.diagnosticsFor(filepath)) {
+                if (diag.level == kex::semantic::Diagnostic::Level::Error) dbOk = false;
+                printRunDiag(diag);
             }
-            if (!ok) {
+
+            // Pass 3+: existing Analyzer (purity, type checking)
+            kex::semantic::Analyzer analyzer;
+            bool ok = analyzer.analyze(program);
+            for (const auto& diag : analyzer.diagnostics())
+                printRunDiag(diag);
+
+            if (!ok || !dbOk) {
                 std::cerr << kex::color::apply(kex::color::bold)
                           << kex::color::apply(kex::color::magenta)
                           << "Aborted:" << kex::color::apply(kex::color::reset)
@@ -601,22 +664,7 @@ int main(int argc, char* argv[]) {
         // mode == "check"
         // Pass 1+2: collect symbols and resolve names via SemanticDB
         kex::semantic::SemanticDB db;
-
-        // Index all prelude files first so their TypeAnnotation declarations
-        // (describe, it, assert, etc.) are visible to ResolvePass when checking
-        // any user file.
-#ifdef KEX_PRELUDE_DIR
-        {
-            std::filesystem::path preludeDir(KEX_PRELUDE_DIR);
-            std::error_code ec;
-            for (const auto& entry : std::filesystem::directory_iterator(preludeDir, ec)) {
-                if (entry.path().extension() == ".kex") {
-                    db.updateFile(entry.path().string(), readFile(entry.path().string()));
-                }
-            }
-        }
-#endif
-
+        loadPrelude(db);
         db.updateFile(filepath, readFile(filepath));
 
         // Pass 3+: existing Analyzer (purity, type checking)
@@ -671,9 +719,9 @@ int main(int argc, char* argv[]) {
         }
 
         return allOk ? 0 : 1;
-    } catch (const std::runtime_error& e) {
+    } catch (const std::exception& e) {
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
-                  << "Parse error:" << kex::color::apply(kex::color::reset)
+                  << "Internal error:" << kex::color::apply(kex::color::reset)
                   << " " << e.what() << "\n";
         return 1;
     }

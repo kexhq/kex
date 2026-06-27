@@ -8,12 +8,18 @@
 
 namespace kex {
 
+struct ParseDiagnostic {
+    SourceLocation location;
+    std::string message;
+};
+
 class Parser {
 public:
     explicit Parser(std::vector<Token> tokens, std::string_view filename = "<stdin>");
 
     auto parseProgram() -> ast::Program;
     auto parseExpr() -> ast::ExprPtr;
+    auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
 private:
     // Token navigation
@@ -103,14 +109,17 @@ private:
     auto isAtExprStart() const -> bool;
     auto hasDoBeforeNewline() const -> bool;
 
-    // Error handling
+    // Error handling and recovery
     [[noreturn]] auto error(const std::string& message) -> void;
+    auto syncToTopLevel() -> void;
+    auto syncToStatement() -> void;
 
     std::vector<Token> m_tokens;
     std::string_view m_filename;
     int m_pos = 0;
     bool m_noDoBlocks = false;
     bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
+    std::vector<ParseDiagnostic> m_diagnostics;
 };
 
 } // namespace kex

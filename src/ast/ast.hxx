@@ -321,6 +321,13 @@ struct BlockExpr {
     std::vector<ExprPtr> body;
 };
 
+// Placeholder inserted by the parser at a recovery point. Carries the
+// original error message so downstream passes can skip this node without
+// re-emitting the diagnostic.
+struct ErrorNode {
+    std::string message;
+};
+
 struct Expr {
     SourceLocation location;
     std::variant<
@@ -363,7 +370,8 @@ struct Expr {
         ThenElseExpr,
         BlockExpr,
         CurryPlaceholder,
-        CurryExpr
+        CurryExpr,
+        ErrorNode
     > kind;
 };
 

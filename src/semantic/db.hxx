@@ -46,6 +46,18 @@ public:
     // stdlib table lookup.
     auto isGloballyKnown(const std::string& name) const -> bool;
 
+    // Finds the SymbolInfo for `name`, preferring symbols from `preferFile`.
+    // Returns null if not found in any indexed file.
+    auto findSymbol(const std::string& name,
+                    const std::string& preferFile = "") -> SymbolInfo*;
+    auto findSymbol(const std::string& name,
+                    const std::string& preferFile = "") const -> const SymbolInfo*;
+
+    // Returns the symbol whose definition or a reference is at (file, line, col).
+    // Used for go-to-definition and hover. Returns null if nothing found there.
+    auto symbolAt(const std::string& file,
+                  uint32_t line, uint32_t col) const -> const SymbolInfo*;
+
     // Access to raw file state for passes
     auto fileState(const std::string& path) -> FileState*;
     auto fileState(const std::string& path) const -> const FileState*;

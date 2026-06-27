@@ -13,12 +13,11 @@ auto parse(const std::string& source) -> ast::Program {
 }
 
 auto parseFails(const std::string& source) -> bool {
-    try {
-        parse(source);
-        return false;
-    } catch (const std::runtime_error&) {
-        return true;
-    }
+    Lexer lexer(source);
+    auto tokens = lexer.tokenizeAll();
+    Parser parser(std::move(tokens));
+    parser.parseProgram();
+    return !parser.diagnostics().empty();
 }
 
 auto itemCount(const std::string& source) -> size_t {

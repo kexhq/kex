@@ -127,23 +127,30 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         using T = std::decay_t<decltype(node)>;
 
         if constexpr (std::is_same_v<T, ast::Identifier>) {
-            if (node.name != "_" && !isKnown(node.name)) {
-                auto hint = suggest(node.name);
-                std::string msg = "Undefined name: `" + node.name + "`";
-                if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
-                error(expr.location, msg);
+            if (node.name != "_") {
+                if (!isKnown(node.name)) {
+                    auto hint = suggest(node.name);
+                    std::string msg = "Undefined name: `" + node.name + "`";
+                    if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
+                    error(expr.location, msg);
+                } else {
+                    recordRef(node.name, expr.location);
+                }
             }
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             // Uppercase names are constructors (Just, Ok, Error…) — the
             // TypeChecker validates them; skip undefined check here.
             if (!node.name.empty()
-                    && std::islower(static_cast<unsigned char>(node.name[0]))
-                    && !isKnown(node.name)) {
-                auto hint = suggest(node.name);
-                std::string msg = "Undefined function: `" + node.name + "`";
-                if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
-                error(expr.location, msg);
+                    && std::islower(static_cast<unsigned char>(node.name[0]))) {
+                if (!isKnown(node.name)) {
+                    auto hint = suggest(node.name);
+                    std::string msg = "Undefined function: `" + node.name + "`";
+                    if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
+                    error(expr.location, msg);
+                } else {
+                    recordRef(node.name, expr.location);
+                }
             }
             for (const auto& arg : node.args)
                 if (arg) resolveExpr(*arg);
@@ -283,19 +290,22 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
             if (!node.name.empty()
-                    && std::islower(static_cast<unsigned char>(node.name[0]))
-                    && !isKnown(node.name)) {
-                auto hint = suggest(node.name);
-                std::string msg = "Undefined function: `" + node.name + "`";
-                if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
-                error(expr.location, msg);
+                    && std::islower(static_cast<unsigned char>(node.name[0]))) {
+                if (!isKnown(node.name)) {
+                    auto hint = suggest(node.name);
+                    std::string msg = "Undefined function: `" + node.name + "`";
+                    if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
+                    error(expr.location, msg);
+                } else {
+                    recordRef(node.name, expr.location);
+                }
             }
             for (const auto& group : node.argGroups)
                 for (const auto& arg : group)
                     if (arg) resolveExpr(*arg);
         }
         // Literals, UpperIdentifier, ThisExpr, BreakExpr, NextExpr,
-        // CurryPlaceholder, ShorthandLambda: nothing to resolve
+        // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve
     }, expr.kind);
 }
 
@@ -328,6 +338,16 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
             if (node.end) resolvePattern(*node.end);
         }
     }, pat.kind);
+}
+
+auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void {
+    if (!m_db || !m_state) return;
+    // Only record references to top-level/module symbols, not local variables
+    // (local vars live in m_scopes and have no SymbolInfo entry).
+    for (const auto& scope : m_scopes)
+        if (scope.count(name)) return;
+    if (auto* sym = m_db->findSymbol(name, m_state->path))
+        sym->references.push_back(loc);
 }
 
 auto ResolvePass::isKnown(const std::string& name) const -> bool {
