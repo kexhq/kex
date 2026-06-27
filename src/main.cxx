@@ -2,6 +2,7 @@
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
+#include "semantic/db.hxx"
 #include "interpreter/evaluator.hxx"
 #include <cctype>
 #include <fstream>
@@ -597,10 +598,16 @@ int main(int argc, char* argv[]) {
         }
 
         // mode == "check"
+        // Pass 1+2: collect symbols and resolve names via SemanticDB
+        kex::semantic::SemanticDB db;
+        db.updateFile(filepath, readFile(filepath));
+
+        // Pass 3+: existing Analyzer (purity, type checking)
         kex::semantic::Analyzer analyzer;
         bool ok = analyzer.analyze(program);
 
-        for (const auto& diag : analyzer.diagnostics()) {
+        // Merge diagnostics: SemanticDB first, then Analyzer
+        auto printDiag = [&](const kex::semantic::Diagnostic& diag) {
             bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
             std::cerr << kex::color::apply(kex::color::gray)
                       << diag.location.file << ":" << diag.location.line << ":"
@@ -610,6 +617,14 @@ int main(int argc, char* argv[]) {
                       << (isError ? "error" : "warning") << ":"
                       << kex::color::apply(kex::color::reset) << " "
                       << colorizeMessage(diag.message) << "\n";
+        };
+        bool dbOk = true;
+        for (const auto& diag : db.diagnosticsFor(filepath)) {
+            if (diag.level == kex::semantic::Diagnostic::Level::Error) dbOk = false;
+            printDiag(diag);
+        }
+        for (const auto& diag : analyzer.diagnostics()) {
+            printDiag(diag);
         }
 
         if (dumpTypes) {
@@ -631,13 +646,14 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        if (ok && !dumpTypes) {
+        bool allOk = ok && dbOk;
+        if (allOk && !dumpTypes) {
             std::cout << "No errors found.\n";
-        } else if (ok) {
+        } else if (allOk) {
             std::cerr << "No errors found.\n";
         }
 
-        return ok ? 0 : 1;
+        return allOk ? 0 : 1;
     } catch (const std::runtime_error& e) {
         std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
                   << "Parse error:" << kex::color::apply(kex::color::reset)
