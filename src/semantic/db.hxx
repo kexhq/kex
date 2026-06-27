@@ -41,6 +41,11 @@ public:
     auto symbolsFor(const std::string& file) const -> const std::vector<SymbolInfo>&;
     auto exportsFor(const std::string& moduleName) const -> std::vector<SymbolInfo*>;
 
+    // Returns true if `name` appears as a top-level symbol in ANY indexed file.
+    // Used by ResolvePass to check prelude-sourced names without a per-call
+    // stdlib table lookup.
+    auto isGloballyKnown(const std::string& name) const -> bool;
+
     // Access to raw file state for passes
     auto fileState(const std::string& path) -> FileState*;
     auto fileState(const std::string& path) const -> const FileState*;

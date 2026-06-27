@@ -18,14 +18,18 @@ public:
     auto run(SemanticDB& db, const std::string& file) -> void;
 
 private:
+    auto resolveFunctionDef(const ast::FunctionDef& def) -> void;
+    auto resolveMakeFns(const std::vector<std::variant<
+            std::unique_ptr<ast::FunctionDef>,
+            std::unique_ptr<ast::TypeAnnotation>,
+            std::unique_ptr<ast::VisibilityBlock>>>& body) -> void;
+
     auto resolveExpr(const ast::Expr& expr) -> void;
     auto resolveBody(const std::vector<ast::ExprPtr>& body) -> void;
     auto resolvePattern(const ast::Pattern& pat) -> void;
+    auto bindParams(const std::vector<ast::Param>& params) -> void;
 
-    // Returns true if `name` is known in the current scope / global index / stdlib.
     auto isKnown(const std::string& name) const -> bool;
-
-    // Closest known name by edit distance, or "" if nothing close enough.
     auto suggest(const std::string& name) const -> std::string;
 
     auto pushScope() -> void;
@@ -34,10 +38,10 @@ private:
 
     auto error(SourceLocation loc, const std::string& msg) -> void;
 
+    SemanticDB* m_db = nullptr;
     FileState* m_state = nullptr;
     SignatureTable m_stdlib;
 
-    // Scope stack: each level is a set of locally-bound names
     std::vector<std::unordered_set<std::string>> m_scopes;
 };
 

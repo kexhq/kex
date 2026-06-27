@@ -35,8 +35,19 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
             info.module = "";
             info.type = Type::unknown();
             m_state->symbols.push_back(std::move(info));
+        } else if constexpr (std::is_same_v<T, ast::TypeAnnotation>) {
+            // Standalone type signature declaration (e.g. in prelude files):
+            // `describe : (String, Block<Unit>) -> Unit`
+            SymbolInfo info;
+            info.name = ptr->name;
+            info.kind = SymbolKind::Function;
+            info.definition = SourceLocation{std::string_view(m_state->path), 0, 0};
+            info.module = "";
+            info.isFoul = ptr->isFoul;
+            info.type = Type::unknown();
+            m_state->symbols.push_back(std::move(info));
         }
-        // UsingBlock, MainBlock, Pragma, CompiledBlock, TypeAnnotation: skip
+        // UsingBlock, MainBlock, Pragma, CompiledBlock: skip
     }, item);
 }
 

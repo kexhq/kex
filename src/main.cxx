@@ -5,6 +5,7 @@
 #include "semantic/db.hxx"
 #include "interpreter/evaluator.hxx"
 #include <cctype>
+#include <filesystem>
 #include <fstream>
 #include <getopt.h>
 #include <iostream>
@@ -600,6 +601,22 @@ int main(int argc, char* argv[]) {
         // mode == "check"
         // Pass 1+2: collect symbols and resolve names via SemanticDB
         kex::semantic::SemanticDB db;
+
+        // Index all prelude files first so their TypeAnnotation declarations
+        // (describe, it, assert, etc.) are visible to ResolvePass when checking
+        // any user file.
+#ifdef KEX_PRELUDE_DIR
+        {
+            std::filesystem::path preludeDir(KEX_PRELUDE_DIR);
+            std::error_code ec;
+            for (const auto& entry : std::filesystem::directory_iterator(preludeDir, ec)) {
+                if (entry.path().extension() == ".kex") {
+                    db.updateFile(entry.path().string(), readFile(entry.path().string()));
+                }
+            }
+        }
+#endif
+
         db.updateFile(filepath, readFile(filepath));
 
         // Pass 3+: existing Analyzer (purity, type checking)

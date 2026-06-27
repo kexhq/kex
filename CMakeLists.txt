@@ -71,6 +71,9 @@ find_path(READLINE_INCLUDE readline/readline.h HINTS /opt/homebrew/opt/readline/
 
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
+target_compile_definitions(kex PRIVATE
+    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
+)
 
 if(READLINE_LIB AND READLINE_INCLUDE)
     target_compile_definitions(kex PRIVATE HAS_READLINE=1)

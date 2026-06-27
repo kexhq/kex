@@ -158,11 +158,18 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("print",     {genA()}, Type::unit());
     sig("readLine",  {}, Type::string());
     sig("inspect",   {genA()}, genA());  // passes value through, prints to stderr
-    // assert / it — test helpers
-    sig("assert",    {Type::boolean()}, Type::unit());
-    sig("assert",    {Type::boolean(), Type::string()}, Type::unit());
+    // assert — test helper (has type signatures; it/describe/assert_equal are
+    // prelude-only and registered separately in ResolvePass::isKnown)
+    sig("assert",       {Type::boolean()}, Type::unit());
+    sig("assert",       {Type::boolean(), Type::string()}, Type::unit());
     // die — never returns (diverges), so typed as Void (bottom type)
-    sig("die",       {Type::string()}, Type::voidType());
+    sig("die",          {Type::string()}, Type::voidType());
+    // Process primitives — args are opaque; typed permissively
+    sig("send",    {genA(), genA()}, Type::unit());
+    sig("worker",  {genA()}, Type::unit());
+    sig("worker",  {genA(), genA()}, Type::unit());
+    sig("supervisor", {}, Type::unit());
+    sig("supervisor", {genA()}, Type::unit());
 
     return table;
 }

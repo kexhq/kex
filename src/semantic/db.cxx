@@ -72,6 +72,15 @@ auto SemanticDB::exportsFor(const std::string& moduleName) const -> std::vector<
     return it != m_moduleExports.end() ? it->second : std::vector<SymbolInfo*>{};
 }
 
+auto SemanticDB::isGloballyKnown(const std::string& name) const -> bool {
+    for (const auto& [path, state] : m_files) {
+        for (const auto& sym : state.symbols) {
+            if (sym.name == name) return true;
+        }
+    }
+    return false;
+}
+
 auto SemanticDB::fileState(const std::string& path) -> FileState* {
     auto it = m_files.find(path);
     return it != m_files.end() ? &it->second : nullptr;

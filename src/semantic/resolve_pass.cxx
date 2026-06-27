@@ -1,11 +1,11 @@
 #include "resolve_pass.hxx"
 #include "analyzer.hxx"
 #include <algorithm>
+#include <cctype>
 #include <variant>
 
 namespace kex::semantic {
 
-// Simple edit distance for "did you mean X?" suggestions.
 static auto editDistance(const std::string& a, const std::string& b) -> int {
     const int m = static_cast<int>(a.size());
     const int n = static_cast<int>(b.size());
@@ -23,74 +23,96 @@ static auto editDistance(const std::string& a, const std::string& b) -> int {
 ResolvePass::ResolvePass() : m_stdlib(SignatureTable::withStdlib()) {}
 
 auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
+    m_db = &db;
     m_state = db.fileState(file);
     if (!m_state) return;
+
+    // Persistent module scope: synthetic top-level let bindings land here so
+    // they remain visible to all subsequent top-level items in the same file.
+    pushScope();
 
     for (const auto& item : m_state->ast.items) {
         std::visit([this](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, ast::FunctionDef>) {
-                pushScope();
-                for (const auto& clause : ptr->clauses) {
-                    // Bind param names into local scope
-                    for (const auto& p : clause.params) {
-                        if (p.name) defineLocal(*p.name);
-                        if (p.pattern) resolvePattern(**p.pattern);
-                    }
-                    resolveBody(clause.body);
-                }
-                popScope();
+                resolveFunctionDef(*ptr);
             } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
                 for (const auto& mitem : ptr->body) {
                     std::visit([this](const auto& mptr) {
                         using MT = std::decay_t<decltype(*mptr)>;
                         if constexpr (std::is_same_v<MT, ast::FunctionDef>) {
-                            pushScope();
-                            for (const auto& clause : mptr->clauses) {
-                                for (const auto& p : clause.params)
-                                    if (p.name) defineLocal(*p.name);
-                                resolveBody(clause.body);
-                            }
-                            popScope();
+                            resolveFunctionDef(*mptr);
                         } else if constexpr (std::is_same_v<MT, ast::MakeDef>) {
-                            for (const auto& bitem : mptr->body) {
-                                std::visit([this](const auto& bptr) {
-                                    using BT = std::decay_t<decltype(*bptr)>;
-                                    if constexpr (std::is_same_v<BT, ast::FunctionDef>) {
-                                        pushScope();
-                                        for (const auto& clause : bptr->clauses) {
-                                            for (const auto& p : clause.params)
-                                                if (p.name) defineLocal(*p.name);
-                                            resolveBody(clause.body);
-                                        }
-                                        popScope();
+                            resolveMakeFns(mptr->body);
+                        } else if constexpr (std::is_same_v<MT, ast::VisibilityBlock>) {
+                            for (const auto& vitem : mptr->items) {
+                                std::visit([this](const auto& vptr) {
+                                    using VT = std::decay_t<decltype(*vptr)>;
+                                    if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
+                                        resolveFunctionDef(*vptr);
+                                    } else if constexpr (std::is_same_v<VT, ast::MakeDef>) {
+                                        resolveMakeFns(vptr->body);
                                     }
-                                }, bitem);
+                                }, vitem);
                             }
                         }
                     }, mitem);
                 }
             } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
-                for (const auto& bitem : ptr->body) {
-                    std::visit([this](const auto& bptr) {
-                        using BT = std::decay_t<decltype(*bptr)>;
-                        if constexpr (std::is_same_v<BT, ast::FunctionDef>) {
-                            pushScope();
-                            for (const auto& clause : bptr->clauses) {
-                                for (const auto& p : clause.params)
-                                    if (p.name) defineLocal(*p.name);
-                                resolveBody(clause.body);
-                            }
-                            popScope();
-                        }
-                    }, bitem);
-                }
+                resolveMakeFns(ptr->body);
             } else if constexpr (std::is_same_v<T, ast::MainBlock>) {
-                pushScope();
-                resolveBody(ptr->body);
-                popScope();
+                if (ptr->synthetic) {
+                    resolveBody(ptr->body);
+                } else {
+                    pushScope();
+                    for (const auto& p : ptr->params)
+                        if (p.name) defineLocal(*p.name);
+                    resolveBody(ptr->body);
+                    popScope();
+                }
             }
         }, item);
+    }
+
+    popScope();
+}
+
+auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
+    pushScope();
+    for (const auto& clause : def.clauses) {
+        bindParams(clause.params);
+        resolveBody(clause.body);
+    }
+    popScope();
+}
+
+auto ResolvePass::resolveMakeFns(const std::vector<std::variant<
+        std::unique_ptr<ast::FunctionDef>,
+        std::unique_ptr<ast::TypeAnnotation>,
+        std::unique_ptr<ast::VisibilityBlock>>>& body) -> void {
+    for (const auto& item : body) {
+        std::visit([this](const auto& ptr) {
+            using T = std::decay_t<decltype(*ptr)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                resolveFunctionDef(*ptr);
+            } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
+                for (const auto& vitem : ptr->items) {
+                    std::visit([this](const auto& vptr) {
+                        using VT = std::decay_t<decltype(*vptr)>;
+                        if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
+                            resolveFunctionDef(*vptr);
+                        }
+                    }, vitem);
+                }
+            }
+        }, item);
+    }
+}
+
+auto ResolvePass::bindParams(const std::vector<ast::Param>& params) -> void {
+    for (const auto& p : params) {
+        if (p.name) defineLocal(*p.name);
+        if (p.pattern) resolvePattern(**p.pattern);
     }
 }
 
@@ -113,7 +135,11 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            if (!isKnown(node.name)) {
+            // Uppercase names are constructors (Just, Ok, Error…) — the
+            // TypeChecker validates them; skip undefined check here.
+            if (!node.name.empty()
+                    && std::islower(static_cast<unsigned char>(node.name[0]))
+                    && !isKnown(node.name)) {
                 auto hint = suggest(node.name);
                 std::string msg = "Undefined function: `" + node.name + "`";
                 if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
@@ -202,6 +228,15 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             resolveBody(node.body);
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+            // Pre-define name for local recursive lambdas so the body can
+            // refer to itself (e.g. `let loop(s) do ... loop(s+1) end`).
+            if (node.pattern && node.value) {
+                if (const auto* vp = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
+                    bool isFunc = std::holds_alternative<ast::Lambda>(node.value->kind)
+                               || std::holds_alternative<ast::BlockExpr>(node.value->kind);
+                    if (isFunc) defineLocal(vp->name);
+                }
+            }
             if (node.value) resolveExpr(*node.value);
             if (node.pattern) resolvePattern(*node.pattern);
         }
@@ -247,7 +282,9 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 if (v) resolveExpr(*v);
         }
         else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-            if (!isKnown(node.name)) {
+            if (!node.name.empty()
+                    && std::islower(static_cast<unsigned char>(node.name[0]))
+                    && !isKnown(node.name)) {
                 auto hint = suggest(node.name);
                 std::string msg = "Undefined function: `" + node.name + "`";
                 if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
@@ -277,7 +314,7 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
                 if (field.pattern)
                     resolvePattern(**field.pattern);
                 else
-                    defineLocal(field.name); // shorthand binding
+                    defineLocal(field.name);
             }
         } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
             for (const auto& e : node.elements)
@@ -290,23 +327,24 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
             if (node.start) resolvePattern(*node.start);
             if (node.end) resolvePattern(*node.end);
         }
-        // LiteralPattern, WildcardPattern: no bindings
     }, pat.kind);
 }
 
 auto ResolvePass::isKnown(const std::string& name) const -> bool {
-    // Check local scope stack (innermost first)
+    // Local scope stack (innermost first)
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it) {
         if (it->count(name)) return true;
     }
-    // Check file-level collected symbols
+    // Current file's collected symbols
     if (m_state) {
         for (const auto& sym : m_state->symbols) {
             if (sym.name == name) return true;
         }
     }
-    // Check stdlib
+    // Stdlib function signatures
     if (m_stdlib.lookup(name)) return true;
+    // Prelude and other indexed files (e.g. src/prelude/*.kex loaded into DB)
+    if (m_db && m_db->isGloballyKnown(name)) return true;
     return false;
 }
 
