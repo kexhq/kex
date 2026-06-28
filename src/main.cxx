@@ -1235,7 +1235,7 @@ int main(int argc, char *argv[])
 
     std::string filepath = argv[optind];
 
-    // `kex file.beam [args]` or `kex -R file.beam [args]` — run a compiled BEAM module.
+    // `kex file.kx.beam [args]` or `kex file.beam [args]` — run a compiled BEAM module.
     if (filepath.size() > 5 &&
         filepath.compare(filepath.size() - 5, 5, ".beam") == 0)
     {
@@ -1243,18 +1243,57 @@ int main(int argc, char *argv[])
         for (int i = optind + 1; i < argc; i++)
             beamArgs.push_back(argv[i]);
 
-        std::string modFile = filepath;
-        auto sl = modFile.rfind('/');
-        if (sl != std::string::npos) modFile = modFile.substr(sl + 1);
-        std::string moduleName = modFile.substr(0, modFile.size() - 5);
-        std::string beamDir = sl != std::string::npos ? filepath.substr(0, sl) : ".";
+        namespace fs = std::filesystem;
+        std::string absBeamPath = fs::weakly_canonical(filepath).string();
+        std::string absBeamDir  = fs::path(absBeamPath).parent_path().string();
+        std::string modFile     = fs::path(absBeamPath).filename().string();
 
-        // Call main/1 with args if args are given, otherwise main/0.
-        std::string mainCall = beamArgs.empty()
-            ? moduleName + ":main(), halt()"
-            : moduleName + ":main(init:get_plain_arguments()), halt()";
-        std::string runCmd = "erl -noshell -pa " + beamDir +
-                             " -eval '" + mainCall + "'";
+        // Derive module name from filename convention:
+        //   <stem>.kx.beam → kex_<stem>   (our compiled output)
+        //   kex_<x>.beam   → kex_<x>      (backward compat)
+        //   anything.beam  → anything      (external module)
+        std::string moduleName;
+        if (modFile.size() > 8 &&
+            modFile.compare(modFile.size() - 8, 8, ".kx.beam") == 0) {
+            moduleName = "kex_" + modFile.substr(0, modFile.size() - 8);
+        } else {
+            moduleName = modFile.substr(0, modFile.size() - 5);
+        }
+
+        // Build kex runtime beams into a temp dir so kex_io etc. are available.
+        std::string rtBeamDir;
+        {
+            fs::path bin = fs::weakly_canonical(argv[0]);
+            for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path()) {
+                auto rtSrc = dir / "runtime" / "src";
+                if (fs::exists(rtSrc)) {
+                    char rtTmp[] = "/tmp/kex_rt_XXXXXX";
+                    if (mkdtemp(rtTmp)) {
+                        rtBeamDir = rtTmp;
+                        for (const auto& e : fs::directory_iterator(rtSrc)) {
+                            if (e.path().extension() == ".erl") {
+                                std::string cmd = "erlc -o " + rtBeamDir + " "
+                                    + e.path().string() + " > /dev/null 2>&1";
+                                std::system(cmd.c_str());
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Load explicitly — code:load_abs rejects when filename != module name,
+        // so use code:load_binary which skips that check.
+        std::string mainCall =
+            "{ok,_Bin}=file:read_file(\"" + absBeamPath + "\"), "
+            "code:load_binary('" + moduleName + "',\"" + absBeamPath + "\",_Bin), "
+            "case lists:member({main,1},erlang:get_module_info('" + moduleName + "',exports)) of "
+            "true -> " + moduleName + ":main(init:get_plain_arguments()); "
+            "false -> " + moduleName + ":main() end, halt()";
+        std::string runCmd = "erl -noshell -pa " + absBeamDir;
+        if (!rtBeamDir.empty()) runCmd += " -pa " + rtBeamDir;
+        runCmd += " -eval '" + mainCall + "'";
         if (!beamArgs.empty()) {
             runCmd += " -extra";
             for (const auto& a : beamArgs) runCmd += " " + a;
@@ -1459,17 +1498,32 @@ int main(int argc, char *argv[])
                     std::filesystem::remove_all(tempDir);
                 return 1;
             }
-            if (tempDir.empty())
-                std::cerr << "  done  " << outputDir << "/" << result.moduleName << ".beam\n";
+            // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
+            // The internal Erlang module name stays kex_<stem> inside the file.
+            std::string internalBeam = outputDir + "/" + result.moduleName + ".beam";
+            std::string kxBeam = outputDir + "/" + stem + ".kx.beam";
+            if (tempDir.empty()) {
+                std::filesystem::rename(internalBeam, kxBeam);
+                std::cerr << "  done  " << kxBeam << "\n";
+            } else {
+                // In temp-dir (interpreter/REPL) mode keep the internal name so
+                // -pa <tempDir> auto-loads it by module name.
+                kxBeam = internalBeam;
+            }
 
             if (compileRun)
             {
+                // Use code:load_binary for explicit load (filename != module name).
+                namespace fs = std::filesystem;
+                std::string absBeam = fs::weakly_canonical(kxBeam).string();
+                std::string loadExpr =
+                    "{ok,_B}=file:read_file(\"" + absBeam + "\"), "
+                    "code:load_binary('" + result.moduleName + "',\"" + absBeam + "\",_B), ";
                 std::string mainCall = result.mainArity == 1
-                    ? result.moduleName + ":main(init:get_plain_arguments()), halt()"
-                    : result.moduleName + ":main(), halt()";
+                    ? loadExpr + result.moduleName + ":main(init:get_plain_arguments()), halt()"
+                    : loadExpr + result.moduleName + ":main(), halt()";
                 std::string runCmd = "erl -noshell -pa " + outputDir +
                                      " -eval '" + mainCall + "'";
-                // Pass script arguments after -extra so init:get_plain_arguments() returns them
                 if (result.mainArity == 1 && !scriptArgs.empty()) {
                     runCmd += " -extra";
                     for (const auto& a : scriptArgs)

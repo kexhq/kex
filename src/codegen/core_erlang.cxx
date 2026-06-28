@@ -429,7 +429,9 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'kex_io':'to_string'(" + recv + ")";
 
             // String methods
-            if (node.method == "length" || node.method == "count")
+            if (node.method == "empty?" && node.args.empty())
+                return "call 'erlang':'=:='(" + recv + ", [])";
+            if ((node.method == "length" || node.method == "count") && !node.block && node.args.empty())
                 return "call 'erlang':'length'(" + recv + ")";
             if (node.method == "upperCase" || node.method == "upcase")
                 return "call 'string':'to_upper'(" + recv + ")";
@@ -446,7 +448,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // List methods
             if (node.method == "push" && node.args.size() == 1)
                 return "call 'erlang':'++'(" + recv + ", [" + firstArg() + "])";
-            if (node.method == "count" && node.args.empty())
+            if (node.method == "count" && node.args.empty() && !node.block)
                 return "call 'erlang':'length'(" + recv + ")";
             if (node.method == "first")
                 return "call 'erlang':'hd'(" + recv + ")";
@@ -479,6 +481,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             if (node.method == "map") {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
                 return letExpr + "call 'lists':'map'(" + fnVar + ", " + recv + ")";
+            }
+            // count { |x| pred } → length(filter(pred, list))
+            if (node.method == "count" && (node.block || !node.args.empty())) {
+                auto [fnVar, letExpr] = bindFun(rawBlock());
+                return letExpr + "call 'erlang':'length'(call 'lists':'filter'(" + fnVar + ", " + recv + "))";
             }
             if (node.method == "filter" || node.method == "select") {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
@@ -1247,6 +1254,10 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
         functionTexts.push_back(mOut.str());
     }
 
+    // erlc +from_core does NOT auto-generate module_info, so we emit it explicitly.
+    m_exports.push_back({"module_info", 0});
+    m_exports.push_back({"module_info", 1});
+
     // Build export list
     std::string exportList;
     for (size_t i = 0; i < m_exports.size(); i++) {
@@ -1261,6 +1272,15 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
     for (const auto& ft : functionTexts) {
         src << ft << "\n";
     }
+    // module_info stubs
+    src << "'module_info'/0 =\n"
+        << "  fun () ->\n"
+        << "    call 'erlang':'get_module_info'\n"
+        << "         ('" << m_moduleName << "')\n";
+    src << "'module_info'/1 =\n"
+        << "  fun (_MIKey) ->\n"
+        << "    call 'erlang':'get_module_info'\n"
+        << "         ('" << m_moduleName << "', _MIKey)\n";
     src << "end\n";
 
     // Determine main arity from exports
