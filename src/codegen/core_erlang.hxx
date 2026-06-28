@@ -17,6 +17,7 @@ public:
     struct EmitResult {
         std::string source;      // Core Erlang text (.core file content)
         std::string moduleName;  // e.g. "kex_hello"
+        int mainArity = 0;       // 0 = main/0, 1 = main/1 (args)
     };
 
     // fileName should be the stem (e.g. "hello" from "hello.kex").
@@ -27,7 +28,8 @@ private:
     // Top-level emitters
     auto emitFunctionDef(const ast::FunctionDef& fn) -> std::string;
     // Emit a group of same-name FunctionDef nodes as a single function.
-    auto emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group) -> std::string;
+    auto emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
+                           bool hasImplicitThis = false) -> std::string;
     auto emitMainBlock(const ast::MainBlock& main) -> std::string;
 
     // Expression emitter — returns a Core Erlang expression string.
@@ -62,8 +64,10 @@ private:
     int m_varCounter = 0;
     std::vector<FuncExport> m_exports;
     // name → arity for all top-level functions defined in this module.
-    // Used to distinguish static local calls from calls-through-variables.
     std::unordered_map<std::string, int> m_topLevelFns;
+    // field_name → [(record_name, 1-based tuple position)]
+    // Used to generate direct element() calls during field destructuring.
+    std::unordered_map<std::string, std::vector<std::pair<std::string,int>>> m_fieldAccessors;
 };
 
 } // namespace kex::codegen

@@ -660,9 +660,22 @@ int main(int argc, char *argv[])
         if (!rtd) { std::cerr << "error: mkdtemp failed\n"; return 1; }
         std::string beamDir = rtd;
 
-        if (!runtimeErl.empty()) {
-            std::string cmd = "erlc -o " + beamDir + " " + runtimeErl + " > /dev/null 2>&1";
-            std::system(cmd.c_str());
+        {
+            namespace fs = std::filesystem;
+            fs::path bin = fs::weakly_canonical(argv[0]);
+            for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path())
+            {
+                auto rtDir = dir / "runtime" / "src";
+                if (fs::exists(rtDir)) {
+                    for (const auto& entry : fs::directory_iterator(rtDir))
+                        if (entry.path().extension() == ".erl") {
+                            std::string cmd = "erlc -o " + beamDir + " "
+                                            + entry.path().string() + " > /dev/null 2>&1";
+                            std::system(cmd.c_str());
+                        }
+                    break;
+                }
+            }
         }
 
         std::cout << "kex 0.1.0 — interactive REPL (BEAM)\n";
@@ -1222,26 +1235,31 @@ int main(int argc, char *argv[])
 
     std::string filepath = argv[optind];
 
-    // `kex -R file.beam` — run an already-compiled BEAM module directly.
-    if ((mode == "compile" && compileRun) || mode == "run-beam")
+    // `kex file.beam [args]` or `kex -R file.beam [args]` — run a compiled BEAM module.
+    if (filepath.size() > 5 &&
+        filepath.compare(filepath.size() - 5, 5, ".beam") == 0)
     {
-        if (filepath.size() > 5 &&
-            filepath.compare(filepath.size() - 5, 5, ".beam") == 0)
-        {
-            // Derive module name from filename: strip path and .beam suffix.
-            std::string modFile = filepath;
-            auto sl = modFile.rfind('/');
-            if (sl != std::string::npos)
-                modFile = modFile.substr(sl + 1);
-            std::string moduleName = modFile.substr(0, modFile.size() - 5);
-            // Determine the directory containing the .beam file for -pa.
-            std::string beamDir = ".";
-            if (sl != std::string::npos)
-                beamDir = filepath.substr(0, sl);
-            std::string runCmd = "erl -noshell -pa " + beamDir +
-                                 " -eval '" + moduleName + ":main(), halt()'";
-            return std::system(runCmd.c_str());
+        std::vector<std::string> beamArgs;
+        for (int i = optind + 1; i < argc; i++)
+            beamArgs.push_back(argv[i]);
+
+        std::string modFile = filepath;
+        auto sl = modFile.rfind('/');
+        if (sl != std::string::npos) modFile = modFile.substr(sl + 1);
+        std::string moduleName = modFile.substr(0, modFile.size() - 5);
+        std::string beamDir = sl != std::string::npos ? filepath.substr(0, sl) : ".";
+
+        // Call main/1 with args if args are given, otherwise main/0.
+        std::string mainCall = beamArgs.empty()
+            ? moduleName + ":main(), halt()"
+            : moduleName + ":main(init:get_plain_arguments()), halt()";
+        std::string runCmd = "erl -noshell -pa " + beamDir +
+                             " -eval '" + mainCall + "'";
+        if (!beamArgs.empty()) {
+            runCmd += " -extra";
+            for (const auto& a : beamArgs) runCmd += " " + a;
         }
+        return std::system(runCmd.c_str());
     }
 
     // Reject non-.kex files before trying to parse them.
@@ -1399,25 +1417,27 @@ int main(int argc, char *argv[])
             }
 
             // --compile: also invoke erlc to produce a .beam file.
-            // Locate kex_io.erl relative to this binary.
-            std::string runtimeErl;
+            // Locate and compile runtime Erlang modules (kex_io.erl, kex_file.erl, ...).
             {
                 namespace fs = std::filesystem;
                 fs::path bin = fs::weakly_canonical(argv[0]);
                 for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path())
                 {
-                    auto candidate = dir / "runtime" / "src" / "kex_io.erl";
-                    if (fs::exists(candidate))
+                    auto rtDir = dir / "runtime" / "src";
+                    if (fs::exists(rtDir))
                     {
-                        runtimeErl = candidate.string();
+                        for (const auto& entry : fs::directory_iterator(rtDir))
+                        {
+                            if (entry.path().extension() == ".erl")
+                            {
+                                std::string rtCmd = "erlc -o " + outputDir + " "
+                                                  + entry.path().string() + " > /dev/null 2>&1";
+                                std::system(rtCmd.c_str());
+                            }
+                        }
                         break;
                     }
                 }
-            }
-            if (!runtimeErl.empty())
-            {
-                std::string rtCmd = "erlc -o " + outputDir + " " + runtimeErl + " > /dev/null 2>&1";
-                std::system(rtCmd.c_str());
             }
 
             std::string coreCmd = "erlc +from_core -pa " + outputDir +
@@ -1444,8 +1464,17 @@ int main(int argc, char *argv[])
 
             if (compileRun)
             {
+                std::string mainCall = result.mainArity == 1
+                    ? result.moduleName + ":main(init:get_plain_arguments()), halt()"
+                    : result.moduleName + ":main(), halt()";
                 std::string runCmd = "erl -noshell -pa " + outputDir +
-                                     " -eval '" + result.moduleName + ":main(), halt()'";
+                                     " -eval '" + mainCall + "'";
+                // Pass script arguments after -extra so init:get_plain_arguments() returns them
+                if (result.mainArity == 1 && !scriptArgs.empty()) {
+                    runCmd += " -extra";
+                    for (const auto& a : scriptArgs)
+                        runCmd += " " + a;
+                }
                 int ret = std::system(runCmd.c_str());
                 if (!tempDir.empty())
                     std::filesystem::remove_all(tempDir);
