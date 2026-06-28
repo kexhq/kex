@@ -413,20 +413,23 @@ auto printUsage(const char* progName) -> void {
     std::cerr << "Usage: " << progName << " [options] <file.kex>\n"
               << "\n"
               << "Options:\n"
-              << "  -r, --run         Execute the program (default); aborts on type errors\n"
+              << "  -r, --run         Interpret the program (default)\n"
+              << "  -c, --compile     Compile to BEAM via Core Erlang\n"
+              << "  -R, --run-beam    Compile to BEAM and execute (implies -c)\n"
+              << "  -C, --check       Run semantic analysis only\n"
               << "  -n, --no-check    Skip semantic check when running\n"
               << "  -l, --lex         Print token stream\n"
               << "  -p, --parse       Print AST\n"
-              << "  -c, --check       Run semantic analysis only\n"
               << "  -j, --json        With --check: output diagnostics as JSON\n"
               << "  -s, --summary     Print public API signatures (Kex syntax)\n"
               << "  -t, --types       With --check: dump inferred expression types\n"
               << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
-              << "  -o <dir>          Output directory for --compile (default: .)\n"
+              << "  -o <dir>          Output directory for -c / --emit-core (default: .)\n"
               << "  -h, --help        Show this help\n"
               << "  -v, --version     Show version\n"
               << "  --no-colors       Disable ANSI color output\n";
 }
+
 
 auto printVersion() -> void {
     std::cout << "kex 0.1.0\n";
@@ -438,12 +441,14 @@ int main(int argc, char* argv[]) {
         {"no-check",  no_argument,       nullptr, 'n'},
         {"lex",       no_argument,       nullptr, 'l'},
         {"parse",     no_argument,       nullptr, 'p'},
-        {"check",     no_argument,       nullptr, 'c'},
+        {"check",     no_argument,       nullptr, 'C'},
+        {"compile",   no_argument,       nullptr, 'c'},
+        {"run-beam",  no_argument,       nullptr, 'R'},
         {"json",      no_argument,       nullptr, 'j'},
         {"summary",   no_argument,       nullptr, 's'},
         {"types",     no_argument,       nullptr, 't'},
         {"emit-core", no_argument,       nullptr, 'e'},
-        {"complete",  required_argument, nullptr, 'C'},
+        {"complete",  required_argument, nullptr, 'K'},
         {"help",      no_argument,       nullptr, 'h'},
         {"version",   no_argument,       nullptr, 'v'},
         {"no-colors", no_argument,       nullptr, 'N'},
@@ -459,19 +464,22 @@ int main(int argc, char* argv[]) {
     std::string outputDir = ".";
     int opt;
 
-    while ((opt = getopt_long(argc, argv, "rnlcjspethvC:o:", longOptions, nullptr)) != -1) {
+    bool compileRun = false;
+    while ((opt = getopt_long(argc, argv, "rnlcCRjspethvK:o:", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'r': mode = "run"; break;
             case 'n': skipCheck = true; break;
             case 'l': mode = "lex"; break;
             case 'p': mode = "parse"; break;
-            case 'c': mode = "check"; break;
+            case 'C': mode = "check"; break;
+            case 'c': mode = "compile"; break;
+            case 'R': mode = "compile"; compileRun = true; break;
             case 'j': jsonOutput = true; mode = "check"; break;
             case 's': summaryMode = true; mode = "check"; break;
             case 't': dumpTypes = true; break;
             case 'e': mode = "emit-core"; break;
             case 'o': outputDir = optarg; break;
-            case 'C': completePrefix = optarg; mode = "complete"; break;
+            case 'K': completePrefix = optarg; mode = "complete"; break;
             case 'h': printUsage(argv[0]); return 0;
             case 'v': printVersion(); return 0;
             case 'N': kex::color::enabled = false; break;
@@ -822,6 +830,33 @@ int main(int argc, char* argv[]) {
     }
 
     std::string filepath = argv[optind];
+
+    // `kex -R file.beam` — run an already-compiled BEAM module directly.
+    if ((mode == "compile" && compileRun) || mode == "run-beam") {
+        if (filepath.size() > 5 &&
+            filepath.compare(filepath.size() - 5, 5, ".beam") == 0) {
+            // Derive module name from filename: strip path and .beam suffix.
+            std::string modFile = filepath;
+            auto sl = modFile.rfind('/');
+            if (sl != std::string::npos) modFile = modFile.substr(sl + 1);
+            std::string moduleName = modFile.substr(0, modFile.size() - 5);
+            // Determine the directory containing the .beam file for -pa.
+            std::string beamDir = ".";
+            if (sl != std::string::npos) beamDir = filepath.substr(0, sl);
+            std::string runCmd = "erl -noshell -pa " + beamDir +
+                                 " -eval '" + moduleName + ":main(), halt()'";
+            return std::system(runCmd.c_str());
+        }
+    }
+
+    // Reject non-.kex files before trying to parse them.
+    if (filepath.size() < 4 ||
+        filepath.compare(filepath.size() - 4, 4, ".kex") != 0) {
+        std::cerr << "error: " << filepath
+                  << ": expected a .kex source file\n";
+        return 1;
+    }
+
     auto source = readFile(filepath);
     if (source.empty()) return 1;
 
@@ -890,7 +925,7 @@ int main(int argc, char* argv[]) {
             return 0;
         }
 
-        if (mode == "emit-core") {
+        if (mode == "compile" || mode == "emit-core") {
             // Derive module stem from filename (e.g. "hello" from "hello.kex")
             std::string stem = filepath;
             auto slash = stem.rfind('/');
@@ -928,7 +963,44 @@ int main(int argc, char* argv[]) {
                 return 1;
             }
             outFile << result.source;
-            std::cerr << "wrote " << outPath << "\n";
+            outFile.close();
+            if (mode == "emit-core") {
+                std::cerr << "wrote " << outPath << "\n";
+                return 0;
+            }
+
+            // --compile: also invoke erlc to produce a .beam file.
+            // Locate kex_io.erl relative to this binary.
+            std::string runtimeErl;
+            {
+                namespace fs = std::filesystem;
+                fs::path bin = fs::weakly_canonical(argv[0]);
+                for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path()) {
+                    auto candidate = dir / "runtime" / "src" / "kex_io.erl";
+                    if (fs::exists(candidate)) { runtimeErl = candidate.string(); break; }
+                }
+            }
+            if (!runtimeErl.empty()) {
+                std::string rtCmd = "erlc -o " + outputDir + " " + runtimeErl
+                                    + " > /dev/null 2>&1";
+                std::system(rtCmd.c_str());
+            }
+
+            std::string coreCmd = "erlc +from_core -pa " + outputDir +
+                                  " -o " + outputDir + " " + outPath;
+            std::cerr << "  erlc  " << result.moduleName << "\n";
+            int erlcRet = std::system(coreCmd.c_str());
+            if (erlcRet != 0) {
+                std::cerr << "error: erlc failed\n";
+                return 1;
+            }
+            std::cerr << "  done  " << outputDir << "/" << result.moduleName << ".beam\n";
+
+            if (compileRun) {
+                std::string runCmd = "erl -noshell -pa " + outputDir +
+                                     " -eval '" + result.moduleName + ":main(), halt()'";
+                return std::system(runCmd.c_str());
+            }
             return 0;
         }
 
