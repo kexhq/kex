@@ -52,5 +52,5 @@ foul module IO do
   # Like C's exit(3); the shell sees this code.
   #
   # @example  IO.exit(1)
-  exit : Int -> Unit
+  exit : Integer -> Unit
 end

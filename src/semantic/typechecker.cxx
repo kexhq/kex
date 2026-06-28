@@ -64,7 +64,9 @@ auto TypeChecker::check(const ast::Program& program,
 
     // Register built-in types
     // (done before registerDeclaredSignatures so annotation TypeExprs can resolve these names)
-    m_globals.set("Int", Type::int64());
+    // Int is a user-facing alias for Integer (arbitrary precision).
+    // Fixed-width integers are available as Int32, Int64, etc.
+    m_globals.set("Int", Type::integer());
     m_globals.set("Integer", Type::integer());
     m_globals.set("Char", Type::charT());
     m_globals.set("String", Type::string());

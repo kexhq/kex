@@ -1,0 +1,81 @@
+# kex: no-check
+# Specs for list functions added after the initial stdlib: second, third,
+# sum with block, product, product with block.
+
+describe("second and third") do
+  it("second returns Just of the second element") do
+    assert([10, 20, 30].second == Just(20))
+    assert(["a", "b", "c"].second == Just("b"))
+  end
+
+  it("second returns None when the list has fewer than two elements") do
+    assert([1].second == None)
+    assert([].second  == None)
+  end
+
+  it("third returns Just of the third element") do
+    assert([10, 20, 30].third == Just(30))
+    assert([1, 2, 3, 4].third == Just(3))
+  end
+
+  it("third returns None when the list has fewer than three elements") do
+    assert([1, 2].third == None)
+    assert([1].third    == None)
+    assert([].third     == None)
+  end
+
+  it("second and third work on strings") do
+    assert("abc".second == Just('b'))
+    assert("abc".third  == Just('c'))
+    assert("a".second   == None)
+  end
+
+  it("first/second/third are consistent with at") do
+    let xs = [10, 20, 30]
+    assert(xs.first.or(-1)  == xs.at(0).or(-1))
+    assert(xs.second.or(-1) == xs.at(1).or(-1))
+    assert(xs.third.or(-1)  == xs.at(2).or(-1))
+  end
+end
+
+describe("sum with block") do
+  it("sums the result of applying the block to each element") do
+    assert(["hello", "hi", "kex"].sum { |s| s.count } == 10)
+  end
+
+  it("returns 0 for an empty list") do
+    assert([].sum { |s| s.count } == 0)
+  end
+
+  it("works with integer arithmetic in the block") do
+    assert([1, 2, 3, 4].sum { |n| n * n } == 30)
+  end
+
+  it("plain sum is unaffected") do
+    assert([1, 2, 3].sum == 6)
+    assert([1.5, 2.5].sum == 4.0)
+  end
+end
+
+describe("product") do
+  it("multiplies all elements") do
+    assert([1, 2, 3, 4].product == 24)
+    assert([5].product == 5)
+  end
+
+  it("returns 1 for an empty list") do
+    assert([].product == 1)
+  end
+
+  it("works with floats") do
+    assert([2.0, 3.0].product == 6.0)
+  end
+
+  it("product with block maps then multiplies") do
+    assert([1, 2, 3, 4].product { |n| n * 2 } == 384)
+  end
+
+  it("product with block returns 1 for an empty list") do
+    assert([].product { |n| n } == 1)
+  end
+end

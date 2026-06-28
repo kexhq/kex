@@ -1,0 +1,227 @@
+# kex: no-check
+# Specs for the Map module — access, modification, transformation, iteration.
+
+describe("Map — construction and basic access") do
+  it("get returns Just for a present key") do
+    let m = { a: 1, b: 2 }
+    assert(m.get(:a) == Just(1))
+    assert(m.get(:b) == Just(2))
+  end
+
+  it("get returns None for a missing key") do
+    let m = { a: 1 }
+    assert(m.get(:z) == None)
+  end
+
+  it("get with default returns the value unwrapped") do
+    let m = { a: 1 }
+    assert(m.get(:a, 0) == 1)
+    assert(m.get(:z, 0) == 0)
+  end
+
+  it("has? is true for present keys and false otherwise") do
+    let m = { x: 10 }
+    assert(m.has?(:x))
+    assert(!m.has?(:y))
+  end
+
+  it("count returns the number of entries") do
+    assert({}.count == 0)
+    assert({ a: 1 }.count == 1)
+    assert({ a: 1, b: 2, c: 3 }.count == 3)
+  end
+
+  it("empty? is true for an empty map") do
+    assert({}.empty?)
+    assert(!{ a: 1 }.empty?)
+  end
+
+  it("keys and values return insertion-ordered lists") do
+    let m = { a: 1, b: 2, c: 3 }
+    assert(m.keys   == [:a, :b, :c])
+    assert(m.values == [1, 2, 3])
+  end
+
+  it("entries returns a list of (k, v) tuples") do
+    let m = { a: 1, b: 2 }
+    let es = m.entries
+    assert(es.count == 2)
+    let (k, v) = es.first.or((:z, 0))
+    assert(k == :a)
+    assert(v == 1)
+  end
+end
+
+describe("Map — modification") do
+  it("put adds a new key") do
+    let m = { a: 1 }.put(:b, 2)
+    assert(m.get(:b).or(0) == 2)
+    assert(m.count == 2)
+  end
+
+  it("put replaces an existing key") do
+    let m = { a: 1 }.put(:a, 99)
+    assert(m.get(:a).or(0) == 99)
+    assert(m.count == 1)
+  end
+
+  it("delete removes a key") do
+    let m = { a: 1, b: 2 }.delete(:a)
+    assert(!m.has?(:a))
+    assert(m.has?(:b))
+    assert(m.count == 1)
+  end
+
+  it("delete is a no-op for a missing key") do
+    let m = { a: 1 }
+    assert(m.delete(:z).count == 1)
+  end
+
+  it("put and delete return new maps — original is unchanged") do
+    let orig = { a: 1 }
+    let _ = orig.put(:b, 2)
+    assert(!orig.has?(:b))
+    let _ = orig.delete(:a)
+    assert(orig.has?(:a))
+  end
+end
+
+describe("Map — merge") do
+  it("merge combines two maps") do
+    let m = { a: 1, b: 2 }.merge({ c: 3 })
+    assert(m.count == 3)
+    assert(m.get(:c).or(0) == 3)
+  end
+
+  it("merge — right-hand values win on conflict") do
+    let m = { a: 1, b: 2 }.merge({ b: 99, c: 3 })
+    assert(m.get(:b).or(0) == 99)
+    assert(m.get(:a).or(0) == 1)
+    assert(m.get(:c).or(0) == 3)
+  end
+
+  it("merging with an empty map is identity") do
+    let m = { a: 1, b: 2 }
+    assert(m.merge({}).count == 2)
+    assert({}.merge(m).count == 2)
+  end
+end
+
+describe("Map — transformation") do
+  it("mapValues transforms values, keys unchanged") do
+    let m = { a: 1, b: 2, c: 3 }.mapValues { |v| v * 10 }
+    assert(m.get(:a).or(0) == 10)
+    assert(m.get(:b).or(0) == 20)
+    assert(m.get(:c).or(0) == 30)
+  end
+
+  it("mapKeys transforms keys, values unchanged") do
+    let m = { "a": 1, "b": 2 }.mapKeys { |k| k.upperCase }
+    assert(m.get("A").or(0) == 1)
+    assert(m.get("B").or(0) == 2)
+  end
+
+  it("map returns a list of transformed entries") do
+    let result = { a: 1, b: 2 }.map { |k, v| v * 2 }
+    assert(result.count == 2)
+    assert(result.contains?(2))
+    assert(result.contains?(4))
+  end
+end
+
+describe("Map — filter and reject") do
+  it("filter keeps only matching entries") do
+    let m = { a: 1, b: 2, c: 3, d: 4 }.filter { |k, v| v > 2 }
+    assert(m.count == 2)
+    assert(m.has?(:c))
+    assert(m.has?(:d))
+    assert(!m.has?(:a))
+  end
+
+  it("reject removes matching entries") do
+    let m = { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }
+    assert(m.count == 1)
+    assert(m.has?(:a))
+    assert(!m.has?(:b))
+  end
+
+  it("filter on empty map returns empty map") do
+    assert({}.filter { |k, v| true }.count == 0)
+  end
+end
+
+describe("Map — predicates") do
+  it("any? returns true when at least one entry matches") do
+    assert({ a: 1, b: 5 }.any? { |k, v| v > 3 })
+    assert(!{ a: 1, b: 2 }.any? { |k, v| v > 3 })
+  end
+
+  it("all? returns true when every entry matches") do
+    assert({ a: 2, b: 4 }.all? { |k, v| v > 0 })
+    assert(!{ a: 2, b: 4 }.all? { |k, v| v > 2 })
+  end
+
+  it("all? is true for an empty map") do
+    assert({}.all? { |k, v| false })
+  end
+
+  it("count with predicate counts matching entries") do
+    let m = { a: 1, b: 2, c: 3, d: 4 }
+    assert(m.count { |k, v| v.even? } == 2)
+    assert(m.count { |k, v| v > 10 } == 0)
+  end
+end
+
+describe("Map — find and each") do
+  it("find returns Just of the first matching (k, v) tuple") do
+    let result = { a: 1, b: 5, c: 2 }.find { |k, v| v > 3 }
+    assert(result != None)
+    match result do
+      Just((k, v)) -> do
+        assert(k == :b)
+        assert(v == 5)
+      end
+      None -> assert(false, "expected Just")
+    end
+  end
+
+  it("find returns None when no entry matches") do
+    assert({ a: 1, b: 2 }.find { |k, v| v > 99 } == None)
+  end
+
+  it("each visits every entry") do
+    var total = 0
+    { a: 1, b: 2, c: 3 }.each { |k, v| total = total + v }
+    assert(total == 6)
+  end
+end
+
+describe("Map — does not break list operations") do
+  it("list each still works after map builtins are loaded") do
+    var sum = 0
+    [1, 2, 3].each { |x| sum = sum + x }
+    assert(sum == 6)
+  end
+
+  it("list map still works") do
+    assert([1, 2, 3].map { |x| x * 2 } == [2, 4, 6])
+  end
+
+  it("list filter still works") do
+    assert([1, 2, 3, 4].filter { |x| x.even? } == [2, 4])
+  end
+
+  it("list any? and all? still work") do
+    assert([1, 2, 3].any? { |x| x > 2 })
+    assert([1, 2, 3].all? { |x| x > 0 })
+  end
+
+  it("list count with predicate still works") do
+    assert([1, 2, 3, 4].count { |x| x.even? } == 2)
+  end
+
+  it("list find still works") do
+    assert([1, 2, 3].find { |x| x > 1 } == 2)
+    assert([1, 2, 3].find { |x| x > 9 } == None)
+  end
+end

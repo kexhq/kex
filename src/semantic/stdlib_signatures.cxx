@@ -180,6 +180,18 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("delete", {Type::map(genA(), genE()), genA()}, Type::map(genA(), genE()));
     sig("keys",   {Type::map(genA(), genE())}, Type::list(genA()));
     sig("values", {Type::map(genA(), genE())}, Type::list(genE()));
+    sig("each",   {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::unit())}, Type::unit());
+    sig("map",    {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::typeVar(-3))}, Type::list(Type::typeVar(-3)));
+    sig("mapValues", {Type::map(genA(), genE()), Type::func({genE()}, Type::typeVar(-3))}, Type::map(genA(), Type::typeVar(-3)));
+    sig("mapKeys",   {Type::map(genA(), genE()), Type::func({genA()}, Type::typeVar(-3))}, Type::map(Type::typeVar(-3), genE()));
+    sig("filter", {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::map(genA(), genE()));
+    sig("reject", {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::map(genA(), genE()));
+    sig("merge",  {Type::map(genA(), genE()), Type::map(genA(), genE())}, Type::map(genA(), genE()));
+    sig("any?",   {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::boolean());
+    sig("all?",   {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::boolean());
+    sig("count",  {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::integer());
+    sig("find",   {Type::map(genA(), genE()), Type::func({genA(), genE()}, Type::boolean())}, Type::optional(Type::tuple({genA(), genE()})));
+    sig("entries",{Type::map(genA(), genE())}, Type::list(Type::tuple({genA(), genE()})));
 
     // src/interpreter/stdlib/string.cxx
     sig("split",      {Type::string(), Type::string()}, Type::list(Type::string()));

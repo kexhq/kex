@@ -1,0 +1,8 @@
+let fact(n: Integer) = (2..n).product
+
+main do
+  IO.printLine(fact(4))
+  IO.printLine(fact(5))
+  IO.printLine(fact(10))
+  IO.printLine(fact(50))
+end

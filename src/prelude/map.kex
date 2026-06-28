@@ -5,37 +5,23 @@ make Map<K, V> do
   # Returns the value for +key+ wrapped in +Just+, or +None+ if absent.
   # When a +default+ is supplied, returns the raw unwrapped value instead.
   #
-  # @param key     [K]
-  # @param default [V]  (optional)
-  # @return [V?] without default; [V] with default
-  #
   # @example
   #   m = { name: "Alice", age: 32 }
   #   m.get(:name)         # => Just("Alice")
-  #   m.get(:missing)      # => None
   #   m.get(:missing, 0)   # => 0
   get :> K -> V?
   get :> (K, V) -> V
 
   # Returns a new map with +key+ mapped to +value+.
-  # If +key+ already exists its old value is replaced.
-  # Use +put!+ to rebind the receiver variable in place.
-  #
-  # @param key   [K]
-  # @param value [V]
-  # @return [Map<K, V>]
+  # Use +put!+ to rebind the receiver variable.
   #
   # @example
   #   m = {}
-  #   m.put!(:x, 1)
-  #   m   # => { x: 1 }
+  #   m.put!(:x, 1)   # => { x: 1 }
   put :> (K, V) -> Map<K, V>
 
   # Returns a new map without +key+. No-op if the key is absent.
-  # Use +delete!+ to rebind the receiver variable in place.
-  #
-  # @param key [K]
-  # @return [Map<K, V>]
+  # Use +delete!+ to rebind the receiver variable.
   #
   # @example
   #   { a: 1, b: 2 }.delete(:a)   # => { b: 2 }
@@ -43,34 +29,26 @@ make Map<K, V> do
 
   # Returns +true+ if +key+ exists in the map.
   #
-  # @param key [K]
-  # @return [Bool]
-  #
   # @example
   #   { a: 1 }.has?(:a)   # => true
-  #   { a: 1 }.has?(:b)   # => false
   has? :> K -> Bool
 
   # Returns +true+ if the map has no entries.
   #
-  # @return [Bool]
-  #
   # @example
-  #   {}.empty?        # => true
-  #   { a: 1 }.empty?  # => false
+  #   {}.empty?   # => true
   empty? :> Bool
 
   # Returns the number of key-value pairs.
-  #
-  # @return [Integer]
+  # When given a predicate, counts only matching entries.
   #
   # @example
-  #   { a: 1, b: 2 }.count   # => 2
+  #   { a: 1, b: 2 }.count                        # => 2
+  #   { a: 1, b: 2 }.count { |k, v| v > 1 }       # => 1
   count :> Integer
+  count :> ((K, V) -> Bool) -> Integer
 
   # Returns all keys as a list, in insertion order.
-  #
-  # @return [[K]]
   #
   # @example
   #   { a: 1, b: 2 }.keys   # => [:a, :b]
@@ -78,9 +56,75 @@ make Map<K, V> do
 
   # Returns all values as a list, in insertion order.
   #
-  # @return [[V]]
-  #
   # @example
   #   { a: 1, b: 2 }.values   # => [1, 2]
   values :> [V]
+
+  # Returns all key-value pairs as a list of tuples, in insertion order.
+  #
+  # @example
+  #   { a: 1, b: 2 }.entries   # => [(:a, 1), (:b, 2)]
+  entries :> [(K, V)]
+
+  # Calls +f+ with each key-value pair for its side effects.
+  #
+  # @example
+  #   scores.each { |k, v| IO.printLine("${k}: ${v}") }
+  each :> ((K, V) -> Unit) -> Unit
+
+  # Transforms each entry by calling +f(k, v)+. Returns a list of results.
+  #
+  # @example
+  #   { a: 1, b: 2 }.map { |k, v| "${k}=${v}" }   # => ["a=1", "b=2"]
+  map :> ((K, V) -> R) -> [R]
+
+  # Returns a new map with all values transformed by +f+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.mapValues { |v| v * 10 }   # => { a: 10, b: 20 }
+  mapValues :> (V -> W) -> Map<K, W>
+
+  # Returns a new map with all keys transformed by +f+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.mapKeys { |k| k.upperCase }   # => { A: 1, B: 2 }
+  mapKeys :> (K -> J) -> Map<J, V>
+
+  # Returns a new map keeping only entries for which +pred+ returns +true+.
+  #
+  # @example
+  #   { a: 1, b: 2, c: 3 }.filter { |k, v| v > 1 }   # => { b: 2, c: 3 }
+  filter :> ((K, V) -> Bool) -> Map<K, V>
+
+  # Returns a new map with all entries for which +pred+ returns +true+ removed.
+  #
+  # @example
+  #   { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }   # => { a: 1 }
+  reject :> ((K, V) -> Bool) -> Map<K, V>
+
+  # Returns a new map combining +self+ and +other+.
+  # On key conflict, +other+'s value wins.
+  #
+  # @example
+  #   { a: 1, b: 2 }.merge({ b: 99, c: 3 })   # => { a: 1, b: 99, c: 3 }
+  merge :> Map<K, V> -> Map<K, V>
+
+  # Returns +true+ if at least one entry satisfies +pred+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.any? { |k, v| v > 1 }   # => true
+  any? :> ((K, V) -> Bool) -> Bool
+
+  # Returns +true+ if every entry satisfies +pred+.
+  #
+  # @example
+  #   { a: 1, b: 2 }.all? { |k, v| v > 0 }   # => true
+  all? :> ((K, V) -> Bool) -> Bool
+
+  # Returns the first entry satisfying +pred+ as a tuple wrapped in +Just+,
+  # or +None+ if no entry matches.
+  #
+  # @example
+  #   { a: 1, b: 2 }.find { |k, v| v > 1 }   # => Just((:b, 2))
+  find :> ((K, V) -> Bool) -> (K, V)?
 end

@@ -21,13 +21,13 @@ main do
   File.delete(path)
 
   IO.printLine(File.exists?(path))
-  IO.printLine(IO.write(path, "ab"))
+  IO.printLine(File.write(path, "ab"))
   IO.printLine(File.exists?(path))
-  IO.printLine(IO.read(path))
+  IO.printLine(File.read(path))
   File.append(path, "cd")
-  IO.printLine(IO.read(path))
+  IO.printLine(File.read(path))
   IO.printLine(File.lines(path))
   IO.printLine(File.feed(path).take(1))
   IO.printLine(File.delete(path))
-  IO.printLine(IO.read(path))
+  IO.printLine(File.read(path))
 end

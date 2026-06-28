@@ -55,7 +55,7 @@ module FS do
     feed : String -> Stream<String>?
 
     # Returns the file size in bytes, or +None+ if inaccessible.
-    size : String -> Int?
+    size : String -> Integer?
 
     # Returns the filename component of +path+ (no directory).
     #

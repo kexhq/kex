@@ -529,14 +529,14 @@ auto Evaluator::registerListBuiltins() -> void {
             double total = 0.0;
             for (const auto& e : elems) {
                 if (auto* f = std::get_if<FloatValue>(&e->data)) total += f->value;
-                else if (auto* i = std::get_if<IntValue>(&e->data)) total += static_cast<double>(i->value);
+                else if (auto i = asInteger(e)) total += i->get_d();
             }
             return Value::floating(total);
         }
-        int64_t total = 0;
+        mpz_class total = 0;
         for (const auto& e : elems)
-            if (auto* i = std::get_if<IntValue>(&e->data)) total += i->value;
-        return Value::integer(total);
+            if (auto i = asInteger(e)) total += *i;
+        return integerResult(total);
     };
 
     reg("sum", [getElements, numericSum](std::vector<ValuePtr> args) -> ValuePtr {
@@ -573,14 +573,14 @@ auto Evaluator::registerListBuiltins() -> void {
             double total = 1.0;
             for (const auto& e : elems) {
                 if (auto* f = std::get_if<FloatValue>(&e->data)) total *= f->value;
-                else if (auto* i = std::get_if<IntValue>(&e->data)) total *= static_cast<double>(i->value);
+                else if (auto i = asInteger(e)) total *= i->get_d();
             }
             return Value::floating(total);
         }
-        int64_t total = 1;
+        mpz_class total = 1;
         for (const auto& e : elems)
-            if (auto* i = std::get_if<IntValue>(&e->data)) total *= i->value;
-        return Value::integer(total);
+            if (auto i = asInteger(e)) total *= *i;
+        return integerResult(total);
     });
 
     reg("flatMap", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
