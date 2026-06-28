@@ -497,7 +497,8 @@ auto printUsage(const char *progName) -> void
               << "Options:\n"
               << "  -r, --run         Interpret the program (default)\n"
               << "  -c, --compile     Compile to BEAM via Core Erlang\n"
-              << "  -R, --run-beam    Run on BEAM (.kex or Kex's .beam)\n"
+              << "  -R, --run-beam    Run on BEAM (.kex or existing .beam; temp dir, auto-clean)\n"
+              << "  -i, --interactive Interactive REPL on BEAM (also: kex -R with no file)\n"
               << "  -C, --check       Run semantic analysis only\n"
               << "  -n, --no-check    Skip semantic check when running\n"
               << "  -l, --lex         Print token stream\n"
@@ -527,6 +528,7 @@ int main(int argc, char *argv[])
         {"check", no_argument, nullptr, 'C'},
         {"compile", no_argument, nullptr, 'c'},
         {"run-beam", no_argument, nullptr, 'R'},
+        {"interactive", no_argument, nullptr, 'i'},
         {"json", no_argument, nullptr, 'j'},
         {"summary", no_argument, nullptr, 's'},
         {"types", no_argument, nullptr, 't'},
@@ -548,7 +550,7 @@ int main(int argc, char *argv[])
     int opt;
 
     bool compileRun = false;
-    while ((opt = getopt_long(argc, argv, "rnlcCRjspethvK:o:", longOptions, nullptr)) != -1)
+    while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions, nullptr)) != -1)
     {
         switch (opt)
         {
@@ -573,6 +575,9 @@ int main(int argc, char *argv[])
         case 'R':
             mode = "compile";
             compileRun = true;
+            break;
+        case 'i':
+            mode = "beam-repl";
             break;
         case 'j':
             jsonOutput = true;
@@ -630,8 +635,190 @@ int main(int argc, char *argv[])
 
     if (optind >= argc && mode != "repl")
     {
-        // No file — enter REPL mode
-        mode = "repl";
+        // No file — enter REPL mode (BEAM REPL if -R was given, tree-walker otherwise)
+        if (mode == "compile" && compileRun)
+            mode = "beam-repl";
+        else if (mode != "beam-repl")
+            mode = "repl";
+    }
+
+    if (mode == "beam-repl")
+    {
+        // ── Locate kex_io.erl ───────────────────────────────────────────────
+        std::string runtimeErl;
+        {
+            namespace fs = std::filesystem;
+            fs::path bin = fs::weakly_canonical(argv[0]);
+            for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path()) {
+                auto candidate = dir / "runtime" / "src" / "kex_io.erl";
+                if (fs::exists(candidate)) { runtimeErl = candidate.string(); break; }
+            }
+        }
+        // ── Create a persistent temp dir for kex_io.beam ────────────────────
+        char rtmpl[] = "/tmp/kex_irepl_XXXXXX";
+        char* rtd = mkdtemp(rtmpl);
+        if (!rtd) { std::cerr << "error: mkdtemp failed\n"; return 1; }
+        std::string beamDir = rtd;
+
+        if (!runtimeErl.empty()) {
+            std::string cmd = "erlc -o " + beamDir + " " + runtimeErl + " > /dev/null 2>&1";
+            std::system(cmd.c_str());
+        }
+
+        std::cout << "kex 0.1.0 — interactive REPL (BEAM)\n";
+        std::cout << "Type :help for available commands, exit to quit.\n\n";
+
+        std::string topDefs;    // function defs — emitted above main do
+        std::string localBinds; // let x = ... — emitted inside main do
+        int iteration = 0;
+
+        // Shared countBlocks lambda for multi-line detection
+        auto countBlocksBeam = [](const std::string &s) -> int {
+            int count = 0;
+            for (size_t i = 0; i < s.size(); i++) {
+                if (i + 2 <= s.size() && s.substr(i, 2) == "do") {
+                    bool wb = (i > 0 && std::isalnum(s[i - 1]));
+                    bool wa = (i + 2 < s.size() && std::isalnum(s[i + 2]));
+                    if (!wb && !wa) count++;
+                }
+                if (i + 3 <= s.size() && s.substr(i, 3) == "end") {
+                    bool wb = (i > 0 && std::isalnum(s[i - 1]));
+                    bool wa = (i + 3 < s.size() && std::isalnum(s[i + 3]));
+                    if (!wb && !wa) count--;
+                }
+            }
+            return count;
+        };
+
+        while (true) {
+            auto [input, ok] = readLine("kex(beam)> ");
+            if (!ok) break;
+            if (input.empty()) continue;
+            if (input == "exit" || input == ":exit" || input == ":quit" || input == ":q") break;
+            if (input == ":help" || input == ":h") {
+                std::cout << "\n  Commands:\n"
+                          << "    exit          Exit the REPL\n"
+                          << "    :help         Show this help\n"
+                          << "    :reset        Clear all accumulated bindings\n"
+                          << "\n";
+                continue;
+            }
+            if (input == ":reset") {
+                topDefs.clear(); localBinds.clear(); iteration = 0;
+                std::cout << "  (bindings cleared)\n";
+                continue;
+            }
+
+            // Accumulate multi-line blocks
+            std::string source = input;
+            int dc = countBlocksBeam(source);
+            while (dc > 0) {
+                auto [cont, contOk] = readLine("  ...> ");
+                if (!contOk) break;
+                source += "\n" + cont;
+                dc += countBlocksBeam(cont);
+            }
+
+            // Classify: function def vs local let vs expression
+            bool isFuncDef = false;
+            bool isLocalLet = false;
+            std::string letVarName;
+            {
+                size_t off = std::string::npos;
+                if (source.rfind("let ", 0) == 0) off = 4;
+                else if (source.rfind("foul ", 0) == 0) off = 5;
+                if (off != std::string::npos) {
+                    auto parenPos = source.find('(', off);
+                    auto eqPos    = source.find('=', off);
+                    bool hasParenBeforeEq = parenPos != std::string::npos &&
+                                           (eqPos == std::string::npos || parenPos < eqPos);
+                    if (hasParenBeforeEq) {
+                        isFuncDef = true;
+                    } else if (eqPos != std::string::npos) {
+                        isLocalLet = true;
+                        // Extract variable name: word after let/foul keyword
+                        size_t i = off;
+                        while (i < source.size() && (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+                            i++;
+                        letVarName = source.substr(off, i - off);
+                    } else {
+                        isFuncDef = true; // 0-arity function def
+                    }
+                }
+            }
+            // Also treat module/type/record/make as top-level
+            if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
+                source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0)
+                isFuncDef = true;
+
+            try {
+                if (isFuncDef) {
+                    // Validate by parsing; no need to run on BEAM for a definition.
+                    std::string check = topDefs + source + "\n";
+                    kex::Lexer lexer(check);
+                    auto tokens = lexer.tokenizeAll();
+                    kex::Parser parser(std::move(tokens));
+                    parser.parseProgram(); // throws on syntax error
+
+                    // Extract function name for the "=> defined" message
+                    size_t off = source.rfind("foul ", 0) == 0 ? 5 : 4;
+                    size_t i = off;
+                    while (i < source.size() && (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+                        i++;
+                    std::string fname = source.substr(off, i - off);
+                    std::cout << kex::color::apply(kex::color::gray) << "=> "
+                              << kex::color::apply(kex::color::reset)
+                              << "defined " << fname << "\n";
+                    topDefs += source + "\n";
+                } else {
+                    // Expression or local let — compile and run on BEAM.
+                    std::string kexSource;
+                    if (isLocalLet) {
+                        kexSource = topDefs + "main do\n" + localBinds
+                                  + "  " + source + "\n"
+                                  + "  IO.inspect(" + letVarName + ")\nend\n";
+                    } else {
+                        kexSource = topDefs + "main do\n" + localBinds
+                                  + "  IO.inspect(" + source + ")\nend\n";
+                    }
+
+                    kex::Lexer lexer(kexSource);
+                    auto tokens = lexer.tokenizeAll();
+                    kex::Parser parser(std::move(tokens));
+                    auto program = parser.parseProgram();
+                    kex::codegen::CoreErlangEmitter emitter;
+                    auto result = emitter.emitProgram(program, "irepl_" + std::to_string(iteration));
+
+                    std::string corePath = beamDir + "/" + result.moduleName + ".core";
+                    std::ofstream cf(corePath);
+                    if (!cf) { std::cerr << "  error: cannot write " << corePath << "\n"; continue; }
+                    cf << result.source;
+                    cf.close();
+
+                    std::string erlCmd = "erlc +from_core -pa " + beamDir +
+                                         " -o " + beamDir + " " + corePath + " 2>&1";
+                    int erlcRet = std::system(erlCmd.c_str());
+                    std::filesystem::remove(corePath);
+                    if (erlcRet != 0) { std::cerr << "  error: compilation failed\n"; continue; }
+
+                    std::string runCmd = "erl -noshell -pa " + beamDir +
+                                         " -eval '" + result.moduleName + ":main(), halt()'"
+                                         " < /dev/null";
+                    std::system(runCmd.c_str());
+                    std::filesystem::remove(beamDir + "/" + result.moduleName + ".beam");
+                    ++iteration;
+
+                    if (isLocalLet)
+                        localBinds += "  " + source + "\n";
+                }
+            } catch (const std::exception &e) {
+                std::cerr << "  " << kex::color::apply(kex::color::red) << "error:"
+                          << kex::color::apply(kex::color::reset) << " " << e.what() << "\n";
+            }
+        }
+
+        std::filesystem::remove_all(beamDir);
+        return 0;
     }
 
     if (mode == "repl")
