@@ -240,6 +240,9 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Variables ---
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            // Check loop/SSA substitution first (mutable var current version).
+            auto subIt = m_varSubst.find(node.name);
+            if (subIt != m_varSubst.end()) return subIt->second;
             // Top-level 0-arity function used as a value — call it.
             auto it = m_topLevelFns.find(node.name);
             if (it != m_topLevelFns.end() && it->second == 0)
@@ -932,92 +935,405 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 }
 
 // ---------------------------------------------------------------------------
-// Body: sequence of exprs → nested let chain
+// Body: sequence of exprs → nested let chain (forward-recursive)
 // ---------------------------------------------------------------------------
+
+void CoreErlangEmitter::collectAssigned(const std::vector<ast::ExprPtr>& body,
+                                         std::unordered_set<std::string>& out) {
+    for (const auto& e : body) {
+        if (!e) continue;
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+                out.insert(node.name);
+            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                collectAssigned(node.thenBody, out);
+                if (node.elseBody) collectAssigned(*node.elseBody, out);
+                for (auto& [cond, b] : node.elifs) collectAssigned(b, out);
+            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+                collectAssigned(node.body, out);
+            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+                collectAssigned(node.body, out);
+            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                for (auto& clause : node.clauses) {
+                    if (clause.body) {
+                        if (auto* ae = std::get_if<ast::AssignExpr>(&clause.body->kind))
+                            out.insert(ae->name);
+                        // Recurse into match arm bodies that are IfExprs or blocks
+                        // (single-expr bodies only for now)
+                    }
+                }
+            }
+            // Don't cross Lambda boundaries — lambdas capture by value on BEAM.
+        }, e->kind);
+    }
+}
+
+auto CoreErlangEmitter::makeTailCall(const std::string& loopFn, int loopArity,
+                                      const std::vector<std::string>& mutParams) -> std::string {
+    std::string args;
+    for (const auto& kexName : mutParams) {
+        if (!args.empty()) args += ", ";
+        auto it = m_varSubst.find(kexName);
+        args += (it != m_varSubst.end()) ? it->second : erlVar(kexName);
+    }
+    return "apply '" + loopFn + "'/" + std::to_string(loopArity) + "(" + args + ")";
+}
+
+auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, int start,
+                                          const std::string& loopFn, int loopArity,
+                                          const std::vector<std::string>& mutParams) -> std::string {
+    if (start >= (int)body.size())
+        return makeTailCall(loopFn, loopArity, mutParams);  // fall-through = next iteration
+
+    const auto& e = body[start];
+
+    // AssignExpr for a loop-threaded var → fresh binding, update subst, continue
+    if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+        if (m_varSubst.count(ae->name)) {
+            std::string newVar = freshVar(ae->name);
+            std::string val = emitExpr(ae->value);
+            auto prev = m_varSubst[ae->name];
+            m_varSubst[ae->name] = newVar;
+            std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+            m_varSubst[ae->name] = prev;
+            return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
+        }
+        // Unknown var — treat as side effect, bind to tmp
+        std::string tmp = freshVar("S");
+        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+        return "let <" + tmp + "> =\n    " + emitExpr(ae->value) + "\nin\n" + rest;
+    }
+
+    // ReturnExpr → exit loop and enclosing function
+    if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
+        if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
+            std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+            return "case " + emitExpr(ti->condition) + " of\n"
+                   "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
+                   "  'false' when 'true' ->\n    " + cont + "\n"
+                   "end";
+        }
+        return emitExpr(re->value);  // discard loop rest
+    }
+
+    // BreakExpr → return 'ok' (loop result placeholder)
+    if (std::get_if<ast::BreakExpr>(&e->kind))
+        return "'ok'";
+
+    // IfExpr → emit branches with loop context
+    if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
+        std::string cond = emitExpr(ie->condition);
+        // Save subst state for merging branches
+        auto substSnap = m_varSubst;
+        std::string thenPart = emitLoopBodyFrom(ie->thenBody, 0, loopFn, loopArity, mutParams);
+        m_varSubst = substSnap;
+        if (ie->elseBody) {
+            std::string elsePart = emitLoopBodyFrom(*ie->elseBody, 0, loopFn, loopArity, mutParams);
+            m_varSubst = substSnap;
+            return "case " + cond + " of\n"
+                   "  'true' when 'true' ->\n    " + thenPart + "\n"
+                   "  'false' when 'true' ->\n    " + elsePart + "\n"
+                   "end";
+        }
+        // No else: false branch = continue with rest of loop body
+        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+        return "case " + cond + " of\n"
+               "  'true' when 'true' ->\n    " + thenPart + "\n"
+               "  'false' when 'true' ->\n    " + cont + "\n"
+               "end";
+    }
+
+    // MatchExpr → emit with loop-aware arm bodies
+    if (auto* me = std::get_if<ast::MatchExpr>(&e->kind)) {
+        bool multiValue = std::holds_alternative<ast::TupleExpr>(me->subject->kind);
+        std::string scrutinee;
+        if (multiValue) {
+            auto& tup = std::get<ast::TupleExpr>(me->subject->kind);
+            scrutinee = "<";
+            for (size_t j = 0; j < tup.elements.size(); j++) {
+                if (j > 0) scrutinee += ", ";
+                scrutinee += emitExpr(tup.elements[j]);
+            }
+            scrutinee += ">";
+        } else {
+            scrutinee = emitExpr(me->subject);
+        }
+        std::string result = "case " + scrutinee + " of\n";
+        for (const auto& clause : me->clauses) {
+            std::string pat = clause.patterns.empty() ? freshVar("W") : emitPattern(clause.patterns[0]);
+            result += "  " + pat;
+            if (clause.guard)
+                result += " when " + emitExpr(*clause.guard);
+            else
+                result += " when 'true'";
+            result += " ->\n";
+            // Emit arm body in loop context
+            auto substSnap = m_varSubst;
+            std::string armBody;
+            if (clause.body) {
+                // Wrap single arm expr as a 1-element body for uniform treatment
+                std::vector<ast::ExprPtr> armBodyVec;
+                // We can't move — make a pseudo call: treat as emitLoopBodyFrom([armExpr])
+                // For simple cases: AssignExpr, ReturnExpr, other expr
+                if (auto* ae2 = std::get_if<ast::AssignExpr>(&clause.body->kind)) {
+                    if (m_varSubst.count(ae2->name)) {
+                        std::string newVar = freshVar(ae2->name);
+                        std::string val = emitExpr(ae2->value);
+                        m_varSubst[ae2->name] = newVar;
+                        armBody = "let <" + newVar + "> =\n    " + val + "\nin\n"
+                                + makeTailCall(loopFn, loopArity, mutParams);
+                    } else {
+                        armBody = emitExpr(ae2->value);
+                    }
+                } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
+                    armBody = emitExpr(re2->value);
+                } else {
+                    armBody = emitExpr(clause.body);
+                }
+            } else {
+                armBody = makeTailCall(loopFn, loopArity, mutParams);
+            }
+            m_varSubst = substSnap;
+            result += "    " + armBody + "\n";
+        }
+        result += "end";
+        // After match in loop body: continue with next loop body statement
+        // (This handles the case where match is not the last statement)
+        if (start + 1 < (int)body.size()) {
+            std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+            std::string tmp = freshVar("S");
+            return "let <" + tmp + "> =\n    " + result + "\nin\n" + cont;
+        }
+        return result;
+    }
+
+    // VarExpr inside loop body — local variable (not a loop param)
+    if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+        std::string ceVar = erlVar(ve->name);
+        m_varSubst[ve->name] = ceVar;
+        std::string val = emitExpr(ve->value);
+        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+        m_varSubst.erase(ve->name);
+        return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
+    }
+
+    // LetExpr inside loop body
+    if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+        if (le->pattern) {
+            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                std::string ceVar = erlVar(vp->name);
+                std::string val = emitExpr(le->value);
+                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+                return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
+            } else {
+                auto tmpVar = freshVar("D");
+                auto pat = emitPattern(le->pattern);
+                auto val = emitExpr(le->value);
+                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+                return "let <" + tmpVar + "> =\n    " + val + "\nin\n"
+                       "case " + tmpVar + " of\n"
+                       "  " + pat + " when 'true' ->\n    " + rest + "\nend";
+            }
+        }
+    }
+
+    // Default: bind to tmp, continue
+    std::string tmp = freshVar("S");
+    std::string val = emitExpr(e);
+    std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+    return "let <" + tmp + "> =\n    " + val + "\nin\n" + rest;
+}
+
+auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
+                                      const ast::ExprPtr* condition,
+                                      const std::vector<ast::ExprPtr>& outerBody,
+                                      int outerStart) -> std::string {
+    // Find which vars from the outer scope are mutated inside the loop.
+    std::unordered_set<std::string> mutated;
+    collectAssigned(loopBody, mutated);
+
+    // Filter to vars currently tracked in m_varSubst (declared before this loop).
+    std::vector<std::string> mutParams;  // ordered list of kex names
+    std::vector<std::string> initVals;   // current CE var names for initial call
+    for (const auto& name : mutated) {
+        auto it = m_varSubst.find(name);
+        if (it != m_varSubst.end()) {
+            mutParams.push_back(name);
+            initVals.push_back(it->second);
+        }
+    }
+
+    std::string loopFn = "__loop_" + std::to_string(m_loopCounter++);
+    int loopArity = static_cast<int>(mutParams.size());
+
+    // Build fresh parameter names and set up m_varSubst for loop body emission.
+    auto savedSubst = m_varSubst;
+    std::string paramList;
+    for (size_t j = 0; j < mutParams.size(); j++) {
+        std::string pv = freshVar(mutParams[j]);
+        if (j > 0) paramList += ", ";
+        paramList += pv;
+        m_varSubst[mutParams[j]] = pv;
+    }
+
+    // Emit the loop body (infinite loop or while).
+    std::string loopBodyStr;
+    if (condition) {
+        // while: wrap body in condition check; false branch returns 'ok'.
+        std::string innerBody = emitLoopBodyFrom(loopBody, 0, loopFn, loopArity, mutParams);
+        loopBodyStr = "case " + emitExpr(*condition) + " of\n"
+                      "  'true' when 'true' ->\n    " + innerBody + "\n"
+                      "  'false' when 'true' -> 'ok'\n"
+                      "end";
+    } else {
+        loopBodyStr = emitLoopBodyFrom(loopBody, 0, loopFn, loopArity, mutParams);
+    }
+
+    m_varSubst = savedSubst;
+
+    // Build initial call argument list.
+    std::string initArgs;
+    for (size_t j = 0; j < initVals.size(); j++) {
+        if (j > 0) initArgs += ", ";
+        initArgs += initVals[j];
+    }
+
+    // Emit the rest of the outer body after the loop.
+    std::string rest = emitBodyFrom(outerBody, outerStart + 1);
+
+    std::ostringstream out;
+    out << "letrec '" << loopFn << "'/" << loopArity << " =\n"
+        << "  fun (" << paramList << ") ->\n"
+        << "    " << loopBodyStr << "\n"
+        << "in\n";
+
+    if (outerStart + 1 >= (int)outerBody.size()) {
+        // Loop is the last statement — its result is the function result.
+        out << "apply '" << loopFn << "'/" << loopArity << "(" << initArgs << ")";
+    } else {
+        // Bind loop result and continue.
+        std::string lr = freshVar("LR");
+        out << "let <" << lr << "> =\n    apply '" << loopFn << "'/" << loopArity
+            << "(" << initArgs << ")\n"
+            << "in\n" << rest;
+    }
+    return out.str();
+}
+
+auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int start) -> std::string {
+    if (start >= (int)body.size()) return "'ok'";
+
+    const auto& e = body[start];
+    const bool isLast = (start == (int)body.size() - 1);
+
+    // VarExpr: introduce mutable binding, track in m_varSubst.
+    if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
+        std::string ceVar = erlVar(ve->name);
+        auto prev = m_varSubst[ve->name];  // save (empty if not set)
+        m_varSubst[ve->name] = ceVar;
+        std::string val = emitExpr(ve->value);
+        std::string rest = isLast ? "'" + ceVar + "'" : emitBodyFrom(body, start + 1);
+        // For last-in-body, VarExpr's value is the block value (unusual but handle gracefully)
+        if (isLast) rest = val;
+        else rest = emitBodyFrom(body, start + 1);
+        m_varSubst.erase(ve->name);
+        if (!prev.empty()) m_varSubst[ve->name] = prev;
+        return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
+    }
+
+    // AssignExpr: SSA renaming (create fresh var, shadow previous binding).
+    if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+        std::string newVar = freshVar(ae->name);
+        std::string val = emitExpr(ae->value);
+        auto prev = m_varSubst.count(ae->name) ? m_varSubst[ae->name] : std::string{};
+        m_varSubst[ae->name] = newVar;
+        std::string rest = isLast ? newVar : emitBodyFrom(body, start + 1);
+        m_varSubst.erase(ae->name);
+        if (!prev.empty()) m_varSubst[ae->name] = prev;
+        return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
+    }
+
+    // LoopExpr / WhileExpr
+    if (auto* le = std::get_if<ast::LoopExpr>(&e->kind))
+        return emitLoopExpr(le->body, nullptr, body, start);
+    if (auto* we = std::get_if<ast::WhileExpr>(&e->kind))
+        return emitLoopExpr(we->body, &we->condition, body, start);
+
+    // LetExpr: simple binding or destructuring.
+    if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+        if (le->pattern) {
+            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                std::string ceVar = erlVar(vp->name);
+                std::string val = emitExpr(le->value);
+                std::string rest = isLast ? ceVar : emitBodyFrom(body, start + 1);
+                return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
+            }
+            // Destructuring
+            auto tmpVar = freshVar("D");
+            auto pat    = emitPattern(le->pattern);
+            auto val    = emitExpr(le->value);
+            std::string rest = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
+            return "let <" + tmpVar + "> =\n    " + val + "\nin\n"
+                   "case " + tmpVar + " of\n"
+                   "  " + pat + " when 'true' ->\n    " + rest + "\nend";
+        }
+        std::string tmp = freshVar("T");
+        std::string rest = isLast ? tmp : emitBodyFrom(body, start + 1);
+        return "let <" + tmp + "> =\n    " + emitExpr(le->value) + "\nin\n" + rest;
+    }
+
+    // ReturnExpr: early return (discard rest).
+    if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
+        if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
+            std::string cont = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
+            return "case " + emitExpr(ti->condition) + " of\n"
+                   "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
+                   "  'false' when 'true' ->\n    " + cont + "\n"
+                   "end";
+        }
+        if (auto* ie = std::get_if<ast::IfExpr>(&re->value->kind)) {
+            if (!ie->elseBody && ie->elifs.empty()) {
+                std::string cont = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
+                return "case " + emitExpr(ie->condition) + " of\n"
+                       "  'true' when 'true' ->\n    " + emitBody(ie->thenBody) + "\n"
+                       "  'false' when 'true' ->\n    " + cont + "\n"
+                       "end";
+            }
+        }
+        return emitExpr(re->value);  // unconditional return — discard rest
+    }
+
+    // IfExpr with return-only then-branch (no else): false path continues to rest.
+    if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
+        bool thenEndsWithReturn = !ie->thenBody.empty() &&
+            std::get_if<ast::ReturnExpr>(&ie->thenBody.back()->kind);
+        bool noElse = !ie->elseBody && ie->elifs.empty();
+        if (thenEndsWithReturn && noElse) {
+            std::string cont = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
+            return "case " + emitExpr(ie->condition) + " of\n"
+                   "  'true' when 'true' ->\n    " + emitBody(ie->thenBody) + "\n"
+                   "  'false' when 'true' ->\n    " + cont + "\n"
+                   "end";
+        }
+    }
+
+    // Last expression: emit as value.
+    if (isLast) return emitExpr(e);
+
+    // Non-last statement: bind to tmp, continue.
+    std::string tmp = freshVar("S");
+    std::string val = emitExpr(e);
+    std::string rest = emitBodyFrom(body, start + 1);
+    return "let <" + tmp + "> =\n    " + val + "\nin\n" + rest;
+}
 
 auto CoreErlangEmitter::emitBody(const std::vector<ast::ExprPtr>& body) -> std::string {
     if (body.empty()) return "'ok'";
-    if (body.size() == 1) return emitExpr(body[0]);
-
-    // Right-fold: build from the last expression backwards.
-    // Walk forward and collect (binding_var_or_"", expr_text) pairs.
-    std::string result = emitExpr(body.back());
-
-    for (int i = static_cast<int>(body.size()) - 2; i >= 0; i--) {
-        const auto& e = body[i];
-        std::string bindVar;
-        std::string bindVal;
-
-        if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-            if (le->pattern) {
-                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
-                    bindVar = erlVar(vp->name);
-                    bindVal = emitExpr(le->value);
-                    result = "let <" + bindVar + "> =\n    " + bindVal + "\nin\n" + result;
-                } else {
-                    // Destructuring pattern (tuple, list, constructor): use case
-                    auto tmpVar = freshVar("D");
-                    auto pat    = emitPattern(le->pattern);
-                    auto val    = emitExpr(le->value);
-                    result = "let <" + tmpVar + "> =\n    " + val + "\nin\n"
-                             "case " + tmpVar + " of\n"
-                             "  " + pat + " when 'true' ->\n    " + result + "\nend";
-                }
-                continue;
-            } else {
-                bindVar = freshVar("T");
-                bindVal = emitExpr(le->value);
-            }
-        } else if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-            bindVar = erlVar(ve->name);
-            bindVal = emitExpr(ve->value);
-        } else if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
-            bindVar = erlVar(ae->name);
-            bindVal = emitExpr(ae->value);
-        } else if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
-            // `return X if cond` parses as ReturnExpr{value=TrailingIf{X, cond}}.
-            // Fold the remaining body into the false branch.
-            if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
-                result = "case " + emitExpr(ti->condition) + " of\n"
-                         "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
-                         "  'false' when 'true' ->\n    " + result + "\n"
-                         "end";
-                continue;
-            }
-            // Also handle ReturnExpr{value=IfExpr{no else}} — `return (if cond do X end)`
-            if (auto* ie = std::get_if<ast::IfExpr>(&re->value->kind)) {
-                if (!ie->elseBody && ie->elifs.empty()) {
-                    result = "case " + emitExpr(ie->condition) + " of\n"
-                             "  'true' when 'true' ->\n    " + emitBody(ie->thenBody) + "\n"
-                             "  'false' when 'true' ->\n    " + result + "\n"
-                             "end";
-                    continue;
-                }
-            }
-            // Unconditional early return: discard unreachable tail.
-            result = emitExpr(re->value);
-            continue;
-        } else if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
-            // `if cond do return X end` — then-body ends with ReturnExpr, no else.
-            bool thenEndsWithReturn = !ie->thenBody.empty() &&
-                std::get_if<ast::ReturnExpr>(&ie->thenBody.back()->kind);
-            bool noElse = !ie->elseBody && ie->elifs.empty();
-            if (thenEndsWithReturn && noElse) {
-                result = "case " + emitExpr(ie->condition) + " of\n"
-                         "  'true' when 'true' ->\n    " + emitBody(ie->thenBody) + "\n"
-                         "  'false' when 'true' ->\n    " + result + "\n"
-                         "end";
-                continue;
-            }
-            bindVar = freshVar("S");
-            bindVal = emitExpr(e);
-        } else {
-            bindVar = freshVar("S");
-            bindVal = emitExpr(e);
-        }
-
-        result = "let <" + bindVar + "> =\n    " + bindVal + "\nin\n" + result;
-    }
+    // Save m_varSubst — emitBodyFrom modifies it during recursion but restores as it unwinds.
+    auto savedSubst = m_varSubst;
+    auto result = emitBodyFrom(body, 0);
+    m_varSubst = savedSubst;
     return result;
 }
 
@@ -1299,9 +1615,11 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
 auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                                      const std::string& fileStem) -> EmitResult {
     m_varCounter = 0;
+    m_loopCounter = 0;
     m_exports.clear();
     m_topLevelFns.clear();
     m_staticCtors.clear();
+    m_varSubst.clear();
     m_moduleName = "kex_" + fileStem;
 
     // Reset field accessor map for this compilation unit.

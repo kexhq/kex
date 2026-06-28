@@ -51,6 +51,32 @@ private:
     // Parse and emit a string literal that contains ${...} interpolation.
     auto emitInterpolatedString(const std::string& raw) -> std::string;
 
+    // Forward-recursive body emitter used by emitBody.
+    auto emitBodyFrom(const std::vector<ast::ExprPtr>& body, int start) -> std::string;
+
+    // Emit a loop body (loop/while) as a letrec tail-recursive function.
+    // loopBody: the loop's statement list.
+    // condition: non-null for while loops, null for infinite loop.
+    // outerBody/outerStart: the enclosing body slice after the loop statement.
+    auto emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
+                      const ast::ExprPtr* condition,
+                      const std::vector<ast::ExprPtr>& outerBody, int outerStart) -> std::string;
+
+    // Emit loop body statements forward in a loop context.
+    // mutParams: kex names of loop-threaded variables (in order).
+    // loopFn: the letrec function name.  loopArity: its arity.
+    auto emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, int start,
+                          const std::string& loopFn, int loopArity,
+                          const std::vector<std::string>& mutParams) -> std::string;
+
+    // Build the tail-call string using current m_varSubst values.
+    auto makeTailCall(const std::string& loopFn, int loopArity,
+                      const std::vector<std::string>& mutParams) -> std::string;
+
+    // Collect all AssignExpr names in a body (not crossing lambda/function boundaries).
+    static void collectAssigned(const std::vector<ast::ExprPtr>& body,
+                                 std::unordered_set<std::string>& out);
+
     // Helpers
     auto freshVar(const std::string& hint = "V") -> std::string;
     // Wrap s in single quotes if needed for a Core Erlang atom.
@@ -62,7 +88,10 @@ private:
 
     std::string m_moduleName;
     int m_varCounter = 0;
+    int m_loopCounter = 0;
     std::vector<FuncExport> m_exports;
+    // kex name → current Core Erlang variable name (for mutable var SSA).
+    std::unordered_map<std::string, std::string> m_varSubst;
     // name → arity for all top-level functions defined in this module.
     std::unordered_map<std::string, int> m_topLevelFns;
     // "TypeName::ConstName" → mangled function name for 0-arity static constants.
