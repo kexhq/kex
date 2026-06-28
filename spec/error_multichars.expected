@@ -1,0 +1,2 @@
+spec/error_multichars.kex:3:16: error: Unterminated char literal
+Aborted: fix syntax errors before running.

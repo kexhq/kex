@@ -75,8 +75,12 @@ auto Parser::currentLocation() const -> SourceLocation {
 
 auto Parser::error(const std::string& message) -> void {
     auto loc = currentLocation();
-    m_diagnostics.push_back({loc, message});
-    throw ParseError{loc, message};
+    std::string msg = message;
+    if (peek().type == TokenType::Error && !peek().value.empty()) {
+        msg = peek().value;
+    }
+    m_diagnostics.push_back({loc, msg});
+    throw ParseError{loc, msg};
 }
 
 auto Parser::syncToTopLevel() -> void {

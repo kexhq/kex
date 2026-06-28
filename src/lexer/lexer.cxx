@@ -155,10 +155,14 @@ auto Lexer::tokenizeAll() -> std::vector<Token> {
     std::vector<Token> tokens;
     while (true) {
         auto token = nextToken();
+        bool stop = token.type == TokenType::Eof || token.type == TokenType::Error;
         tokens.push_back(token);
-        if (token.type == TokenType::Eof || token.type == TokenType::Error) {
+        if (stop) {
             break;
         }
+    }
+    if (tokens.back().type != TokenType::Eof) {
+        tokens.push_back(makeToken(TokenType::Eof));
     }
     return tokens;
 }

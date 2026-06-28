@@ -1,0 +1,4 @@
+main do
+  IO.printLine("this has to work")
+  IO.printLine('this is wrong (chars)')
+end

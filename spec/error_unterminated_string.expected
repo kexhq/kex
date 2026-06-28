@@ -1,0 +1,2 @@
+spec/error_unterminated_string.kex:3:16: error: Unterminated string
+Aborted: fix syntax errors before running.
