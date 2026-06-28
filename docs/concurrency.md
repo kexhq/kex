@@ -85,8 +85,10 @@ foul do
   let task1 = Task.start { fetchUser(id) }
   let task2 = Task.start { fetchPosts(id) }
 
-  let user = task1.await(timeout: 5000)?
-  let posts = task2.await(timeout: 5000)?
+  let user  = task1.await(timeout: 5000)
+  let posts = task2.await(timeout: 5000)
+  # `await` returns Result<User, TaskError> / Result<[Post], TaskError> —
+  # handle with match or flatMap rather than short-circuiting syntax.
 end
 ```
 
