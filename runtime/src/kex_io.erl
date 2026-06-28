@@ -1,5 +1,5 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, read_line/0, inspect/1]).
+-export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->

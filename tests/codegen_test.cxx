@@ -2,6 +2,9 @@
 #include "../src/codegen/core_erlang.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 
 using namespace test;
 
@@ -157,19 +160,18 @@ int main() {
     });
 
     describe("CoreErlangEmitter — let bindings", []() {
-        it("let binding becomes Core Erlang let...in", []() {
+        it("let binding becomes Core Erlang let <X> = ... in", []() {
             auto out = emit("main do\n  let x = 1\n  x\nend\n");
-            assertTrue(contains(out, "let X ="), out);
+            assertTrue(contains(out, "let <X>"), out);
             assertTrue(contains(out, "in"), out);
         });
 
         it("multiple lets form a chain", []() {
             auto out = emit("main do\n  let x = 1\n  let y = 2\n  x\nend\n");
-            // Should have at least two let bindings
-            auto first  = out.find("let X =");
-            auto second = out.find("let Y =");
-            assertTrue(first  != std::string::npos, "missing let X");
-            assertTrue(second != std::string::npos, "missing let Y");
+            auto first  = out.find("let <X>");
+            auto second = out.find("let <Y>");
+            assertTrue(first  != std::string::npos, "missing let <X>");
+            assertTrue(second != std::string::npos, "missing let <Y>");
             assertTrue(first < second, "X should appear before Y");
         });
     });
@@ -192,8 +194,7 @@ int main() {
 
         it("function body emits param binding then expression", []() {
             auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
-            // Param 'n' should be bound from _Arg0
-            assertTrue(contains(out, "let N = _Arg0"), out);
+            assertTrue(contains(out, "let <N> = _Arg0"), out);
         });
 
         it("zero-arity function emits fun ()", []() {
@@ -216,6 +217,135 @@ int main() {
         it("list literal emits [...]", []() {
             auto out = emit("main do\n  [1, 2, 3]\nend\n");
             assertTrue(contains(out, "[1, 2, 3]"), out);
+        });
+    });
+
+    describe("CoreErlangEmitter — match expressions", []() {
+        it("match emits case with when 'true' guards", []() {
+            auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
+            assertTrue(contains(out, "case"), out);
+            assertTrue(contains(out, "when 'true'"), out);
+        });
+
+        it("tuple subject becomes multi-value case with angle brackets", []() {
+            auto out = emit("main do\n  match (1, 2) do\n    (1, 2) -> true\n    (_, _) -> false\n  end\nend\n");
+            assertTrue(contains(out, "case <"), out);
+            assertTrue(contains(out, "<1, 2>"), out);
+        });
+
+        it("no semicolons between match clauses", []() {
+            auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
+            assertTrue(contains(out, "->"), "output should contain arrows");
+            // Extract the case body and assert no semicolons between clauses
+            auto caseStart = out.find("case ");
+            auto caseEnd   = out.find("end", caseStart);
+            assertTrue(caseStart != std::string::npos, "should have case");
+            auto caseText = out.substr(caseStart, caseEnd - caseStart);
+            assertFalse(contains(caseText, ";"), "no semicolons between case clauses");
+        });
+    });
+
+    describe("CoreErlangEmitter — string interpolation", []() {
+        it("plain string emits as quoted charlist", []() {
+            auto out = emit("main do\n  \"hello\"\nend\n");
+            assertTrue(contains(out, "\"hello\""), out);
+        });
+
+        it("interpolated string uses kex_io:to_string for embedded expr", []() {
+            auto out = emit("main do\n  let n = 42\n  \"value: ${n}\"\nend\n");
+            assertTrue(contains(out, "kex_io':'to_string'"), out);
+            assertTrue(contains(out, "\"value: \""), out);
+        });
+
+        it("interpolated string concatenates with erlang:'++'", []() {
+            auto out = emit("main do\n  let n = 42\n  \"${n}!\"\nend\n");
+            assertTrue(contains(out, "erlang':'++"), out);
+        });
+    });
+
+    describe("CoreErlangEmitter — UFCS method dispatch", []() {
+        it("modulo maps to erlang:rem", []() {
+            auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
+            assertTrue(contains(out, "call 'erlang':'rem'"), out);
+        });
+
+        it("even? maps to erlang:rem =:= 0", []() {
+            auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
+            assertTrue(contains(out, "call 'erlang':'rem'"), out);
+            assertTrue(contains(out, "'=:='"), out);
+        });
+
+        it("each binds lambda and calls lists:foreach", []() {
+            auto out = emit("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n");
+            assertTrue(contains(out, "call 'lists':'foreach'"), out);
+            assertTrue(contains(out, "fun ("), out);
+        });
+
+        it("map binds lambda and calls lists:map", []() {
+            auto out = emit("main do\n  [1,2,3].map { |x| x }\nend\n");
+            assertTrue(contains(out, "call 'lists':'map'"), out);
+        });
+
+        it("filter binds lambda and calls lists:filter", []() {
+            auto out = emit("main do\n  [1,2,3].filter { |x| true }\nend\n");
+            assertTrue(contains(out, "call 'lists':'filter'"), out);
+        });
+
+        it("push appends via erlang:'++'", []() {
+            auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
+            assertTrue(contains(out, "call 'erlang':'++'"), out);
+        });
+    });
+
+    describe("CoreErlangEmitter — end-to-end compilation", []() {
+        // These tests require erlc on PATH. Skip gracefully if not available.
+        auto erlcAvailable = []() -> bool {
+            return std::system("erlc -help > /dev/null 2>&1") == 0 ||
+                   std::system("which erlc > /dev/null 2>&1") == 0;
+        };
+
+        it("hello world compiles and runs on BEAM", [&erlcAvailable]() {
+            if (!erlcAvailable()) return; // skip
+            // Emit .core
+            auto out = emit("IO.printLine(\"hello from beam\")\n", "e2e_hello");
+            // Write to temp file
+            std::ofstream f("/tmp/kex_e2e_hello.core");
+            f << out;
+            f.close();
+            // Compile runtime + module
+            int r1 = std::system("erlc -o /tmp runtime/src/kex_io.erl > /dev/null 2>&1");
+            int r2 = std::system("erlc +from_core -pa /tmp -o /tmp /tmp/kex_e2e_hello.core > /dev/null 2>&1");
+            assertEqual(r2, 0, "erlc should succeed");
+            // Run it
+            int r3 = std::system("erl -noshell -pa /tmp -eval 'kex_e2e_hello:main(), halt()' > /dev/null 2>&1");
+            assertEqual(r3, 0, "erl should exit 0");
+            (void)r1;
+        });
+
+        it("function call compiles and produces correct output", [&erlcAvailable]() {
+            if (!erlcAvailable()) return;
+            const char* src =
+                "let double(n: Integer) -> Integer = n * 2\n"
+                "main do\n"
+                "  IO.printLine(double(21))\n"
+                "end\n";
+            auto out = emit(src, "e2e_double");
+            std::ofstream f("/tmp/kex_e2e_double.core");
+            f << out;
+            f.close();
+            int r = std::system("erlc +from_core -pa /tmp -o /tmp /tmp/kex_e2e_double.core > /dev/null 2>&1");
+            assertEqual(r, 0, "erlc should succeed on double");
+            // Capture output
+            FILE* pipe = popen("erl -noshell -pa /tmp -eval 'kex_e2e_double:main(), halt()'", "r");
+            assertTrue(pipe != nullptr, "popen succeeded");
+            char buf[256] = {};
+            fgets(buf, sizeof(buf), pipe);
+            pclose(pipe);
+            std::string actual(buf);
+            // trim trailing newline
+            while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r'))
+                actual.pop_back();
+            assertEqual(actual, std::string("42"), "double(21) should print 42");
         });
     });
 

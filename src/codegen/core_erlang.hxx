@@ -42,6 +42,9 @@ private:
     auto resolveStdlib(const std::string& kexModule,
                        const std::string& kexFn) -> std::pair<std::string, std::string>;
 
+    // Parse and emit a string literal that contains ${...} interpolation.
+    auto emitInterpolatedString(const std::string& raw) -> std::string;
+
     // Helpers
     auto freshVar(const std::string& hint = "V") -> std::string;
     // Wrap s in single quotes if needed for a Core Erlang atom.
