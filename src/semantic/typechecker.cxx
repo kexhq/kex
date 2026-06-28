@@ -45,6 +45,9 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtOfConstructor["Less"] = "Comparison";
     m_adtOfConstructor["Equal"] = "Comparison";
     m_adtOfConstructor["Greater"] = "Comparison";
+    m_adtVariants["Either"] = {"Left", "Right"};
+    m_adtOfConstructor["Left"] = "Either";
+    m_adtOfConstructor["Right"] = "Either";
 
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {
@@ -1381,10 +1384,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             inferBody(node.body);
             return Type::unit();
-        }
-        else if constexpr (std::is_same_v<T, ast::ErrorPropagate>) {
-            if (node.inner) return inferExpr(*node.inner);
-            return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
             for (const auto& [_, val] : node.fields) {

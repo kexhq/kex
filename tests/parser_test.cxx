@@ -260,10 +260,10 @@ int main() {
             assertEqual(main->body.size(), size_t(2));
         });
 
-        it("parses error propagation", []() {
-            auto program = parse("main do\n  let x = foo()?\nend");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
-            assertEqual(main->body.size(), size_t(1));
+        it("parses or! result type sugar", []() {
+            auto program = parse("let f(x: String) -> Integer or! String do\n  Ok(1)\nend");
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertEqual(fn->name, std::string("f"));
         });
 
         it("parses if expression", []() {

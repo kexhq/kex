@@ -173,9 +173,6 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
             if (node.operand) resolveExpr(*node.operand);
         }
-        else if constexpr (std::is_same_v<T, ast::ErrorPropagate>) {
-            if (node.inner) resolveExpr(*node.inner);
-        }
         else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
             for (const auto& e : node.elements)
                 if (e) resolveExpr(*e);

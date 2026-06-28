@@ -190,10 +190,6 @@ struct UnaryOp {
     ExprPtr operand;
 };
 
-struct ErrorPropagate {
-    ExprPtr inner;
-};
-
 struct TupleExpr {
     std::vector<ExprPtr> elements;
 };
@@ -350,7 +346,6 @@ struct Expr {
         RecordConstruction,
         BinaryOp,
         UnaryOp,
-        ErrorPropagate,
         TupleExpr,
         ListExpr,
         MapExpr,

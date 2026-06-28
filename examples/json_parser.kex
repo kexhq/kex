@@ -16,10 +16,13 @@ record Parser do
 end
 
 make Parser do
-  let parse(input: String) -> Result<Json, ParseError> do
+  let parse(input: String) -> Json or! ParseError do
     let parser = Parser { input: input }
-    let (result, _) = parser.parseValue()?
-    return Ok(result)
+    let (result, _) = match parser.parseValue() do
+      Error(e) -> return Error(e)
+      Ok(v)    -> v
+    end
+    Ok(result)
   end
 
   private do
@@ -36,7 +39,7 @@ make Parser do
       var p = this
       loop
         match p.current do
-          Just(' ') -> p = p.advance
+          Just(' ')  -> p = p.advance
           Just('\n') -> p = p.advance
           Just('\t') -> p = p.advance
           _ -> return p
@@ -44,34 +47,26 @@ make Parser do
       end
     end
 
-    let parseValue() -> Result<(Json, Parser), ParseError> do
+    let parseValue() -> (Json, Parser) or! ParseError do
       let p = this.skipWhitespace
-
       match p.current do
-        None -> Error(UnexpectedEnd)
-        Just('n') -> p.parseLiteral("null", JsonNull)
-        Just('t') -> p.parseLiteral("true", JsonBool(true))
+        None    -> Error(UnexpectedEnd)
+        Just('n') -> p.parseLiteral("null",  JsonNull)
+        Just('t') -> p.parseLiteral("true",  JsonBool(true))
         Just('f') -> p.parseLiteral("false", JsonBool(false))
         Just('"') -> p.parseString
         Just('[') -> p.parseArray
         Just('{') -> p.parseObject
         Just(c) when c.digit? || c == '-' -> p.parseNumber
-        Just(c) -> Error(UnexpectedChar("${c}", p.pos))
+        Just(c)   -> Error(UnexpectedChar("${c}", p.pos))
       end
     end
 
-    # Checks that the next `word.count` characters are exactly `word`
-    # (e.g. "null", "true", "false") and returns the parser positioned
-    # just past it — without this, `parseNull`/`parseBool` would accept
-    # any input starting with 'n'/'t'/'f' (e.g. "nul" or "txyz") as a
-    # valid literal, since they only ever checked the first character.
-    let expectLiteral(word: String) -> Result<Parser, ParseError> do
+    let expectLiteral(word: String) -> Parser or! ParseError do
       var p = this
       var i = 0
       loop
-        if i >= word.count
-          return Ok(p)
-        end
+        return Ok(p) if i >= word.count
         if p.current == Just(word.at(i))
           p = p.advance
           i = i + 1
@@ -81,28 +76,28 @@ make Parser do
       end
     end
 
-    # null/true/false are all "match a fixed word, then produce a fixed
-    # value" — one helper instead of a near-identical function per literal.
-    let parseLiteral(word: String, value: Json) -> Result<(Json, Parser), ParseError> do
-      let p = this.expectLiteral(word)?
-      return Ok((value, p))
+    let parseLiteral(word: String, value: Json) -> (Json, Parser) or! ParseError do
+      let p = match this.expectLiteral(word) do
+        Error(e) -> return Error(e)
+        Ok(p)    -> p
+      end
+      Ok((value, p))
     end
 
-    let parseString() -> Result<(Json, Parser), ParseError> do
-      var p = this.advance   # skip opening quote
+    let parseString() -> (Json, Parser) or! ParseError do
+      var p = this.advance
       var chars: [Char] = []
-
       loop
         match p.current do
-          None -> return Error(UnexpectedEnd)
+          None      -> return Error(UnexpectedEnd)
           Just('"') -> return Ok((JsonString(chars.join("")), p.advance))
           Just('\\') -> do
             p = p.advance
             match p.current do
               Just('n') -> chars.push!('\n')
               Just('t') -> chars.push!('\t')
-              Just(c) -> chars.push!(c)
-              None -> return Error(UnexpectedEnd)
+              Just(c)   -> chars.push!(c)
+              None      -> return Error(UnexpectedEnd)
             end
             p = p.advance
           end
@@ -114,63 +109,56 @@ make Parser do
       end
     end
 
-    let parseArray() -> Result<(Json, Parser), ParseError> do
-      var p = this.advance.skipWhitespace   # skip [
+    let parseArray() -> (Json, Parser) or! ParseError do
+      var p = this.advance.skipWhitespace
       var items: [Json] = []
-
-      if p.current == Just(']')
-        return Ok((JsonArray([]), p.advance))
-      end
-
+      return Ok((JsonArray([]), p.advance)) if p.current == Just(']')
       loop
-        let (value, nextP) = p.parseValue()?
+        let (value, nextP) = match p.parseValue() do
+          Error(e) -> return Error(e)
+          Ok(v)    -> v
+        end
         items.push!(value)
         p = nextP.skipWhitespace
-
         match p.current do
           Just(',') -> p = p.advance.skipWhitespace
           Just(']') -> return Ok((JsonArray(items), p.advance))
-          _ -> return Error(UnexpectedChar("expected , or ]", p.pos))
+          _         -> return Error(UnexpectedChar("expected , or ]", p.pos))
         end
       end
     end
 
-    let parseObject() -> Result<(Json, Parser), ParseError> do
-      var p = this.advance.skipWhitespace   # skip {
+    let parseObject() -> (Json, Parser) or! ParseError do
+      var p = this.advance.skipWhitespace
       var obj: { String: Json } = {}
-
-      if p.current == Just('}')
-        return Ok((JsonObject({}), p.advance))
-      end
-
+      return Ok((JsonObject({}), p.advance)) if p.current == Just('}')
       loop
-        let (JsonString(key), afterKey) = p.parseString()?
-        p = afterKey.skipWhitespace
-
-        # expect colon
-        p = p.advance.skipWhitespace
-
-        let (value, afterValue) = p.parseValue()?
+        let (JsonString(key), afterKey) = match p.parseString() do
+          Error(e) -> return Error(e)
+          Ok(v)    -> v
+        end
+        p = afterKey.skipWhitespace.advance.skipWhitespace  # skip colon
+        let (value, afterValue) = match p.parseValue() do
+          Error(e) -> return Error(e)
+          Ok(v)    -> v
+        end
         obj.put!(key, value)
         p = afterValue.skipWhitespace
-
         match p.current do
           Just(',') -> p = p.advance.skipWhitespace
           Just('}') -> return Ok((JsonObject(obj), p.advance))
-          _ -> return Error(UnexpectedChar("expected , or }", p.pos))
+          _         -> return Error(UnexpectedChar("expected , or }", p.pos))
         end
       end
     end
 
-    let parseNumber() -> Result<(Json, Parser), ParseError> do
+    let parseNumber() -> (Json, Parser) or! ParseError do
       var p = this
       var chars: [Char] = []
-
       if p.current == Just('-')
         chars.push!('-')
         p = p.advance
       end
-
       loop
         match p.current do
           Just(c) when c.digit? || c == '.' -> do
@@ -180,7 +168,7 @@ make Parser do
           _ -> do
             let numStr = chars.join("")
             match Float.parse(numStr) do
-              Ok(n) -> return Ok((JsonNumber(n), p))
+              Ok(n)    -> return Ok((JsonNumber(n), p))
               Error(_) -> return Error(InvalidNumber(numStr))
             end
           end
@@ -191,12 +179,10 @@ make Parser do
   end
 end
 
-# Usage
 main do
   let input = "{\"name\": \"Alice\", \"age\": 30, \"hobbies\": [\"coding\", \"music\"]}"
-
   match Parser.parse(input) do
-    Ok(json) -> IO.printLine("Parsed: ${json}")
-    Error(e) -> IO.printLine("Error: ${e}")
+    Ok(json)  -> IO.printLine("Parsed: ${json}")
+    Error(e)  -> IO.printLine("Error: ${e}")
   end
 end

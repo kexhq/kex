@@ -62,6 +62,7 @@ private:
 
     // Type expressions
     auto parseTypeExpr() -> ast::TypeExprPtr;
+    auto parseTypeOr() -> ast::TypeExprPtr;
     auto parseTypeUnion() -> ast::TypeExprPtr;
     auto parseTypeFunction() -> ast::TypeExprPtr;
     auto parseTypePostfix() -> ast::TypeExprPtr;

@@ -22,6 +22,8 @@ auto Evaluator::registerAdtConstructors() -> void {
     regCtor1("Just");
     regCtor1("Ok");
     regCtor1("Error");
+    regCtor1("Left");
+    regCtor1("Right");
 
     // Comparison — the result type of Comparable.compare.
     // Less/Equal/Greater are zero-arg constructors (atoms), same as None.

@@ -176,6 +176,9 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     for (const char* name : {"Option", "Just", "None"}) {
         reg.registerImplementation(name, "Optionable");
     }
+    for (const char* name : {"Either", "Left", "Right"}) {
+        reg.registerImplementation(name, "Eitherable");
+    }
 
     return reg;
 }

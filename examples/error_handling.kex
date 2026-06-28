@@ -9,20 +9,34 @@ let parseInt(s: String) -> Result<Int, ParseError> do
 end
 
 let parsePort(s: String) -> Result<Int, ParseError> do
-  let n = parseInt(s)?
-  return Error(Overflow) if n > 65535
-  return Ok(n)
+  match parseInt(s) do
+    Error(e) -> return Error(e)
+    Ok(n) -> do
+      return Error(Overflow) if n > 65535
+      return Ok(n)
+    end
+  end
 end
 
-# Chaining with ?
+# Aspirational: file I/O and Config not yet in stdlib
 foul loadConfig(path: String) -> Result<Config, AppError> do
-  let content = IO.read(path)?
-  let parsed = Config.parse(content)?
-  let port = parsePort(parsed.get("port"))?
-  return Ok(Config { port: port, host: parsed.get("host") })
+  match IO.read(path) do
+    Error(e) -> return Error(AppError(e))
+    Ok(content) -> do
+      match Config.parse(content) do
+        Error(e) -> return Error(e)
+        Ok(parsed) -> do
+          match parsePort(parsed.get("port")) do
+            Error(e) -> return Error(AppError(e))
+            Ok(port) -> return Ok(Config { port: port, host: parsed.get("host") })
+          end
+        end
+      end
+    end
+  end
 end
 
-# Optional handled explicitly (no ? operator)
+# Optional handled with match and if let
 let findUser(users: [User], name: String) -> User? do
   return users.find { |u| u.name == name }
 end
@@ -34,12 +48,16 @@ let greetUser(users: [User], name: String) -> String do
   end
 end
 
-# Combining Result and Optional
+# Aspirational: fetchUser not yet in stdlib
 foul getUserEmail(id: Int) -> Result<String, AppError> do
-  let user = fetchUser(id)?
-  match user.email do
-    Just(email) -> Ok(email)
-    None -> Error(AppError(:no_email))
+  match fetchUser(id) do
+    Error(e) -> return Error(e)
+    Ok(user) -> do
+      match user.email do
+        Just(email) -> Ok(email)
+        None -> Error(AppError(:no_email))
+      end
+    end
   end
 end
 

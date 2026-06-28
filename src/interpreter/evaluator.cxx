@@ -1111,27 +1111,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // Otherwise return as type tag (atom) for pattern matching
             return Value::atom(node.name);
         }
-        else if constexpr (std::is_same_v<T, ast::ErrorPropagate>) {
-            // expr? — unwrap Ok(x)/Just(x) to x; short-circuit the enclosing
-            // function on Error(e)/None by reusing the same ReturnException
-            // mechanism `return` already uses. Any other value passes
-            // through unchanged (matches the type checker, which just
-            // forwards the inner expression's type).
-            auto inner = node.inner ? eval(*node.inner) : Value::none();
-            if (std::holds_alternative<NoneValue>(inner->data)) {
-                throw ReturnException(inner);
-            }
-            if (auto* rec = std::get_if<RecordValue>(&inner->data)) {
-                if ((rec->typeName == "Ok" || rec->typeName == "Just") && rec->fields.size() == 1) {
-                    auto it = rec->fields.find("0");
-                    if (it != rec->fields.end()) return it->second;
-                }
-                if (rec->typeName == "Error") {
-                    throw ReturnException(inner);
-                }
-            }
-            return inner;
-        }
         else if constexpr (std::is_same_v<T, ast::ErrorNode>) {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
                                expr.location);

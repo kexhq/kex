@@ -65,7 +65,9 @@ type_expr
   | LBRACKET type_expr RBRACKET                   (* list type *)
   | LBRACE type_expr COLON type_expr RBRACE       (* map type *)
   | type_expr PIPE type_expr                      (* union type *)
-  | type_expr QUESTION                            (* optional sugar *)
+  | type_expr QUESTION                            (* optional sugar: T? = Just(T) | None *)
+  | type_expr "or" "!" type_expr                  (* result sugar: T or! E = Result<T, E> *)
+  | type_expr "or" type_expr                      (* either sugar: A or B = Either<A, B> *)
   | BLOCK LESS_THAN type_expr GREATER_THAN        (* block type *)
   | atom_literal                                  (* atom in type position *)
   ;
@@ -215,7 +217,6 @@ expr
   | UPPER_IDENT LBRACE record_init RBRACE        (* record construction *)
   | expr binary_op expr                          (* binary operation *)
   | unary_op expr                                (* unary operation *)
-  | expr QUESTION                                (* error propagation *)
   | LPAREN expr ( COMMA expr )+ RPAREN           (* tuple *)
   | LBRACKET list_items? RBRACKET                (* list literal *)
   | LBRACE map_items? RBRACE                     (* map literal *)

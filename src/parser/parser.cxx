@@ -769,7 +769,35 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
 // ===== Type Expressions =====
 
 auto Parser::parseTypeExpr() -> ast::TypeExprPtr {
-    return parseTypeUnion();
+    return parseTypeOr();
+}
+
+// `T or! E`  →  Result<T, E>   (Ok/Error constructors)
+// `T or L`   →  Either<T, L>   (Right/Left constructors)
+// Lower precedence than `|` (ADT union) and `->` (function type).
+auto Parser::parseTypeOr() -> ast::TypeExprPtr {
+    auto left = parseTypeUnion();
+
+    // `or` is context-sensitive: only a keyword in type position (stays as
+    // LowerIdent in expression position so `.or(...)` and `let or = ...` work).
+    if (check(TokenType::LowerIdent) && peek().value == "or") {
+        advance();
+        bool isResult = match(TokenType::Bang); // consume `!` if present
+        auto right = parseTypeUnion();
+
+        auto result = std::make_unique<ast::TypeExpr>();
+        result->location = left->location;
+
+        std::vector<ast::TypeExprPtr> args;
+        args.push_back(std::move(left));
+        args.push_back(std::move(right));
+        ast::TypeName typeName;
+        typeName.parts = {isResult ? "Result" : "Either"};
+        result->kind = ast::GenericType{std::move(typeName), std::move(args)};
+        return result;
+    }
+
+    return left;
 }
 
 auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
@@ -1150,15 +1178,6 @@ auto Parser::parsePostfix() -> ast::ExprPtr {
             call->kind = ast::MethodCall{
                 std::move(expr), "get", std::move(args), {}, std::nullopt, false};
             expr = std::move(call);
-            continue;
-        }
-
-        // Error propagation: expr?
-        if (match(TokenType::Question)) {
-            auto prop = std::make_unique<ast::Expr>();
-            prop->location = currentLocation();
-            prop->kind = ast::ErrorPropagate{std::move(expr)};
-            expr = std::move(prop);
             continue;
         }
 

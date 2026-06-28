@@ -33,6 +33,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Then: return "then";
         case TokenType::This: return "this";
         case TokenType::Timeout: return "timeout";
+        case TokenType::Trait: return "trait";
         case TokenType::True: return "true";
         case TokenType::Type: return "type";
         case TokenType::Using: return "using";

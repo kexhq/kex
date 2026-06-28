@@ -417,9 +417,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
             analyzeBody(node.body);
         }
-        else if constexpr (std::is_same_v<T, ast::ErrorPropagate>) {
-            if (node.inner) analyzeExpr(*node.inner);
-        }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             for (const auto& elem : node.elements) {
                 if (elem) analyzeExpr(*elem);
