@@ -1,6 +1,7 @@
 #include "common/color.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
+#include "codegen/core_erlang.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
 #include "interpreter/evaluator.hxx"
@@ -420,6 +421,8 @@ auto printUsage(const char* progName) -> void {
               << "  -j, --json        With --check: output diagnostics as JSON\n"
               << "  -s, --summary     Print public API signatures (Kex syntax)\n"
               << "  -t, --types       With --check: dump inferred expression types\n"
+              << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+              << "  -o <dir>          Output directory for --compile (default: .)\n"
               << "  -h, --help        Show this help\n"
               << "  -v, --version     Show version\n"
               << "  --no-colors       Disable ANSI color output\n";
@@ -431,19 +434,20 @@ auto printVersion() -> void {
 
 int main(int argc, char* argv[]) {
     static struct option longOptions[] = {
-        {"run",      no_argument,       nullptr, 'r'},
-        {"no-check", no_argument,       nullptr, 'n'},
-        {"lex",      no_argument,       nullptr, 'l'},
-        {"parse",    no_argument,       nullptr, 'p'},
-        {"check",    no_argument,       nullptr, 'c'},
-        {"json",     no_argument,       nullptr, 'j'},
-        {"summary",  no_argument,       nullptr, 's'},
-        {"types",    no_argument,       nullptr, 't'},
-        {"complete", required_argument, nullptr, 'C'},
-        {"help",     no_argument,       nullptr, 'h'},
-        {"version",  no_argument,       nullptr, 'v'},
-        {"no-colors",no_argument,       nullptr, 'N'},
-        {nullptr,    0,                 nullptr,  0 }
+        {"run",       no_argument,       nullptr, 'r'},
+        {"no-check",  no_argument,       nullptr, 'n'},
+        {"lex",       no_argument,       nullptr, 'l'},
+        {"parse",     no_argument,       nullptr, 'p'},
+        {"check",     no_argument,       nullptr, 'c'},
+        {"json",      no_argument,       nullptr, 'j'},
+        {"summary",   no_argument,       nullptr, 's'},
+        {"types",     no_argument,       nullptr, 't'},
+        {"emit-core", no_argument,       nullptr, 'e'},
+        {"complete",  required_argument, nullptr, 'C'},
+        {"help",      no_argument,       nullptr, 'h'},
+        {"version",   no_argument,       nullptr, 'v'},
+        {"no-colors", no_argument,       nullptr, 'N'},
+        {nullptr,     0,                 nullptr,  0 }
     };
 
     std::string mode = "run";
@@ -452,9 +456,10 @@ int main(int argc, char* argv[]) {
     bool jsonOutput = false;
     bool summaryMode = false;
     std::string completePrefix;
+    std::string outputDir = ".";
     int opt;
 
-    while ((opt = getopt_long(argc, argv, "rnlcjspthvC:", longOptions, nullptr)) != -1) {
+    while ((opt = getopt_long(argc, argv, "rnlcjspethvC:o:", longOptions, nullptr)) != -1) {
         switch (opt) {
             case 'r': mode = "run"; break;
             case 'n': skipCheck = true; break;
@@ -464,6 +469,8 @@ int main(int argc, char* argv[]) {
             case 'j': jsonOutput = true; mode = "check"; break;
             case 's': summaryMode = true; mode = "check"; break;
             case 't': dumpTypes = true; break;
+            case 'e': mode = "emit-core"; break;
+            case 'o': outputDir = optarg; break;
             case 'C': completePrefix = optarg; mode = "complete"; break;
             case 'h': printUsage(argv[0]); return 0;
             case 'v': printVersion(); return 0;
@@ -880,6 +887,28 @@ int main(int argc, char* argv[]) {
 
         if (mode == "parse") {
             printAst(program);
+            return 0;
+        }
+
+        if (mode == "emit-core") {
+            // Derive module stem from filename (e.g. "hello" from "hello.kex")
+            std::string stem = filepath;
+            auto slash = stem.rfind('/');
+            if (slash != std::string::npos) stem = stem.substr(slash + 1);
+            auto dot = stem.rfind('.');
+            if (dot != std::string::npos) stem = stem.substr(0, dot);
+
+            kex::codegen::CoreErlangEmitter emitter;
+            auto result = emitter.emitProgram(program, stem);
+
+            std::string outPath = outputDir + "/" + result.moduleName + ".core";
+            std::ofstream outFile(outPath);
+            if (!outFile) {
+                std::cerr << "error: cannot write " << outPath << "\n";
+                return 1;
+            }
+            outFile << result.source;
+            std::cerr << "wrote " << outPath << "\n";
             return 0;
         }
 

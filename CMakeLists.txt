@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_library(kex_lib
+    src/codegen/core_erlang.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
@@ -102,6 +103,11 @@ foreach(src IN LISTS PRELUDE_SOURCES)
         VERBATIM
     )
 endforeach()
+
+add_executable(codegen_test tests/codegen_test.cxx)
+target_link_libraries(codegen_test PRIVATE kex_lib)
+target_include_directories(codegen_test PRIVATE tests)
+add_test(NAME codegen_test COMMAND codegen_test)
 
 add_executable(lexer_test tests/lexer_test.cxx)
 target_link_libraries(lexer_test PRIVATE kex_lib)
