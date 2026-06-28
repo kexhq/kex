@@ -490,6 +490,50 @@ auto printAst(const kex::ast::Program &program) -> void
     }
 }
 
+// Absolute path to cmake-pre-built Kex runtime beams (kex_io.beam, ...),
+// or empty if none is available. Using these avoids an erlc spawn (~0.15s
+// per module) on every BEAM invocation.
+auto prebuiltRuntimeBeamDir() -> std::string
+{
+#ifdef KEX_RUNTIME_BEAM_DIR
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    if (fs::exists(fs::path{KEX_RUNTIME_BEAM_DIR} / "kex_io.beam", ec))
+        return KEX_RUNTIME_BEAM_DIR;
+#else
+    (void)0;
+#endif
+    return {};
+}
+
+// Fallback: walk up from argv[0] to find runtime/src/*.erl and compile them
+// into a fresh temp dir. Returns the dir (empty on failure); caller owns
+// cleanup via fs::remove_all.
+auto compileRuntimeBeamsToTemp(const char* argv0) -> std::string
+{
+    namespace fs = std::filesystem;
+    fs::path bin = fs::weakly_canonical(argv0);
+    for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path())
+    {
+        auto rtSrc = dir / "runtime" / "src";
+        if (!fs::exists(rtSrc)) continue;
+        char tmp[] = "/tmp/kex_rt_XXXXXX";
+        if (!mkdtemp(tmp)) return {};
+        std::string out = tmp;
+        for (const auto& e : fs::directory_iterator(rtSrc))
+        {
+            if (e.path().extension() == ".erl")
+            {
+                std::string cmd = "erlc -o " + out + " "
+                                + e.path().string() + " > /dev/null 2>&1";
+                std::system(cmd.c_str());
+            }
+        }
+        return out;
+    }
+    return {};
+}
+
 auto printUsage(const char *progName) -> void
 {
     std::cerr << "Usage: " << progName << " [options] <file.kex>\n"
@@ -644,22 +688,17 @@ int main(int argc, char *argv[])
 
     if (mode == "beam-repl")
     {
-        // ── Locate kex_io.erl ───────────────────────────────────────────────
-        std::string runtimeErl;
-        {
-            namespace fs = std::filesystem;
-            fs::path bin = fs::weakly_canonical(argv[0]);
-            for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path()) {
-                auto candidate = dir / "runtime" / "src" / "kex_io.erl";
-                if (fs::exists(candidate)) { runtimeErl = candidate.string(); break; }
-            }
-        }
-        // ── Create a persistent temp dir for kex_io.beam ────────────────────
+        // ── Writable temp dir for per-eval user beams ─────────────────────
         char rtmpl[] = "/tmp/kex_irepl_XXXXXX";
         char* rtd = mkdtemp(rtmpl);
         if (!rtd) { std::cerr << "error: mkdtemp failed\n"; return 1; }
         std::string beamDir = rtd;
 
+        // Put runtime beams (kex_io, ...) on the path. Prefer the cmake
+        // pre-built dir (added as an extra -pa at run time); fall back to
+        // compiling them into beamDir so a single -pa suffices.
+        std::string rtPaDir = prebuiltRuntimeBeamDir();
+        if (rtPaDir.empty())
         {
             namespace fs = std::filesystem;
             fs::path bin = fs::weakly_canonical(argv[0]);
@@ -815,6 +854,7 @@ int main(int argc, char *argv[])
                     if (erlcRet != 0) { std::cerr << "  error: compilation failed\n"; continue; }
 
                     std::string runCmd = "erl -noshell -pa " + beamDir +
+                                         (rtPaDir.empty() ? "" : " -pa " + rtPaDir) +
                                          " -eval '" + result.moduleName + ":main(), halt()'"
                                          " < /dev/null";
                     std::system(runCmd.c_str());
@@ -1260,27 +1300,15 @@ int main(int argc, char *argv[])
             moduleName = modFile.substr(0, modFile.size() - 5);
         }
 
-        // Build kex runtime beams into a temp dir so kex_io etc. are available.
-        std::string rtBeamDir;
+        // Put Kex runtime beams (kex_io, kex_file, ...) on the code path.
+        // Prefer cmake-pre-built beams (zero compile cost); fall back to
+        // compiling them into a temp dir we clean up afterwards.
+        std::string rtBeamDir = prebuiltRuntimeBeamDir();
+        bool rtTemp = false;
+        if (rtBeamDir.empty())
         {
-            fs::path bin = fs::weakly_canonical(argv[0]);
-            for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path()) {
-                auto rtSrc = dir / "runtime" / "src";
-                if (fs::exists(rtSrc)) {
-                    char rtTmp[] = "/tmp/kex_rt_XXXXXX";
-                    if (mkdtemp(rtTmp)) {
-                        rtBeamDir = rtTmp;
-                        for (const auto& e : fs::directory_iterator(rtSrc)) {
-                            if (e.path().extension() == ".erl") {
-                                std::string cmd = "erlc -o " + rtBeamDir + " "
-                                    + e.path().string() + " > /dev/null 2>&1";
-                                std::system(cmd.c_str());
-                            }
-                        }
-                    }
-                    break;
-                }
-            }
+            rtBeamDir = compileRuntimeBeamsToTemp(argv[0]);
+            rtTemp = !rtBeamDir.empty();
         }
 
         // Load explicitly — code:load_abs rejects when filename != module name,
@@ -1298,7 +1326,9 @@ int main(int argc, char *argv[])
             runCmd += " -extra";
             for (const auto& a : beamArgs) runCmd += " " + a;
         }
-        return std::system(runCmd.c_str());
+        int rc = std::system(runCmd.c_str());
+        if (rtTemp) fs::remove_all(rtBeamDir);
+        return rc;
     }
 
     // Reject non-.kex files before trying to parse them.
@@ -1456,25 +1486,40 @@ int main(int argc, char *argv[])
             }
 
             // --compile: also invoke erlc to produce a .beam file.
-            // Locate and compile runtime Erlang modules (kex_io.erl, kex_file.erl, ...).
+            // Place Kex runtime beams (kex_io, kex_file, ...) into the output
+            // dir so the compiled .beam is self-contained. Prefer copying the
+            // cmake-pre-built beams; fall back to compiling from source.
             {
                 namespace fs = std::filesystem;
-                fs::path bin = fs::weakly_canonical(argv[0]);
-                for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path())
+                std::string prebuilt = prebuiltRuntimeBeamDir();
+                if (!prebuilt.empty())
                 {
-                    auto rtDir = dir / "runtime" / "src";
-                    if (fs::exists(rtDir))
+                    std::error_code ec;
+                    for (const auto& e : fs::directory_iterator(prebuilt))
+                        if (e.path().extension() == ".beam")
+                            fs::copy_file(e.path(),
+                                          fs::path{outputDir} / e.path().filename(),
+                                          fs::copy_options::overwrite_existing, ec);
+                }
+                else
+                {
+                    fs::path bin = fs::weakly_canonical(argv[0]);
+                    for (auto dir = bin.parent_path(); dir != dir.root_path(); dir = dir.parent_path())
                     {
-                        for (const auto& entry : fs::directory_iterator(rtDir))
+                        auto rtDir = dir / "runtime" / "src";
+                        if (fs::exists(rtDir))
                         {
-                            if (entry.path().extension() == ".erl")
+                            for (const auto& entry : fs::directory_iterator(rtDir))
                             {
-                                std::string rtCmd = "erlc -o " + outputDir + " "
-                                                  + entry.path().string() + " > /dev/null 2>&1";
-                                std::system(rtCmd.c_str());
+                                if (entry.path().extension() == ".erl")
+                                {
+                                    std::string rtCmd = "erlc -o " + outputDir + " "
+                                                      + entry.path().string() + " > /dev/null 2>&1";
+                                    std::system(rtCmd.c_str());
+                                }
                             }
+                            break;
                         }
-                        break;
                     }
                 }
             }

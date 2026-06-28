@@ -1,0 +1,21 @@
+# Recursive Fibonacci — CPU-bound benchmark.
+#
+# Naive doubly-recursive fib is compute-heavy, so it amortises BEAM's ~0.1s
+# VM boot and shows the JIT outrunning the tree-walking interpreter:
+#
+#   time ./kex examples/fib.kex           # interpreter
+#   ./kex -c examples/fib.kex
+#   time ./kex ./fib.kx.beam              # BEAM
+#
+# Bump N below to widen the gap (each +5 ≈ 10x the work).
+
+let fib(n: Int) -> Int do
+  return n if n < 2
+
+  fib(n - 1) + fib(n - 2)
+end
+
+main do
+  let n = 30
+  IO.printLine("fib(${n}) = ${fib(n)}")
+end

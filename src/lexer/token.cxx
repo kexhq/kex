@@ -70,6 +70,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::AmpAmp: return "&&";
         case TokenType::Plus: return "+";
         case TokenType::Question: return "?";
+        case TokenType::QuestionQuestion: return "??";
         case TokenType::Slash: return "/";
         case TokenType::Star: return "*";
         case TokenType::Tilde: return "~";

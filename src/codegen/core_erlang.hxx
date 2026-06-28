@@ -65,6 +65,8 @@ private:
     std::vector<FuncExport> m_exports;
     // name → arity for all top-level functions defined in this module.
     std::unordered_map<std::string, int> m_topLevelFns;
+    // "TypeName::ConstName" → mangled function name for 0-arity static constants.
+    std::unordered_map<std::string, std::string> m_staticCtors;
     // field_name → [(record_name, 1-based tuple position)]
     // Used to generate direct element() calls during field destructuring.
     std::unordered_map<std::string, std::vector<std::pair<std::string,int>>> m_fieldAccessors;

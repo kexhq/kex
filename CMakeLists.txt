@@ -70,11 +70,45 @@ target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 find_library(READLINE_LIB readline HINTS /opt/homebrew/opt/readline/lib /usr/local/opt/readline/lib)
 find_path(READLINE_INCLUDE readline/readline.h HINTS /opt/homebrew/opt/readline/include /usr/local/opt/readline/include)
 
+# ── Erlang runtime beams ────────────────────────────────────────────────
+# Pre-compile runtime/src/*.erl into the build tree so that BEAM runs don't
+# pay an erlc spawn (~0.15s per module) on every invocation. The absolute
+# output path is compiled into the binary via KEX_RUNTIME_BEAM_DIR; main.cxx
+# uses it directly as a -pa path, falling back to per-run compilation only
+# when the pre-built beams are missing (e.g. running outside the build tree).
+find_program(ERLC_EXECUTABLE erlc)
+set(KEX_RUNTIME_BEAM_DIR "${CMAKE_BINARY_DIR}/runtime/beam")
+file(GLOB KEX_RUNTIME_ERL CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/*.erl")
+set(KEX_RUNTIME_BEAMS "")
+foreach(erl IN LISTS KEX_RUNTIME_ERL)
+    cmake_path(GET erl STEM stem)
+    list(APPEND KEX_RUNTIME_BEAMS "${KEX_RUNTIME_BEAM_DIR}/${stem}.beam")
+endforeach()
+
+if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
+    add_custom_command(
+        OUTPUT ${KEX_RUNTIME_BEAMS}
+        COMMAND ${CMAKE_COMMAND} -E make_directory ${KEX_RUNTIME_BEAM_DIR}
+        COMMAND ${ERLC_EXECUTABLE} -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
+        DEPENDS ${KEX_RUNTIME_ERL}
+        COMMENT "Compiling Kex runtime Erlang modules"
+        VERBATIM
+    )
+    add_custom_target(kex_runtime_beams DEPENDS ${KEX_RUNTIME_BEAMS})
+    set(KEX_HAS_RUNTIME_BEAMS TRUE)
+else()
+    message(STATUS "Runtime beams: skipped (erlc not found); BEAM runs will compile on demand")
+endif()
+
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE
     KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
+    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
 )
+if(KEX_HAS_RUNTIME_BEAMS)
+    add_dependencies(kex kex_runtime_beams)
+endif()
 
 if(READLINE_LIB AND READLINE_INCLUDE)
     target_compile_definitions(kex PRIVATE HAS_READLINE=1)

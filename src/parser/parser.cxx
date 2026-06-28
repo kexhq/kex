@@ -992,12 +992,13 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 auto Parser::parseOr() -> ast::ExprPtr {
     auto left = parseAnd();
 
-    while (check(TokenType::PipePipe)) {
+    while (check(TokenType::PipePipe) || check(TokenType::QuestionQuestion)) {
+        auto opType = peek().type;
         advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
         auto right = parseAnd();
-        op->kind = ast::BinaryOp{std::move(left), TokenType::PipePipe, std::move(right)};
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
         left = std::move(op);
     }
 

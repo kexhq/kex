@@ -75,14 +75,37 @@ inspect(X) ->
 to_string(X) when is_list(X) ->
     case io_lib:printable_unicode_list(X) of
         true  -> X;
-        false -> lists:flatten(io_lib:format("~w", [X]))
+        false ->
+            "[" ++ lists:flatten(lists:join(",", lists:map(fun format_value/1, X))) ++ "]"
     end;
 to_string(X) when is_binary(X)  -> binary_to_list(X);
 to_string(X) when is_atom(X)    -> atom_to_list(X);
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> lists:flatten(io_lib:format("~g", [X]));
-to_string(X) when is_tuple(X)   -> lists:flatten(io_lib:format("~p", [X]));
+to_string(X) when is_map(X)     ->
+    Pairs = [format_value(K) ++ " => " ++ format_value(V) || {K, V} <- maps:to_list(X)],
+    "#{" ++ lists:flatten(lists:join(",", Pairs)) ++ "}";
+to_string(X) when is_tuple(X)   ->
+    Parts = [format_value(E) || E <- tuple_to_list(X)],
+    "{" ++ lists:flatten(lists:join(",", Parts)) ++ "}";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
+
+%% format_value/1 — format a single value for display inside containers.
+format_value(X) when is_list(X) ->
+    case io_lib:printable_unicode_list(X) of
+        true  -> "\"" ++ X ++ "\"";
+        false -> "[" ++ lists:flatten(lists:join(",", lists:map(fun format_value/1, X))) ++ "]"
+    end;
+format_value(X) when is_map(X) ->
+    Pairs = [format_value(K) ++ " => " ++ format_value(V) || {K, V} <- maps:to_list(X)],
+    "#{" ++ lists:flatten(lists:join(",", Pairs)) ++ "}";
+format_value(X) when is_tuple(X) ->
+    Parts = [format_value(E) || E <- tuple_to_list(X)],
+    "{" ++ lists:flatten(lists:join(",", Parts)) ++ "}";
+format_value(X) when is_integer(X) -> integer_to_list(X);
+format_value(X) when is_float(X)   -> lists:flatten(io_lib:format("~g", [X]));
+format_value(X) when is_atom(X)    -> atom_to_list(X);
+format_value(X)                    -> lists:flatten(io_lib:format("~p", [X])).
 
 %% add/2 — polymorphic + for both strings (lists) and numbers.
 add(A, B) when is_list(A) -> A ++ B;

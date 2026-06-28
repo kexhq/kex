@@ -125,6 +125,9 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"Math::abs",       {"erlang", "abs"}},
         {"Math::pow",       {"math",   "pow"}},
         {"Math::pi",        {"math",   "pi"}},
+        {"Math::PI",        {"math",   "pi"}},
+        {"Math::e",         {"math",   "exp"}},
+        {"Math::inf",       {"erlang", "infinity"}},
         // String
         {"String::length",  {"erlang", "length"}},
         {"String::toUpper", {"string", "to_upper"}},
@@ -251,6 +254,17 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Binary ops ---
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
+            // ?? (null-coalescing): if lhs is `none`, return rhs, else return lhs.
+            if (node.op == TokenType::QuestionQuestion) {
+                auto lv = freshVar("QQ");
+                auto l = emitExpr(node.left);
+                auto r = emitExpr(node.right);
+                return "let <" + lv + "> =\n    " + l + "\nin\n"
+                       "case " + lv + " of\n"
+                       "  'none' when 'true' -> " + r + "\n"
+                       "  _ when 'true' -> " + lv + "\n"
+                       "end";
+            }
             auto l = emitExpr(node.left);
             auto r = emitExpr(node.right);
             auto op = [&]() -> std::string {
@@ -378,6 +392,17 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 }
                 if (!bmod.empty())
                     return "call '" + bmod + "':'" + bfn + "'(" + args + ")";
+                // Check if the method is a 0-arity static constant from a static do...end block.
+                auto ctorIt = m_staticCtors.find(uid->name + "::" + node.method);
+                if (ctorIt != m_staticCtors.end()) {
+                    return "apply '" + ctorIt->second + "'/0()";
+                }
+                // Check if the method is a local top-level function (static make method).
+                auto localIt = m_topLevelFns.find(node.method);
+                if (localIt != m_topLevelFns.end()) {
+                    int callArity = static_cast<int>(node.args.size());
+                    return "apply '" + node.method + "'/" + std::to_string(callArity) + "(" + args + ")";
+                }
                 // Unknown module method → call as Kex module
                 return "call 'Kex." + uid->name + "':'" + node.method + "'(" + args + ")";
             }
@@ -415,10 +440,22 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'kex_io':'to_string'(" + recv + ")";
 
             // String methods
-            if (node.method == "empty?" && node.args.empty())
-                return "call 'erlang':'=:='(" + recv + ", [])";
-            if ((node.method == "length" || node.method == "count") && !node.block && node.args.empty())
-                return "call 'erlang':'length'(" + recv + ")";
+            if (node.method == "empty?" && node.args.empty()) {
+                auto tmp = freshVar("EV");
+                return "let <" + tmp + "> =\n    " + recv + "\nin\n"
+                       "case call 'erlang':'is_map'(" + tmp + ") of\n"
+                       "  'true' when 'true' -> call 'erlang':'=:='(call 'maps':'size'(" + tmp + "), 0)\n"
+                       "  'false' when 'true' -> call 'erlang':'=:='(" + tmp + ", [])\n"
+                       "end";
+            }
+            if ((node.method == "length" || node.method == "count") && !node.block && node.args.empty()) {
+                auto tmp = freshVar("SZ");
+                return "let <" + tmp + "> =\n    " + recv + "\nin\n"
+                       "case call 'erlang':'is_map'(" + tmp + ") of\n"
+                       "  'true' when 'true' -> call 'maps':'size'(" + tmp + ")\n"
+                       "  'false' when 'true' -> call 'erlang':'length'(" + tmp + ")\n"
+                       "end";
+            }
             if (node.method == "upperCase" || node.method == "upcase")
                 return "call 'string':'to_upper'(" + recv + ")";
             if (node.method == "lowerCase" || node.method == "downcase")
@@ -445,7 +482,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             if (node.method == "contains?" && node.args.size() == 1)
                 return "call 'lists':'member'(" + firstArg() + ", " + recv + ")";
             if (node.method == "join" && node.args.size() == 1)
-                return "call 'lists':'join'(" + firstArg() + ", " + recv + ")";
+                return "call 'lists':'flatten'(call 'lists':'join'(" + firstArg() + ", " + recv + "))";
             if (node.method == "flatten")
                 return "call 'lists':'flatten'(" + recv + ")";
 
@@ -460,6 +497,71 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (!node.args.empty()) return emitExpr(node.args.back());
                 return "fun (_) -> 'ok'";
             };
+            // Returns true if the block/last-arg lambda has 2 parameters (map iteration).
+            auto blockArity2 = [&]() -> bool {
+                const ast::ExprPtr* blk = node.block ? &*node.block : (!node.args.empty() ? &node.args.back() : nullptr);
+                if (!blk) return false;
+                if (auto* lam = std::get_if<ast::Lambda>(&(*blk)->kind))
+                    return lam->params.size() == 2;
+                return false;
+            };
+
+            // Map-aware higher-order dispatch: 2-param blocks → map operations.
+            if (blockArity2()) {
+                if (node.method == "each") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    return letExpr + "call 'maps':'foreach'(" + fnVar + ", " + recv + ")";
+                }
+                if (node.method == "map") {
+                    // produces a list: one result per (k,v) pair
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    auto kv = freshVar("K"); auto vv = freshVar("V"); auto accv = freshVar("Acc");
+                    auto foldF = "fun (" + kv + ", " + vv + ", " + accv + ") ->\n    "
+                                 "[apply " + fnVar + "(" + kv + ", " + vv + ")|" + accv + "]";
+                    auto [foldVar, foldLet] = bindFun(foldF);
+                    return letExpr + foldLet + "call 'lists':'reverse'(call 'maps':'fold'(" + foldVar + ", [], " + recv + "))";
+                }
+                if (node.method == "filter" || node.method == "select") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    return letExpr + "call 'maps':'filter'(" + fnVar + ", " + recv + ")";
+                }
+                if (node.method == "reject") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    auto kv = freshVar("K"); auto vv = freshVar("V");
+                    auto notFun = "fun (" + kv + ", " + vv + ") ->\n    call 'erlang':'not'(apply " + fnVar + "(" + kv + ", " + vv + "))";
+                    auto [notVar, notLet] = bindFun(notFun);
+                    return letExpr + notLet + "call 'maps':'filter'(" + notVar + ", " + recv + ")";
+                }
+                if (node.method == "any?") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    return letExpr + "call 'erlang':'>'("
+                           "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + ")), 0)";
+                }
+                if (node.method == "all?") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    return letExpr + "call 'erlang':'=:='("
+                           "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + ")), "
+                           "call 'maps':'size'(" + recv + "))";
+                }
+                if (node.method == "count" && (node.block || !node.args.empty())) {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    return letExpr + "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + "))";
+                }
+                if (node.method == "find") {
+                    auto [fnVar, letExpr] = bindFun(rawBlock());
+                    auto kv = freshVar("K"); auto vv = freshVar("V"); auto accv = freshVar("Acc");
+                    auto foldF = "fun (" + kv + ", " + vv + ", " + accv + ") ->\n    "
+                                 "case " + accv + " of\n"
+                                 "  'none' when 'true' ->\n    case apply " + fnVar + "(" + kv + ", " + vv + ") of\n"
+                                 "      'true' when 'true' -> {'Just', {" + kv + ", " + vv + "}}\n"
+                                 "      'false' when 'true' -> 'none'\n    end\n"
+                                 "  _ when 'true' -> " + accv + "\n"
+                                 "end";
+                    auto [foldVar, foldLet] = bindFun(foldF);
+                    return letExpr + foldLet + "call 'maps':'fold'(" + foldVar + ", 'none', " + recv + ")";
+                }
+            }
+
             if (node.method == "each") {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
                 return letExpr + "call 'lists':'foreach'(" + fnVar + ", " + recv + ")";
@@ -481,7 +583,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (node.args.size() >= 1 && node.block) {
                     auto init = emitExpr(node.args[0]);
                     auto [fnVar, letExpr] = bindFun(emitExpr(*node.block));
-                    return letExpr + "call 'lists':'foldl'(" + fnVar + ", " + init + ", " + recv + ")";
+                    // Kex block args are (acc, elem); lists:foldl passes (elem, acc) — wrap to swap.
+                    auto ev = freshVar("E"); auto av = freshVar("A");
+                    auto swapFun = "fun (" + ev + ", " + av + ") ->\n    apply " + fnVar + "(" + av + ", " + ev + ")";
+                    auto [swapVar, swapLet] = bindFun(swapFun);
+                    return letExpr + swapLet + "call 'lists':'foldl'(" + swapVar + ", " + init + ", " + recv + ")";
                 }
             }
 
@@ -502,11 +608,12 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
             // Option methods
             if (node.method == "or" && node.args.size() == 1) {
-                // Some(x).or(default) → x; None.or(default) → default
+                // Some(x).or(default) or Just(x).or(default) → x; None.or(default) → default
                 auto dflt = firstArg();
                 auto tmp  = freshVar("Opt");
                 return "let <" + tmp + "> =\n    " + recv + "\nin\n"
                        "case " + tmp + " of\n"
+                       "  {'Just', _V} when 'true' -> _V\n"
                        "  {'Some', _V} when 'true' -> _V\n"
                        "  'none' when 'true' -> " + dflt + "\n"
                        "  _ when 'true' -> " + tmp + "\n"
@@ -591,8 +698,14 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'maps':'put'(" + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ", " + recv + ")";
             if (node.method == "delete" && node.args.size() == 1)
                 return "call 'maps':'remove'(" + firstArg() + ", " + recv + ")";
-            if (node.method == "get" && node.args.size() == 1)
-                return "call 'maps':'get'(" + firstArg() + ", " + recv + ")";
+            if (node.method == "get" && node.args.size() == 1) {
+                // maps:find returns {ok,V} | error — wrap as Just/None for Kex
+                auto kv = freshVar("V");
+                return "case call 'maps':'find'(" + firstArg() + ", " + recv + ") of\n"
+                       "  {'ok', " + kv + "} when 'true' -> {'Just', " + kv + "}\n"
+                       "  'error' when 'true' -> 'none'\n"
+                       "end";
+            }
             if (node.method == "get" && node.args.size() == 2)
                 return "call 'maps':'get'(" + emitExpr(node.args[0]) + ", " + recv + ", " + emitExpr(node.args[1]) + ")";
             if (node.method == "merge" && node.args.size() == 1)
@@ -603,17 +716,28 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'maps':'keys'(" + recv + ")";
             if (node.method == "values" && node.args.empty())
                 return "call 'maps':'values'(" + recv + ")";
+            if (node.method == "entries" && node.args.empty())
+                return "call 'maps':'to_list'(" + recv + ")";
+            if (node.method == "size" && node.args.empty())
+                return "call 'maps':'size'(" + recv + ")";
             if (node.method == "mapKeys") {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
-                // maps:fold to rebuild with transformed keys
                 auto accVar = freshVar("MA"); auto kVar = freshVar("K"); auto vVar = freshVar("V");
-                return letExpr +
-                       "call 'maps':'fold'(fun(" + kVar + ", " + vVar + ", " + accVar + ") -> "
-                       "call 'maps':'put'(apply " + fnVar + "(" + kVar + "), " + vVar + ", " + accVar + ") end, "
-                       "#{}, " + recv + ")";
+                auto foldFun = "fun (" + kVar + ", " + vVar + ", " + accVar + ") ->\n    "
+                               "call 'maps':'put'(apply " + fnVar + "(" + kVar + "), " + vVar + ", " + accVar + ")";
+                auto [foldVar, foldLet] = bindFun(foldFun);
+                return letExpr + foldLet +
+                       "call 'maps':'fold'(" + foldVar + ", call 'maps':'new'(), " + recv + ")";
             }
             if (node.method == "mapValues") {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
+                // maps:map needs fun(K, V) -> NewV. If user wrote |v| (1-arg), wrap it.
+                if (!blockArity2()) {
+                    auto kv = freshVar("K"); auto vv = freshVar("V");
+                    auto wrapFun = "fun (" + kv + ", " + vv + ") ->\n    apply " + fnVar + "(" + vv + ")";
+                    auto [wrapVar, wrapLet] = bindFun(wrapFun);
+                    return letExpr + wrapLet + "call 'maps':'map'(" + wrapVar + ", " + recv + ")";
+                }
                 return letExpr + "call 'maps':'map'(" + fnVar + ", " + recv + ")";
             }
 
@@ -747,6 +871,57 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
         // --- Range expression (1..N) → lists:seq(1, N) ---
         else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
             return "call 'lists':'seq'(" + emitExpr(node.start) + ", " + emitExpr(node.end) + ")";
+        }
+
+        // --- Map literal: %{k => v, ...} ---
+        else if constexpr (std::is_same_v<T, ast::MapExpr>) {
+            if (node.entries.empty())
+                return "call 'maps':'new'()";
+            std::string pairs;
+            for (size_t i = 0; i < node.entries.size(); i++) {
+                if (i > 0) pairs += ", ";
+                pairs += "{" + emitExpr(node.entries[i].key) + ", " + emitExpr(node.entries[i].value) + "}";
+            }
+            return "call 'maps':'from_list'([" + pairs + "])";
+        }
+
+        // --- ShorthandLambda: &funcName, &.method, &.method(args) ---
+        else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
+            std::string pv = freshVar("SX");
+            if (node.kind == ast::ShorthandLambda::Kind::Method ||
+                node.kind == ast::ShorthandLambda::Kind::MethodWithArgs) {
+                // Synthesize a MethodCall on `pv` and emit it via the UFCS dispatch.
+                auto recvExpr = std::make_unique<ast::Expr>();
+                recvExpr->kind = ast::Identifier{pv};  // Identifier = variable reference
+                ast::MethodCall mc;
+                mc.receiver = std::move(recvExpr);
+                mc.method = node.name;
+                // For MethodWithArgs, use placeholder Identifiers; we'll replace the
+                // emitted text after calling emitExpr.
+                for (const auto& a : node.args) {
+                    auto aCopy = std::make_unique<ast::Expr>();
+                    aCopy->kind = ast::Identifier{"__arg_placeholder__"};
+                    mc.args.push_back(std::move(aCopy));
+                }
+                auto mcExpr = std::make_unique<ast::Expr>();
+                mcExpr->kind = std::move(mc);
+                std::string body = emitExpr(mcExpr);
+                // If there were MethodWithArgs, replace placeholder identifier text with real args.
+                if (node.kind == ast::ShorthandLambda::Kind::MethodWithArgs) {
+                    // erlVar("__arg_placeholder__") = "__Arg_placeholder__" (uppercased first char after _)
+                    const std::string placeholder = "__Arg_placeholder__";
+                    for (const auto& a : node.args) {
+                        auto argText = emitExpr(a);
+                        auto pos = body.find(placeholder);
+                        if (pos != std::string::npos)
+                            body.replace(pos, placeholder.size(), argText);
+                    }
+                }
+                return "fun (" + pv + ") ->\n    " + body;
+            } else {
+                // Kind::Function (&funcName) — produces a 1-arg wrapper.
+                return "fun (" + pv + ") ->\n    apply '" + node.name + "'/1(" + pv + ")";
+            }
         }
 
         // Unhandled — emit a placeholder that compiles but fails at runtime.
@@ -1126,6 +1301,7 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
     m_varCounter = 0;
     m_exports.clear();
     m_topLevelFns.clear();
+    m_staticCtors.clear();
     m_moduleName = "kex_" + fileStem;
 
     // Reset field accessor map for this compilation unit.
@@ -1164,6 +1340,22 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                     // Mark each field name as a known 1-arity function.
                     for (const auto& f : node->fields)
                         m_topLevelFns[f.name] = 1;
+                    // Collect static block functions.
+                    if (node->staticBlock) {
+                        for (const auto& fd : node->staticBlock->functions) {
+                            if (!fd) continue;
+                            int explArity = fd->clauses.empty() ? 0
+                                          : static_cast<int>(fd->clauses[0].params.size());
+                            if (explArity > 0) {
+                                m_topLevelFns[fd->name] = explArity;
+                            } else {
+                                // 0-arity constants: emit with mangled name to avoid clashes.
+                                std::string mangled = node->name + "_" + fd->name;
+                                m_staticCtors[node->name + "::" + fd->name] = mangled;
+                                m_topLevelFns[mangled] = 0;
+                            }
+                        }
+                    }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 if (node) {
@@ -1172,14 +1364,18 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                         [&](const ast::FunctionDef& fd) {
                         int explArity = fd.clauses.empty() ? 0
                                       : static_cast<int>(fd.clauses[0].params.size());
+                        // Uppercase-named functions in make blocks are static constructors
+                        // with no implicit This parameter.
+                        bool isStaticCtor = !fd.name.empty() &&
+                                           std::isupper(static_cast<unsigned char>(fd.name[0]));
                         bool firstIsReceiver = false;
-                        if (!fd.clauses.empty() && !fd.clauses[0].params.empty()) {
+                        if (!isStaticCtor && !fd.clauses.empty() && !fd.clauses[0].params.empty()) {
                             const auto& p0 = fd.clauses[0].params[0];
                             if (!p0.name && p0.pattern &&
                                 std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind))
                                 firstIsReceiver = true;
                         }
-                        m_topLevelFns[fd.name] = explArity + (firstIsReceiver ? 0 : 1);
+                        m_topLevelFns[fd.name] = explArity + (isStaticCtor || firstIsReceiver ? 0 : 1);
                     };
                     for (const auto& bodyItem : node->body) {
                         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bodyItem)) {
@@ -1228,14 +1424,17 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                 // Helper to push one FunctionDef (from either direct body or VisibilityBlock).
                 auto pushMakeFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
+                    // Uppercase-named functions are static constructors — no implicit This.
+                    bool isStaticCtor = !fd->name.empty() &&
+                                       std::isupper(static_cast<unsigned char>(fd->name[0]));
                     bool firstParamIsReceiver = false;
-                    if (!fd->clauses.empty() && !fd->clauses[0].params.empty()) {
+                    if (!isStaticCtor && !fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                         const auto& p0 = fd->clauses[0].params[0];
                         if (!p0.name && p0.pattern &&
                             std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind))
                             firstParamIsReceiver = true;
                     }
-                    bool needsImplicitThis = !firstParamIsReceiver;
+                    bool needsImplicitThis = !isStaticCtor && !firstParamIsReceiver;
                     if (!ordered.empty() && !ordered.back().isMain
                         && ordered.back().fns[0]->name == fd->name) {
                         ordered.back().fns.push_back(fd);
@@ -1251,6 +1450,37 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                             for (const auto& vi : (*vbPtr)->items)
                                 if (auto* fp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                                     pushMakeFn(fp->get());
+                        }
+                    }
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                // Emit non-trivial functions (arity >= 1) from the static do...end block.
+                if (node && node->staticBlock) {
+                    for (const auto& fd : node->staticBlock->functions) {
+                        if (!fd) continue;
+                        int explArity = fd->clauses.empty() ? 0
+                                      : static_cast<int>(fd->clauses[0].params.size());
+                        if (explArity == 0) {
+                            // Emit 0-arity constants as mangled top-level functions.
+                            std::string mangled = node->name + "_" + fd->name;
+                            m_exports.push_back({mangled, 0});
+                            std::ostringstream fnOut;
+                            fnOut << "'" << mangled << "'/0 =\n";
+                            fnOut << "  fun () ->\n";
+                            if (!fd->clauses.empty()) {
+                                fnOut << "    " << emitBody(fd->clauses[0].body) << "\n";
+                            } else {
+                                fnOut << "    'ok'\n";
+                            }
+                            functionTexts.push_back(fnOut.str());
+                            continue;
+                        }
+                        // Static block functions are plain functions, no implicit This.
+                        if (!ordered.empty() && !ordered.back().isMain
+                            && ordered.back().fns[0]->name == fd->name) {
+                            ordered.back().fns.push_back(fd.get());
+                        } else {
+                            ordered.push_back({false, false, {fd.get()}, nullptr});
                         }
                     }
                 }

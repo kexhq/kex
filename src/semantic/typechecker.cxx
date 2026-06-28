@@ -1588,6 +1588,9 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                     if (int id = varId(rhs); id >= 0) unifyVar(id, Type::boolean());
                     return Type::boolean();
                 }
+                case TokenType::QuestionQuestion:
+                    // ?? returns rhs type when lhs is none, otherwise lhs type.
+                    return rhs;
                 default:
                     return lhs;
             }
@@ -1666,6 +1669,9 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                 error(loc, "Logical operator requires Bool, got " + typeToString(rhs));
             }
             return Type::boolean();
+
+        case TokenType::QuestionQuestion:
+            return rhs;
 
         default:
             return Type::unknown();
