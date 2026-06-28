@@ -168,8 +168,8 @@ auto CoreErlangEmitter::emitPattern(const ast::PatternPtr& pat) -> std::string {
             if (p.rest) result += "|" + emitPattern(*p.rest);
             return result + "]";
         } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-            // Sum type variant: Tag(args...) → {'Tag', args...}
-            if (p.args.empty()) return "{'" + p.name + "'}";
+            // Sum type variant: Tag → 'Tag' (atom); Tag(args) → {'Tag', args...}
+            if (p.args.empty()) return "'" + p.name + "'";
             std::string result = "{'" + p.name + "'";
             for (const auto& arg : p.args) result += ", " + emitPattern(arg);
             return result + "}";
@@ -312,6 +312,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (!bmod.empty())
                     return "call '" + bmod + "':'" + bfn + "'(" + args + ")";
                 return "call 'Kex." + mod + "':'" + fn + "'(" + args + ")";
+            }
+            // ADT constructor call: uppercase name → tagged tuple {'Name', args...}
+            if (!node.name.empty() && std::isupper(static_cast<unsigned char>(node.name[0]))) {
+                if (args.empty()) return "'" + node.name + "'";
+                return "{'" + node.name + "', " + args + "}";
             }
             // Local function — use apply
             int arity = static_cast<int>(node.args.size());
@@ -533,6 +538,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                    "  'true' when 'true' -> " + t + "\n"
                    "  'false' when 'true' -> " + f + "\n"
                    "end";
+        }
+
+        // --- Range expression (1..N) → lists:seq(1, N) ---
+        else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
+            return "call 'lists':'seq'(" + emitExpr(node.start) + ", " + emitExpr(node.end) + ")";
         }
 
         // Unhandled — emit a placeholder that compiles but fails at runtime.
