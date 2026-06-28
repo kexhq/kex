@@ -9,6 +9,14 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> v
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
             if (node.name != "_") {
+                auto* existing = m_symbols.currentScope().lookupLocal(node.name);
+                if (existing && existing->kind == SymbolKind::Variable) {
+                    if (existing->isMutable) {
+                        error(loc, "Cannot redeclare '" + node.name + "': was declared with 'var'");
+                    } else {
+                        error(loc, "Cannot redeclare immutable binding: " + node.name);
+                    }
+                }
                 m_symbols.define(Symbol{node.name, SymbolKind::Variable, false, false, true, loc});
             }
         }

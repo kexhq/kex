@@ -130,6 +130,8 @@ auto Lexer::nextToken() -> Token {
             if (isLowerAlpha(peek())) return lexAtom();
             return makeToken(TokenType::Colon);
 
+        case ';': return makeToken(TokenType::Newline);
+
         case '#':
             if (match('[')) return makeToken(TokenType::HashLBracket);
             skipComment();

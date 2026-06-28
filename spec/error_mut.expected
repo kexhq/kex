@@ -1,0 +1,2 @@
+spec/error_mut.kex:7:3: error: Cannot redeclare 'x': was declared with 'var'
+Aborted: fix type errors before running (use --no-check to skip).

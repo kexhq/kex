@@ -1,0 +1,9 @@
+main do
+  let x = 34
+  IO.printLine("x = ${x}")
+  x = 33
+  IO.printLine("x = ${x}")
+
+  let x = []
+  IO.printLine("x = ${x}")
+end

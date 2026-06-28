@@ -1,0 +1,15 @@
+foul hereToo do
+  var y = 25
+  IO.printLine("y = ${y}")
+  y = 24
+  IO.printLine("y = ${y}")
+end
+
+main do
+  var x = 34
+  IO.printLine("x = ${x}")
+  x = 33
+  IO.printLine("x = ${x}")
+
+  hereToo()
+end
