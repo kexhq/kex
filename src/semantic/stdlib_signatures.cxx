@@ -100,7 +100,9 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("sort",  {Type::list(genA())}, Type::list(genA()));
     sig("sort",  {Type::list(genA()), Type::func({genA(), genA()}, Type::boolean())}, Type::list(genA()));
     sig("min",   {Type::list(genA())}, Type::optional(genA()));
+    sig("min",   {Type::list(genA()), Type::func({genA()}, Type::typeVar(-3))}, Type::optional(genA()));
     sig("max",   {Type::list(genA())}, Type::optional(genA()));
+    sig("max",   {Type::list(genA()), Type::func({genA()}, Type::typeVar(-3))}, Type::optional(genA()));
     sig("sum",   {Type::list(numberLike())}, numberLike());
     sig("flatMap", {Type::list(genA()), Type::func({genA()}, Type::list(genE()))}, Type::list(genE()));
     sig("join",  {Type::list(Type::string()), Type::string()}, Type::string());

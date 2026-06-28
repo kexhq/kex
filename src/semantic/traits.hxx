@@ -50,6 +50,11 @@ public:
     // priority/ordering rule to fall back on.
     auto registerImplementation(const std::string& typeName, const std::string& traitName) -> void;
 
+    // Returns the name of the first non-structural trait both types share,
+    // or "" if they have no common user-defined trait. Used to widen
+    // heterogeneous list elements to their common trait type.
+    auto commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string;
+
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable/
     // Resultable/Optionable pre-registered, plus implementations for the
     // built-in primitive/sized types and the Result/Option prelude ADTs.

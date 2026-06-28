@@ -990,6 +990,20 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         return Type::func(std::move(paramTypes), resolve(bodyType));
     }
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
+        if (sl->kind == ast::ShorthandLambda::Kind::Function && hintParams.size() > 1) {
+            // Multi-param function capture: &+ used as (acc, elem) -> acc + elem.
+            // Build a param list from all hints, call the function with all of them.
+            std::vector<TypePtr> paramTypes;
+            for (const auto& h : hintParams) {
+                auto pt = resolve(h);
+                paramTypes.push_back(
+                    (std::holds_alternative<TypeVar>(pt->kind) ||
+                     std::holds_alternative<UnknownType>(pt->kind))
+                        ? freshTypeVar() : pt);
+            }
+            auto resultType = checkCall(sl->name, paramTypes, blockExpr.location);
+            return Type::func(std::move(paramTypes), resolve(resultType));
+        }
         TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
         if (std::holds_alternative<TypeVar>(paramType->kind) ||
             std::holds_alternative<UnknownType>(paramType->kind))
@@ -1182,9 +1196,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         elemType = t; // adopt the concrete type if we have one
                     } else if (!tPermissive && !elemFuncPermissive &&
                                !argMatchesParam(t, elemType) && !argMatchesParam(elemType, t)) {
-                        error(expr.location,
-                              "List elements must be the same type. Expected " +
-                              typeToString(elemType) + ", got " + typeToString(t));
+                        // Before erroring, check if both types share a common trait.
+                        // If so, widen the element type to that trait.
+                        std::string common = m_traits.commonTrait(elemType, t);
+                        if (!common.empty()) {
+                            elemType = Type::named(common);
+                        } else {
+                            error(expr.location,
+                                  "List elements must be the same type. Expected " +
+                                  typeToString(elemType) + ", got " + typeToString(t));
+                        }
                     }
                 }
             }
@@ -1652,6 +1673,19 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (std::holds_alternative<VoidType>(argType->kind)) return true;
     if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {
         return m_traits.satisfies(argType, constrained->traitName);
+    }
+    // NamedType param that is itself a trait name: `Shape`, `Comparable`, etc.
+    // Occurs when a heterogeneous list was widened to a trait element type and
+    // then each element is checked against it, or when a trait-typed value is
+    // passed to a ConstrainedType param that got resolved to NamedType.
+    // argType matches if it implements that trait, or if argType IS that trait.
+    if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
+        if (m_traits.get(paramNamed->name)) {
+            if (auto* argNamed = std::get_if<NamedType>(&argType->kind);
+                argNamed && argNamed->name == paramNamed->name)
+                return true; // trait-typed value matches trait param
+            return m_traits.satisfies(argType, paramNamed->name);
+        }
     }
     // Sized ints/floats and arbitrary-precision Integer aren't distinguished
     // at runtime yet (IntValue is one int64_t, FloatValue one double — see

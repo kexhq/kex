@@ -49,6 +49,37 @@ foul printShape(s: Shape) do
   IO.printLine(s.describe)
 end
 
+# --- Multiple traits ---
+
+trait Comparable do
+  compare : This -> Comparison
+  let lessThan?(other)    = this.compare(other) == Less
+  let greaterThan?(other) = this.compare(other) == Greater
+  let equalTo?(other)     = this.compare(other) == Equal
+end
+
+record Version do
+  major : Integer
+  minor : Integer
+  patch : Integer
+end
+
+make Version, implement: Comparable do
+  let compare(other) do
+    if @major != other.major
+      if @major < other.major then Less else Greater end
+    elif @minor != other.minor
+      if @minor < other.minor then Less else Greater end
+    elif @patch != other.patch
+      if @patch < other.patch then Less else Greater end
+    else
+      Equal
+    end
+  end
+
+  let to(String) = "${@major}.${@minor}.${@patch}"
+end
+
 main do
   let shapes = [
     Circle    { radius: 5.0 },
@@ -58,40 +89,8 @@ main do
 
   shapes.each(&printShape)
 
-  # largest area via currying
   let largest = shapes.max { |s| s.area }
   IO.printLine("Largest area: ${largest.area}")
-
-  # --- Multiple traits ---
-
-  trait Comparable do
-    compare : This -> Comparison
-    let lessThan?(other)    = this.compare(other) == Less
-    let greaterThan?(other) = this.compare(other) == Greater
-    let equalTo?(other)     = this.compare(other) == Equal
-  end
-
-  record Version do
-    major : Integer
-    minor : Integer
-    patch : Integer
-  end
-
-  make Version, implement: Comparable do
-    let compare(other) do
-      if @major != other.major
-        if @major < other.major then Less else Greater end
-      elif @minor != other.minor
-        if @minor < other.minor then Less else Greater end
-      elif @patch != other.patch
-        if @patch < other.patch then Less else Greater end
-      else
-        Equal
-      end
-    end
-
-    let to(String) = "${@major}.${@minor}.${@patch}"
-  end
 
   let v1 = Version { major: 1, minor: 2, patch: 0 }
   let v2 = Version { major: 1, minor: 3, patch: 0 }

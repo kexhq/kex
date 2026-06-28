@@ -2053,6 +2053,7 @@ auto Parser::parseListExpr() -> ast::ExprPtr {
         skipNewlines();
         while (match(TokenType::Comma)) {
             skipNewlines();
+            if (check(TokenType::RBracket)) break; // trailing comma
             elements.push_back(parseExpr());
             skipNewlines();
         }
@@ -2155,7 +2156,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
             auto value = parseExpr();
             entries.push_back(ast::MapEntry{std::move(key), std::move(value)});
             skipNewlines();
-        } while (match(TokenType::Comma));
+        } while (match(TokenType::Comma) && !check(TokenType::RBrace));
 
         skipNewlines();
         expect(TokenType::RBrace, "Expected '}' to close map");

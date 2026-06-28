@@ -31,8 +31,8 @@ end
 
 # Specialized make for [Int]
 make [Int] do
-  let sum = this.reduce(0, &.+)
-  let product = this.reduce(1, &.*)
+  let sum = this.reduce(0, &+)
+  let product = this.reduce(1, &*)
 end
 
 # Generic make for all lists

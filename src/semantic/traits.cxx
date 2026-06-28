@@ -1,5 +1,6 @@
 #include "traits.hxx"
 #include <cassert>
+#include <unordered_set>
 
 namespace kex::semantic {
 
@@ -26,7 +27,26 @@ auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string
     bool isInt = std::holds_alternative<SizedIntType>(type->kind) ||
                  (std::holds_alternative<PrimitiveType>(type->kind) &&
                   std::get<PrimitiveType>(type->kind).kind == PrimitiveType::Integer);
+    if (!isInt) {
+        // NamedType("Integer") and friends — produced by Type::named(m_currentMakeType)
+        // inside make blocks or by user type annotations that spell "Integer" as a name.
+        if (auto* named = std::get_if<NamedType>(&type->kind)) {
+            static const std::unordered_set<std::string> kIntNames = {
+                "Int", "Integer", "Byte", "Int8", "Int16", "Int32", "Int64",
+                "UInt8", "UInt16", "UInt32", "UInt64"
+            };
+            isInt = kIntNames.count(named->name) > 0;
+        }
+    }
     bool isFloat = std::holds_alternative<SizedFloatType>(type->kind);
+    if (!isFloat) {
+        if (auto* named = std::get_if<NamedType>(&type->kind)) {
+            static const std::unordered_set<std::string> kFloatNames = {
+                "Float", "Float32", "Float64", "Double"
+            };
+            isFloat = kFloatNames.count(named->name) > 0;
+        }
+    }
 
     if (traitName == "Integer") return isInt;
     if (traitName == "Float") return isFloat;
@@ -36,6 +56,11 @@ auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string
 
 auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName) const -> bool {
     if (!type) return false;
+
+    // A value whose type IS the trait (e.g. NamedType("Shape") against trait "Shape")
+    // trivially satisfies that trait — it was already widened to the trait type.
+    if (auto* named = std::get_if<NamedType>(&type->kind))
+        if (named->name == traitName && m_traits.count(traitName)) return true;
 
     // A ConstrainedType("T", "Integer") satisfies "Integer" and (by extension) "Number";
     // likewise "Float" satisfies "Number". This comes up when a constrained hint type
@@ -82,6 +107,24 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     auto it = m_implementations.find(implementorKey(type));
     if (it == m_implementations.end()) return false;
     return it->second.count(traitName) > 0;
+}
+
+auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
+    auto keyA = implementorKey(a);
+    auto keyB = implementorKey(b);
+    auto itA = m_implementations.find(keyA);
+    auto itB = m_implementations.find(keyB);
+    if (itA == m_implementations.end() || itB == m_implementations.end()) return "";
+    // Skip structural/primitive traits — only return user-defined ones.
+    static const std::set<std::string> kBuiltin = {
+        "Number", "Integer", "Float", "Equatable", "Comparable",
+        "Showable", "Resultable", "Optionable"
+    };
+    for (const auto& t : itA->second) {
+        if (kBuiltin.count(t)) continue;
+        if (itB->second.count(t)) return t;
+    }
+    return "";
 }
 
 auto TraitRegistry::withBuiltins() -> TraitRegistry {
