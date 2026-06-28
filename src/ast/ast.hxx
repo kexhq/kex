@@ -222,6 +222,10 @@ struct IfExpr {
     std::vector<ExprPtr> thenBody;
     std::vector<std::pair<ExprPtr, std::vector<ExprPtr>>> elifs;
     std::optional<std::vector<ExprPtr>> elseBody;
+    // `if let Pattern = expr` — set when the condition is a pattern match.
+    // When set, `condition` holds the scrutinee expression and `letPattern`
+    // holds the pattern to match against it.
+    PatternPtr letPattern;
 };
 
 struct MatchClause {

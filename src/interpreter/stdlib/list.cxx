@@ -453,6 +453,19 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();
+        if (args.size() >= 2) {
+            auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+            if (fn && fn->native) {
+                auto keyOf = fn->native;
+                auto result = elems[0];
+                auto bestKey = keyOf({result});
+                for (size_t i = 1; i < elems.size(); i++) {
+                    auto k = keyOf({elems[i]});
+                    if (compareVia(k, bestKey) == "Less") { result = elems[i]; bestKey = k; }
+                }
+                return Value::record("Just", {{"0", result}});
+            }
+        }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Less") result = elems[i];
@@ -463,6 +476,19 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         auto elems = getElements(args[0]);
         if (elems.empty()) return Value::none();
+        if (args.size() >= 2) {
+            auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+            if (fn && fn->native) {
+                auto keyOf = fn->native;
+                auto result = elems[0];
+                auto bestKey = keyOf({result});
+                for (size_t i = 1; i < elems.size(); i++) {
+                    auto k = keyOf({elems[i]});
+                    if (compareVia(k, bestKey) == "Greater") { result = elems[i]; bestKey = k; }
+                }
+                return Value::record("Just", {{"0", result}});
+            }
+        }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Greater") result = elems[i];

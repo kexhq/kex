@@ -1532,6 +1532,13 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     expr->location = currentLocation();
     expect(TokenType::If, "Expected 'if'");
 
+    // `if let Pattern = expr` — pattern-binding conditional
+    ast::PatternPtr letPattern;
+    if (match(TokenType::Let)) {
+        letPattern = parsePattern();
+        expect(TokenType::Equals, "Expected '=' after pattern in 'if let'");
+    }
+
     m_noDoBlocks = true;
     m_noThenExpr = true;
     auto condition = parseExpr();
@@ -1591,9 +1598,11 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     skipNewlines();
     expect(TokenType::End, "Expected 'end' to close if");
 
-    expr->kind = ast::IfExpr{
+    ast::IfExpr ifNode{
         std::move(condition), std::move(thenBody),
         std::move(elifs), std::move(elseBody)};
+    ifNode.letPattern = std::move(letPattern);
+    expr->kind = std::move(ifNode);
     return expr;
 }
 

@@ -89,8 +89,9 @@ main do
 
   shapes.each(&printShape)
 
-  let largest = shapes.max { |s| s.area }
-  IO.printLine("Largest area: ${largest.area}")
+  if let Just(largest) = shapes.max { |s| s.area }
+    IO.printLine("Largest area: ${largest}")
+  end
 
   let v1 = Version { major: 1, minor: 2, patch: 0 }
   let v2 = Version { major: 1, minor: 3, patch: 0 }

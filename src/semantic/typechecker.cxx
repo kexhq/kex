@@ -1244,7 +1244,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::named("Range", {elemType});
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-            if (node.condition) {
+            if (node.letPattern) {
+                // `if let Pattern = expr` — infer scrutinee, bind pattern vars
+                // in a scope covering only the then-body (already scoped in
+                // resolve pass). Skip Bool check — it's a pattern match.
+                if (node.condition) inferExpr(*node.condition);
+                pushScope();
+                if (node.letPattern) bindPatternVars(*node.letPattern);
+            } else if (node.condition) {
                 auto condType = inferExpr(*node.condition);
                 auto resolved = resolve(condType);
                 if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
@@ -1256,6 +1263,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
             }
             auto thenType = inferBody(node.thenBody);
+            if (node.letPattern) popScope();
             TypePtr branchType = resolve(thenType);  // tracks the first concrete non-Void branch
             for (const auto& [cond, body] : node.elifs) {
                 if (cond) inferExpr(*cond);

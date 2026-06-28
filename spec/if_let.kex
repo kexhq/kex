@@ -1,0 +1,62 @@
+# if let — pattern-binding conditional
+# Expected output:
+# got 42
+# none branch
+# max is 5
+# between 10 and 99
+# ok: 99
+# got error
+# point 3.0,4.0
+
+record Point do
+  x : Float
+  y : Float
+end
+
+main do
+  # Basic Just unwrap
+  let x = Just(42)
+  if let Just(n) = x
+    IO.printLine("got ${n}")
+  end
+
+  # None takes else branch
+  let y = None
+  if let Just(n) = y
+    IO.printLine("should not print")
+  else
+    IO.printLine("none branch")
+  end
+
+  # Works with stdlib returning Optional
+  let items = [3, 1, 4, 1, 5]
+  if let Just(m) = items.max
+    IO.printLine("max is ${m}")
+  end
+
+  # Nested constructor pattern
+  let pair = Just((10, 99))
+  if let Just((a, b)) = pair
+    IO.printLine("between ${a} and ${b}")
+  end
+
+  # Result Ok branch
+  let r = Ok(99)
+  if let Ok(v) = r
+    IO.printLine("ok: ${v}")
+  end
+
+  # Result Error branch goes to else
+  let e = Error("oops")
+  if let Ok(v) = e
+    IO.printLine("should not print")
+  else
+    IO.printLine("got error")
+  end
+
+  # Custom record wrapped in Just
+  let p = Just(Point { x: 3.0, y: 4.0 })
+  if let Just(pt) = p
+    IO.printLine("point ${pt.x},${pt.y}")
+  end
+end

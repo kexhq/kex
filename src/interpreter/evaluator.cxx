@@ -404,21 +404,25 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         i++;
                     }
                     if (i < s.size()) i++; // skip }
-                    // Parse the expression and evaluate directly in current env
+                    // Parse and evaluate the interpolated expression.
+                    // Only catch parse failures here — let runtime errors
+                    // propagate so bugs in ${expr} aren't silently hidden.
+                    ast::ExprPtr interpExpr;
                     try {
                         kex::Lexer interpLexer(inner);
                         auto interpTokens = interpLexer.tokenizeAll();
-                        // Parse as a single expression
                         kex::Parser interpParser(std::move(interpTokens));
-                        auto interpExpr = interpParser.parseExpr();
-                        if (interpExpr) {
-                            auto val = eval(*interpExpr);
-                            result += val->toString();
-                        }
+                        interpExpr = interpParser.parseExpr();
                     } catch (...) {
-                        // Fallback: try as variable lookup
+                        // Parse failed (e.g. a keyword inside ${}) — try
+                        // treating the whole inner string as a variable name.
                         auto val = m_env->get(inner);
                         result += val ? val->toString() : inner;
+                        continue;
+                    }
+                    if (interpExpr) {
+                        auto val = eval(*interpExpr);
+                        result += val->toString();
                     }
                 } else {
                     result += s[i];
@@ -755,6 +759,21 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return range;
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            if (node.letPattern) {
+                // `if let Pattern = expr` — match the scrutinee against the
+                // pattern; run thenBody with bindings in scope if it matches.
+                auto scrutinee = node.condition ? eval(*node.condition) : Value::none();
+                pushEnv();
+                bool matched = matchPattern(*node.letPattern, scrutinee);
+                ValuePtr result = Value::none();
+                if (matched) {
+                    result = evalBody(node.thenBody);
+                } else if (node.elseBody) {
+                    result = evalBody(*node.elseBody);
+                }
+                popEnv();
+                return result;
+            }
             auto cond = node.condition ? eval(*node.condition) : Value::boolean(false);
             if (cond->isTrue()) {
                 return evalBody(node.thenBody);

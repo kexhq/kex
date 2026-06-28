@@ -197,7 +197,16 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
             if (node.condition) resolveExpr(*node.condition);
-            resolveBody(node.thenBody);
+            if (node.letPattern) {
+                // `if let Pattern = expr` — pattern bindings are in scope
+                // only inside the then-body.
+                pushScope();
+                resolvePattern(*node.letPattern);
+                resolveBody(node.thenBody);
+                popScope();
+            } else {
+                resolveBody(node.thenBody);
+            }
             for (const auto& [cond, body] : node.elifs) {
                 if (cond) resolveExpr(*cond);
                 resolveBody(body);
