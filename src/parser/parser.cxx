@@ -2487,6 +2487,7 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
 auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     auto block = std::make_unique<ast::MainBlock>();
     block->location = currentLocation();
+    block->isExplicitMain = true;
     expect(TokenType::Main, "Expected 'main'");
 
     // Optional params: main(args) do ... end — bound to the script's

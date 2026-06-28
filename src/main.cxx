@@ -898,6 +898,26 @@ int main(int argc, char* argv[]) {
             auto dot = stem.rfind('.');
             if (dot != std::string::npos) stem = stem.substr(0, dot);
 
+            // Require an explicit `main do ... end` block for codegen.
+            bool hasMain = false;
+            for (const auto& item : program.items) {
+                std::visit([&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<kex::ast::MainBlock>>) {
+                        if (node && node->isExplicitMain) hasMain = true;
+                    }
+                }, item);
+            }
+            if (!hasMain) {
+                std::cerr << "error: " << filepath
+                          << ": no 'main do ... end' block found.\n"
+                          << "  Bare top-level expressions are not allowed in --emit-core mode.\n"
+                          << "  Wrap your entry point in: main do\n"
+                          << "                              ...\n"
+                          << "                            end\n";
+                return 1;
+            }
+
             kex::codegen::CoreErlangEmitter emitter;
             auto result = emitter.emitProgram(program, stem);
 

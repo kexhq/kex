@@ -121,6 +121,35 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"IO::readLine",    {"kex_io", "read_line"}},
         {"IO::inspect",     {"kex_io", "inspect"}},
         {"IO::exit",        {"erlang", "halt"}},
+        // Math
+        {"Math::sqrt",      {"math",   "sqrt"}},
+        {"Math::sin",       {"math",   "sin"}},
+        {"Math::cos",       {"math",   "cos"}},
+        {"Math::tan",       {"math",   "tan"}},
+        {"Math::log",       {"math",   "log"}},
+        {"Math::log2",      {"math",   "log2"}},
+        {"Math::exp",       {"math",   "exp"}},
+        {"Math::floor",     {"erlang", "floor"}},
+        {"Math::ceil",      {"erlang", "ceil"}},
+        {"Math::round",     {"erlang", "round"}},
+        {"Math::abs",       {"erlang", "abs"}},
+        {"Math::pow",       {"math",   "pow"}},
+        {"Math::pi",        {"math",   "pi"}},
+        // String
+        {"String::length",  {"erlang", "length"}},
+        {"String::toUpper", {"string", "to_upper"}},
+        {"String::toLower", {"string", "to_lower"}},
+        {"String::trim",    {"string", "trim"}},
+        {"String::split",   {"string", "split"}},
+        // List
+        {"List::length",    {"erlang", "length"}},
+        {"List::reverse",   {"lists",  "reverse"}},
+        {"List::flatten",   {"lists",  "flatten"}},
+        {"List::sort",      {"lists",  "sort"}},
+        {"List::min",       {"lists",  "min"}},
+        {"List::max",       {"lists",  "max"}},
+        {"List::sum",       {"lists",  "sum"}},
+        {"List::member",    {"lists",  "member"}},
     };
     auto key = kexModule + "::" + kexFn;
     auto it = table.find(key);
@@ -211,6 +240,10 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Variables ---
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            // Top-level 0-arity function used as a value — call it.
+            auto it = m_topLevelFns.find(node.name);
+            if (it != m_topLevelFns.end() && it->second == 0)
+                return "apply '" + node.name + "'/0()";
             return erlVar(node.name);
         } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
             // Module reference used standalone — emit as atom
@@ -318,9 +351,26 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (args.empty()) return "'" + node.name + "'";
                 return "{'" + node.name + "', " + args + "}";
             }
-            // Local function — use apply
-            int arity = static_cast<int>(node.args.size());
-            return "apply '" + node.name + "'/" + std::to_string(arity) + "(" + args + ")";
+            // Known top-level function
+            auto topIt = m_topLevelFns.find(node.name);
+            if (topIt != m_topLevelFns.end()) {
+                int callArity = static_cast<int>(node.args.size());
+                int defArity  = topIt->second;
+                if (defArity == callArity) {
+                    // Exact arity match → static dispatch
+                    return "apply '" + node.name + "'/" + std::to_string(callArity) + "(" + args + ")";
+                }
+                // Arity mismatch: the top-level value is a 0-arity closure; call it
+                // first, then apply the resulting fun to the arguments.
+                // e.g., hello("Alice") where hello/0 returns a lambda:
+                //   let <_HFn> = apply 'hello'/0() in apply _HFn("Alice")
+                auto tmpFn = freshVar(node.name.substr(0,1));
+                return "let <" + tmpFn + "> = apply '" + node.name + "'/" +
+                       std::to_string(defArity) + "() in\napply " + tmpFn + "(" + args + ")";
+            }
+            // Unknown lowercase name: treat as a variable holding a fun (closure/param)
+            // → dynamic apply through the variable
+            return "apply " + erlVar(node.name) + "(" + args + ")";
         }
 
         // --- Method call (UFCS) ---
@@ -347,7 +397,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return node.args.size() > 1 ? emitExpr(node.args[1]) : "";
             };
 
-            // Integer methods
+            // Integer/Float methods
             if (node.method == "modulo" && node.args.size() == 1)
                 return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";
             if (node.method == "even?")
@@ -356,6 +406,18 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'erlang':'=/='(call 'erlang':'rem'(" + recv + ", 2), 0)";
             if (node.method == "abs")
                 return "call 'erlang':'abs'(" + recv + ")";
+            if (node.method == "sqrt")
+                return "call 'math':'sqrt'(" + recv + ")";
+            if (node.method == "floor")
+                return "call 'erlang':'floor'(" + recv + ")";
+            if (node.method == "ceil" || node.method == "ceiling")
+                return "call 'erlang':'ceil'(" + recv + ")";
+            if (node.method == "round")
+                return "call 'erlang':'round'(" + recv + ")";
+            if (node.method == "toFloat" || node.method == "to_f")
+                return "call 'erlang':'float'(" + recv + ")";
+            if (node.method == "toInteger" || node.method == "to_i" || node.method == "truncate")
+                return "call 'erlang':'trunc'(" + recv + ")";
             if (node.method == "toString" || node.method == "to_s")
                 return "call 'kex_io':'to_string'(" + recv + ")";
 
@@ -430,11 +492,21 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             return "apply '" + node.method + "'/" + std::to_string(arity) + "(" + args + ")";
         }
 
-        // --- If/else ---
+        // --- If/elif/else ---
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            // Build the else branch from the inside out: start with the
+            // final else (or 'ok'), then wrap each elif around it.
+            std::string otherwise = node.elseBody ? emitBody(*node.elseBody) : "'ok'";
+            // Process elif chain in reverse
+            for (int i = static_cast<int>(node.elifs.size()) - 1; i >= 0; --i) {
+                auto& [elifCond, elifBody] = node.elifs[i];
+                otherwise = "case " + emitExpr(elifCond) + " of\n"
+                            "  'true' when 'true' ->\n    " + emitBody(elifBody) + "\n"
+                            "  'false' when 'true' ->\n    " + otherwise + "\n"
+                            "end";
+            }
             auto cond = emitExpr(node.condition);
             auto then = emitBody(node.thenBody);
-            std::string otherwise = node.elseBody ? emitBody(*node.elseBody) : "'ok'";
             return "case " + cond + " of\n"
                    "  'true' when 'true' ->\n    " + then + "\n"
                    "  'false' when 'true' ->\n    " + otherwise + "\n"
@@ -571,14 +643,24 @@ auto CoreErlangEmitter::emitBody(const std::vector<ast::ExprPtr>& body) -> std::
 
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
             if (le->pattern) {
-                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
+                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                     bindVar = erlVar(vp->name);
-                else
-                    bindVar = emitPattern(le->pattern);
+                    bindVal = emitExpr(le->value);
+                    result = "let <" + bindVar + "> =\n    " + bindVal + "\nin\n" + result;
+                } else {
+                    // Destructuring pattern (tuple, list, constructor): use case
+                    auto tmpVar = freshVar("D");
+                    auto pat    = emitPattern(le->pattern);
+                    auto val    = emitExpr(le->value);
+                    result = "let <" + tmpVar + "> =\n    " + val + "\nin\n"
+                             "case " + tmpVar + " of\n"
+                             "  " + pat + " when 'true' ->\n    " + result + "\nend";
+                }
+                continue;
             } else {
                 bindVar = freshVar("T");
+                bindVal = emitExpr(le->value);
             }
-            bindVal = emitExpr(le->value);
         } else if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
             bindVar = erlVar(ve->name);
             bindVal = emitExpr(ve->value);
@@ -656,54 +738,147 @@ auto CoreErlangEmitter::emitFunctionDef(const ast::FunctionDef& fn) -> std::stri
         return out.str();
     }
 
-    // Multi-clause: case on args directly (single arg) or args tuple (multi-arg).
+    // Multi-clause: delegate to emitFunctionGroup with a single-element group.
+    return emitFunctionGroup({&fn});
+}
+
+auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group)
+    -> std::string
+{
+    if (group.empty()) return "";
+    const auto& first = *group[0];
+
+    // Count total clauses across all nodes
+    int totalClauses = 0;
+    for (const auto* fn : group) totalClauses += static_cast<int>(fn->clauses.size());
+    if (totalClauses == 0) return "";
+
+    int arity = static_cast<int>(first.clauses.empty() ? 0 : first.clauses[0].params.size());
+    m_exports.push_back({first.name, arity});
+
+    // Synthetic arg vars: _Arg0, _Arg1, ...
+    std::vector<std::string> argVars;
+    for (int i = 0; i < arity; i++)
+        argVars.push_back("_Arg" + std::to_string(i));
+
+    std::string funHead = "(";
+    for (size_t i = 0; i < argVars.size(); i++) {
+        if (i > 0) funHead += ", ";
+        funHead += argVars[i];
+    }
+    funHead += ")";
+
+    // Single clause across the whole group: emit without case dispatch.
+    if (totalClauses == 1) {
+        const auto& clause = first.clauses[0];
+        std::string paramLets;
+        for (size_t i = 0; i < clause.params.size(); i++) {
+            const auto& param = clause.params[i];
+            std::string paramName;
+            if (param.name)
+                paramName = erlVar(*param.name);
+            else if (param.pattern)
+                if (auto* vp = std::get_if<ast::VarPattern>(&(*param.pattern)->kind))
+                    paramName = erlVar(vp->name);
+            if (!paramName.empty() && paramName != argVars[i])
+                paramLets += "let <" + paramName + "> = " + argVars[i] + " in\n";
+        }
+        std::ostringstream out;
+        out << "'" << first.name << "'/" << arity << " =\n";
+        out << "  fun " << funHead << " ->\n";
+        out << "    " << paramLets << emitBody(clause.body) << "\n";
+        return out.str();
+    }
+
+    // Multi-clause: Core Erlang case dispatch.
+    // Single-arg: case _Arg0 of Pat when 'true' -> body
+    // Multi-arg:  case <_Arg0, _Arg1> of <P0, P1> when 'true' -> body
+    bool multiArg = arity > 1;
+
     std::ostringstream out;
-    out << "'" << fn.name << "'/" << arity << " =\n";
+    out << "'" << first.name << "'/" << arity << " =\n";
     out << "  fun " << funHead << " ->\n";
 
-    bool useTuple = arity != 1;
-    if (useTuple) {
-        out << "    case {";
+    if (multiArg) {
+        out << "    case <";
         for (size_t i = 0; i < argVars.size(); i++) {
             if (i > 0) out << ", ";
             out << argVars[i];
         }
-        out << "} of\n";
-    } else {
+        out << "> of\n";
+    } else if (arity == 1) {
         out << "    case " << argVars[0] << " of\n";
+    } else {
+        // Zero-arg: shouldn't have multi-clause but handle gracefully
+        out << "    case 'ok' of\n";
     }
 
-    for (const auto& clause : fn.clauses) {
-        if (useTuple) {
-            out << "      {";
-            for (size_t i = 0; i < clause.params.size(); i++) {
-                if (i > 0) out << ", ";
-                if (clause.params[i].pattern)
-                    out << emitPattern(*clause.params[i].pattern);
-                else if (clause.params[i].name)
-                    out << erlVar(*clause.params[i].name);
-                else
-                    out << "_";
-            }
-            out << "} ->\n";
-        } else {
-            // Single-arg: emit the pattern directly
-            out << "      ";
-            if (!clause.params.empty()) {
-                if (clause.params[0].pattern)
-                    out << emitPattern(*clause.params[0].pattern);
-                else if (clause.params[0].name)
-                    out << erlVar(*clause.params[0].name);
-                else
-                    out << "_";
+    for (const auto* fn : group) {
+        for (const auto& clause : fn->clauses) {
+            if (multiArg) {
+                out << "      <";
+                for (size_t i = 0; i < clause.params.size(); i++) {
+                    if (i > 0) out << ", ";
+                    auto& p = clause.params[i];
+                    if (p.pattern) {
+                        auto* vp = std::get_if<ast::VarPattern>(&(*p.pattern)->kind);
+                        if (std::holds_alternative<ast::WildcardPattern>((*p.pattern)->kind))
+                            out << freshVar("W");
+                        else if (vp) out << erlVar(vp->name);
+                        else out << emitPattern(*p.pattern);
+                    } else if (p.name) {
+                        out << erlVar(*p.name);
+                    } else {
+                        out << freshVar("W");
+                    }
+                }
+                out << "> when 'true' ->\n";
             } else {
-                out << "_";
+                out << "      ";
+                if (!clause.params.empty()) {
+                    auto& p = clause.params[0];
+                    if (p.pattern) {
+                        auto* vp = std::get_if<ast::VarPattern>(&(*p.pattern)->kind);
+                        if (std::holds_alternative<ast::WildcardPattern>((*p.pattern)->kind))
+                            out << "_";
+                        else if (vp) out << erlVar(vp->name);
+                        else out << emitPattern(*p.pattern);
+                    } else if (p.name) {
+                        out << erlVar(*p.name);
+                    } else {
+                        out << "_";
+                    }
+                } else {
+                    out << "_";
+                }
+                out << " when 'true' ->\n";
             }
-            out << " ->\n";
+
+            // For named params in the matching clause, bind them from the arg vars
+            std::string paramLets;
+            for (size_t i = 0; i < clause.params.size() && i < argVars.size(); i++) {
+                auto& p = clause.params[i];
+                if (p.name) {
+                    auto varName = erlVar(*p.name);
+                    // Only bind if the pattern wasn't already a variable binding
+                    bool alreadyBound = false;
+                    if (p.pattern)
+                        if (auto* vp = std::get_if<ast::VarPattern>(&(*p.pattern)->kind))
+                            alreadyBound = (erlVar(vp->name) == varName);
+                    if (!alreadyBound && varName != argVars[i])
+                        paramLets += "let <" + varName + "> = " + argVars[i] + " in\n";
+                } else if (p.pattern) {
+                    if (auto* vp = std::get_if<ast::VarPattern>(&(*p.pattern)->kind)) {
+                        auto varName = erlVar(vp->name);
+                        if (varName != argVars[i])
+                            paramLets += "let <" + varName + "> = " + argVars[i] + " in\n";
+                    }
+                }
+            }
+            out << "        " << paramLets << emitBody(clause.body) << "\n";
         }
-        out << "        " << emitBody(clause.body) << ";\n";
     }
-    out << "      _ -> call 'erlang':'error'('function_clause')\n";
+    out << "      _ when 'true' -> call 'erlang':'error'('function_clause')\n";
     out << "    end\n";
     return out.str();
 }
@@ -721,10 +896,16 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
     out << "'main'/" << arity << " =\n";
     if (arity == 0) {
         out << "  fun () ->\n";
+        out << "    " << emitBody(main.body) << "\n";
     } else {
+        // main(args) — bind the args list from _Args
+        std::string paramName = "Args";
+        if (!main.params.empty() && main.params[0].name)
+            paramName = erlVar(*main.params[0].name);
         out << "  fun (_Args) ->\n";
+        out << "    let <" << paramName << "> = _Args in\n";
+        out << "    " << emitBody(main.body) << "\n";
     }
-    out << "    " << emitBody(main.body) << "\n";
     return out.str();
 }
 
@@ -736,25 +917,136 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                                      const std::string& fileStem) -> EmitResult {
     m_varCounter = 0;
     m_exports.clear();
+    m_topLevelFns.clear();
     m_moduleName = "kex_" + fileStem;
 
-    // First pass: collect and emit each function / main block.
+    // First pass: collect all top-level function names so emitExpr can
+    // distinguish static local calls from calls-through-variables.
+    for (const auto& item : prog.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                if (node) {
+                    int arity = node->clauses.empty() ? 0
+                              : static_cast<int>(node->clauses[0].params.size());
+                    m_topLevelFns[node->name] = arity;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                // Synthetic blocks hold top-level `let name = expr` declarations.
+                if (node && node->synthetic) {
+                    for (const auto& e : node->body) {
+                        if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                            if (le->pattern) {
+                                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
+                                    m_topLevelFns[vp->name] = 0;
+                            }
+                        }
+                    }
+                }
+            }
+        }, item);
+    }
+
+    // Second pass: group consecutive FunctionDefs with the same name (multi-clause
+    // functions written as separate `let` declarations), then emit each group once.
+    // Each group is a list of pointers to the original FunctionDef nodes.
     std::vector<std::string> functionTexts;
+
+    using FnGroup  = std::vector<const ast::FunctionDef*>;
+    struct OrderedItem { bool isMain; FnGroup fns; const ast::MainBlock* mb; };
+    std::vector<OrderedItem> ordered;
+    // Bare top-level expressions (non-synthetic, non-explicit-main MainBlocks)
+    // are accumulated here and emitted as a synthetic main/0 if there's no
+    // explicit main block.
+    std::vector<const ast::MainBlock*> bareExprs;
 
     for (const auto& item : prog.items) {
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (node) functionTexts.push_back(emitFunctionDef(*node));
+                if (!node) return;
+                // Merge into last group if same name
+                if (!ordered.empty() && !ordered.back().isMain
+                    && ordered.back().fns[0]->name == node->name) {
+                    ordered.back().fns.push_back(node.get());
+                } else {
+                    ordered.push_back({false, {node.get()}, nullptr});
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (node) functionTexts.push_back(emitMainBlock(*node));
+                if (node) {
+                    if (node->synthetic) {
+                        // Each `let name = expr` in a synthetic block becomes a
+                        // named 0-arity function, not part of main.
+                        for (const auto& e : node->body) {
+                            if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                                if (le->pattern) {
+                                    if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                                        // Store as a special "global let" item
+                                        // We'll handle it below as a 0-arity function.
+                                        struct SyntheticLet {
+                                            std::string name;
+                                            const ast::ExprPtr* value;
+                                        };
+                                        // Can't easily store mixed types — emit immediately
+                                        m_exports.push_back({vp->name, 0});
+                                        std::ostringstream fnOut;
+                                        fnOut << "'" << vp->name << "'/0 =\n";
+                                        fnOut << "  fun () ->\n";
+                                        fnOut << "    " << emitExpr(le->value) << "\n";
+                                        functionTexts.push_back(fnOut.str());
+                                    }
+                                }
+                            }
+                        }
+                    } else if (node->isExplicitMain) {
+                        ordered.push_back({true, {}, node.get()});
+                    } else {
+                        // Bare top-level expression — stash for synthetic main
+                        bareExprs.push_back(node.get());
+                    }
+                }
             }
-            // TODO M3: ModuleDef, RecordDef, TypeDef
         }, item);
     }
 
-    // If no main was emitted but there are top-level expressions (synthetic
-    // main blocks), they were already handled above.
+    for (const auto& oi : ordered) {
+        if (oi.isMain) {
+            functionTexts.push_back(emitMainBlock(*oi.mb));
+        } else {
+            // Emit merged: first node's metadata + all clauses from every node
+            const auto& first = *oi.fns[0];
+            // Build a temporary FunctionDef that holds references to all clauses
+            // via a local re-emit that processes each group's nodes.
+            // We can't copy FunctionDef (unique_ptrs), so instead delegate to a
+            // helper that accepts the group directly.
+            functionTexts.push_back(emitFunctionGroup(oi.fns));
+        }
+    }
+
+    // If there are bare top-level expressions and no explicit main was emitted,
+    // bundle them into a single main/0.
+    bool hasExplicitMain = std::any_of(ordered.begin(), ordered.end(),
+                                        [](const auto& oi){ return oi.isMain; });
+    if (!bareExprs.empty() && !hasExplicitMain) {
+        m_exports.push_back({"main", 0});
+        std::ostringstream mOut;
+        mOut << "'main'/0 =\n  fun () ->\n";
+        // Collect all body exprs from all bare blocks, emit as one body
+        std::vector<ast::ExprPtr> allExprs; // can't move — emit inline
+        // Build a chained body using emitBody logic
+        std::vector<std::string> stmts;
+        for (const auto* mb : bareExprs)
+            for (const auto& e : mb->body)
+                stmts.push_back(emitExpr(e));
+        // Right-fold: last is result, others bound to throwaway vars
+        std::string body = stmts.empty() ? "'ok'" : stmts.back();
+        for (int i = static_cast<int>(stmts.size()) - 2; i >= 0; --i) {
+            auto tmp = freshVar("S");
+            body = "let <" + tmp + "> =\n    " + stmts[i] + "\nin\n" + body;
+        }
+        mOut << "    " << body << "\n";
+        functionTexts.push_back(mOut.str());
+    }
 
     // Build export list
     std::string exportList;

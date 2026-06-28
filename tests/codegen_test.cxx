@@ -307,7 +307,7 @@ int main() {
         it("hello world compiles and runs on BEAM", [&erlcAvailable]() {
             if (!erlcAvailable()) return; // skip
             // Emit .core
-            auto out = emit("IO.printLine(\"hello from beam\")\n", "e2e_hello");
+            auto out = emit("main do\n  IO.printLine(\"hello from beam\")\nend\n", "e2e_hello");
             // Write to temp file
             std::ofstream f("/tmp/kex_e2e_hello.core");
             f << out;

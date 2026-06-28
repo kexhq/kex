@@ -491,6 +491,9 @@ struct MainBlock {
     // `let x = expr` bindings — these should NOT push a new env scope so
     // that bound names remain visible to subsequent top-level items.
     bool synthetic = false;
+    // True only for explicit `main do ... end` blocks (parsed by parseMainBlock).
+    // False for synthetic let-wrappers and bare top-level expression wrappers.
+    bool isExplicitMain = false;
 };
 
 struct Pragma {

@@ -1,6 +1,8 @@
 #pragma once
 #include "../ast/ast.hxx"
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::codegen {
@@ -24,6 +26,8 @@ public:
 private:
     // Top-level emitters
     auto emitFunctionDef(const ast::FunctionDef& fn) -> std::string;
+    // Emit a group of same-name FunctionDef nodes as a single function.
+    auto emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group) -> std::string;
     auto emitMainBlock(const ast::MainBlock& main) -> std::string;
 
     // Expression emitter — returns a Core Erlang expression string.
@@ -57,6 +61,9 @@ private:
     std::string m_moduleName;
     int m_varCounter = 0;
     std::vector<FuncExport> m_exports;
+    // name → arity for all top-level functions defined in this module.
+    // Used to distinguish static local calls from calls-through-variables.
+    std::unordered_map<std::string, int> m_topLevelFns;
 };
 
 } // namespace kex::codegen
