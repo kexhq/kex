@@ -1762,10 +1762,22 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
                             SourceLocation loc) -> TypePtr {
-    const std::vector<Signature>* sigs = m_stdlib.lookup(name);
-    if (!sigs) {
-        auto it = m_userSignatures.find(name);
-        if (it != m_userSignatures.end()) sigs = &it->second;
+    const std::vector<Signature>* stdlibSigs = m_stdlib.lookup(name);
+    auto userIt = m_userSignatures.find(name);
+    bool hasUser = (userIt != m_userSignatures.end());
+
+    // When both stdlib and user define the same name, merge so user-defined
+    // overloads (e.g. user's 3-param `worker`) are visible alongside stdlib ones.
+    std::vector<Signature> merged;
+    const std::vector<Signature>* sigs = nullptr;
+    if (stdlibSigs && hasUser) {
+        merged = *stdlibSigs;
+        for (const auto& s : userIt->second) merged.push_back(s);
+        sigs = &merged;
+    } else if (stdlibSigs) {
+        sigs = stdlibSigs;
+    } else if (hasUser) {
+        sigs = &userIt->second;
     }
     if (!sigs) {
         // Record field access: `user.name` desugars to checkCall("name", [User]).

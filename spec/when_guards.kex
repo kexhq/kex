@@ -1,44 +1,58 @@
 # `when` for match guards, bare `when`, and subject binding.
-let classify(n) = match n do
-  n when n >= 90 -> "A"
-  n when n >= 80 -> "B"
-  _ -> "F"
+let classify(n) do
+  return match n do
+    n when n >= 90 -> "A"
+    n when n >= 80 -> "B"
+    _ -> "F"
+  end
 end
 
-let complex(n) = match n do
-  n when n > 0 && n < 100 -> "in range"
-  _ -> "out of range"
+let complex(n) do
+  return match n do
+    n when n > 0 && n < 100 -> "in range"
+    _ -> "out of range"
+  end
 end
 
-let withCall(s) = match s do
-  s when s.count > 0 -> "non-empty"
-  _ -> "empty"
+let withCall(s) do
+  return match s do
+    s when s.count > 0 -> "non-empty"
+    _ -> "empty"
+  end
 end
 
-let multiPattern(pair) = match pair do
+let multiPattern(pair) do
+  return match pair do
   (:ok, val) when val > 0 -> "ok positive"
   _ -> "other"
+  end
 end
 
 # Subject binding with bare when
-let withBinding(n) = match n do |x|
-  100 -> "wow"
-  when x >= 65 -> "senior"
-  when x >= 18 -> "adult"
-  _ -> "minor"
+let withBinding(n) do
+  return match n do |x|
+    100 -> "wow"
+    when x >= 65 -> "senior"
+    when x >= 18 -> "adult"
+    _ -> "minor"
+  end
 end
 
-let mixed(n) = match n do
-  100 -> "exactly 100"
-  n when n > 50 -> "over 50"
-  _ -> "other"
+let mixed(n) do
+  return match n do
+    100 -> "exactly 100"
+    n when n > 50 -> "over 50"
+    _ -> "other"
+  end
 end
 
-let withResult(r) = match r do |x|
-  Ok(val) when val > 0 -> "ok-positive: ${val}"
-  Ok(_) -> "ok-other"
-  Error(e) when x.ok? -> "unreachable"
-  Error(e) -> "error: ${e}"
+let withResult(r) do
+  return match r do |x|
+    Ok(val) when val > 0 -> "ok-positive: ${val}"
+    Ok(_) -> "ok-other"
+    Error(e) when x.ok? -> "unreachable"
+    Error(e) -> "error: ${e}"
+  end
 end
 
 main do

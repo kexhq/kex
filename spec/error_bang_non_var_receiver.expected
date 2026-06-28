@@ -1,2 +1,2 @@
 before
-Parse error: spec/error_bang_non_var_receiver.kex:5:18: runtime error: '!' requires a variable binding as the receiver
+Internal error: spec/error_bang_non_var_receiver.kex:5:18: runtime error: '!' requires a variable binding as the receiver

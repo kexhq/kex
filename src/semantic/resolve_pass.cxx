@@ -208,6 +208,8 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             if (node.subject) resolveExpr(*node.subject);
             for (const auto& clause : node.clauses) {
                 pushScope();
+                if (node.subjectBinding)
+                    defineLocal(*node.subjectBinding);
                 for (const auto& pat : clause.patterns)
                     if (pat) resolvePattern(*pat);
                 if (clause.guard) resolveExpr(**clause.guard);

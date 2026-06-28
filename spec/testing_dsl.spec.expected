@@ -10,4 +10,4 @@ nesting
 it survives more than just failed asserts
   ✗ catches an ordinary runtime error too, not just assert failures: spec/testing_dsl.spec.kex:37:12: runtime error: Undefined variable: doesNotExist
   ✓ still runs after the previous test errored
-Parse error: assertion failed: assert outside of it propagates as an uncaught error
+Internal error: assertion failed: assert outside of it propagates as an uncaught error

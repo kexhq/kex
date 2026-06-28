@@ -1,1 +1,2 @@
-Parse error: spec/error_then_without_else.kex:3:23: Expected 'else' after 'then', got Newline
+spec/error_then_without_else.kex:3:23: error: Expected 'else' after 'then', got Newline
+Aborted: fix syntax errors before running.

@@ -1,1 +1,2 @@
-Parse error: spec/error_then_nested_no_parens.kex:3:23: Expected 'else' after 'then', got then [then]
+spec/error_then_nested_no_parens.kex:3:23: error: Expected 'else' after 'then', got then [then]
+Aborted: fix syntax errors before running.

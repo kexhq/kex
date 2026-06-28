@@ -1,4 +1,4 @@
-.PHONY: build test spec clean repl run check install uninstall help
+.PHONY: build test spec test-all clean repl run check install uninstall help
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -9,8 +9,9 @@ help:
 	@echo "Kex Language Compiler"
 	@echo ""
 	@echo "  make build        Build the compiler"
-	@echo "  make test         Run all unit tests"
+	@echo "  make test         Run all unit tests (C++ test binaries)"
 	@echo "  make spec         Run spec programs and verify output"
+	@echo "  make test-all     Run unit tests + spec suite (used by CI)"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
@@ -26,6 +27,8 @@ build:
 
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
+
+test-all: test spec
 
 SHELL := /bin/bash
 

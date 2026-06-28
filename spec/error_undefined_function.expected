@@ -1,2 +1,2 @@
-before
-Parse error: spec/error_undefined_function.kex:4:16: runtime error: Undefined function: doesNotExist
+spec/error_undefined_function.kex:4:16: error: Undefined function: `doesNotExist`
+Aborted: fix type errors before running (use --no-check to skip).

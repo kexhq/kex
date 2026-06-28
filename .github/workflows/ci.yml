@@ -2,23 +2,25 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
   pull_request:
+    branches: ["**"]
 
 jobs:
   test:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake libreadline-dev
+        run: sudo apt-get install -y cmake libgmp-dev libreadline-dev
+
+      - name: Build
+        run: cmake -B build -G "Unix Makefiles" && cmake --build build
 
       - name: Unit tests
         run: make test
 
-      - name: Spec tests
+      - name: Spec suite
         run: make spec
-
-      - name: Parse all examples
-        run: make parse

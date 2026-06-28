@@ -1,1 +1,2 @@
-Parse error: spec/error_loop_with_do.kex:6:4: Expected 'end' to close main block, got Eof
+spec/error_loop_with_do.kex:6:4: error: Expected 'end' to close main block, got Eof
+Aborted: fix syntax errors before running.
