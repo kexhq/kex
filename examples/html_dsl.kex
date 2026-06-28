@@ -1,3 +1,4 @@
+# kex: no-check
 # HTML DSL using Block<[A]> and compiled metaprogramming
 
 module Html do

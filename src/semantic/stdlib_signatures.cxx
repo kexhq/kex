@@ -105,6 +105,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("max",   {Type::list(genA()), Type::func({genA()}, Type::typeVar(-3))}, Type::optional(genA()));
     sig("sum",   {Type::list(numberLike())}, numberLike());
     sig("flatMap", {Type::list(genA()), Type::func({genA()}, Type::list(genE()))}, Type::list(genE()));
+    sig("flatMap", {Type::optional(genA()), Type::func({genA()}, Type::optional(genE()))}, Type::optional(genE()));
     sig("join",  {Type::list(Type::string()), Type::string()}, Type::string());
     sig("join",  {Type::list(Type::string())}, Type::string());
     sig("join",  {Type::string(), Type::string()}, Type::string());
@@ -172,6 +173,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("worker",  {genA(), genA()}, Type::unit());
     sig("supervisor", {}, Type::unit());
     sig("supervisor", {genA()}, Type::unit());
+    sig("supervisor", {genA(), Type::func({}, Type::unit())}, Type::unit());
 
     return table;
 }

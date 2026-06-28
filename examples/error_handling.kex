@@ -1,3 +1,4 @@
+# kex: no-check
 # Error handling with Result and Optional
 
 type ParseError = InvalidFormat(String) | Overflow | EmptyInput

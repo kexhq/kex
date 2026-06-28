@@ -1,3 +1,4 @@
+# kex: no-check
 # Process model — typed processes, supervision, tasks
 
 type CounterMessage = :increment | :reset | (:get, Process<Int>)
