@@ -1,0 +1,17 @@
+# kex: check-only
+# Typed process: send-site type checking with constructor messages.
+type Msg = Ping | Pong
+
+foul server -> Process<Msg> do
+  return spawn do
+    receive do
+      Ping -> IO.printLine("ping")
+      Pong -> IO.printLine("pong")
+    end
+  end
+end
+
+main do
+  let p = server()
+  p.send(Ping)
+end

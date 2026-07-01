@@ -1,0 +1,2 @@
+spec/process_typed_send_error.kex:14:9: error: send: message type String does not match Process<Msg>
+Aborted: fix type errors before running (use --no-check to skip).

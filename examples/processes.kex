@@ -1,4 +1,3 @@
-# kex: no-check
 # Process model showcase — typed processes, supervision, tasks.
 # Run with: kex -R examples/processes.kex
 
@@ -6,13 +5,13 @@
 # Typed counter process — functional loop, no mutable state
 # --------------------------------------------------------------------
 
-type CounterMessage = :increment | :reset | (:get, Process<Int>)
+type CounterMessage = Increment | Reset | Get(Process<Int>)
 
 foul counterLoop(n: Int) do
   receive do
-    :increment -> counterLoop(n + 1)
-    :reset -> counterLoop(0)
-    (:get, sender) -> do
+    Increment -> counterLoop(n + 1)
+    Reset -> counterLoop(0)
+    Get(sender) -> do
       sender.send(n)
       counterLoop(n)
     end
@@ -27,13 +26,13 @@ end
 # Chat process — accepts typed messages, broadcasts to all members
 # --------------------------------------------------------------------
 
-type ChatMessage = (:join, String) | (:leave, String) | (:broadcast, String, String)
+type ChatMessage = Join(String) | Leave(String) | Broadcast(String, String)
 
 foul chatLoop(users: [String]) do
   receive do
-    (:join, name) -> chatLoop([name | users])
-    (:leave, name) -> chatLoop(users.reject { |u| u == name })
-    (:broadcast, from, text) -> do
+    Join(name) -> chatLoop([name | users])
+    Leave(name) -> chatLoop(users.reject { |u| u == name })
+    Broadcast(from, text) -> do
       IO.printLine("[chat] " + from + ": " + text)
       chatLoop(users)
     end
@@ -67,33 +66,33 @@ end
 main do
   # --- Typed counter ---
   let counter = startCounter()
-  counter.send(:increment)
-  counter.send(:increment)
-  counter.send(:increment)
-  counter.send(:reset)
-  counter.send(:increment)
-  counter.send((:get, Process.self))
+  counter.send(Increment)
+  counter.send(Increment)
+  counter.send(Increment)
+  counter.send(Reset)
+  counter.send(Increment)
+  counter.send(Get(Process.self))
   receive do
     n -> IO.printLine("counter = " + n.to(String))
   end
 
   # --- Chat room ---
   let chat = startChat()
-  chat.send((:join, "Alice"))
-  chat.send((:join, "Bob"))
-  chat.send((:broadcast, "Alice", "hello everyone"))
-  chat.send((:leave, "Bob"))
+  chat.send(Join("Alice"))
+  chat.send(Join("Bob"))
+  chat.send(Broadcast("Alice", "hello everyone"))
+  chat.send(Leave("Bob"))
 
   # --- Tasks (async parallel) ---
   let t1 = Task.start { slowSquare(6) }
   let t2 = Task.start { slowSquare(7) }
   match t1.await(timeout: 5000) do
-    (:ok, v) -> IO.printLine("6^2 = " + v.to(String))
-    (:error, _) -> IO.printLine("6^2 task failed")
+    Ok(v) -> IO.printLine("6^2 = " + v.to(String))
+    Error(_) -> IO.printLine("6^2 task failed")
   end
   match t2.await(timeout: 5000) do
-    (:ok, v) -> IO.printLine("7^2 = " + v.to(String))
-    (:error, _) -> IO.printLine("7^2 task failed")
+    Ok(v) -> IO.printLine("7^2 = " + v.to(String))
+    Error(_) -> IO.printLine("7^2 task failed")
   end
 
   # --- Supervision tree ---
@@ -101,7 +100,7 @@ main do
     [worker { startCounterWorker() }]
   end
   match supResult do
-    (:ok, pid) -> IO.printLine("supervisor pid: " + pid.to(String))
-    (:error, reason) -> IO.printLine("supervisor error: " + reason.to(String))
+    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String))
+    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String))
   end
 end

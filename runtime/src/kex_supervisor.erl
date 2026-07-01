@@ -15,9 +15,12 @@ strategy(Bad) ->
 
 %% start_link/1 — entry point from Kex codegen.
 %% Spec is #{strategy => atom, children => [ChildSpec]}.
-%% Each ChildSpec is a map #{start_fun => Fun} (block form).
+%% Returns Ok(Pid) | Error(Reason) to match Kex Result conventions.
 start_link(Spec) ->
-    supervisor:start_link(?MODULE, Spec).
+    case supervisor:start_link(?MODULE, Spec) of
+        {ok, Pid} -> {'Ok', Pid};
+        {error, Reason} -> {'Error', Reason}
+    end.
 
 %% OTP supervisor callback.
 init(#{strategy := Strat, children := Children}) ->

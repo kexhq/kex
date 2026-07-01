@@ -8,23 +8,23 @@ start(Fun) ->
     Parent = self(),
     Pid = spawn(fun() ->
         Result = Fun(),
-        Parent ! {'kex_task_done', Ref, {ok, Result}}
+        Parent ! {'kex_task_done', Ref, {'Ok', Result}}
     end),
     erlang:monitor(process, Pid),
     {Ref, Pid}.
 
 %% task.await(timeout: T) — wait up to T ms for the task result.
-%% Returns {ok, Value} | {error, timeout} | {error, {exit, Reason}}.
+%% Returns Ok(Value) | Error(:timeout) | Error({:exit, Reason}).
 await({Ref, Pid}, Timeout) ->
     receive
         {'kex_task_done', Ref, Result} ->
             erlang:demonitor(Ref, [flush]),
             Result;
         {'DOWN', _MonRef, process, Pid, Reason} ->
-            {error, {exit, Reason}}
+            {'Error', {exit, Reason}}
     after Timeout ->
         erlang:demonitor(Ref, [flush]),
-        {error, timeout}
+        {'Error', timeout}
     end.
 
 %% await_all([Task]) — await a list of tasks, return list of results.

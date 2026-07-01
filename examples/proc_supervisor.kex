@@ -22,7 +22,7 @@ main do
     [worker { startCounter("counter-A") }]
   end
   match result do
-    (:ok, pid) -> IO.printLine("supervisor started: " + pid.to(String))
+    Ok(pid) -> IO.printLine("supervisor started: " + pid.to(String))
     (:error, reason) -> IO.printLine("supervisor error: " + reason.to(String))
   end
 end

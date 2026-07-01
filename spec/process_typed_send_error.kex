@@ -1,0 +1,15 @@
+# Typed process: sending the wrong type is a compile error.
+type Msg = Ping | Pong
+
+foul server -> Process<Msg> do
+  return spawn do
+    receive do
+      Ping -> IO.printLine("ping")
+    end
+  end
+end
+
+main do
+  let p = server()
+  p.send("wrong type")
+end

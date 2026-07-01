@@ -1,0 +1,14 @@
+# kex: run-beam
+# Task.start and await return Ok(value) on success.
+# kex: no-check
+foul double(n: Int) -> Int do
+  n * 2
+end
+
+main do
+  let t = Task.start { double(21) }
+  match t.await(timeout: 1000) do
+    Ok(v) -> IO.printLine(v.to(String))
+    Error(_) -> IO.printLine("error")
+  end
+end

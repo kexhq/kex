@@ -40,6 +40,8 @@ spec: build
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		kex_flags="--no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
+		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
+		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then kex_flags="-R --no-colors"; fi; \
 		actual=$$($(KEX) $$kex_flags "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
