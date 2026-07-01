@@ -1697,8 +1697,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
 }
 
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
-    // Body can be an explicit do...end block, a single inline expression, or
-    // a multi-line sequence (body starts on the next line after '->').
+    // do...end block: required for multi-statement arm bodies.
     if (match(TokenType::Do)) {
         skipNewlines();
         std::vector<ast::ExprPtr> body;
@@ -1707,126 +1706,17 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
             skipNewlines();
         }
         expect(TokenType::End, "Expected 'end' to close match clause body");
-
         auto blockExpr = std::make_unique<ast::Expr>();
         blockExpr->location = currentLocation();
         blockExpr->kind = ast::BlockExpr{std::move(body)};
         return blockExpr;
     }
-
-    // Multi-line body: body starts on the next line after '->'.
-    // Parse a sequence of expressions, stopping when we reach a new clause
-    // boundary (detected by peekIsClauseStart), 'end', 'after', or EOF.
-    if (check(TokenType::Newline)) {
-        skipNewlines();
-        std::vector<ast::ExprPtr> body;
-        while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()
-               && !peekIsClauseStart()) {
-            body.push_back(parseExpr());
-            skipNewlines();
-        }
-        if (body.size() == 1) return std::move(body[0]);
-        auto blockExpr = std::make_unique<ast::Expr>();
-        blockExpr->location = body.empty() ? currentLocation() : body[0]->location;
-        blockExpr->kind = ast::BlockExpr{std::move(body)};
-        return blockExpr;
-    }
-
+    // Single expression — inline or on the next line.
+    // Multi-statement arms require do...end to avoid ambiguity.
+    if (check(TokenType::Newline)) skipNewlines();
     return parseExpr();
 }
 
-// Returns true if the current position (after skipNewlines()) looks like the
-// start of a new match/receive clause (i.e. a pattern followed by '->').
-//
-// The key disambiguation: `LowerIdent Arrow/When` is a variable pattern clause,
-// but `LowerIdent LParen` is a function call expression in the clause body.
-auto Parser::peekIsClauseStart() const -> bool {
-    if (atEnd()) return false;
-    const auto& tok = peek();
-
-    switch (tok.type) {
-        // Atoms (:ping, :stop, ...) and wildcards (_) are always patterns.
-        case TokenType::Atom:
-        case TokenType::Underscore:
-            return true;
-
-        // Variable pattern `x ->` or `x when guard ->`.
-        // Function call `x(args)` is NOT a clause start.
-        case TokenType::LowerIdent: {
-            const auto& next = peekNext();
-            return next.type == TokenType::Arrow || next.type == TokenType::When;
-        }
-
-        // Constructor pattern `Name ->` or `Name(args) ->`.
-        // Method call `Name.method(...)` is NOT a clause start.
-        case TokenType::UpperIdent: {
-            const auto& next = peekNext();
-            if (next.type == TokenType::Arrow || next.type == TokenType::When)
-                return true;
-            if (next.type == TokenType::LParen)
-                return peekHasArrowAfterBalance(); // Name(args) ->
-            return false; // Name.method or other — expression
-        }
-
-        // Tuple/list pattern: `(pat, ...) ->` or `[h|t] ->`.
-        case TokenType::LParen:
-        case TokenType::LBracket:
-            return peekHasArrowAfterBalance();
-
-        // Literal patterns: `42 ->`, `"str" ->`, `true ->`.
-        case TokenType::Integer:
-        case TokenType::Float:
-        case TokenType::String:
-        case TokenType::True:
-        case TokenType::False:
-        case TokenType::None: {
-            const auto& next = peekNext();
-            return next.type == TokenType::Arrow || next.type == TokenType::When;
-        }
-
-        default:
-            return false;
-    }
-}
-
-// Scans forward from m_pos past balanced brackets and returns true if a
-// '->' or 'when' immediately follows the outermost closing bracket.
-// Used by peekIsClauseStart for tuple/list/constructor patterns.
-auto Parser::peekHasArrowAfterBalance() const -> bool {
-    int depth = 0;
-    int n = static_cast<int>(m_tokens.size());
-    for (int i = m_pos; i < n; i++) {
-        switch (m_tokens[i].type) {
-            case TokenType::LParen:
-            case TokenType::LBracket:
-            case TokenType::LBrace:
-                depth++;
-                break;
-            case TokenType::RParen:
-            case TokenType::RBracket:
-            case TokenType::RBrace:
-                depth--;
-                if (depth == 0) {
-                    // Check the token immediately after the closing bracket.
-                    if (i + 1 < n) {
-                        auto t = m_tokens[i + 1].type;
-                        return t == TokenType::Arrow || t == TokenType::When;
-                    }
-                    return false;
-                }
-                break;
-            case TokenType::Newline:
-                if (depth == 0) return false; // ran off the end of the line
-                break;
-            case TokenType::End:
-            case TokenType::After:
-                return false;
-            default:
-                break;
-        }
-    }
-    return false;
-}
 
 auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();

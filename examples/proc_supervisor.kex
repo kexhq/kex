@@ -3,9 +3,10 @@
 
 foul counter(name: String, n: Int) do
   receive do
-    :ping ->
-      IO.printLine(name + " ping #" + n.toString())
+    :ping -> do
+      IO.printLine(name + " ping #" + n.to(String))
       counter(name, n + 1)
+    end
     :boom -> IO.printLine(name + " crashing!")
   end
 end
@@ -17,8 +18,11 @@ foul startCounter(name: String) do
 end
 
 main do
-  let sup = Supervisor.start(strategy: :only_crashed) do
+  let result = Supervisor.start(restart: :only_crashed) do
     [worker { startCounter("counter-A") }]
   end
-  IO.printLine("supervisor: " + sup.toString())
+  match result do
+    (:ok, pid) -> IO.printLine("supervisor started: " + pid.to(String))
+    (:error, reason) -> IO.printLine("supervisor error: " + reason.to(String))
+  end
 end

@@ -74,7 +74,7 @@ main do
   counter.send(:increment)
   counter.send((:get, Process.self))
   receive do
-    n -> IO.printLine("counter = " + n.toString())
+    n -> IO.printLine("counter = " + n.to(String))
   end
 
   # --- Chat room ---
@@ -87,14 +87,21 @@ main do
   # --- Tasks (async parallel) ---
   let t1 = Task.start { slowSquare(6) }
   let t2 = Task.start { slowSquare(7) }
-  let r1 = t1.await(timeout: 5000)
-  let r2 = t2.await(timeout: 5000)
-  IO.printLine("6^2 = " + r1.toString())
-  IO.printLine("7^2 = " + r2.toString())
+  match t1.await(timeout: 5000) do
+    (:ok, v) -> IO.printLine("6^2 = " + v.to(String))
+    (:error, _) -> IO.printLine("6^2 task failed")
+  end
+  match t2.await(timeout: 5000) do
+    (:ok, v) -> IO.printLine("7^2 = " + v.to(String))
+    (:error, _) -> IO.printLine("7^2 task failed")
+  end
 
   # --- Supervision tree ---
-  let sup = Supervisor.start(strategy: :only_crashed) do
+  let supResult = Supervisor.start(restart: :only_crashed) do
     [worker { startCounterWorker() }]
   end
-  IO.printLine("supervisor pid: " + sup.toString())
+  match supResult do
+    (:ok, pid) -> IO.printLine("supervisor pid: " + pid.to(String))
+    (:error, reason) -> IO.printLine("supervisor error: " + reason.to(String))
+  end
 end

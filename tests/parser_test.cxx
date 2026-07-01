@@ -362,16 +362,15 @@ int main() {
             ));
         });
 
-        it("multi-line body keeps enclosing foul function in the module", []() {
-            // Regression: a function call on its own line inside a receive clause body
-            // was silently causing the enclosing foul function to be dropped.
+        it("multi-statement arm body with do...end keeps enclosing foul function", []() {
             auto prog = parse(
                 "# kex: no-check\n"
                 "foul counter(name: String, n: Int) do\n"
                 "  receive do\n"
-                "    :ping ->\n"
+                "    :ping -> do\n"
                 "      IO.printLine(name)\n"
                 "      counter(name, n + 1)\n"
+                "    end\n"
                 "    :boom -> IO.printLine(\"crash\")\n"
                 "  end\n"
                 "end\n"
@@ -385,14 +384,15 @@ int main() {
             assertTrue((std::holds_alternative<std::unique_ptr<ast::MainBlock>>(prog.items[1])));
         });
 
-        it("multi-line body with two expressions returns a block", []() {
+        it("do...end arm body with two expressions returns a block", []() {
             auto prog = parse(
                 "# kex: no-check\n"
                 "foul counter(n: Int) do\n"
                 "  receive do\n"
-                "    :ping ->\n"
+                "    :ping -> do\n"
                 "      IO.printLine(\"ping\")\n"
                 "      counter(n + 1)\n"
+                "    end\n"
                 "  end\n"
                 "end\n"
             );
@@ -422,14 +422,15 @@ int main() {
             assertFalse(std::holds_alternative<ast::BlockExpr>(recv.clauses[0].body->kind));
         });
 
-        it("correctly separates two clauses when body is multi-line", []() {
+        it("do...end arm body correctly separates two clauses", []() {
             auto prog = parse(
                 "# kex: no-check\n"
                 "foul counter(n: Int) do\n"
                 "  receive do\n"
-                "    :ping ->\n"
+                "    :ping -> do\n"
                 "      IO.printLine(\"ping\")\n"
                 "      counter(n + 1)\n"
+                "    end\n"
                 "    :stop -> :done\n"
                 "  end\n"
                 "end\n"

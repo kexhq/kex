@@ -13,7 +13,7 @@ end
 main do
   let child = crasher()
   child.link()
-  IO.printLine("child alive? " + child.alive?().toString())
+  IO.printLine("child alive? " + child.alive?().to(String))
   child.send(:go)
   # Small timeout to let the child finish
   receive timeout: 200 do

@@ -382,12 +382,12 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                            "call 'kex_supervisor':'worker'(" + fnVar + ")";
                 }
             }
-            // `supervisor(strategy: :s) do BLOCK end` as a free function.
+            // `supervisor(restart: :s) do BLOCK end` as a free function.
             // Creates a nested supervisor child spec.
             if (node.name == "supervisor" && node.block) {
                 std::string strat = "'only_crashed'";
                 for (const auto& [k, v] : node.namedArgs)
-                    if (k == "strategy" || k == "restart") strat = emitExpr(v);
+                    if (k == "restart") strat = emitExpr(v);
                 std::string children;
                 if (auto* lam = std::get_if<ast::Lambda>(&node.block->get()->kind))
                     children = emitBody(lam->body);
@@ -488,13 +488,13 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 // Task.await_all([tasks]) → kex_task:await_all/1
                 if (uid->name == "Task" && node.method == "await_all" && !node.args.empty())
                     return "call 'kex_task':'await_all'(" + args + ")";
-                // Supervisor.start(strategy: :s) do BLOCK end
+                // Supervisor.start(restart: :s) do BLOCK end
                 // BLOCK must evaluate to a list of child specs (from worker { } calls).
                 // The block is parsed as a 0-arity Lambda; inline its body directly.
                 if (uid->name == "Supervisor" && node.method == "start" && node.block) {
                     std::string strat = "'only_crashed'";
                     for (const auto& [k, v] : node.namedArgs)
-                        if (k == "strategy" || k == "restart") strat = emitExpr(v);
+                        if (k == "restart") strat = emitExpr(v);
                     std::string children;
                     if (auto* lam = std::get_if<ast::Lambda>(&node.block->get()->kind))
                         children = emitBody(lam->body);

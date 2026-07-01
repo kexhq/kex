@@ -1,7 +1,6 @@
 # kex: no-check
 # Layer-1 smoke test for BEAM processes: spawn + send + receive round-trip.
 # A child process waits for :ping messages and replies :pong to the sender.
-# The sender is bound via `receive do |sender| ... end`.
 
 foul pingServer do
   spawn do
