@@ -1,0 +1,13 @@
+let double(n: Integer) = n * 2
+
+let greet(name: String) -> String do
+  return "Hello, ${name}!"
+end
+
+let add(a, b) = a + b   # types can be inferred
+
+main do
+  IO.printLine(double(21))
+  IO.printLine(greet("kex"))
+  IO.printLine(add(2, 3))
+end

@@ -1,0 +1,14 @@
+main do
+  let nums = [1, 2, 3, 4, 5]
+
+  IO.printLine(nums.sum)                        # 15
+  IO.printLine(nums.map { |x| x * 2 })          # [2, 4, 6, 8, 10]
+  IO.printLine(nums.filter(&.even?))            # [2, 4]
+  IO.printLine(nums.find(&.even?))              # Just(2)
+  IO.printLine(nums.contains?(3))                # true
+  IO.printLine(nums.min)                         # Just(1)
+
+  let r = 1..100
+  IO.printLine(r.sum)                            # 5050
+  IO.printLine(r.map { |x| x * x }.take(3))     # [1, 4, 9]
+end

@@ -1,0 +1,9 @@
+record Point do
+  x : Float
+  y : Float
+end
+
+main do
+  let p = Point { x: 1.0, y: 2.0 }
+  IO.printLine(p)
+end

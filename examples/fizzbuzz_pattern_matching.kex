@@ -2,17 +2,15 @@
 # Elegant approach using pattern matching on divisibility
 
 # Direct pattern matching to produce strings
-let fizzBuzz(n: Int) -> String do
+let fizzBuzz(n: Integer) -> String do
   match (n.modulo(3), n.modulo(5)) do
     (0, 0) -> "FizzBuzz"
     (0, _) -> "Fizz"
     (_, 0) -> "Buzz"
-    (_, _) -> "${n}"
+    (_, _) -> n.to(String)
   end
 end
 
 main do
-  (1..100)
-    .map { |n| fizzBuzz(n) }
-    .each { |s| IO.printLine(s) }
+  (1..100).map(&.fizzBuzz).each { |s| IO.printLine(s) }
 end

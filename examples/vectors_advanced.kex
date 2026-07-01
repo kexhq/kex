@@ -53,43 +53,51 @@ end
 # --- Instance methods via make ---
 
 make Vector2D do
+  let +(other: This) -> This do
+    return Vector2D { x: @x + other.x, y: @y + other.y }
+  end
+
+  let *(factor: Float) -> This do
+    return Vector2D { x: @x * factor, y: @y * factor }
+  end
+
   let add(other: Vector2D) -> Vector2D do
-    return Vector2D { x: this.x + other.x, y: this.y + other.y }
+    return Vector2D { x: @x + other.x, y: @y + other.y }
   end
 
   let scale(factor: Float) -> Vector2D do
-    return Vector2D { x: this.x * factor, y: this.y * factor }
+    return Vector2D { x: @x * factor, y: @y * factor }
   end
 
   let dot(other: Vector2D) -> Float do
-    return this.x * other.x + this.y * other.y
+    return @x * other.x + @y * other.y
   end
 
   let length -> Float do
-    return Math.sqrt(this.x * this.x + this.y * this.y)
+    return Math.sqrt(@x * @x + @y * @y)
   end
 
   let normalize -> Vector2D do
-    let len = Math.sqrt(this.x * this.x + this.y * this.y)
-    return Vector2D { x: this.x / len, y: this.y / len }
+    let len = Math.sqrt(@x * @x + @y * @y)
+    return Vector2D { x: @x / len, y: @y / len }
   end
 
   let rotate(angle: Float) -> Vector2D do
     let c = Math.cos(angle)
     let s = Math.sin(angle)
-    return Vector2D { x: this.x * c - this.y * s, y: this.x * s + this.y * c }
+    return Vector2D { x: @x * c - @y * s, y: @x * s + @y * c }
   end
 
   let lerp(other: Vector2D, t: Float) -> Vector2D do
     return Vector2D {
-      x: this.x + (other.x - this.x) * t,
-      y: this.y + (other.y - this.y) * t
+      x: @x + (other.x - @x) * t,
+      y: @y + (other.y - @y) * t
     }
   end
 
   # Universal conversion — value.to(TargetType)
   let to(String) -> String do
-    return "(${this.x}, ${this.y})"
+    return "(${@x}, ${@y})"
   end
 end
 
@@ -173,4 +181,13 @@ main do
   IO.printLine("lerp(0.5) = ${start.lerp(finish, 0.5).to(String)}")
   IO.printLine("lerp(0.75) = ${start.lerp(finish, 0.75).to(String)}")
   IO.printLine("lerp(1.0) = ${start.lerp(finish, 1.0).to(String)}")
+
+  IO.printLine("")
+  IO.printLine("=== Operator Overloading ===")
+  IO.printLine("")
+
+  # `+` and `*` are overloaded above, so vectors combine like numbers.
+  let velocity = Vector2D { x: 1.0, y: -0.5 }
+  let combined = p + velocity * 2.0
+  IO.printLine("next position: ${combined.to(String)}")
 end

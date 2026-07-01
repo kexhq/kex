@@ -1,0 +1,15 @@
+type ParseError = InvalidFormat(String) | Overflow | EmptyInput
+
+let describe(e: ParseError) -> String do
+  match e do
+    InvalidFormat(s) -> "bad input: ${s}"
+    Overflow         -> "out of range"
+    EmptyInput       -> "got nothing"
+  end
+end
+
+main do
+  IO.printLine(describe(InvalidFormat("abc")))
+  IO.printLine(describe(Overflow))
+  IO.printLine(describe(EmptyInput))
+end

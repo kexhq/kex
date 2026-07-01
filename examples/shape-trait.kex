@@ -1,0 +1,7 @@
+trait Shape do
+  area      :> Float
+  perimeter :> Float
+
+  # default implementation, written against `this`
+  let describe = "area=${this.area}, perimeter=${this.perimeter}"
+end

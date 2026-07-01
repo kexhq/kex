@@ -1,0 +1,7 @@
+main do
+  IO.printLine([1, 2, 3].map { |x| x * 2 })
+
+  [1, 2, 3].each do |x|
+    IO.printLine(x.to(String))
+  end
+end

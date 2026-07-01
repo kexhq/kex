@@ -1,0 +1,15 @@
+record Temperature do
+  celsius : Float
+
+  static do
+    let Freezing = Temperature { celsius: 0.0 }
+  end
+end
+
+main do
+  let boiling = Temperature { celsius: 100.0 }
+  let freezing = Temperature.Freezing
+
+  IO.printLine(boiling)
+  IO.printLine(freezing)
+end

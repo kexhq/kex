@@ -36,9 +36,9 @@ main do
   let position = Vector2D { x: 3.0, y: 4.0 }
   let velocity = Vector2D { x: 1.0, y: -0.5 }
 
-  let next = position + velocity * 2.0
-  IO.printLine("next position: ${next.to(String)}")
-  IO.printLine("arrived? ${next.near?(Vector2D { x: 5.0, y: 3.0 })}")
+  let arrived = position + velocity * 2.0
+  IO.printLine("next position: ${arrived.to(String)}")
+  IO.printLine("arrived? ${arrived.near?(Vector2D { x: 5.0, y: 3.0 })}")
 end
 ```
 
@@ -121,7 +121,8 @@ make Vector3D do
   end
 end
 
-let shot = (Vector2D.UnitX * 2.0 + Vector2D { x: 0.0, y: 5.0 }).to(String)
+let unitX = Vector2D { x: 1.0, y: 0.0 }
+let shot = (unitX * 2.0 + Vector2D { x: 0.0, y: 5.0 }).to(String)
 # "(2.0, 5.0)" — `*` resolves through Vector2D::*, `+` through Vector2D::+
 ```
 
@@ -236,20 +237,16 @@ let squaresOfMultiplesOfThree = (1..100)
 let add(a, b) = a + b
 let multiply(a, b) = a * b
 
-let inc    = ~add(1)              # {|b| add(1, b)}
-let double = ~multiply(2)         # {|b| multiply(2, b)}
+let inc = ~add(1)
+let double = ~multiply(2)
 
-[1, 2, 3].map(~multiply(10))      # [10, 20, 30]
+main do
+  let multipled = [1, 2, 3].map(~multiply(10))
+  IO.printLine(multipled)
 
-(1..100).reduce(0, ~(+))          # 5050 — sum of 1 to 100
-
-let fact(n) = (1..n).reduce(1, ~(*))
-fact(10)                           # 3628800
-
-let sub5 = ~(-)(_, 5)             # {|a| a - 5}
-sub5(20)                          # 15
-
-~(+)(2)(3)                        # 5 — chained, fully applied inline
+  let summed = (1..100).reduce(0, ~(+))
+  IO.printLine(summed)
+end
 ```
 
 ### Traits
@@ -300,9 +297,6 @@ Kex is intended to make embedded DSLs feel native. Block arguments and `do |x| .
 
 ```rb
 let app = Http.routes do
-  middleware &logRequests
-  middleware &authenticate
-
   get "/" do |req|
     Response.ok("Welcome")
   end
@@ -310,13 +304,15 @@ let app = Http.routes do
   get "/users/:id" do |req|
     match UserService.find(req.params.id) do
       Just(user) -> Response.json(user)
-      None       -> Response.notFound("user not found")
+      None -> Response.notFound("user not found")
     end
   end
 
   post "/users" do |req|
-    let user = UserService.create(req.body)?
-    Response.created(user)
+    let user = UserService.create(req.body)
+    return Response.created(user) if user.ok?
+
+    return Response.error("error while creating user")
   end
 end
 ```

@@ -1,0 +1,24 @@
+trait Shape do
+  area      :> Float
+  perimeter :> Float
+
+  let describe = "area=${this.area}, perimeter=${this.perimeter}"
+end
+
+record Circle do
+  radius : Float
+end
+
+make Circle, implement: Shape do
+  let area      = Math.PI * @radius * @radius
+  let perimeter = 2.0 * Math.PI * @radius
+end
+
+foul printShape(s: Shape) do
+  IO.printLine(s.describe)
+end
+
+main do
+  let shapes = [Circle { radius: 5.0 }, Circle { radius: 2.0 }]
+  shapes.each(&printShape)
+end

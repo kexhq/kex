@@ -1,0 +1,12 @@
+let double(n: Integer) = n * 2
+
+# Haskell-style type declaration, then multiple clauses that
+# pattern-match on the argument:
+factorial : Integer -> Integer
+let factorial(0) = 1
+let factorial(n: Integer) = n * factorial(n - 1)
+
+main do
+  IO.printLine(double(21))
+  IO.printLine(factorial(5))
+end

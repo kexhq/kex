@@ -1,102 +1,20 @@
-# Traits — declare type contracts with optional default implementations.
-# `make Type, implement: Trait do ... end` satisfies the contract.
-# Default methods have access to `this` and can be overridden per type.
-
-# --- Shape trait with required methods and a default ---
-
 trait Shape do
-  area      : () -> Float
-  perimeter : () -> Float
+  area :> Float
+  perimeter :> Float
 
-  let describe = "area=${this.area}, perimeter=${this.perimeter}"
+  let describe = "area=${this.area}" # default implementation
 end
 
 record Circle do
-  radius : Float
-end
-
-record Rectangle do
-  width  : Float
-  height : Float
-end
-
-record Triangle do
-  a : Float
-  b : Float
-  c : Float
-  height : Float
+  radius: Float
 end
 
 make Circle, implement: Shape do
-  let area      = Math.PI * @radius * @radius
+  let area = Math.PI * @radius * @radius
   let perimeter = 2.0 * Math.PI * @radius
 end
 
-make Rectangle, implement: Shape do
-  let area      = @width * @height
-  let perimeter = 2.0 * (@width + @height)
-  let describe  = "Rectangle ${@width}x${@height} (area=${this.area})"  # override default
-end
-
-make Triangle, implement: Shape do
-  let area      = 0.5 * @a * @height
-  let perimeter = @a + @b + @c
-end
-
-# --- Trait-constrained function ---
-
-foul printShape(s: Shape) do
-  IO.printLine(s.describe)
-end
-
-# --- Multiple traits ---
-
-trait Comparable do
-  compare : This -> Comparison
-  let lessThan?(other)    = this.compare(other) == Less
-  let greaterThan?(other) = this.compare(other) == Greater
-  let equalTo?(other)     = this.compare(other) == Equal
-end
-
-record Version do
-  major : Integer
-  minor : Integer
-  patch : Integer
-end
-
-make Version, implement: Comparable do
-  let compare(other) do
-    if @major != other.major
-      if @major < other.major then Less else Greater end
-    elif @minor != other.minor
-      if @minor < other.minor then Less else Greater end
-    elif @patch != other.patch
-      if @patch < other.patch then Less else Greater end
-    else
-      Equal
-    end
-  end
-
-  let to(String) = "${@major}.${@minor}.${@patch}"
-end
-
 main do
-  let shapes = [
-    Circle    { radius: 5.0 },
-    Rectangle { width: 4.0, height: 6.0 },
-    Triangle  { a: 3.0, b: 4.0, c: 5.0, height: 4.0 },
-  ]
-
-  shapes.each(&printShape)
-
-  if let Just(largest) = shapes.max { |s| s.area }
-    IO.printLine("Largest area: ${largest}")
-  end
-
-  let v1 = Version { major: 1, minor: 2, patch: 0 }
-  let v2 = Version { major: 1, minor: 3, patch: 0 }
-
-  IO.printLine("${v1.to(String)} < ${v2.to(String)}? ${v1.lessThan?(v2)}")
-  IO.printLine("${v2.to(String)} > ${v1.to(String)}? ${v2.greaterThan?(v1)}")
-  IO.printLine("${v1.to(String)} = ${v1.to(String)}? ${v1.equalTo?(v1)}")
+  let c = Circle { radius: 5.0 }
+  IO.printLine(c.describe)
 end

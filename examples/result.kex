@@ -1,0 +1,33 @@
+type ParseError = InvalidFormat(String) | Overflow | EmptyInput
+
+let parsePort(s: String) -> Result<Int, ParseError> do
+  return Error(EmptyInput) if s.empty?
+
+  match Integer.parse(s) do
+    Ok(n)    -> do
+      return Error(Overflow) if n > 65535
+
+      return Ok(n)
+    end
+    Error(_) -> Error(InvalidFormat(s))
+  end
+end
+
+# Result<T, E> can also be simplified as T or! E.
+let parsePortAlt(s: String) -> Int or! ParseError do
+  return Error(EmptyInput) if s.empty?
+
+  match Integer.parse(s) do
+    Ok(n)    -> do
+      return Error(Overflow) if n > 65535
+
+      return Ok(n)
+    end
+    Error(_) -> Error(InvalidFormat(s))
+  end
+end
+
+main do
+  IO.printLine(parsePort("8080"))
+  IO.printLine(parsePortAlt("70000"))
+end

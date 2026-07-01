@@ -1,0 +1,20 @@
+record Request do
+  path : String
+end
+
+main do
+  let requests = [
+    Request { path: "/admin/users" },
+    Request { path: "/home" },
+    Request { path: "/admin/settings" },
+  ]
+
+  let admin = requests
+    .filter { |req| req.path.startsWith?("/admin") }
+    .map { |req| req.path }
+
+  IO.printLine(admin)
+
+  # exactly equivalent:
+  IO.printLine(map(admin, &.upperCase))
+end

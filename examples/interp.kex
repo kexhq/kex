@@ -1,0 +1,5 @@
+main do
+  let name = "world"
+  IO.printLine("Hello, ${name}!")
+  IO.printLine("${(1..3).sum}")   # "6"
+end

@@ -1,0 +1,27 @@
+record Vector2D do
+  x : Float
+  y : Float
+end
+
+make Vector2D do
+  let +(other: Vector2D) -> Vector2D do
+    return Vector2D { x: @x + other.x, y: @y + other.y }
+  end
+
+  let *(factor: Float) -> Vector2D do
+    return Vector2D { x: @x * factor, y: @y * factor }
+  end
+
+  let to(String) -> String do
+    return "(${@x}, ${@y})"
+  end
+end
+
+main do
+  let unitX = Vector2D { x: 1.0, y: 0.0 }
+  let offset = Vector2D { x: 0.0, y: 5.0 }
+
+  # Operator sugar resolves through the receiver type:
+  let result = unitX * 2.0 + offset
+  IO.printLine(result.to(String))
+end

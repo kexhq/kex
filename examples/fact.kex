@@ -1,0 +1,7 @@
+factorial : Integer -> Integer
+let factorial(1) = 1
+let factorial(n) = n * factorial(n - 1)
+
+main do
+  IO.printLine(factorial(4))
+end

@@ -1,0 +1,11 @@
+record Shape do
+  area : Float
+end
+
+main do
+  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }, Shape { area: 7.0 }]
+
+  if let Just(largest) = shapes.max { |s| s.area }
+    IO.printLine("largest area: ${largest.area}")
+  end
+end

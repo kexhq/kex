@@ -1,0 +1,33 @@
+record Todo do
+  id     : Integer
+  userId : Integer
+end
+
+record User do
+  id      : Integer
+  name    : String
+  adult?  : Bool
+  email   : String?
+end
+
+let findUserTodo(todos: [Todo], userId: Integer, todoId: Integer) -> Todo? do
+  return todos.find { |t| t.id == todoId && t.userId == userId }
+end
+
+# Using T? sugar
+let findUser(users: [User], name: String) -> User? do
+  return users.find { |u| u.name == name }
+end
+
+main do
+  let users = [
+    User { id: 1, name: "alice", adult?: true, email: Just("alice@example.com") },
+    User { id: 2, name: "bob", adult?: false, email: None },
+  ]
+
+  let fallback = User { id: 0, name: "nobody", adult?: false, email: None }
+  let adult = users.find { |u| u.adult? }.or(fallback)
+  IO.printLine("adult email: ${adult.email}")  # String?
+
+  IO.printLine(findUser(users, "bob"))
+end

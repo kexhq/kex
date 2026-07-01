@@ -1,0 +1,20 @@
+record Vector2D do
+  x : Float
+  y : Float
+end
+
+make Vector2D do
+  let +(other: Vector2D) -> Vector2D do
+    return Vector2D { x: @x + other.x, y: @y + other.y }
+  end
+
+  let to(String) -> String do
+    return "(${@x}, ${@y})"
+  end
+end
+
+main do
+  let a = Vector2D { x: 1.0, y: 2.0 }
+  let b = Vector2D { x: 3.0, y: 4.0 }
+  IO.printLine((a + b).to(String))
+end

@@ -1,0 +1,10 @@
+main do
+  var list = [1, 2, 3, 4, 5]
+  list.push!(6)
+  list.filter!(&.even?)
+  list.map! { |x| x * 10 }
+  IO.printLine(list.to(String))  # list is [20, 40, 60]
+
+  # frozen.push!(4)
+  # runtime error: Cannot use '!' on immutable binding: frozen
+end

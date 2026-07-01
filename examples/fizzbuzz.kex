@@ -1,54 +1,13 @@
 # FizzBuzz in Kex — demonstrating pattern matching and functional programming
-
-# Define the FizzBuzz result type with pattern matching
-type FizzBuzz
-  = Number(Int)
-  | Fizz
-  | Buzz
-  | FizzBuzz
-
-# Pattern-based fizzbuzz calculation with multiple clauses
-# This shows Kex's elegant pattern matching on divisibility
-let fizzbuzz(n: Int) -> FizzBuzz do
-  match (n.modulo(3) == 0, n.modulo(5) == 0) do
-    (true, true)   -> FizzBuzz
-    (true, false)  -> Fizz
-    (false, true)  -> Buzz
-    (false, false) -> Number(n)
-  end
-end
-
-# Convert FizzBuzz result to string (polymorphic)
-let toString(result: FizzBuzz) -> String do
-  match result do
-    FizzBuzz       -> "FizzBuzz"
-    Fizz           -> "Fizz"
-    Buzz           -> "Buzz"
-    Number(n)      -> "${n}"
-  end
-end
-
-# Elegant version using pattern matching directly on number properties
-let fizzbuzzElegant(n: Int) -> String do
+let fizzBuzz(n: Integer) -> String do
   match (n.modulo(3), n.modulo(5)) do
     (0, 0) -> "FizzBuzz"
     (0, _) -> "Fizz"
     (_, 0) -> "Buzz"
-    (_, _) -> "${n}"
+    (_, _) -> n.to(String)
   end
 end
 
-# Demonstrate UFCS: method chaining on ranges
-let runFizzbuzz(limit: Int) -> [String] do
-  (1..limit)
-    .map { |n| fizzbuzzElegant(n) }
-end
-
-# Print results
 main do
-  let results = (1..100).map { |n| fizzbuzzElegant(n) }
-
-  results.each do |output|
-    IO.printLine(output)
-  end
+  (1..100).map(&.fizzBuzz).each { |s| IO.printLine(s) }
 end

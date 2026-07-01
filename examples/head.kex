@@ -1,0 +1,17 @@
+make [X] do
+  head :> X?
+  let head(@[]) = None
+  let head(@[x | _]) = Just(x)
+
+  rest :> This
+  let rest(@[]) = []
+  let rest(@[_ | xs]) = xs
+end
+
+main do
+  let list = [1, 2, 3]
+  IO.printLine(list.head)   # same as: head(list)
+  IO.printLine([].head)     # same as: head([])
+
+  IO.printLine(list.rest)
+end

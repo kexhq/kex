@@ -1,0 +1,12 @@
+let compute(x: Int) = x * 2 + 1     # pure
+
+foul readConfig(path: String) do
+  return File.read(path)
+end
+
+# Compile error: pure code cannot call foul code.
+# let bad(path: String) = readConfig(path)
+
+main do
+  IO.printLine(compute(20))
+end

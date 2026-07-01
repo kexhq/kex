@@ -1,0 +1,16 @@
+let add(a, b) = a + b
+let multiply(a, b) = a * b
+
+let inc    = ~add(1)              # {|b| add(1, b)}
+let double = ~multiply(2)         # {|b| multiply(2, b)}
+
+let sub5 = ~(-)(_, 5)             # {|a| a - 5}
+
+main do
+  IO.printLine([1, 2, 3].map(~multiply(10)))  # [10, 20, 30]
+  IO.printLine((1..100).reduce(0, ~(+)))      # 5050
+
+  IO.printLine(inc(9))
+  IO.printLine(double(4))
+  IO.printLine(sub5(20))                      # 15
+end

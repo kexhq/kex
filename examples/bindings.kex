@@ -1,0 +1,12 @@
+main do
+  let name = "kex"          # immutable
+  var count = 0             # mutable
+  count = count + 1         # reassign
+
+  var list = [1, 2, 3]
+  list.push!(4)             # list := list.push(4)
+
+  IO.printLine(name)
+  IO.printLine(count)
+  IO.printLine(list)
+end

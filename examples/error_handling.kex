@@ -3,18 +3,16 @@
 
 type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 
-let parseInt(s: String) -> Result<Int, ParseError> do
-  return Error(EmptyInput) if s.empty?
-  return Integer.parse(s).mapError { |_| InvalidFormat(s) }
-end
-
 let parsePort(s: String) -> Result<Int, ParseError> do
-  match parseInt(s) do
-    Error(e) -> return Error(e)
-    Ok(n) -> do
+  return Error(EmptyInput) if s.empty?
+
+  match Integer.parse(s) do
+    Ok(n)    -> do
       return Error(Overflow) if n > 65535
+
       return Ok(n)
     end
+    Error(_) -> Error(InvalidFormat(s))
   end
 end
 
@@ -66,4 +64,11 @@ let firstAdultEmail(users: [User]) -> String? do
   return users
     .find(&.adult?)
     .flatMap(&.email)
+end
+
+main do
+  match parsePort("8080") do
+    Ok(port)    -> IO.printLine("listening on ${port}")
+    Error(why)  -> IO.printLine("bad port: ${why}")
+  end
 end

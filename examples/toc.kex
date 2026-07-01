@@ -1,0 +1,17 @@
+foul createTocFor(file_name: String) do
+  let lines = File.lines(file_name)
+  let heads = lines.filter(&.startsWith?("#"))
+
+  IO.printLine("heads:")
+  IO.inspect(heads)
+end
+
+
+main(args) do
+  if args.count < 1
+    IO.error("usage: toc file.md")
+    return 1
+  end
+
+  createTocFor(args.first) if args.first.ok?
+end

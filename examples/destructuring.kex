@@ -1,0 +1,28 @@
+let divmod(a: Integer, b: Integer) -> (Integer, Integer) do
+  return (a / b, a.modulo(b))
+end
+
+let describeResult(result: Result<Integer, String>) -> String do
+  match result do
+    Ok(n)    -> "got ${n}"
+    Error(e) -> "failed: ${e}"
+  end
+end
+
+let describeOptional(opt: Integer?) -> String do
+  match opt do
+    Just(n) -> "got ${n}"
+    None    -> "nothing"
+  end
+end
+
+main do
+  let (q, r) = divmod(10, 3)
+  IO.printLine("q=${q}, r=${r}")
+
+  IO.printLine(describeResult(Ok(7)))
+  IO.printLine(describeResult(Error("bad input")))
+
+  IO.printLine(describeOptional(Just(3)))
+  IO.printLine(describeOptional(None))
+end

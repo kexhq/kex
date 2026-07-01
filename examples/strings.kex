@@ -1,0 +1,10 @@
+main do
+  IO.printLine("hello".upperCase)             # "HELLO"
+  IO.printLine("  hi  ".trim)                 # "hi"
+  IO.printLine("a,b,c".split(","))            # ["a", "b", "c"]
+  IO.printLine("a-b-c".contains?("-"))        # true
+
+  IO.printLine('0'.digit?)                    # true
+  IO.printLine('a'.alpha?)                     # true
+  IO.printLine(' '.space?)                     # true
+end

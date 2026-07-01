@@ -8,6 +8,8 @@ main do
   list.filter!(&.even?)      # list is now [2, 4, 6]
   list.map! { |x| x * 10 }  # list is now [20, 40, 60]
 
+  IO.printLine(list.to(String))
+
   var ages = { "alice": 30, "bob": 25 }
   ages.put!("charlie", 35)
   ages.delete!("bob")

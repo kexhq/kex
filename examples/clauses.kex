@@ -1,0 +1,11 @@
+let factorial(0) = 1
+let factorial(n: Integer) = n * factorial(n - 1)
+
+let head([h | _]) = h
+let head([])      = None
+
+main do
+  IO.printLine(factorial(5))
+  IO.printLine(head([1, 2, 3]))
+  IO.printLine(head([]))
+end

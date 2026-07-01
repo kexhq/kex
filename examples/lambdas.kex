@@ -1,0 +1,8 @@
+main do
+  let inc = { |x| x + 1 }
+  let add = { |a, b| a + b }
+
+  IO.printLine([1, 2, 3].map(&inc))         # [2, 3, 4]
+  IO.printLine(add(2, 3))
+  IO.printLine([1, 2, 3].map(&.to(String))) # method reference via &.
+end
