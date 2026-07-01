@@ -1,0 +1,24 @@
+# kex: no-check
+# Milestone-5 smoke test: supervision tree with a crashing child.
+
+foul counter(name: String, n: Int) do
+  receive do
+    :ping ->
+      IO.printLine(name + " ping #" + n.toString())
+      counter(name, n + 1)
+    :boom -> IO.printLine(name + " crashing!")
+  end
+end
+
+foul startCounter(name: String) do
+  spawn do
+    counter(name, 1)
+  end
+end
+
+main do
+  let sup = Supervisor.start(strategy: :only_crashed) do
+    [worker { startCounter("counter-A") }]
+  end
+  IO.printLine("supervisor: " + sup.toString())
+end

@@ -1,82 +1,100 @@
 # kex: no-check
-# Process model — typed processes, supervision, tasks
+# Process model showcase — typed processes, supervision, tasks.
+# Run with: kex -R examples/processes.kex
+
+# --------------------------------------------------------------------
+# Typed counter process — functional loop, no mutable state
+# --------------------------------------------------------------------
 
 type CounterMessage = :increment | :reset | (:get, Process<Int>)
 
+foul counterLoop(n: Int) do
+  receive do
+    :increment -> counterLoop(n + 1)
+    :reset -> counterLoop(0)
+    (:get, sender) -> do
+      sender.send(n)
+      counterLoop(n)
+    end
+  end
+end
+
 foul startCounter -> Process<CounterMessage> do
-  return spawn do
-    var state = 0
-    loop
-      receive do
-        :increment -> state = state + 1
-        :reset -> state = 0
-        (:get, sender) -> sender.send(state)
-      end
+  return spawn do counterLoop(0) end
+end
+
+# --------------------------------------------------------------------
+# Chat process — accepts typed messages, broadcasts to all members
+# --------------------------------------------------------------------
+
+type ChatMessage = (:join, String) | (:leave, String) | (:broadcast, String, String)
+
+foul chatLoop(users: [String]) do
+  receive do
+    (:join, name) -> chatLoop([name | users])
+    (:leave, name) -> chatLoop(users.reject { |u| u == name })
+    (:broadcast, from, text) -> do
+      IO.printLine("[chat] " + from + ": " + text)
+      chatLoop(users)
     end
   end
 end
-
-# Functional style (no var)
-foul startCounterPure -> Process<CounterMessage> do
-  return spawn do
-    let loop(state: Int) do
-      receive do
-        :increment -> loop(state + 1)
-        :reset -> loop(0)
-        (:get, sender) -> do
-          sender.send(state)
-          loop(state)
-        end
-      end
-    end
-    loop(0)
-  end
-end
-
-# Tasks for simple async
-foul fetchAll(ids: [Int]) -> [Result<User, Error>] do
-  let tasks = ids.map do |id|
-    Task.start { fetchUser(id) }
-  end
-
-  return tasks.map { |t| t.await(timeout: 5000) }
-end
-
-record AppConfig do
-  dbUrl : String
-  port  : Integer
-end
-
-let config = AppConfig { dbUrl: "postgres://localhost/app", port: 8080 }
-
-# Supervision tree
-foul startApp do
-  Supervisor.start(strategy: :one_for_one) do
-    worker(Database, args: [config.dbUrl])
-    worker(Cache)
-    supervisor(strategy: :one_for_all) do
-      worker(WebServer, args: [config.port])
-      worker(WebSocket)
-    end
-  end
-end
-
-# Typed process that only accepts specific messages
-type ChatMessage = (:join, String) | (:leave, String) | (:msg, String, String)
 
 foul startChat -> Process<ChatMessage> do
-  return spawn do
-    var users: [String] = []
-    loop
-      receive do
-        (:join, name) -> users = [name | users]
-        (:leave, name) -> users = users.reject { |u| u == name }
-        (:msg, from, text) -> do
-          users.each do |user|
-            send(user, "${from}: ${text}")
-          end
-        end
-      end
-    end
+  return spawn do chatLoop([]) end
+end
+
+# --------------------------------------------------------------------
+# Tasks — async parallel computation
+# --------------------------------------------------------------------
+
+foul slowSquare(n: Int) -> Int do
+  n * n
+end
+
+# --------------------------------------------------------------------
+# Supervision tree
+# --------------------------------------------------------------------
+
+foul startCounterWorker do
+  startCounter()
+end
+
+# --------------------------------------------------------------------
+# main — exercise the full process model
+# --------------------------------------------------------------------
+
+main do
+  # --- Typed counter ---
+  let counter = startCounter()
+  counter.send(:increment)
+  counter.send(:increment)
+  counter.send(:increment)
+  counter.send(:reset)
+  counter.send(:increment)
+  counter.send((:get, Process.self))
+  receive do
+    n -> IO.printLine("counter = " + n.toString())
   end
+
+  # --- Chat room ---
+  let chat = startChat()
+  chat.send((:join, "Alice"))
+  chat.send((:join, "Bob"))
+  chat.send((:broadcast, "Alice", "hello everyone"))
+  chat.send((:leave, "Bob"))
+
+  # --- Tasks (async parallel) ---
+  let t1 = Task.start { slowSquare(6) }
+  let t2 = Task.start { slowSquare(7) }
+  let r1 = t1.await(timeout: 5000)
+  let r2 = t2.await(timeout: 5000)
+  IO.printLine("6^2 = " + r1.toString())
+  IO.printLine("7^2 = " + r2.toString())
+
+  # --- Supervision tree ---
+  let sup = Supervisor.start(strategy: :only_crashed) do
+    [worker { startCounterWorker() }]
+  end
+  IO.printLine("supervisor pid: " + sup.toString())
 end
