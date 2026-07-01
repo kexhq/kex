@@ -14,7 +14,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install dependencies
-        run: sudo apt-get install -y cmake libgmp-dev libreadline-dev
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base
 
       - name: Build
         run: cmake -B build -G "Unix Makefiles" && cmake --build build
