@@ -1,2 +1,2 @@
-spec/error_if_with_do.kex:6:4: error: Expected 'end' to close main block, got Eof
+spec/error_if_with_do.kex:3:11: error: use 'then' instead of 'do' in if expression: `if cond then body end`
 Aborted: fix syntax errors before running.

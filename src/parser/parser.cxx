@@ -657,7 +657,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
 
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
-        parseTypeExpr(); // consume return type (stored later when we need it)
+        clause.returnAnnotation = parseTypeExpr();
     }
 
     // = expr (single expression body)
@@ -992,12 +992,13 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 auto Parser::parseOr() -> ast::ExprPtr {
     auto left = parseAnd();
 
-    while (check(TokenType::PipePipe)) {
+    while (check(TokenType::PipePipe) || check(TokenType::QuestionQuestion)) {
+        auto opType = peek().type;
         advance();
         auto op = std::make_unique<ast::Expr>();
         op->location = currentLocation();
         auto right = parseAnd();
-        op->kind = ast::BinaryOp{std::move(left), TokenType::PipePipe, std::move(right)};
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
         left = std::move(op);
     }
 
@@ -1572,6 +1573,9 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     // (multiline). The `then` keyword acts as an inline body separator so
     // that `if n == 0 then true else false end` parses correctly without
     // consuming `then` as a ternary operator inside the condition.
+    // `do` after an if condition is a syntax error — use `then`.
+    if (check(TokenType::Do))
+        error("use 'then' instead of 'do' in if expression: `if cond then body end`");
     bool inlineThen = match(TokenType::Then);
     if (!inlineThen) skipNewlines();
 
@@ -1693,7 +1697,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
 }
 
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
-    // Body can be single expr or a do...end block
+    // do...end block: required for multi-statement arm bodies.
     if (match(TokenType::Do)) {
         skipNewlines();
         std::vector<ast::ExprPtr> body;
@@ -1702,14 +1706,17 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
             skipNewlines();
         }
         expect(TokenType::End, "Expected 'end' to close match clause body");
-
         auto blockExpr = std::make_unique<ast::Expr>();
         blockExpr->location = currentLocation();
         blockExpr->kind = ast::BlockExpr{std::move(body)};
         return blockExpr;
     }
+    // Single expression — inline or on the next line.
+    // Multi-statement arms require do...end to avoid ambiguity.
+    if (check(TokenType::Newline)) skipNewlines();
     return parseExpr();
 }
+
 
 auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
@@ -1723,6 +1730,16 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     }
 
     expect(TokenType::Do, "Expected 'do' after receive");
+
+    // Optional `|sender|` binding: when present, every received message is
+    // expected to be a 2-tuple {Payload, Sender} and `sender` is bound to
+    // the sending pid (with Payload matched against the clause patterns).
+    std::optional<std::string> senderBinding;
+    if (match(TokenType::Pipe)) {
+        senderBinding = expect(TokenType::LowerIdent, "Expected name in receive sender binding").value;
+        expect(TokenType::Pipe, "Expected '|' after receive sender binding");
+    }
+
     skipNewlines();
 
     std::vector<ast::MatchClause> clauses;
@@ -1740,7 +1757,8 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 
     expect(TokenType::End, "Expected 'end' to close receive");
 
-    expr->kind = ast::ReceiveExpr{std::move(clauses), std::move(timeout), std::move(afterBody)};
+    expr->kind = ast::ReceiveExpr{std::move(clauses), std::move(timeout),
+                                  std::move(afterBody), std::move(senderBinding)};
     return expr;
 }
 
@@ -2487,6 +2505,7 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
 auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     auto block = std::make_unique<ast::MainBlock>();
     block->location = currentLocation();
+    block->isExplicitMain = true;
     expect(TokenType::Main, "Expected 'main'");
 
     // Optional params: main(args) do ... end — bound to the script's

@@ -1,0 +1,2 @@
+spec/error_receive_bare_multiline.kex:7:14: error: Expected '->' in match clause, got (
+Aborted: fix syntax errors before running.

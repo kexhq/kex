@@ -38,3 +38,9 @@ Thumbs.db
 
 # Scratch files left behind by an interrupted `make spec` IO test run
 spec/io_scratch.txt
+
+# BEAM/Erlang build artifacts
+*.core
+*.beam
+*.dump
+*.S

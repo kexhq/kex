@@ -49,8 +49,11 @@ auto writeTempSource(const std::string& source) -> std::string {
     char tmp[] = "/tmp/kex_color_src_XXXXXX";
     int fd = mkstemp(tmp);
     close(fd);
-    { std::ofstream f(tmp); f << source; }
-    return tmp;
+    // Rename with .kex extension so the compiler accepts it
+    std::string path = std::string(tmp) + ".kex";
+    std::rename(tmp, path.c_str());
+    { std::ofstream f(path); f << source; }
+    return path;
 }
 
 auto hasAnsi(const std::string& s) -> bool {

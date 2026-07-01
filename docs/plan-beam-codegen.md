@@ -12,7 +12,7 @@ Pipeline:
 .kex source → parse → semantic analysis → desugar → Core Erlang text (.core) → erlc → .beam
 ```
 
-The **desugar** step is new: a pre-codegen pass that rewrites complex control flow (error propagation, loops, mutable variables) into a simplified AST that maps 1:1 to Core Erlang. This separates "what does this Kex construct mean?" from "how do I emit Core Erlang text?" and keeps the emitter mechanical.
+The **desugar** step is new: a pre-codegen pass that rewrites complex control flow (loops, mutable variables) into a simplified AST that maps 1:1 to Core Erlang. This separates "what does this Kex construct mean?" from "how do I emit Core Erlang text?" and keeps the emitter mechanical.
 
 ## Prerequisites from Semantic Analysis
 
@@ -86,7 +86,6 @@ Becomes `'Kex.Foo.Bar'` — dot-separated, flattened to a single BEAM module. Ea
 | `receive do ... end` | `receive ... after Timeout -> ... end` | Message passing |
 | `x.map { \|n\| ... }` | Resolved by UFCS to specific module call | Type-directed |
 | pipeline `a.foo().bar()` | Nested calls (resolved targets) | Desugared before codegen |
-| `expr?` (error propagation) | Desugared to explicit match (see below) | Pre-codegen rewrite |
 | `String` | BEAM binary | UTF-8 encoded |
 | `Integer` | BEAM bignum | Arbitrary precision |
 | `Float` | BEAM float (64-bit) | |
@@ -173,62 +172,6 @@ Every record module exports `__record_info__/1` which returns field names and tu
 ## Desugaring Pass
 
 A dedicated AST-to-AST transform that runs after semantic analysis and before codegen. It rewrites complex constructs into a simplified form that maps directly to Core Erlang.
-
-### Error Propagation (`?`) → Explicit CPS
-
-The `?` operator is NOT handled inline by the emitter. Instead, a desugaring pass rewrites it before codegen.
-
-**The problem:** `?` means "if this is an error, return early from the enclosing function." In an expression-oriented language, "return early" requires restructuring the entire continuation of the function into the success branch of a case.
-
-**The transform:**
-
-Input:
-```kex
-let doStuff(input: String) -> Result<Int, Error> do
-  let parsed = Integer.parse(input)?
-  let validated = validate(parsed)?
-  parsed + validated
-end
-```
-
-After desugaring:
-```kex
-let doStuff(input: String) -> Result<Int, Error> do
-  match Integer.parse(input) do
-    :ok(parsed) ->
-      match validate(parsed) do
-        :ok(validated) -> :ok(parsed + validated)
-        :error(e) -> :error(e)
-      end
-    :error(e) -> :error(e)
-  end
-end
-```
-
-This is a mechanical right-fold: for each `?` in sequence, wrap everything after it in the success branch. The emitter then sees only `match` expressions, which it already knows how to emit.
-
-**`?` inside lambdas:** Returns from the lambda, not the enclosing function. The desugaring scope resets at lambda boundaries.
-
-**`?` inside if branches:** Each branch desugars independently. If only one branch has `?`, only that branch gets the case wrapper.
-
-**`?` in complex positions (e.g., function arguments):**
-```kex
-foo(bar()?, baz()?)
-```
-
-Desugars to:
-```kex
-match bar() do
-  :ok(tmp1) ->
-    match baz() do
-      :ok(tmp2) -> foo(tmp1, tmp2)
-      :error(e) -> :error(e)
-    end
-  :error(e) -> :error(e)
-end
-```
-
-Evaluation order is left-to-right, each `?` introduces a new nesting level.
 
 ### Loops → Tail-Recursive Functions
 
@@ -476,6 +419,34 @@ Since each Kex module maps to exactly one BEAM module, hot reloading works at Ke
 
 The REPL compiles each entered expression/definition as a temporary module, loads it, evaluates, and unloads. This naturally uses BEAM's hot loading. No special support beyond "compile a module and load it."
 
+## REPL Commands
+
+Both the tree-walker REPL (`kex`) and the BEAM REPL (`kex -i`) share the same command set. Commands use `/` as the prefix — not `:`, which is overloaded in Kex as the atom literal prefix (`:ok`, `:error`, etc.).
+
+| Command | Description |
+|---------|-------------|
+| `exit` | Exit the REPL (no prefix — convenience alias) |
+| `/help`, `/h` | Show command list |
+| `/quit`, `/q`, `/exit` | Exit the REPL |
+| `/set <opt>` | Enable a feature flag (`types`, `ast`, `tokens`) |
+| `/unset <opt>` | Disable a feature flag |
+| `/complete <prefix>` | Show tab completions for a prefix |
+| `/reset` | Clear all accumulated bindings and definitions, starting a fresh session |
+| `/load <file>` | Load a `.kex` or `.beam` file into the current session |
+
+### `/reset`
+
+Wipes the accumulated top-level definitions and local bindings for the current session. Useful when experimenting and the state has become inconsistent. Does not affect history.
+
+### `/load <file>`
+
+- **`.kex` file (both REPLs):** parse and evaluate the file, merging its top-level definitions into the current session as if they had been typed in.
+- **`.beam` file (BEAM REPL only):** copy the file into the REPL's working beam directory and make its module available for calls. Not applicable to the tree-walker REPL.
+
+### Note on `:` atoms
+
+Because `:` now has no special meaning as a command prefix, atom literals like `:ok` and `:error` typed at the REPL prompt are parsed as expressions, not as commands. This is the correct behaviour.
+
 ## Runtime Library Design
 
 ### Architecture
@@ -583,7 +554,6 @@ src/
   desugar/
     desugar.hxx              — Desugaring pass interface
     desugar.cxx              — Implementation
-    error_prop.cxx           — ? operator rewriting
     loops.cxx                — Loop → recursive function transform
     ssa.cxx                  — Mutable variable SSA renaming
 runtime/
@@ -700,42 +670,40 @@ private:
 24. `break` → return value from loop function
 25. `next` → tail-call to loop function with current state
 26. Nested loops (unique naming, inner-only break/next)
-27. Error propagation (`?`) → nested match rewriting
-28. `?` in compound positions (arguments, lambdas, branches)
 
 ### Milestone 5: Sum Types and Exhaustiveness
 
-29. Sum type variants → tagged tuples
-30. Pattern matching on sum types
-31. Exhaustiveness checking (all variants covered)
-32. Wildcard injection when non-exhaustive (with compiler warning)
-33. Guards in patterns → Core Erlang `when`
+27. Sum type variants → tagged tuples
+28. Pattern matching on sum types
+29. Exhaustiveness checking (all variants covered)
+30. Wildcard injection when non-exhaustive (with compiler warning)
+31. Guards in patterns → Core Erlang `when`
 
 ### Milestone 6: Concurrency
 
-34. spawn → `erlang:spawn/1`
-35. send/receive → `erlang:send` + receive expression
-36. After timeout in receive
-37. Process linking basics
-38. `kex_genserver` bridge for OTP interop
+32. spawn → `erlang:spawn/1`
+33. send/receive → `erlang:send` + receive expression
+34. After timeout in receive
+35. Process linking basics
+36. `kex_genserver` bridge for OTP interop
 
 ### Milestone 7: Full Language
 
-39. Range expressions
-40. Map literals and operations
-41. Shorthand lambdas (`&.method`, `&function`)
-42. Trailing if → case wrapper
-43. Non-tail-recursion warnings
-44. Source map for error reporting
-45. Erlang port for structured compilation (replace system() shell-out)
+37. Range expressions
+38. Map literals and operations
+39. Shorthand lambdas (`&.method`, `&function`)
+40. Trailing if → case wrapper
+41. Non-tail-recursion warnings
+42. Source map for error reporting
+43. Erlang port for structured compilation (replace system() shell-out)
 
 ### Milestone 8: Ecosystem
 
-46. Runtime library completion (kex_runtime OTP app)
-47. Mix compiler plugin for mixed Kex/Elixir projects
-48. Package manifest (kex.toml) with dependency resolution
-49. REPL backed by BEAM (compile + hot-load per expression)
-50. Hot code reload documentation and best practices
+44. Runtime library completion (kex_runtime OTP app)
+45. Mix compiler plugin for mixed Kex/Elixir projects
+46. Package manifest (kex.toml) with dependency resolution
+47. REPL backed by BEAM (compile + hot-load per expression)
+48. Hot code reload documentation and best practices
 
 ## Design Decisions
 
@@ -772,10 +740,10 @@ Elixir uses maps for structs to get field-name-based access without positional f
 
 ### Why a desugaring pass (not inline in the emitter)?
 
-- **Separation of concerns:** "what does `?` mean?" is a language semantics question; "how do I print a case expression?" is a codegen question
+- **Separation of concerns:** "what does this loop mean?" is a language semantics question; "how do I print a `letrec`?" is a codegen question
 - **Testability:** can unit-test desugaring (AST → AST) without generating text
 - **Reuse:** the desugared AST could target other backends (WASM) without re-implementing control flow transforms
-- **Composability:** SSA, loops, and `?` interact (a `?` inside a loop body). Doing them as separate sub-passes in a defined order is cleaner than handling all combinations in the emitter.
+- **Composability:** SSA and loops interact (mutable vars referenced inside a loop body become loop params). Doing them as separate sub-passes in a defined order is cleaner than handling all combinations in the emitter.
 
 ### Why no circular module dependencies?
 

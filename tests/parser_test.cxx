@@ -316,6 +316,197 @@ int main() {
         });
     });
 
+    describe("Parser — Receive clause body", []() {
+        // Helpers to extract a ReceiveExpr from a foul function's body.
+        auto getFoulReceive = [](const std::string& src) -> const ast::ReceiveExpr& {
+            Lexer lexer(src);
+            auto tokens = lexer.tokenizeAll();
+            Parser parser(std::move(tokens));
+            auto prog = parser.parseProgram();
+            auto& fn = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& body = fn->clauses[0].body;
+            return std::get<ast::ReceiveExpr>(body[0]->kind);
+        };
+
+        it("parses inline single-expression clause body", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :ping -> :pong\n"
+                "  end\n"
+                "end\n"
+            );
+            assertFalse(parseFails(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :ping -> :pong\n"
+                "  end\n"
+                "end\n"
+            ));
+            assertEqual(prog.items.size(), size_t(1));
+        });
+
+        it("parses multi-line clause body (single expression on next line)", []() {
+            // The body starts on the line after '->'; must not be misread as a new clause.
+            assertFalse(parseFails(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :ping ->\n"
+                "      IO.printLine(\"pong\")\n"
+                "    :stop -> :done\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("multi-statement arm body with do...end keeps enclosing foul function", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul counter(name: String, n: Int) do\n"
+                "  receive do\n"
+                "    :ping -> do\n"
+                "      IO.printLine(name)\n"
+                "      counter(name, n + 1)\n"
+                "    end\n"
+                "    :boom -> IO.printLine(\"crash\")\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  IO.printLine(\"hi\")\n"
+                "end\n"
+            );
+            // Both the foul function AND main must be present.
+            assertEqual(prog.items.size(), size_t(2));
+            assertTrue((std::holds_alternative<std::unique_ptr<ast::FunctionDef>>(prog.items[0])));
+            assertTrue((std::holds_alternative<std::unique_ptr<ast::MainBlock>>(prog.items[1])));
+        });
+
+        it("do...end arm body with two expressions returns a block", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul counter(n: Int) do\n"
+                "  receive do\n"
+                "    :ping -> do\n"
+                "      IO.printLine(\"ping\")\n"
+                "      counter(n + 1)\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn  = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertEqual(recv.clauses.size(), size_t(1));
+            // The two-expression body must be wrapped in a BlockExpr.
+            assertTrue(std::holds_alternative<ast::BlockExpr>(recv.clauses[0].body->kind));
+            auto& block = std::get<ast::BlockExpr>(recv.clauses[0].body->kind);
+            assertEqual(block.body.size(), size_t(2));
+        });
+
+        it("multi-line body with single expression is not wrapped in a block", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :ping ->\n"
+                "      counter(1)\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertEqual(recv.clauses.size(), size_t(1));
+            // Single expression: returned as-is, not wrapped.
+            assertFalse(std::holds_alternative<ast::BlockExpr>(recv.clauses[0].body->kind));
+        });
+
+        it("do...end arm body correctly separates two clauses", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul counter(n: Int) do\n"
+                "  receive do\n"
+                "    :ping -> do\n"
+                "      IO.printLine(\"ping\")\n"
+                "      counter(n + 1)\n"
+                "    end\n"
+                "    :stop -> :done\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            // Must have exactly 2 clauses: :ping and :stop.
+            assertEqual(recv.clauses.size(), size_t(2));
+        });
+
+        it("tuple pattern clause after multi-line body is recognised", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul counter(n: Int) do\n"
+                "  receive do\n"
+                "    :ping ->\n"
+                "      counter(n + 1)\n"
+                "    (:get, sender) -> sender\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertEqual(recv.clauses.size(), size_t(2));
+        });
+
+        it("function call on next line is NOT a clause boundary", []() {
+            // counter(name, n+1) must be body expression, not a new clause pattern.
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul counter(name: String, n: Int) do\n"
+                "  receive do\n"
+                "    :ping ->\n"
+                "      counter(name, n + 1)\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            // Only one clause: :ping
+            assertEqual(recv.clauses.size(), size_t(1));
+            // Its body is counter(name, n+1) — a FunctionCall, not a wildcard/atom
+            assertFalse(std::holds_alternative<ast::BlockExpr>(recv.clauses[0].body->kind));
+        });
+
+        it("parses receive with explicit do...end clause body", []() {
+            assertFalse(parseFails(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :ping -> do\n"
+                "      IO.printLine(\"ping\")\n"
+                "      loop()\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("parses receive with timeout", []() {
+            auto prog = parse(
+                "# kex: no-check\n"
+                "foul wait do\n"
+                "  receive timeout: 500 do\n"
+                "    :msg -> :got\n"
+                "  after -> :timeout\n"
+                "  end\n"
+                "end\n"
+            );
+            auto& fn   = std::get<std::unique_ptr<ast::FunctionDef>>(prog.items[0]);
+            auto& recv = std::get<ast::ReceiveExpr>(fn->clauses[0].body[0]->kind);
+            assertTrue(recv.timeout.has_value());
+            assertTrue(recv.afterBody.has_value());
+        });
+    });
+
     describe("Parser — Lambdas", []() {
         it("parses inline lambda", []() {
             auto program = parse("main do\n  let f = { |x| x + 1 }\nend");

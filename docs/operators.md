@@ -39,7 +39,6 @@ No pipe operator (`|>`) either — UFCS covers chaining: `input.parse.transform.
 
 | Op | Meaning |
 |----|---------|
-| `?` | Error propagation (Result only) |
 | `..` | Range (`1..10`) |
 | `...` | Spread in Block<[A]> |
 | `!` (suffix) | Mutating call on var |

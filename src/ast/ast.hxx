@@ -240,6 +240,10 @@ struct ReceiveExpr {
     std::vector<MatchClause> clauses;
     std::optional<ExprPtr> timeout;
     std::optional<ExprPtr> afterBody;
+    // When present, every message is expected to be a 2-tuple {Payload, Sender}
+    // and this name is bound to the Sender pid for each clause. Patterns in
+    // `clauses` match against the Payload only.
+    std::optional<std::string> senderBinding;
 };
 
 struct LoopExpr {
@@ -393,6 +397,7 @@ struct Param {
 struct FunctionClause {
     std::vector<Param> params;
     std::vector<ExprPtr> body;
+    std::optional<TypeExprPtr> returnAnnotation;
 };
 
 struct FunctionDef {
@@ -491,6 +496,9 @@ struct MainBlock {
     // `let x = expr` bindings — these should NOT push a new env scope so
     // that bound names remain visible to subsequent top-level items.
     bool synthetic = false;
+    // True only for explicit `main do ... end` blocks (parsed by parseMainBlock).
+    // False for synthetic let-wrappers and bare top-level expression wrappers.
+    bool isExplicitMain = false;
 };
 
 struct Pragma {

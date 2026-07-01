@@ -1,0 +1,21 @@
+# kex: no-check
+# Milestone-4 smoke test: Task.start + await for concurrent async work.
+
+foul slowAdd(a: Int, b: Int) -> Int do
+  a + b
+end
+
+main do
+  let t1 = Task.start { slowAdd(10, 20) }
+  let t2 = Task.start { slowAdd(100, 200) }
+  let r1 = t1.await(timeout: 2000)
+  let r2 = t2.await(timeout: 2000)
+  match r1 do
+    (:ok, v) -> IO.printLine("t1 result: " + v.to(String))
+    (:error, reason) -> IO.printLine("t1 error: " + reason.to(String))
+  end
+  match r2 do
+    (:ok, v) -> IO.printLine("t2 result: " + v.to(String))
+    (:error, reason) -> IO.printLine("t2 error: " + reason.to(String))
+  end
+end

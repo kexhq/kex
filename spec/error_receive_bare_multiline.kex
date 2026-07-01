@@ -1,0 +1,10 @@
+# kex: no-check
+# Multi-statement receive arms require do...end; bare multi-line is illegal.
+foul counter(n: Int) do
+  receive do
+    :ping ->
+      IO.printLine("ping")
+      counter(n + 1)
+  end
+end
+main do counter(0) end

@@ -401,6 +401,13 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
             for (const auto& clause : node.clauses) {
                 m_symbols.pushScope(m_inFoulContext);
+                // When a sender binding is present, every message is a
+                // {Payload, Sender} tuple; the sender name is in scope for
+                // every clause (alongside the pattern vars).
+                if (node.senderBinding && *node.senderBinding != "_") {
+                    m_symbols.define(Symbol{*node.senderBinding, SymbolKind::Variable,
+                                            false, false, true, expr.location});
+                }
                 for (const auto& pat : clause.patterns) {
                     if (pat) bindPatternVars(*pat, expr.location);
                 }

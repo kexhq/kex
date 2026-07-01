@@ -39,24 +39,6 @@ let parseInt(s: String) -> Result<Int, ParseError> do
 end
 ```
 
-## The `?` Operator
-
-`?` works on both `Result` and `Optional` — unwraps `Ok`/`Just`, or short-circuits the enclosing function with `Error`/`None`:
-
-```kex
-foul let loadConfig(path: String) -> Result<Config, AppError> do
-  let content = File.read(path)?          # returns Error early if fails
-  let parsed = Config.parse(content)?
-  let port = parsePort(parsed["port"])?
-  return Ok(Config { port: port })
-end
-
-foul let greetUser(id: Int) -> String? do
-  let user = findUser(id)?                # returns None early if not found
-  return "Hello, ${user.name}"
-end
-```
-
 ## Checking Without Unwrapping
 
 `ok?`/`error?` (on `Result`) and `some?`/`none?` (on `Optional`) ask "did this succeed" without a `match`:
@@ -69,12 +51,13 @@ end
 
 ## Combining
 
+Chain `Result`/`Optional` computations with `flatMap`:
+
 ```kex
 foul let getUserEmail(id: Int) -> Result<String, AppError> do
-  let user = fetchUser(id)?
-  match user.email do
+  fetchUser(id).flatMap { |user| match user.email do
     Just(email) -> Ok(email)
     None -> Error(AppError(:no_email))
-  end
+  end}
 end
 ```
