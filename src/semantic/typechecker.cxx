@@ -526,6 +526,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // `Void` — the bottom/uninhabited type for never-returning functions.
             if (last == "Void" && node.parts.size() == 1)
                 return Type::voidType();
+            // `Any` — escape hatch: unifies with everything (unknown message type
+            // for Process<Any>, etc.). Treated as UnknownType at the type level.
+            if (last == "Any" && node.parts.size() == 1)
+                return Type::unknown();
             // Single-letter identifiers are generic type variables (docs/
             // types.md Generics) — reuse the same TypeVar for repeated
             // occurrences of the same letter within this clause.
@@ -685,7 +689,17 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         return nullptr;
     }();
 
-    auto returnType = declared ? declared->result : freshTypeVar();
+    // Resolve inline return type annotation (-> Type on the function def line),
+    // present when no separate TypeAnnotation declaration exists.
+    TypePtr inlineReturnType;
+    if (!declared && !def.clauses.empty() && def.clauses[0].returnAnnotation) {
+        std::unordered_map<std::string, TypePtr> gvars;
+        inlineReturnType = resolveTypeExpr(**def.clauses[0].returnAnnotation, gvars);
+    }
+
+    auto returnType = declared    ? declared->result
+                    : inlineReturnType ? inlineReturnType
+                    : freshTypeVar();
     defineVar(def.name, returnType);
 
     std::vector<Signature> signatures;
@@ -718,19 +732,30 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // relaxations that call-site checking uses — e.g. Int and Integer are
         // compatible, so `add : Int -> Int -> Int` with a body returning
         // Integer (inferred from literal arithmetic) isn't a mismatch.
-        if (declared && !std::holds_alternative<TypeVar>(declared->result->kind) &&
+        auto effectiveReturnType = declared ? declared->result : inlineReturnType;
+        if (effectiveReturnType &&
+            !std::holds_alternative<TypeVar>(effectiveReturnType->kind) &&
+            !std::holds_alternative<UnknownType>(effectiveReturnType->kind) &&
             !std::holds_alternative<UnknownType>(bodyType->kind) &&
             !std::holds_alternative<TypeVar>(bodyType->kind) &&
-            !argMatchesParam(bodyType, declared->result)) {
+            !argMatchesParam(bodyType, effectiveReturnType)) {
             error(def.location,
-                  "`" + def.name + "` declared to return " + typeToString(declared->result) +
+                  "`" + def.name + "` declared to return " + typeToString(effectiveReturnType) +
                   " but body returns " + typeToString(bodyType));
         }
         // Resolve TypeVars — body inference may have constrained unannotated
         // params via unifyVar (e.g. `n * 2` → n : Number).
         for (auto& pt : paramTypes) pt = resolve(pt);
         popScope();
-        signatures.push_back(Signature{def.name, std::move(paramTypes), resolve(bodyType)});
+        // Prefer the declared/annotated return type for annotated functions —
+        // using the inferred body type would expose internal TypeVars to call
+        // sites, which can be incorrectly constrained by the first call.
+        auto concrete = [](const TypePtr& t) {
+            return !std::holds_alternative<TypeVar>(t->kind);
+        };
+        auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
+                          ? effectiveReturnType : resolve(bodyType);
+        signatures.push_back(Signature{def.name, std::move(paramTypes), resultType});
     }
 
     // make-block methods have an implicit `this` receiver, not a regular
@@ -1155,6 +1180,29 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto hints = resolveBlockHints(node.name, argTypes);
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
+            // send(pid, msg) — check msg type against Process<Msg> if pid type is known.
+            if (node.name == "send" && argTypes.size() == 2) {
+                auto pidType = resolve(argTypes[0]);
+                auto msgType = resolve(argTypes[1]);
+                if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
+                    if (nt->name == "Process" && nt->typeArgs.size() == 1) {
+                        auto declared = resolve(nt->typeArgs[0]);
+                        // Process<Any> (unknown msg type) skips the check.
+                        if (!std::holds_alternative<UnknownType>(declared->kind)) {
+                            if (auto* tv = std::get_if<TypeVar>(&declared->kind)) {
+                                unifyVar(tv->id, msgType);
+                            } else if (!std::holds_alternative<UnknownType>(msgType->kind) &&
+                                       !std::holds_alternative<TypeVar>(msgType->kind) &&
+                                       !argMatchesParam(msgType, declared)) {
+                                error(expr.location,
+                                      "send: message type " + typeToString(msgType) +
+                                      " does not match Process<" + typeToString(declared) + ">");
+                            }
+                        }
+                    }
+                }
+                return msgType;
+            }
             return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
@@ -1182,6 +1230,29 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (node.block) {
                 auto hints = resolveBlockHints(node.method, argTypes);
                 argTypes.push_back(inferBlock(**node.block, hints));
+            }
+            // pid.send(msg) UFCS — check msg type against Process<Msg>.
+            // argTypes[0] = pid type, argTypes[1] = msg type.
+            if (node.method == "send" && argTypes.size() == 2) {
+                auto pidType = resolve(argTypes[0]);
+                auto msgType = resolve(argTypes[1]);
+                if (auto* nt = std::get_if<NamedType>(&pidType->kind)) {
+                    if (nt->name == "Process" && nt->typeArgs.size() == 1) {
+                        auto declared = resolve(nt->typeArgs[0]);
+                        if (!std::holds_alternative<UnknownType>(declared->kind)) {
+                            if (auto* tv = std::get_if<TypeVar>(&declared->kind)) {
+                                unifyVar(tv->id, msgType);
+                            } else if (!std::holds_alternative<UnknownType>(msgType->kind) &&
+                                       !std::holds_alternative<TypeVar>(msgType->kind) &&
+                                       !argMatchesParam(msgType, declared)) {
+                                error(expr.location,
+                                      "send: message type " + typeToString(msgType) +
+                                      " does not match Process<" + typeToString(declared) + ">");
+                            }
+                        }
+                    }
+                }
+                return msgType;
             }
             return checkCall(node.method, argTypes, expr.location);
         }
@@ -1366,7 +1437,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             pushScope();
             inferBody(node.body);
             popScope();
-            return Type::named("Process");
+            // Process<Msg> — Msg is a fresh TypeVar that unification resolves
+            // against the declared return-type annotation (e.g. -> Process<Counter>).
+            return Type::named("Process", {freshTypeVar()});
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
             inferBody(node.body);

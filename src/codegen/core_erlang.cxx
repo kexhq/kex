@@ -346,11 +346,92 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (i > 0) args += ", ";
                 args += emitExpr(node.args[i]);
             }
+            // `worker { block }` → kex_supervisor:worker/1 with block as 0-arity fun.
+            if (node.name == "worker" && node.block) {
+                auto fnVar = freshVar("WorkerFn");
+                auto fun   = emitExpr(*node.block);
+                return "let <" + fnVar + "> =\n    " + fun + " in\n"
+                       "call 'kex_supervisor':'worker'(" + fnVar + ")";
+            }
+            // `worker(Module)` / `worker(Module, args: [...])` MPA sugar.
+            // Desugars to: worker { Module.start(args...) }
+            // i.e. kex_supervisor:worker/1 with a 0-arity fun that calls kex_MODULE:start/N.
+            if (node.name == "worker" && !node.args.empty() && !node.block) {
+                if (auto* uid = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
+                    // Lower-case the module name for kex_MODULE convention.
+                    std::string modName = uid->name;
+                    std::transform(modName.begin(), modName.end(), modName.begin(),
+                                   [](unsigned char c){ return std::tolower(c); });
+                    std::string startArgs;
+                    for (const auto& [k, v] : node.namedArgs) {
+                        if (k == "args") {
+                            // The args value is expected to be a List; emit each element.
+                            if (auto* lst = std::get_if<ast::ListExpr>(&v->kind)) {
+                                for (size_t i = 0; i < lst->elements.size(); i++) {
+                                    if (i > 0) startArgs += ", ";
+                                    startArgs += emitExpr(lst->elements[i]);
+                                }
+                            } else {
+                                startArgs = emitExpr(v);
+                            }
+                        }
+                    }
+                    auto fnVar = freshVar("WorkerFn");
+                    std::string callExpr = "call 'kex_" + modName + "':'start'(" + startArgs + ")";
+                    return "let <" + fnVar + "> =\n    fun () ->\n    " + callExpr + " in\n"
+                           "call 'kex_supervisor':'worker'(" + fnVar + ")";
+                }
+            }
+            // `supervisor(strategy: :s) do BLOCK end` as a free function.
+            // Creates a nested supervisor child spec.
+            if (node.name == "supervisor" && node.block) {
+                std::string strat = "'only_crashed'";
+                for (const auto& [k, v] : node.namedArgs)
+                    if (k == "strategy" || k == "restart") strat = emitExpr(v);
+                std::string children;
+                if (auto* lam = std::get_if<ast::Lambda>(&node.block->get()->kind))
+                    children = emitBody(lam->body);
+                else
+                    children = emitExpr(*node.block);
+                auto childVar = freshVar("Children");
+                auto fnVar    = freshVar("SupFn");
+                // The nested supervisor is itself a worker whose start fun calls start_link.
+                return "let <" + childVar + "> =\n    " + children + " in\n"
+                       "let <" + fnVar + "> =\n"
+                       "    fun () ->\n"
+                       "    call 'kex_supervisor':'start_link'("
+                       "~{'strategy' => " + strat + ", 'children' => " + childVar + "}~) in\n"
+                       "call 'kex_supervisor':'worker'(" + fnVar + ")";
+            }
+            // Intercept `send(pid, msg)` → erlang:send(Pid, {'kex_msg', Msg, self()}).
+            // Every Kex send wraps the payload with the 'kex_msg' tag and the
+            // sender's pid, so receiving `receive do |sender| ... end` can
+            // bind the sender and bare `receive do pat -> ... end` matches
+            // against the payload only. The tag also keeps Kex messages
+            // distinguishable from raw Erlang tuples in the mailbox.
+            if (node.name == "send" && node.args.size() == 2)
+                return "call 'erlang':'send'(" + emitExpr(node.args[0]) +
+                       ", {'kex_msg', " + emitExpr(node.args[1]) +
+                       ", call 'erlang':'self'()})";
+            // Intercept `self()` → erlang:self/0.
+            if (node.name == "self" && node.args.empty())
+                return "call 'erlang':'self'()";
             // Check if it's a namespaced call like IO.printLine
             auto dot = node.name.find('.');
             if (dot != std::string::npos) {
                 auto mod = node.name.substr(0, dot);
                 auto fn  = node.name.substr(dot + 1);
+                // Process.* module dispatch.
+                if (mod == "Process") {
+                    if (fn == "self" && node.args.empty())
+                        return "call 'erlang':'self'()";
+                    if (fn == "exit" && node.args.size() == 2)
+                        return "call 'erlang':'exit'(" + args + ")";
+                    if (fn == "register" && node.args.size() == 2)
+                        return "call 'erlang':'register'(" + args + ")";
+                    if (fn == "whereis" && node.args.size() == 1)
+                        return "call 'erlang':'whereis'(" + args + ")";
+                }
                 auto [bmod, bfn] = resolveStdlib(mod, fn);
                 if (!bmod.empty())
                     return "call '" + bmod + "':'" + bfn + "'(" + args + ")";
@@ -395,6 +476,35 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 }
                 if (!bmod.empty())
                     return "call '" + bmod + "':'" + bfn + "'(" + args + ")";
+                // Task.start { block } → kex_task:start/1 with block as 0-arity fun.
+                // The block emits as `fun () -> BODY` already; bind it to a var first
+                // (Core Erlang requires fun literals to be let-bound before passing).
+                if (uid->name == "Task" && node.method == "start" && node.block) {
+                    auto fnVar = freshVar("TaskFn");
+                    auto fun   = emitExpr(*node.block);
+                    return "let <" + fnVar + "> =\n    " + fun + " in\n"
+                           "call 'kex_task':'start'(" + fnVar + ")";
+                }
+                // Task.await_all([tasks]) → kex_task:await_all/1
+                if (uid->name == "Task" && node.method == "await_all" && !node.args.empty())
+                    return "call 'kex_task':'await_all'(" + args + ")";
+                // Supervisor.start(strategy: :s) do BLOCK end
+                // BLOCK must evaluate to a list of child specs (from worker { } calls).
+                // The block is parsed as a 0-arity Lambda; inline its body directly.
+                if (uid->name == "Supervisor" && node.method == "start" && node.block) {
+                    std::string strat = "'only_crashed'";
+                    for (const auto& [k, v] : node.namedArgs)
+                        if (k == "strategy" || k == "restart") strat = emitExpr(v);
+                    std::string children;
+                    if (auto* lam = std::get_if<ast::Lambda>(&node.block->get()->kind))
+                        children = emitBody(lam->body);
+                    else
+                        children = emitExpr(*node.block);
+                    auto childVar = freshVar("Children");
+                    return "let <" + childVar + "> =\n    " + children + " in\n"
+                           "call 'kex_supervisor':'start_link'("
+                           "~{'strategy' => " + strat + ", 'children' => " + childVar + "}~)";
+                }
                 // Check if the method is a 0-arity static constant from a static do...end block.
                 auto ctorIt = m_staticCtors.find(uid->name + "::" + node.method);
                 if (ctorIt != m_staticCtors.end()) {
@@ -405,6 +515,17 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (localIt != m_topLevelFns.end()) {
                     int callArity = static_cast<int>(node.args.size());
                     return "apply '" + node.method + "'/" + std::to_string(callArity) + "(" + args + ")";
+                }
+                // Process.* module dispatch (MethodCall path, no parens or with parens).
+                if (uid->name == "Process") {
+                    if (node.method == "self" && node.args.empty())
+                        return "call 'erlang':'self'()";
+                    if (node.method == "exit" && node.args.size() == 2)
+                        return "call 'erlang':'exit'(" + args + ")";
+                    if (node.method == "register" && node.args.size() == 2)
+                        return "call 'erlang':'register'(" + args + ")";
+                    if (node.method == "whereis" && node.args.size() == 1)
+                        return "call 'erlang':'whereis'(" + args + ")";
                 }
                 // Unknown module method → call as Kex module
                 return "call 'Kex." + uid->name + "':'" + node.method + "'(" + args + ")";
@@ -418,10 +539,42 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return node.args.size() > 1 ? emitExpr(node.args[1]) : "";
             };
 
+            // Task methods (UFCS on a task handle).
+            // `task.await(timeout: T)` → kex_task:await/2; default timeout = 'infinity'.
+            if (node.method == "await") {
+                std::string timeout = "'infinity'";
+                for (const auto& [k, v] : node.namedArgs)
+                    if (k == "timeout") timeout = emitExpr(v);
+                if (!node.args.empty()) timeout = firstArg();
+                return "call 'kex_task':'await'(" + recv + ", " + timeout + ")";
+            }
+
+            // Process / pid methods (UFCS on a pid receiver).
+            // `pid.send(m)` → erlang:send(Pid, {'kex_msg', M, self()})
+            if (node.method == "send" && node.args.size() == 1)
+                return "call 'erlang':'send'(" + recv + ", {'kex_msg', " + firstArg() +
+                       ", call 'erlang':'self'()})";
+            // `pid.link()` / `pid.unlink()` → erlang:link/1 / erlang:unlink/1
+            if (node.method == "link" && node.args.empty())
+                return "call 'erlang':'link'(" + recv + ")";
+            if (node.method == "unlink" && node.args.empty())
+                return "call 'erlang':'unlink'(" + recv + ")";
+            // `pid.monitor()` → erlang:monitor/2 (returns a reference)
+            if (node.method == "monitor" && node.args.empty())
+                return "call 'erlang':'monitor'('process', " + recv + ")";
+            // `pid.alive?()` → erlang:is_process_alive/1
+            if (node.method == "alive?" && node.args.empty())
+                return "call 'erlang':'is_process_alive'(" + recv + ")";
+            // `ref.demonitor()` → erlang:demonitor/1
+            if (node.method == "demonitor" && node.args.empty())
+                return "call 'erlang':'demonitor'(" + recv + ")";
+            // `pid.exit(reason)` (instance form) → erlang:exit/2
+            if (node.method == "exit" && node.args.size() == 1)
+                return "call 'erlang':'exit'(" + recv + ", " + firstArg() + ")";
+
             // Integer/Float methods
             if (node.method == "modulo" && node.args.size() == 1)
-                return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";
-            if (node.method == "even?")
+                return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";            if (node.method == "even?")
                 return "call 'erlang':'=:='(call 'erlang':'rem'(" + recv + ", 2), 0)";
             if (node.method == "odd?")
                 return "call 'erlang':'=/='(call 'erlang':'rem'(" + recv + ", 2), 0)";
@@ -925,6 +1078,50 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 // Kind::Function (&funcName) — produces a 1-arg wrapper.
                 return "fun (" + pv + ") ->\n    apply '" + node.name + "'/1(" + pv + ")";
             }
+        }
+
+        // --- Spawn: bind body as a 0-arity fun, then call erlang:spawn/1.
+        // Per the emitter's existing convention (see higher-order list methods
+        // around line 494), Core Erlang fun literals passed as call arguments
+        // are bound to a var first via a let prefix.
+        else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
+            auto body = emitBody(node.body);
+            auto fnVar = freshVar("SpawnFn");
+            return "let <" + fnVar + "> =\n"
+                   "    fun () ->\n"
+                   "        " + body + " in\n"
+                   "call 'erlang':'spawn'(" + fnVar + ")";
+        }
+
+        // --- Receive: native Core Erlang `receive ... after ...`.
+        // Core Erlang receive has no 'end' keyword — the expression ends after
+        // the after-clause body. A blocking receive (no user-specified timeout)
+        // uses `after 'infinity' -> 'true'` as required by the grammar.
+        // Patterns are wrapped as `{'kex_msg', <pat>, <sender>}` to match
+        // the wire format emitted by `send`.
+        else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+            std::string senderVar = node.senderBinding
+                ? erlVar(*node.senderBinding)
+                : freshVar("W");
+            std::string result = "receive\n";
+            for (const auto& clause : node.clauses) {
+                std::string pat = clause.patterns.empty()
+                    ? freshVar("W")
+                    : emitPattern(clause.patterns[0]);
+                result += "  {'kex_msg', " + pat + ", " + senderVar + "}";
+                if (clause.guard)
+                    result += " when " + emitExpr(*clause.guard);
+                else
+                    result += " when 'true'";
+                result += " ->\n    " + emitExpr(clause.body) + "\n";
+            }
+            if (node.timeout && node.afterBody) {
+                result += "after " + emitExpr(*node.timeout) + " ->\n"
+                          "    " + emitExpr(*node.afterBody);
+            } else {
+                result += "after 'infinity' ->\n    'true'";
+            }
+            return result;
         }
 
         // Unhandled — emit a placeholder that compiles but fails at runtime.
@@ -1626,6 +1823,29 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
     m_fieldAccessors.clear();
     auto& fieldAccessors = m_fieldAccessors; // alias for use in lambdas below
 
+    // Recursively collect FunctionDefs from a ModuleDef's body (and any
+    // nested ModuleDefs). Kex modules within a single source file are
+    // namespaces for organization; they flatten into the same BEAM module
+    // as their host file so calls like `Factorial.compute(n)` resolve to
+    // a local apply rather than a cross-module call.
+    std::function<void(const ast::ModuleDef&)> collectModuleFns =
+        [&](const ast::ModuleDef& mod) {
+        for (const auto& bodyItem : mod.body) {
+            std::visit([&](const auto& n) {
+                using DT = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<DT, std::unique_ptr<ast::FunctionDef>>) {
+                    if (n) {
+                        int arity = n->clauses.empty() ? 0
+                                  : static_cast<int>(n->clauses[0].params.size());
+                        m_topLevelFns[n->name] = arity;
+                    }
+                } else if constexpr (std::is_same_v<DT, std::unique_ptr<ast::ModuleDef>>) {
+                    if (n) collectModuleFns(*n);
+                }
+            }, bodyItem);
+        }
+    };
+
     // First pass: collect all top-level function names so emitExpr can
     // distinguish static local calls from calls-through-variables.
     for (const auto& item : prog.items) {
@@ -1637,6 +1857,8 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                               : static_cast<int>(node->clauses[0].params.size());
                     m_topLevelFns[node->name] = arity;
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectModuleFns(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 // Synthetic blocks hold top-level `let name = expr` declarations.
                 if (node && node->synthetic) {
@@ -1736,6 +1958,31 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                 } else {
                     ordered.push_back({false, false, {node.get()}, nullptr});
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                // Flatten nested module functions into the current BEAM module.
+                // Each FunctionDef becomes a top-level function; recursive
+                // descent handles nested modules.
+                if (!node) return;
+                std::function<void(const ast::ModuleDef&)> pushModuleFns =
+                    [&](const ast::ModuleDef& mod) {
+                    for (const auto& bodyItem : mod.body) {
+                        std::visit([&](const auto& n) {
+                            using DT = std::decay_t<decltype(n)>;
+                            if constexpr (std::is_same_v<DT, std::unique_ptr<ast::FunctionDef>>) {
+                                if (!n) return;
+                                if (!ordered.empty() && !ordered.back().isMain
+                                    && ordered.back().fns[0]->name == n->name) {
+                                    ordered.back().fns.push_back(n.get());
+                                } else {
+                                    ordered.push_back({false, false, {n.get()}, nullptr});
+                                }
+                            } else if constexpr (std::is_same_v<DT, std::unique_ptr<ast::ModuleDef>>) {
+                                if (n) pushModuleFns(*n);
+                            }
+                        }, bodyItem);
+                    }
+                };
+                pushModuleFns(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 // make T do ... end — emit each FunctionDef as a top-level function.
                 if (!node) return;

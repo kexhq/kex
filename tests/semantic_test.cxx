@@ -1576,5 +1576,95 @@ int main() {
         });
     });
 
+    describe("Process<T> send-site typing", []() {
+        it("typed process rejects wrong message type (method call)", []() {
+            assertTrue(hasError(
+                "foul startTyped -> Process<String> do\n"
+                "  return spawn do\n"
+                "    receive do msg -> IO.printLine(msg) end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = startTyped()\n"
+                "  p.send(42)\n"
+                "end\n",
+                "does not match Process<String>"
+            ));
+        });
+
+        it("typed process accepts correct message type (method call)", []() {
+            assertTrue(noErrors(
+                "foul startTyped -> Process<String> do\n"
+                "  return spawn do\n"
+                "    receive do msg -> IO.printLine(msg) end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = startTyped()\n"
+                "  p.send(\"hello\")\n"
+                "end\n"
+            ));
+        });
+
+        it("Process<Any> accepts any message type", []() {
+            assertTrue(noErrors(
+                "foul startDynamic -> Process<Any> do\n"
+                "  return spawn do\n"
+                "    receive do msg -> IO.printLine(msg.toString()) end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let d = startDynamic()\n"
+                "  d.send(\"anything\")\n"
+                "  d.send(42)\n"
+                "end\n"
+            ));
+        });
+
+        it("typed process rejects wrong message type (free function send)", []() {
+            assertTrue(hasError(
+                "foul startTyped -> Process<String> do\n"
+                "  return spawn do\n"
+                "    receive do msg -> IO.printLine(msg) end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = startTyped()\n"
+                "  send(p, 42)\n"
+                "end\n",
+                "does not match Process<String>"
+            ));
+        });
+
+        it("typed process accepts correct message type (free function send)", []() {
+            assertTrue(noErrors(
+                "foul startTyped -> Process<String> do\n"
+                "  return spawn do\n"
+                "    receive do msg -> IO.printLine(msg) end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = startTyped()\n"
+                "  send(p, \"hello\")\n"
+                "end\n"
+            ));
+        });
+
+        it("inline return type annotation is honoured for non-process types", []() {
+            assertTrue(noErrors(
+                "let double -> Integer = 2 * 2\n"
+                "main do IO.printLine(double.toString()) end\n"
+            ));
+        });
+
+        it("inline return type mismatch is an error", []() {
+            assertTrue(hasError(
+                "let getNum -> String = 42\n"
+                "main do IO.printLine(getNum()) end\n",
+                "declared to return"
+            ));
+        });
+    });
+
     return runAll();
 }

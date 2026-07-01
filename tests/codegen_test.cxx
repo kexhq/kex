@@ -297,6 +297,221 @@ int main() {
         });
     });
 
+    describe("CoreErlangEmitter — process primitives", []() {
+        it("spawn emits erlang:spawn with a 0-arity fun", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go do\n"
+                "  spawn do IO.printLine(\"child\") end\n"
+                "end\n"
+                "main do go() end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'spawn'"), out);
+        });
+
+        it("receive emits native Core Erlang receive with after infinity", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul loop do\n"
+                "  receive do\n"
+                "    :stop -> IO.printLine(\"done\")\n"
+                "  end\n"
+                "end\n"
+                "main do spawn do loop() end end\n"
+            );
+            assertTrue(contains(out, "receive"), out);
+            assertTrue(contains(out, "after 'infinity'"), out);
+        });
+
+        it("receive with timeout emits after clause with the given timeout", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul waitOne do\n"
+                "  receive timeout: 1000 do\n"
+                "    :ok -> IO.printLine(\"got it\")\n"
+                "  after -> IO.printLine(\"timeout\")\n"
+                "  end\n"
+                "end\n"
+                "main do waitOne() end\n"
+            );
+            assertTrue(contains(out, "receive"), out);
+            assertTrue(contains(out, "after 1000"), out);
+        });
+
+        it("pid.send(msg) emits erlang:send with kex_msg wrapper", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go(pid) do\n"
+                "  pid.send(:ping)\n"
+                "end\n"
+                "main do go(self()) end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'send'"), out);
+            assertTrue(contains(out, "'kex_msg'"), out);
+        });
+
+        it("send(pid, msg) free function emits erlang:send", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go(pid) do\n"
+                "  send(pid, :ping)\n"
+                "end\n"
+                "main do go(self()) end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'send'"), out);
+        });
+
+        it("self() emits erlang:self()", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul myPid do self() end\n"
+                "main do myPid() end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+        });
+
+        it("pid.link() emits erlang:link", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go(pid) do pid.link() end\n"
+                "main do go(self()) end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'link'"), out);
+        });
+
+        it("pid.alive?() emits erlang:is_process_alive", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul check(pid) do pid.alive?() end\n"
+                "main do check(self()) end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'is_process_alive'"), out);
+        });
+
+        it("Task.start { block } emits kex_task:start/1", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go do\n"
+                "  Task.start { IO.printLine(\"async\") }\n"
+                "end\n"
+                "main do go() end\n"
+            );
+            assertTrue(contains(out, "call 'kex_task':'start'"), out);
+        });
+
+        it("task.await() emits kex_task:await/2 with infinity", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go do\n"
+                "  let t = Task.start { 42 }\n"
+                "  t.await()\n"
+                "end\n"
+                "main do go() end\n"
+            );
+            assertTrue(contains(out, "call 'kex_task':'await'"), out);
+            assertTrue(contains(out, "'infinity'"), out);
+        });
+
+        it("task.await(timeout: N) emits kex_task:await/2 with N", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go do\n"
+                "  let t = Task.start { 42 }\n"
+                "  t.await(timeout: 5000)\n"
+                "end\n"
+                "main do go() end\n"
+            );
+            assertTrue(contains(out, "call 'kex_task':'await'"), out);
+            assertTrue(contains(out, "5000"), out);
+        });
+
+        it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul startWorker do\n"
+                "  spawn do receive do :stop -> \"done\" end end\n"
+                "end\n"
+                "main do\n"
+                "  Supervisor.start(strategy: :only_crashed) do\n"
+                "    [worker { startWorker() }]\n"
+                "  end\n"
+                "end\n"
+            );
+            assertTrue(contains(out, "call 'kex_supervisor':'start_link'"), out);
+            assertTrue(contains(out, "'strategy'"), out);
+        });
+
+        it("worker { block } emits kex_supervisor:worker/1", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul w do\n"
+                "  worker { spawn do receive do :stop -> \"done\" end end }\n"
+                "end\n"
+                "main do w() end\n"
+            );
+            assertTrue(contains(out, "call 'kex_supervisor':'worker'"), out);
+        });
+
+        it("worker(Module) MPA form emits kex_MODULE:start with no args", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "main do\n"
+                "  Supervisor.start(strategy: :only_crashed) do\n"
+                "    [worker(Cache)]\n"
+                "  end\n"
+                "end\n"
+            );
+            assertTrue(contains(out, "call 'kex_cache':'start'()"), out);
+            assertTrue(contains(out, "call 'kex_supervisor':'worker'"), out);
+        });
+
+        it("worker(Module, args: [...]) MPA form passes args to kex_MODULE:start", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "main do\n"
+                "  Supervisor.start(strategy: :only_crashed) do\n"
+                "    [worker(Database, args: [\"postgres://localhost\"])]\n"
+                "  end\n"
+                "end\n"
+            );
+            assertTrue(contains(out, "call 'kex_database':'start'"), out);
+            assertTrue(contains(out, "\"postgres://localhost\""), out);
+        });
+
+        it("supervisor(strategy:) do block end as free fn emits nested start_link", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "main do\n"
+                "  Supervisor.start(strategy: :only_crashed) do\n"
+                "    [supervisor(strategy: :all) do\n"
+                "      [worker(WebServer)]\n"
+                "    end]\n"
+                "  end\n"
+                "end\n"
+            );
+            // The nested supervisor should also call start_link
+            auto count = 0;
+            std::string::size_type pos = 0;
+            while ((pos = out.find("kex_supervisor':'start_link'", pos)) != std::string::npos) {
+                count++;
+                pos++;
+            }
+            assertTrue(count >= 2, "expected at least 2 start_link calls (outer + nested)");
+        });
+
+        it("Process.self without parens emits erlang:self()", []() {
+            auto out = emit(
+                "# kex: no-check\n"
+                "foul go do\n"
+                "  let me = Process.self\n"
+                "  me\n"
+                "end\n"
+                "main do go() end\n"
+            );
+            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+        });
+    });
+
     describe("CoreErlangEmitter — end-to-end compilation", []() {
         // These tests require erlc on PATH. Skip gracefully if not available.
         auto erlcAvailable = []() -> bool {

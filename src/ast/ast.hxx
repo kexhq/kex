@@ -240,6 +240,10 @@ struct ReceiveExpr {
     std::vector<MatchClause> clauses;
     std::optional<ExprPtr> timeout;
     std::optional<ExprPtr> afterBody;
+    // When present, every message is expected to be a 2-tuple {Payload, Sender}
+    // and this name is bound to the Sender pid for each clause. Patterns in
+    // `clauses` match against the Payload only.
+    std::optional<std::string> senderBinding;
 };
 
 struct LoopExpr {
@@ -393,6 +397,7 @@ struct Param {
 struct FunctionClause {
     std::vector<Param> params;
     std::vector<ExprPtr> body;
+    std::optional<TypeExprPtr> returnAnnotation;
 };
 
 struct FunctionDef {

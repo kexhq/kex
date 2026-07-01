@@ -109,6 +109,13 @@ private:
     auto parseMatchClauseBody() -> ast::ExprPtr;
     auto isAtExprStart() const -> bool;
     auto hasDoBeforeNewline() const -> bool;
+    // Returns true if current token (after skipNewlines) looks like the start
+    // of a new match/receive clause (pattern -> body), used to terminate
+    // multi-line clause body parsing without an explicit do...end.
+    auto peekIsClauseStart() const -> bool;
+    // Scans forward past balanced brackets from m_pos and returns true if a
+    // '->' or 'when' follows the closing bracket (indicates a clause pattern).
+    auto peekHasArrowAfterBalance() const -> bool;
 
     // Error handling and recovery
     [[noreturn]] auto error(const std::string& message) -> void;
