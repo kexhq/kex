@@ -101,9 +101,12 @@ int main() {
     });
 
     describe("CoreErlangEmitter — binary operators", []() {
-        it("emits addition via erlang:'+'", []() {
+        it("emits addition via kex_io:add (polymorphic + for numbers and strings)", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
-            assertTrue(contains(out, "call 'erlang':'+'"), out);
+            // + dispatches through kex_io:add/2 which handles both number
+            // addition (erlang:'+') and string concatenation (erlang:'++')
+            // at runtime based on the operand types.
+            assertTrue(contains(out, "call 'kex_io':'add'"), out);
         });
 
         it("emits subtraction via erlang:'-'", []() {
@@ -521,20 +524,15 @@ int main() {
 
         it("hello world compiles and runs on BEAM", [&erlcAvailable]() {
             if (!erlcAvailable()) return; // skip
-            // Emit .core
+            // Emit .core (ctest runs from build dir, so runtime/beam is a valid relative path)
             auto out = emit("main do\n  IO.printLine(\"hello from beam\")\nend\n", "e2e_hello");
-            // Write to temp file
             std::ofstream f("/tmp/kex_e2e_hello.core");
             f << out;
             f.close();
-            // Compile runtime + module
-            int r1 = std::system("erlc -o /tmp runtime/src/kex_io.erl > /dev/null 2>&1");
-            int r2 = std::system("erlc +from_core -pa /tmp -o /tmp /tmp/kex_e2e_hello.core > /dev/null 2>&1");
+            int r2 = std::system("erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_hello.core > /dev/null 2>&1");
             assertEqual(r2, 0, "erlc should succeed");
-            // Run it
-            int r3 = std::system("erl -noshell -pa /tmp -eval 'kex_e2e_hello:main(), halt()' > /dev/null 2>&1");
+            int r3 = std::system("erl -noshell -pa runtime/beam -pa /tmp -eval 'kex_e2e_hello:main(), halt()' > /dev/null 2>&1");
             assertEqual(r3, 0, "erl should exit 0");
-            (void)r1;
         });
 
         it("function call compiles and produces correct output", [&erlcAvailable]() {
@@ -548,16 +546,14 @@ int main() {
             std::ofstream f("/tmp/kex_e2e_double.core");
             f << out;
             f.close();
-            int r = std::system("erlc +from_core -pa /tmp -o /tmp /tmp/kex_e2e_double.core > /dev/null 2>&1");
+            int r = std::system("erlc +from_core -pa runtime/beam -o /tmp /tmp/kex_e2e_double.core > /dev/null 2>&1");
             assertEqual(r, 0, "erlc should succeed on double");
-            // Capture output
-            FILE* pipe = popen("erl -noshell -pa /tmp -eval 'kex_e2e_double:main(), halt()'", "r");
+            FILE* pipe = popen("erl -noshell -pa runtime/beam -pa /tmp -eval 'kex_e2e_double:main(), halt()'", "r");
             assertTrue(pipe != nullptr, "popen succeeded");
             char buf[256] = {};
             fgets(buf, sizeof(buf), pipe);
             pclose(pipe);
             std::string actual(buf);
-            // trim trailing newline
             while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r'))
                 actual.pop_back();
             assertEqual(actual, std::string("42"), "double(21) should print 42");

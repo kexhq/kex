@@ -1573,6 +1573,9 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     // (multiline). The `then` keyword acts as an inline body separator so
     // that `if n == 0 then true else false end` parses correctly without
     // consuming `then` as a ternary operator inside the condition.
+    // `do` after an if condition is a syntax error — use `then`.
+    if (check(TokenType::Do))
+        error("use 'then' instead of 'do' in if expression: `if cond then body end`");
     bool inlineThen = match(TokenType::Then);
     if (!inlineThen) skipNewlines();
 

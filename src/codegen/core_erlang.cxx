@@ -1214,9 +1214,17 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         return emitExpr(re->value);  // discard loop rest
     }
 
-    // BreakExpr → return 'ok' (loop result placeholder)
-    if (std::get_if<ast::BreakExpr>(&e->kind))
-        return "'ok'";
+    // BreakExpr → return current mutable var state as a tuple (or 'ok' if none)
+    if (std::get_if<ast::BreakExpr>(&e->kind)) {
+        if (mutParams.empty()) return "'ok'";
+        std::string tuple = "{";
+        for (size_t i = 0; i < mutParams.size(); i++) {
+            if (i > 0) tuple += ", ";
+            auto it = m_varSubst.find(mutParams[i]);
+            tuple += (it != m_varSubst.end()) ? it->second : "_";
+        }
+        return tuple + "}";
+    }
 
     // IfExpr → emit branches with loop context
     if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
@@ -1374,20 +1382,45 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
         m_varSubst[mutParams[j]] = pv;
     }
 
+    // Build the tuple returned by break / while-false-exit.
+    // Holds the current values of all mutable params in mutParams order.
+    auto makeBreakTuple = [&]() -> std::string {
+        if (loopArity == 0) return "'ok'";
+        std::string t = "{";
+        for (size_t i = 0; i < mutParams.size(); i++) {
+            if (i > 0) t += ", ";
+            auto it = m_varSubst.find(mutParams[i]);
+            t += (it != m_varSubst.end()) ? it->second : "_";
+        }
+        return t + "}";
+    };
+
     // Emit the loop body (infinite loop or while).
     std::string loopBodyStr;
     if (condition) {
-        // while: wrap body in condition check; false branch returns 'ok'.
+        // while: wrap body in condition check; false branch exits with current state.
         std::string innerBody = emitLoopBodyFrom(loopBody, 0, loopFn, loopArity, mutParams);
+        std::string falseExit = makeBreakTuple();
         loopBodyStr = "case " + emitExpr(*condition) + " of\n"
                       "  'true' when 'true' ->\n    " + innerBody + "\n"
-                      "  'false' when 'true' -> 'ok'\n"
+                      "  'false' when 'true' -> " + falseExit + "\n"
                       "end";
     } else {
         loopBodyStr = emitLoopBodyFrom(loopBody, 0, loopFn, loopArity, mutParams);
     }
 
     m_varSubst = savedSubst;
+
+    // Build post-loop variable names: fresh SSA vars that receive the mutable state
+    // extracted from the loop result tuple. Update m_varSubst before emitting rest.
+    std::vector<std::string> postLoopVars;
+    if (loopArity > 0) {
+        for (const auto& name : mutParams) {
+            std::string v = freshVar(name);
+            postLoopVars.push_back(v);
+            m_varSubst[name] = v;
+        }
+    }
 
     // Build initial call argument list.
     std::string initArgs;
@@ -1396,8 +1429,12 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
         initArgs += initVals[j];
     }
 
-    // Emit the rest of the outer body after the loop.
+    // Emit the rest of the outer body with updated subst so references to mutable
+    // vars after the loop resolve to the post-loop SSA names.
     std::string rest = emitBodyFrom(outerBody, outerStart + 1);
+
+    // Restore subst (the caller's emitBodyFrom chain handles its own scope).
+    m_varSubst = savedSubst;
 
     std::ostringstream out;
     out << "letrec '" << loopFn << "'/" << loopArity << " =\n"
@@ -1405,15 +1442,32 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
         << "    " << loopBodyStr << "\n"
         << "in\n";
 
-    if (outerStart + 1 >= (int)outerBody.size()) {
-        // Loop is the last statement — its result is the function result.
+    if (loopArity == 0) {
+        // No mutable state — just run the loop and continue.
+        if (outerStart + 1 >= (int)outerBody.size()) {
+            out << "apply '" << loopFn << "'/0(" << initArgs << ")";
+        } else {
+            std::string lr = freshVar("LR");
+            out << "let <" << lr << "> =\n    apply '" << loopFn << "'/0(" << initArgs << ")\n"
+                << "in\n" << rest;
+        }
+    } else if (outerStart + 1 >= (int)outerBody.size()) {
+        // Loop is the last statement — return the loop result directly.
         out << "apply '" << loopFn << "'/" << loopArity << "(" << initArgs << ")";
     } else {
-        // Bind loop result and continue.
+        // Bind loop result tuple and destructure into post-loop SSA vars.
         std::string lr = freshVar("LR");
         out << "let <" << lr << "> =\n    apply '" << loopFn << "'/" << loopArity
             << "(" << initArgs << ")\n"
-            << "in\n" << rest;
+            << "in\n";
+        for (size_t i = 0; i < postLoopVars.size(); i++) {
+            // Skip extraction for vars not referenced in rest (avoids erlc unused-result warning)
+            if (rest.find(postLoopVars[i]) == std::string::npos) continue;
+            out << "let <" << postLoopVars[i] << "> =\n"
+                << "    call 'erlang':'element'(" << (i + 1) << ", " << lr << ")\n"
+                << "in\n";
+        }
+        out << rest;
     }
     return out.str();
 }
