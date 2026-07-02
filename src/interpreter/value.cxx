@@ -70,6 +70,10 @@ auto Value::process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr {
     return std::make_shared<Value>(Value{ProcessValue{pid, scheduler}});
 }
 
+auto Value::task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr {
+    return std::make_shared<Value>(Value{TaskValue{pid, scheduler}});
+}
+
 auto Value::list(std::vector<ValuePtr> elems) -> ValuePtr {
     return std::make_shared<Value>(Value{ListValue{std::move(elems)}});
 }
@@ -125,6 +129,7 @@ auto Value::toString() const -> std::string {
         }
         else if constexpr (std::is_same_v<T, ModuleValue>) return v.name;
         else if constexpr (std::is_same_v<T, ProcessValue>) return "#Process<" + std::to_string(v.pid) + ">";
+        else if constexpr (std::is_same_v<T, TaskValue>) return "#Task<" + std::to_string(v.pid) + ">";
         else if constexpr (std::is_same_v<T, ListValue>) {
             // A list of nothing but Chars displays as text, not as a
             // bracketed list — [Char] is meant to look like a String from
@@ -321,6 +326,7 @@ auto Value::typeName() const -> std::string {
         }
         else if constexpr (std::is_same_v<T, ModuleValue>) return "Module";
         else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
+        else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
         else if constexpr (std::is_same_v<T, ListValue>) {
             if (v.elements.empty()) return "List";
             return "[" + v.elements.front()->typeName() + "]";
@@ -396,6 +402,7 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         else if constexpr (std::is_same_v<AT, BoolValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, AtomValue>) return av.name == bv->name;
         else if constexpr (std::is_same_v<AT, ProcessValue>) return av.pid == bv->pid;
+        else if constexpr (std::is_same_v<AT, TaskValue>) return av.pid == bv->pid;
         else if constexpr (std::is_same_v<AT, ListValue>) {
             if (av.elements.size() != bv->elements.size()) return false;
             for (size_t i = 0; i < av.elements.size(); i++) {
@@ -504,6 +511,8 @@ auto Value::inspect() const -> std::string {
                 return std::string(c(cyan)) + node.name + c(reset);
             else if constexpr (std::is_same_v<T, ProcessValue>)
                 return std::string(c(gray)) + "#Process<" + std::to_string(node.pid) + ">" + c(reset);
+            else if constexpr (std::is_same_v<T, TaskValue>)
+                return std::string(c(gray)) + "#Task<" + std::to_string(node.pid) + ">" + c(reset);
             else if constexpr (std::is_same_v<T, ListValue>) {
                 bool allChars = !node.elements.empty();
                 for (const auto& el : node.elements)

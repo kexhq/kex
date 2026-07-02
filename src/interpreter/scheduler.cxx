@@ -187,6 +187,91 @@ auto Scheduler::spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Env
     return id;
 }
 
+auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
+    ProcessId id = m_nextId++;
+    auto proc = std::make_unique<Process>();
+    proc->id = id;
+    proc->env = std::make_shared<Environment>(m_evaluator.m_env);
+    proc->savedEnv = proc->env;
+    Process* procPtr = proc.get();
+    Scheduler* self = this;
+    ProcessId spawner = m_current;
+
+    proc->fiber = std::make_unique<Fiber>([self, procPtr, blockFn, spawner]() {
+        ValuePtr resultMsg;
+        try {
+            auto* fn = std::get_if<FunctionValue>(&blockFn->data);
+            ValuePtr result = (fn && fn->native) ? fn->native({}) : Value::none();
+            resultMsg = Value::tuple({Value::atom("task_done"), result});
+        } catch (const ReturnException& ret) {
+            resultMsg = Value::tuple({Value::atom("task_done"), ret.value()});
+        } catch (...) {
+            rethrowIfForcedUnwind();
+            // No OS-level monitor/DOWN signal to lean on here — catching
+            // the escaping exception IS the mechanism (see
+            // docs/fiber-process-plan.md §9). The message itself is
+            // intentionally generic (no exception-type introspection) —
+            // callers match on the (:task_failed, _) shape via Task::await.
+            resultMsg = Value::tuple({Value::atom("task_failed"), Value::string("task failed")});
+        }
+        procPtr->exitValue = resultMsg;
+        procPtr->finished = true;
+        self->send(spawner, resultMsg);
+    });
+
+    m_processes.emplace(id, std::move(proc));
+    m_ready.push_back(id);
+    return id;
+}
+
+auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr> {
+    auto it = m_processes.find(m_current);
+    if (it == m_processes.end()) return std::nullopt;
+    auto& proc = *it->second;
+
+    std::optional<std::chrono::steady_clock::time_point> deadline;
+    if (timeoutMs) deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(*timeoutMs);
+    uint64_t myGeneration = ++proc.waitGeneration;
+    bool timeoutRegistered = false;
+
+    // Deliberately its own small loop rather than sharing blockingReceive's
+    // (that one is built around Kex AST pattern/guard matching via the
+    // evaluator; this one only ever needs a fixed C++-level shape check —
+    // forcing them through one abstraction would either weaken this one or
+    // complicate that one for no real benefit). Same yield/timeout/
+    // generation-token mechanics either way.
+    while (true) {
+        for (size_t i = 0; i < proc.mailbox.size(); i++) {
+            auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
+            if (!tup || tup->elements.size() != 2) continue;
+            const ValuePtr& payload = tup->elements[0];
+            const ValuePtr& sender = tup->elements[1];
+            auto* senderProc = std::get_if<ProcessValue>(&sender->data);
+            if (!senderProc || senderProc->pid != taskId) continue;
+            auto* payloadTup = std::get_if<TupleValue>(&payload->data);
+            if (!payloadTup || payloadTup->elements.size() != 2) continue;
+            auto* tag = std::get_if<AtomValue>(&payloadTup->elements[0]->data);
+            if (!tag || (tag->name != "task_done" && tag->name != "task_failed")) continue;
+
+            auto result = payload;
+            proc.mailbox.erase(proc.mailbox.begin() + static_cast<long>(i));
+            return result;
+        }
+
+        if (deadline && !timeoutRegistered) {
+            m_timeouts.emplace(*deadline, TimeoutEntry{m_current, myGeneration});
+            timeoutRegistered = true;
+        }
+        proc.blockedOnReceive = true;
+        proc.wokeByTimeout = false;
+        Fiber::yieldToScheduler();
+        if (proc.wokeByTimeout) {
+            proc.wokeByTimeout = false;
+            return std::nullopt;
+        }
+    }
+}
+
 auto Scheduler::send(ProcessId target, ValuePtr payload) -> bool {
     auto it = m_processes.find(target);
     if (it == m_processes.end() || it->second->finished) return false;

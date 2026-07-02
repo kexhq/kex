@@ -1483,5 +1483,54 @@ int main() {
         });
     });
 
+    describe("Interpreter — Processes (phase 4: Task)", []() {
+        it("Task.start/.await(timeout:) returns Ok(result) on success", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t = Task.start { 10 + 20 }\n"
+                "  match t.await(timeout: 2000) do\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got 30\n"));
+        });
+
+        it("await(timeout:) returns Error(:timeout) if the task never replies in time", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t = Task.start {\n"
+                "    receive do\n"
+                "      :never -> 1\n"
+                "    end\n"
+                "  }\n"
+                "  match t.await(timeout: 20) do\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("error :timeout\n"));
+        });
+
+        it("Task.awaitAll awaits multiple tasks in order, each as Ok(result)", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t1 = Task.start { 1 + 1 }\n"
+                "  let t2 = Task.start { 2 + 2 }\n"
+                "  let results = Task.awaitAll([t1, t2])\n"
+                "  results.each { |r|\n"
+                "    match r do\n"
+                "      Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    end\n"
+                "  }\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got 2\ngot 4\n"));
+        });
+    });
+
     return runAll();
 }

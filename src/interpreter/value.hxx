@@ -59,6 +59,12 @@ struct ModuleValue { std::string name; };  // "Math", "IO", "File"
 // program's whole run.
 struct ProcessValue { uint64_t pid; class Scheduler* scheduler; };
 
+// `Task.start { block }`'s handle — a Task *is* spawn+monitor underneath
+// (same as runtime/src/kex_task.erl on the BEAM backend), but kept as its
+// own variant rather than reusing ProcessValue so typeName() says "Task"
+// and `.await` dispatches unambiguously without a tag check.
+struct TaskValue { uint64_t pid; class Scheduler* scheduler; };
+
 struct ListValue { std::vector<ValuePtr> elements; };
 struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
@@ -108,6 +114,7 @@ struct Value {
         VariantValue,
         ModuleValue,
         ProcessValue,
+        TaskValue,
         ListValue,
         TupleValue,
         MapValue,
@@ -132,6 +139,7 @@ struct Value {
                          std::vector<std::string> typeParams = {}, std::vector<int> argParamIndex = {}) -> ValuePtr;
     static auto module(std::string name) -> ValuePtr;
     static auto process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
+    static auto task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
     static auto list(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto tuple(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields) -> ValuePtr;

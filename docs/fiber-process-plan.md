@@ -167,8 +167,8 @@ No new `find_library` for native (`ucontext.h` is always present on macOS/Linux)
 1. **Done.** Fiber abstraction (native on Boost.Context, wasm untested) + Scheduler skeleton + `ProcessValue` + `spawn`/`send`/`receive` (no timeout). Root-process-as-fiber lands here since top-level `receive` needs it immediately. `examples/beam/proc_ping.kex` now runs correctly through the tree-walking interpreter.
 2. **Done.** `receive timeout:` / `after` — deadline evaluated once per receive call (not reset per non-matching message, matching BEAM), a `waitGeneration` token on `Process` guards against a stale timeout from an earlier `receive` firing against a later, unrelated one.
 3. **Done.** `link`/`unlink`/`alive?` — passive bookkeeping (`Scheduler::link`/`unlink` record/remove a bidirectional edge on `Process::links`; `alive?` is just `isAlive`), no signal propagation, per §8. Verified a linked partner exiting does not kill the other process.
-4. `Task.start`/`.await(timeout:)`/`.await_all`, including the `blockingReceive` → `receiveOne` refactor (next).
-5. `Supervisor.start(restart:)`, best-effort scope per §9.
+4. **Done.** `Task.start`/`.await(timeout:)`/`Task.awaitAll`. Took the pragmatic path on the `blockingReceive`/`receiveOne` refactor mentioned in §9: rather than force `receive`'s Kex-AST pattern/guard matching and Task's fixed-shape C++ message check through one shared abstraction, `Scheduler::awaitTaskMessage` is its own small function with the same yield/timeout/generation-token mechanics — duplicated shape, not duplicated complexity, and simpler than bending one to fit the other.
+5. `Supervisor.start(restart:)`, best-effort scope per §9 (next).
 6. (Separate follow-up, not gating 1-5) wasm/Emscripten build target + JS bindings + `step()`-driven browser REPL.
 
 ## Verification

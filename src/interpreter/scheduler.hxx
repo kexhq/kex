@@ -10,6 +10,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
@@ -132,6 +133,23 @@ public:
     // robustness).
     auto link(ProcessId other) -> void;
     auto unlink(ProcessId other) -> void;
+
+    // Task.start { block }: spawns a process that calls `blockFn` (a
+    // zero-arg FunctionValue — the evaluated `{ ... }` block) and, on
+    // completion, sends `(:task_done, result)` back to whichever process
+    // is currently running (the one calling Task.start) — captured once,
+    // at start time, not re-derived via `self()` inside the block, so the
+    // reply always goes to the real spawner even if the block itself calls
+    // spawn/receive. An escaping exception sends `(:task_failed, message)`
+    // instead — there's no OS-level monitor/DOWN signal to lean on, so
+    // catching here is what replaces it (see docs/fiber-process-plan.md §9).
+    auto startTask(ValuePtr blockFn) -> ProcessId;
+
+    // Blocks (same yield/timeout mechanics as blockingReceive, but scanning
+    // for a specific task's reply rather than arbitrary Kex patterns) until
+    // `taskId`'s (:task_done, ...)/(:task_failed, ...) message arrives, or
+    // returns nullopt if timeoutMs elapses first. Used by Task::await.
+    auto awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
 
     // Called once per function call (see Evaluator::callFunction) so a
     // compute-bound process that never calls `receive` still yields
