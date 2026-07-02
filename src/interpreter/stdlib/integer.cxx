@@ -74,41 +74,41 @@ auto Evaluator::registerIntegerBuiltins() -> void {
     // etc. Built directly as RecordValue{"Ok"/"Error", ...} rather than
     // calling the registered Ok/Error constructors, since those aren't
     // wired up for native-to-native calls (only Kex-level calls).
-    m_globalEnv->define("Float", Value::record("Float", {}));
+    m_globalEnv->define("Float", Value::module("Float"));
     reg("Float::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::record("Error", {{"0", Value::string("Float.parse expects a String")}});
+        if (!s) return Value::variant("Error", "Result", {Value::string("Float.parse expects a String")});
         try {
             size_t consumed = 0;
             double v = std::stod(s->value, &consumed);
             if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
-            return Value::record("Ok", {{"0", Value::floating(v)}});
+            return Value::variant("Ok", "Result", {Value::floating(v)});
         } catch (const std::exception&) {
-            return Value::record("Error", {{"0", Value::string("invalid float: " + s->value)}});
+            return Value::variant("Error", "Result", {Value::string("invalid float: " + s->value)});
         }
     });
 
-    m_globalEnv->define("Integer", Value::record("Integer", {}));
+    m_globalEnv->define("Integer", Value::module("Integer"));
     reg("Integer::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::record("Error", {{"0", Value::string("Integer.parse expects a String")}});
+        if (!s) return Value::variant("Error", "Result", {Value::string("Integer.parse expects a String")});
         try {
             size_t consumed = 0;
             int64_t v = std::stoll(s->value, &consumed);
             if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
-            return Value::record("Ok", {{"0", Value::integer(v)}});
+            return Value::variant("Ok", "Result", {Value::integer(v)});
         } catch (const std::out_of_range&) {
             // Too big for int64_t doesn't mean invalid — Integer is
             // arbitrary precision; mpz_class's string constructor throws
             // std::invalid_argument itself if the string isn't a valid
             // integer (it requires a full match, not a prefix parse).
             try {
-                return Value::record("Ok", {{"0", integerResult(mpz_class(s->value))}});
+                return Value::variant("Ok", "Result", {integerResult(mpz_class(s->value))});
             } catch (const std::exception&) {
-                return Value::record("Error", {{"0", Value::string("invalid integer: " + s->value)}});
+                return Value::variant("Error", "Result", {Value::string("invalid integer: " + s->value)});
             }
         } catch (const std::exception&) {
-            return Value::record("Error", {{"0", Value::string("invalid integer: " + s->value)}});
+            return Value::variant("Error", "Result", {Value::string("invalid integer: " + s->value)});
         }
     });
 }

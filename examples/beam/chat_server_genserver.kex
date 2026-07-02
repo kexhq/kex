@@ -1,0 +1,53 @@
+# TCP chat server — sketch of a `serving` construct: a process whose
+# message-handling methods are declared with `slot`, typed. There's no
+# hand-written message ADT — each slot's name and parameter types
+# generate one constructor of the process's message type. Return type
+# decides call (returns (State, Reply)) vs cast (returns State), with
+# no separate declaration needed either way.
+# Run with: kex -R examples/chat_server_genserver.kex
+#
+# NOTE: `Net`, `serving`, `slot`, `.serve`, `.onConnection`, `.onReceive`
+# are not yet implemented — this file shows the target surface syntax
+# discussed in design, not working code.
+
+record ChatRoom do
+  members: [Socket]
+end
+
+serving ChatRoom do
+  initialize do
+    return ChatRoom { members: [] }
+  end
+
+  slot join(socket: Socket) -> (ChatRoom, String) do
+    let updated = ChatRoom { members: @members + [socket] }
+    (updated, "welcome")
+  end
+
+  slot broadcast(senderName: String, line: String) -> ChatRoom do
+    @members.each do |memberSocket|
+      Net.send(memberSocket, "${senderName}: ${line}\n")
+    end
+    this
+  end
+end
+
+main do
+  let room = ChatRoom.serve()
+  let listener = Net.Listen(port: 4000)
+
+  IO.printLine("chat server listening on :4000")
+
+  # Blocks the main process, spawning a fresh handler per connection.
+  # Accepting the next client never waits on a slow join or a slow
+  # client — each one runs in its own process.
+  listener.onConnection do |socket|
+    spawn do
+      room.join(socket)
+
+      socket.onReceive do |recv|
+        room.broadcast("guest", recv)
+      end
+    end
+  end
+end

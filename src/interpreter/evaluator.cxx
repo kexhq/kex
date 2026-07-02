@@ -63,6 +63,8 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             execTypeDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
             execTraitDef(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+            execCompiledBlock(*node);
         }
     }, item);
 }
@@ -85,9 +87,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 execVisibilityBlock(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
                 execTraitDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                execCompiledBlock(*node);
             }
-            // CompiledBlock/UsingBlock: not implemented yet (separate,
-            // larger features — metaprogramming and module imports).
         }, item);
     }
 }
@@ -103,6 +105,28 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
     }
 }
 
+auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block) -> void {
+    // Execute compiled block items as if they were regular module items.
+    // The interpreter doesn't distinguish compile-time vs runtime evaluation;
+    // function defs and make blocks are simply registered in the environment.
+    for (const auto& item : block.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                execFunctionDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                execMakeDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                execRecordDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                execTypeDef(*node);
+            } else if constexpr (std::is_same_v<T, ast::ExprPtr>) {
+                if (node) eval(*node);
+            }
+        }, item);
+    }
+}
+
 auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     if (def.staticBlock) {
         // Static constructors/constants are namespaced under the type
@@ -112,14 +136,13 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
             execFunctionDef(*func, def.name);
         }
     }
-    // Register sum-type variant constructors with args (Just(A), Ok(A),
-    // Error(E), Number(Int), ...) as callable functions that build a
-    // RecordValue with positional fields "0", "1", .... Zero-arg variants
-    // (Fizz, Nothing, ...) need no constructor registration — they already
-    // work as values and as patterns via the UpperIdentifier-as-Atom
-    // fallback in eval()/matchPattern(). Both kinds still need an entry in
-    // m_variantParent so `make TypeName do ... end` method dispatch can map
-    // the variant tag back to the declaring type.
+    // Register sum-type variant constructors. Zero-arg variants (Fizz,
+    // Nothing, ...) are stored directly as VariantValue in the environment.
+    // With-arg constructors (Just(A), Ok(A), ...) are registered as
+    // callable functions that build a VariantValue with a positional args
+    // list. Both kinds get an entry in m_variantParent so `make TypeName
+    // do ... end` method dispatch can map the variant tag back to the
+    // declaring type.
     if (def.variants) {
         for (const auto& variant : *def.variants) {
             if (!variant) continue;
@@ -138,15 +161,18 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
 
             m_variantParent[variantName] = def.name;
 
-            if (arity == 0) continue;
+            if (arity == 0) {
+                m_env->define(variantName, Value::variant(variantName, def.name));
+                continue;
+            }
             auto val = std::make_shared<Value>();
             val->data = FunctionValue{variantName,
-                [variantName, arity](std::vector<ValuePtr> args) -> ValuePtr {
-                    std::unordered_map<std::string, ValuePtr> fields;
+                [variantName, defName = def.name, arity](std::vector<ValuePtr> args) -> ValuePtr {
+                    std::vector<ValuePtr> varArgs;
                     for (size_t i = 0; i < arity; i++) {
-                        fields[std::to_string(i)] = i < args.size() ? args[i] : Value::none();
+                        varArgs.push_back(i < args.size() ? args[i] : Value::none());
                     }
-                    return Value::record(variantName, std::move(fields));
+                    return Value::variant(variantName, defName, std::move(varArgs));
                 }};
             m_env->define(variantName, val);
         }
@@ -238,29 +264,78 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
     // vector from the map — avoids a dangling pointer when unordered_map
     // rehashes after a new key is inserted for a different function.
     auto funcValue = std::make_shared<Value>();
-    funcValue->data = FunctionValue{def.name, [this, regName](std::vector<ValuePtr> args) -> ValuePtr {
+    // A name containing "::" was registered with a type scope → it's a UFCS
+    // method and the first arg is always the receiver ("this").
+    bool isMethod = regName.find("::") != std::string::npos;
+    funcValue->data = FunctionValue{def.name, [this, regName, isMethod](std::vector<ValuePtr> args) -> ValuePtr {
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
                 pushEnv();
                 bool matched = true;
 
-                // If more args than params, first arg is 'this' (UFCS method call)
+                // UFCS: if this function is a type-scoped method (name contains "::"),
+                // the first arg is always "this" (the receiver). Fall back to the old
+                // args.size() > params heuristic for free functions that might receive
+                // extra args through some other path.
+                // Decide whether args[0] is the implicit receiver ("this") or
+                // an explicit first-param match.
+                //
+                // Rules:
+                // 1. If the first param is a ThisPattern (@Pat), it explicitly
+                //    matches the receiver — argOffset stays 0.
+                // 2. If args has one MORE element than the (non-default) params
+                //    and this is a type-scoped method, the extra arg is the
+                //    receiver — argOffset = 1. This handles `from(table)` called
+                //    as `q.from(:users)` (args=[q,:users], params=[table]).
+                // 3. Legacy: any extra arg beyond params is the receiver (the
+                //    old `args.size() > clause.params.size()` check). Handles
+                //    pre-@ make-block functions like `let pub(b) = b.priv`.
+                bool firstParamIsThisPattern = !clause.params.empty()
+                    && clause.params[0].pattern
+                    && *clause.params[0].pattern
+                    && std::holds_alternative<ast::ThisPattern>((*clause.params[0].pattern)->kind);
+
+                // Count required params (those without defaults)
+                size_t requiredParams = 0;
+                for (const auto& p : clause.params) {
+                    if (!p.defaultValue) requiredParams++;
+                }
+
                 size_t argOffset = 0;
-                if (args.size() > clause.params.size()) {
+                if (firstParamIsThisPattern) {
+                    // @Pat: receiver is pattern-matched as first param; bind this for @field access
+                    if (!args.empty()) m_env->define("this", args[0]);
+                    argOffset = 0;
+                } else if (isMethod && !args.empty()
+                           && args.size() == requiredParams + 1) {
+                    // Type-scoped method called with exactly required-params + 1 args:
+                    // the extra arg is the receiver.
+                    m_env->define("this", args[0]);
+                    argOffset = 1;
+                } else if (args.size() > clause.params.size()) {
+                    // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
                 }
 
-                for (size_t i = 0; i < clause.params.size() && (i + argOffset) < args.size(); i++) {
+                for (size_t i = 0; i < clause.params.size(); i++) {
                     const auto& param = clause.params[i];
-                    if (param.pattern && *param.pattern) {
-                        if (!matchPattern(**param.pattern, args[i + argOffset])) {
-                            matched = false;
-                            break;
+                    if ((i + argOffset) < args.size()) {
+                        if (param.pattern && *param.pattern) {
+                            if (!matchPattern(**param.pattern, args[i + argOffset])) {
+                                matched = false;
+                                break;
+                            }
+                        } else if (param.name.has_value()) {
+                            m_env->define(*param.name, args[i + argOffset]);
                         }
-                    } else if (param.name.has_value()) {
-                        m_env->define(*param.name, args[i + argOffset]);
+                    } else if (param.defaultValue && *param.defaultValue) {
+                        // No arg provided — use the default value
+                        if (param.name.has_value()) {
+                            m_env->define(*param.name, eval(**param.defaultValue));
+                        }
                     }
+                    // No arg and no default: leave unbound (may cause runtime error if accessed)
                 }
 
                 if (matched) {
@@ -566,40 +641,37 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return callFunction(node.name, std::move(args), std::move(namedArgs), expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            auto receiver = node.receiver ? eval(*node.receiver) : Value::none();
-
-            // Namespace access: empty-record namespace placeholders (File, IO,
-            // record-static namespaces like Vector2D) OR a bare UpperIdentifier
-            // receiver that isn't bound to anything (Stream, Math, etc.).
-            //
-            // The UpperIdentifier case matters: without it, an unresolved
-            // namespace identifier evaluates (via ast::UpperIdentifier's eval
-            // fallback) to an Atom, which would otherwise fall through to the
-            // generic UFCS path below and get silently prepended as args[0],
-            // corrupting calls like Stream.Sequence(from: 0) { ... }.take(3)
-            // ("Cannot add Atom and Int"). Treating it as a namespace call
-            // instead means it either dispatches correctly (if a matching
-            // mangled or plain function exists) or fails with a clear
-            // "Undefined function" error — never silent corruption.
+            // Pre-check: if the receiver is a bare UpperIdentifier that isn't
+            // in the environment and isn't a known variant, treat it as a
+            // namespace call WITHOUT evaluating the receiver — so that an
+            // unknown name like `Stream` or `NotANamespace` becomes a namespace
+            // dispatch rather than throwing "Undefined identifier" here.
+            // This must run before eval(*node.receiver) to avoid the throw.
             std::string namespaceName;
             bool isNamespaceCall = false;
-            if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
-                if (rec->fields.empty()) {
-                    isNamespaceCall = true;
-                    namespaceName = rec->typeName;
-                }
-            }
-            if (!isNamespaceCall) {
+            if (node.receiver) {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
-                    // A known zero-arg ADT variant tag (Nothing, Fizz, ...)
-                    // is a value being used as a UFCS receiver, not a
-                    // namespace — let it fall through to the generic UFCS
-                    // path below (as an Atom) so receiverType resolution
-                    // there can map it to its declaring type.
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                     if (!isKnownVariant && !m_env->get(upperIdent->name)) {
                         isNamespaceCall = true;
                         namespaceName = upperIdent->name;
+                    }
+                }
+            }
+
+            auto receiver = (!isNamespaceCall && node.receiver) ? eval(*node.receiver) : Value::none();
+
+            // Namespace access: ModuleValue (registered modules like IO, Math,
+            // File, Integer) or empty-record placeholders for user record types
+            // used as static-method namespaces (Vector2D, etc.).
+            if (!isNamespaceCall) {
+                if (auto* mod = std::get_if<ModuleValue>(&receiver->data)) {
+                    isNamespaceCall = true;
+                    namespaceName = mod->name;
+                } else if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
+                    if (rec->fields.empty()) {
+                        isNamespaceCall = true;
+                        namespaceName = rec->typeName;
                     }
                 }
             }
@@ -655,12 +727,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             std::string receiverType;
             if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
                 receiverType = rec->typeName;
-            } else if (auto* atom = std::get_if<AtomValue>(&receiver->data)) {
-                // Zero-arg ADT variant tags (Nothing, Fizz, ...) are Atoms —
-                // needed so `make TypeName do ... end` methods registered
-                // under "TypeName::method" can be found via m_variantParent
-                // below even though the value itself carries no type name.
-                receiverType = atom->name;
+            } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
+                receiverType = var->tag;
             } else if (std::holds_alternative<ListValue>(receiver->data)) {
                 receiverType = "List";
             } else if (std::holds_alternative<MapValue>(receiver->data)) {
@@ -877,6 +945,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 [this, bodyPtr, paramNames, capturedEnv](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
+                    // If the lambda expects multiple params but receives a single
+                    // tuple, auto-spread it so `list.each do |a, b|` works on
+                    // a list of pairs without breaking `each do |pair|`.
+                    if (paramNames.size() > 1 && args.size() == 1) {
+                        if (auto* tv = std::get_if<TupleValue>(&args[0]->data)) {
+                            if (tv->elements.size() == paramNames.size()) {
+                                args = tv->elements;
+                            }
+                        }
+                    }
                     for (size_t i = 0; i < paramNames.size() && i < args.size(); i++) {
                         m_env->define(paramNames[i], args[i]);
                     }
@@ -1111,16 +1189,31 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             throw NextException{};
         }
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
-            // Look up in environment first (records, namespaces, ALL_CAPS
-            // constants like `let MAX_RETRIES = 3`)
+            // Look up in environment first (variants, modules, record namespaces,
+            // ALL_CAPS constants like `let MAX_RETRIES = 3`).
+            // All valid capitalized names (declared variants, stdlib modules,
+            // user record types) are registered in the environment at
+            // declaration time. An unknown name here is a real error.
             auto val = m_env->get(node.name);
             if (val) return autoCallZeroArgConstant(node.name, val);
-            // Otherwise return as type tag (atom) for pattern matching
-            return Value::atom(node.name);
+            throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::ErrorNode>) {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
                                expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+            // `using Module` inside a body: execute the module's compiled
+            // block functions in the current scope so their names become
+            // available as plain identifiers (e.g. `html`, `body` after
+            // `using Html.Language`). Currently a no-op because compiled
+            // block functions are already registered globally by execModule.
+            if (!node.body.empty()) {
+                for (const auto& e : node.body) {
+                    if (e) eval(*e);
+                }
+            }
+            return Value::unit();
         }
         else {
             return Value::none();
@@ -1197,6 +1290,15 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             // we just want "what text does this contribute", which a bare
             // Char answers fine; see textContent vs. stringOrCharListText
             // in value.cxx.
+            {
+                auto* ll = std::get_if<ListValue>(&left->data);
+                auto* rl = std::get_if<ListValue>(&right->data);
+                if (ll && rl) {
+                    std::vector<ValuePtr> elems = ll->elements;
+                    elems.insert(elems.end(), rl->elements.begin(), rl->elements.end());
+                    return Value::list(std::move(elems));
+                }
+            }
             if (auto lt = textContent(left)) {
                 if (auto rt = textContent(right)) return Value::string(*lt + *rt);
             }
@@ -1516,9 +1618,9 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             if (pat.name == "None") return std::holds_alternative<NoneValue>(value->data);
 
             if (pat.args.empty()) {
-                // Match type tag atoms: to(String) passes atom("String")
-                if (auto* atom = std::get_if<AtomValue>(&value->data)) {
-                    if (atom->name == pat.name) return true;
+                // Match zero-arg variant constructors (Nothing, Less, Fizz, ...)
+                if (auto* var = std::get_if<VariantValue>(&value->data)) {
+                    if (var->tag == pat.name && var->args.empty()) return true;
                 }
 
                 // Match type names as type patterns (for runtime type checking).
@@ -1543,6 +1645,12 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                     if (rec->typeName == pat.name) return true;
                 }
+                // Match builtin type namespaces (String, Integer, Float, ...
+                // registered as ModuleValue) — needed for the `to(String)`
+                // conversion-protocol pattern and similar type-name matches.
+                if (auto* mod = std::get_if<ModuleValue>(&value->data)) {
+                    if (mod->name == pat.name) return true;
+                }
                 // Match True/False as literal patterns
                 if (pat.name == "True") {
                     auto* b = std::get_if<BoolValue>(&value->data);
@@ -1555,9 +1663,15 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             }
 
             // Constructor with args: Just(x), Ok(x), Error(e), Number(n), etc.
-            // Constructor calls build a RecordValue with positional fields
-            // keyed "0", "1", ... (see the variant-constructor registration
-            // in registerBuiltins / execTopLevel's TypeDef handling).
+            if (auto* var = std::get_if<VariantValue>(&value->data)) {
+                if (var->tag != pat.name) return false;
+                if (var->args.size() != pat.args.size()) return false;
+                for (size_t i = 0; i < pat.args.size(); i++) {
+                    if (!matchPattern(*pat.args[i], var->args[i])) return false;
+                }
+                return true;
+            }
+            // RecordValue constructors for user-defined records (not ADT variants)
             if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                 if (rec->typeName != pat.name) return false;
                 if (rec->fields.size() != pat.args.size()) return false;

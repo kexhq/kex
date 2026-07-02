@@ -32,7 +32,7 @@ auto Evaluator::registerMathBuiltins() -> void {
     // Namespace placeholder so `Math.sqrt(...)` resolves via the
     // empty-RecordValue namespace-dispatch branch in eval() (ast::MethodCall)
     // and gets the mangled "Math::" dispatch — see io.cxx for the same setup.
-    m_globalEnv->define("Math", Value::record("Math", {}));
+    m_globalEnv->define("Math", Value::module("Math"));
 
     reg("Math::PI", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kPi); });
     reg("Math::E", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kE); });

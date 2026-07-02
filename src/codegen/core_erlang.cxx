@@ -167,6 +167,10 @@ auto CoreErlangEmitter::emitPattern(const ast::PatternPtr& pat) -> std::string {
         using T = std::decay_t<decltype(p)>;
         if constexpr (std::is_same_v<T, ast::WildcardPattern>) {
             return "_";
+        } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            // @ in a pattern (e.g. @Ok(x), @Less) is a sigil that in BEAM
+            // terms means the same thing as the plain pattern — unwrap it.
+            return p.inner ? emitPattern(p.inner) : "_";
         } else if constexpr (std::is_same_v<T, ast::VarPattern>) {
             return erlVar(p.name);
         } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
@@ -249,7 +253,12 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "apply '" + node.name + "'/0()";
             return erlVar(node.name);
         } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
-            // Module reference used standalone — emit as atom
+            // Two distinct Kex concepts legitimately lower to a BEAM atom here:
+            //   • Zero-arg variant tag (Less, Nothing) → bare atom 'Less',
+            //     matching Erlang/OTP convention for sum-type constructors.
+            //   • Module reference (Math, IO) → module atom for call/apply sites.
+            // Both map to erlAtom intentionally; the distinction is in how
+            // the surrounding call/pattern context uses the result.
             return erlAtom(node.name);
         } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
             return "This";

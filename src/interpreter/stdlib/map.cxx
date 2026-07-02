@@ -8,6 +8,8 @@ namespace kex::interpreter {
 // handling reassigns the receiver variable to the result automatically,
 // e.g. `obj.put!(key, value)`).
 auto Evaluator::registerMapBuiltins() -> void {
+    m_globalEnv->define("Map", Value::module("Map"));
+
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};
@@ -52,7 +54,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         if (!map) return args.size() >= 3 ? args[2] : Value::none();
         for (const auto& [k, v] : map->entries) {
             if (valuesEqual(k, args[1])) {
-                return args.size() >= 3 ? v : Value::record("Just", {{"0", v}});
+                return args.size() >= 3 ? v : Value::variant("Just", "Option", {v});
             }
         }
         return args.size() >= 3 ? args[2] : Value::none();
@@ -282,7 +284,7 @@ auto Evaluator::registerMapBuiltins() -> void {
             if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) {
                 auto tuple = std::make_shared<Value>();
                 tuple->data = TupleValue{{k, v}};
-                return Value::record("Just", {{"0", tuple}});
+                return Value::variant("Just", "Option", {tuple});
             }
         }
         return Value::none();

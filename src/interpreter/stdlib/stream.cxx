@@ -12,6 +12,8 @@ namespace kex::interpreter {
 // Namespace placeholders — currently static functions are resolved globally.
 // Stream.Sequence → just use Sequence directly for now.
 auto Evaluator::registerStreamBuiltins() -> void {
+    m_globalEnv->define("Stream", Value::module("Stream"));
+
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};

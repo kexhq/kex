@@ -4,6 +4,10 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerListBuiltins() -> void {
+    m_globalEnv->define("List",  Value::module("List"));
+    m_globalEnv->define("Tuple", Value::module("Tuple"));
+    m_globalEnv->define("Range", Value::module("Range"));
+
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};
@@ -46,14 +50,14 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::string(std::move(s));
     };
 
-    // to(Type) — universal conversion.
-    // `Integer` in the env is a RecordValue{"Integer",{}} namespace sentinel,
-    // not an AtomValue, so we check both.
+    // to(Type) — universal conversion. Type argument is a ModuleValue (for
+    // builtin types like Integer, Float, String) or a RecordValue{} namespace
+    // sentinel (for user record types used as namespaces).
     reg("to", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         std::string targetName;
-        if (auto* a = std::get_if<AtomValue>(&args[1]->data))
-            targetName = a->name;
+        if (auto* m = std::get_if<ModuleValue>(&args[1]->data))
+            targetName = m->name;
         else if (auto* r = std::get_if<RecordValue>(&args[1]->data))
             targetName = r->typeName;
 
@@ -232,11 +236,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::record("Just", {{"0", Value::character(str->value[0])}});
+            return Value::variant("Just", "Option", {Value::character(str->value[0])});
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
-            return Value::record("Just", {{"0", list->elements[0]}});
+            return Value::variant("Just", "Option", {list->elements[0]});
         }
         return Value::none();
     });
@@ -245,11 +249,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.size() < 2) return Value::none();
-            return Value::record("Just", {{"0", list->elements[1]}});
+            return Value::variant("Just", "Option", {list->elements[1]});
         }
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.size() < 2) return Value::none();
-            return Value::record("Just", {{"0", Value::character(str->value[1])}});
+            return Value::variant("Just", "Option", {Value::character(str->value[1])});
         }
         return Value::none();
     });
@@ -258,11 +262,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.size() < 3) return Value::none();
-            return Value::record("Just", {{"0", list->elements[2]}});
+            return Value::variant("Just", "Option", {list->elements[2]});
         }
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.size() < 3) return Value::none();
-            return Value::record("Just", {{"0", Value::character(str->value[2])}});
+            return Value::variant("Just", "Option", {Value::character(str->value[2])});
         }
         return Value::none();
     });
@@ -282,11 +286,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::record("Just", {{"0", Value::character(str->value.back())}});
+            return Value::variant("Just", "Option", {Value::character(str->value.back())});
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
-            return Value::record("Just", {{"0", list->elements.back()}});
+            return Value::variant("Just", "Option", {list->elements.back()});
         }
         return Value::none();
     });
@@ -401,7 +405,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto elems = getElements(args[0]);
         for (size_t i = 0; i < elems.size(); i++)
             if (valuesEqual(elems[i], args[1]))
-                return Value::record("Just", {{"0", Value::integer(static_cast<int64_t>(i))}});
+                return Value::variant("Just", "Option", {Value::integer(static_cast<int64_t>(i))});
         return Value::none();
     });
 
@@ -440,11 +444,20 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* ac = std::get_if<CharValue>(&a->data))
             if (auto* bc = std::get_if<CharValue>(&b->data))
                 return ac->value < bc->value ? "Less" : (ac->value > bc->value ? "Greater" : "Equal");
-        if (auto* rec = std::get_if<RecordValue>(&a->data)) {
+        auto dispatchCompare = [&](const std::string& typeName) -> std::string {
             try {
-                auto r = callFunction(rec->typeName + "::compare", {a, b}, {}, {});
-                if (auto* atom = std::get_if<AtomValue>(&r->data)) return atom->name;
+                auto r = callFunction(typeName + "::compare", {a, b}, {}, {});
+                if (auto* var = std::get_if<VariantValue>(&r->data)) return var->tag;
             } catch (...) {}
+            return "";
+        };
+        if (auto* var = std::get_if<VariantValue>(&a->data)) {
+            auto r = dispatchCompare(var->tag);
+            if (!r.empty()) return r;
+        }
+        if (auto* rec = std::get_if<RecordValue>(&a->data)) {
+            auto r = dispatchCompare(rec->typeName);
+            if (!r.empty()) return r;
         }
         return "Equal";
     };
@@ -489,13 +502,13 @@ auto Evaluator::registerListBuiltins() -> void {
                     auto k = keyOf({elems[i]});
                     if (compareVia(k, bestKey) == "Less") { result = elems[i]; bestKey = k; }
                 }
-                return Value::record("Just", {{"0", result}});
+                return Value::variant("Just", "Option", {result});
             }
         }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Less") result = elems[i];
-        return Value::record("Just", {{"0", result}});
+        return Value::variant("Just", "Option", {result});
     });
 
     reg("max", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
@@ -512,13 +525,13 @@ auto Evaluator::registerListBuiltins() -> void {
                     auto k = keyOf({elems[i]});
                     if (compareVia(k, bestKey) == "Greater") { result = elems[i]; bestKey = k; }
                 }
-                return Value::record("Just", {{"0", result}});
+                return Value::variant("Just", "Option", {result});
             }
         }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Greater") result = elems[i];
-        return Value::record("Just", {{"0", result}});
+        return Value::variant("Just", "Option", {result});
     });
 
     auto numericSum = [](const std::vector<ValuePtr>& elems) -> ValuePtr {
@@ -597,6 +610,12 @@ auto Evaluator::registerListBuiltins() -> void {
                 result.push_back(mapped);
         }
         return Value::list(std::move(result));
+    });
+
+    // inspect() — pretty-printed representation of any value (UFCS on all types)
+    reg("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::string("()");
+        return Value::string(args[0]->inspect());
     });
 }
 

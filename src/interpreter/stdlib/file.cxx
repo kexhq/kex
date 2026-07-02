@@ -33,8 +33,8 @@ auto Evaluator::registerFileBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
-    m_globalEnv->define("File", Value::record("File", {}));
-    m_globalEnv->define("FileHandle", Value::record("FileHandle", {}));
+    m_globalEnv->define("File", Value::module("File"));
+    m_globalEnv->define("FileHandle", Value::module("FileHandle"));
 
     // File.open(path, mode) -> FileHandle?
     // File.open(path, mode, block) -> block result or None on failure
@@ -445,7 +445,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
-    m_globalEnv->define("Directory", Value::record("Directory", {}));
+    m_globalEnv->define("Directory", Value::module("Directory"));
 
     // Directory.exists?(path) -> Bool  /  Directory.dir?(path) -> Bool
     auto dirExistsFn = [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -629,11 +629,11 @@ auto Evaluator::registerMockBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
-    m_globalEnv->define("Mock", Value::record("Mock", {}));
+    m_globalEnv->define("Mock", Value::module("Mock"));
 
     // Mock.FS — returns a sub-namespace placeholder so Mock.FS.File/Directory/clear work
     reg("Mock::FS", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::record("Mock::FS", {});
+        return Value::module("Mock::FS");
     });
 
     // Mock.FS.File(path, content) -> Unit  — register an in-memory file

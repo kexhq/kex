@@ -98,6 +98,40 @@ int main() {
             auto out = emit("main do\n  :ok\nend\n");
             assertTrue(contains(out, "ok"), out);
         });
+
+        it("zero-arg variant tag emits as bare atom", []() {
+            // Less (zero-arg variant) → 'Less' in Core Erlang
+            auto out = emit("main do\n  Less\nend\n");
+            assertTrue(contains(out, "'Less'"), out);
+        });
+
+        it("constructor pattern with args emits as tagged tuple", []() {
+            // @Ok(x) in match → {'Ok', X} in Core Erlang
+            auto out = emit(
+                "let f(v) = match v do\n"
+                "  @Ok(x) -> x\n"
+                "  @Error(e) -> e\n"
+                "end\n"
+                "main do f(42) end\n"
+            );
+            assertTrue(contains(out, "{'Ok'"), out);
+            assertTrue(contains(out, "{'Error'"), out);
+        });
+
+        it("zero-arg constructor pattern emits as bare atom", []() {
+            // @Less in match → 'Less' in Core Erlang
+            auto out = emit(
+                "let f(v) = match v do\n"
+                "  @Less -> -1\n"
+                "  @Equal -> 0\n"
+                "  @Greater -> 1\n"
+                "end\n"
+                "main do f(Less) end\n"
+            );
+            assertTrue(contains(out, "'Less'"), out);
+            assertTrue(contains(out, "'Equal'"), out);
+            assertTrue(contains(out, "'Greater'"), out);
+        });
     });
 
     describe("CoreErlangEmitter — binary operators", []() {

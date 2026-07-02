@@ -12,29 +12,24 @@ namespace kex::interpreter {
 // re-declares these is harmless — execTopLevel's TypeDef handling just
 // redefines them identically.
 auto Evaluator::registerAdtConstructors() -> void {
-    auto regCtor1 = [this](const std::string& name) {
+    auto regCtor1 = [this](const std::string& name, const std::string& parentType) {
         auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, [name](std::vector<ValuePtr> args) -> ValuePtr {
-            return Value::record(name, {{"0", args.empty() ? Value::none() : args[0]}});
+        val->data = FunctionValue{name, [name, parentType](std::vector<ValuePtr> args) -> ValuePtr {
+            return Value::variant(name, parentType, {args.empty() ? Value::none() : args[0]});
         }};
         m_globalEnv->define(name, val);
     };
-    regCtor1("Just");
-    regCtor1("Ok");
-    regCtor1("Error");
-    regCtor1("Left");
-    regCtor1("Right");
+    regCtor1("Just", "Option");
+    regCtor1("Ok", "Result");
+    regCtor1("Error", "Result");
+    regCtor1("Left", "Either");
+    regCtor1("Right", "Either");
 
     // Comparison — the result type of Comparable.compare.
-    // Less/Equal/Greater are zero-arg constructors (atoms), same as None.
-    auto regAtom = [this](const std::string& name) {
-        auto val = std::make_shared<Value>();
-        val->data = AtomValue{name};
-        m_globalEnv->define(name, val);
-    };
-    regAtom("Less");
-    regAtom("Equal");
-    regAtom("Greater");
+    // Less/Equal/Greater are zero-arg variant constructors.
+    m_globalEnv->define("Less",    Value::variant("Less",    "Ordering"));
+    m_globalEnv->define("Equal",   Value::variant("Equal",   "Ordering"));
+    m_globalEnv->define("Greater", Value::variant("Greater", "Ordering"));
 
     // ok?/error? (Result<T, E> = Ok(T) | Error(E)) and some?/none?
     // (T? = Just(T) | None) — predicates over the same prelude ADTs, so
@@ -47,11 +42,11 @@ auto Evaluator::registerAdtConstructors() -> void {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, [name, tag](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.empty()) throw std::runtime_error(name + " expects a Result, got no argument");
-            auto* rec = std::get_if<RecordValue>(&args[0]->data);
-            if (!rec || (rec->typeName != "Ok" && rec->typeName != "Error")) {
+            auto* var = std::get_if<VariantValue>(&args[0]->data);
+            if (!var || (var->tag != "Ok" && var->tag != "Error")) {
                 throw std::runtime_error(name + " expects a Result (Ok/Error), got " + args[0]->typeName());
             }
-            return Value::boolean(rec->typeName == tag);
+            return Value::boolean(var->tag == tag);
         }};
         m_globalEnv->define(name, val);
     };
@@ -65,8 +60,8 @@ auto Evaluator::registerAdtConstructors() -> void {
         val->data = FunctionValue{name, [name, wantJust](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.empty()) throw std::runtime_error(name + " expects an Optional, got no argument");
             if (std::holds_alternative<NoneValue>(args[0]->data)) return Value::boolean(!wantJust);
-            auto* rec = std::get_if<RecordValue>(&args[0]->data);
-            if (!rec || rec->typeName != "Just") {
+            auto* var = std::get_if<VariantValue>(&args[0]->data);
+            if (!var || var->tag != "Just") {
                 throw std::runtime_error(name + " expects an Optional (Just/None), got " + args[0]->typeName());
             }
             return Value::boolean(wantJust);
@@ -90,12 +85,11 @@ auto Evaluator::registerAdtConstructors() -> void {
             const auto& receiver = args[0];
             const auto& fallback = args[1];
             if (std::holds_alternative<NoneValue>(receiver->data)) return fallback;
-            if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
-                if (rec->typeName == "Ok" || rec->typeName == "Just") {
-                    auto it = rec->fields.find("0");
-                    return it != rec->fields.end() ? it->second : Value::none();
+            if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
+                if (var->tag == "Ok" || var->tag == "Just") {
+                    return var->args.empty() ? Value::none() : var->args[0];
                 }
-                if (rec->typeName == "Error") return fallback;
+                if (var->tag == "Error") return fallback;
             }
             // Raw value (not an ADT wrapper, not None) — already the
             // successful result; return it directly. This handles stdlib

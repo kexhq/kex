@@ -5,6 +5,11 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerStringBuiltins() -> void {
+    m_globalEnv->define("String", Value::module("String"));
+    m_globalEnv->define("Char",   Value::module("Char"));
+    m_globalEnv->define("Bool",   Value::module("Bool"));
+    m_globalEnv->define("Atom",   Value::module("Atom"));
+
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};

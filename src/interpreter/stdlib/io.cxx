@@ -18,7 +18,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // Pre-register the namespace placeholder so `IO.printLine(...)` resolves
     // via the empty-RecordValue namespace-dispatch branch in eval()
     // (ast::MethodCall) and gets the mangled "IO::" dispatch.
-    m_globalEnv->define("IO", Value::record("IO", {}));
+    m_globalEnv->define("IO", Value::module("IO"));
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
     reg("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {

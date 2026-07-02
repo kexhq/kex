@@ -1,0 +1,136 @@
+# Compiled SQL — zero-overhead query builder
+#
+# The SQL module defines its builder methods inside `compiled do...end`.
+# When user code calls `.emit()`, the compiler evaluates the entire chain
+# at compile time, producing a static SQL string + a params list of any
+# runtime values (free variables auto-detected as placeholders).
+
+module SQL do
+  record Query do
+    text   : String
+    params : [Any] = []
+  end
+
+  record QueryBuilder do
+    fields     : [Symbol] = []
+    table      : Symbol = :none
+    conditions : [(String, Any)] = []
+    order      : String? = None
+    limit_val  : Int? = None
+  end
+
+  compiled do
+    let select(fields: Symbol | [Symbol]) -> QueryBuilder do
+      match fields do
+        :all -> QueryBuilder { fields: [:all] }
+        f    -> QueryBuilder { fields: f }
+      end
+    end
+
+    make QueryBuilder do
+      let from(table: Symbol) -> QueryBuilder do
+        QueryBuilder { fields: @fields, table: table, conditions: @conditions }
+      end
+
+      let where(conditions) -> QueryBuilder do
+        QueryBuilder {
+          fields: @fields,
+          table: @table,
+          conditions: @conditions + conditions
+        }
+      end
+
+      let orderBy(col: String, dir: Symbol = :asc) -> QueryBuilder do
+        QueryBuilder {
+          fields: @fields,
+          table: @table,
+          conditions: @conditions,
+          order: "${col} ${dir}"
+        }
+      end
+
+      let limit(n: Int) -> QueryBuilder do
+        QueryBuilder {
+          fields: @fields,
+          table: @table,
+          conditions: @conditions,
+          order: @order,
+          limit_val: Just(n)
+        }
+      end
+
+      # .emit() is the compile-time collapse trigger.
+      # The compiler evaluates the whole chain, producing a Query record
+      # with a static SQL string and any free variables as params.
+      let emit() -> Query do
+        let field_str = match @fields do
+          [:all] -> "*"
+          fs     -> fs.map(&.to(String)).join(", ")
+        end
+
+        var sql = "SELECT ${field_str} FROM ${@table}"
+        var params = []
+        var idx = 1
+
+        @conditions.each do |col, val|
+          let prefix = if idx == 1 then " WHERE " else " AND " end
+          sql = sql + "${prefix}${col} = $${idx}"
+          params = params + [val]
+          idx = idx + 1
+        end
+
+        if @order do |o|
+          sql = sql + " ORDER BY ${o}"
+        end
+
+        if @limit_val do |lim|
+          sql = sql + " LIMIT $${idx}"
+          params = params + [lim]
+        end
+
+        Query { text: sql, params: params }
+      end
+    end
+  end
+end
+
+# --- Helpers for conditions ---
+let eq(val) = val
+
+# ---------------------------------------------------------------------------
+# Usage — these look like normal calls but collapse at compile time.
+# ---------------------------------------------------------------------------
+
+main do
+  let userId = "42"
+  let userName = "John"
+
+  # Fully static — no free vars, entire query is a string literal at runtime
+  let q1 = SQL.select(:all).from(:users).emit()
+  # Compiles to: Query { text: "SELECT * FROM users", params: [] }
+
+  IO.printLine(q1.text)
+
+  # Free variable detected — userId becomes $1
+  let q2 = SQL.select([:name, :email])
+              .from(:users)
+              .where([(:id, userId)])
+              .emit()
+  # Result: Query { text: "SELECT name, email FROM users WHERE id = $1",
+  #                 params: [userId] }
+
+  IO.printLine(q2.text)
+  IO.printLine(q2.params.inspect())
+
+  # Multiple free vars
+  let q3 = SQL.select(:all)
+              .from(:users)
+              .where([(:name, userName), (:id, userId)])
+              .orderBy("name")
+              .limit(10)
+              .emit()
+  # Result: Query { text: "SELECT * FROM users WHERE name = $1 AND id = $2 ORDER BY name asc LIMIT $3",
+  #                 params: [userName, userId, 10] }
+
+  IO.printLine(q3.text)
+end

@@ -332,6 +332,13 @@ struct ErrorNode {
     std::string message;
 };
 
+// `using Module` or `using Module do ... end` inside a function/main body.
+// Brings the module's compiled-block definitions into the current scope.
+struct UsingExpr {
+    TypeName module;
+    std::vector<ExprPtr> body; // empty for bare `using Module`
+};
+
 struct Expr {
     SourceLocation location;
     std::variant<
@@ -374,7 +381,8 @@ struct Expr {
         BlockExpr,
         CurryPlaceholder,
         CurryExpr,
-        ErrorNode
+        ErrorNode,
+        UsingExpr
     > kind;
 };
 
@@ -477,9 +485,19 @@ struct MakeDef {
     >> body;
 };
 
+// Items that can appear inside a compiled do...end block.
+// Mirrors the subset of module items that carry runtime-evaluable semantics.
+using CompiledItem = std::variant<
+    std::unique_ptr<FunctionDef>,
+    std::unique_ptr<MakeDef>,
+    std::unique_ptr<RecordDef>,
+    std::unique_ptr<TypeDef>,
+    ExprPtr  // constant assignments (NAME = value) and other expr stmts
+>;
+
 struct CompiledBlock {
     SourceLocation location;
-    std::vector<ExprPtr> body; // simplified for now
+    std::vector<CompiledItem> items;
 };
 
 struct UsingBlock {
