@@ -1421,7 +1421,11 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
             if (auto* i = std::get_if<IntValue>(&operand->data)) {
                 // -INT64_MIN doesn't fit in int64_t — promote rather than
                 // silently wrap/UB, same as the overflow-checked binary ops.
-                if (i->value == INT64_MIN) return Value::bigInteger(-mpz_class(static_cast<long>(i->value)));
+                // mpz_class built via decimal string, not
+                // static_cast<long>: `long` is 32-bit on wasm32, unlike
+                // every native (LP64) target this project has built on
+                // before — see value.cxx's asInteger/integerResult.
+                if (i->value == INT64_MIN) return Value::bigInteger(-mpz_class(std::to_string(i->value)));
                 return Value::integer(-i->value);
             }
             if (auto* bi = std::get_if<BigIntValue>(&operand->data))

@@ -124,11 +124,37 @@ auto Fiber::trampolineBody() -> void {
 
 namespace {
 thread_local Fiber* g_startingFiber = nullptr;
+
+// The "native" context — wherever execution is when it's not inside any
+// Fiber (i.e. the scheduler's own flat driving loop). Every Fiber::resume()
+// call in this design originates from that same place (never fiber-to-
+// fiber — the scheduler never nests), so unlike the native/Boost.Context
+// backend (which needs a per-fiber caller slot, since boost's fiber
+// objects are consumed/replaced on every swap), a single shared context
+// suffices here and is reused across every fiber's resume/yield cycle.
+//
+// Must be initialized via emscripten_fiber_init_from_current_context, NOT
+// left zero-initialized — confirmed against Emscripten's own
+// test/test_fibers.cpp after a zero-initialized "caller" context produced
+// an opaque "unreachable" trap on the very first swap, reproduced even in
+// a minimal standalone repro with no Kex code involved at all. Lazily
+// initialized on first use (captures "resume here" at that call site,
+// which is safe precisely because every resume() call shares that one
+// flat call site).
+emscripten_fiber_t g_nativeContext{};
+std::vector<char> g_nativeAsyncifyStack(65536);
+bool g_nativeContextInitialized = false;
+
+auto ensureNativeContext() -> void {
+    if (g_nativeContextInitialized) return;
+    emscripten_fiber_init_from_current_context(
+        &g_nativeContext, g_nativeAsyncifyStack.data(), g_nativeAsyncifyStack.size());
+    g_nativeContextInitialized = true;
+}
 }
 
 struct Fiber::Impl {
     emscripten_fiber_t ctx{};
-    emscripten_fiber_t callerCtx{};
     std::vector<char> stack;
     std::vector<char> asyncifyStack;
 };
@@ -154,25 +180,26 @@ Fiber::~Fiber() = default;
 
 auto Fiber::resume() -> void {
     if (m_finished) return;
+    ensureNativeContext();
 
     Fiber* prevFiber = g_currentFiber;
     g_currentFiber = this;
     m_started = true;
 
-    emscripten_fiber_swap(&m_impl->callerCtx, &m_impl->ctx);
+    emscripten_fiber_swap(&g_nativeContext, &m_impl->ctx);
     g_currentFiber = prevFiber;
 }
 
 auto Fiber::yieldToScheduler() -> void {
     Fiber* self = g_currentFiber;
     if (!self) return;
-    emscripten_fiber_swap(&self->m_impl->ctx, &self->m_impl->callerCtx);
+    emscripten_fiber_swap(&self->m_impl->ctx, &g_nativeContext);
 }
 
 auto Fiber::trampolineBody() -> void {
     m_entry();
     m_finished = true;
-    emscripten_fiber_swap(&m_impl->ctx, &m_impl->callerCtx);
+    emscripten_fiber_swap(&m_impl->ctx, &g_nativeContext);
 }
 
 #endif

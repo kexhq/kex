@@ -5,6 +5,54 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Must come before add_library(kex_lib ...) below, not just before the
+# executables that link it — add_compile_options()/add_link_options() only
+# affect targets declared AFTER they're called. Placing these after
+# add_library(kex_lib ...) (where they lived originally) meant kex_lib's
+# own object files never got -sNO_DISABLE_EXCEPTION_CATCHING at compile
+# time — only the final executables got it, at link time, which doesn't
+# retroactively fix exception codegen already baked into kex_lib's already-
+# compiled .o files. Confirmed the hard way: every try/catch inside
+# kex_lib's sources (i.e. everywhere that matters — this is where the
+# entire interpreter lives) silently failed to catch anything on wasm,
+# while a hand-written reproduction of the same fiber+exception pattern in
+# a single translation unit (compiled with the flag correctly applied)
+# worked fine. Cost real time to find because the failure mode (a specific
+# try/catch just doesn't fire) looks identical to a genuine Asyncify/EH
+# interaction bug, which is what an actual Emscripten 6.0.2 regression
+# (see third_party/gmp-wasm/README.md) had already trained us to suspect.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Default wasm heap (16MB) is far smaller than what a native process
+    # gets for free, and every process's fiber (see src/interpreter/fiber.cxx)
+    # allocates its own 8MB C stack + 8MB asyncify stack — a single fiber
+    # alone can exceed the default budget. -sALLOW_MEMORY_GROWTH lets the
+    # heap grow on demand instead of hard-capping and aborting.
+    add_link_options(-sALLOW_MEMORY_GROWTH=1)
+
+    # emscripten_fiber_swap (src/interpreter/fiber.cxx's wasm backend)
+    # requires Asyncify at link time — confirmed empirically, matching
+    # Emscripten's own docs (see docs/fiber-process-plan.md's fiber
+    # section): fibers are built ON TOP OF Asyncify, not an alternative to
+    # it, so this cost is unavoidable for the wasm target regardless of
+    # which fiber API is used.
+    add_link_options(-sASYNCIFY)
+    # Default ASYNCIFY_STACK_SIZE (4KB) is nowhere near enough for this
+    # tree-walking interpreter's recursion depth — eval()/callFunction()
+    # nest many C++ frames deep per one level of Kex-level recursion, and
+    # Asyncify needs scratch space to unwind/rewind through all of them on
+    # every emscripten_fiber_swap. Confirmed empirically ("unreachable"
+    # trap with a direct "may be due to ASYNCIFY_STACK_SIZE" hint).
+    add_link_options(-sASYNCIFY_STACK_SIZE=16777216)
+
+    # The interpreter uses C++ exceptions as its core control-flow/error
+    # mechanism (RuntimeError, ReturnException, ...) — Emscripten disables
+    # exception catching by default (smaller/faster output for code that
+    # doesn't need it). Needed at both compile and link time (see the
+    # comment above this whole block for why compile-time matters here).
+    add_compile_options(-sNO_DISABLE_EXCEPTION_CATCHING)
+    add_link_options(-sNO_DISABLE_EXCEPTION_CATCHING)
+endif()
+
 add_library(kex_lib
     src/codegen/core_erlang.cxx
     src/lexer/token.cxx
@@ -42,28 +90,51 @@ target_include_directories(kex_lib PUBLIC src)
 
 # GMP backs the arbitrary-precision `Integer` default (see
 # docs/type-system-plan.md's Runtime representation section). Required,
-# not optional like readline below — dynamic linking only: GMP is
-# dual-licensed LGPLv3/GPLv2, fine to depend on under LGPL terms when
-# dynamically linked, but statically linking it into the `kex` binary
-# would pull the GPL's stricter terms onto that binary. Force shared-only
-# resolution rather than letting find_library silently pick up the .a
-# Homebrew also installs alongside the .dylib.
-set(_kex_saved_lib_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
-if(APPLE)
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .dylib)
-else()
-    set(CMAKE_FIND_LIBRARY_SUFFIXES .so)
-endif()
-find_library(GMP_LIB gmp HINTS /opt/homebrew/lib /usr/local/lib)
-find_library(GMPXX_LIB gmpxx HINTS /opt/homebrew/lib /usr/local/lib)
-set(CMAKE_FIND_LIBRARY_SUFFIXES ${_kex_saved_lib_suffixes})
-find_path(GMP_INCLUDE gmpxx.h HINTS /opt/homebrew/include /usr/local/include)
+# not optional like readline below.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Wasm has no meaningful dynamic-linking story here, so this is a
+    # deliberate, scoped exception to the native build's dynamic-only
+    # policy below: statically linking GMP (dual-licensed LGPLv3/GPLv2)
+    # into the wasm output is only permissible under LGPLv3's static-
+    # linking allowance (relinkability — this repo, including this
+    # third_party/gmp-wasm build recipe, provides everything needed to
+    # rebuild and relink a modified GMP). No prebuilt wasm GMP exists via
+    # Emscripten's port system or Homebrew — see third_party/gmp-wasm/
+    # README.md for how this was built from source.
+    set(GMP_WASM_DIR "${CMAKE_SOURCE_DIR}/third_party/gmp-wasm")
+    set(GMP_LIB "${GMP_WASM_DIR}/lib/libgmp.a")
+    set(GMPXX_LIB "${GMP_WASM_DIR}/lib/libgmpxx.a")
+    set(GMP_INCLUDE "${GMP_WASM_DIR}/include")
 
-if(NOT GMP_LIB OR NOT GMPXX_LIB OR NOT GMP_INCLUDE)
-    message(FATAL_ERROR
-        "GMP (libgmp + libgmpxx, shared) not found — required for the "
-        "arbitrary-precision Integer runtime. Install it (e.g. `brew "
-        "install gmp`) and re-run cmake.")
+    if(NOT EXISTS "${GMP_LIB}" OR NOT EXISTS "${GMPXX_LIB}" OR NOT EXISTS "${GMP_INCLUDE}/gmpxx.h")
+        message(FATAL_ERROR
+            "Prebuilt wasm GMP not found under ${GMP_WASM_DIR} — see "
+            "third_party/gmp-wasm/README.md to rebuild it.")
+    endif()
+else()
+    # Dynamic linking only: GMP is dual-licensed LGPLv3/GPLv2, fine to
+    # depend on under LGPL terms when dynamically linked, but statically
+    # linking it into the `kex` binary would pull the GPL's stricter terms
+    # onto that binary. Force shared-only resolution rather than letting
+    # find_library silently pick up the .a Homebrew also installs
+    # alongside the .dylib.
+    set(_kex_saved_lib_suffixes ${CMAKE_FIND_LIBRARY_SUFFIXES})
+    if(APPLE)
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .dylib)
+    else()
+        set(CMAKE_FIND_LIBRARY_SUFFIXES .so)
+    endif()
+    find_library(GMP_LIB gmp HINTS /opt/homebrew/lib /usr/local/lib)
+    find_library(GMPXX_LIB gmpxx HINTS /opt/homebrew/lib /usr/local/lib)
+    set(CMAKE_FIND_LIBRARY_SUFFIXES ${_kex_saved_lib_suffixes})
+    find_path(GMP_INCLUDE gmpxx.h HINTS /opt/homebrew/include /usr/local/include)
+
+    if(NOT GMP_LIB OR NOT GMPXX_LIB OR NOT GMP_INCLUDE)
+        message(FATAL_ERROR
+            "GMP (libgmp + libgmpxx, shared) not found — required for the "
+            "arbitrary-precision Integer runtime. Install it (e.g. `brew "
+            "install gmp`) and re-run cmake.")
+    endif()
 endif()
 
 target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})

@@ -14,16 +14,26 @@
 #include <string>
 #include <vector>
 
-#ifdef HAS_READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
+// Pure string logic, no actual readline API dependency — needed
+// unconditionally by `--complete`/`-K` (used by shell completion scripts,
+// which shell out to `kex -K` rather than linking readline) and by the
+// interactive REPL's `make X do` target tracking, which runs the same
+// whether or not this build has readline (see the non-readline readLine()
+// fallback below). Bundling this under #ifdef HAS_READLINE was an
+// oversight that only ever surfaced when actually building without
+// readline — every native dev machine so far has had it available via
+// Homebrew.
 #include "common/completion.hxx"
-
-// Completion state — populated before the REPL loop, read by the C callback.
-static kex::semantic::SemanticDB *g_replDb = nullptr;
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+
+#ifdef HAS_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+
+// Completion state — populated before the REPL loop, read by the C callback.
+static kex::semantic::SemanticDB *g_replDb = nullptr;
 static std::vector<std::string> g_completionMatches;
 static std::string g_completionWord;
 static std::string g_completionStripPrefix;

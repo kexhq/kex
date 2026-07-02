@@ -21,18 +21,30 @@ auto Value::bigInteger(mpz_class v) -> ValuePtr {
 }
 
 auto asInteger(const ValuePtr& v) -> std::optional<mpz_class> {
-    // long is 64-bit on every platform this project targets (LP64) — see
-    // integerResult's fits_slong_p() below; the explicit cast avoids an
-    // ambiguous int64_t (long long) -> mpz_class overload resolution.
-    if (auto* i = std::get_if<IntValue>(&v->data)) return mpz_class(static_cast<long>(i->value));
+    // Deliberately NOT `mpz_class(static_cast<long>(i->value))`: `long` is
+    // 64-bit on every native LP64 target this project has ever built on
+    // (macOS/Linux), but wasm32 (see docs/fiber-process-plan.md's phase 6
+    // notes) has a 32-bit `long` — that cast would silently truncate any
+    // IntValue outside 32-bit range before it ever reached GMP. Round-
+    // tripping through decimal string construction is slower but portable
+    // regardless of the platform's `long` width, and Integer arithmetic
+    // isn't a hot path here (the wasm build's GMP is already the slower
+    // portable-C fallback, not hand-tuned assembly, for the same reason).
+    if (auto* i = std::get_if<IntValue>(&v->data)) return mpz_class(std::to_string(i->value));
     if (auto* b = std::get_if<BigIntValue>(&v->data)) return b->value;
     return std::nullopt;
 }
 
 auto integerResult(mpz_class v) -> ValuePtr {
-    // `long` is 64-bit on every platform this project targets (LP64), so
-    // fits_slong_p matches int64_t's range.
-    if (v.fits_slong_p()) return Value::integer(v.get_si());
+    // Same reasoning as asInteger: fits_slong_p()/get_si() are tied to the
+    // platform's `long` width, not int64_t's — comparing against explicit
+    // int64_t bounds (built once, via decimal string, so this doesn't
+    // depend on `long` either) is the portable equivalent.
+    static const mpz_class kInt64Min(std::to_string(INT64_MIN));
+    static const mpz_class kInt64Max(std::to_string(INT64_MAX));
+    if (v >= kInt64Min && v <= kInt64Max) {
+        return Value::integer(std::stoll(v.get_str()));
+    }
     return Value::bigInteger(std::move(v));
 }
 
