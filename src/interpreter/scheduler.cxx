@@ -2,6 +2,11 @@
 #include "environment.hxx"
 #include "evaluator.hxx"
 
+// std::this_thread::sleep_until — a plain blocking sleep on the single OS
+// thread this scheduler already owns, not thread *management* (no new
+// thread is created). See driveUntilFinished.
+#include <thread>
+
 #ifndef __EMSCRIPTEN__
 #include <boost/context/detail/exception.hpp>
 #endif
@@ -58,17 +63,51 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     m_current = prevCurrent;
 }
 
+auto Scheduler::fireExpiredTimeouts() -> void {
+    auto now = std::chrono::steady_clock::now();
+    while (!m_timeouts.empty() && m_timeouts.begin()->first <= now) {
+        auto entry = m_timeouts.begin()->second;
+        m_timeouts.erase(m_timeouts.begin());
+
+        auto pit = m_processes.find(entry.pid);
+        if (pit == m_processes.end() || pit->second->finished) continue;
+        auto& proc = *pit->second;
+        // Stale entry from a receive call this process has since moved past
+        // (e.g. woken by a message, then entered a fresh receive before
+        // this old deadline got here) — discard silently, matches BEAM
+        // never firing a superseded `after`.
+        if (!proc.blockedOnReceive || proc.waitGeneration != entry.generation) continue;
+
+        proc.blockedOnReceive = false;
+        proc.wokeByTimeout = true;
+        m_ready.push_back(entry.pid);
+    }
+}
+
 auto Scheduler::driveUntilFinished(ProcessId target) -> ValuePtr {
     while (true) {
         auto it = m_processes.find(target);
         if (it == m_processes.end() || it->second->finished) break;
 
+        fireExpiredTimeouts();
+
         if (m_ready.empty()) {
-            // Nothing runnable and the target process hasn't finished —
-            // with no timeout support yet (phase 2), this can only mean a
-            // real deadlock: some process in the chain is blocked on a
-            // receive nothing will ever satisfy.
-            throw RuntimeError("deadlock: no process is runnable", SourceLocation{});
+            if (m_timeouts.empty()) {
+                // Nothing runnable, nothing pending — a real deadlock: some
+                // process in the chain is blocked on a receive nothing will
+                // ever satisfy.
+                throw RuntimeError("deadlock: no process is runnable", SourceLocation{});
+            }
+            // Nothing runnable *right now*, but some process's `receive
+            // timeout:` deadline hasn't arrived yet. This is a plain
+            // blocking sleep on the one OS thread we already have — not
+            // "managing threads" in the sense this design deliberately
+            // avoids (no new thread, no lock) — acceptable for native
+            // script/REPL execution; a wasm/browser embed drives via
+            // step() instead (see docs/fiber-process-plan.md §2) and would
+            // never reach this branch that way.
+            std::this_thread::sleep_until(m_timeouts.begin()->first);
+            continue;
         }
 
         ProcessId next = m_ready.front();
@@ -170,6 +209,25 @@ auto Scheduler::blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr {
     if (it == m_processes.end()) return Value::none();
     auto& proc = *it->second;
 
+    // Evaluated once, up front — matches BEAM's `after` semantics, where
+    // the timeout is measured from entering receive, not restarted each
+    // time a non-matching message arrives. A local, not Process state: it
+    // only needs to survive across this call's own yields, which plain
+    // local variables already do (the whole C++ stack, including locals,
+    // is preserved across a fiber yield/resume — that's the entire point
+    // of using real fibers instead of a rewritten/CPS'd evaluator).
+    std::optional<std::chrono::steady_clock::time_point> deadline;
+    if (expr.timeout) {
+        auto timeoutVal = m_evaluator.eval(**expr.timeout);
+        if (auto* iv = std::get_if<IntValue>(&timeoutVal->data)) {
+            deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(iv->value);
+        }
+        // Anything else (e.g. an `:infinity` atom) — no deadline, blocks
+        // forever, same as `after` being absent entirely.
+    }
+    uint64_t myGeneration = ++proc.waitGeneration;
+    bool timeoutRegistered = false;
+
     while (true) {
         for (size_t i = 0; i < proc.mailbox.size(); i++) {
             auto* tup = std::get_if<TupleValue>(&proc.mailbox[i]->data);
@@ -205,11 +263,21 @@ auto Scheduler::blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr {
         }
 
         // Nothing in the mailbox matched any clause — block until send()
-        // wakes this process, then re-scan from scratch (a new message may
-        // not be the only unmatched one). No timeout support yet (phase 2:
-        // expr.timeout/expr.afterBody are ignored here for now).
+        // wakes this process (or, if a deadline is set, until it passes),
+        // then re-scan from scratch (a new message may not be the only
+        // unmatched one).
+        if (deadline && !timeoutRegistered) {
+            m_timeouts.emplace(*deadline, TimeoutEntry{m_current, myGeneration});
+            timeoutRegistered = true;
+        }
         proc.blockedOnReceive = true;
+        proc.wokeByTimeout = false;
         Fiber::yieldToScheduler();
+
+        if (proc.wokeByTimeout) {
+            proc.wokeByTimeout = false;
+            return expr.afterBody ? m_evaluator.eval(**expr.afterBody) : Value::none();
+        }
     }
 }
 

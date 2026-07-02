@@ -27,8 +27,9 @@ public:
 ```
 
 Two backends behind `#ifdef __EMSCRIPTEN__`, both living only in `fiber.cxx` (the header stays platform-neutral):
-- **Native**: `ucontext.h` (`getcontext`/`makecontext`/`swapcontext`) — POSIX, available on macOS/Linux (the only targets per CLAUDE.md). Deprecated-but-functional on macOS; scope the deprecation-warning suppression to this one file. If it ever proves troublesome, swapping the *implementation* here for Boost.Context is a contained fallback — not worth building speculatively now.
-- **Wasm**: `emscripten/fiber.h`. Confirmed against Emscripten's own docs: fibers are built *on top of* Asyncify, not an alternative to it — `-sASYNCIFY` is a hard requirement for using this API at all, so the wasm build pays Asyncify's binary-size/perf cost regardless (an earlier draft of this plan asserted otherwise; that was wrong). `emscripten_fiber_init` needs a C stack buffer *plus* a separate "asyncify stack" scratch buffer per fiber. Native stays on the cheap `ucontext` path either way — this cost is wasm-only.
+- **Native**: **Boost.Context** (`boost::context::fiber`, its `fcontext`-based assembly backend), not `ucontext.h` as originally planned. `ucontext` was tried first and rejected after hitting a real, reproducible bug: on Apple Silicon macOS, `swapcontext` doesn't reliably save/restore FP/NEON register state across a context switch, causing heap corruption (confirmed empirically — a freed "pointer" whose bytes were exactly the bit pattern of `1.0f`, and a REPL rendering bug that turned out to be memory corruption, not a logic error). Boost.Context's `fcontext` backend is hand-written assembly per architecture, specifically built to handle this correctly, and is the well-established primitive other coroutine/fiber libraries reach for on this exact platform combination. New dependency: `find_package(Boost REQUIRED COMPONENTS context)` in CMakeLists.txt (Homebrew's `boost` package ships the CMake config needed).
+  - One sharp edge worth documenting since it caused a real crash during implementation: destroying a still-suspended (not finished) `boost::context::fiber` makes Boost.Context resume it *one more time*, specifically to throw an internal `boost::context::detail::forced_unwind` exception at its suspension point, so the fiber's own C++ stack unwinds normally (destructors run) before the stack memory is freed. That exception **must** propagate all the way back out of the entry function uncaught. A generic `catch (...)` around the entry function's body (needed anyway to turn an uncaught Kex-level error into that process's exit value) will otherwise swallow it, corrupting Boost.Context's internal state and crashing later, unrelated fiber operations. Every such `catch (...)` must check for and re-throw `forced_unwind` first. This matters in practice specifically because processes are *expected* to be destroyed while still suspended — e.g. `examples/beam/proc_ping.kex`'s server loop, which never explicitly terminates.
+- **Wasm**: `emscripten/fiber.h`, unchanged from the original plan and still untested (no wasm toolchain used yet). Confirmed against Emscripten's own docs: fibers are built *on top of* Asyncify, not an alternative to it — `-sASYNCIFY` is a hard requirement for using this API at all, so the wasm build pays Asyncify's binary-size/perf cost regardless (an earlier draft of this plan asserted otherwise; that was wrong).
 
 A single process-wide "current fiber" pointer (not actually thread-local in any meaningful sense — there is exactly one OS thread — just named that way defensively) tracks who `yieldToScheduler()` swaps back to.
 
@@ -163,9 +164,9 @@ No new `find_library` for native (`ucontext.h` is always present on macOS/Linux)
 
 ## Phasing
 
-1. Fiber abstraction (both backends) + Scheduler skeleton + `ProcessValue` + `spawn`/`send`/`receive` (no timeout). Root-process-as-fiber lands here since top-level `receive` needs it immediately.
-2. `receive timeout:` / `after`.
-3. `link`/`unlink`/`alive?` + exit propagation.
+1. **Done.** Fiber abstraction (native on Boost.Context, wasm untested) + Scheduler skeleton + `ProcessValue` + `spawn`/`send`/`receive` (no timeout). Root-process-as-fiber lands here since top-level `receive` needs it immediately. `examples/beam/proc_ping.kex` now runs correctly through the tree-walking interpreter.
+2. **Done.** `receive timeout:` / `after` — deadline evaluated once per receive call (not reset per non-matching message, matching BEAM), a `waitGeneration` token on `Process` guards against a stale timeout from an earlier `receive` firing against a later, unrelated one.
+3. `link`/`unlink`/`alive?` + exit propagation (next).
 4. `Task.start`/`.await(timeout:)`/`.await_all`, including the `blockingReceive` → `receiveOne` refactor.
 5. `Supervisor.start(restart:)`, best-effort scope per §9.
 6. (Separate follow-up, not gating 1-5) wasm/Emscripten build target + JS bindings + `step()`-driven browser REPL.

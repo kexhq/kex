@@ -3,10 +3,12 @@
 #include "../ast/ast.hxx"
 #include "fiber.hxx"
 #include "value.hxx"
+#include <chrono>
 #include <cstdint>
 #include <deque>
 #include <exception>
 #include <functional>
+#include <map>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -57,6 +59,19 @@ struct Process {
     bool blockedOnReceive = false;
     // BEAM-style reduction counter — see Scheduler::tickReduction.
     int reductions = 0;
+    // Incremented once at the start of every blockingReceive call — a
+    // "which wait is this" token. A pending timeout registered for wait
+    // generation N must be ignored if it fires after this process has since
+    // moved on to a *different* receive (generation N+1, N+2, ...): without
+    // this, an early message-wake followed immediately by a fresh `receive
+    // timeout:` could let the FIRST call's now-stale timeout fire against
+    // the second call, timing it out prematurely. See blockingReceive.
+    uint64_t waitGeneration = 0;
+    // Set by the scheduler's timeout-firing logic (never by send()) right
+    // before waking this process, so blockingReceive can tell "woke because
+    // a message arrived" from "woke because the deadline passed" without
+    // needing to re-scan the mailbox first.
+    bool wokeByTimeout = false;
 };
 
 // Cooperative, single-OS-thread scheduler over Fiber-backed processes. See
@@ -95,7 +110,12 @@ public:
     // Evaluator::eval's ReceiveExpr branch). Blocks (yields) until a
     // matching message arrives, re-scanning the whole mailbox on every
     // wake since an earlier-arrived, still-unmatched message must still be
-    // considered. No timeout support yet (phase 2).
+    // considered. If expr.timeout is set, evaluates it once (milliseconds)
+    // and registers a deadline; if nothing matches by then, evaluates
+    // expr.afterBody instead of continuing to wait (or returns None if
+    // afterBody is absent) — matches BEAM's `after` semantics: the timeout
+    // is measured from entering receive, not reset on each non-matching
+    // message.
     auto blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr;
 
     auto currentProcessId() const -> ProcessId { return m_current; }
@@ -111,12 +131,22 @@ public:
 private:
     auto resumeProcess(ProcessId id) -> void;
     auto driveUntilFinished(ProcessId target) -> ValuePtr;
+    auto fireExpiredTimeouts() -> void;
 
     Evaluator& m_evaluator;
     ProcessId m_nextId = 0;
     std::unordered_map<ProcessId, std::unique_ptr<Process>> m_processes;
     std::deque<ProcessId> m_ready;
     ProcessId m_current = 0;
+
+    struct TimeoutEntry {
+        ProcessId pid;
+        uint64_t generation;
+    };
+    // Ordered by deadline — std::multimap is a plain balanced tree, which
+    // is plenty at the process counts this is meant for; a real binary
+    // heap is a drop-in upgrade later if that ever stops being true.
+    std::multimap<std::chrono::steady_clock::time_point, TimeoutEntry> m_timeouts;
 
     static constexpr int kReductionBudget = 2000;
 };

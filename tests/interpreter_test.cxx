@@ -1372,5 +1372,67 @@ int main() {
         });
     });
 
+    describe("Interpreter — Processes (phase 2: receive timeout/after)", []() {
+        it("fires `after` when nothing arrives before the deadline", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"unexpected\")\n"
+                "  after -> IO.printLine(\"timed out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("timed out\n"));
+        });
+
+        it("does not fire `after` when a matching message arrives first", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:early)\n"
+                "    end\n"
+                "  end\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 5000 do\n"
+                "    :early -> IO.printLine(\"got it early\")\n"
+                "  after -> IO.printLine(\"should not time out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got it early\n"));
+        });
+
+        it("a stale timeout from an earlier receive doesn't leak into a later one", []() {
+            // The first receive gets its message almost immediately, well
+            // before its own long deadline. That deadline is still sitting
+            // in the scheduler's timeout table, unfired, when the second
+            // (short-timeout) receive starts — it must not be mistaken for
+            // the second receive's own deadline (the waitGeneration guard
+            // in blockingReceive exists specifically for this).
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:early)\n"
+                "    end\n"
+                "  end\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 5000 do\n"
+                "    :early -> IO.printLine(\"first: got it\")\n"
+                "  after -> IO.printLine(\"first: should not happen\")\n"
+                "  end\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"second: unexpected message\")\n"
+                "  after -> IO.printLine(\"second: correctly timed out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("first: got it\nsecond: correctly timed out\n"));
+        });
+    });
+
     return runAll();
 }
