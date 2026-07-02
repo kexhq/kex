@@ -1,5 +1,5 @@
-# kex: no-check
-# Milestone-4 smoke test: Task.start + await for concurrent async work.
+# Task.start + await for concurrent async work. Runs on both the
+# tree-walking interpreter (`kex`) and the BEAM backend (`kex -R`).
 
 foul slowAdd(a: Int, b: Int) -> Int do
   a + b

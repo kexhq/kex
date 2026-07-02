@@ -84,12 +84,22 @@ int main() {
         it("test_union.kex", []() { assertTrue(parseFile("examples/test_union.kex")); });
         it("compiled_sql.kex", []() { assertTrue(parseFile("examples/compiled_sql.kex")); });
         it("compiled_css.kex", []() { assertTrue(parseFile("examples/compiled_css.kex")); });
-        // Aspirational — parse must succeed even though they don't run in the tree-walker.
+        // Aspirational — parse must succeed even though they don't run on
+        // either backend yet. chat_server_genserver.kex specifically needs
+        // Net/serving/slot, none of which exist — unrelated to the process
+        // model (spawn/receive/Task/Supervisor), which both backends do
+        // support (see the process examples below).
         it("aspirational/compiled.kex", []() { assertTrue(parseFile("examples/aspirational/compiled.kex")); });
         it("aspirational/html_dsl.kex", []() { assertTrue(parseFile("examples/aspirational/html_dsl.kex")); });
         it("aspirational/compiled_router.kex", []() { assertTrue(parseFile("examples/aspirational/compiled_router.kex")); });
-        // BEAM-target examples — parse must succeed even though they run via BEAM codegen, not the tree-walker.
-        it("beam/processes.kex", []() { assertTrue(parseFile("examples/beam/processes.kex")); });
+        it("aspirational/chat_server_genserver.kex", []() { assertTrue(parseFile("examples/aspirational/chat_server_genserver.kex")); });
+        // Process examples — parse (and, below, run) on both the
+        // tree-walking interpreter and the BEAM backend (`kex -R`).
+        it("proc_ping.kex", []() { assertTrue(parseFile("examples/proc_ping.kex")); });
+        it("proc_link.kex", []() { assertTrue(parseFile("examples/proc_link.kex")); });
+        it("proc_supervisor.kex", []() { assertTrue(parseFile("examples/proc_supervisor.kex")); });
+        it("proc_task.kex", []() { assertTrue(parseFile("examples/proc_task.kex")); });
+        it("processes.kex", []() { assertTrue(parseFile("examples/processes.kex")); });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -113,6 +123,11 @@ int main() {
         it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });
         it("pattern_matching.kex", []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
+        it("proc_ping.kex", []() { assertTrue(runFileOk("examples/proc_ping.kex")); });
+        it("proc_link.kex", []() { assertTrue(runFileOk("examples/proc_link.kex")); });
+        it("proc_supervisor.kex", []() { assertTrue(runFileOk("examples/proc_supervisor.kex")); });
+        it("proc_task.kex", []() { assertTrue(runFileOk("examples/proc_task.kex")); });
+        it("processes.kex", []() { assertTrue(runFileOk("examples/processes.kex")); });
         it("real_world.kex", []() { assertTrue(runFileOk("examples/real_world.kex")); });
         it("records.kex", []() { assertTrue(runFileOk("examples/records.kex")); });
         it("stdlib_demo.kex", []() { assertTrue(runFileOk("examples/stdlib_demo.kex")); });

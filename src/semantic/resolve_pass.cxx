@@ -226,6 +226,14 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
             for (const auto& clause : node.clauses) {
                 pushScope();
+                // When a sender binding is present (`receive do |sender|
+                // ... end`), every message is a {Payload, Sender} tuple and
+                // the sender name is in scope for every clause, alongside
+                // the pattern vars — matches analyzer.cxx's equivalent
+                // handling of the same construct.
+                if (node.senderBinding && *node.senderBinding != "_") {
+                    defineLocal(*node.senderBinding);
+                }
                 for (const auto& pat : clause.patterns)
                     if (pat) resolvePattern(*pat);
                 if (clause.guard) resolveExpr(**clause.guard);

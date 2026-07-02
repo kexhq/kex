@@ -1,0 +1,26 @@
+# link/alive?/Process.self. Runs on both the tree-walking interpreter
+# (`kex`) and the BEAM backend (`kex -R`) — note the interpreter's `link`
+# is passive bookkeeping only (no cascading kill/exit-signal delivery,
+# unlike real BEAM links), so "parent" below just times out waiting rather
+# than receiving an actual exit signal; the observable behavior is the
+# same either way since nothing here relies on the signal itself.
+
+foul crasher do
+  spawn do
+    receive do
+      :go -> IO.printLine("crasher: exiting")
+    end
+  end
+end
+
+main do
+  let child = crasher()
+  child.link()
+  IO.printLine("child alive? " + child.alive?().to(String))
+  child.send(:go)
+  # Small timeout to let the child finish
+  receive timeout: 200 do
+    _ -> IO.printLine("unexpected message")
+  after -> IO.printLine("parent: child has exited")
+  end
+end
