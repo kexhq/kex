@@ -90,7 +90,8 @@ auto Lexer::nextToken() -> Token {
             return makeToken(TokenType::Question);
         case '/': return makeToken(TokenType::Slash);
         case '*': return makeToken(TokenType::Star);
-        case '+': return makeToken(TokenType::Plus);
+        case '+':
+            return makeToken(TokenType::Plus);
 
         case '-':
             if (match('>')) return makeToken(TokenType::Arrow);

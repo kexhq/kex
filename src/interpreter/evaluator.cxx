@@ -63,6 +63,8 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             execTypeDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
             execTraitDef(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+            execCompiledBlock(*node);
         }
     }, item);
 }
@@ -85,9 +87,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 execVisibilityBlock(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
                 execTraitDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                execCompiledBlock(*node);
             }
-            // CompiledBlock/UsingBlock: not implemented yet (separate,
-            // larger features — metaprogramming and module imports).
         }, item);
     }
 }
@@ -100,6 +102,28 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             execFunctionDef(**fn);
         }
+    }
+}
+
+auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block) -> void {
+    // Execute compiled block items as if they were regular module items.
+    // The interpreter doesn't distinguish compile-time vs runtime evaluation;
+    // function defs and make blocks are simply registered in the environment.
+    for (const auto& item : block.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                execFunctionDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                execMakeDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                execRecordDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                execTypeDef(*node);
+            } else if constexpr (std::is_same_v<T, ast::ExprPtr>) {
+                if (node) eval(*node);
+            }
+        }, item);
     }
 }
 
@@ -240,29 +264,78 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
     // vector from the map — avoids a dangling pointer when unordered_map
     // rehashes after a new key is inserted for a different function.
     auto funcValue = std::make_shared<Value>();
-    funcValue->data = FunctionValue{def.name, [this, regName](std::vector<ValuePtr> args) -> ValuePtr {
+    // A name containing "::" was registered with a type scope → it's a UFCS
+    // method and the first arg is always the receiver ("this").
+    bool isMethod = regName.find("::") != std::string::npos;
+    funcValue->data = FunctionValue{def.name, [this, regName, isMethod](std::vector<ValuePtr> args) -> ValuePtr {
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
                 pushEnv();
                 bool matched = true;
 
-                // If more args than params, first arg is 'this' (UFCS method call)
+                // UFCS: if this function is a type-scoped method (name contains "::"),
+                // the first arg is always "this" (the receiver). Fall back to the old
+                // args.size() > params heuristic for free functions that might receive
+                // extra args through some other path.
+                // Decide whether args[0] is the implicit receiver ("this") or
+                // an explicit first-param match.
+                //
+                // Rules:
+                // 1. If the first param is a ThisPattern (@Pat), it explicitly
+                //    matches the receiver — argOffset stays 0.
+                // 2. If args has one MORE element than the (non-default) params
+                //    and this is a type-scoped method, the extra arg is the
+                //    receiver — argOffset = 1. This handles `from(table)` called
+                //    as `q.from(:users)` (args=[q,:users], params=[table]).
+                // 3. Legacy: any extra arg beyond params is the receiver (the
+                //    old `args.size() > clause.params.size()` check). Handles
+                //    pre-@ make-block functions like `let pub(b) = b.priv`.
+                bool firstParamIsThisPattern = !clause.params.empty()
+                    && clause.params[0].pattern
+                    && *clause.params[0].pattern
+                    && std::holds_alternative<ast::ThisPattern>((*clause.params[0].pattern)->kind);
+
+                // Count required params (those without defaults)
+                size_t requiredParams = 0;
+                for (const auto& p : clause.params) {
+                    if (!p.defaultValue) requiredParams++;
+                }
+
                 size_t argOffset = 0;
-                if (args.size() > clause.params.size()) {
+                if (firstParamIsThisPattern) {
+                    // @Pat: receiver is pattern-matched as first param; bind this for @field access
+                    if (!args.empty()) m_env->define("this", args[0]);
+                    argOffset = 0;
+                } else if (isMethod && !args.empty()
+                           && args.size() == requiredParams + 1) {
+                    // Type-scoped method called with exactly required-params + 1 args:
+                    // the extra arg is the receiver.
+                    m_env->define("this", args[0]);
+                    argOffset = 1;
+                } else if (args.size() > clause.params.size()) {
+                    // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
                 }
 
-                for (size_t i = 0; i < clause.params.size() && (i + argOffset) < args.size(); i++) {
+                for (size_t i = 0; i < clause.params.size(); i++) {
                     const auto& param = clause.params[i];
-                    if (param.pattern && *param.pattern) {
-                        if (!matchPattern(**param.pattern, args[i + argOffset])) {
-                            matched = false;
-                            break;
+                    if ((i + argOffset) < args.size()) {
+                        if (param.pattern && *param.pattern) {
+                            if (!matchPattern(**param.pattern, args[i + argOffset])) {
+                                matched = false;
+                                break;
+                            }
+                        } else if (param.name.has_value()) {
+                            m_env->define(*param.name, args[i + argOffset]);
                         }
-                    } else if (param.name.has_value()) {
-                        m_env->define(*param.name, args[i + argOffset]);
+                    } else if (param.defaultValue && *param.defaultValue) {
+                        // No arg provided — use the default value
+                        if (param.name.has_value()) {
+                            m_env->define(*param.name, eval(**param.defaultValue));
+                        }
                     }
+                    // No arg and no default: leave unbound (may cause runtime error if accessed)
                 }
 
                 if (matched) {
@@ -872,6 +945,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 [this, bodyPtr, paramNames, capturedEnv](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
+                    // If the lambda expects multiple params but receives a single
+                    // tuple, auto-spread it so `list.each do |a, b|` works on
+                    // a list of pairs without breaking `each do |pair|`.
+                    if (paramNames.size() > 1 && args.size() == 1) {
+                        if (auto* tv = std::get_if<TupleValue>(&args[0]->data)) {
+                            if (tv->elements.size() == paramNames.size()) {
+                                args = tv->elements;
+                            }
+                        }
+                    }
                     for (size_t i = 0; i < paramNames.size() && i < args.size(); i++) {
                         m_env->define(paramNames[i], args[i]);
                     }
@@ -1119,6 +1202,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
                                expr.location);
         }
+        else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+            // `using Module` inside a body: execute the module's compiled
+            // block functions in the current scope so their names become
+            // available as plain identifiers (e.g. `html`, `body` after
+            // `using Html.Language`). Currently a no-op because compiled
+            // block functions are already registered globally by execModule.
+            if (!node.body.empty()) {
+                for (const auto& e : node.body) {
+                    if (e) eval(*e);
+                }
+            }
+            return Value::unit();
+        }
         else {
             return Value::none();
         }
@@ -1194,6 +1290,15 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             // we just want "what text does this contribute", which a bare
             // Char answers fine; see textContent vs. stringOrCharListText
             // in value.cxx.
+            {
+                auto* ll = std::get_if<ListValue>(&left->data);
+                auto* rl = std::get_if<ListValue>(&right->data);
+                if (ll && rl) {
+                    std::vector<ValuePtr> elems = ll->elements;
+                    elems.insert(elems.end(), rl->elements.begin(), rl->elements.end());
+                    return Value::list(std::move(elems));
+                }
+            }
             if (auto lt = textContent(left)) {
                 if (auto rt = textContent(right)) return Value::string(*lt + *rt);
             }

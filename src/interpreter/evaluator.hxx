@@ -58,6 +58,7 @@ private:
     auto execTypeDef(const ast::TypeDef& def) -> void;
     auto execRecordDef(const ast::RecordDef& def) -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
+    auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
 

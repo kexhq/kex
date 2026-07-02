@@ -1,0 +1,123 @@
+# Compiled metaprogramming
+
+# Simple constant generation
+compiled do
+  MAX_RETRIES = 3
+  TIMEOUT_MS = 5000
+end
+
+# Generate functions from a list
+module Validators do
+  compiled do
+    TYPES = ["email", "phone", "url", "ip"]
+
+    TYPES.each do |name|
+      let %name?(input: String) -> Bool do
+        return BuiltIn.Validators.validate(input, "%name")
+      end
+    end
+  end
+end
+
+# Generate from env
+module Config do
+  compiled do
+    ENV_PREFIX = Env.get("APP_PREFIX") ?? "app"
+
+    KEYS = ["database_url", "redis_url", "secret_key", "port"]
+
+    KEYS.each do |key|
+      let %key -> String? do
+        return Env.get("${ENV_PREFIX}_${key}")
+      end
+    end
+  end
+end
+
+# HTML DSL generation (full example)
+module Html do
+  record Element do
+    name : String
+    id : String? = None
+    classes : [String] = []
+    attributes : { String: String } = {}
+    children : [Element | String] = []
+  end
+
+  type Node = Element | String
+
+  module Language do
+    compiled do
+      VOID_ELEMENTS = ["br", "hr", "img", "input", "meta", "link"]
+      BLOCK_ELEMENTS = ["html", "head", "body", "div", "p", "span",
+                        "footer", "header", "nav", "main", "section",
+                        "article", "aside", "ul", "ol", "li", "table",
+                        "tr", "td", "th", "form", "a"]
+      HEADERS = (1..6).map { |i| "h${i}" }
+      ALL_ELEMENTS = BLOCK_ELEMENTS + HEADERS
+
+      ALL_ELEMENTS.each do |name|
+        let %name(id = None, classes = [], block: Block<[Node]>) -> Element do
+          let children = block()
+          return Element { name: "%name", id: id, classes: classes, children: children }
+        end
+      end
+
+      VOID_ELEMENTS.each do |name|
+        let %name(id = None, classes = [], attributes = {}) -> Element do
+          return Element { name: "%name", id: id, classes: classes, attributes: attributes }
+        end
+      end
+    end
+
+    # Title is special — takes a string directly
+    let title(text: String) -> Element do
+      return Element { name: "title", children: [text] }
+    end
+  end
+end
+
+# Type generation
+module Events do
+  compiled do
+    EVENT_NAMES = ["click", "submit", "change", "focus", "blur", "keydown"]
+
+    EVENT_NAMES.each do |name|
+      type %name = Event { type: "%name", target: Element }
+    end
+  end
+end
+
+# Generate operator overloads for vector math
+module Vec do
+  record Vec2 do
+    x : Float
+    y : Float
+  end
+
+  record Vec3 do
+    x : Float
+    y : Float
+    z : Float
+  end
+
+  compiled do
+    OPS = [
+      ("add", "+"),
+      ("subtract", "-"),
+      ("multiply", "*")
+    ]
+
+    VECS = ["Vec2", "Vec3"]
+
+    VECS.each do |vecName|
+      make %vecName do
+        OPS.each do |opName, _|
+          let %opName(other: This) -> This do
+            # Implementation generated per-vec
+          end
+        end
+      end
+    end
+  end
+end

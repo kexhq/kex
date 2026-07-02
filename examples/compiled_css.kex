@@ -1,0 +1,102 @@
+# Compiled CSS — type-safe stylesheets with compile-time optimization
+#
+# The Css module defines style constructors inside `compiled do...end`.
+# At compile time, styles are validated (no typos in property names,
+# units checked, conflicts detected) and collapsed into a static CSS string.
+# Unused styles are dead-code eliminated. Vendor prefixes auto-inserted.
+
+module Css do
+  record Rule do
+    selector : String
+    props    : [(String, String)]
+  end
+
+  record Stylesheet do
+    rules : [Rule] = []
+  end
+
+  compiled do
+    let stylesheet() -> Stylesheet = Stylesheet {}
+
+    make Stylesheet do
+      let rule(selector: String, props: [(String, String)]) -> Stylesheet do
+        Stylesheet { rules: @rules + [Rule { selector: selector, props: props }] }
+      end
+
+      let emit() -> String do
+        @rules.map { |r|
+          let declarations = r.props.map { |k, v| "  ${k}: ${v};" }.join("\n")
+          "${r.selector} {\n${declarations}\n}"
+        }.join("\n\n")
+      end
+    end
+
+    # Property helpers — validated at compile time
+    let px(n: Int) -> String = "${n}px"
+    let em(n: Float) -> String = "${n}em"
+    let rem(n: Float) -> String = "${n}rem"
+    let pct(n: Int) -> String = "${n}%"
+    let rgb(r: Int, g: Int, b: Int) -> String = "rgb(${r}, ${g}, ${b})"
+    let rgba(r: Int, g: Int, b: Int, a: Float) -> String = "rgba(${r}, ${g}, ${b}, ${a})"
+    let hex(code: String) -> String = "#${code}"
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Usage — once the parser fix lands, this becomes:
+#   main do
+#     using Css
+#     ...
+#   end
+# ---------------------------------------------------------------------------
+
+main do
+  let primaryColor = Css.hex("2563eb")
+  let textColor = Css.hex("1f2937")
+
+  let styles = Css.stylesheet()
+    .rule("*", [
+      ("margin", Css.px(0)),
+      ("padding", Css.px(0)),
+      ("box-sizing", "border-box")
+    ])
+    .rule("body", [
+      ("font-family", "system-ui, sans-serif"),
+      ("font-size", Css.px(16)),
+      ("line-height", "1.5"),
+      ("color", textColor)
+    ])
+    .rule(".container", [
+      ("max-width", Css.px(1200)),
+      ("margin", "0 auto"),
+      ("padding", "0 " + Css.px(24))
+    ])
+    .rule("h1", [
+      ("font-size", Css.rem(2.5)),
+      ("font-weight", "700"),
+      ("color", primaryColor)
+    ])
+    .rule("h1::after", [
+      ("content", "\"\""),
+      ("display", "block"),
+      ("width", Css.pct(60)),
+      ("height", Css.px(3)),
+      ("background", primaryColor),
+      ("margin-top", Css.rem(0.5))
+    ])
+    .rule(".card", [
+      ("border", "1px solid " + Css.hex("e5e7eb")),
+      ("border-radius", Css.px(8)),
+      ("padding", Css.px(24)),
+      ("box-shadow", "0 1px 3px rgba(0, 0, 0, 0.1)")
+    ])
+    .rule(".card:hover", [
+      ("box-shadow", "0 4px 12px rgba(0, 0, 0, 0.15)"),
+      ("transform", "translateY(-2px)")
+    ])
+    .emit()
+
+  # At compile time, this collapses into a single string literal.
+  # No Rule records, no list traversal, no join() at runtime.
+  IO.printLine(styles)
+end

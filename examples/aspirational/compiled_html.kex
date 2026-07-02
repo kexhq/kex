@@ -1,0 +1,84 @@
+# Compiled HTML — type-safe templates with compile-time optimization
+#
+# The Html module defines element constructors inside `compiled do...end`.
+# At compile time, the full element tree is known (except for free variables),
+# so `.emit()` collapses it into a pre-built string — no tree allocation,
+# no recursive rendering at runtime.
+
+module Html do
+  record Element do
+    tag      : String
+    id       : String? = None
+    classes  : [String] = []
+    attrs    : { String: String } = {}
+    children : [Element | String] = []
+    void     : Bool = false
+  end
+
+  module Language do
+    compiled do
+      BLOCK_TAGS = ["html", "head", "body", "div", "p", "section", "article",
+                    "nav", "header", "footer", "ul", "ol", "li", "form",
+                    "table", "thead", "tbody", "tr", "td", "th"]
+      INLINE_TAGS = ["span", "a", "strong", "em", "code", "small", "label"]
+      VOID_TAGS = ["br", "hr", "img", "input", "meta", "link"]
+      HEADING_TAGS = (1..6).map { |i| "h${i}" }
+
+      ALL_TAGS = BLOCK_TAGS + INLINE_TAGS + HEADING_TAGS
+
+      ALL_TAGS.each do |tag|
+        let %tag(id = None, classes = [], block: Block<[Element | String]>) -> Element do
+          let children = block()
+          Element { tag: "%tag", id: id, classes: classes, children: children }
+        end
+      end
+
+      VOID_TAGS.each do |tag|
+        let %tag(attrs = {}) -> Element do
+          Element { tag: "%tag", attrs: attrs, void: true }
+        end
+      end
+
+      let title(block: Block<String>) -> Element do
+        Element { tag: "title", children: [block()] }
+      end
+
+      let emit(el: Element) -> String = render_tree(el)
+    end
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Usage
+# ---------------------------------------------------------------------------
+
+main do
+  using Html.Language
+
+  let document = html do
+    head do
+      title do
+        "Very nice"
+      end
+    end
+
+    body do
+      h1 id: "main-title" do
+        "Hello, world"
+      end
+
+      div classes: ["info", "box"] do
+        p do
+          "This is some coolness"
+        end
+      end
+
+      footer do
+        "Copyright (C) Alice Kovacs"
+      end
+    end
+  end
+
+  let output = emit(document)
+  IO.printLine(output)
+end

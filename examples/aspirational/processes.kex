@@ -1,0 +1,106 @@
+# Process model showcase — typed processes, supervision, tasks.
+# Run with: kex -R examples/processes.kex
+
+# --------------------------------------------------------------------
+# Typed counter process — functional loop, no mutable state
+# --------------------------------------------------------------------
+
+type CounterMessage = Increment | Reset | Get(Process<Int>)
+
+foul counterLoop(n: Int) do
+  receive do
+    Increment -> counterLoop(n + 1)
+    Reset -> counterLoop(0)
+    Get(sender) -> do
+      sender.send(n)
+      counterLoop(n)
+    end
+  end
+end
+
+foul startCounter -> Process<CounterMessage> do
+  return spawn do counterLoop(0) end
+end
+
+# --------------------------------------------------------------------
+# Chat process — accepts typed messages, broadcasts to all members
+# --------------------------------------------------------------------
+
+type ChatMessage = Join(String) | Leave(String) | Broadcast(String, String)
+
+foul chatLoop(users: [String]) do
+  receive do
+    Join(name) -> chatLoop([name | users])
+    Leave(name) -> chatLoop(users.reject { |u| u == name })
+    Broadcast(from, text) -> do
+      IO.printLine("[chat] " + from + ": " + text)
+      chatLoop(users)
+    end
+  end
+end
+
+foul startChat -> Process<ChatMessage> do
+  return spawn do chatLoop([]) end
+end
+
+# --------------------------------------------------------------------
+# Tasks — async parallel computation
+# --------------------------------------------------------------------
+
+foul slowSquare(n: Int) -> Int do
+  n * n
+end
+
+# --------------------------------------------------------------------
+# Supervision tree
+# --------------------------------------------------------------------
+
+foul startCounterWorker do
+  startCounter()
+end
+
+# --------------------------------------------------------------------
+# main — exercise the full process model
+# --------------------------------------------------------------------
+
+main do
+  # --- Typed counter ---
+  let counter = startCounter()
+  counter.send(Increment)
+  counter.send(Increment)
+  counter.send(Increment)
+  counter.send(Reset)
+  counter.send(Increment)
+  counter.send(Get(Process.self))
+  receive do
+    n -> IO.printLine("counter = " + n.to(String))
+  end
+
+  # --- Chat room ---
+  let chat = startChat()
+  chat.send(Join("Alice"))
+  chat.send(Join("Bob"))
+  chat.send(Broadcast("Alice", "hello everyone"))
+  chat.send(Leave("Bob"))
+
+  # --- Tasks (async parallel) ---
+  let t1 = Task.start { slowSquare(6) }
+  let t2 = Task.start { slowSquare(7) }
+  match t1.await(timeout: 5000) do
+    Ok(v) -> IO.printLine("6^2 = " + v.to(String))
+    Error(_) -> IO.printLine("6^2 task failed")
+  end
+  match t2.await(timeout: 5000) do
+    Ok(v) -> IO.printLine("7^2 = " + v.to(String))
+    Error(_) -> IO.printLine("7^2 task failed")
+  end
+
+  # --- Supervision tree ---
+  let supResult = Supervisor.start(restart: :only_crashed) do
+    [worker { startCounterWorker() }]
+  end
+  match supResult do
+    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String))
+    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String))
+  end
+end

@@ -1546,6 +1546,23 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
+    // `using Module` or `using Module do...end` inside a body
+    if (check(TokenType::Using)) {
+        advance(); // consume 'using'
+        ast::UsingExpr usingExpr;
+        usingExpr.module = parseTypeName();
+        if (match(TokenType::Do)) {
+            skipNewlines();
+            while (!check(TokenType::End) && !atEnd()) {
+                usingExpr.body.push_back(parseExpr());
+                skipNewlines();
+            }
+            expect(TokenType::End, "Expected 'end' to close using block");
+        }
+        expr->kind = std::move(usingExpr);
+        return expr;
+    }
+
     error("Unexpected token: " + std::string(tokenTypeName(peek().type)));
 }
 
@@ -1573,6 +1590,75 @@ auto Parser::parseIfExpr() -> ast::ExprPtr {
     // (multiline). The `then` keyword acts as an inline body separator so
     // that `if n == 0 then true else false end` parses correctly without
     // consuming `then` as a ternary operator inside the condition.
+    // `if val do |binding| ... end` — option-unwrapping guard.
+    // Desugars to: match val do Just(binding) -> body; _ -> () end
+    if (check(TokenType::Do) && !letPattern) {
+        // Peek past 'do' to see if this is 'do |name|'
+        auto saved = m_pos;
+        advance(); // consume 'do'
+        skipNewlines();
+        if (check(TokenType::Pipe)) {
+            advance(); // consume '|'
+            if (check(TokenType::LowerIdent)) {
+                auto bindName = advance().value;
+                if (match(TokenType::Pipe)) {
+                    skipNewlines();
+                    // Collect body
+                    std::vector<ast::ExprPtr> body;
+                    while (!check(TokenType::End) && !atEnd()) {
+                        body.push_back(parseExpr());
+                        skipNewlines();
+                    }
+                    expect(TokenType::End, "Expected 'end' to close if block");
+
+                    // Desugars to: match condition do None -> (); binding -> body end
+                    // This handles both explicit Optional (None / Just(x)) and
+                    // truthy-optional fields (None / bare-value) uniformly.
+                    auto matchExpr = std::make_unique<ast::Expr>();
+                    matchExpr->location = expr->location;
+
+                    // None literal pattern
+                    auto nonePat = std::make_unique<ast::Pattern>();
+                    nonePat->location = expr->location;
+                    nonePat->kind = ast::LiteralPattern{Token{TokenType::None, "None", {}}};
+
+                    // Variable binding pattern
+                    auto varPat = std::make_unique<ast::Pattern>();
+                    varPat->location = expr->location;
+                    varPat->kind = ast::VarPattern{bindName};
+
+                    // Build () unit for None clause
+                    auto unitExpr = std::make_unique<ast::Expr>();
+                    unitExpr->location = expr->location;
+                    unitExpr->kind = ast::TupleExpr{{}};
+
+                    // Build body expr for binding clause
+                    auto bodyExpr = std::make_unique<ast::Expr>();
+                    bodyExpr->location = expr->location;
+                    bodyExpr->kind = ast::BlockExpr{std::move(body)};
+
+                    ast::MatchClause noneClause;
+                    noneClause.patterns.push_back(std::move(nonePat));
+                    noneClause.body = std::move(unitExpr);
+
+                    ast::MatchClause bindClause;
+                    bindClause.patterns.push_back(std::move(varPat));
+                    bindClause.body = std::move(bodyExpr);
+
+                    ast::MatchExpr matchNode;
+                    matchNode.subject = std::move(condition);
+                    matchNode.clauses.push_back(std::move(noneClause));
+                    matchNode.clauses.push_back(std::move(bindClause));
+
+                    matchExpr->kind = std::move(matchNode);
+                    return matchExpr;
+                }
+            }
+        }
+        // Not an option guard — restore position and fall through to error
+        m_pos = saved;
+    }
+
     // `do` after an if condition is a syntax error — use `then`.
     if (check(TokenType::Do))
         error("use 'then' instead of 'do' in if expression: `if cond then body end`");
@@ -2439,39 +2525,51 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
-        // UPPER = expr (compile-time constant assignment)
+        // UPPER = expr (compile-time constant definition)
         if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
             auto loc = currentLocation();
             auto name = advance().value;
             advance(); // =
             auto value = parseExpr();
-
+            // Emit as LetExpr{VarPattern{name}, value} so the evaluator defines
+            // the binding with m_env->define() rather than requiring a mutable
+            // pre-existing variable (AssignExpr would throw "Undefined variable").
+            auto pat = std::make_unique<ast::Pattern>();
+            pat->kind = ast::VarPattern{name};
             auto expr = std::make_unique<ast::Expr>();
             expr->location = loc;
-            expr->kind = ast::AssignExpr{std::move(name), std::move(value)};
-            block->body.push_back(std::move(expr));
+            expr->kind = ast::LetExpr{std::move(pat), std::move(value)};
+            block->items.push_back(std::move(expr));
+        }
+        // Function definition (possibly splice: let %name(...) = ...)
+        else if (check(TokenType::Let) || check(TokenType::Foul)) {
+            bool isFoul = check(TokenType::Foul);
+            if (isFoul) advance();
+            block->items.push_back(parseFunctionDef(isFoul));
+        }
+        // make Block inside compiled
+        else if (check(TokenType::Make)) {
+            block->items.push_back(parseMakeDef());
+        }
+        // record definition inside compiled
+        else if (check(TokenType::Record)) {
+            block->items.push_back(parseRecordDef());
         }
         // type definition inside compiled
         else if (check(TokenType::Type)) {
-            // Skip type defs in compiled blocks for now (consume until end of line)
-            advance(); // type
-            while (!check(TokenType::Newline) && !check(TokenType::End) && !atEnd()) {
-                advance();
-            }
+            block->items.push_back(parseTypeDef());
         }
-        // %name :> TypeAnnotation or %name : TypeAnnotation
+        // %name :> TypeAnnotation or %name : TypeAnnotation (type annotation for splice)
         else if (check(TokenType::SpliceIdent) &&
                  (peekNext().type == TokenType::TypeAnnotation || peekNext().type == TokenType::Colon)) {
             advance(); // %name
             advance(); // :> or :
-            parseTypeExpr(); // consume type
-        }
-        // let %name(...) or regular let
-        else if (check(TokenType::Let) || check(TokenType::Foul)) {
-            block->body.push_back(parseExpr());
+            parseTypeExpr(); // consume type — annotation only, no item emitted
         }
         else {
-            block->body.push_back(parseExpr());
+            // Fallback: general expression (e.g. .each { |tag| let %tag = ... } loops)
+            auto expr = parseExpr();
+            block->items.push_back(std::move(expr));
         }
         skipNewlines();
     }

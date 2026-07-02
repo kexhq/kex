@@ -611,6 +611,12 @@ auto Evaluator::registerListBuiltins() -> void {
         }
         return Value::list(std::move(result));
     });
+
+    // inspect() — pretty-printed representation of any value (UFCS on all types)
+    reg("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::string("()");
+        return Value::string(args[0]->inspect());
+    });
 }
 
 } // namespace kex::interpreter

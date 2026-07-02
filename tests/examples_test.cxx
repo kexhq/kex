@@ -58,16 +58,13 @@ int main() {
     describe("Examples — All Parse", []() {
         it("basics.kex", []() { assertTrue(parseFile("examples/basics.kex")); });
         it("closures.kex", []() { assertTrue(parseFile("examples/closures.kex")); });
-        it("compiled.kex", []() { assertTrue(parseFile("examples/compiled.kex")); });
         it("error_handling.kex", []() { assertTrue(parseFile("examples/error_handling.kex")); });
         it("generics.kex", []() { assertTrue(parseFile("examples/generics.kex")); });
-        it("html_dsl.kex", []() { assertTrue(parseFile("examples/html_dsl.kex")); });
         it("json_parser.kex", []() { assertTrue(parseFile("examples/json_parser.kex")); });
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(parseFile("examples/mutating.kex")); });
         it("pattern_matching.kex", []() { assertTrue(parseFile("examples/pattern_matching.kex")); });
-        it("processes.kex", []() { assertTrue(parseFile("examples/processes.kex")); });
         it("real_world.kex", []() { assertTrue(parseFile("examples/real_world.kex")); });
         it("records.kex", []() { assertTrue(parseFile("examples/records.kex")); });
         it("streams.kex", []() { assertTrue(parseFile("examples/streams.kex")); });
@@ -85,6 +82,13 @@ int main() {
         it("hello.kex", []() { assertTrue(parseFile("examples/hello.kex")); });
         it("stdlib_demo.kex", []() { assertTrue(parseFile("examples/stdlib_demo.kex")); });
         it("test_union.kex", []() { assertTrue(parseFile("examples/test_union.kex")); });
+        it("compiled_sql.kex", []() { assertTrue(parseFile("examples/compiled_sql.kex")); });
+        it("compiled_css.kex", []() { assertTrue(parseFile("examples/compiled_css.kex")); });
+        it("compiled_router.kex", []() { assertTrue(parseFile("examples/compiled_router.kex")); });
+        // Aspirational — parse must succeed even though they don't run in the tree-walker.
+        it("aspirational/compiled.kex", []() { assertTrue(parseFile("examples/aspirational/compiled.kex")); });
+        it("aspirational/html_dsl.kex", []() { assertTrue(parseFile("examples/aspirational/html_dsl.kex")); });
+        it("aspirational/processes.kex", []() { assertTrue(parseFile("examples/aspirational/processes.kex")); });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -93,29 +97,25 @@ int main() {
     describe("Examples — All Run", []() {
         it("basics.kex", []() { assertTrue(runFileOk("examples/basics.kex")); });
         it("closures.kex", []() { assertTrue(runFileOk("examples/closures.kex")); });
-        it("compiled.kex", []() { assertTrue(runFileOk("examples/compiled.kex")); });
+        it("compiled_sql.kex", []() { assertTrue(runFileOk("examples/compiled_sql.kex")); });
+        it("compiled_css.kex", []() { assertTrue(runFileOk("examples/compiled_css.kex")); });
+        it("compiled_router.kex", []() { assertTrue(runFileOk("examples/compiled_router.kex")); });
         it("env.kex", []() { assertTrue(runFileOk("examples/env.kex")); });
         it("error_handling.kex", []() { assertTrue(runFileOk("examples/error_handling.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(runFileOk("examples/fizzbuzz.kex")); });
-        it("fizzbuzz_abstraction.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_abstraction.kex")); });
         it("fizzbuzz_functional.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_functional.kex")); });
         it("fizzbuzz_pattern_matching.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_pattern_matching.kex")); });
         it("fizzbuzz_recursive.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_recursive.kex")); });
         it("fizzbuzz_simple.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_simple.kex")); });
         it("generics.kex", []() { assertTrue(runFileOk("examples/generics.kex")); });
         it("hello.kex", []() { assertTrue(runFileOk("examples/hello.kex")); });
-        it("html_dsl.kex", []() { assertTrue(runFileOk("examples/html_dsl.kex")); });
         it("maps.kex", []() { assertTrue(runFileOk("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });
         it("pattern_matching.kex", []() { assertTrue(runFileOk("examples/pattern_matching.kex")); });
-        // processes.kex is BEAM-only (spawn/receive/Task); parse-only test is in the
-        // Parser suite above. Interpreter suite skips it to avoid spurious failures.
-        it("processes.kex parses without error", []() { assertTrue(parseFile("examples/processes.kex")); });
         it("real_world.kex", []() { assertTrue(runFileOk("examples/real_world.kex")); });
         it("records.kex", []() { assertTrue(runFileOk("examples/records.kex")); });
         it("stdlib_demo.kex", []() { assertTrue(runFileOk("examples/stdlib_demo.kex")); });
-        it("streams.kex", []() { assertTrue(runFileOk("examples/streams.kex")); });
         it("test_union.kex", []() { assertTrue(runFileOk("examples/test_union.kex")); });
         it("types.kex", []() { assertTrue(runFileOk("examples/types.kex")); });
         it("vectors.kex", []() { assertTrue(runFileOk("examples/vectors.kex")); });

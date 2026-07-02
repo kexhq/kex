@@ -1,0 +1,23 @@
+# kex: no-check
+# Milestone-2 smoke test: link to a child, it exits, parent gets signal.
+# Tests: spawn, link(), send, alive?(), Process.self.
+
+foul crasher do
+  spawn do
+    receive do
+      :go -> IO.printLine("crasher: exiting")
+    end
+  end
+end
+
+main do
+  let child = crasher()
+  child.link()
+  IO.printLine("child alive? " + child.alive?().to(String))
+  child.send(:go)
+  # Small timeout to let the child finish
+  receive timeout: 200 do
+    _ -> IO.printLine("unexpected message")
+  after -> IO.printLine("parent: child has exited (link signal delivered)")
+  end
+end
