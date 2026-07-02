@@ -3,108 +3,35 @@
 <head>
 <meta charset="utf-8">
 <title>Kex — in-browser REPL (test page)</title>
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
 <style>
-  :root {
-    color-scheme: dark;
-    --bg: #1e1e1e;
-    --panel: #252526;
-    --border: #3c3c3c;
-    --text: #d4d4d4;
-    --muted: #8a8a8a;
-    --accent: #4ec9b0;
-    --error: #f14c4c;
-    --prompt: #569cd6;
-  }
+  :root { color-scheme: dark; }
   * { box-sizing: border-box; }
   body {
     margin: 0;
-    background: var(--bg);
-    color: var(--text);
+    background: #1e1e1e;
+    color: #d4d4d4;
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     display: flex;
     flex-direction: column;
     height: 100vh;
   }
   header {
-    padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--border);
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid #3c3c3c;
     display: flex;
     align-items: baseline;
     gap: 0.75rem;
     flex-wrap: wrap;
   }
-  header h1 {
-    font-size: 0.95rem;
-    margin: 0;
-    font-weight: 600;
-  }
-  header .status {
-    font-size: 0.8rem;
-    color: var(--muted);
-  }
-  .warning {
-    margin: 0.5rem 1rem 0;
-    padding: 0.6rem 0.8rem;
-    background: #3a2f13;
-    border: 1px solid #6b5518;
-    border-radius: 6px;
-    font-size: 0.8rem;
-    color: #e0c675;
-    line-height: 1.4;
-  }
-  .warning code { color: #f0d78c; }
-  #output {
+  header h1 { font-size: 0.95rem; margin: 0; font-weight: 600; }
+  header .status { font-size: 0.8rem; color: #8a8a8a; }
+  #term-wrap {
     flex: 1;
-    overflow-y: auto;
-    padding: 1rem;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-size: 0.85rem;
-    line-height: 1.5;
+    min-height: 0;
+    padding: 0.5rem 0.75rem;
   }
-  .entry { margin-bottom: 0.9rem; }
-  .entry .src { color: var(--prompt); }
-  .entry .src::before { content: "kex> "; color: var(--muted); }
-  .entry .out { color: var(--text); }
-  .entry .out.is-error { color: var(--error); }
-  #input-row {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.75rem 1rem;
-    border-top: 1px solid var(--border);
-    background: var(--panel);
-  }
-  #input-row .gutter {
-    color: var(--muted);
-    padding-top: 0.4rem;
-    user-select: none;
-  }
-  #source {
-    flex: 1;
-    resize: vertical;
-    min-height: 2.6rem;
-    max-height: 40vh;
-    background: var(--bg);
-    color: var(--text);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    padding: 0.5rem 0.6rem;
-    font-family: inherit;
-    font-size: 0.85rem;
-  }
-  #run {
-    background: var(--accent);
-    color: #0b1b18;
-    border: none;
-    border-radius: 6px;
-    padding: 0 1rem;
-    font-weight: 600;
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-  #run:disabled { opacity: 0.5; cursor: default; }
-  #run:hover:not(:disabled) { filter: brightness(1.08); }
-  .hint { color: var(--muted); font-size: 0.75rem; padding: 0 1rem 0.6rem; }
+  #terminal { height: 100%; }
 </style>
 </head>
 <body>
@@ -113,95 +40,240 @@
     <span class="status" id="status">loading…</span>
   </header>
 
-  <div class="warning">
-    <strong>Known limitation:</strong> anything that causes a process to actually
-    yield — <code>receive</code>, <code>receive timeout:</code>,
-    <code>Task.await</code> — currently misbehaves (duplicated output, lost
-    state) due to an unresolved Asyncify/JS-interop issue in the wasm bindings.
-    See <code>docs/fiber-process-plan.md</code>'s "JS REPL bindings" section.
-    Everything else — expressions, <code>let</code>/<code>var</code>, functions,
-    records, pattern matching, and even <code>spawn</code> itself (just not
-    waiting on a reply) — works correctly.
-  </div>
-
-  <div id="output"></div>
-
-  <div id="input-row">
-    <span class="gutter">kex&gt;</span>
-    <textarea id="source" placeholder="1 + 2" autofocus rows="1"></textarea>
-    <button id="run" disabled>Run</button>
-  </div>
-  <div class="hint">Enter to run · Shift+Enter for a new line · state persists across lines, like a real REPL session</div>
+  <div id="term-wrap"><div id="terminal"></div></div>
 
   <script type="module">
+    import { Terminal } from "./vendor/xterm/xterm.mjs";
+    import { FitAddon } from "./vendor/xterm/addon-fit.mjs";
     import createKexReplModule from "../build-wasm/kex_repl_wasm.js";
 
     const statusEl = document.getElementById("status");
-    const outputEl = document.getElementById("output");
-    const sourceEl = document.getElementById("source");
-    const runEl = document.getElementById("run");
+
+    // A real terminal emulator (xterm.js), not a hand-rolled textarea —
+    // ANSI color codes below come straight from the wasm binary's own
+    // kex::color output (see src/wasm_repl.cxx), so coloring matches the
+    // native REPL exactly instead of being reimplemented in JS.
+    const term = new Terminal({
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      fontSize: 14,
+      cursorBlink: true,
+      theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+    });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById("terminal"));
+    fitAddon.fit();
+    window.addEventListener("resize", () => fitAddon.fit());
+
+    const PROMPT = "kex> ";
+    const CONT_PROMPT = "...> ";
+
+    // Same countBlocks() word-boundary do/end scan main.cxx's real REPL
+    // uses to decide whether to keep reading continuation lines (see its
+    // `countBlocks` lambda) — a straight port so multi-line `do ... end`
+    // blocks behave identically here.
+    function countBlocks(s) {
+      let count = 0;
+      const isAlnum = (c) => c !== undefined && /[A-Za-z0-9]/.test(c);
+      for (let i = 0; i < s.length; i++) {
+        if (s.substr(i, 2) === "do") {
+          const wordBefore = isAlnum(s[i - 1]);
+          const wordAfter = isAlnum(s[i + 2]);
+          if (!wordBefore && !wordAfter) count++;
+        }
+        if (s.substr(i, 3) === "end") {
+          const wordBefore = isAlnum(s[i - 1]);
+          const wordAfter = isAlnum(s[i + 3]);
+          if (!wordBefore && !wordAfter) count--;
+        }
+      }
+      return count;
+    }
+
+    // History persisted across page loads (localStorage stands in for the
+    // native REPL's history file — see main.cxx's read_history/write_history
+    // around HAS_READLINE). Every submitted physical line is recorded
+    // individually, matching readLine()'s per-line add_history call —
+    // continuation lines get their own history entries too.
+    const HISTORY_KEY = "kex-repl-history";
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { history = []; }
+    let historyPos = history.length;
+    let draft = "";
+
+    function saveHistory() {
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-500))); } catch {}
+    }
+
+    let line = "";
+    let cursor = 0;
+    let accumulated = "";
+    let prompt = PROMPT;
+    let evalSource = null; // set once the wasm module is ready
+
+    function writePrompt() {
+      term.write(prompt);
+    }
+
+    function redrawLine() {
+      term.write("\r\x1b[K" + prompt + line);
+      const back = line.length - cursor;
+      if (back > 0) term.write(`\x1b[${back}D`);
+    }
+
+    function setLine(s) {
+      line = s;
+      cursor = line.length;
+      redrawLine();
+    }
+
+    async function submitLine() {
+      term.write("\r\n");
+      if (line.length > 0) {
+        history.push(line);
+        historyPos = history.length;
+        saveHistory();
+      }
+      accumulated += (accumulated ? "\n" : "") + line;
+      line = "";
+      cursor = 0;
+
+      if (countBlocks(accumulated) > 0) {
+        prompt = CONT_PROMPT;
+        writePrompt();
+        return;
+      }
+
+      const src = accumulated;
+      accumulated = "";
+      prompt = PROMPT;
+
+      if (src.trim().length === 0) {
+        writePrompt();
+        return;
+      }
+
+      if (evalSource) {
+        const out = await evalSource(src);
+        // wasm output already ends in ANSI reset + newline where needed;
+        // just fix up bare \n into \r\n for the terminal.
+        term.write(out.replace(/\n/g, "\r\n"));
+      }
+      writePrompt();
+    }
+
+    term.onData((data) => {
+      if (!evalSource) return; // module not ready yet
+      switch (data) {
+        case "\r": // Enter
+          submitLine();
+          return;
+        case "": // Backspace
+          if (cursor > 0) {
+            line = line.slice(0, cursor - 1) + line.slice(cursor);
+            cursor--;
+            redrawLine();
+          }
+          return;
+        case "": // Ctrl-C: cancel current line / abort multi-line block
+          term.write("^C\r\n");
+          line = "";
+          cursor = 0;
+          accumulated = "";
+          prompt = PROMPT;
+          writePrompt();
+          return;
+        case "": // Ctrl-A: start of line
+          cursor = 0;
+          redrawLine();
+          return;
+        case "": // Ctrl-E: end of line
+          cursor = line.length;
+          redrawLine();
+          return;
+        case "": // Ctrl-K: kill to end of line
+          line = line.slice(0, cursor);
+          redrawLine();
+          return;
+        case "": // Ctrl-U: kill whole line
+          line = "";
+          cursor = 0;
+          redrawLine();
+          return;
+        case "": { // Ctrl-W: delete word backward
+          let end = cursor;
+          let start = end;
+          while (start > 0 && line[start - 1] === " ") start--;
+          while (start > 0 && line[start - 1] !== " ") start--;
+          line = line.slice(0, start) + line.slice(end);
+          cursor = start;
+          redrawLine();
+          return;
+        }
+        case "[A": // Up: previous history entry
+          if (historyPos > 0) {
+            if (historyPos === history.length) draft = line;
+            historyPos--;
+            setLine(history[historyPos]);
+          }
+          return;
+        case "[B": // Down: next history entry
+          if (historyPos < history.length) {
+            historyPos++;
+            setLine(historyPos === history.length ? draft : history[historyPos]);
+          }
+          return;
+        case "[C": // Right
+          if (cursor < line.length) { cursor++; redrawLine(); }
+          return;
+        case "[D": // Left
+          if (cursor > 0) { cursor--; redrawLine(); }
+          return;
+        case "[H": case "[1~": // Home (some terminals)
+          cursor = 0;
+          redrawLine();
+          return;
+        case "[F": case "[4~": // End
+          cursor = line.length;
+          redrawLine();
+          return;
+      }
+      // Printable character (or a pasted chunk of them) — insert at cursor.
+      if (data >= " " || data === "\t") {
+        line = line.slice(0, cursor) + data + line.slice(cursor);
+        cursor += data.length;
+        redrawLine();
+      }
+    });
+
+    term.writeln("kex 0.1.0 — interactive REPL (wasm, in-browser)");
+    term.writeln("\x1b[90mKnown limitation: receive / receive timeout: / Task.await currently\x1b[0m");
+    term.writeln("\x1b[90mmisbehave (duplicated output, lost state) — see docs/fiber-process-plan.md's\x1b[0m");
+    term.writeln("\x1b[90m\"JS REPL bindings\" section. Everything else works: expressions, let/var,\x1b[0m");
+    term.writeln("\x1b[90mfunctions, records, pattern matching, and spawn itself.\x1b[0m");
+    term.writeln("");
+    statusEl.textContent = "loading wasm module…";
 
     const Module = await createKexReplModule();
     const session = Module.ccall("kex_repl_create", "number", [], []);
 
-    async function evalSource(src) {
-      // kex_repl_eval is void-returning on purpose — see
-      // src/wasm_repl.cxx's doc comment: a direct return value from an
-      // Asyncify-instrumented export wasn't reliably reaching the JS
-      // caller, so the result is fetched via a second, ordinary
-      // synchronous call instead (kex_repl_last_result never touches
-      // Asyncify, so it's unaffected by that issue).
+    evalSource = async function (src) {
+      // kex_repl_eval is void-returning on purpose — see src/wasm_repl.cxx's
+      // doc comment: a direct return value from an Asyncify-instrumented
+      // export wasn't reliably reaching the JS caller, so the result is
+      // fetched via a second, ordinary synchronous call instead
+      // (kex_repl_last_result never touches Asyncify, so it's unaffected).
       await Module.ccall(
         "kex_repl_eval", null,
         ["number", "string"], [session, src],
         { async: true }
       );
       return Module.ccall("kex_repl_last_result", "string", ["number"], [session]);
-    }
-
-    function appendEntry(src, out, isError) {
-      const entry = document.createElement("div");
-      entry.className = "entry";
-      const srcEl = document.createElement("div");
-      srcEl.className = "src";
-      srcEl.textContent = src;
-      const outEl = document.createElement("div");
-      outEl.className = "out" + (isError ? " is-error" : "");
-      outEl.textContent = out;
-      entry.append(srcEl, outEl);
-      outputEl.appendChild(entry);
-      outputEl.scrollTop = outputEl.scrollHeight;
-    }
-
-    async function runCurrentSource() {
-      const src = sourceEl.value;
-      if (!src.trim()) return;
-      runEl.disabled = true;
-      sourceEl.disabled = true;
-      try {
-        const out = await evalSource(src);
-        appendEntry(src, out || "(no output)", out.startsWith("error:"));
-      } catch (e) {
-        appendEntry(src, "internal error: " + e, true);
-      } finally {
-        sourceEl.value = "";
-        runEl.disabled = false;
-        sourceEl.disabled = false;
-        sourceEl.focus();
-      }
-    }
-
-    runEl.addEventListener("click", runCurrentSource);
-    sourceEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        runCurrentSource();
-      }
-    });
+    };
 
     statusEl.textContent = "ready";
-    runEl.disabled = false;
-    sourceEl.focus();
+    writePrompt();
+    term.focus();
   </script>
 </body>
 </html>

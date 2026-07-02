@@ -45,8 +45,10 @@ extern "C" {
 
 EMSCRIPTEN_KEEPALIVE
 KexReplSession* kex_repl_create() {
-    // No terminal to color for in a browser — matches --no-colors.
-    kex::color::enabled = false;
+    // web/index.html renders this through a real terminal emulator
+    // (xterm.js), so leave ANSI colors on (the default) — output matches
+    // the native REPL's coloring exactly, rendered by the terminal instead
+    // of reimplemented in JS.
     auto* session = new KexReplSession();
     // Matches the real REPL's own mode — without it, each chunk's
     // top-level `main`-block wrapping pushes its own scope (see
@@ -124,13 +126,26 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         auto value = session->evaluator.execute(*program);
         result = session->evaluator.output().substr(outputBefore);
 
-        if (!isDef && value) {
-            result += "=> " + value->toRepr() + " : " + value->typeName() + "\n";
+        // Matches main.cxx's real REPL showResult lambda exactly (gray "=>"
+        // and ":", plain value, cyan type — showTypes defaults to on there
+        // too), so the two look identical once rendered through a real
+        // terminal instead of a plain-text diff.
+        if (!isDef && value && !std::holds_alternative<UnitValue>(value->data)) {
+            result += std::string(color::apply(color::gray)) + "=> " +
+                      color::apply(color::reset) + value->inspect() + " " +
+                      color::apply(color::gray) + ":" + color::apply(color::reset) +
+                      " " + color::apply(color::cyan) + value->typeName() +
+                      color::apply(color::reset) + "\n";
         }
     } catch (const std::exception& e) {
-        result = std::string("error: ") + e.what() + "\n";
+        // Matches main.cxx's real REPL error formatting exactly (see its
+        // `catch (const std::exception &e)` blocks) so the two look
+        // identical once rendered through a real terminal.
+        result = std::string("  ") + color::apply(color::red) + "error:" +
+                 color::apply(color::reset) + " " + e.what() + "\n";
     } catch (...) {
-        result = "error: unknown failure\n";
+        result = std::string("  ") + color::apply(color::red) + "error:" +
+                 color::apply(color::reset) + " unknown failure\n";
     }
 
     session->lastResult = std::move(result);
