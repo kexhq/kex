@@ -33,6 +33,22 @@ struct Fiber::Impl {
     // whatever continuation the fiber's own yieldToScheduler() call left
     // behind for "the next time the scheduler wants to resume me".
     ctx::fiber intoFiber;
+    // Address of this fiber's own `callerSlot` local (see the constructor
+    // below) — nullptr until the fiber has started running at least once.
+    // g_yieldSlot() is a single thread_local shared by every fiber, so by
+    // the time the scheduler gets back around to resuming a fiber that
+    // *isn't* the one that ran most recently, some other fiber's own
+    // resume/yield cycle will have overwritten it — resume() must restore
+    // it to point at THIS fiber's slot every time, not just rely on the
+    // one-time assignment the entry lambda makes on its first line below.
+    // (Found the hard way: without this, a fiber resumed a second time —
+    // e.g. a supervisor's poll loop calling sleepFor() repeatedly — reads
+    // yieldToScheduler()'s slot as whichever *other* fiber ran last,
+    // dereferencing into a currently-suspended, unrelated fiber's own
+    // stack. Boost.Context caught it as an assertion failure rather than
+    // silently corrupting memory, which is how this got found instead of
+    // shipped.)
+    ctx::fiber* selfSlot = nullptr;
 };
 
 namespace {
@@ -48,9 +64,10 @@ auto g_yieldSlot() -> ctx::fiber*& {
 
 Fiber::Fiber(EntryFn entry, std::size_t stackSize)
     : m_impl(std::make_unique<Impl>()), m_entry(std::move(entry)) {
+    Impl* implPtr = m_impl.get();
     m_impl->intoFiber = ctx::fiber(
         std::allocator_arg, ctx::fixedsize_stack(stackSize),
-        [this](ctx::fiber&& caller) -> ctx::fiber {
+        [this, implPtr](ctx::fiber&& caller) -> ctx::fiber {
             // `caller` is the continuation representing "the scheduler,
             // ready to be resumed" — it needs to live for this fiber's
             // entire lifetime (every yieldToScheduler() call, however deep
@@ -59,10 +76,10 @@ Fiber::Fiber(EntryFn entry, std::size_t stackSize)
             // a local of this outer frame, addressed via a thread_local
             // slot rather than passed explicitly through every call.
             ctx::fiber callerSlot = std::move(caller);
-            ctx::fiber* prevSlot = g_yieldSlot();
+            implPtr->selfSlot = &callerSlot;
             g_yieldSlot() = &callerSlot;
             trampolineBody();
-            g_yieldSlot() = prevSlot;
+            implPtr->selfSlot = nullptr;
             return std::move(callerSlot);
         });
 }
@@ -75,6 +92,15 @@ auto Fiber::resume() -> void {
     Fiber* prevFiber = g_currentFiber;
     g_currentFiber = this;
     m_started = true;
+
+    // Restore the shared yield-target slot to THIS fiber's own caller
+    // continuation before jumping in — see Impl::selfSlot's comment for
+    // why this can't just be left to the entry lambda's one-time setup.
+    // nullptr on the very first resume (the lambda hasn't run yet and sets
+    // it itself as its first line), harmless to skip in that case.
+    if (m_impl->selfSlot) {
+        g_yieldSlot() = m_impl->selfSlot;
+    }
 
     m_impl->intoFiber = std::move(m_impl->intoFiber).resume();
 

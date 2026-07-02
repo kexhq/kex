@@ -151,6 +151,28 @@ public:
     // returns nullopt if timeoutMs elapses first. Used by Task::await.
     auto awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
 
+    // A plain cooperative sleep — registers a timeout for the currently-
+    // running process and yields until it fires. Used by the supervisor
+    // poll loop below; any message that happens to arrive during the sleep
+    // wakes it early too (harmless here — the supervisor process never
+    // reads its own mailbox for anything).
+    auto sleepFor(int64_t ms) -> void;
+
+    // Supervisor.start(restart: :only_crashed) do [worker { ... }, ...] end
+    // — spawns a dedicated long-running process that starts each child (by
+    // calling its zero-arg block, which is expected to itself call `spawn`
+    // and return the child's pid — see stdlib/process.cxx's `worker`
+    // builtin) and then polls their aliveness, respawning (by calling the
+    // same block again) any that have died. This is deliberately NOT BEAM's
+    // supervisor: no push notification on crash (nothing in this design
+    // ever signals process death — see `link`'s doc comment), so polling
+    // is the only option; only `:only_crashed` (one_for_one-equivalent) is
+    // supported — see docs/fiber-process-plan.md §9 for why `:all`/
+    // `:crashed_and_newer` are cut from scope entirely, not deferred.
+    // `childBlocks` are the already-evaluated zero-arg FunctionValues from
+    // each `worker { ... }` spec.
+    auto startSupervisor(std::vector<ValuePtr> childBlocks) -> ProcessId;
+
     // Called once per function call (see Evaluator::callFunction) so a
     // compute-bound process that never calls `receive` still yields
     // periodically — BEAM's reduction-counting preemption, placed at the

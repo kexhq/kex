@@ -272,6 +272,69 @@ auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeou
     }
 }
 
+auto Scheduler::sleepFor(int64_t ms) -> void {
+    auto it = m_processes.find(m_current);
+    if (it == m_processes.end()) return;
+    auto& proc = *it->second;
+
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+    uint64_t myGeneration = ++proc.waitGeneration;
+    m_timeouts.emplace(deadline, TimeoutEntry{m_current, myGeneration});
+    proc.blockedOnReceive = true;
+    proc.wokeByTimeout = false;
+    Fiber::yieldToScheduler();
+    proc.wokeByTimeout = false; // wake for any reason — this is a plain sleep, not a wait-for-something
+}
+
+auto Scheduler::startSupervisor(std::vector<ValuePtr> childBlocks) -> ProcessId {
+    ProcessId id = m_nextId++;
+    auto proc = std::make_unique<Process>();
+    proc->id = id;
+    proc->env = std::make_shared<Environment>(m_evaluator.m_env);
+    proc->savedEnv = proc->env;
+    Process* procPtr = proc.get();
+    Scheduler* self = this;
+
+    proc->fiber = std::make_unique<Fiber>([self, procPtr, childBlocks]() mutable {
+        auto callBlock = [](const ValuePtr& fn) -> ValuePtr {
+            auto* f = std::get_if<FunctionValue>(&fn->data);
+            return (f && f->native) ? f->native({}) : Value::none();
+        };
+        auto pidOf = [](const ValuePtr& v) -> ProcessId {
+            auto* p = std::get_if<ProcessValue>(&v->data);
+            return p ? p->pid : 0;
+        };
+
+        std::vector<ProcessId> childPids;
+        childPids.reserve(childBlocks.size());
+        for (const auto& block : childBlocks) {
+            childPids.push_back(pidOf(callBlock(block)));
+        }
+
+        try {
+            // Runs forever, same as a real BEAM supervisor — nothing ever
+            // explicitly stops it; it's cooperatively abandoned (see
+            // link's doc comment on why that's safe here) when the program
+            // or REPL session ends.
+            while (true) {
+                self->sleepFor(50);
+                for (size_t i = 0; i < childBlocks.size(); i++) {
+                    if (childPids[i] != 0 && !self->isAlive(childPids[i])) {
+                        childPids[i] = pidOf(callBlock(childBlocks[i]));
+                    }
+                }
+            }
+        } catch (...) {
+            rethrowIfForcedUnwind();
+        }
+        procPtr->finished = true;
+    });
+
+    m_processes.emplace(id, std::move(proc));
+    m_ready.push_back(id);
+    return id;
+}
+
 auto Scheduler::send(ProcessId target, ValuePtr payload) -> bool {
     auto it = m_processes.find(target);
     if (it == m_processes.end() || it->second->finished) return false;
