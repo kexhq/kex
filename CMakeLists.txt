@@ -5,6 +5,22 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# An unoptimized (default/empty CMAKE_BUILD_TYPE) Asyncify build is not
+# just slower than Release — it's practically unusable. Confirmed
+# empirically: the full interpreter test suite (145 cases, including
+# process/fiber-heavy ones) went from timing out past 280s and even
+# outright failing a wall-clock-timing-sensitive test at the default build
+# type, to completing entirely in well under a second at -O3. Asyncify's
+# instrumentation overhead is apparently dominated by what optimization
+# removes, not added by it, for this code — so default to Release for the
+# wasm target specifically rather than requiring everyone building it to
+# know to pass -DCMAKE_BUILD_TYPE=Release themselves. Native is unaffected
+# (still whatever CMAKE_BUILD_TYPE the caller passes, empty by default,
+# matching prior behavior).
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" AND NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+
 # Must come before add_library(kex_lib ...) below, not just before the
 # executables that link it — add_compile_options()/add_link_options() only
 # affect targets declared AFTER they're called. Placing these after
@@ -202,6 +218,22 @@ if(READLINE_LIB AND READLINE_INCLUDE)
     message(STATUS "Readline support: enabled")
 else()
     message(STATUS "Readline support: disabled (readline not found)")
+endif()
+
+# Wasm-only: a small C API (src/wasm_repl.cxx) for driving the interpreter
+# from JS — deliberately not the `kex` CLI binary above, whose interactive
+# REPL loop assumes a real blocking stdin (readline or a plain-stdin
+# fallback), neither of which exists in a browser. See
+# web/index.html for the test page that loads this.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    add_executable(kex_repl_wasm src/wasm_repl.cxx)
+    target_link_libraries(kex_repl_wasm PRIVATE kex_lib)
+    target_link_options(kex_repl_wasm PRIVATE
+        -sMODULARIZE=1
+        -sEXPORT_NAME=createKexReplModule
+        -sEXPORTED_FUNCTIONS=_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_malloc,_free
+        -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
+    )
 endif()
 
 enable_testing()
