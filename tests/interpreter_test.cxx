@@ -1237,5 +1237,140 @@ int main() {
         });
     });
 
+    describe("Interpreter — Processes (fiber-based scheduler, phase 1)", []() {
+        it("spawn/send/receive round trip", []() {
+            auto out = runOutput(
+                "foul pingServer do\n"
+                "  spawn do\n"
+                "    loop\n"
+                "      receive do |sender|\n"
+                "        :ping -> sender.send(:pong)\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let server = pingServer()\n"
+                "  server.send(:ping)\n"
+                "  receive do\n"
+                "    :pong -> IO.printLine(\"pong\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("pong\n"));
+        });
+
+        it("selective receive skips non-matching messages already in the mailbox", []() {
+            // Sends (:a, ...) then (:b, ...) then (:c, ...); the receiver
+            // only has a clause for :b — proves it scans past the
+            // already-arrived :a rather than only ever checking the first
+            // queued message.
+            auto out = runOutput(
+                "foul echoer do\n"
+                "  spawn do\n"
+                "    receive do\n"
+                "      (:b, sender) -> sender.send(:got_b)\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = echoer()\n"
+                "  p.send((:a, Process.self))\n"
+                "  p.send((:b, Process.self))\n"
+                "  p.send((:c, Process.self))\n"
+                "  receive do\n"
+                "    :got_b -> IO.printLine(\"selective\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("selective\n"));
+        });
+
+        it("Process.self differs between spawner and spawned process", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    parent.send((:ready, Process.self))\n"
+                "  end\n"
+                "  receive do\n"
+                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("false\n"));
+        });
+
+        it("two processes with same-named top-level lets in their spawn bodies don't cross-contaminate", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  spawn do\n"
+                "    let n = 1\n"
+                "    parent.send(n)\n"
+                "  end\n"
+                "  spawn do\n"
+                "    let n = 2\n"
+                "    parent.send(n)\n"
+                "  end\n"
+                "  receive do\n"
+                "    n -> receive do\n"
+                "      m -> IO.printLine((n + m).to(String))\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+            );
+            // Order between the two spawned processes isn't guaranteed, but
+            // if either process's `n` leaked into the other's environment
+            // (the m_env-swap bug this test exists to catch), the sum would
+            // come out wrong (e.g. 2+2 or 1+1 instead of 1+2).
+            assertEqual(out, std::string("3\n"));
+        });
+
+        it("a process spawned on one execute() call is reachable from a later call on the same Evaluator", []() {
+            // Mirrors REPL usage: `let pid = spawn do ... end` on one line,
+            // then `pid.send(...)` on a later line — the Scheduler must
+            // persist across execute() calls, not be torn down between
+            // them, so a still-alive (blocked-in-receive) process from an
+            // earlier call keeps working on a later one.
+            Evaluator evaluator;
+            // Kept alive for the whole test, matching how main.cxx's REPL
+            // mode keeps every line's Program alive forever (`new`, never
+            // deleted) — spawn captures a raw pointer into the AST (same
+            // convention LambdaValue::body already uses), so a process
+            // still blocked in `receive` after execute() returns needs its
+            // originating Program to outlive it.
+            std::vector<ast::Program> keepAlive;
+
+            auto runOnEvaluator = [&](const std::string& source) {
+                Lexer lexer(source);
+                auto tokens = lexer.tokenizeAll();
+                Parser parser(std::move(tokens));
+                keepAlive.push_back(parser.parseProgram());
+                evaluator.execute(keepAlive.back());
+            };
+
+            // Top-level `let` (no `main` wrapper), matching the REPL's
+            // actual line-by-line shape — top-level `var` isn't a
+            // supported construct today, unrelated to this test's concern.
+            runOnEvaluator(
+                "let storedPid = spawn do\n"
+                "  receive do\n"
+                "    (:ping, sender) -> sender.send(:pong)\n"
+                "  end\n"
+                "end\n"
+            );
+            runOnEvaluator(
+                "main do\n"
+                "  storedPid.send((:ping, Process.self))\n"
+                "  receive do\n"
+                "    :pong -> IO.printLine(\"cross-call\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(evaluator.output(), std::string("cross-call\n"));
+        });
+    });
+
     return runAll();
 }

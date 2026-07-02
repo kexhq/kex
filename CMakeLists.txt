@@ -21,6 +21,8 @@ add_library(kex_lib
     src/semantic/resolve_pass.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
+    src/interpreter/fiber.cxx
+    src/interpreter/scheduler.cxx
     src/interpreter/evaluator.cxx
     src/interpreter/stdlib/adt.cxx
     src/interpreter/stdlib/io.cxx
@@ -30,6 +32,7 @@ add_library(kex_lib
     src/interpreter/stdlib/integer.cxx
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
+    src/interpreter/stdlib/process.cxx
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/test.cxx
@@ -65,6 +68,17 @@ endif()
 
 target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
+
+# Boost.Context backs the native (non-Emscripten) fiber/coroutine primitive
+# used for Kex's process model (see src/interpreter/fiber.cxx and
+# docs/fiber-process-plan.md). Plain ucontext was tried first and rejected —
+# on Apple Silicon macOS, swapcontext doesn't reliably save/restore FP/NEON
+# register state across a context switch, causing heap corruption. Boost's
+# fcontext backend is the well-tested primitive purpose-built for this.
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    find_package(Boost REQUIRED COMPONENTS context)
+    target_link_libraries(kex_lib PUBLIC Boost::context)
+endif()
 
 # Optional readline support
 find_library(READLINE_LIB readline HINTS /opt/homebrew/opt/readline/lib /usr/local/opt/readline/lib)
