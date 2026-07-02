@@ -1,0 +1,79 @@
+# Compiled Router — Sinatra-style
+#
+# Routes are declared with `get`, `post`, etc. directly.
+# The framework defines these as compiled functions that accumulate route
+# data at compile time and generate an optimized dispatch function.
+
+module Router do
+  record Request do
+    method  : Symbol
+    path    : String
+    params  : { String: String } = {}
+    body    : String = ""
+  end
+
+  record Response do
+    status  : Int
+    headers : { String: String } = {}
+    body    : String
+  end
+
+  let ok(body: String) -> Response = Response { status: 200, body: body }
+  let json(body: String) -> Response = Response { status: 200, headers: { "Content-Type": "application/json" }, body: body }
+  let redirect(to: String) -> Response = Response { status: 302, headers: { "Location": to }, body: "" }
+  let notFound() -> Response = Response { status: 404, body: "Not Found" }
+
+  compiled do
+    let get(path: String, handler: (Request) -> Response) = register(:get, path, handler)
+    let post(path: String, handler: (Request) -> Response) = register(:post, path, handler)
+    let put(path: String, handler: (Request) -> Response) = register(:put, path, handler)
+    let delete(path: String, handler: (Request) -> Response) = register(:delete, path, handler)
+    let compile() -> (Request) -> Response = buildDispatch()
+  end
+end
+
+# ---------------------------------------------------------------------------
+# Sinatra-style app. `using Router do...end` brings get/post/etc into scope.
+# At compile time, each route declaration accumulates into a table.
+# `compile()` collapses them into an optimized dispatch function.
+# ---------------------------------------------------------------------------
+
+main do
+  using Router
+
+  get "/" do |_req|
+    ok("Hello, world!")
+  end
+
+  get "/users" do |_req|
+    json("[{\"name\": \"Alice\"}, {\"name\": \"Bob\"}]")
+  end
+
+  get "/users/:id" do |req|
+    let id = req.params.get("id", "0")
+    json("{\"id\": ${id}, \"name\": \"User ${id}\"}")
+  end
+
+  post "/users" do |req|
+    json("{\"created\": true}")
+  end
+
+  put "/users/:id" do |req|
+    let id = req.params.get("id", "0")
+    json("{\"updated\": \"${id}\"}")
+  end
+
+  delete "/users/:id" do |req|
+    let id = req.params.get("id", "0")
+    json("{\"deleted\": \"${id}\"}")
+  end
+
+  get "/health" do |_req|
+    ok("OK")
+  end
+
+  let app = compile()
+  let req = Request { method: :get, path: "/users/42", params: {}, body: "" }
+  let resp = app(req)
+  IO.printLine("GET /users/42 → ${resp.status}: ${resp.body}")
+end

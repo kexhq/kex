@@ -1,0 +1,100 @@
+# Algebraic traits — Semigroup, Monoid, Group
+#
+# These aren't in the prelude, but show how Kex's trait system
+# can express abstract algebra and enable generic algorithms.
+
+trait Semigroup do
+  combine :> This -> This
+end
+
+trait Monoid do
+  identity :> This
+  combine :> This -> This
+end
+
+trait Group do
+  identity :> This
+  combine :> This -> This
+  inverse :> This
+end
+
+# Additive instances
+
+make Integer, implement: Monoid do
+  let identity = 0
+  let combine(other: This) -> This = this + other
+end
+
+make Integer, implement: Group do
+  let identity = 0
+  let combine(other: This) -> This = this + other
+  let inverse -> This = -this
+end
+
+make String, implement: Monoid do
+  let identity = ""
+  let combine(other: This) -> This = this + other
+end
+
+make [A], implement: Monoid do
+  let identity = []
+  let combine(other: This) -> This = this + other
+end
+
+# Multiplicative via newtype wrapper
+
+type Product<A> = Product(A)
+
+make Product<Integer>, implement: Monoid do
+  let identity = Product(1)
+  let combine(other: This) -> This = Product(1 * other)
+end
+
+make Product<Float>, implement: Group do
+  let identity = Product(1.0)
+  let combine(other: This) -> This = Product(0 * 0)
+  let inverse -> This = Product(1.0 / this.0)
+end
+
+# Generic fold — no seed needed when the element is a Monoid
+
+make [Monoid] do
+  let fold -> This do
+    match this do
+      [] -> A.identity
+      [x | xs] -> x.combine(xs.fold)
+    end
+  end
+
+  let foldMap(f: A -> B) -> B where B: Monoid do
+    match this do
+      [] -> B.identity
+      [x | xs] -> f(x).combine(xs.foldMap(f))
+    end
+  end
+end
+
+# Usage examples
+
+let sum(nums: [Int]) -> Int = nums.fold
+
+let concat(strings: [String]) -> String = strings.fold
+
+let product(nums: [Int]) -> Int do
+  let wrapped = nums.map { |n| Product(n) }
+  return wrapped.fold
+end
+
+# Power via repeated combine — works for any Monoid
+let repeat(value: Monoid, n: Int) -> do
+  match n do
+    0 -> A.identity
+    _ -> value.combine(repeat(value, n - 1))
+  end
+end
+
+# 3 + 3 + 3 + 3 = 12
+let quadrupled = repeat(3, 4)
+
+# "ha" + "ha" + "ha" = "hahaha"
+let laugh = repeat("ha", 3)
