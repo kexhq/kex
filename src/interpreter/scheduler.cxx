@@ -5,6 +5,7 @@
 // std::this_thread::sleep_until — a plain blocking sleep on the single OS
 // thread this scheduler already owns, not thread *management* (no new
 // thread is created). See driveUntilFinished.
+#include <algorithm>
 #include <thread>
 
 #ifndef __EMSCRIPTEN__
@@ -284,6 +285,24 @@ auto Scheduler::blockingReceive(const ast::ReceiveExpr& expr) -> ValuePtr {
 auto Scheduler::isAlive(ProcessId id) const -> bool {
     auto it = m_processes.find(id);
     return it != m_processes.end() && !it->second->finished;
+}
+
+auto Scheduler::link(ProcessId other) -> void {
+    auto a = m_processes.find(m_current);
+    auto b = m_processes.find(other);
+    if (a == m_processes.end() || b == m_processes.end()) return;
+    a->second->links.push_back(other);
+    b->second->links.push_back(m_current);
+}
+
+auto Scheduler::unlink(ProcessId other) -> void {
+    auto removeLink = [](std::vector<ProcessId>& links, ProcessId id) {
+        links.erase(std::remove(links.begin(), links.end(), id), links.end());
+    };
+    auto a = m_processes.find(m_current);
+    auto b = m_processes.find(other);
+    if (a != m_processes.end()) removeLink(a->second->links, other);
+    if (b != m_processes.end()) removeLink(b->second->links, m_current);
 }
 
 auto Scheduler::tickReduction() -> void {

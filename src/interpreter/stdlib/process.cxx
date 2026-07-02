@@ -32,6 +32,36 @@ auto Evaluator::registerProcessBuiltins() -> void {
         p->scheduler->send(p->pid, args[1]);
         return Value::unit();
     });
+
+    // pid.link()/pid.unlink() — links the CALLING process (whichever
+    // process is currently running when this is invoked, not necessarily
+    // the receiver's spawner) to the receiver pid. Passive bookkeeping
+    // only — see Scheduler::link's doc comment for why this deliberately
+    // doesn't carry BEAM's signal-propagation semantics.
+    reg("link", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::unit();
+        auto* p = std::get_if<ProcessValue>(&args[0]->data);
+        if (!p) return Value::unit();
+        p->scheduler->link(p->pid);
+        return Value::unit();
+    });
+    reg("unlink", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::unit();
+        auto* p = std::get_if<ProcessValue>(&args[0]->data);
+        if (!p) return Value::unit();
+        p->scheduler->unlink(p->pid);
+        return Value::unit();
+    });
+
+    // pid.alive?() — true until that process's fiber has finished (whether
+    // by a normal return or an uncaught exception caught by its own
+    // fiber's outer handler — see Scheduler::spawn/runToCompletion).
+    reg("alive?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::boolean(false);
+        auto* p = std::get_if<ProcessValue>(&args[0]->data);
+        if (!p) return Value::boolean(false);
+        return Value::boolean(p->scheduler->isAlive(p->pid));
+    });
 }
 
 } // namespace kex::interpreter

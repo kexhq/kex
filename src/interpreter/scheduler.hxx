@@ -121,6 +121,18 @@ public:
     auto currentProcessId() const -> ProcessId { return m_current; }
     auto isAlive(ProcessId id) const -> bool;
 
+    // Passive bookkeeping only — records/removes a bidirectional edge
+    // between the currently-running process and `other`. Deliberately NOT
+    // BEAM's link model: no cascading kill on abnormal exit, no
+    // `trap_exit`, no exit-reason signal delivery. A process only ever
+    // dies by finishing its own body; nothing external ever force-
+    // terminates it, so there's no signal-propagation machinery to build
+    // here. See docs/fiber-process-plan.md §8 for the full rationale (real
+    // BEAM remains the answer for anything that needs actual supervision
+    // robustness).
+    auto link(ProcessId other) -> void;
+    auto unlink(ProcessId other) -> void;
+
     // Called once per function call (see Evaluator::callFunction) so a
     // compute-bound process that never calls `receive` still yields
     // periodically — BEAM's reduction-counting preemption, placed at the

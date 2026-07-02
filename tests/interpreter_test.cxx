@@ -1434,5 +1434,54 @@ int main() {
         });
     });
 
+    describe("Interpreter — Processes (phase 3: link/unlink/alive?)", []() {
+        it("alive?() is true while blocked in receive, false once the process finishes", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:done)\n"
+                "    end\n"
+                "  end\n"
+                "  IO.printLine(\"before: \" + child.alive?().to(String))\n"
+                "  child.send(:go)\n"
+                "  receive do\n"
+                "    :done -> IO.printLine(\"got done\")\n"
+                "  end\n"
+                "  # Give the child's own fiber a turn to actually finish —\n"
+                "  # it sent :done and returned in the same reduction, so by\n"
+                "  # the time we've been woken and resumed, it's already run\n"
+                "  # to completion.\n"
+                "  IO.printLine(\"after: \" + child.alive?().to(String))\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("before: true\ngot done\nafter: false\n"));
+        });
+
+        it("link() is passive bookkeeping — a linked partner exiting does not kill the other process", []() {
+            // Deliberately NOT BEAM's link model (docs/fiber-process-plan.md
+            // §8): this asserts the absence of cascading kill, since it'd be
+            // an easy regression to accidentally reintroduce later.
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> IO.printLine(\"child exiting\")\n"
+                "    end\n"
+                "  end\n"
+                "  child.link()\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"unexpected\")\n"
+                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("child exiting\nparent still alive: true\n"));
+        });
+    });
+
     return runAll();
 }
