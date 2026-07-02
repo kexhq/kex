@@ -1645,6 +1645,12 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                     if (rec->typeName == pat.name) return true;
                 }
+                // Match builtin type namespaces (String, Integer, Float, ...
+                // registered as ModuleValue) — needed for the `to(String)`
+                // conversion-protocol pattern and similar type-name matches.
+                if (auto* mod = std::get_if<ModuleValue>(&value->data)) {
+                    if (mod->name == pat.name) return true;
+                }
                 // Match True/False as literal patterns
                 if (pat.name == "True") {
                     auto* b = std::get_if<BoolValue>(&value->data);

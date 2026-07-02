@@ -84,11 +84,12 @@ int main() {
         it("test_union.kex", []() { assertTrue(parseFile("examples/test_union.kex")); });
         it("compiled_sql.kex", []() { assertTrue(parseFile("examples/compiled_sql.kex")); });
         it("compiled_css.kex", []() { assertTrue(parseFile("examples/compiled_css.kex")); });
-        it("compiled_router.kex", []() { assertTrue(parseFile("examples/compiled_router.kex")); });
         // Aspirational — parse must succeed even though they don't run in the tree-walker.
         it("aspirational/compiled.kex", []() { assertTrue(parseFile("examples/aspirational/compiled.kex")); });
         it("aspirational/html_dsl.kex", []() { assertTrue(parseFile("examples/aspirational/html_dsl.kex")); });
-        it("aspirational/processes.kex", []() { assertTrue(parseFile("examples/aspirational/processes.kex")); });
+        it("aspirational/compiled_router.kex", []() { assertTrue(parseFile("examples/aspirational/compiled_router.kex")); });
+        // BEAM-target examples — parse must succeed even though they run via BEAM codegen, not the tree-walker.
+        it("beam/processes.kex", []() { assertTrue(parseFile("examples/beam/processes.kex")); });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -99,7 +100,6 @@ int main() {
         it("closures.kex", []() { assertTrue(runFileOk("examples/closures.kex")); });
         it("compiled_sql.kex", []() { assertTrue(runFileOk("examples/compiled_sql.kex")); });
         it("compiled_css.kex", []() { assertTrue(runFileOk("examples/compiled_css.kex")); });
-        it("compiled_router.kex", []() { assertTrue(runFileOk("examples/compiled_router.kex")); });
         it("env.kex", []() { assertTrue(runFileOk("examples/env.kex")); });
         it("error_handling.kex", []() { assertTrue(runFileOk("examples/error_handling.kex")); });
         it("fizzbuzz.kex", []() { assertTrue(runFileOk("examples/fizzbuzz.kex")); });
