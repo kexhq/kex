@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kex — in-browser REPL (test page)</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #1e1e1e;
+    --panel: #252526;
+    --border: #3c3c3c;
+    --text: #d4d4d4;
+    --muted: #8a8a8a;
+    --accent: #4ec9b0;
+    --error: #f14c4c;
+    --prompt: #569cd6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  header h1 {
+    font-size: 0.95rem;
+    margin: 0;
+    font-weight: 600;
+  }
+  header .status {
+    font-size: 0.8rem;
+    color: var(--muted);
+  }
+  .warning {
+    margin: 0.5rem 1rem 0;
+    padding: 0.6rem 0.8rem;
+    background: #3a2f13;
+    border: 1px solid #6b5518;
+    border-radius: 6px;
+    font-size: 0.8rem;
+    color: #e0c675;
+    line-height: 1.4;
+  }
+  .warning code { color: #f0d78c; }
+  #output {
+    flex: 1;
+    overflow-y: auto;
+    padding: 1rem;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.85rem;
+    line-height: 1.5;
+  }
+  .entry { margin-bottom: 0.9rem; }
+  .entry .src { color: var(--prompt); }
+  .entry .src::before { content: "kex> "; color: var(--muted); }
+  .entry .out { color: var(--text); }
+  .entry .out.is-error { color: var(--error); }
+  #input-row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  #input-row .gutter {
+    color: var(--muted);
+    padding-top: 0.4rem;
+    user-select: none;
+  }
+  #source {
+    flex: 1;
+    resize: vertical;
+    min-height: 2.6rem;
+    max-height: 40vh;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0.5rem 0.6rem;
+    font-family: inherit;
+    font-size: 0.85rem;
+  }
+  #run {
+    background: var(--accent);
+    color: #0b1b18;
+    border: none;
+    border-radius: 6px;
+    padding: 0 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-size: 0.85rem;
+  }
+  #run:disabled { opacity: 0.5; cursor: default; }
+  #run:hover:not(:disabled) { filter: brightness(1.08); }
+  .hint { color: var(--muted); font-size: 0.75rem; padding: 0 1rem 0.6rem; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Kex REPL (wasm, in-browser)</h1>
+    <span class="status" id="status">loading…</span>
+  </header>
+
+  <div class="warning">
+    <strong>Known limitation:</strong> anything that causes a process to actually
+    yield — <code>receive</code>, <code>receive timeout:</code>,
+    <code>Task.await</code> — currently misbehaves (duplicated output, lost
+    state) due to an unresolved Asyncify/JS-interop issue in the wasm bindings.
+    See <code>docs/fiber-process-plan.md</code>'s "JS REPL bindings" section.
+    Everything else — expressions, <code>let</code>/<code>var</code>, functions,
+    records, pattern matching, and even <code>spawn</code> itself (just not
+    waiting on a reply) — works correctly.
+  </div>
+
+  <div id="output"></div>
+
+  <div id="input-row">
+    <span class="gutter">kex&gt;</span>
+    <textarea id="source" placeholder="1 + 2" autofocus rows="1"></textarea>
+    <button id="run" disabled>Run</button>
+  </div>
+  <div class="hint">Enter to run · Shift+Enter for a new line · state persists across lines, like a real REPL session</div>
+
+  <script type="module">
+    import createKexReplModule from "../build-wasm/kex_repl_wasm.js";
+
+    const statusEl = document.getElementById("status");
+    const outputEl = document.getElementById("output");
+    const sourceEl = document.getElementById("source");
+    const runEl = document.getElementById("run");
+
+    const Module = await createKexReplModule();
+    const session = Module.ccall("kex_repl_create", "number", [], []);
+
+    async function evalSource(src) {
+      // kex_repl_eval is void-returning on purpose — see
+      // src/wasm_repl.cxx's doc comment: a direct return value from an
+      // Asyncify-instrumented export wasn't reliably reaching the JS
+      // caller, so the result is fetched via a second, ordinary
+      // synchronous call instead (kex_repl_last_result never touches
+      // Asyncify, so it's unaffected by that issue).
+      await Module.ccall(
+        "kex_repl_eval", null,
+        ["number", "string"], [session, src],
+        { async: true }
+      );
+      return Module.ccall("kex_repl_last_result", "string", ["number"], [session]);
+    }
+
+    function appendEntry(src, out, isError) {
+      const entry = document.createElement("div");
+      entry.className = "entry";
+      const srcEl = document.createElement("div");
+      srcEl.className = "src";
+      srcEl.textContent = src;
+      const outEl = document.createElement("div");
+      outEl.className = "out" + (isError ? " is-error" : "");
+      outEl.textContent = out;
+      entry.append(srcEl, outEl);
+      outputEl.appendChild(entry);
+      outputEl.scrollTop = outputEl.scrollHeight;
+    }
+
+    async function runCurrentSource() {
+      const src = sourceEl.value;
+      if (!src.trim()) return;
+      runEl.disabled = true;
+      sourceEl.disabled = true;
+      try {
+        const out = await evalSource(src);
+        appendEntry(src, out || "(no output)", out.startsWith("error:"));
+      } catch (e) {
+        appendEntry(src, "internal error: " + e, true);
+      } finally {
+        sourceEl.value = "";
+        runEl.disabled = false;
+        sourceEl.disabled = false;
+        sourceEl.focus();
+      }
+    }
+
+    runEl.addEventListener("click", runCurrentSource);
+    sourceEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        runCurrentSource();
+      }
+    });
+
+    statusEl.textContent = "ready";
+    runEl.disabled = false;
+    sourceEl.focus();
+  </script>
+</body>
+</html>

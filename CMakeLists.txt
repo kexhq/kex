@@ -230,6 +230,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_link_libraries(kex_repl_wasm PRIVATE kex_lib)
     target_link_options(kex_repl_wasm PRIVATE
         -sMODULARIZE=1
+        # A real `export default`, not just Emscripten's default UMD-style
+        # module.exports/AMD-only wrapper — that form works when imported
+        # from Node (whose ESM loader treats a CommonJS module.exports as
+        # the default export automatically) but silently has no export at
+        # all when loaded via a browser <script type="module">, since
+        # neither `module` nor `exports` exist there. Confirmed the hard
+        # way via an actual headless-browser run of web/index.html, not
+        # just the Node-based smoke tests used earlier in this file's
+        # history — see docs/fiber-process-plan.md's "JS REPL bindings"
+        # section for why testing only through Node wasn't sufficient here.
+        -sEXPORT_ES6=1
         -sEXPORT_NAME=createKexReplModule
         -sEXPORTED_FUNCTIONS=_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_malloc,_free
         -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
