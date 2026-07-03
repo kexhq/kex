@@ -24,6 +24,7 @@
 // readline — every native dev machine so far has had it available via
 // Homebrew.
 #include "common/completion.hxx"
+#include "common/prelude_loader.hxx"
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
@@ -454,13 +455,7 @@ auto fileExists(const std::string &path) -> bool
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void
 {
 #ifdef KEX_PRELUDE_DIR
-    std::filesystem::path preludeDir(KEX_PRELUDE_DIR);
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator(preludeDir, ec))
-    {
-        if (entry.path().extension() == ".kex")
-            db.updateFile(entry.path().string(), readFile(entry.path().string()));
-    }
+    kex::loadPrelude(db, KEX_PRELUDE_DIR);
 #endif
 }
 

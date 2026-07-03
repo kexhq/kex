@@ -110,6 +110,7 @@
     let accumulated = "";
     let prompt = PROMPT;
     let evalSource = null; // set once the wasm module is ready
+    let completeWord = null; // set once the wasm module is ready
 
     function writePrompt() {
       term.write(prompt);
@@ -167,6 +168,9 @@
       switch (data) {
         case "\r": // Enter
           submitLine();
+          return;
+        case "\t": // Tab: complete
+          completeWord();
           return;
         case "": // Backspace
           if (cursor > 0) {
@@ -239,22 +243,62 @@
           return;
       }
       // Printable character (or a pasted chunk of them) — insert at cursor.
-      if (data >= " " || data === "\t") {
+      if (data >= " ") {
         line = line.slice(0, cursor) + data + line.slice(cursor);
         cursor += data.length;
         redrawLine();
       }
     });
 
+    // Same word-break character set main.cxx configures via
+    // rl_completer_word_break_characters (see its REPL setup) — '.' and '"'
+    // are deliberately excluded so "IO.pri<TAB>" and "[1,2,3].ma<TAB>" are
+    // each treated as one word, matching the native REPL exactly.
+    const WORD_BREAK_CHARS = " \t\n\\@$><=;|&{(";
+
+    function findWordStart(s, end) {
+      let i = end;
+      while (i > 0 && WORD_BREAK_CHARS.indexOf(s[i - 1]) === -1) i--;
+      return i;
+    }
+
+    function longestCommonPrefix(strs) {
+      if (strs.length === 0) return "";
+      let prefix = strs[0];
+      for (let i = 1; i < strs.length && prefix; i++) {
+        let j = 0;
+        while (j < prefix.length && j < strs[i].length && prefix[j] === strs[i][j]) j++;
+        prefix = prefix.slice(0, j);
+      }
+      return prefix;
+    }
+
+    // Mirrors main.cxx's kexDisplayMatches: when showing the ambiguous-match
+    // list, strip the prefix shared by all matches up to its last '.' (so a
+    // list of List methods shows "map filter each" rather than repeating
+    // "List." on every entry) — display-only, doesn't affect what gets
+    // inserted into the line.
+    function stripSharedQualifierForDisplay(matches, lcp) {
+      const dot = lcp.lastIndexOf(".");
+      if (dot === -1) return matches;
+      const stripLen = dot + 1;
+      return matches.map((m) => (m.length > stripLen ? m.slice(stripLen) : m));
+    }
+
     term.writeln("kex 0.1.0 — interactive REPL (wasm, in-browser)");
-    term.writeln("\x1b[90mKnown limitation: receive / receive timeout: / Task.await currently\x1b[0m");
-    term.writeln("\x1b[90mmisbehave (duplicated output, lost state) — see docs/fiber-process-plan.md's\x1b[0m");
-    term.writeln("\x1b[90m\"JS REPL bindings\" section. Everything else works: expressions, let/var,\x1b[0m");
-    term.writeln("\x1b[90mfunctions, records, pattern matching, and spawn itself.\x1b[0m");
     term.writeln("");
     statusEl.textContent = "loading wasm module…";
 
-    const Module = await createKexReplModule();
+    // Without an explicit locateFile, the --preload-file package
+    // (kex_repl_wasm.data) resolves relative to the *page's* URL
+    // (window.location.pathname) rather than the JS module's own
+    // directory — a real bug, found the same way as the EXPORT_ES6 one
+    // above (by actually loading this page, not just smoke-testing in
+    // Node): it 404'd at /web/kex_repl_wasm.data instead of
+    // /build-wasm/kex_repl_wasm.data.
+    const Module = await createKexReplModule({
+      locateFile: (path) => "../build-wasm/" + path,
+    });
     const session = Module.ccall("kex_repl_create", "number", [], []);
 
     evalSource = async function (src) {
@@ -269,6 +313,46 @@
         { async: true }
       );
       return Module.ccall("kex_repl_last_result", "string", ["number"], [session]);
+    };
+
+    completeWord = async function () {
+      const start = findWordStart(line, cursor);
+      const word = line.slice(start, cursor);
+      // kex_repl_complete is a plain synchronous export (no evaluator.execute()
+      // involved, so no Asyncify boundary to cross) — unlike kex_repl_eval it
+      // can return its result directly, no split fetch call needed.
+      const raw = Module.ccall(
+        "kex_repl_complete", "string",
+        ["number", "string", "number", "string"],
+        [session, line, start, word]
+      );
+      const matches = raw.split("\n").filter((m) => m.length > 0);
+
+      if (matches.length === 0) {
+        term.write("\x07"); // bell — no completions
+        return;
+      }
+      if (matches.length === 1) {
+        const repl = matches[0];
+        line = line.slice(0, start) + repl + line.slice(cursor);
+        cursor = start + repl.length;
+        redrawLine();
+        return;
+      }
+
+      const lcp = longestCommonPrefix(matches);
+      if (lcp.length > word.length) {
+        line = line.slice(0, start) + lcp + line.slice(cursor);
+        cursor = start + lcp.length;
+        redrawLine();
+        return;
+      }
+
+      // Already at the longest common prefix and still ambiguous — show the
+      // match list below the current line, like readline's double-TAB.
+      const display = stripSharedQualifierForDisplay(matches, lcp);
+      term.write("\r\n" + display.join("  ") + "\r\n");
+      redrawLine();
     };
 
     statusEl.textContent = "ready";

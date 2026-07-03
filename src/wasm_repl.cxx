@@ -9,9 +9,16 @@
 // reachable from a later call" test — a `let`/`spawn` on one call stays
 // visible/alive on the next, matching what a real REPL user expects.
 #include "common/color.hxx"
+#include "common/completion.hxx"
+#include "common/prelude_loader.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "interpreter/evaluator.hxx"
+// db.hxx only forward-declares Diagnostic; SemanticDB's FileState member
+// needs the complete type to be destructible, so this include is load-
+// bearing even though nothing here names Diagnostic directly.
+#include "semantic/analyzer.hxx"
+#include "semantic/db.hxx"
 
 #ifdef __EMSCRIPTEN__
 #include <emscripten/emscripten.h>
@@ -39,6 +46,13 @@ std::vector<std::unique_ptr<kex::ast::Program>> g_programs;
 struct KexReplSession {
     kex::interpreter::Evaluator evaluator;
     std::string lastResult;
+    // Mirrors main.cxx's real REPL `replDb`/`replAccumSource` pair exactly
+    // (see its "SemanticDB for REPL: prelude loaded once, updated on each
+    // input" comment) so tab completion in the browser sees the same
+    // prelude- and user-defined names the native REPL's <TAB> does.
+    kex::semantic::SemanticDB replDb;
+    std::string replAccumSource;
+    std::string lastCompletions;
 };
 
 extern "C" {
@@ -55,6 +69,11 @@ KexReplSession* kex_repl_create() {
     // execMainBlock's `!m_replMode && !block.synthetic` check), which
     // would make a `let` on one call invisible on the next.
     session->evaluator.setReplMode(true);
+    // "/prelude" is embedded into MEMFS at build time by the kex_repl_wasm
+    // target's `--preload-file src/prelude@/prelude` link option (see
+    // CMakeLists.txt) — the wasm equivalent of KEX_PRELUDE_DIR, a real
+    // filesystem path on native.
+    kex::loadPrelude(session->replDb, "/prelude");
     return session;
 }
 
@@ -126,6 +145,15 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
         auto value = session->evaluator.execute(*program);
         result = session->evaluator.output().substr(outputBefore);
 
+        // Matches main.cxx's real REPL exactly (see its "Accumulate and
+        // re-index so all prior definitions stay visible for tab
+        // completion" comment) — only definitions get indexed, since a bare
+        // expression like `1 + 2` isn't a name anything else can reference.
+        if (isDef) {
+            session->replAccumSource += source + "\n";
+            session->replDb.updateFile("<repl>", session->replAccumSource);
+        }
+
         // Matches main.cxx's real REPL showResult lambda exactly (gray "=>"
         // and ":", plain value, cyan type — showTypes defaults to on there
         // too), so the two look identical once rendered through a real
@@ -149,6 +177,24 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
     }
 
     session->lastResult = std::move(result);
+
+#ifdef __EMSCRIPTEN__
+    // Works around a real, documented Emscripten bug
+    // (emscripten-core/emscripten#13302): a ccall(..., {async: true})'d
+    // export that performs a Fiber-based context switch (fiber.cxx's
+    // emscripten_fiber_swap — exactly what happens above whenever
+    // `receive`/`receive timeout:`/`Task.await` actually blocks and the
+    // scheduler switches processes) returns garbage to JS and can leave the
+    // call replayed/duplicated, unless something Asyncify itself recognizes
+    // (like emscripten_sleep) also runs before the function returns.
+    // `emscripten_sleep(0)` is the issue's own documented workaround: it
+    // still defers one tick to the browser event loop (imperceptible at
+    // 0ms) but "kicks" Asyncify's return-value/rewind plumbing back onto
+    // the right track. This is what the "still-unresolved yield-crossing
+    // Asyncify/JS-interop bug" section in docs/fiber-process-plan.md used
+    // to describe — that section has been updated now that this is fixed.
+    emscripten_sleep(0);
+#endif
 }
 
 // Ordinary synchronous call, no Asyncify involvement — fetches whatever
@@ -159,6 +205,35 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
 EMSCRIPTEN_KEEPALIVE
 const char* kex_repl_last_result(KexReplSession* session) {
     return session->lastResult.c_str();
+}
+
+// Tab completion, reusing the exact same header-only logic main.cxx's real
+// readline integration uses (kex::resolveCompletionQuery/rewriteCompletions,
+// see src/common/completion.hxx) — `line` is the current input line up to
+// the cursor's containing word, `start` is where that word begins (as
+// GNU readline's own word-break-character scan would find it — web/index.html
+// ports that scan to JS using the same break-char set main.cxx configures
+// via rl_completer_word_break_characters), and `text` is the word itself.
+// A plain synchronous call — never touches evaluator.execute()/Asyncify —
+// so unlike kex_repl_eval this can return its result directly.
+EMSCRIPTEN_KEEPALIVE
+const char* kex_repl_complete(KexReplSession* session, const char* lineIn,
+                               int start, const char* textIn) {
+    using namespace kex;
+
+    std::string line(lineIn ? lineIn : "");
+    std::string text(textIn ? textIn : "");
+    auto cq = resolveCompletionQuery(line.c_str(), start, text.c_str());
+    auto raw = session->replDb.completionsFor(cq.dbQuery);
+    auto rewritten = rewriteCompletions(std::move(raw), cq.rewriteFrom, cq.rewriteTo);
+
+    std::string joined;
+    for (auto& m : rewritten) {
+        joined += m;
+        joined += '\n';
+    }
+    session->lastCompletions = std::move(joined);
+    return session->lastCompletions.c_str();
 }
 
 } // extern "C"
