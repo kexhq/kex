@@ -81,18 +81,22 @@ int main() {
     describe("REPL CLI — ADT Display", []() {
         it("renders positional records as Name(args), not a field dump", []() {
             auto out = runRepl("Ok(\"hi\")\n");
-            assertTrue(out.find("=> Ok(\"hi\") : Ok") != std::string::npos, out);
+            // : Result<String, ?> — the parent generic type with its
+            // resolved type param, not the bare constructor tag "Ok" (see
+            // Value::ok/just/error in value.cxx and VariantValue's
+            // typeParams/argParamIndex).
+            assertTrue(out.find("=> Ok(\"hi\") : Result<String, ?>") != std::string::npos, out);
             assertTrue(out.find("{ 0:") == std::string::npos, out);
         });
 
         it("renders Error(...) the same way", []() {
             auto out = runRepl("Error(\"bad\")\n");
-            assertTrue(out.find("=> Error(\"bad\") : Error") != std::string::npos, out);
+            assertTrue(out.find("=> Error(\"bad\") : Result<?, String>") != std::string::npos, out);
         });
 
         it("renders Just(...) the same way", []() {
             auto out = runRepl("Just(42)\n");
-            assertTrue(out.find("=> Just(42) : Just") != std::string::npos, out);
+            assertTrue(out.find("=> Just(42) : Option<Int>") != std::string::npos, out);
         });
     });
 

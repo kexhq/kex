@@ -1,4 +1,4 @@
-.PHONY: build test spec test-all clean repl run check install uninstall help build-wasm test-wasm
+.PHONY: build test spec test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -25,6 +25,8 @@ help:
 	@echo "                    active, pinned per third_party/gmp-wasm/README.md,"
 	@echo "                    and a prebuilt third_party/gmp-wasm/{include,lib})"
 	@echo "  make test-wasm    Build the wasm target + run its test suite via Node"
+	@echo "  make web-demo     Build the wasm target and serve web/index.html locally"
+	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
 	@echo ""
 
 build:
@@ -51,6 +53,13 @@ build-wasm:
 # path that doesn't exist in a wasm build, so they're a native-only concern.
 test-wasm: build-wasm
 	@node $(WASM_BUILD_DIR)/interpreter_test.js
+
+# Serves the repo root so web/index.html can load ../build-wasm/kex_repl_wasm.js
+# (see that file's own relative import) — must run from the repo root, not
+# from inside web/. Ctrl-C to stop.
+web-demo: build-wasm
+	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
+	@python3 -m http.server 8743
 
 test-all: test spec
 

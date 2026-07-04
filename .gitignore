@@ -52,3 +52,7 @@ spec/io_scratch.txt
 # too, not pure source, same reasoning as the .a libs below it).
 third_party/gmp-wasm/include/
 third_party/gmp-wasm/lib/
+
+# Assembled by packages/kex/scripts/build.sh from build-wasm/ — build
+# output, not source, same reasoning as the gmp-wasm entries above.
+packages/kex/dist/

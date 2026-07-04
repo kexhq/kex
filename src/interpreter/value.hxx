@@ -137,6 +137,16 @@ struct Value {
     static auto atom(std::string name) -> ValuePtr;
     static auto variant(std::string tag, std::string parentType = "", std::vector<ValuePtr> args = {},
                          std::vector<std::string> typeParams = {}, std::vector<int> argParamIndex = {}) -> ValuePtr;
+    // Convenience wrappers over variant() for the prelude's builtin generic
+    // ADTs (Option<T> = Just(T) | None, Result<T, E> = Ok(T) | Error(E)) —
+    // every stdlib call site that constructs one of these should go through
+    // here rather than calling variant() directly with the tag/parentType
+    // spelled out, so typeName() can always render "Option<Int>"/
+    // "Result<String, Int>" instead of just the bare "Option"/"Result"
+    // (which is what happens if typeParams/argParamIndex are left empty).
+    static auto just(ValuePtr inner) -> ValuePtr;
+    static auto ok(ValuePtr inner) -> ValuePtr;
+    static auto error(ValuePtr inner) -> ValuePtr;
     static auto module(std::string name) -> ValuePtr;
     static auto process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
     static auto task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;

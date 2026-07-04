@@ -29,6 +29,9 @@ jobs:
 
   wasm:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
 
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +77,10 @@ jobs:
         if: steps.cache-gmp-wasm.outputs.cache-hit != 'true'
         run: |
           source emsdk/emsdk_env.sh
-          curl -LO https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+          # gmplib.org itself timed out connecting from GitHub's runners
+          # (confirmed: curl hung ~135s then failed) — ftp.gnu.org mirrors
+          # the same release and is far better CDN'd for CI traffic.
+          curl -LO https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
           tar xf gmp-6.3.0.tar.xz
           mkdir gmp-6.3.0/build-wasm && cd gmp-6.3.0/build-wasm
           emconfigure ../configure \
@@ -97,3 +103,19 @@ jobs:
 
       - name: Wasm unit tests (via Node)
         run: make test-wasm
+
+      # Pre-release only — no NPM_TOKEN needed, GITHUB_TOKEN can publish to
+      # GitHub Packages directly. Every push overwrites what the `next`
+      # dist-tag points to (a fresh 0.0.0-dev.<short-sha> version each
+      # time); there is no `latest`/stable release yet — see
+      # packages/kex/README.md. Skipped on pull_request builds so PRs from
+      # forks (which don't get GITHUB_TOKEN write access) don't fail here.
+      - name: Publish @kexhq/kex to GitHub Packages
+        if: github.event_name == 'push'
+        working-directory: packages/kex
+        run: |
+          npm version "0.0.0-dev.${GITHUB_SHA::7}" --no-git-tag-version
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          npm publish --tag next
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -51,10 +51,22 @@ public:
 
 private:
     struct Impl;
-    std::unique_ptr<Impl> m_impl;
+    // Declaration order matters here — members are destroyed in reverse
+    // order, and m_impl MUST be destroyed before m_entry. Destroying m_impl
+    // (on the native/Boost.Context backend) can resume a still-suspended
+    // fiber one last time to deliver forced_unwind (see scheduler.cxx's
+    // rethrowIfForcedUnwind comment) — that resume re-enters code still
+    // holding onto m_entry's captured closure state (e.g. Scheduler::
+    // startTask's captured Task block). If m_entry were destroyed first (as
+    // it was when declared before m_impl), that resume would run against an
+    // already-freed closure — a real, reproduced use-after-free (confirmed
+    // via Valgrind: a Task that never replies, awaited with a timeout that
+    // expires, destroys the still-blocked-in-receive Task fiber at scope
+    // exit and corrupts memory).
     EntryFn m_entry;
     bool m_started = false;
     bool m_finished = false;
+    std::unique_ptr<Impl> m_impl;
 };
 
 } // namespace kex::interpreter

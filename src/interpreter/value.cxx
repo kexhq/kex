@@ -74,6 +74,18 @@ auto Value::variant(std::string tag, std::string parentType, std::vector<ValuePt
                                                         std::move(typeParams), std::move(argParamIndex)}});
 }
 
+auto Value::just(ValuePtr inner) -> ValuePtr {
+    return variant("Just", "Option", {std::move(inner)}, {"T"}, {0});
+}
+
+auto Value::ok(ValuePtr inner) -> ValuePtr {
+    return variant("Ok", "Result", {std::move(inner)}, {"T", "E"}, {0});
+}
+
+auto Value::error(ValuePtr inner) -> ValuePtr {
+    return variant("Error", "Result", {std::move(inner)}, {"T", "E"}, {1});
+}
+
 auto Value::module(std::string name) -> ValuePtr {
     return std::make_shared<Value>(Value{ModuleValue{std::move(name)}});
 }

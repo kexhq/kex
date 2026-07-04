@@ -77,38 +77,38 @@ auto Evaluator::registerIntegerBuiltins() -> void {
     m_globalEnv->define("Float", Value::module("Float"));
     reg("Float::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::variant("Error", "Result", {Value::string("Float.parse expects a String")});
+        if (!s) return Value::error(Value::string("Float.parse expects a String"));
         try {
             size_t consumed = 0;
             double v = std::stod(s->value, &consumed);
             if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
-            return Value::variant("Ok", "Result", {Value::floating(v)});
+            return Value::ok(Value::floating(v));
         } catch (const std::exception&) {
-            return Value::variant("Error", "Result", {Value::string("invalid float: " + s->value)});
+            return Value::error(Value::string("invalid float: " + s->value));
         }
     });
 
     m_globalEnv->define("Integer", Value::module("Integer"));
     reg("Integer::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::variant("Error", "Result", {Value::string("Integer.parse expects a String")});
+        if (!s) return Value::error(Value::string("Integer.parse expects a String"));
         try {
             size_t consumed = 0;
             int64_t v = std::stoll(s->value, &consumed);
             if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
-            return Value::variant("Ok", "Result", {Value::integer(v)});
+            return Value::ok(Value::integer(v));
         } catch (const std::out_of_range&) {
             // Too big for int64_t doesn't mean invalid — Integer is
             // arbitrary precision; mpz_class's string constructor throws
             // std::invalid_argument itself if the string isn't a valid
             // integer (it requires a full match, not a prefix parse).
             try {
-                return Value::variant("Ok", "Result", {integerResult(mpz_class(s->value))});
+                return Value::ok(integerResult(mpz_class(s->value)));
             } catch (const std::exception&) {
-                return Value::variant("Error", "Result", {Value::string("invalid integer: " + s->value)});
+                return Value::error(Value::string("invalid integer: " + s->value));
             }
         } catch (const std::exception&) {
-            return Value::variant("Error", "Result", {Value::string("invalid integer: " + s->value)});
+            return Value::error(Value::string("invalid integer: " + s->value));
         }
     });
 }

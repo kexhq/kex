@@ -54,7 +54,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         if (!map) return args.size() >= 3 ? args[2] : Value::none();
         for (const auto& [k, v] : map->entries) {
             if (valuesEqual(k, args[1])) {
-                return args.size() >= 3 ? v : Value::variant("Just", "Option", {v});
+                return args.size() >= 3 ? v : Value::just(v);
             }
         }
         return args.size() >= 3 ? args[2] : Value::none();
@@ -284,7 +284,7 @@ auto Evaluator::registerMapBuiltins() -> void {
             if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) {
                 auto tuple = std::make_shared<Value>();
                 tuple->data = TupleValue{{k, v}};
-                return Value::variant("Just", "Option", {tuple});
+                return Value::just(tuple);
             }
         }
         return Value::none();

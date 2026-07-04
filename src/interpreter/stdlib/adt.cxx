@@ -19,9 +19,19 @@ auto Evaluator::registerAdtConstructors() -> void {
         }};
         m_globalEnv->define(name, val);
     };
-    regCtor1("Just", "Option");
-    regCtor1("Ok", "Result");
-    regCtor1("Error", "Result");
+    // Just/Ok/Error go through Value::just/ok/error rather than regCtor1 so
+    // typeName() renders "Option<Int>"/"Result<String, ...>" instead of the
+    // bare "Option"/"Result" (see value.hxx's comment on those helpers).
+    auto regGenericCtor1 = [this](const std::string& name, ValuePtr (*make)(ValuePtr)) {
+        auto val = std::make_shared<Value>();
+        val->data = FunctionValue{name, [make](std::vector<ValuePtr> args) -> ValuePtr {
+            return make(args.empty() ? Value::none() : args[0]);
+        }};
+        m_globalEnv->define(name, val);
+    };
+    regGenericCtor1("Just", &Value::just);
+    regGenericCtor1("Ok", &Value::ok);
+    regGenericCtor1("Error", &Value::error);
     regCtor1("Left", "Either");
     regCtor1("Right", "Either");
 

@@ -84,9 +84,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // atom/value ends up in Error(...) — no separate error ADT to keep
     // this from growing beyond what the interpreter needs).
     reg("await", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::variant("Error", "Result", {Value::string("not a task")});
+        if (args.empty()) return Value::error(Value::string("not a task"));
         auto* t = std::get_if<TaskValue>(&args[0]->data);
-        if (!t) return Value::variant("Error", "Result", {Value::string("not a task")});
+        if (!t) return Value::error(Value::string("not a task"));
 
         std::optional<int64_t> timeoutMs;
         if (args.size() > 1) {
@@ -94,17 +94,17 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
 
         auto msg = t->scheduler->awaitTaskMessage(t->pid, timeoutMs);
-        if (!msg) return Value::variant("Error", "Result", {Value::atom("timeout")});
+        if (!msg) return Value::error(Value::atom("timeout"));
 
         auto* tup = std::get_if<TupleValue>(&(*msg)->data);
         if (!tup || tup->elements.size() != 2) {
-            return Value::variant("Error", "Result", {Value::string("malformed task result")});
+            return Value::error(Value::string("malformed task result"));
         }
         auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
         if (tag && tag->name == "task_done") {
-            return Value::variant("Ok", "Result", {tup->elements[1]});
+            return Value::ok(tup->elements[1]);
         }
-        return Value::variant("Error", "Result", {tup->elements[1]});
+        return Value::error(tup->elements[1]);
     });
 
     // Task.awaitAll([tasks]) — awaits each task in order, no timeout
@@ -125,24 +125,24 @@ auto Evaluator::registerProcessBuiltins() -> void {
         for (const auto& taskVal : lst->elements) {
             auto* t = std::get_if<TaskValue>(&taskVal->data);
             if (!t) {
-                results.push_back(Value::variant("Error", "Result", {Value::string("not a task")}));
+                results.push_back(Value::error(Value::string("not a task")));
                 continue;
             }
             auto msg = t->scheduler->awaitTaskMessage(t->pid, std::nullopt);
             if (!msg) {
-                results.push_back(Value::variant("Error", "Result", {Value::atom("timeout")}));
+                results.push_back(Value::error(Value::atom("timeout")));
                 continue;
             }
             auto* tup = std::get_if<TupleValue>(&(*msg)->data);
             if (!tup || tup->elements.size() != 2) {
-                results.push_back(Value::variant("Error", "Result", {Value::string("malformed task result")}));
+                results.push_back(Value::error(Value::string("malformed task result")));
                 continue;
             }
             auto* tag = std::get_if<AtomValue>(&tup->elements[0]->data);
             if (tag && tag->name == "task_done") {
-                results.push_back(Value::variant("Ok", "Result", {tup->elements[1]}));
+                results.push_back(Value::ok(tup->elements[1]));
             } else {
-                results.push_back(Value::variant("Error", "Result", {tup->elements[1]}));
+                results.push_back(Value::error(tup->elements[1]));
             }
         }
         return Value::list(std::move(results));
@@ -170,11 +170,11 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // wrong behavior.
     reg("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
-            return Value::variant("Error", "Result", {Value::string("Supervisor.start requires a do...end block")});
+            return Value::error(Value::string("Supervisor.start requires a do...end block"));
         }
         auto* specsBlockFn = std::get_if<FunctionValue>(&args[0]->data);
         if (!specsBlockFn || !specsBlockFn->native) {
-            return Value::variant("Error", "Result", {Value::string("Supervisor.start requires a do...end block")});
+            return Value::error(Value::string("Supervisor.start requires a do...end block"));
         }
 
         std::string strategy = "only_crashed";
@@ -182,16 +182,15 @@ auto Evaluator::registerProcessBuiltins() -> void {
             if (auto* av = std::get_if<AtomValue>(&args[1]->data)) strategy = av->name;
         }
         if (strategy != "only_crashed") {
-            return Value::variant("Error", "Result", {Value::string(
+            return Value::error(Value::string(
                 "Supervisor restart strategy :" + strategy + " isn't supported by the interpreter — "
-                "only :only_crashed is; use the BEAM backend (kex -R) for :all/:crashed_and_newer.")});
+                "only :only_crashed is; use the BEAM backend (kex -R) for :all/:crashed_and_newer."));
         }
 
         auto specsVal = specsBlockFn->native({});
         auto* specsList = std::get_if<ListValue>(&specsVal->data);
         if (!specsList) {
-            return Value::variant("Error", "Result",
-                {Value::string("Supervisor.start's block must evaluate to a list of worker specs")});
+            return Value::error(Value::string("Supervisor.start's block must evaluate to a list of worker specs"));
         }
 
         std::vector<ValuePtr> childBlocks;
@@ -203,7 +202,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
 
         auto supPid = m_scheduler->startSupervisor(std::move(childBlocks));
-        return Value::variant("Ok", "Result", {Value::process(supPid, m_scheduler.get())});
+        return Value::ok(Value::process(supPid, m_scheduler.get()));
     });
 }
 

@@ -1,0 +1,29 @@
+{
+  "name": "@kexhq/kex",
+  "version": "0.0.0-dev",
+  "description": "Kex language interpreter compiled to WebAssembly, for embedding a Kex REPL in the browser or Node.",
+  "type": "module",
+  "main": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.mjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kexhq/kex.git",
+    "directory": "packages/kex"
+  },
+  "license": "MIT",
+  "scripts": {
+    "prepack": "bash scripts/build.sh"
+  }
+}
