@@ -779,6 +779,25 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 auto localIt = m_topLevelFns.find(node.method);
                 if (localIt != m_topLevelFns.end()) {
                     int callArity = static_cast<int>(node.args.size());
+                    int defArity  = localIt->second;
+                    // A `make Type do let m(args) ... end` method is emitted
+                    // with an implicit `this` receiver (defArity = args + 1).
+                    // Called in STATIC `Type.m(args)` form there's no receiver
+                    // to pass, so supply a placeholder (the type tag) to line
+                    // the arities up — matching the tree-walker, where a
+                    // static call passes no receiver and such a method simply
+                    // never touches `this` (it builds its own value from the
+                    // explicit args). A real, reproduced bug otherwise:
+                    // `Parser.parse(input)` emitted `parse/1` but the method
+                    // is `parse/2`, so erlc reported `undefined function
+                    // parse/1` (examples/json_parser.kex, via
+                    // spec/json_parser.spec.kex).
+                    if (defArity == callArity + 1) {
+                        std::string recvArg = "'" + uid->name + "'";
+                        std::string allArgs = args.empty() ? recvArg : recvArg + ", " + args;
+                        return "apply '" + node.method + "'/" + std::to_string(defArity) +
+                               "(" + allArgs + ")";
+                    }
                     return "apply '" + node.method + "'/" + std::to_string(callArity) + "(" + args + ")";
                 }
                 // Process.* module dispatch (MethodCall path, no parens or with parens).
@@ -1181,12 +1200,45 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // above) can reference the exact same implementation — a real,
             // reproduced bug otherwise: undef'd entirely
             // (spec/char_predicates.kex, spec/char_type.kex, spec/list_hof.kex).
-            if (node.method == "digit?" && node.args.empty())
+            // In a `when` guard, a `call 'kex_io':...` is an illegal guard
+            // expression (Erlang guards can't call arbitrary functions) —
+            // so inline the exact same range checks kex_io:is_digit/
+            // is_alpha/is_space use, as guard-safe boolean BIF trees
+            // (erlang:'>='/'=<'/'=:='/'and'/'or' are all allowed in
+            // guards). A real, reproduced bug otherwise: `Just(c) when
+            // c.digit? || c == '-'` emitted `call 'kex_io':'is_digit'(C)`
+            // inside the guard and erlc rejected the whole function with
+            // "illegal guard expression" (examples/json_parser.kex's
+            // parseValue/parseNumber, via spec/json_parser.spec.kex).
+            if (node.method == "digit?" && node.args.empty()) {
+                if (m_inGuard)
+                    return "call 'erlang':'and'(call 'erlang':'>='(" + recv +
+                           ", 48), call 'erlang':'=<'(" + recv + ", 57))";
                 return "call 'kex_io':'is_digit'(" + recv + ")";
-            if (node.method == "space?" && node.args.empty())
+            }
+            if (node.method == "space?" && node.args.empty()) {
+                if (m_inGuard) {
+                    // C =:= 32/9/10/13/11/12 (space/tab/nl/cr/vtab/ff),
+                    // chained with erlang:'or' (lists:member isn't a guard BIF).
+                    std::string chk;
+                    for (int code : {32, 9, 10, 13, 11, 12}) {
+                        std::string eq = "call 'erlang':'=:='(" + recv + ", " +
+                                         std::to_string(code) + ")";
+                        chk = chk.empty() ? eq : "call 'erlang':'or'(" + chk + ", " + eq + ")";
+                    }
+                    return chk;
+                }
                 return "call 'kex_io':'is_space'(" + recv + ")";
-            if (node.method == "alpha?" && node.args.empty())
+            }
+            if (node.method == "alpha?" && node.args.empty()) {
+                if (m_inGuard)
+                    return "call 'erlang':'or'("
+                           "call 'erlang':'and'(call 'erlang':'>='(" + recv + ", 65), "
+                           "call 'erlang':'=<'(" + recv + ", 90)), "
+                           "call 'erlang':'and'(call 'erlang':'>='(" + recv + ", 97), "
+                           "call 'erlang':'=<'(" + recv + ", 122)))";
                 return "call 'kex_io':'is_alpha'(" + recv + ")";
+            }
 
             // Extra list methods
             if (node.method == "sum") {
@@ -1482,9 +1534,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     pat = clause.patterns.empty() ? freshVar("W") : emitPattern(clause.patterns[0]);
                 }
                 result += "  " + pat;
-                if (clause.guard)
+                if (clause.guard) {
+                    m_inGuard = true;
                     result += " when " + emitExpr(*clause.guard);
-                else
+                    m_inGuard = false;
+                } else
                     result += " when 'true'";
                 result += " ->\n    " + emitExpr(clause.body) + "\n";
             }
@@ -1505,8 +1559,34 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Record construction ---
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            // Tagged tuple {'TypeName', field1, field2, ...}
-            // Field order from definition — for M1 just emit in declared order.
+            // Tagged tuple {'TypeName', field1, field2, ...}. Fields MUST be
+            // emitted in the record's DECLARED order (not the order written
+            // at the construction site), and any field omitted at the site
+            // gets its declared default value — the field accessors read
+            // fixed tuple positions, so a short/misordered tuple corrupts
+            // every later access. A real, reproduced bug otherwise:
+            // `Parser { input: x }` (with `pos : Int = 0` defaulted)
+            // emitted a 2-tuple `{'Parser', X}`, and the `pos` accessor's
+            // `element(3, ...)` then crashed with badarg
+            // (examples/json_parser.kex, via spec/json_parser.spec.kex).
+            auto recIt = m_records.find(node.typeName);
+            if (recIt != m_records.end()) {
+                std::string result = "{'" + node.typeName + "'";
+                for (const auto& field : recIt->second->fields) {
+                    const ast::ExprPtr* provided = nullptr;
+                    for (const auto& [name, val] : node.fields)
+                        if (name == field.name) { provided = &val; break; }
+                    if (provided)
+                        result += ", " + emitExpr(*provided);
+                    else if (field.defaultValue)
+                        result += ", " + emitExpr(*field.defaultValue);
+                    else
+                        result += ", 'none'";
+                }
+                return result + "}";
+            }
+            // Unknown record (e.g. from another module) — fall back to the
+            // fields as written.
             std::string result = "{'" + node.typeName + "'";
             for (const auto& [name, val] : node.fields)
                 result += ", " + emitExpr(val);
@@ -1740,9 +1820,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     ? freshVar("W")
                     : emitPattern(clause.patterns[0]);
                 result += "  {'kex_msg', " + pat + ", " + senderVar + "}";
-                if (clause.guard)
+                if (clause.guard) {
+                    m_inGuard = true;
                     result += " when " + emitExpr(*clause.guard);
-                else
+                    m_inGuard = false;
+                } else
                     result += " when 'true'";
                 result += " ->\n    " + emitExpr(clause.body) + "\n";
             }
@@ -1918,19 +2000,35 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
     // IfExpr → emit branches with loop context
     if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
         std::string cond = emitExpr(ie->condition);
-        // What comes after this `if` in the enclosing body (or after the
-        // caller's own fallthrough, if this if is itself inside a branch of
-        // an outer if) — computed once up front, then handed to both
-        // branches as THEIR fallthrough, so a branch falling off the end of
-        // its own statement list continues here instead of wrongly
-        // restarting the loop (see emitLoopBodyFrom's doc comment).
-        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+        // When the `if` is the LAST loop-body statement, a branch that falls
+        // off its end restarts the loop — and the restart tail call must use
+        // that branch's OWN post-assignment variable bindings. Pre-baking one
+        // shared `cont` tail call here (with the pre-branch bindings) was a
+        // real, reproduced infinite loop: `loop / if c / p = p.advance / i =
+        // i + 1 / else return .. / end / end` recursed with the OLD p/i, so
+        // the counter never advanced (examples/json_parser.kex's
+        // expectLiteral, via spec/json_parser.spec.kex). So in that case pass
+        // the (empty or inherited) `fallthrough` straight through, letting
+        // each branch's base case regenerate the tail call against its own
+        // updated m_varSubst. Only when statements actually FOLLOW the `if`
+        // is a shared pre-computed continuation correct (and needed — see
+        // emitLoopBodyFrom's doc comment on the break-after-if case).
+        bool ifIsLast = (start + 1 >= (int)body.size());
+        std::string branchFallthrough;
+        std::string cont; // concrete continuation for the no-else false branch
+        if (ifIsLast) {
+            branchFallthrough = fallthrough;
+            cont = fallthrough.empty() ? makeTailCall(loopFn, loopArity, mutParams) : fallthrough;
+        } else {
+            cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+            branchFallthrough = cont;
+        }
         // Save subst state for merging branches
         auto substSnap = m_varSubst;
-        std::string thenPart = emitLoopBodyFrom(ie->thenBody, 0, loopFn, loopArity, mutParams, cont);
+        std::string thenPart = emitLoopBodyFrom(ie->thenBody, 0, loopFn, loopArity, mutParams, branchFallthrough);
         m_varSubst = substSnap;
         if (ie->elseBody) {
-            std::string elsePart = emitLoopBodyFrom(*ie->elseBody, 0, loopFn, loopArity, mutParams, cont);
+            std::string elsePart = emitLoopBodyFrom(*ie->elseBody, 0, loopFn, loopArity, mutParams, branchFallthrough);
             m_varSubst = substSnap;
             return "case " + cond + " of\n"
                    "  'true' when 'true' ->\n    " + thenPart + "\n"
@@ -1967,33 +2065,37 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
             bindingPrefix = "let <" + bv + "> =\n    " + scrutinee + "\nin\n";
             scrutinee = bv;
         }
-        // Computed once, used by every arm that doesn't itself break/return —
-        // "whatever comes after this match in the loop body" (its own base
-        // case already correctly resolves to the outer fallthrough/tail-call
-        // when there's nothing left, so this is right whether match is the
-        // last loop-body statement or not — no separate last-vs-not-last
-        // special-casing needed here).
-        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+        // The continuation ("whatever comes after this match in the loop
+        // body") is regenerated PER ARM, after that arm's own assignment has
+        // updated m_varSubst — because when it ends in a loop-restart tail
+        // call, that call must carry the arm's post-assignment bindings. A
+        // real, reproduced infinite loop otherwise: `loop / match p.current
+        // do Just(' ') -> p = p.advance ; _ -> return p end / end`
+        // (examples/json_parser.kex's skipWhitespace) baked one shared `cont`
+        // with the pre-assignment `p`, so the whitespace arm advanced a fresh
+        // var but restarted the loop with the OLD p — never making progress.
+        auto contNow = [&]() {
+            return emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+        };
         std::string result = bindingPrefix + "case " + scrutinee + " of\n";
         for (const auto& clause : me->clauses) {
             std::string pat = clause.patterns.empty() ? freshVar("W") : emitPattern(clause.patterns[0]);
             result += "  " + pat;
-            if (clause.guard)
+            if (clause.guard) {
+                m_inGuard = true;
                 result += " when " + emitExpr(*clause.guard);
-            else
+                m_inGuard = false;
+            } else
                 result += " when 'true'";
             result += " ->\n";
             // Emit arm body in loop context — a match arm is exactly a
             // single loop-body statement, so this reuses the exact same
             // per-statement handling emitLoopBodyFrom itself would apply
-            // (break/next/assign/return/other), just inlined here since we
-            // already have `cont` computed once for every arm to share
-            // (matching how emitLoopBodyFrom's TrailingIf/IfExpr handling
-            // reuses one `cont` across branches too). A bare `break`/`next`
-            // arm — e.g. `5 -> break` — previously fell into the generic
-            // "other expr" case below, which called plain emitExpr() on it
-            // and hit codegen's "unimplemented AST node" catch-all (break/
-            // next are only meaningful in a loop context).
+            // (break/next/assign/return/other). A bare `break`/`next` arm —
+            // e.g. `5 -> break` — previously fell into the generic "other
+            // expr" case below, which called plain emitExpr() on it and hit
+            // codegen's "unimplemented AST node" catch-all (break/next are
+            // only meaningful in a loop context).
             auto substSnap = m_varSubst;
             std::string armBody;
             if (std::get_if<ast::BreakExpr>(&clause.body->kind)) {
@@ -2005,16 +2107,30 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
                     std::string newVar = freshVar(ae2->name);
                     std::string val = emitExpr(ae2->value);
                     m_varSubst[ae2->name] = newVar;
-                    armBody = "let <" + newVar + "> =\n    " + val + "\nin\n" + cont;
+                    armBody = "let <" + newVar + "> =\n    " + val + "\nin\n" + contNow();
                 } else {
                     std::string tmp = freshVar("S");
-                    armBody = "let <" + tmp + "> =\n    " + emitExpr(ae2->value) + "\nin\n" + cont;
+                    armBody = "let <" + tmp + "> =\n    " + emitExpr(ae2->value) + "\nin\n" + contNow();
                 }
             } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
                 armBody = emitExpr(re2->value);  // exits the function entirely, ignores cont
+            } else if (auto* be2 = std::get_if<ast::BlockExpr>(&clause.body->kind)) {
+                // A `do ... end` arm body is a multi-statement loop-body
+                // fragment — emit it loop-aware (so its own assignments/
+                // returns/breaks thread correctly and the trailing loop
+                // restart carries the arm's post-block bindings), with the
+                // rest-after-the-match as its fallthrough. When the match is
+                // the last loop statement, pass the (empty/inherited)
+                // fallthrough through so the block's base case regenerates the
+                // restart tail call against its updated m_varSubst — same
+                // reasoning as the IfExpr `ifIsLast` case above
+                // (examples/json_parser.kex's parseNumber arm).
+                bool matchIsLast = (start + 1 >= (int)body.size());
+                std::string blockFallthrough = matchIsLast ? fallthrough : contNow();
+                armBody = emitLoopBodyFrom(be2->body, 0, loopFn, loopArity, mutParams, blockFallthrough);
             } else {
                 std::string tmp = freshVar("S");
-                armBody = "let <" + tmp + "> =\n    " + emitExpr(clause.body) + "\nin\n" + cont;
+                armBody = "let <" + tmp + "> =\n    " + emitExpr(clause.body) + "\nin\n" + contNow();
             }
             m_varSubst = substSnap;
             result += "    " + armBody + "\n";
@@ -2852,6 +2968,7 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 if (node) {
+                    m_records[node->name] = node.get();
                     for (int i = 0; i < (int)node->fields.size(); ++i) {
                         // tuple position: 1 = tag, 2..N+1 = fields
                         fieldAccessors[node->fields[i].name].push_back({node->name, i + 2});

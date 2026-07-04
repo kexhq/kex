@@ -121,6 +121,13 @@ private:
     // Escape a string for Core Erlang string literal syntax.
     static auto erlString(const std::string& s) -> std::string;
 
+    // True while emitting a match-clause `when` guard. Core Erlang guards
+    // may only use guard-safe operations — no arbitrary function calls —
+    // so predicates that normally emit a `call 'kex_io':...` (digit?/
+    // alpha?/space?) must instead expand to an inline guard-safe boolean
+    // expression when this is set (see emitExpr's MethodCall handling).
+    bool m_inGuard = false;
+
     std::string m_moduleName;
     int m_varCounter = 0;
     int m_loopCounter = 0;
@@ -140,6 +147,10 @@ private:
     // field_name → [(record_name, 1-based tuple position)]
     // Used to generate direct element() calls during field destructuring.
     std::unordered_map<std::string, std::vector<std::pair<std::string,int>>> m_fieldAccessors;
+    // record_name → its RecordDef, so RecordConstruction can emit fields in
+    // DECLARED order and fill in defaults for omitted fields (the tuple
+    // layout must match the fixed positions the field accessors assume).
+    std::unordered_map<std::string, const ast::RecordDef*> m_records;
 };
 
 } // namespace kex::codegen
