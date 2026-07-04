@@ -27,6 +27,15 @@ jobs:
       - name: Spec suite
         run: make spec
 
+      # Informational only (make spec-beam always exits 0 — see its own
+      # comment in the Makefile) — a meaningful fraction of specs exercise
+      # real, documented gaps in the BEAM codegen backend (operator
+      # overloading and cross-type method-name collisions, trait default
+      # methods, Streams, curried function references) rather than
+      # regressions, so this reports a pass/fail count without gating CI.
+      - name: Spec suite via BEAM (informational)
+        run: make spec-beam
+
   wasm:
     runs-on: ubuntu-latest
     permissions:
@@ -103,6 +112,15 @@ jobs:
 
       - name: Wasm unit tests (via Node)
         run: make test-wasm
+
+      # NODERAWFS (see CMakeLists.txt's kex target) gives the wasm-built
+      # CLI real host filesystem access via Node, so the full spec suite
+      # can run against it directly — same tree-walker as native, so this
+      # is expected to match closely (unlike spec-beam, this one DOES gate
+      # CI: a wasm-specific spec mismatch would be a real regression, not a
+      # documented backend gap).
+      - name: Spec suite via wasm (Node)
+        run: make spec-wasm
 
       # Pre-release only — no NPM_TOKEN needed, GITHUB_TOKEN can publish to
       # GitHub Packages directly. Every push overwrites what the `next`

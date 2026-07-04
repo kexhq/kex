@@ -1439,11 +1439,16 @@ int main(int argc, char *argv[])
         kex::Parser parser(std::move(tokens), filepath);
         auto program = parser.parseProgram();
 
-        // In --run mode, print parse errors and abort — SemanticDB is not
-        // invoked there so we're the only place that can report them.
-        // In --check mode the SemanticDB re-parses and reports them itself;
-        // printing here would duplicate every message.
-        if (!parser.diagnostics().empty() && mode == "run")
+        // In --run and --compile/-R modes, print parse errors and abort —
+        // SemanticDB is not invoked yet at this point so we're the only
+        // place that can report them cleanly. Without this, --compile/-R
+        // fell through to runSemanticCheck, which re-parses via SemanticDB
+        // and reports the exact same underlying parse error but mislabeled
+        // as "fix type errors" — confusing for something that's actually a
+        // syntax error (see spec/error_if_with_do.kex, a real regression
+        // case). In --check mode the SemanticDB re-parses and reports them
+        // itself; printing here would duplicate every message.
+        if (!parser.diagnostics().empty() && (mode == "run" || mode == "compile"))
         {
             for (const auto &pd : parser.diagnostics())
             {
@@ -1458,7 +1463,8 @@ int main(int argc, char *argv[])
             std::cerr << kex::color::apply(kex::color::bold)
                       << kex::color::apply(kex::color::magenta)
                       << "Aborted:" << kex::color::apply(kex::color::reset)
-                      << " fix syntax errors before running.\n";
+                      << " fix syntax errors before " << (mode == "run" || compileRun ? "running" : "compiling")
+                      << ".\n";
             return 1;
         }
 
@@ -1478,10 +1484,16 @@ int main(int argc, char *argv[])
             // type-check yet).
             if (!runSemanticCheck(program, filepath))
             {
+                // -R (run-beam) sets mode == "compile" internally too (see
+                // compileRun above) — say "before running" there, matching
+                // the tree-walker's identical message for the same failure,
+                // since from the user's point of view they ran `kex -R
+                // file.kex`, not `kex --compile file.kex`.
                 std::cerr << kex::color::apply(kex::color::bold)
                           << kex::color::apply(kex::color::magenta)
                           << "Aborted:" << kex::color::apply(kex::color::reset)
-                          << " fix type errors before compiling (use --no-check to skip).\n";
+                          << " fix type errors before " << (compileRun ? "running" : "compiling")
+                          << " (use --no-check to skip).\n";
                 return 1;
             }
         }
@@ -1512,28 +1524,17 @@ int main(int argc, char *argv[])
             if (dot != std::string::npos)
                 stem = stem.substr(0, dot);
 
-            // Require an explicit `main do ... end` block for codegen.
-            bool hasMain = false;
-            for (const auto &item : program.items)
-            {
-                std::visit([&](const auto &node)
-                           {
-                    using T = std::decay_t<decltype(node)>;
-                    if constexpr (std::is_same_v<T, std::unique_ptr<kex::ast::MainBlock>>) {
-                        if (node && node->isExplicitMain) hasMain = true;
-                    } }, item);
-            }
-            if (!hasMain)
-            {
-                std::cerr << "error: " << filepath
-                          << ": no 'main do ... end' block found.\n"
-                          << "  Bare top-level expressions are not allowed in --emit-core mode.\n"
-                          << "  Wrap your entry point in: main do\n"
-                          << "                              ...\n"
-                          << "                            end\n";
-                return 1;
-            }
-
+            // An explicit `main do ... end` is no longer required here —
+            // CoreErlangEmitter already synthesizes one from trailing bare
+            // top-level expressions when there isn't one (see its
+            // `bareExprs` handling), matching the tree-walker's own
+            // implicit-top-level-execution behavior exactly. This used to
+            // hard-require an explicit main block and reject anything else
+            // outright, which was stricter than the emitter itself actually
+            // needs — a real, reproduced case: spec/comparision.kex is
+            // pure top-level `type`/`make`/`let` declarations plus bare
+            // `comps.each { ... }` calls with no `main` block at all, and
+            // runs identically under both backends once this guard is gone.
             kex::codegen::CoreErlangEmitter emitter;
             auto result = emitter.emitProgram(program, stem);
 
@@ -1595,8 +1596,19 @@ int main(int argc, char *argv[])
                                   " -o " + outputDir + " " + outPath;
             if (!tempDir.empty())
             {
-                // Suppress erlc noise in temp-dir (interpreter) mode; redirect stderr.
-                coreCmd += " 2>&1";
+                // Suppress erlc noise in temp-dir (interpreter/-R) mode —
+                // was `2>&1` (merging stderr into stdout), the OPPOSITE of
+                // what this comment always said it should do. erlc prints
+                // its own warnings (e.g. "this clause cannot match because
+                // a previous clause always matches" — confirmed harmless
+                // compiler-analysis noise, not a real logic bug: reproduced
+                // on spec/functions.kex, whose actual computed values are
+                // all correct) to its OWN STDOUT, not stderr — so both
+                // streams need silencing, not just stderr, to keep them out
+                // of the running program's own visible output. erlc
+                // failures are still caught via the exit-code check below
+                // regardless of where its diagnostic text went.
+                coreCmd += " > /dev/null 2>&1";
             }
             else
             {

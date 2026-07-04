@@ -54,20 +54,51 @@ private:
     // Forward-recursive body emitter used by emitBody.
     auto emitBodyFrom(const std::vector<ast::ExprPtr>& body, int start) -> std::string;
 
+    // Identifies an enclosing loop's own letrec function + threaded state,
+    // for when a loop is nested inside another loop's body (see
+    // emitLoopExpr's `outerLoop` parameter).
+    struct LoopContext {
+        std::string loopFn;
+        int loopArity;
+        std::vector<std::string> mutParams;
+        std::string fallthrough;
+    };
+
     // Emit a loop body (loop/while) as a letrec tail-recursive function.
     // loopBody: the loop's statement list.
     // condition: non-null for while loops, null for infinite loop.
     // outerBody/outerStart: the enclosing body slice after the loop statement.
+    // outerLoop: non-null when this loop is itself nested inside another
+    // loop's body — "falling off the end of outerBody" must then continue
+    // via the OUTER loop's own emitLoopBodyFrom (tail-call/fallthrough),
+    // not emitBodyFrom's plain "return the final value" behavior, which
+    // only makes sense at true top level. A real, reproduced bug otherwise:
+    // `loop \n loop \n ... \n end \n end` (or `while` nested either way)
+    // hit codegen's "unimplemented AST node" catch-all, since
+    // emitLoopBodyFrom had no dispatch case for a nested LoopExpr/WhileExpr
+    // at all.
     auto emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
                       const ast::ExprPtr* condition,
-                      const std::vector<ast::ExprPtr>& outerBody, int outerStart) -> std::string;
+                      const std::vector<ast::ExprPtr>& outerBody, int outerStart,
+                      const LoopContext* outerLoop = nullptr) -> std::string;
 
     // Emit loop body statements forward in a loop context.
     // mutParams: kex names of loop-threaded variables (in order).
     // loopFn: the letrec function name.  loopArity: its arity.
+    // `fallthrough`, when non-empty, is the Core Erlang expression to splice
+    // in once `body[start:]` is exhausted, instead of tail-calling the loop
+    // function again — needed when `body` is actually an `if`'s own
+    // then/else statement list (a different vector from the enclosing loop
+    // body): falling off the end of an if-branch must continue with
+    // whatever follows the `if` in the loop body, not immediately restart
+    // the loop (see emitLoopExpr's IfExpr handling — this was a real,
+    // reproduced bug: `loop \n if true \n ... \n end \n break \n end`
+    // never reached `break` at all, looping forever, since the `if`'s own
+    // then-body falling through was wrongly treated as "next iteration").
     auto emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, int start,
                           const std::string& loopFn, int loopArity,
-                          const std::vector<std::string>& mutParams) -> std::string;
+                          const std::vector<std::string>& mutParams,
+                          const std::string& fallthrough = "") -> std::string;
 
     // Build the tail-call string using current m_varSubst values.
     auto makeTailCall(const std::string& loopFn, int loopArity,

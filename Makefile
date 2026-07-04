@@ -27,6 +27,13 @@ help:
 	@echo "  make test-wasm    Build the wasm target + run its test suite via Node"
 	@echo "  make web-demo     Build the wasm target and serve web/index.html locally"
 	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
+	@echo "  make spec-beam    Run the spec suite through the BEAM backend (-R) and"
+	@echo "                    report how many match the tree-walker's golden output."
+	@echo "                    Informational only — never fails the build (see"
+	@echo "                    docs/fiber-process-plan.md for known backend gaps)."
+	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
+	@echo "                    (requires build-wasm; expected to match closely,"
+	@echo "                    since it's the same tree-walker as native)."
 	@echo ""
 
 build:
@@ -76,6 +83,68 @@ spec: build
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then kex_flags="-R --no-colors"; fi; \
 		actual=$$($(KEX) $$kex_flags "$$f" 2>&1); \
+		expected=$$(cat "$$exp_file"); \
+		if [ "$$actual" = "$$expected" ]; then \
+			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \
+			passed=$$((passed + 1)); \
+		else \
+			printf "  \033[31m✗\033[0m %s\n" "$$(basename $$f)"; \
+			diff <(echo "$$actual") <(echo "$$expected") | head -10 | sed 's/^/    /'; \
+			failed=$$((failed + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $$passed passing, $$failed failing"; \
+	[ $$failed -eq 0 ]
+
+# Runs the whole spec suite through -R (BEAM) instead of the per-file tag
+# system `spec` uses, and diffs against the SAME .expected golden files —
+# any mismatch means the two backends produce different output for that
+# program. Skips check-only specs (those are about semantic checking, not
+# runtime execution — same exclusion `spec` doesn't need since it already
+# dispatches per-tag). Informational: prints a pass/fail count but always
+# exits 0, since a meaningful fraction of specs currently exercise features
+# with real, documented gaps in the BEAM codegen backend (operator
+# overloading and cross-type method-name collisions, trait default methods,
+# Streams, curried function references — see
+# docs/fiber-process-plan.md's "BEAM parity" section) rather than being
+# regressions to gate CI on.
+spec-beam: build
+	@echo "Running spec suite through BEAM (-R)..."
+	@failed=0; passed=0; \
+	for f in spec/*.kex; do \
+		exp_file="$${f%.kex}.expected"; \
+		if [ ! -f "$$exp_file" ]; then continue; fi; \
+		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
+		actual=$$(timeout 8 $(KEX) -R --no-colors "$$f" 2>&1); \
+		expected=$$(cat "$$exp_file"); \
+		if [ "$$actual" = "$$expected" ]; then \
+			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \
+			passed=$$((passed + 1)); \
+		else \
+			printf "  \033[33m~\033[0m %s (BEAM output differs)\n" "$$(basename $$f)"; \
+			failed=$$((failed + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $$passed matching, $$failed differing (informational — not a build failure)"
+
+# Same idea, but through the wasm-built `kex` CLI (via Node, using
+# NODERAWFS for real file access — see CMakeLists.txt) instead of BEAM —
+# this is the SAME tree-walker as native, so it's expected to match very
+# closely; any mismatch here is more likely a genuine wasm-specific
+# regression worth investigating, not a documented feature gap.
+spec-wasm: build-wasm
+	@echo "Running spec suite through the wasm-built kex CLI (via Node)..."
+	@failed=0; passed=0; \
+	for f in spec/*.kex; do \
+		exp_file="$${f%.kex}.expected"; \
+		if [ ! -f "$$exp_file" ]; then continue; fi; \
+		kex_flags="--no-colors"; \
+		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
+		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
+		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then continue; fi; \
+		actual=$$(timeout 8 node $(WASM_BUILD_DIR)/kex.js $$kex_flags "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \

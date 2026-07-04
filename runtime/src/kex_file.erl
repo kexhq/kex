@@ -1,5 +1,5 @@
 -module(kex_file).
--export([exists/1, lines/1, read/1, write/2, size/1, delete/1]).
+-export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1]).
 
 %% File.exists?(path) → true | false
 exists(Path) ->
@@ -29,6 +29,13 @@ read(Path) ->
 %% File.write(path, content) → true | false
 write(Path, Content) ->
     case file:write_file(Path, Content) of
+        ok    -> true;
+        _     -> false
+    end.
+
+%% File.append(path, content) → true | false
+append(Path, Content) ->
+    case file:write_file(Path, Content, [append]) of
         ok    -> true;
         _     -> false
     end.

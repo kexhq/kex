@@ -116,18 +116,37 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"Math::sin",       {"math",   "sin"}},
         {"Math::cos",       {"math",   "cos"}},
         {"Math::tan",       {"math",   "tan"}},
-        {"Math::log",       {"math",   "log"}},
+        // log maps to kex_io:math_log/1,2 (not a bare math:log forward) —
+        // Erlang's math module has no log/2 (arbitrary base) at all; see
+        // kex_io.erl's math_log for the ln(x)/ln(base) implementation
+        // matching src/interpreter/stdlib/math.cxx's Math::log exactly.
+        {"Math::log",       {"kex_io", "math_log"}},
         {"Math::log2",      {"math",   "log2"}},
+        {"Math::log10",     {"math",   "log10"}},
         {"Math::exp",       {"math",   "exp"}},
         {"Math::floor",     {"erlang", "floor"}},
         {"Math::ceil",      {"erlang", "ceil"}},
         {"Math::round",     {"erlang", "round"}},
         {"Math::abs",       {"erlang", "abs"}},
         {"Math::pow",       {"math",   "pow"}},
+        {"Math::atan2",     {"math",   "atan2"}},
+        {"Math::hypot",     {"kex_io", "math_hypot"}},
+        {"Math::cbrt",      {"kex_io", "math_cbrt"}},
         {"Math::pi",        {"math",   "pi"}},
         {"Math::PI",        {"math",   "pi"}},
-        {"Math::e",         {"math",   "exp"}},
+        // e/E is a bare 0-arg constant (Euler's number) — math:exp/1 needs
+        // an argument, so it can't back this directly (a real, reproduced
+        // undef crash otherwise: math:exp() with no args). See
+        // kex_io.erl's math_e/0.
+        {"Math::e",         {"kex_io", "math_e"}},
+        {"Math::E",         {"kex_io", "math_e"}},
         {"Math::inf",       {"erlang", "infinity"}},
+        // Integer/Float parsing — see kex_io.erl's integer_parse/float_parse
+        // for why these need custom logic rather than a bare BIF mapping
+        // (they return Ok(v)/Error(reason), matching
+        // src/interpreter/stdlib/integer.cxx exactly).
+        {"Integer::parse",  {"kex_io", "integer_parse"}},
+        {"Float::parse",    {"kex_io", "float_parse"}},
         // String
         {"String::length",  {"erlang", "length"}},
         {"String::toUpper", {"string", "to_upper"}},
@@ -139,6 +158,7 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"File::lines",     {"kex_file", "lines"}},
         {"File::read",      {"kex_file", "read"}},
         {"File::write",     {"kex_file", "write"}},
+        {"File::append",    {"kex_file", "append"}},
         {"File::size",      {"kex_file", "size"}},
         {"File::delete",    {"kex_file", "delete"}},
         // List
@@ -178,6 +198,18 @@ auto CoreErlangEmitter::emitPattern(const ast::PatternPtr& pat) -> std::string {
                 case TokenType::Integer:     return p.literal.value;
                 case TokenType::Float:       return p.literal.value;
                 case TokenType::String:      return erlString(p.literal.value);
+                // A Char literal pattern (e.g. `@['_' | rest]`) — Kex Chars
+                // compile to plain Erlang integers (see emitExpr's
+                // CharLiteral case), so the pattern must match that same
+                // integer codepoint, not fall to the "_" wildcard default
+                // below. A real, reproduced bug otherwise: falling to "_"
+                // means the pattern matches ANY character, not just this
+                // one — spec/my_starts_with.kex's `@['-' | rest]` clause
+                // became unreachable dead code because an earlier `@['_' |
+                // rest]` clause's "pattern" was actually a wildcard.
+                case TokenType::Char:
+                    return std::to_string(static_cast<int>(
+                        static_cast<unsigned char>(p.literal.value.empty() ? '\0' : p.literal.value[0])));
                 case TokenType::True:        return "'true'";
                 case TokenType::False:       return "'false'";
                 case TokenType::None:        return "'none'";
@@ -253,6 +285,30 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "apply '" + node.name + "'/0()";
             return erlVar(node.name);
         } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            // ENV is a real value (a Map<String,String> snapshot of the
+            // process environment — see src/interpreter/stdlib/env.cxx),
+            // not a module namespace or a zero-arg ADT tag, despite being
+            // spelled ALL_CAPS/UpperIdentifier like one. A real, reproduced
+            // undef crash otherwise: every `ENV.xxx` call fell into the
+            // module-dispatch branch below, calling the nonexistent
+            // 'Kex.ENV' module.
+            if (node.name == "ENV") return "call 'kex_io':'env_map'()";
+            // ALL_CAPS top-level `let` constants (e.g. `let DEFAULT_LEVEL =
+            // "info"`) are a real, established Kex convention (see
+            // src/interpreter/stdlib/env.cxx's comment on ENV following
+            // "the same convention as the ALL_CAPS ... constant" pattern) —
+            // parsed as UpperIdentifier like a module/atom reference, but
+            // must resolve as a variable when one is actually bound. A real,
+            // reproduced bug otherwise: referencing DEFAULT_LEVEL anywhere
+            // after its `let` printed the literal atom 'DEFAULT_LEVEL'
+            // instead of its value (spec/env.kex).
+            {
+                auto subIt = m_varSubst.find(node.name);
+                if (subIt != m_varSubst.end()) return subIt->second;
+                auto it = m_topLevelFns.find(node.name);
+                if (it != m_topLevelFns.end() && it->second == 0)
+                    return "apply '" + node.name + "'/0()";
+            }
             // Two distinct Kex concepts legitimately lower to a BEAM atom here:
             //   • Zero-arg variant tag (Less, Nothing) → bare atom 'Less',
             //     matching Erlang/OTP convention for sum-type constructors.
@@ -277,6 +333,59 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                        "  _ when 'true' -> " + lv + "\n"
                        "end";
             }
+            // && / || must short-circuit (matches the tree-walking
+            // interpreter's Evaluator::eval BinaryOp handling exactly, and
+            // is what Kex's docs/examples rely on — spec/mutual_recursion.kex
+            // is a real regression case: `n == 0 || isOdd(n - 1)` needs the
+            // right-hand recursive call to never run once n == 0). Erlang's
+            // own 'and'/'or' BIFs are NOT short-circuiting — they're strict,
+            // evaluating both operands unconditionally before combining them
+            // — unlike source-level andalso/orelse. Confirmed the hard way:
+            // compiling this via the naive `call 'erlang':'or'(...)` form
+            // caused genuine infinite recursion under BEAM (every call is a
+            // real tail call, so it never stack-overflows either — it just
+            // runs forever). Expand to the same case-based short-circuit
+            // form the real Erlang compiler generates for andalso/orelse.
+            if (node.op == TokenType::AmpAmp) {
+                auto lv = freshVar("AND");
+                auto l = emitExpr(node.left);
+                auto r = emitExpr(node.right);
+                return "let <" + lv + "> =\n    " + l + "\nin\n"
+                       "case " + lv + " of\n"
+                       "  'true' when 'true' -> " + r + "\n"
+                       "  'false' when 'true' -> 'false'\n"
+                       "end";
+            }
+            if (node.op == TokenType::PipePipe) {
+                auto lv = freshVar("OR");
+                auto l = emitExpr(node.left);
+                auto r = emitExpr(node.right);
+                return "let <" + lv + "> =\n    " + l + "\nin\n"
+                       "case " + lv + " of\n"
+                       "  'true' when 'true' -> 'true'\n"
+                       "  'false' when 'true' -> " + r + "\n"
+                       "end";
+            }
+            // / is polymorphic like +: Erlang's own '/' ALWAYS returns a
+            // float, even for two integers (10/3 =:= 3.33...), but Kex's
+            // `/` does integer division when both operands are integers
+            // (matching Evaluator::eval's BinaryOp::Slash case, which uses
+            // plain C++ int64_t division — truncating toward zero, exactly
+            // like Erlang's own `div`) and float division otherwise. A
+            // real, reproduced bug otherwise: `10 / 3` printed "3.333333"
+            // under BEAM instead of "3" (spec/arithmetic.kex).
+            if (node.op == TokenType::Slash) {
+                auto lv = freshVar("L");
+                auto rv = freshVar("R");
+                auto l = emitExpr(node.left);
+                auto r = emitExpr(node.right);
+                return "let <" + lv + "> =\n    " + l + "\nin\n"
+                       "let <" + rv + "> =\n    " + r + "\nin\n"
+                       "case {call 'erlang':'is_integer'(" + lv + "), call 'erlang':'is_integer'(" + rv + ")} of\n"
+                       "  {'true', 'true'} when 'true' -> call 'erlang':'div'(" + lv + ", " + rv + ")\n"
+                       "  _ when 'true' -> call 'erlang':'/'(" + lv + ", " + rv + ")\n"
+                       "end";
+            }
             auto l = emitExpr(node.left);
             auto r = emitExpr(node.right);
             auto op = [&]() -> std::string {
@@ -292,8 +401,6 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     case TokenType::GreaterThan: return ">";
                     case TokenType::LessEq:      return "=<";
                     case TokenType::GreaterEq:   return ">=";
-                    case TokenType::AmpAmp:      return "and";
-                    case TokenType::PipePipe:    return "or";
                     default:                     return "+";
                 }
             }();
@@ -308,7 +415,10 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
             auto operand = emitExpr(node.operand);
             if (node.op == TokenType::Minus)
-                return "call 'erlang':'negate'(" + operand + ")";
+                // erlang:'-'/1 is the real unary-minus BIF — 'negate' isn't
+                // a thing in Erlang at all (a real, reproduced undef crash:
+                // spec/arithmetic.kex).
+                return "call 'erlang':'-'(" + operand + ")";
             if (node.op == TokenType::Bang)
                 return "call 'erlang':'not'(" + operand + ")";
             return operand;
@@ -425,6 +535,15 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // Intercept `self()` → erlang:self/0.
             if (node.name == "self" && node.args.empty())
                 return "call 'erlang':'self'()";
+            // assert(cond[, msg]) — part of Kex's testing DSL (see
+            // src/interpreter/stdlib/test.cxx), a plain global function
+            // (not stdlib-module-namespaced), so it fell through to the
+            // "unknown lowercase name → treat as a variable" default below
+            // otherwise, producing an "unbound variable 'Assert'" erlc
+            // error (a real, reproduced bug: spec/traits.kex,
+            // spec/my_starts_with.kex).
+            if (node.name == "assert" && !node.args.empty())
+                return "call 'kex_io':'assert'(" + args + ")";
             // Check if it's a namespaced call like IO.printLine
             auto dot = node.name.find('.');
             if (dot != std::string::npos) {
@@ -475,8 +594,13 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Method call (UFCS) ---
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            // Check if receiver is a module name (UpperIdentifier)
-            if (auto* uid = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
+            // Check if receiver is a module name (UpperIdentifier) — ENV is
+            // excluded: it's a real Map value (see emitExpr's UpperIdentifier
+            // case above), so `ENV.get(...)`/`.each`/`.has?`/etc. must fall
+            // through to the generic UFCS/value-receiver dispatch below,
+            // exactly like any other Map-valued receiver.
+            if (auto* uid = std::get_if<ast::UpperIdentifier>(&node.receiver->kind);
+                uid && uid->name != "ENV") {
                 auto [bmod, bfn] = resolveStdlib(uid->name, node.method);
                 std::string args;
                 for (size_t i = 0; i < node.args.size(); i++) {
@@ -642,14 +766,41 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'erlang':'++'(" + recv + ", [" + firstArg() + "])";
             if (node.method == "count" && node.args.empty() && !node.block)
                 return "call 'erlang':'length'(" + recv + ")";
-            if (node.method == "first")
-                return "call 'erlang':'hd'(" + recv + ")";
-            if (node.method == "last")
-                return "call 'lists':'last'(" + recv + ")";
+            // first/last return Just(value)/None (matches
+            // src/interpreter/stdlib/list.cxx exactly — works for both
+            // String and List receivers, since a Char is just the head/
+            // last element either way) — not the raw element, and NOT a
+            // crash on an empty receiver. A real, reproduced bug otherwise:
+            // erlang:hd([]) throws badarg, and even on a non-empty list the
+            // raw element was returned unwrapped (spec/collections.kex
+            // expected "Just(1)", got "1").
+            if (node.method == "first") {
+                auto rv = freshVar("Recv");
+                return "let <" + rv + "> =\n    " + recv + "\nin\n"
+                       "case " + rv + " of\n"
+                       "  [] when 'true' -> 'none'\n"
+                       "  _ when 'true' -> {'Just', call 'erlang':'hd'(" + rv + ")}\n"
+                       "end";
+            }
+            if (node.method == "last") {
+                auto rv = freshVar("Recv");
+                return "let <" + rv + "> =\n    " + recv + "\nin\n"
+                       "case " + rv + " of\n"
+                       "  [] when 'true' -> 'none'\n"
+                       "  _ when 'true' -> {'Just', call 'lists':'last'(" + rv + ")}\n"
+                       "end";
+            }
             if (node.method == "reverse")
                 return "call 'lists':'reverse'(" + recv + ")";
             if (node.method == "contains?" && node.args.size() == 1)
                 return "call 'lists':'member'(" + firstArg() + ", " + recv + ")";
+            // n.in?(range) / c.in?(range) — range membership. Ranges
+            // compile to a materialized list (lists:seq — see emitExpr's
+            // RangeExpr case), so this is just reversed lists:member — the
+            // receiver (an Int or Char, both plain integers) is the element
+            // being searched for, the range argument is the list.
+            if (node.method == "in?" && node.args.size() == 1)
+                return "call 'lists':'member'(" + recv + ", " + firstArg() + ")";
             if (node.method == "join" && node.args.size() == 1)
                 return "call 'lists':'flatten'(call 'lists':'join'(" + firstArg() + ", " + recv + "))";
             if (node.method == "flatten")
@@ -748,11 +899,55 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 auto [fnVar, letExpr] = bindFun(rawBlock());
                 return letExpr + "call 'lists':'filter'(" + fnVar + ", " + recv + ")";
             }
+            // flatMap { |x| ... } — one level of flattening (matches
+            // src/interpreter/stdlib/list.cxx's flatMap: if the block's
+            // result is itself a list, splice its elements; this simpler
+            // lists:append(lists:map(...)) form assumes the common case —
+            // the block always returns a list — rather than replicating
+            // the interpreter's per-element is-it-a-list check).
+            if (node.method == "flatMap" && node.block) {
+                auto [fnVar, letExpr] = bindFun(rawBlock());
+                return letExpr + "call 'lists':'append'(call 'lists':'map'(" + fnVar + ", " + recv + "))";
+            }
+            // partition { |x| ... } → (matching, nonMatching) — matches
+            // src/interpreter/stdlib/list.cxx's partition exactly.
+            if (node.method == "partition" && node.block) {
+                auto [fnVar, letExpr] = bindFun(rawBlock());
+                return letExpr + "call 'lists':'partition'(" + fnVar + ", " + recv + ")";
+            }
+            // indexOf(value) -> Just(index) | None — matches
+            // src/interpreter/stdlib/list.cxx's indexOf exactly. No
+            // lists:indexOf/2 BIF exists in standard Erlang/OTP (confirmed
+            // — undef); see kex_io:index_of/2 for the real implementation.
+            if (node.method == "indexOf" && node.args.size() == 1)
+                return "call 'kex_io':'index_of'(" + firstArg() + ", " + recv + ")";
+            // product — no lists:product/1 BIF; see kex_io:list_product/1
+            // (a bare inline `fun ... end` passed directly as a call
+            // argument, e.g. lists:foldl(fun (...) -> ... end, 1, Recv),
+            // isn't valid Core Erlang — fun literals must be let-bound to a
+            // variable first, same reason bindFun exists for block-taking
+            // methods elsewhere in this function).
+            if (node.method == "product" && node.args.empty() && !node.block)
+                return "call 'kex_io':'list_product'(" + recv + ")";
             if (node.method == "reduce" || node.method == "inject") {
+                // Two forms: `.reduce(seed) { |acc, x| ... }` (a block) and
+                // `.reduce(seed, fn)` (the fn as a second plain argument —
+                // e.g. a curried operator reference like `~(+)`). A real,
+                // reproduced bug otherwise: the 2-plain-arg form fell
+                // through entirely, undef'd as a local `reduce/3` call
+                // (spec/currying.kex).
                 if (node.args.size() >= 1 && node.block) {
                     auto init = emitExpr(node.args[0]);
                     auto [fnVar, letExpr] = bindFun(emitExpr(*node.block));
                     // Kex block args are (acc, elem); lists:foldl passes (elem, acc) — wrap to swap.
+                    auto ev = freshVar("E"); auto av = freshVar("A");
+                    auto swapFun = "fun (" + ev + ", " + av + ") ->\n    apply " + fnVar + "(" + av + ", " + ev + ")";
+                    auto [swapVar, swapLet] = bindFun(swapFun);
+                    return letExpr + swapLet + "call 'lists':'foldl'(" + swapVar + ", " + init + ", " + recv + ")";
+                }
+                if (node.args.size() == 2 && !node.block) {
+                    auto init = emitExpr(node.args[0]);
+                    auto [fnVar, letExpr] = bindFun(emitExpr(node.args[1]));
                     auto ev = freshVar("E"); auto av = freshVar("A");
                     auto swapFun = "fun (" + ev + ", " + av + ") ->\n    apply " + fnVar + "(" + av + ", " + ev + ")";
                     auto [swapVar, swapLet] = bindFun(swapFun);
@@ -775,15 +970,23 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     return "call 'erlang':'float'(" + recv + ")";
             }
 
-            // Option methods
+            // Option/Result methods
             if (node.method == "or" && node.args.size() == 1) {
-                // Some(x).or(default) or Just(x).or(default) → x; None.or(default) → default
+                // Just(x)/Ok(x).or(default) → x; None/Error(_).or(default) →
+                // default — shared by both prelude ADTs (see
+                // src/interpreter/stdlib/adt.cxx's "or" builtin, which this
+                // must match: Ok/Error were missing here entirely, falling
+                // through to the catch-all "return as-is" case and printing
+                // the raw {Ok,V}/{Error,_} tuple instead of unwrapping it —
+                // a real, reproduced bug, spec/result_option_or.kex).
                 auto dflt = firstArg();
                 auto tmp  = freshVar("Opt");
                 return "let <" + tmp + "> =\n    " + recv + "\nin\n"
                        "case " + tmp + " of\n"
                        "  {'Just', _V} when 'true' -> _V\n"
                        "  {'Some', _V} when 'true' -> _V\n"
+                       "  {'Ok', _V} when 'true' -> _V\n"
+                       "  {'Error', _E} when 'true' -> " + dflt + "\n"
                        "  'none' when 'true' -> " + dflt + "\n"
                        "  _ when 'true' -> " + tmp + "\n"
                        "end";
@@ -792,6 +995,32 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'erlang':'=/='(" + recv + ", 'none')";
             if (node.method == "none?")
                 return "call 'erlang':'=:='(" + recv + ", 'none')";
+            // ok?/error? — Result predicates, matching
+            // src/interpreter/stdlib/adt.cxx's regResultPredicate exactly
+            // (a real, reproduced bug otherwise: these fell through to the
+            // generic FunctionCall dispatch entirely, undef'd — but here
+            // they're MethodCall-only since regResultPredicate is UFCS).
+            if (node.method == "ok?")
+                return "call 'erlang':'=:='(call 'erlang':'element'(1, " + recv + "), 'Ok')";
+            if (node.method == "error?")
+                return "call 'erlang':'=:='(call 'erlang':'element'(1, " + recv + "), 'Error')";
+            // Char predicates — plain global Kex functions (see
+            // src/interpreter/stdlib/string.cxx's digit?/alpha?/space?),
+            // not stdlib-module-namespaced, called via UFCS on a Char
+            // (a plain Erlang integer codepoint). A real, reproduced bug
+            // otherwise: undef'd entirely (spec/char_predicates.kex,
+            // spec/char_type.kex).
+            if (node.method == "digit?" && node.args.empty())
+                return "call 'erlang':'and'(call 'erlang':'>='(" + recv + ", 48), call 'erlang':'=<'(" + recv + ", 57))";
+            if (node.method == "space?" && node.args.empty())
+                return "call 'lists':'member'(" + recv + ", [32, 9, 10, 13, 11, 12])";
+            if (node.method == "alpha?" && node.args.empty()) {
+                auto cv = freshVar("C");
+                return "let <" + cv + "> =\n    " + recv + "\nin\n"
+                       "call 'erlang':'or'("
+                       "call 'erlang':'and'(call 'erlang':'>='(" + cv + ", 65), call 'erlang':'=<'(" + cv + ", 90)), "
+                       "call 'erlang':'and'(call 'erlang':'>='(" + cv + ", 97), call 'erlang':'=<'(" + cv + ", 122)))";
+            }
 
             // Extra list methods
             if (node.method == "sum") {
@@ -868,15 +1097,32 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             if (node.method == "delete" && node.args.size() == 1)
                 return "call 'maps':'remove'(" + firstArg() + ", " + recv + ")";
             if (node.method == "get" && node.args.size() == 1) {
-                // maps:find returns {ok,V} | error — wrap as Just/None for Kex
+                // `get` doubles as list indexing (`list[i]` desugars to
+                // `list.get(i)` — see parsePostfix) — no static type info in
+                // Erlang, so dispatch at runtime. List indexing returns the
+                // raw element (or 'none'), NOT Just(value)-wrapped like
+                // Map.get's 2-arg form — matches
+                // src/interpreter/stdlib/map.cxx's `get` builtin exactly.
+                // A real, reproduced bug otherwise: this unconditionally
+                // called maps:find, which raises {badmap,...} for any list
+                // receiver (spec/list_indexing.kex).
                 auto kv = freshVar("V");
-                return "case call 'maps':'find'(" + firstArg() + ", " + recv + ") of\n"
-                       "  {'ok', " + kv + "} when 'true' -> {'Just', " + kv + "}\n"
-                       "  'error' when 'true' -> 'none'\n"
+                return "case call 'erlang':'is_list'(" + recv + ") of\n"
+                       "  'true' when 'true' -> call 'kex_io':'list_get'(" + recv + ", " + firstArg() + ")\n"
+                       "  'false' when 'true' ->\n"
+                       "    case call 'maps':'find'(" + firstArg() + ", " + recv + ") of\n"
+                       "      {'ok', " + kv + "} when 'true' -> {'Just', " + kv + "}\n"
+                       "      'error' when 'true' -> 'none'\n"
+                       "    end\n"
                        "end";
             }
             if (node.method == "get" && node.args.size() == 2)
-                return "call 'maps':'get'(" + emitExpr(node.args[0]) + ", " + recv + ", " + emitExpr(node.args[1]) + ")";
+                return "case call 'erlang':'is_list'(" + recv + ") of\n"
+                       "  'true' when 'true' -> call 'kex_io':'list_get'(" + recv + ", "
+                       + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ")\n"
+                       "  'false' when 'true' -> call 'maps':'get'(" + emitExpr(node.args[0]) + ", "
+                       + recv + ", " + emitExpr(node.args[1]) + ")\n"
+                       "end";
             if (node.method == "merge" && node.args.size() == 1)
                 return "call 'maps':'merge'(" + recv + ", " + firstArg() + ")";
             if (node.method == "has?" && node.args.size() == 1)
@@ -1192,9 +1438,10 @@ auto CoreErlangEmitter::makeTailCall(const std::string& loopFn, int loopArity,
 
 auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, int start,
                                           const std::string& loopFn, int loopArity,
-                                          const std::vector<std::string>& mutParams) -> std::string {
+                                          const std::vector<std::string>& mutParams,
+                                          const std::string& fallthrough) -> std::string {
     if (start >= (int)body.size())
-        return makeTailCall(loopFn, loopArity, mutParams);  // fall-through = next iteration
+        return fallthrough.empty() ? makeTailCall(loopFn, loopArity, mutParams) : fallthrough;
 
     const auto& e = body[start];
 
@@ -1205,20 +1452,20 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
             std::string val = emitExpr(ae->value);
             auto prev = m_varSubst[ae->name];
             m_varSubst[ae->name] = newVar;
-            std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+            std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
             m_varSubst[ae->name] = prev;
             return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
         }
         // Unknown var — treat as side effect, bind to tmp
         std::string tmp = freshVar("S");
-        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
         return "let <" + tmp + "> =\n    " + emitExpr(ae->value) + "\nin\n" + rest;
     }
 
     // ReturnExpr → exit loop and enclosing function
     if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
-            std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+            std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
             return "case " + emitExpr(ti->condition) + " of\n"
                    "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
                    "  'false' when 'true' ->\n    " + cont + "\n"
@@ -1227,8 +1474,10 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         return emitExpr(re->value);  // discard loop rest
     }
 
-    // BreakExpr → return current mutable var state as a tuple (or 'ok' if none)
-    if (std::get_if<ast::BreakExpr>(&e->kind)) {
+    // Shared by every BreakExpr site (bare, or wrapped in a TrailingIf) —
+    // returns the current mutable var state as a tuple (or 'ok' if none),
+    // exiting the letrec loop function entirely.
+    auto breakTuple = [&]() -> std::string {
         if (mutParams.empty()) return "'ok'";
         std::string tuple = "{";
         for (size_t i = 0; i < mutParams.size(); i++) {
@@ -1237,17 +1486,79 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
             tuple += (it != m_varSubst.end()) ? it->second : "_";
         }
         return tuple + "}";
+    };
+
+    // BreakExpr → return current mutable var state as a tuple (or 'ok' if none)
+    if (std::get_if<ast::BreakExpr>(&e->kind)) {
+        return breakTuple();
+    }
+
+    // NextExpr → skip straight to the next iteration (tail-call the loop
+    // function again with the current mutable state) — was previously
+    // unhandled here at all, falling through to the generic (non-loop-
+    // aware) default case below, which called plain emitExpr() on it and
+    // hit codegen's catch-all "unimplemented AST node" path (NextExpr is
+    // only meaningful inside a loop, so only this loop-aware emitter can
+    // know what to do with it).
+    if (std::get_if<ast::NextExpr>(&e->kind)) {
+        return makeTailCall(loopFn, loopArity, mutParams);
+    }
+
+    // Bare TrailingIf as a loop-body statement (`break if cond`, `next if
+    // cond`, or any other `expr if cond` one-liner) — same real bug class
+    // as NextExpr above: falling through to plain emitExpr() couldn't
+    // handle a break/next inside the trailing-if's wrapped expr at all.
+    // Evaluate `expr` (loop-aware) only when `cond` holds; otherwise
+    // continue with the rest of the loop body.
+    if (auto* ti = std::get_if<ast::TrailingIf>(&e->kind)) {
+        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+        std::string thenPart;
+        if (std::get_if<ast::BreakExpr>(&ti->expr->kind)) {
+            thenPart = breakTuple();
+        } else if (std::get_if<ast::NextExpr>(&ti->expr->kind)) {
+            thenPart = makeTailCall(loopFn, loopArity, mutParams);
+        } else {
+            thenPart = emitExpr(ti->expr);
+        }
+        return "case " + emitExpr(ti->condition) + " of\n"
+               "  'true' when 'true' -> " + thenPart + "\n"
+               "  'false' when 'true' -> " + cont + "\n"
+               "end";
+    }
+
+    // Nested LoopExpr/WhileExpr (a loop statement inside another loop's
+    // body) — was previously unhandled here at all (only emitBodyFrom, the
+    // plain top-level body emitter, dispatched to emitLoopExpr), falling
+    // through to the generic default case's plain emitExpr() and hitting
+    // codegen's "unimplemented AST node" catch-all. Pass the CURRENT loop's
+    // own state as outerLoop so the nested loop's own post-loop
+    // continuation correctly resumes here (tail-call/fallthrough) instead
+    // of assuming top-level "just return" semantics.
+    if (auto* le = std::get_if<ast::LoopExpr>(&e->kind)) {
+        LoopContext outerCtx{loopFn, loopArity, mutParams, fallthrough};
+        return emitLoopExpr(le->body, nullptr, body, start, &outerCtx);
+    }
+    if (auto* we = std::get_if<ast::WhileExpr>(&e->kind)) {
+        LoopContext outerCtx{loopFn, loopArity, mutParams, fallthrough};
+        return emitLoopExpr(we->body, &we->condition, body, start, &outerCtx);
     }
 
     // IfExpr → emit branches with loop context
     if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
         std::string cond = emitExpr(ie->condition);
+        // What comes after this `if` in the enclosing body (or after the
+        // caller's own fallthrough, if this if is itself inside a branch of
+        // an outer if) — computed once up front, then handed to both
+        // branches as THEIR fallthrough, so a branch falling off the end of
+        // its own statement list continues here instead of wrongly
+        // restarting the loop (see emitLoopBodyFrom's doc comment).
+        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
         // Save subst state for merging branches
         auto substSnap = m_varSubst;
-        std::string thenPart = emitLoopBodyFrom(ie->thenBody, 0, loopFn, loopArity, mutParams);
+        std::string thenPart = emitLoopBodyFrom(ie->thenBody, 0, loopFn, loopArity, mutParams, cont);
         m_varSubst = substSnap;
         if (ie->elseBody) {
-            std::string elsePart = emitLoopBodyFrom(*ie->elseBody, 0, loopFn, loopArity, mutParams);
+            std::string elsePart = emitLoopBodyFrom(*ie->elseBody, 0, loopFn, loopArity, mutParams, cont);
             m_varSubst = substSnap;
             return "case " + cond + " of\n"
                    "  'true' when 'true' ->\n    " + thenPart + "\n"
@@ -1255,7 +1566,6 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
                    "end";
         }
         // No else: false branch = continue with rest of loop body
-        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
         return "case " + cond + " of\n"
                "  'true' when 'true' ->\n    " + thenPart + "\n"
                "  'false' when 'true' ->\n    " + cont + "\n"
@@ -1277,6 +1587,13 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         } else {
             scrutinee = emitExpr(me->subject);
         }
+        // Computed once, used by every arm that doesn't itself break/return —
+        // "whatever comes after this match in the loop body" (its own base
+        // case already correctly resolves to the outer fallthrough/tail-call
+        // when there's nothing left, so this is right whether match is the
+        // last loop-body statement or not — no separate last-vs-not-last
+        // special-casing needed here).
+        std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
         std::string result = "case " + scrutinee + " of\n";
         for (const auto& clause : me->clauses) {
             std::string pat = clause.patterns.empty() ? freshVar("W") : emitPattern(clause.patterns[0]);
@@ -1286,43 +1603,43 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
             else
                 result += " when 'true'";
             result += " ->\n";
-            // Emit arm body in loop context
+            // Emit arm body in loop context — a match arm is exactly a
+            // single loop-body statement, so this reuses the exact same
+            // per-statement handling emitLoopBodyFrom itself would apply
+            // (break/next/assign/return/other), just inlined here since we
+            // already have `cont` computed once for every arm to share
+            // (matching how emitLoopBodyFrom's TrailingIf/IfExpr handling
+            // reuses one `cont` across branches too). A bare `break`/`next`
+            // arm — e.g. `5 -> break` — previously fell into the generic
+            // "other expr" case below, which called plain emitExpr() on it
+            // and hit codegen's "unimplemented AST node" catch-all (break/
+            // next are only meaningful in a loop context).
             auto substSnap = m_varSubst;
             std::string armBody;
-            if (clause.body) {
-                // Wrap single arm expr as a 1-element body for uniform treatment
-                std::vector<ast::ExprPtr> armBodyVec;
-                // We can't move — make a pseudo call: treat as emitLoopBodyFrom([armExpr])
-                // For simple cases: AssignExpr, ReturnExpr, other expr
-                if (auto* ae2 = std::get_if<ast::AssignExpr>(&clause.body->kind)) {
-                    if (m_varSubst.count(ae2->name)) {
-                        std::string newVar = freshVar(ae2->name);
-                        std::string val = emitExpr(ae2->value);
-                        m_varSubst[ae2->name] = newVar;
-                        armBody = "let <" + newVar + "> =\n    " + val + "\nin\n"
-                                + makeTailCall(loopFn, loopArity, mutParams);
-                    } else {
-                        armBody = emitExpr(ae2->value);
-                    }
-                } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
-                    armBody = emitExpr(re2->value);
-                } else {
-                    armBody = emitExpr(clause.body);
-                }
-            } else {
+            if (std::get_if<ast::BreakExpr>(&clause.body->kind)) {
+                armBody = breakTuple();
+            } else if (std::get_if<ast::NextExpr>(&clause.body->kind)) {
                 armBody = makeTailCall(loopFn, loopArity, mutParams);
+            } else if (auto* ae2 = std::get_if<ast::AssignExpr>(&clause.body->kind)) {
+                if (m_varSubst.count(ae2->name)) {
+                    std::string newVar = freshVar(ae2->name);
+                    std::string val = emitExpr(ae2->value);
+                    m_varSubst[ae2->name] = newVar;
+                    armBody = "let <" + newVar + "> =\n    " + val + "\nin\n" + cont;
+                } else {
+                    std::string tmp = freshVar("S");
+                    armBody = "let <" + tmp + "> =\n    " + emitExpr(ae2->value) + "\nin\n" + cont;
+                }
+            } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
+                armBody = emitExpr(re2->value);  // exits the function entirely, ignores cont
+            } else {
+                std::string tmp = freshVar("S");
+                armBody = "let <" + tmp + "> =\n    " + emitExpr(clause.body) + "\nin\n" + cont;
             }
             m_varSubst = substSnap;
             result += "    " + armBody + "\n";
         }
         result += "end";
-        // After match in loop body: continue with next loop body statement
-        // (This handles the case where match is not the last statement)
-        if (start + 1 < (int)body.size()) {
-            std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
-            std::string tmp = freshVar("S");
-            return "let <" + tmp + "> =\n    " + result + "\nin\n" + cont;
-        }
         return result;
     }
 
@@ -1331,7 +1648,7 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         std::string ceVar = erlVar(ve->name);
         m_varSubst[ve->name] = ceVar;
         std::string val = emitExpr(ve->value);
-        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+        std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
         m_varSubst.erase(ve->name);
         return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
     }
@@ -1342,13 +1659,13 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                 std::string ceVar = erlVar(vp->name);
                 std::string val = emitExpr(le->value);
-                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
                 return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
             } else {
                 auto tmpVar = freshVar("D");
                 auto pat = emitPattern(le->pattern);
                 auto val = emitExpr(le->value);
-                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+                std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
                 return "let <" + tmpVar + "> =\n    " + val + "\nin\n"
                        "case " + tmpVar + " of\n"
                        "  " + pat + " when 'true' ->\n    " + rest + "\nend";
@@ -1359,14 +1676,15 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
     // Default: bind to tmp, continue
     std::string tmp = freshVar("S");
     std::string val = emitExpr(e);
-    std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams);
+    std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
     return "let <" + tmp + "> =\n    " + val + "\nin\n" + rest;
 }
 
 auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
                                       const ast::ExprPtr* condition,
                                       const std::vector<ast::ExprPtr>& outerBody,
-                                      int outerStart) -> std::string {
+                                      int outerStart,
+                                      const LoopContext* outerLoop) -> std::string {
     // Find which vars from the outer scope are mutated inside the loop.
     std::unordered_set<std::string> mutated;
     collectAssigned(loopBody, mutated);
@@ -1443,8 +1761,14 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
     }
 
     // Emit the rest of the outer body with updated subst so references to mutable
-    // vars after the loop resolve to the post-loop SSA names.
-    std::string rest = emitBodyFrom(outerBody, outerStart + 1);
+    // vars after the loop resolve to the post-loop SSA names. When this loop is
+    // itself nested inside another loop (outerLoop != nullptr), "the rest"
+    // must continue via the OUTER loop's own loop-aware emission (tail-call/
+    // fallthrough), not emitBodyFrom's plain top-level semantics.
+    std::string rest = outerLoop
+        ? emitLoopBodyFrom(outerBody, outerStart + 1, outerLoop->loopFn, outerLoop->loopArity,
+                           outerLoop->mutParams, outerLoop->fallthrough)
+        : emitBodyFrom(outerBody, outerStart + 1);
 
     // Restore subst (the caller's emitBodyFrom chain handles its own scope).
     m_varSubst = savedSubst;
@@ -1455,16 +1779,23 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
         << "    " << loopBodyStr << "\n"
         << "in\n";
 
+    // The "just apply and return directly" shortcuts below are only valid at
+    // true top level (outerLoop == nullptr): there, when this loop is the
+    // final statement, its own result can legitimately BE the enclosing
+    // function's return value. When nested, `rest` must always be spliced
+    // in afterward (its own base case already correctly resolves to the
+    // outer loop's fallthrough/tail-call even when outerStart+1 is past the
+    // end of outerBody), so the shortcuts are skipped entirely.
     if (loopArity == 0) {
         // No mutable state — just run the loop and continue.
-        if (outerStart + 1 >= (int)outerBody.size()) {
+        if (!outerLoop && outerStart + 1 >= (int)outerBody.size()) {
             out << "apply '" << loopFn << "'/0(" << initArgs << ")";
         } else {
             std::string lr = freshVar("LR");
             out << "let <" << lr << "> =\n    apply '" << loopFn << "'/0(" << initArgs << ")\n"
                 << "in\n" << rest;
         }
-    } else if (outerStart + 1 >= (int)outerBody.size()) {
+    } else if (!outerLoop && outerStart + 1 >= (int)outerBody.size()) {
         // Loop is the last statement — return the loop result directly.
         out << "apply '" << loopFn << "'/" << loopArity << "(" << initArgs << ")";
     } else {
@@ -1747,8 +2078,33 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
         return lets;
     };
 
-    // Single clause across the whole group: emit without case dispatch.
-    if (totalClauses == 1) {
+    // Single clause across the whole group, AND every param's pattern (if
+    // any) is something bindPatternLets can actually turn into plain lets
+    // (a bare variable name or a record destructure) — emit without a case
+    // dispatch at all, since a plain let-chain is simpler/cheaper here.
+    // Anything else (list-cons patterns like `@[x|_]`, constructor
+    // patterns, tuple patterns, wildcards, literals — anything
+    // bindPatternLets doesn't handle) falls through to the general
+    // case-dispatch path below instead, which handles arbitrary patterns
+    // correctly via real Core Erlang pattern matching (valid even for a
+    // single clause). A real, reproduced bug otherwise: `let head(@[x |
+    // _]) = x` — a single-clause function whose only param is a list-cons
+    // pattern — silently produced NO binding for `x` at all ("unbound
+    // variable 'X'"), since bindPatternLets only knows how to destructure
+    // VarPattern/RecordPattern (spec/type_dispatch.kex).
+    auto patternIsSimple = [](const ast::Pattern* pat) -> bool {
+        if (!pat) return true;
+        return std::holds_alternative<ast::VarPattern>(pat->kind) ||
+               std::holds_alternative<ast::RecordPattern>(pat->kind);
+    };
+    bool allParamsSimple = true;
+    for (const auto& param : first.clauses[0].params) {
+        if (!patternIsSimple(param.pattern ? param.pattern->get() : nullptr)) {
+            allParamsSimple = false;
+            break;
+        }
+    }
+    if (totalClauses == 1 && allParamsSimple) {
         const auto& clause = first.clauses[0];
         std::string paramLets;
         // If `this` is implicit, _Arg0 = this; explicit params start at _Arg1.
@@ -1975,11 +2331,35 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                         // with no implicit This parameter.
                         bool isStaticCtor = !fd.name.empty() &&
                                            std::isupper(static_cast<unsigned char>(fd.name[0]));
+                        // An unnamed first param carrying ANY pattern (not just
+                        // RecordPattern — e.g. `let myCapitalize(@[]) = ...` /
+                        // `let myCapitalize(@[x|rest]) = ...` in `make String
+                        // do`, a ListPattern receiver) means the receiver
+                        // itself is being pattern-matched, same convention as
+                        // a record-destructuring receiver. Checking only for
+                        // RecordPattern here was a real, reproduced bug:
+                        // spec/my_capitalize.kex's make-String methods were
+                        // never recognized as having a receiver at all, so
+                        // `.myCapitalize` calls used the wrong arity and
+                        // fell through to erlc's "undefined function" error.
                         bool firstIsReceiver = false;
                         if (!isStaticCtor && !fd.clauses.empty() && !fd.clauses[0].params.empty()) {
                             const auto& p0 = fd.clauses[0].params[0];
+                            // The @ sigil (ThisPattern, any inner kind — see
+                            // Parser::parsePattern) is the real, precise
+                            // marker for "this param IS the receiver, being
+                            // pattern-matched" — not "any unnamed param with
+                            // a pattern at all". That broader check was a
+                            // real, reproduced regression: a bare type-name
+                            // parameter like `to(String)` (no `@`, used for
+                            // .to(Type) overload dispatch — a
+                            // ConstructorPattern, not a receiver) was
+                            // wrongly swallowed as "the receiver", leaving
+                            // the real implicit `this` completely unbound
+                            // (spec/type_dispatch.kex's `to/1`).
                             if (!p0.name && p0.pattern &&
-                                std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind))
+                                (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
+                                 std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind)))
                                 firstIsReceiver = true;
                         }
                         m_topLevelFns[fd.name] = explArity + (isStaticCtor || firstIsReceiver ? 0 : 1);
@@ -2059,11 +2439,18 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                     // Uppercase-named functions are static constructors — no implicit This.
                     bool isStaticCtor = !fd->name.empty() &&
                                        std::isupper(static_cast<unsigned char>(fd->name[0]));
+                    // See the matching check above (in the first collection
+                    // pass) for why this accepts any pattern kind, not just
+                    // RecordPattern.
+                    // See the matching check above (first collection pass)
+                    // for why this checks ThisPattern/RecordPattern
+                    // specifically, not any pattern at all.
                     bool firstParamIsReceiver = false;
                     if (!isStaticCtor && !fd->clauses.empty() && !fd->clauses[0].params.empty()) {
                         const auto& p0 = fd->clauses[0].params[0];
                         if (!p0.name && p0.pattern &&
-                            std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind))
+                            (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
+                             std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind)))
                             firstParamIsReceiver = true;
                     }
                     bool needsImplicitThis = !isStaticCtor && !firstParamIsReceiver;
