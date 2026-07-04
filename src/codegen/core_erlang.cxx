@@ -644,6 +644,44 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (args.empty()) return "'" + node.name + "'";
                 return "{'" + node.name + "', " + args + "}";
             }
+            // Named arguments (`f(b: 2, a: 1)`, or `worker target: t,
+            // restart: r do ... end`) are reordered into the callee's
+            // positional parameter slots by name, mirroring
+            // Evaluator::callFunction exactly: each named arg lands in its
+            // matching slot first, THEN positional args — including a
+            // trailing do-block, appended last — fill whatever slots
+            // remain in declaration order, and any still-empty slot
+            // defaults to None. A real, reproduced bug otherwise: named
+            // args were dropped from the emitted call entirely, leaving
+            // the arity short and erlc rejecting it with "argument count
+            // mismatch" (spec/optional_parens_do.kex).
+            auto paramsIt = m_topLevelParams.find(node.name);
+            if (!node.namedArgs.empty() && paramsIt != m_topLevelParams.end()) {
+                const auto& paramNames = paramsIt->second;
+                std::vector<std::string> slots(paramNames.size()); // "" = unfilled
+                for (const auto& [argName, argVal] : node.namedArgs) {
+                    for (size_t i = 0; i < paramNames.size(); i++) {
+                        if (paramNames[i] == argName) { slots[i] = emitExpr(argVal); break; }
+                    }
+                }
+                std::vector<std::string> positional;
+                for (const auto& a : node.args) positional.push_back(emitExpr(a));
+                if (node.block) positional.push_back(emitExpr(*node.block));
+                size_t nextSlot = 0;
+                for (auto& p : positional) {
+                    while (nextSlot < slots.size() && !slots[nextSlot].empty()) nextSlot++;
+                    if (nextSlot >= slots.size()) break;
+                    slots[nextSlot] = std::move(p);
+                }
+                std::string reordered;
+                for (size_t i = 0; i < slots.size(); i++) {
+                    if (i > 0) reordered += ", ";
+                    reordered += slots[i].empty() ? "'none'" : slots[i];
+                }
+                return "apply '" + node.name + "'/" + std::to_string(slots.size()) +
+                       "(" + reordered + ")";
+            }
+
             // A trailing `do...end` block on a free-function call (with or
             // without parens around the preceding positional args — see
             // Parser's optional-parens-before-`do` sugar) is passed as
@@ -2791,6 +2829,12 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                     int arity = node->clauses.empty() ? 0
                               : static_cast<int>(node->clauses[0].params.size());
                     m_topLevelFns[node->name] = arity;
+                    if (!node->clauses.empty()) {
+                        std::vector<std::string> names;
+                        for (const auto& p : node->clauses[0].params)
+                            names.push_back(p.name ? *p.name : std::string{});
+                        m_topLevelParams[node->name] = std::move(names);
+                    }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) collectModuleFns(*node);

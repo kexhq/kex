@@ -109,7 +109,23 @@ to_string(X) when is_binary(X)  -> binary_to_list(X);
 % reproduced bug otherwise: IO.printLine(None) printed "none" under BEAM
 % but "None" under the tree-walker.
 to_string('none')               -> "None";
-to_string(X) when is_atom(X)    -> atom_to_list(X);
+to_string('true')               -> "true";
+to_string('false')              -> "false";
+% A Kex `:atom` literal (always lowercase-first — see the lexer) prints
+% WITH its leading colon, matching src/interpreter/value.cxx's AtomValue
+% toString (`":" + name`). Capitalized atoms are instead ADT nullary
+% constructors (Just/Ok/Less/JsonNull/...) or type names, which print bare
+% — so first-letter case is what distinguishes the two here. true/false
+% (Kex booleans, handled just above) are the only lowercase atoms that are
+% NOT `:atoms` and so are excluded. A real, reproduced bug otherwise: an
+% atom argument interpolated into a string printed as `database` instead
+% of `:database` (spec/optional_parens_do.kex).
+to_string(X) when is_atom(X) ->
+    S = atom_to_list(X),
+    case S of
+        [C | _] when C >= $a, C =< $z -> [$: | S];
+        _ -> S
+    end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
 to_string(X) when is_map(X)     ->

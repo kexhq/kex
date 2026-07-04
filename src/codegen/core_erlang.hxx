@@ -129,6 +129,12 @@ private:
     std::unordered_map<std::string, std::string> m_varSubst;
     // name → arity for all top-level functions defined in this module.
     std::unordered_map<std::string, int> m_topLevelFns;
+    // name → ordered parameter names (first clause) for top-level free
+    // functions, so a call with named args (`f(b: 2, a: 1)`) or a trailing
+    // do-block can reorder those args into positional slots by param name
+    // (see emitExpr's FunctionCall reordering). "" for an unnamed/pattern
+    // param — such a slot can only ever be filled positionally.
+    std::unordered_map<std::string, std::vector<std::string>> m_topLevelParams;
     // "TypeName::ConstName" → mangled function name for 0-arity static constants.
     std::unordered_map<std::string, std::string> m_staticCtors;
     // field_name → [(record_name, 1-based tuple position)]
