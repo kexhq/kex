@@ -1566,6 +1566,40 @@ int main(int argc, char *argv[])
             if (dot != std::string::npos)
                 stem = stem.substr(0, dot);
 
+            // `<name>.spec.kex` auto-loads `<name>.kex`'s declarations —
+            // see specBaseCandidates's own doc comment. `mode == "run"`
+            // (the tree-walker) already does this via a separate
+            // Evaluator::execute call below; the BEAM codegen path emits
+            // everything as ONE Core Erlang module from a single Program,
+            // so the equivalent here is prepending the base file's
+            // declarations (everything but its own `main` block) directly
+            // into `program.items` before emitting — a real, reproduced
+            // gap otherwise: spec/json_parser.spec.kex's `Parser.parse`
+            // (declared in examples/json_parser.kex) compiled to a bare
+            // `undef` under BEAM, since nothing here ever loaded that
+            // file's declarations at all.
+            for (const auto &candidate : specBaseCandidates(filepath))
+            {
+                if (!fileExists(candidate))
+                    continue;
+
+                auto baseSource = readFile(candidate);
+                kex::Lexer baseLexer(std::move(baseSource), candidate);
+                auto baseTokens = baseLexer.tokenizeAll();
+                kex::Parser baseParser(std::move(baseTokens), candidate);
+                auto baseProgram = baseParser.parseProgram();
+
+                std::vector<kex::ast::TopLevelItem> merged;
+                merged.reserve(baseProgram.items.size() + program.items.size());
+                for (auto &item : baseProgram.items)
+                    if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+                        merged.push_back(std::move(item));
+                for (auto &item : program.items)
+                    merged.push_back(std::move(item));
+                program.items = std::move(merged);
+                break;
+            }
+
             // An explicit `main do ... end` is no longer required here —
             // CoreErlangEmitter already synthesizes one from trailing bare
             // top-level expressions when there isn't one (see its

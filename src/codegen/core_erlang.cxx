@@ -847,10 +847,6 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'string':'trim'(" + recv + ")";
             if (node.method == "split" && node.args.size() == 1)
                 return "call 'string':'split'(" + recv + ", " + firstArg() + ", 'all')";
-            if (node.method == "contains?" && node.args.size() == 1)
-                return "call 'erlang':'=/='("
-                       "call 'string':'find'(" + recv + ", " + firstArg() + "), 'nomatch')";
-
             // List methods
             if (node.method == "push" && node.args.size() == 1)
                 return "call 'erlang':'++'(" + recv + ", [" + firstArg() + "])";
@@ -887,8 +883,29 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             }
             if (node.method == "reverse")
                 return "call 'lists':'reverse'(" + recv + ")";
-            if (node.method == "contains?" && node.args.size() == 1)
-                return "call 'lists':'member'(" + firstArg() + ", " + recv + ")";
+            // "abc".contains?("b") (substring search, needle is itself a
+            // string) vs [1,2,3].contains?(2) / (1..10).contains?(5) /
+            // ('a'..'z').contains?('m') (element membership, needle is a
+            // scalar) both compile to the exact same method name/arity,
+            // and String/List/Range receivers are ALL plain Erlang lists
+            // (no runtime tag to dispatch on) — so the receiver alone
+            // can't distinguish them. The needle itself can, though:
+            // `string:find` expects a string pattern, which is a list —
+            // a real, reproduced bug otherwise: this always used
+            // `string:find` regardless of receiver, and a Range/List
+            // receiver with a scalar Char/Integer needle isn't a valid
+            // `string:find` pattern at all (`unicode:characters_to_list`
+            // crash on the bare integer) (spec/list_extras.kex's
+            // `('a'..'z').contains?('m')`).
+            if (node.method == "contains?" && node.args.size() == 1) {
+                auto needle = freshVar("Needle");
+                return "let <" + needle + "> =\n    " + firstArg() + "\nin\n"
+                       "case call 'erlang':'is_list'(" + needle + ") of\n"
+                       "  'true' when 'true' -> call 'erlang':'=/='("
+                             "call 'string':'find'(" + recv + ", " + needle + "), 'nomatch')\n"
+                       "  'false' when 'true' -> call 'lists':'member'(" + needle + ", " + recv + ")\n"
+                       "end";
+            }
             // n.in?(range) / c.in?(range) — range membership. Ranges
             // compile to a materialized list (lists:seq — see emitExpr's
             // RangeExpr case), so this is just reversed lists:member — the
@@ -1065,10 +1082,22 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     typeName = ve->name;
                 if (typeName == "String")
                     return "call 'kex_io':'to_string'(" + recv + ")";
-                if (typeName == "Int")
-                    return "call 'erlang':'round'(" + recv + ")";
+                // "Integer" is the real Kex type name (see
+                // src/interpreter/stdlib/list.cxx's own `.to` — "Int"
+                // alone is never actually used at the source level); a
+                // real, reproduced bug otherwise: `.to(Integer)` fell
+                // through this whole special case entirely (matching
+                // neither branch) and was wrongly treated as a call to a
+                // nonexistent user method `to/2` (spec/fact.kex).
+                // kex_io:to_integer/to_float handle String receivers
+                // (parse) and Float→Integer truncation (not rounding —
+                // `erlang:round` was also wrong for that case, matching
+                // neither list.cxx's `static_cast<int64_t>` truncation
+                // nor a String receiver at all).
+                if (typeName == "Int" || typeName == "Integer")
+                    return "call 'kex_io':'to_integer'(" + recv + ")";
                 if (typeName == "Float")
-                    return "call 'erlang':'float'(" + recv + ")";
+                    return "call 'kex_io':'to_float'(" + recv + ")";
             }
 
             // Option/Result methods
@@ -2581,6 +2610,19 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
             paramName = erlVar(*main.params[0].name);
         out << "  fun (_Args) ->\n";
         out << "    let <" << paramName << "> = _Args in\n";
+        // main(args, env) — a second param binds the ENV snapshot
+        // (Map<String,String>), matching Evaluator::execMainBlock
+        // exactly. There's no real second argument from erl's own entry
+        // point (init:get_plain_arguments/0 only ever gives the one args
+        // list) — env is synthesized here the same way bare `ENV`
+        // references are elsewhere (emitExpr's UpperIdentifier case). A
+        // real, reproduced bug otherwise: `main(args, env) do ... end`
+        // only ever bound `args`, leaving `env` a genuinely unbound
+        // variable the moment the body referenced it (spec/env_param.kex).
+        if (main.params.size() >= 2 && main.params[1].name) {
+            out << "    let <" << erlVar(*main.params[1].name)
+                << "> = call 'kex_io':'env_map'() in\n";
+        }
         out << "    " << withTestSummary(emitBody(main.body)) << "\n";
     }
     return out.str();

@@ -3,7 +3,7 @@
          list_get/2, list_get/3, env_map/0, integer_parse/1, float_parse/1,
          math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
          assert/1, assert/2, index_of/2, list_product/1,
-         is_digit/1, is_alpha/1, is_space/1, divide/2]).
+         is_digit/1, is_alpha/1, is_space/1, divide/2, to_integer/1, to_float/1]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
@@ -272,3 +272,33 @@ float_parse(S) ->
                 _ -> {'Error', "invalid float: " ++ S}
             end
     end.
+
+%% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
+%% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
+%% an already-matching type, TRUNCATE (not round) a Float down to Integer,
+%% parse a String, and 'none' on anything else/unparseable — unlike
+%% integer_parse/float_parse above, the result is the bare value itself
+%% (or 'none'), not an Ok/Error-wrapped Result. A real, reproduced bug
+%% otherwise: `.to(Integer)` on a String receiver crashed outright
+%% (erlang:round/1 requires a number, not a list) (spec/fact.kex).
+to_integer(X) when is_integer(X) -> X;
+to_integer(X) when is_float(X) -> erlang:trunc(X);
+to_integer(X) when is_list(X) ->
+    case string:to_integer(X) of
+        {Int, ""} -> Int;
+        _ -> 'none'
+    end;
+to_integer(_) -> 'none'.
+
+to_float(X) when is_float(X) -> X;
+to_float(X) when is_integer(X) -> float(X);
+to_float(X) when is_list(X) ->
+    case string:to_float(X) of
+        {Flt, ""} -> Flt;
+        _ ->
+            case string:to_integer(X) of
+                {Int, ""} -> float(Int);
+                _ -> 'none'
+            end
+    end;
+to_float(_) -> 'none'.
