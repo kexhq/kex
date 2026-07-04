@@ -34,6 +34,31 @@ static std::string g_currentMakeTarget;
 #include <readline/history.h>
 
 // Completion state — populated before the REPL loop, read by the C callback.
+// Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
+// embedded `'` via the standard close-quote/escaped-literal-quote/reopen
+// idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
+// quoted atoms (e.g. a module name with a literal '.' in its stem, like
+// "kex_json_parser.spec") — naively embedding those quotes directly inside
+// an outer single-quoted shell argument is fragile: shell single-quote
+// parsing is stateful (quote/unquote toggles as it scans), so whether a
+// hand-placed escape sequence lands in "quoted" or "unquoted" context
+// depends on the exact quote parity of everything BEFORE it, not just
+// what's written at that one spot — verified the hard way (a `\''`
+// sequence that worked correctly right after the argument's own opening
+// quote broke once embedded deeper into a longer string, because an
+// earlier quoted/unquoted flip had already changed the state at that
+// point). Applying this uniformly across the whole string is what makes
+// it position-independent and actually robust (spec/json_parser.spec.kex).
+static auto shellSingleQuote(const std::string& s) -> std::string {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else out += c;
+    }
+    out += "'";
+    return out;
+}
+
 static kex::semantic::SemanticDB *g_replDb = nullptr;
 static std::vector<std::string> g_completionMatches;
 static std::string g_completionWord;
@@ -902,9 +927,22 @@ int main(int argc, char *argv[])
                     std::filesystem::remove(corePath);
                     if (erlcRet != 0) { std::cerr << "  error: compilation failed\n"; continue; }
 
+                    // The module name needs to be a quoted Erlang atom in
+                    // the -eval text — a stem containing a literal '.'
+                    // (e.g. "json_parser.spec" → kex_json_parser.spec)
+                    // otherwise makes Erlang's OWN parser choke on the
+                    // embedded '.' as a statement terminator ("syntax
+                    // error before: '.'"), a real, reproduced bug
+                    // (spec/json_parser.spec.kex). shellSingleQuote wraps
+                    // the whole -eval text as one shell argument, so the
+                    // quotes around the atom survive into erl regardless
+                    // of where they land (see its own comment for why a
+                    // hand-placed escape at just this one spot isn't
+                    // reliable).
+                    std::string evalExpr = "'" + result.moduleName + "':main(), halt()";
                     std::string runCmd = "erl -noshell -pa " + beamDir +
                                          (rtPaDir.empty() ? "" : " -pa " + rtPaDir) +
-                                         " -eval '" + result.moduleName + ":main(), halt()'"
+                                         " -eval " + shellSingleQuote(evalExpr) +
                                          " < /dev/null";
                     std::system(runCmd.c_str());
                     std::filesystem::remove(beamDir + "/" + result.moduleName + ".beam");
@@ -1366,11 +1404,15 @@ int main(int argc, char *argv[])
             "{ok,_Bin}=file:read_file(\"" + absBeamPath + "\"), "
             "code:load_binary('" + moduleName + "',\"" + absBeamPath + "\",_Bin), "
             "case lists:member({main,1},erlang:get_module_info('" + moduleName + "',exports)) of "
-            "true -> " + moduleName + ":main(init:get_plain_arguments()); "
-            "false -> " + moduleName + ":main() end, halt()";
+            "true -> '" + moduleName + "':main(init:get_plain_arguments()); "
+            "false -> '" + moduleName + "':main() end, halt()";
         std::string runCmd = "erl -noshell -pa " + absBeamDir;
         if (!rtBeamDir.empty()) runCmd += " -pa " + rtBeamDir;
-        runCmd += " -eval '" + mainCall + "'";
+        // shellSingleQuote (see its own comment) wraps the whole -eval
+        // text as one shell argument, so quote characters embedded in it
+        // (e.g. around a module name with a literal '.' in its stem)
+        // survive into erl correctly regardless of where they land.
+        runCmd += " -eval " + shellSingleQuote(mainCall);
         if (!beamArgs.empty()) {
             runCmd += " -extra";
             for (const auto& a : beamArgs) runCmd += " " + a;
@@ -1644,10 +1686,14 @@ int main(int argc, char *argv[])
                     "{ok,_B}=file:read_file(\"" + absBeam + "\"), "
                     "code:load_binary('" + result.moduleName + "',\"" + absBeam + "\",_B), ";
                 std::string mainCall = result.mainArity == 1
-                    ? loadExpr + result.moduleName + ":main(init:get_plain_arguments()), halt()"
-                    : loadExpr + result.moduleName + ":main(), halt()";
+                    ? loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()), halt()"
+                    : loadExpr + "'" + result.moduleName + "':main(), halt()";
+                // shellSingleQuote (see its own comment) wraps the whole
+                // -eval text as one shell argument, so quote characters
+                // embedded in it survive into erl correctly regardless of
+                // where they land (spec/json_parser.spec.kex).
                 std::string runCmd = "erl -noshell -pa " + outputDir +
-                                     " -eval '" + mainCall + "'";
+                                     " -eval " + shellSingleQuote(mainCall);
                 if (result.mainArity == 1 && !scriptArgs.empty()) {
                     runCmd += " -extra";
                     for (const auto& a : scriptArgs)

@@ -28,8 +28,12 @@ private:
     // Top-level emitters
     auto emitFunctionDef(const ast::FunctionDef& fn) -> std::string;
     // Emit a group of same-name FunctionDef nodes as a single function.
+    // emitNameOverride, when non-empty, is used as the emitted Erlang
+    // function's name instead of group[0]->name — see emitProgram's
+    // cross-type method-name-collision mangling (`add` -> `add__Vec2`).
     auto emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                           bool hasImplicitThis = false) -> std::string;
+                           bool hasImplicitThis = false,
+                           const std::string& emitNameOverride = "") -> std::string;
     auto emitMainBlock(const ast::MainBlock& main) -> std::string;
 
     // Expression emitter — returns a Core Erlang expression string.

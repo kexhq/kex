@@ -374,17 +374,55 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // like Erlang's own `div`) and float division otherwise. A
             // real, reproduced bug otherwise: `10 / 3` printed "3.333333"
             // under BEAM instead of "3" (spec/arithmetic.kex).
+            // Operator overloading: `make Type do let +(other) ... end`
+            // (and -, *, /, %, ==, !=, <, >, <=, >=) registers a real
+            // top-level function under the literal operator symbol as its
+            // name (see Parser::parseFunctionDef's tokenTypeName(...)
+            // fallback for operator-named defs), with the same implicit-
+            // this/collision-mangling treatment as any other method — so
+            // if `m_topLevelFns` has an entry for the operator's symbol,
+            // a real (possibly dispatcher, if multiple types overload it)
+            // function exists and must be preferred over the builtin
+            // numeric/string behavior below. Runtime-checked (`is_tuple`)
+            // since operands could still be builtin values even when SOME
+            // type overloads this operator (spec/operator_overloading.kex).
+            auto overloadSymbol = [&]() -> std::string {
+                switch (node.op) {
+                    case TokenType::Plus:        return "+";
+                    case TokenType::Minus:       return "-";
+                    case TokenType::Star:        return "*";
+                    case TokenType::Slash:       return "/";
+                    case TokenType::Percent:     return "%";
+                    case TokenType::EqEq:        return "==";
+                    case TokenType::NotEq:       return "!=";
+                    case TokenType::LessThan:    return "<";
+                    case TokenType::GreaterThan: return ">";
+                    case TokenType::LessEq:      return "<=";
+                    case TokenType::GreaterEq:   return ">=";
+                    default:                     return "";
+                }
+            }();
+            auto overloadIt = overloadSymbol.empty() ? m_topLevelFns.end()
+                                                      : m_topLevelFns.find(overloadSymbol);
+            bool hasOverload = overloadIt != m_topLevelFns.end() && overloadIt->second == 2;
+
             if (node.op == TokenType::Slash) {
                 auto lv = freshVar("L");
                 auto rv = freshVar("R");
                 auto l = emitExpr(node.left);
                 auto r = emitExpr(node.right);
+                std::string body =
+                    "case {call 'erlang':'is_integer'(" + lv + "), call 'erlang':'is_integer'(" + rv + ")} of\n"
+                    "  {'true', 'true'} when 'true' -> call 'erlang':'div'(" + lv + ", " + rv + ")\n"
+                    "  _ when 'true' -> call 'erlang':'/'(" + lv + ", " + rv + ")\n"
+                    "end";
+                if (hasOverload)
+                    body = "case call 'erlang':'is_tuple'(" + lv + ") of\n"
+                           "  'true' when 'true' -> apply '/'/2(" + lv + ", " + rv + ")\n"
+                           "  'false' when 'true' -> " + body + "\n"
+                           "end";
                 return "let <" + lv + "> =\n    " + l + "\nin\n"
-                       "let <" + rv + "> =\n    " + r + "\nin\n"
-                       "case {call 'erlang':'is_integer'(" + lv + "), call 'erlang':'is_integer'(" + rv + ")} of\n"
-                       "  {'true', 'true'} when 'true' -> call 'erlang':'div'(" + lv + ", " + rv + ")\n"
-                       "  _ when 'true' -> call 'erlang':'/'(" + lv + ", " + rv + ")\n"
-                       "end";
+                       "let <" + rv + "> =\n    " + r + "\nin\n" + body;
             }
             auto l = emitExpr(node.left);
             auto r = emitExpr(node.right);
@@ -404,11 +442,26 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     default:                     return "+";
                 }
             }();
+            std::string fallback;
             // + is overloaded: string concat (++) or arithmetic (+).
             // Dispatch at runtime via kex_io:add/2 which checks is_list.
             if (node.op == TokenType::Plus)
-                return "call 'kex_io':'add'(" + l + ", " + r + ")";
-            return "call 'erlang':'" + op + "'(" + l + ", " + r + ")";
+                fallback = "call 'kex_io':'add'(" + l + ", " + r + ")";
+            else
+                fallback = "call 'erlang':'" + op + "'(" + l + ", " + r + ")";
+            if (!hasOverload) return fallback;
+
+            auto lv = freshVar("L");
+            auto rv = freshVar("R");
+            return "let <" + lv + "> =\n    " + l + "\nin\n"
+                   "let <" + rv + "> =\n    " + r + "\nin\n"
+                   "case call 'erlang':'is_tuple'(" + lv + ") of\n"
+                   "  'true' when 'true' -> apply '" + overloadSymbol + "'/2(" + lv + ", " + rv + ")\n"
+                   "  'false' when 'true' -> " +
+                       (node.op == TokenType::Plus
+                            ? "call 'kex_io':'add'(" + lv + ", " + rv + ")"
+                            : "call 'erlang':'" + op + "'(" + lv + ", " + rv + ")") + "\n"
+                   "end";
         }
 
         // --- Unary ops ---
@@ -466,7 +519,13 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 args += emitExpr(node.args[i]);
             }
             // `worker { block }` → kex_supervisor:worker/1 with block as 0-arity fun.
-            if (node.name == "worker" && node.block) {
+            // Only when the program hasn't defined its own `worker`
+            // itself — a user-defined `foul worker(...) do ... end` must
+            // shadow this built-in sugar, not be silently overridden by
+            // it (spec/optional_parens_do.kex's own 2-arg-plus-block
+            // `worker`, previously always intercepted here regardless of
+            // arg count).
+            if (node.name == "worker" && node.block && !m_topLevelFns.count("worker")) {
                 auto fnVar = freshVar("WorkerFn");
                 auto fun   = emitExpr(*node.block);
                 return "let <" + fnVar + "> =\n    " + fun + " in\n"
@@ -475,7 +534,8 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // `worker(Module)` / `worker(Module, args: [...])` MPA sugar.
             // Desugars to: worker { Module.start(args...) }
             // i.e. kex_supervisor:worker/1 with a 0-arity fun that calls kex_MODULE:start/N.
-            if (node.name == "worker" && !node.args.empty() && !node.block) {
+            if (node.name == "worker" && !node.args.empty() && !node.block &&
+                !m_topLevelFns.count("worker")) {
                 if (auto* uid = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind)) {
                     // Lower-case the module name for kex_MODULE convention.
                     std::string modName = uid->name;
@@ -503,7 +563,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             }
             // `supervisor(restart: :s) do BLOCK end` as a free function.
             // Creates a nested supervisor child spec.
-            if (node.name == "supervisor" && node.block) {
+            if (node.name == "supervisor" && node.block && !m_topLevelFns.count("supervisor")) {
                 std::string strat = "'only_crashed'";
                 for (const auto& [k, v] : node.namedArgs)
                     if (k == "restart") strat = emitExpr(v);
@@ -544,6 +604,20 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // spec/my_starts_with.kex).
             if (node.name == "assert" && !node.args.empty())
                 return "call 'kex_io':'assert'(" + args + ")";
+            // describe(name) do ... end / it(name) do ... end — the rest
+            // of Kex's testing DSL (see src/interpreter/stdlib/test.cxx
+            // and runtime/src/kex_test.erl, which mirrors its exact
+            // output format/nesting semantics). Same fallthrough gap as
+            // `assert` above otherwise (spec/testing_dsl.spec.kex,
+            // spec/json_parser.spec.kex, spec/optional_parens_do.kex).
+            if ((node.name == "describe" || node.name == "it") &&
+                !node.args.empty() && node.block) {
+                auto nameArg = emitExpr(node.args[0]);
+                auto fnVar = freshVar(node.name == "describe" ? "Describe" : "It");
+                auto fun = emitExpr(*node.block);
+                return "let <" + fnVar + "> =\n    " + fun + " in\n"
+                       "call 'kex_test':'" + node.name + "'(" + nameArg + ", " + fnVar + ")";
+            }
             // Check if it's a namespaced call like IO.printLine
             auto dot = node.name.find('.');
             if (dot != std::string::npos) {
@@ -570,14 +644,30 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (args.empty()) return "'" + node.name + "'";
                 return "{'" + node.name + "', " + args + "}";
             }
+            // A trailing `do...end` block on a free-function call (with or
+            // without parens around the preceding positional args — see
+            // Parser's optional-parens-before-`do` sugar) is passed as
+            // that function's own last parameter, exactly like any other
+            // argument — e.g. `foo 1, 2, 3 do ... end` calling `foul
+            // foo(a, b, c, block) do ... end`. A real, reproduced bug
+            // otherwise: `node.block` was silently dropped for any
+            // generic user-defined function call (only a handful of
+            // builtins like `worker`/`supervisor` special-cased it),
+            // leaving the callee's arity permanently short by one
+            // (spec/optional_parens_do.kex).
+            std::string callArgs = args;
+            if (node.block) {
+                if (!callArgs.empty()) callArgs += ", ";
+                callArgs += emitExpr(*node.block);
+            }
             // Known top-level function
             auto topIt = m_topLevelFns.find(node.name);
             if (topIt != m_topLevelFns.end()) {
-                int callArity = static_cast<int>(node.args.size());
+                int callArity = static_cast<int>(node.args.size()) + (node.block ? 1 : 0);
                 int defArity  = topIt->second;
                 if (defArity == callArity) {
                     // Exact arity match → static dispatch
-                    return "apply '" + node.name + "'/" + std::to_string(callArity) + "(" + args + ")";
+                    return "apply '" + node.name + "'/" + std::to_string(callArity) + "(" + callArgs + ")";
                 }
                 // Arity mismatch: the top-level value is a 0-arity closure; call it
                 // first, then apply the resulting fun to the arguments.
@@ -585,11 +675,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 //   let <_HFn> = apply 'hello'/0() in apply _HFn("Alice")
                 auto tmpFn = freshVar(node.name.substr(0,1));
                 return "let <" + tmpFn + "> = apply '" + node.name + "'/" +
-                       std::to_string(defArity) + "() in\napply " + tmpFn + "(" + args + ")";
+                       std::to_string(defArity) + "() in\napply " + tmpFn + "(" + callArgs + ")";
             }
             // Unknown lowercase name: treat as a variable holding a fun (closure/param)
             // → dynamic apply through the variable
-            return "apply " + erlVar(node.name) + "(" + args + ")";
+            return "apply " + erlVar(node.name) + "(" + callArgs + ")";
         }
 
         // --- Method call (UFCS) ---
@@ -774,7 +864,12 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // erlang:hd([]) throws badarg, and even on a non-empty list the
             // raw element was returned unwrapped (spec/collections.kex
             // expected "Just(1)", got "1").
-            if (node.method == "first") {
+            // Unless a `make [A] do let first(@...) ... end`-style user
+            // override exists, in which case it takes priority — see the
+            // matching `to` guard above for why (spec/type_dispatch.kex
+            // defines its own unwrapped first/last/empty?/head/tail over
+            // `[A]`, which must win over this Just/None-wrapped default).
+            if (node.method == "first" && !m_topLevelFns.count("first")) {
                 auto rv = freshVar("Recv");
                 return "let <" + rv + "> =\n    " + recv + "\nin\n"
                        "case " + rv + " of\n"
@@ -782,7 +877,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                        "  _ when 'true' -> {'Just', call 'erlang':'hd'(" + rv + ")}\n"
                        "end";
             }
-            if (node.method == "last") {
+            if (node.method == "last" && !m_topLevelFns.count("last")) {
                 auto rv = freshVar("Recv");
                 return "let <" + rv + "> =\n    " + recv + "\nin\n"
                        "case " + rv + " of\n"
@@ -955,8 +1050,14 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 }
             }
 
-            // Type conversion: x.to(String), x.to(Int), x.to(Float)
-            if (node.method == "to" && node.args.size() == 1) {
+            // Type conversion: x.to(String), x.to(Int), x.to(Float) — unless
+            // a `make Type do let to(Kind) ... end` block defined its own
+            // `to`, which must take priority over this builtin fallback. A
+            // real, reproduced bug otherwise: Vec2/Vec3's own `to(String)`
+            // overloads were always bypassed in favor of the generic
+            // to_string dispatcher, printing the raw tagged tuple instead
+            // of the user's formatted string (spec/type_dispatch.kex).
+            if (node.method == "to" && node.args.size() == 1 && !m_topLevelFns.count("to")) {
                 std::string typeName;
                 if (auto* ui = std::get_if<ast::UpperIdentifier>(&node.args[0]->kind))
                     typeName = ui->name;
@@ -1199,6 +1300,28 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                             "  'false' when 'true' ->\n    " + otherwise + "\n"
                             "end";
             }
+            // `if let Pattern = expr ... end`: condition holds the
+            // scrutinee (NOT a boolean) and letPattern is the pattern to
+            // destructure it against — a real Core Erlang case dispatch,
+            // not a true/false branch. Pattern variables (e.g. `Just(n)`
+            // binding `n`) are bound directly by the case match itself,
+            // same as any other pattern; no separate let-chain needed. A
+            // real, reproduced bug otherwise: `letPattern` was completely
+            // unhandled, silently falling to the plain boolean-if path
+            // below, which used the scrutinee as if it were a bare 'true'/
+            // 'false' atom and left every pattern-bound name genuinely
+            // unbound (erlc: "unbound variable" for each one)
+            // (spec/if_let.kex).
+            if (node.letPattern) {
+                auto scrutinee = emitExpr(node.condition);
+                auto pat = emitPattern(node.letPattern);
+                auto then = emitBody(node.thenBody);
+                return "case " + scrutinee + " of\n"
+                       "  " + pat + " when 'true' ->\n    " + then + "\n"
+                       "  _ when 'true' ->\n    " + otherwise + "\n"
+                       "end";
+            }
+
             auto cond = emitExpr(node.condition);
             auto then = emitBody(node.thenBody);
             return "case " + cond + " of\n"
@@ -1214,8 +1337,31 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // For a single subject, use: case V of P when 'true' -> ...
             bool multiValue = std::holds_alternative<ast::TupleExpr>(node.subject->kind);
 
+            // Ranges materialize as plain ascending lists (see RangeExpr's
+            // `lists:seq` emission), so matching against a RangePattern
+            // clause (`(x..y)`, `(-10..-1)`) isn't structural — there's no
+            // "Range" tag to pattern-match on. Instead, rewrite the whole
+            // match into a 2-tuple-of-bounds dispatch: compute the
+            // subject's first/last elements ONCE, then each RangePattern
+            // clause becomes an ordinary 2-tuple pattern over those
+            // bounds (literal bound checks structurally match; `(x..y)`
+            // binds x/y to the actual bounds directly) — every literal
+            // bound is guard-safe (a==-10) but `lists:last` itself is
+            // NOT guard-safe, so it must be computed up front, not
+            // inside a `when` guard (spec/range.kex's second match block).
+            bool rangeMode = std::any_of(node.clauses.begin(), node.clauses.end(),
+                [](const ast::MatchClause& c) {
+                    return !c.patterns.empty() &&
+                           std::holds_alternative<ast::RangePattern>(c.patterns[0]->kind);
+                });
+
             std::string scrutinee;
-            if (multiValue) {
+            std::string bindingPrefix;
+            if (rangeMode) {
+                auto subj = freshVar("RSubj");
+                bindingPrefix = "let <" + subj + "> =\n    " + emitExpr(node.subject) + "\nin\n";
+                scrutinee = "<call 'erlang':'hd'(" + subj + "), call 'lists':'last'(" + subj + ")>";
+            } else if (multiValue) {
                 auto& tup = std::get<ast::TupleExpr>(node.subject->kind);
                 scrutinee = "<";
                 for (size_t i = 0; i < tup.elements.size(); i++) {
@@ -1227,10 +1373,30 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 scrutinee = emitExpr(node.subject);
             }
 
-            std::string result = "case " + scrutinee + " of\n";
+            // `match subj do |x| ... end` binds the subject to `x`, in
+            // scope for every clause's guard/body (see `withBinding`/
+            // `withResult` in spec/when_guards.kex, which reference the
+            // binder from a bare `when cond -> ...` clause with no
+            // pattern of its own at all). Bind it via a `let` up front
+            // and use that bound variable as the actual case scrutinee,
+            // rather than dropping the binder on the floor entirely — a
+            // real, reproduced bug otherwise: erlc rejected the guard's
+            // reference to `x` as an unbound variable.
+            if (node.subjectBinding && !multiValue && !rangeMode) {
+                auto bv = erlVar(*node.subjectBinding);
+                bindingPrefix += "let <" + bv + "> =\n    " + scrutinee + "\nin\n";
+                scrutinee = bv;
+            }
+
+            std::string result = bindingPrefix + "case " + scrutinee + " of\n";
             for (const auto& clause : node.clauses) {
                 std::string pat;
-                if (multiValue && !clause.patterns.empty()) {
+                if (rangeMode && !clause.patterns.empty() &&
+                    std::holds_alternative<ast::RangePattern>(clause.patterns[0]->kind)) {
+                    auto& rp = std::get<ast::RangePattern>(clause.patterns[0]->kind);
+                    pat = "<" + (rp.start ? emitPattern(rp.start) : freshVar("W")) + ", " +
+                          (rp.end ? emitPattern(rp.end) : freshVar("W")) + ">";
+                } else if (multiValue && !clause.patterns.empty()) {
                     if (auto* tp = std::get_if<ast::TuplePattern>(&clause.patterns[0]->kind)) {
                         pat = "<";
                         for (size_t i = 0; i < tp->elements.size(); i++) {
@@ -1726,6 +1892,14 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         } else {
             scrutinee = emitExpr(me->subject);
         }
+        // Bind `|x|` subject binder, if any — see the matching non-loop
+        // MatchExpr handling in emitExpr for why (spec/when_guards.kex).
+        std::string bindingPrefix;
+        if (me->subjectBinding && !multiValue) {
+            auto bv = erlVar(*me->subjectBinding);
+            bindingPrefix = "let <" + bv + "> =\n    " + scrutinee + "\nin\n";
+            scrutinee = bv;
+        }
         // Computed once, used by every arm that doesn't itself break/return —
         // "whatever comes after this match in the loop body" (its own base
         // case already correctly resolves to the outer fallthrough/tail-call
@@ -1733,7 +1907,7 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         // last loop-body statement or not — no separate last-vs-not-last
         // special-casing needed here).
         std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
-        std::string result = "case " + scrutinee + " of\n";
+        std::string result = bindingPrefix + "case " + scrutinee + " of\n";
         for (const auto& clause : me->clauses) {
             std::string pat = clause.patterns.empty() ? freshVar("W") : emitPattern(clause.patterns[0]);
             result += "  " + pat;
@@ -2137,11 +2311,13 @@ auto CoreErlangEmitter::emitFunctionDef(const ast::FunctionDef& fn) -> std::stri
 }
 
 auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                                          bool hasImplicitThis)
+                                          bool hasImplicitThis,
+                                          const std::string& emitNameOverride)
     -> std::string
 {
     if (group.empty()) return "";
     const auto& first = *group[0];
+    const std::string& emitName = emitNameOverride.empty() ? first.name : emitNameOverride;
 
     // Count total clauses across all nodes
     int totalClauses = 0;
@@ -2151,7 +2327,7 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     int explicitArity = static_cast<int>(first.clauses.empty() ? 0 : first.clauses[0].params.size());
     // If the make block adds `this` as an implicit first receiver, total arity is +1.
     int arity = explicitArity + (hasImplicitThis ? 1 : 0);
-    m_exports.push_back({first.name, arity});
+    m_exports.push_back({emitName, arity});
 
     // Synthetic arg vars: _Arg0, _Arg1, ...
     std::vector<std::string> argVars;
@@ -2201,6 +2377,19 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
                         lets += "let <" + erlVar(field.name) + "> = " + extracted + " in\n";
                     }
                 }
+            } else if constexpr (std::is_same_v<PT, ast::RangePattern>) {
+                // Ranges materialize as plain ascending lists (see
+                // RangeExpr's `lists:seq` emission), so a receiver-level
+                // `x.._`/`_..y`/`x..y` pattern isn't structural — it
+                // means "bind x to the first element" / "bind y to the
+                // last element" of that list (spec/range.kex's `make
+                // Range do let first(x.._) = x; let last(_..y) = y end`).
+                if (p.start)
+                    if (auto* sv = std::get_if<ast::VarPattern>(&p.start->kind))
+                        lets += "let <" + erlVar(sv->name) + "> = call 'erlang':'hd'(" + src + ") in\n";
+                if (p.end)
+                    if (auto* ev = std::get_if<ast::VarPattern>(&p.end->kind))
+                        lets += "let <" + erlVar(ev->name) + "> = call 'lists':'last'(" + src + ") in\n";
             }
             return lets;
         }, pat->kind);
@@ -2234,7 +2423,8 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     auto patternIsSimple = [](const ast::Pattern* pat) -> bool {
         if (!pat) return true;
         return std::holds_alternative<ast::VarPattern>(pat->kind) ||
-               std::holds_alternative<ast::RecordPattern>(pat->kind);
+               std::holds_alternative<ast::RecordPattern>(pat->kind) ||
+               std::holds_alternative<ast::RangePattern>(pat->kind);
     };
     bool allParamsSimple = true;
     for (const auto& param : first.clauses[0].params) {
@@ -2253,7 +2443,7 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
         for (size_t i = 0; i < clause.params.size(); i++)
             paramLets += bindParamLets(clause.params[i], argVars[i + argOffset]);
         std::ostringstream out;
-        out << "'" << first.name << "'/" << arity << " =\n";
+        out << "'" << emitName << "'/" << arity << " =\n";
         out << "  fun " << funHead << " ->\n";
         out << "    " << paramLets << emitBody(clause.body) << "\n";
         return out.str();
@@ -2268,7 +2458,7 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     bool multiArg = caseArity > 1;
 
     std::ostringstream out;
-    out << "'" << first.name << "'/" << arity << " =\n";
+    out << "'" << emitName << "'/" << arity << " =\n";
     out << "  fun " << funHead << " ->\n";
     // Bind `this` first if implicit
     if (hasImplicitThis)
@@ -2336,7 +2526,24 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
             out << "        " << paramLets << emitBody(clause.body) << "\n";
         }
     }
-    out << "      _ when 'true' -> call 'erlang':'error'('function_clause')\n";
+    // A bare `_` fallback pattern only matches a single-value scrutinee —
+    // against a multi-value `<E1,...,En>` case (multiArg), Core Erlang
+    // requires a same-arity value-list pattern too, each element a
+    // DISTINCT fresh variable (`_` repeated is a duplicate-variable
+    // error, not a wildcard, once inside a value-list pattern). A real,
+    // reproduced bug otherwise: erlc rejected the whole function with
+    // "pattern count mismatch" for any multi-arg multi-clause function at
+    // all (spec/comparision.kex's `to(@Tag, Integer)` overload family).
+    if (multiArg) {
+        out << "      <";
+        for (int i = 0; i < caseArity; i++) {
+            if (i > 0) out << ", ";
+            out << freshVar("W");
+        }
+        out << "> when 'true' -> call 'erlang':'error'('function_clause')\n";
+    } else {
+        out << "      _ when 'true' -> call 'erlang':'error'('function_clause')\n";
+    }
     out << "    end\n";
     return out.str();
 }
@@ -2350,11 +2557,23 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
     int arity = main.params.empty() ? 0 : 1;
     m_exports.push_back({"main", arity});
 
+    // Print the describe/it pass/fail summary after main runs, exactly
+    // matching Evaluator::execute's own post-run summary — but only if
+    // any `it` actually ran (kex_test:maybe_print_summary/0 checks the
+    // counters itself), so ordinary non-test programs see no extra
+    // output (spec/optional_parens_do.kex, spec/json_parser.spec.kex).
+    auto withTestSummary = [this](const std::string& body) {
+        auto v = freshVar("MainResult");
+        auto discard = freshVar("Summary");
+        return "let <" + v + "> =\n    " + body + "\nin\n"
+               "let <" + discard + "> =\n    call 'kex_test':'maybe_print_summary'()\nin\n" + v;
+    };
+
     std::ostringstream out;
     out << "'main'/" << arity << " =\n";
     if (arity == 0) {
         out << "  fun () ->\n";
-        out << "    " << emitBody(main.body) << "\n";
+        out << "    " << withTestSummary(emitBody(main.body)) << "\n";
     } else {
         // main(args) — bind the args list from _Args
         std::string paramName = "Args";
@@ -2362,7 +2581,7 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
             paramName = erlVar(*main.params[0].name);
         out << "  fun (_Args) ->\n";
         out << "    let <" << paramName << "> = _Args in\n";
-        out << "    " << emitBody(main.body) << "\n";
+        out << "    " << withTestSummary(emitBody(main.body)) << "\n";
     }
     return out.str();
 }
@@ -2384,6 +2603,118 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
     // Reset field accessor map for this compilation unit.
     m_fieldAccessors.clear();
     auto& fieldAccessors = m_fieldAccessors; // alias for use in lambdas below
+
+    // Extracts a plain record-type name from a `make TARGET do` block's
+    // target, e.g. "Vec2" from `make Vec2 do`. Returns nullopt for
+    // anything that isn't a bare type name (generic/list targets like
+    // `make [A] do` dispatch via pattern-matching on the receiver already
+    // — see emitFunctionGroup's ThisPattern/RecordPattern receiver
+    // detection — so they never need the cross-type mangling below).
+    auto simpleTypeNameOf = [](const ast::TypeExprPtr& target) -> std::optional<std::string> {
+        if (!target) return std::nullopt;
+        if (auto* tn = std::get_if<ast::TypeName>(&target->kind)) {
+            if (tn->parts.empty()) return std::nullopt;
+            return tn->parts.back();
+        }
+        return std::nullopt;
+    };
+
+    // Trait declarations, by name — used below to fill in default method
+    // bodies (`let passing? = this.score > 0`) for any `make Type,
+    // implement: Trait do ... end` block that doesn't override them
+    // itself (spec/traits.kex's Bot, which uses BOTH Describable's and
+    // Scorable's defaults untouched, and Player, which overrides `shout`
+    // but still relies on the default `passing?`).
+    std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
+    for (const auto& item : prog.items) {
+        auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item);
+        if (td && *td) traitDefs[(*td)->name] = td->get();
+    }
+
+    // Own method names directly defined in a `make Type do ... end` block
+    // (NOT counting inherited trait defaults) — used both to know which
+    // trait defaults still need to be filled in for that type, and to
+    // build methodTypeOwners below.
+    auto ownMethodNames = [](const ast::MakeDef& make) {
+        std::unordered_set<std::string> names;
+        for (const auto& bodyItem : make.body) {
+            if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bodyItem)) {
+                if (*fdp) names.insert((*fdp)->name);
+            } else if (auto* vbp = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bodyItem)) {
+                if (*vbp)
+                    for (const auto& vi : (*vbp)->items)
+                        if (auto* fp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                            if (*fp) names.insert((*fp)->name);
+            }
+        }
+        return names;
+    };
+
+    // Trait default methods a type inherits: every default FunctionDef in
+    // every trait it implements, EXCEPT names the type's own make-block
+    // already defines (an explicit override always wins). Keyed by type
+    // name, then method name — the FunctionDef* is shared (read-only)
+    // across every inheriting type, since the default body itself never
+    // needs to differ per type; only its emitted name/dispatch does (see
+    // the mangling/dispatcher machinery below, which treats an inherited
+    // default exactly like a directly-defined method).
+    std::unordered_map<std::string, std::unordered_map<std::string, const ast::FunctionDef*>>
+        inheritedDefaults;
+    for (const auto& item : prog.items) {
+        auto* makeDef = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+        if (!makeDef || !*makeDef || (*makeDef)->implements.empty()) continue;
+        auto typeName = simpleTypeNameOf((*makeDef)->target);
+        if (!typeName) continue;
+        auto own = ownMethodNames(**makeDef);
+        for (const auto& traitName : (*makeDef)->implements) {
+            auto it = traitDefs.find(traitName);
+            if (it == traitDefs.end()) continue;
+            for (const auto& traitItem : it->second->body) {
+                auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&traitItem);
+                if (!fdp || !*fdp) continue;
+                const auto& name = (*fdp)->name;
+                if (own.count(name)) continue; // overridden — skip default
+                inheritedDefaults[*typeName].emplace(name, fdp->get());
+            }
+        }
+    }
+
+    // Pre-pass: which method names are defined by more than one type's
+    // `make Type do ... end` block (counting both directly-defined AND
+    // inherited-trait-default methods)? Erlang has one flat function-name
+    // space per module — two different types both defining e.g. `add`
+    // (spec/type_dispatch.kex's Vec2/Vec3, or operator overloading's `+`)
+    // can't both emit a plain `add/2` without erlc rejecting the
+    // duplicate. `methodTypeOwners` also records EACH type per colliding
+    // name, in declaration order, for the dispatcher emitted later.
+    std::unordered_map<std::string, std::vector<std::string>> methodTypeOwners;
+    for (const auto& item : prog.items) {
+        auto* makeDef = std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+        if (!makeDef || !*makeDef) continue;
+        auto typeName = simpleTypeNameOf((*makeDef)->target);
+        if (!typeName) continue;
+        auto collectName = [&](const std::string& name) {
+            auto& owners = methodTypeOwners[name];
+            if (std::find(owners.begin(), owners.end(), *typeName) == owners.end())
+                owners.push_back(*typeName);
+        };
+        for (const auto& bodyItem : (*makeDef)->body) {
+            if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bodyItem)) {
+                if (*fdp) collectName((*fdp)->name);
+            } else if (auto* vbp = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bodyItem)) {
+                if (*vbp)
+                    for (const auto& vi : (*vbp)->items)
+                        if (auto* fp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                            if (*fp) collectName((*fp)->name);
+            }
+        }
+        auto defIt = inheritedDefaults.find(*typeName);
+        if (defIt != inheritedDefaults.end())
+            for (const auto& [name, fd] : defIt->second) collectName(name);
+    }
+    std::unordered_set<std::string> collidingMethodNames;
+    for (const auto& [name, owners] : methodTypeOwners)
+        if (owners.size() > 1) collidingMethodNames.insert(name);
 
     // Recursively collect FunctionDefs from a ModuleDef's body (and any
     // nested ModuleDefs). Kex modules within a single source file are
@@ -2496,9 +2827,16 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                             // wrongly swallowed as "the receiver", leaving
                             // the real implicit `this` completely unbound
                             // (spec/type_dispatch.kex's `to/1`).
+                            // RangePattern (`x.._`/`_..y`, no `@` needed —
+                            // see Parser::parseParam's dedicated `name..`
+                            // lookahead) is likewise always the receiver
+                            // being destructured, never a plain 2nd
+                            // parameter — spec/range.kex's `make Range do
+                            // let first(x.._) = x end`.
                             if (!p0.name && p0.pattern &&
                                 (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
-                                 std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind)))
+                                 std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
+                                 std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind)))
                                 firstIsReceiver = true;
                         }
                         m_topLevelFns[fd.name] = explArity + (isStaticCtor || firstIsReceiver ? 0 : 1);
@@ -2514,6 +2852,14 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                             }
                         }
                     }
+                    // Also register inherited trait-default methods, so
+                    // m_topLevelFns knows their arity too (see
+                    // inheritedDefaults above).
+                    if (auto typeName = simpleTypeNameOf(node->target)) {
+                        auto defIt = inheritedDefaults.find(*typeName);
+                        if (defIt != inheritedDefaults.end())
+                            for (const auto& [name, fd] : defIt->second) registerFn(*fd);
+                    }
                 }
             }
         }, item);
@@ -2525,7 +2871,16 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
     std::vector<std::string> functionTexts;
 
     using FnGroup  = std::vector<const ast::FunctionDef*>;
-    struct OrderedItem { bool isMain; bool hasImplicitThis; FnGroup fns; const ast::MainBlock* mb; };
+    // emitNameOverride: non-empty when this group's method name collides
+    // with another type's make-block defining the SAME method (e.g. both
+    // `Vec2` and `Vec3` defining `add`) — see the `collidingMethodNames`
+    // pre-pass below. Erlang has one flat function-name space per module,
+    // so two same-name/arity functions from different make-blocks can't
+    // coexist; each contributing type's version is instead emitted under a
+    // mangled name (`add__Vec2`), and a small dispatcher function under
+    // the original bare name (`add`) picks the right one at runtime via
+    // the receiver's own type tag (see the dispatcher-emission loop below).
+    struct OrderedItem { bool isMain; bool hasImplicitThis; FnGroup fns; const ast::MainBlock* mb; std::string emitNameOverride{}; };
     std::vector<OrderedItem> ordered;
     // Bare top-level expressions (non-synthetic, non-explicit-main MainBlocks)
     // are accumulated here and emitted as a synthetic main/0 if there's no
@@ -2572,6 +2927,7 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 // make T do ... end — emit each FunctionDef as a top-level function.
                 if (!node) return;
+                auto typeName = simpleTypeNameOf(node->target);
                 // Helper to push one FunctionDef (from either direct body or VisibilityBlock).
                 auto pushMakeFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
@@ -2589,15 +2945,28 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                         const auto& p0 = fd->clauses[0].params[0];
                         if (!p0.name && p0.pattern &&
                             (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
-                             std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind)))
+                             std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
+                             std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind)))
                             firstParamIsReceiver = true;
                     }
                     bool needsImplicitThis = !isStaticCtor && !firstParamIsReceiver;
+                    // Colliding method name (another type also defines it) —
+                    // emit under a mangled `name__Type` instead of the bare
+                    // name (see collidingMethodNames/methodTypeOwners above
+                    // and the dispatcher-emission loop below). Uses the
+                    // mangled name for the merge-with-previous-group check
+                    // too, since two different types' same-named methods
+                    // must NOT be merged into one (mangled) group together.
+                    std::string effectiveName = fd->name;
+                    if (typeName && collidingMethodNames.count(fd->name))
+                        effectiveName = fd->name + "__" + *typeName;
                     if (!ordered.empty() && !ordered.back().isMain
-                        && ordered.back().fns[0]->name == fd->name) {
+                        && ordered.back().fns[0]->name == fd->name
+                        && ordered.back().emitNameOverride == (effectiveName == fd->name ? "" : effectiveName)) {
                         ordered.back().fns.push_back(fd);
                     } else {
-                        ordered.push_back({false, needsImplicitThis, {fd}, nullptr});
+                        ordered.push_back({false, needsImplicitThis, {fd}, nullptr,
+                                           effectiveName == fd->name ? "" : effectiveName});
                     }
                 };
                 for (const auto& bodyItem : node->body) {
@@ -2610,6 +2979,16 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
                                     pushMakeFn(fp->get());
                         }
                     }
+                }
+                // Fill in any inherited-but-not-overridden trait default
+                // methods (see inheritedDefaults above) exactly like any
+                // other make-block method — pushMakeFn's mangling/
+                // collision handling applies identically whether fd came
+                // from this block's own body or a trait default.
+                if (typeName) {
+                    auto defIt = inheritedDefaults.find(*typeName);
+                    if (defIt != inheritedDefaults.end())
+                        for (const auto& [name, fd] : defIt->second) pushMakeFn(fd);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 // Emit non-trivial functions (arity >= 1) from the static do...end block.
@@ -2689,8 +3068,49 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
             // via a local re-emit that processes each group's nodes.
             // We can't copy FunctionDef (unique_ptrs), so instead delegate to a
             // helper that accepts the group directly.
-            functionTexts.push_back(emitFunctionGroup(oi.fns, oi.hasImplicitThis));
+            functionTexts.push_back(emitFunctionGroup(oi.fns, oi.hasImplicitThis, oi.emitNameOverride));
         }
+    }
+
+    // Cross-type method-name-collision dispatcher: for each colliding
+    // method name (e.g. `add`, defined by both Vec2's and Vec3's make
+    // blocks), emit one small function under the bare name that inspects
+    // the receiver's own tuple tag (element 1) and dispatches to the
+    // right type-mangled variant (`add__Vec2`, `add__Vec3`). Every
+    // colliding name is guaranteed to have gone through emitFunctionGroup
+    // with a non-empty emitNameOverride above, so `name__Type` always
+    // exists with the arity recorded in m_topLevelFns.
+    for (const auto& name : collidingMethodNames) {
+        auto arityIt = m_topLevelFns.find(name);
+        if (arityIt == m_topLevelFns.end()) continue;
+        int arity = arityIt->second;
+        if (arity < 1) continue; // needs a receiver to dispatch on
+
+        std::vector<std::string> argVars;
+        for (int i = 0; i < arity; i++) argVars.push_back("_Arg" + std::to_string(i));
+
+        m_exports.push_back({name, arity});
+        std::ostringstream out;
+        out << "'" << name << "'/" << arity << " =\n";
+        out << "  fun (";
+        for (size_t i = 0; i < argVars.size(); i++) {
+            if (i > 0) out << ", ";
+            out << argVars[i];
+        }
+        out << ") ->\n";
+        out << "    case call 'erlang':'element'(1, _Arg0) of\n";
+        for (const auto& typeName : methodTypeOwners[name]) {
+            out << "      '" << typeName << "' when 'true' ->\n";
+            out << "        apply '" << name << "__" << typeName << "'/" << arity << "(";
+            for (size_t i = 0; i < argVars.size(); i++) {
+                if (i > 0) out << ", ";
+                out << argVars[i];
+            }
+            out << ")\n";
+        }
+        out << "      _ when 'true' -> call 'erlang':'error'('function_clause')\n";
+        out << "    end\n";
+        functionTexts.push_back(out.str());
     }
 
     // Emit field accessor functions for each unique record field name.
@@ -2750,6 +3170,14 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
             auto tmp = freshVar("S");
             body = "let <" + tmp + "> =\n    " + stmts[i] + "\nin\n" + body;
         }
+        // Same describe/it pass/fail summary footer as emitMainBlock —
+        // see its comment for why (spec/testing_dsl.spec.kex's bare
+        // top-level describe/it calls, with no explicit `main do` block
+        // at all, go through this synthetic-main path instead).
+        auto resultVar = freshVar("MainResult");
+        auto discardVar = freshVar("Summary");
+        body = "let <" + resultVar + "> =\n    " + body + "\nin\n"
+               "let <" + discardVar + "> =\n    call 'kex_test':'maybe_print_summary'()\nin\n" + resultVar;
         mOut << "    " << body << "\n";
         functionTexts.push_back(mOut.str());
     }
