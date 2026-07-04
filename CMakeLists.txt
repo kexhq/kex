@@ -210,6 +210,17 @@ target_compile_definitions(kex PRIVATE
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
 endif()
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # NODERAWFS maps every fs call straight through to Node's real host
+    # filesystem (no MEMFS sandbox, no --preload-file needed) — this is
+    # what lets `node build-wasm/kex.js some/real/path.kex` work at all,
+    # since KEX_PRELUDE_DIR above is still a real native path baked in at
+    # compile time. Deliberately not applied to kex_repl_wasm (below),
+    # which needs to run in an actual browser, where NODERAWFS doesn't
+    # apply — that target uses --preload-file instead. This is what makes
+    # `make spec-wasm` possible at all.
+    target_link_options(kex PRIVATE -sNODERAWFS=1)
+endif()
 
 if(READLINE_LIB AND READLINE_INCLUDE)
     target_compile_definitions(kex PRIVATE HAS_READLINE=1)
