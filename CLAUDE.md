@@ -13,6 +13,20 @@ cmake --build build
 
 Run: `./build/kex <file.kex>`
 
+### Emscripten/wasm build
+
+Powers `web/index.html`'s in-browser REPL. Requires `emsdk` active, pinned to
+**5.0.7** (not Homebrew's Emscripten — see `third_party/gmp-wasm/README.md`
+for a real regression in newer versions), and a prebuilt
+`third_party/gmp-wasm/{include,lib}` (gitignored, not vendored — same
+README has the build recipe). CI builds and caches this from scratch; see
+`.github/workflows/ci.yml`'s `wasm` job.
+
+```
+make build-wasm   # emcmake cmake -B build-wasm && cmake --build build-wasm
+make test-wasm    # + runs the interpreter test suite via Node
+```
+
 ## Project Structure
 
 - `grammar.ebnf` — formal grammar specification (EBNF)

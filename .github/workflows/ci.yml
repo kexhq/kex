@@ -16,7 +16,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base
+          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
 
       - name: Build
         run: cmake -B build -G "Unix Makefiles" && cmake --build build
@@ -26,3 +26,74 @@ jobs:
 
       - name: Spec suite
         run: make spec
+
+  wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake
+
+      # Pinned to 5.0.7 specifically — newer Emscripten (6.0.2 at the time
+      # this was found) has a real regression where -sASYNCIFY combined with
+      # -sNO_DISABLE_EXCEPTION_CATCHING hangs on the first
+      # emscripten_fiber_swap call. See third_party/gmp-wasm/README.md's
+      # "Emscripten version" section for the full writeup.
+      - name: Cache emsdk
+        id: cache-emsdk
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-5.0.7
+
+      - name: Install emsdk
+        if: steps.cache-emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 5.0.7 && ./emsdk activate 5.0.7
+
+      # GMP built for wasm32 from source — no prebuilt wasm GMP exists via
+      # Emscripten's port system or Homebrew, and third_party/gmp-wasm's
+      # include/lib are gitignored (build artifacts, not vendored — see that
+      # directory's README.md and CLAUDE.md's stance on not committing
+      # generated binaries). Cached here since the build itself takes a
+      # couple of minutes and never changes unless the GMP or Emscripten
+      # version pin above changes.
+      - name: Cache GMP-for-wasm
+        id: cache-gmp-wasm
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/gmp-wasm/include
+            third_party/gmp-wasm/lib
+          key: gmp-wasm-6.3.0-emsdk-5.0.7-v2
+
+      - name: Build GMP for wasm
+        if: steps.cache-gmp-wasm.outputs.cache-hit != 'true'
+        run: |
+          source emsdk/emsdk_env.sh
+          curl -LO https://gmplib.org/download/gmp/gmp-6.3.0.tar.xz
+          tar xf gmp-6.3.0.tar.xz
+          mkdir gmp-6.3.0/build-wasm && cd gmp-6.3.0/build-wasm
+          emconfigure ../configure \
+            --host=wasm32-unknown-emscripten \
+            --build="$(../config.guess)" \
+            --disable-assembly \
+            --disable-shared \
+            --enable-static \
+            --enable-cxx \
+            --prefix="${GITHUB_WORKSPACE}/third_party/gmp-wasm" \
+            CC_FOR_BUILD=clang \
+            CFLAGS="-O2"
+          emmake make -j"$(nproc)"
+          emmake make install
+
+      - name: Configure and build wasm target
+        run: |
+          source emsdk/emsdk_env.sh
+          make build-wasm
+
+      - name: Wasm unit tests (via Node)
+        run: make test-wasm

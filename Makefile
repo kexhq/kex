@@ -1,9 +1,11 @@
-.PHONY: build test spec test-all clean repl run check install uninstall help
+.PHONY: build test spec test-all clean repl run check install uninstall help build-wasm test-wasm
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+
+WASM_BUILD_DIR = build-wasm
 
 help:
 	@echo "Kex Language Compiler"
@@ -19,6 +21,10 @@ help:
 	@echo "  make clean        Clean build artifacts"
 	@echo "  make run F=<file>  Run a .kex file"
 	@echo "  make check F=<file>  Semantic check a .kex file"
+	@echo "  make build-wasm   Build the Emscripten/wasm target (requires emsdk"
+	@echo "                    active, pinned per third_party/gmp-wasm/README.md,"
+	@echo "                    and a prebuilt third_party/gmp-wasm/{include,lib})"
+	@echo "  make test-wasm    Build the wasm target + run its test suite via Node"
 	@echo ""
 
 build:
@@ -27,6 +33,24 @@ build:
 
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
+
+# See docs/fiber-process-plan.md's "Phase 6" section and
+# third_party/gmp-wasm/README.md — requires `emsdk` active (pinned to
+# 5.0.7; newer versions have a real Asyncify+exceptions regression) and a
+# prebuilt third_party/gmp-wasm/{include,lib} (not checked in — rebuild
+# locally per that README, or see .github/workflows/ci.yml for how CI
+# builds and caches it).
+build-wasm:
+	@emcmake cmake -B $(WASM_BUILD_DIR) 2>/dev/null | tail -1
+	@cmake --build $(WASM_BUILD_DIR)
+
+# Only interpreter_test is run here — it's the suite this project has
+# actually verified passes under wasm (145/145, matching the native suite)
+# throughout the process-model/wasm work; the CLI-driving test binaries
+# (repl_cli_test, color_cli_test) shell out to a native `kex` executable
+# path that doesn't exist in a wasm build, so they're a native-only concern.
+test-wasm: build-wasm
+	@node $(WASM_BUILD_DIR)/interpreter_test.js
 
 test-all: test spec
 
