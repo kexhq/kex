@@ -1,0 +1,15 @@
+# kex: check-only
+# Regression: `receive do |sender| ... end` binds `sender` for use inside
+# every clause (pattern, guard, and body) — resolve_pass.cxx's ReceiveExpr
+# handling never registered it, so any use of the sender binding was
+# reported as "Undefined name: `sender`" even though it's valid. Never
+# caught before because nothing ran semantic checking on process code: the
+# interpreter had no process support until this session, and `-R` skipped
+# checking entirely.
+foul echoer do
+  spawn do
+    receive do |sender|
+      :ping -> sender.send(:pong)
+    end
+  end
+end

@@ -21,18 +21,30 @@ auto Value::bigInteger(mpz_class v) -> ValuePtr {
 }
 
 auto asInteger(const ValuePtr& v) -> std::optional<mpz_class> {
-    // long is 64-bit on every platform this project targets (LP64) — see
-    // integerResult's fits_slong_p() below; the explicit cast avoids an
-    // ambiguous int64_t (long long) -> mpz_class overload resolution.
-    if (auto* i = std::get_if<IntValue>(&v->data)) return mpz_class(static_cast<long>(i->value));
+    // Deliberately NOT `mpz_class(static_cast<long>(i->value))`: `long` is
+    // 64-bit on every native LP64 target this project has ever built on
+    // (macOS/Linux), but wasm32 (see docs/fiber-process-plan.md's phase 6
+    // notes) has a 32-bit `long` — that cast would silently truncate any
+    // IntValue outside 32-bit range before it ever reached GMP. Round-
+    // tripping through decimal string construction is slower but portable
+    // regardless of the platform's `long` width, and Integer arithmetic
+    // isn't a hot path here (the wasm build's GMP is already the slower
+    // portable-C fallback, not hand-tuned assembly, for the same reason).
+    if (auto* i = std::get_if<IntValue>(&v->data)) return mpz_class(std::to_string(i->value));
     if (auto* b = std::get_if<BigIntValue>(&v->data)) return b->value;
     return std::nullopt;
 }
 
 auto integerResult(mpz_class v) -> ValuePtr {
-    // `long` is 64-bit on every platform this project targets (LP64), so
-    // fits_slong_p matches int64_t's range.
-    if (v.fits_slong_p()) return Value::integer(v.get_si());
+    // Same reasoning as asInteger: fits_slong_p()/get_si() are tied to the
+    // platform's `long` width, not int64_t's — comparing against explicit
+    // int64_t bounds (built once, via decimal string, so this doesn't
+    // depend on `long` either) is the portable equivalent.
+    static const mpz_class kInt64Min(std::to_string(INT64_MIN));
+    static const mpz_class kInt64Max(std::to_string(INT64_MAX));
+    if (v >= kInt64Min && v <= kInt64Max) {
+        return Value::integer(std::stoll(v.get_str()));
+    }
     return Value::bigInteger(std::move(v));
 }
 
@@ -56,12 +68,34 @@ auto Value::atom(std::string name) -> ValuePtr {
     return std::make_shared<Value>(Value{AtomValue{std::move(name)}});
 }
 
-auto Value::variant(std::string tag, std::string parentType, std::vector<ValuePtr> args) -> ValuePtr {
-    return std::make_shared<Value>(Value{VariantValue{std::move(tag), std::move(parentType), std::move(args)}});
+auto Value::variant(std::string tag, std::string parentType, std::vector<ValuePtr> args,
+                     std::vector<std::string> typeParams, std::vector<int> argParamIndex) -> ValuePtr {
+    return std::make_shared<Value>(Value{VariantValue{std::move(tag), std::move(parentType), std::move(args),
+                                                        std::move(typeParams), std::move(argParamIndex)}});
+}
+
+auto Value::just(ValuePtr inner) -> ValuePtr {
+    return variant("Just", "Option", {std::move(inner)}, {"T"}, {0});
+}
+
+auto Value::ok(ValuePtr inner) -> ValuePtr {
+    return variant("Ok", "Result", {std::move(inner)}, {"T", "E"}, {0});
+}
+
+auto Value::error(ValuePtr inner) -> ValuePtr {
+    return variant("Error", "Result", {std::move(inner)}, {"T", "E"}, {1});
 }
 
 auto Value::module(std::string name) -> ValuePtr {
     return std::make_shared<Value>(Value{ModuleValue{std::move(name)}});
+}
+
+auto Value::process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr {
+    return std::make_shared<Value>(Value{ProcessValue{pid, scheduler}});
+}
+
+auto Value::task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr {
+    return std::make_shared<Value>(Value{TaskValue{pid, scheduler}});
 }
 
 auto Value::list(std::vector<ValuePtr> elems) -> ValuePtr {
@@ -118,6 +152,8 @@ auto Value::toString() const -> std::string {
             return result + ")";
         }
         else if constexpr (std::is_same_v<T, ModuleValue>) return v.name;
+        else if constexpr (std::is_same_v<T, ProcessValue>) return "#Process<" + std::to_string(v.pid) + ">";
+        else if constexpr (std::is_same_v<T, TaskValue>) return "#Task<" + std::to_string(v.pid) + ">";
         else if constexpr (std::is_same_v<T, ListValue>) {
             // A list of nothing but Chars displays as text, not as a
             // bracketed list — [Char] is meant to look like a String from
@@ -290,9 +326,35 @@ auto Value::typeName() const -> std::string {
         else if constexpr (std::is_same_v<T, CharValue>) return "Char";
         else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
         else if constexpr (std::is_same_v<T, AtomValue>) return "Atom";
-        else if constexpr (std::is_same_v<T, VariantValue>) return v.tag;
+        else if constexpr (std::is_same_v<T, VariantValue>) {
+            std::string base = v.parentType.empty() ? v.tag : v.parentType;
+            if (v.typeParams.empty()) return base;
+            std::vector<std::string> resolved(v.typeParams.size(), "?");
+            bool anyResolved = false;
+            for (size_t i = 0; i < v.args.size() && i < v.argParamIndex.size(); i++) {
+                int pi = v.argParamIndex[i];
+                if (pi >= 0 && static_cast<size_t>(pi) < resolved.size()) {
+                    resolved[static_cast<size_t>(pi)] = v.args[i]->typeName();
+                    anyResolved = true;
+                }
+            }
+            // Zero-arg variant of a generic type (e.g. Nothing) carries no
+            // payload to infer params from — show the bare type name.
+            if (!anyResolved) return base;
+            std::string result = base + "<";
+            for (size_t i = 0; i < resolved.size(); i++) {
+                if (i) result += ", ";
+                result += resolved[i];
+            }
+            return result + ">";
+        }
         else if constexpr (std::is_same_v<T, ModuleValue>) return "Module";
-        else if constexpr (std::is_same_v<T, ListValue>) return "List";
+        else if constexpr (std::is_same_v<T, ProcessValue>) return "Process";
+        else if constexpr (std::is_same_v<T, TaskValue>) return "Task";
+        else if constexpr (std::is_same_v<T, ListValue>) {
+            if (v.elements.empty()) return "List";
+            return "[" + v.elements.front()->typeName() + "]";
+        }
         else if constexpr (std::is_same_v<T, TupleValue>) return "Tuple";
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";
         else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
@@ -363,6 +425,8 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         else if constexpr (std::is_same_v<AT, CharValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, BoolValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, AtomValue>) return av.name == bv->name;
+        else if constexpr (std::is_same_v<AT, ProcessValue>) return av.pid == bv->pid;
+        else if constexpr (std::is_same_v<AT, TaskValue>) return av.pid == bv->pid;
         else if constexpr (std::is_same_v<AT, ListValue>) {
             if (av.elements.size() != bv->elements.size()) return false;
             for (size_t i = 0; i < av.elements.size(); i++) {
@@ -469,6 +533,10 @@ auto Value::inspect() const -> std::string {
             }
             else if constexpr (std::is_same_v<T, ModuleValue>)
                 return std::string(c(cyan)) + node.name + c(reset);
+            else if constexpr (std::is_same_v<T, ProcessValue>)
+                return std::string(c(gray)) + "#Process<" + std::to_string(node.pid) + ">" + c(reset);
+            else if constexpr (std::is_same_v<T, TaskValue>)
+                return std::string(c(gray)) + "#Task<" + std::to_string(node.pid) + ">" + c(reset);
             else if constexpr (std::is_same_v<T, ListValue>) {
                 bool allChars = !node.elements.empty();
                 for (const auto& el : node.elements)

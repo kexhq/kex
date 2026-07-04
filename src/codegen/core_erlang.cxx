@@ -494,8 +494,12 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     return "let <" + fnVar + "> =\n    " + fun + " in\n"
                            "call 'kex_task':'start'(" + fnVar + ")";
                 }
-                // Task.await_all([tasks]) → kex_task:await_all/1
-                if (uid->name == "Task" && node.method == "await_all" && !node.args.empty())
+                // Task.awaitAll([tasks]) → kex_task:await_all/1 — the Kex-
+                // facing name is camelCase (matching every other multi-word
+                // Kex builtin); the Erlang implementation function it maps
+                // to keeps its own snake_case name, appropriately, since
+                // that's Erlang's own convention, not Kex's.
+                if (uid->name == "Task" && node.method == "awaitAll" && !node.args.empty())
                     return "call 'kex_task':'await_all'(" + args + ")";
                 // Supervisor.start(restart: :s) do BLOCK end
                 // BLOCK must evaluate to a list of child specs (from worker { } calls).

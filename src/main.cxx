@@ -14,16 +14,27 @@
 #include <string>
 #include <vector>
 
-#ifdef HAS_READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
+// Pure string logic, no actual readline API dependency — needed
+// unconditionally by `--complete`/`-K` (used by shell completion scripts,
+// which shell out to `kex -K` rather than linking readline) and by the
+// interactive REPL's `make X do` target tracking, which runs the same
+// whether or not this build has readline (see the non-readline readLine()
+// fallback below). Bundling this under #ifdef HAS_READLINE was an
+// oversight that only ever surfaced when actually building without
+// readline — every native dev machine so far has had it available via
+// Homebrew.
 #include "common/completion.hxx"
-
-// Completion state — populated before the REPL loop, read by the C callback.
-static kex::semantic::SemanticDB *g_replDb = nullptr;
+#include "common/prelude_loader.hxx"
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+
+#ifdef HAS_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+
+// Completion state — populated before the REPL loop, read by the C callback.
+static kex::semantic::SemanticDB *g_replDb = nullptr;
 static std::vector<std::string> g_completionMatches;
 static std::string g_completionWord;
 static std::string g_completionStripPrefix;
@@ -444,14 +455,52 @@ auto fileExists(const std::string &path) -> bool
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void
 {
 #ifdef KEX_PRELUDE_DIR
-    std::filesystem::path preludeDir(KEX_PRELUDE_DIR);
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator(preludeDir, ec))
-    {
-        if (entry.path().extension() == ".kex")
-            db.updateFile(entry.path().string(), readFile(entry.path().string()));
-    }
+    kex::loadPrelude(db, KEX_PRELUDE_DIR);
 #endif
+}
+
+// Runs semantic analysis (undefined-name detection + type checking) and
+// prints any diagnostics, same as plain `run` mode's pre-execution check.
+// Shared by `run` and `compile`/`-R` (BEAM) so both backends catch the same
+// errors before doing anything backend-specific — previously `-R` skipped
+// this entirely and fell straight through to erlc, which reports things
+// like an undefined function as a raw, un-Kex-like Core Erlang compile
+// error ("unbound variable 'UndefinedFunctionCall' in main/0") instead of
+// this backend-agnostic diagnostic. Returns false if there were any errors.
+auto runSemanticCheck(const kex::ast::Program &program, const std::string &filepath) -> bool
+{
+    auto printDiag = [&](const kex::semantic::Diagnostic &diag)
+    {
+        bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+        std::cerr << kex::color::apply(kex::color::gray)
+                  << diag.location.file << ":" << diag.location.line << ":"
+                  << diag.location.column << ":" << kex::color::apply(kex::color::reset)
+                  << " " << kex::color::apply(kex::color::bold)
+                  << (isError ? kex::color::apply(kex::color::red) : kex::color::apply(kex::color::magenta))
+                  << (isError ? "error" : "warning") << ":"
+                  << kex::color::apply(kex::color::reset) << " "
+                  << colorizeMessage(diag.message) << "\n";
+    };
+
+    // Pass 1+2: SemanticDB undefined-name detection
+    kex::semantic::SemanticDB runDb;
+    loadPrelude(runDb);
+    runDb.updateFile(filepath, readFile(filepath));
+    bool dbOk = true;
+    for (const auto &diag : runDb.diagnosticsFor(filepath))
+    {
+        if (diag.level == kex::semantic::Diagnostic::Level::Error)
+            dbOk = false;
+        printDiag(diag);
+    }
+
+    // Pass 3+: existing Analyzer (purity, type checking)
+    kex::semantic::Analyzer analyzer;
+    bool ok = analyzer.analyze(program);
+    for (const auto &diag : analyzer.diagnostics())
+        printDiag(diag);
+
+    return ok && dbOk;
 }
 
 auto printAst(const kex::ast::Program &program) -> void
@@ -1419,6 +1468,24 @@ int main(int argc, char *argv[])
             return 0;
         }
 
+        if (mode == "compile" && !skipCheck)
+        {
+            // Same pre-execution check `run` mode does — see
+            // runSemanticCheck's doc comment for why this matters: without
+            // it, an error here only ever surfaced as a raw erlc failure.
+            // Not applied to emit-core (a debug/inspection dump — you may
+            // want to see the emitted Core Erlang for code that doesn't
+            // type-check yet).
+            if (!runSemanticCheck(program, filepath))
+            {
+                std::cerr << kex::color::apply(kex::color::bold)
+                          << kex::color::apply(kex::color::magenta)
+                          << "Aborted:" << kex::color::apply(kex::color::reset)
+                          << " fix type errors before compiling (use --no-check to skip).\n";
+                return 1;
+            }
+        }
+
         if (mode == "compile" || mode == "emit-core")
         {
             // For `-R file.kex` without explicit `-o`, use a temp dir and clean up after.
@@ -1584,38 +1651,7 @@ int main(int argc, char *argv[])
 
         if (mode == "run" && !skipCheck)
         {
-            auto printRunDiag = [&](const kex::semantic::Diagnostic &diag)
-            {
-                bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-                std::cerr << kex::color::apply(kex::color::gray)
-                          << diag.location.file << ":" << diag.location.line << ":"
-                          << diag.location.column << ":" << kex::color::apply(kex::color::reset)
-                          << " " << kex::color::apply(kex::color::bold)
-                          << (isError ? kex::color::apply(kex::color::red) : kex::color::apply(kex::color::magenta))
-                          << (isError ? "error" : "warning") << ":"
-                          << kex::color::apply(kex::color::reset) << " "
-                          << colorizeMessage(diag.message) << "\n";
-            };
-
-            // Pass 1+2: SemanticDB undefined-name detection
-            kex::semantic::SemanticDB runDb;
-            loadPrelude(runDb);
-            runDb.updateFile(filepath, readFile(filepath));
-            bool dbOk = true;
-            for (const auto &diag : runDb.diagnosticsFor(filepath))
-            {
-                if (diag.level == kex::semantic::Diagnostic::Level::Error)
-                    dbOk = false;
-                printRunDiag(diag);
-            }
-
-            // Pass 3+: existing Analyzer (purity, type checking)
-            kex::semantic::Analyzer analyzer;
-            bool ok = analyzer.analyze(program);
-            for (const auto &diag : analyzer.diagnostics())
-                printRunDiag(diag);
-
-            if (!ok || !dbOk)
+            if (!runSemanticCheck(program, filepath))
             {
                 std::cerr << kex::color::apply(kex::color::bold)
                           << kex::color::apply(kex::color::magenta)

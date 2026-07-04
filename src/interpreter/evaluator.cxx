@@ -8,21 +8,35 @@ namespace kex::interpreter {
 Evaluator::Evaluator() {
     m_globalEnv = std::make_shared<Environment>();
     m_env = m_globalEnv;
+    // Owns every process for this Evaluator's whole lifetime — see
+    // docs/fiber-process-plan.md §2: there is no "outside of a process"
+    // execution mode, matching BEAM, so this always exists rather than
+    // being created lazily on first spawn/receive use.
+    m_scheduler = std::make_unique<Scheduler>(*this);
     registerBuiltins();
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
-    ValuePtr lastResult = Value::none();
-
     for (const auto& item : program.items) {
         execTopLevel(item);
     }
 
-    for (const auto& item : program.items) {
-        if (auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
-            lastResult = execMainBlock(**main);
+    // The top-level program itself runs as one process (see
+    // Scheduler::runToCompletion) — spawn/receive/Process.self at top level
+    // go through the exact same path as inside a spawned process, with no
+    // special-casing. Any processes spawned here that outlive this call
+    // (e.g. a server loop that never explicitly terminates, matching
+    // examples/proc_ping.kex) stay alive in the Scheduler's process table
+    // for a later execute() call (e.g. the next REPL line) to `send` to.
+    ValuePtr lastResult = m_scheduler->runToCompletion([this, &program]() -> ValuePtr {
+        ValuePtr result = Value::none();
+        for (const auto& item : program.items) {
+            if (auto* main = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
+                result = execMainBlock(**main);
+            }
         }
-    }
+        return result;
+    }, m_globalEnv);
 
     // describe/it/assert summary — only printed if any `it` ran, so
     // programs that don't use the testing DSL see no extra output.
@@ -1202,6 +1216,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
                                expr.location);
         }
+        else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
+            auto pid = m_scheduler->spawn(node.body, m_env);
+            return Value::process(pid, m_scheduler.get());
+        }
+        else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+            return m_scheduler->blockingReceive(node);
+        }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             // `using Module` inside a body: execute the module's compiled
             // block functions in the current scope so their names become
@@ -1400,7 +1421,11 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
             if (auto* i = std::get_if<IntValue>(&operand->data)) {
                 // -INT64_MIN doesn't fit in int64_t — promote rather than
                 // silently wrap/UB, same as the overflow-checked binary ops.
-                if (i->value == INT64_MIN) return Value::bigInteger(-mpz_class(static_cast<long>(i->value)));
+                // mpz_class built via decimal string, not
+                // static_cast<long>: `long` is 32-bit on wasm32, unlike
+                // every native (LP64) target this project has built on
+                // before — see value.cxx's asInteger/integerResult.
+                if (i->value == INT64_MIN) return Value::bigInteger(-mpz_class(std::to_string(i->value)));
                 return Value::integer(-i->value);
             }
             if (auto* bi = std::get_if<BigIntValue>(&operand->data))
@@ -1419,6 +1444,12 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
 
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
+    // BEAM-style reduction-counted auto-yield (docs/fiber-process-plan.md
+    // §5): placed at function-call boundaries, the same kind of safe point
+    // BEAM itself uses, so a compute-bound process that never calls
+    // `receive` still gives other processes a turn periodically.
+    m_scheduler->tickReduction();
+
     auto val = m_env->get(name);
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
@@ -1719,6 +1750,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerEnvBuiltins();
     registerMathBuiltins();
     registerTestBuiltins();
+    registerProcessBuiltins();
 }
 
 auto Evaluator::pushEnv() -> void {

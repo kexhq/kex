@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <fstream>
 #include <functional>
 #include <gmpxx.h>
@@ -34,9 +35,35 @@ struct VariantValue {
     std::string tag;         // "Ok", "Less", "Nothing"
     std::string parentType;  // "Result", "Ordering", "Option", "" if unknown
     std::vector<ValuePtr> args;  // payload — empty for zero-arg
+
+    // Declared type params of parentType, e.g. ["X"] for Optional<X> or
+    // ["T", "E"] for Result<T, E> — empty if parentType is non-generic or
+    // unknown. Lets typeName() render "Optional<Integer>" instead of just
+    // "Optional" by pairing each param with the runtime type of the args[]
+    // entry that instantiates it (see argParamIndex).
+    std::vector<std::string> typeParams;
+    // argParamIndex[i] is the index into typeParams that args[i] instantiates,
+    // or -1 if args[i]'s declared type wasn't a bare type param (e.g. nested
+    // generics like List<X>) and so can't be resolved to a single param.
+    std::vector<int> argParamIndex;
 };
 
 struct ModuleValue { std::string name; };  // "Math", "IO", "File"
+
+// A process handle — the runtime value of `spawn do ... end` and
+// `Process.self`. Deliberately thin: the real Fiber, mailbox, and links
+// live in the Scheduler's own process table (src/interpreter/scheduler.hxx),
+// not here, so copying a pid around never risks fiber/mailbox lifetime
+// issues. `scheduler` is a non-owning back-pointer — it outlives every
+// ProcessValue it produces, since it's owned by the Evaluator for the
+// program's whole run.
+struct ProcessValue { uint64_t pid; class Scheduler* scheduler; };
+
+// `Task.start { block }`'s handle — a Task *is* spawn+monitor underneath
+// (same as runtime/src/kex_task.erl on the BEAM backend), but kept as its
+// own variant rather than reusing ProcessValue so typeName() says "Task"
+// and `.await` dispatches unambiguously without a tag check.
+struct TaskValue { uint64_t pid; class Scheduler* scheduler; };
 
 struct ListValue { std::vector<ValuePtr> elements; };
 struct TupleValue { std::vector<ValuePtr> elements; };
@@ -86,6 +113,8 @@ struct Value {
         AtomValue,
         VariantValue,
         ModuleValue,
+        ProcessValue,
+        TaskValue,
         ListValue,
         TupleValue,
         MapValue,
@@ -106,8 +135,21 @@ struct Value {
     static auto character(char v) -> ValuePtr;
     static auto boolean(bool v) -> ValuePtr;
     static auto atom(std::string name) -> ValuePtr;
-    static auto variant(std::string tag, std::string parentType = "", std::vector<ValuePtr> args = {}) -> ValuePtr;
+    static auto variant(std::string tag, std::string parentType = "", std::vector<ValuePtr> args = {},
+                         std::vector<std::string> typeParams = {}, std::vector<int> argParamIndex = {}) -> ValuePtr;
+    // Convenience wrappers over variant() for the prelude's builtin generic
+    // ADTs (Option<T> = Just(T) | None, Result<T, E> = Ok(T) | Error(E)) —
+    // every stdlib call site that constructs one of these should go through
+    // here rather than calling variant() directly with the tag/parentType
+    // spelled out, so typeName() can always render "Option<Int>"/
+    // "Result<String, Int>" instead of just the bare "Option"/"Result"
+    // (which is what happens if typeParams/argParamIndex are left empty).
+    static auto just(ValuePtr inner) -> ValuePtr;
+    static auto ok(ValuePtr inner) -> ValuePtr;
+    static auto error(ValuePtr inner) -> ValuePtr;
     static auto module(std::string name) -> ValuePtr;
+    static auto process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
+    static auto task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
     static auto list(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto tuple(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields) -> ValuePtr;

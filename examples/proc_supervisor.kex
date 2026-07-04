@@ -1,5 +1,6 @@
-# kex: no-check
-# Milestone-5 smoke test: supervision tree with a crashing child.
+# Supervision tree with a crashing child. Runs on both the tree-walking
+# interpreter (`kex`, :only_crashed only) and the BEAM backend (`kex -R`,
+# all restart strategies).
 
 foul counter(name: String, n: Int) do
   receive do
@@ -23,6 +24,6 @@ main do
   end
   match result do
     Ok(pid) -> IO.printLine("supervisor started: " + pid.to(String))
-    (:error, reason) -> IO.printLine("supervisor error: " + reason.to(String))
+    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String))
   end
 end

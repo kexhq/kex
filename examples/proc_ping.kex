@@ -1,5 +1,5 @@
-# kex: no-check
-# Layer-1 smoke test for BEAM processes: spawn + send + receive round-trip.
+# spawn + send + receive round-trip. Runs on both the tree-walking
+# interpreter (`kex`) and the BEAM backend (`kex -R`).
 # A child process waits for :ping messages and replies :pong to the sender.
 
 foul pingServer do

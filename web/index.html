@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Kex — in-browser REPL (test page)</title>
+<link rel="stylesheet" href="vendor/xterm/xterm.css">
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: #1e1e1e;
+    color: #d4d4d4;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    padding: 0.6rem 1rem;
+    border-bottom: 1px solid #3c3c3c;
+    display: flex;
+    align-items: baseline;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+  }
+  header h1 { font-size: 0.95rem; margin: 0; font-weight: 600; }
+  header .status { font-size: 0.8rem; color: #8a8a8a; }
+  #term-wrap {
+    flex: 1;
+    min-height: 0;
+    padding: 0.5rem 0.75rem;
+  }
+  #terminal { height: 100%; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Kex REPL (wasm, in-browser)</h1>
+    <span class="status" id="status">loading…</span>
+  </header>
+
+  <div id="term-wrap"><div id="terminal"></div></div>
+
+  <script type="module">
+    import { Terminal } from "./vendor/xterm/xterm.mjs";
+    import { FitAddon } from "./vendor/xterm/addon-fit.mjs";
+    import createKexReplModule from "../build-wasm/kex_repl_wasm.js";
+
+    const statusEl = document.getElementById("status");
+
+    // A real terminal emulator (xterm.js), not a hand-rolled textarea —
+    // ANSI color codes below come straight from the wasm binary's own
+    // kex::color output (see src/wasm_repl.cxx), so coloring matches the
+    // native REPL exactly instead of being reimplemented in JS.
+    const term = new Terminal({
+      fontFamily: "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
+      fontSize: 14,
+      cursorBlink: true,
+      theme: { background: "#1e1e1e", foreground: "#d4d4d4" },
+    });
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(document.getElementById("terminal"));
+    fitAddon.fit();
+    window.addEventListener("resize", () => fitAddon.fit());
+
+    const PROMPT = "kex> ";
+    const CONT_PROMPT = "...> ";
+
+    // Same countBlocks() word-boundary do/end scan main.cxx's real REPL
+    // uses to decide whether to keep reading continuation lines (see its
+    // `countBlocks` lambda) — a straight port so multi-line `do ... end`
+    // blocks behave identically here.
+    function countBlocks(s) {
+      let count = 0;
+      const isAlnum = (c) => c !== undefined && /[A-Za-z0-9]/.test(c);
+      for (let i = 0; i < s.length; i++) {
+        if (s.substr(i, 2) === "do") {
+          const wordBefore = isAlnum(s[i - 1]);
+          const wordAfter = isAlnum(s[i + 2]);
+          if (!wordBefore && !wordAfter) count++;
+        }
+        if (s.substr(i, 3) === "end") {
+          const wordBefore = isAlnum(s[i - 1]);
+          const wordAfter = isAlnum(s[i + 3]);
+          if (!wordBefore && !wordAfter) count--;
+        }
+      }
+      return count;
+    }
+
+    // History persisted across page loads (localStorage stands in for the
+    // native REPL's history file — see main.cxx's read_history/write_history
+    // around HAS_READLINE). Every submitted physical line is recorded
+    // individually, matching readLine()'s per-line add_history call —
+    // continuation lines get their own history entries too.
+    const HISTORY_KEY = "kex-repl-history";
+    let history = [];
+    try { history = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]"); } catch { history = []; }
+    let historyPos = history.length;
+    let draft = "";
+
+    function saveHistory() {
+      try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(-500))); } catch {}
+    }
+
+    let line = "";
+    let cursor = 0;
+    let accumulated = "";
+    let prompt = PROMPT;
+    let evalSource = null; // set once the wasm module is ready
+    let completeWord = null; // set once the wasm module is ready
+
+    function writePrompt() {
+      term.write(prompt);
+    }
+
+    function redrawLine() {
+      term.write("\r\x1b[K" + prompt + line);
+      const back = line.length - cursor;
+      if (back > 0) term.write(`\x1b[${back}D`);
+    }
+
+    function setLine(s) {
+      line = s;
+      cursor = line.length;
+      redrawLine();
+    }
+
+    async function submitLine() {
+      term.write("\r\n");
+      if (line.length > 0) {
+        history.push(line);
+        historyPos = history.length;
+        saveHistory();
+      }
+      accumulated += (accumulated ? "\n" : "") + line;
+      line = "";
+      cursor = 0;
+
+      if (countBlocks(accumulated) > 0) {
+        prompt = CONT_PROMPT;
+        writePrompt();
+        return;
+      }
+
+      const src = accumulated;
+      accumulated = "";
+      prompt = PROMPT;
+
+      if (src.trim().length === 0) {
+        writePrompt();
+        return;
+      }
+
+      if (evalSource) {
+        const out = await evalSource(src);
+        // wasm output already ends in ANSI reset + newline where needed;
+        // just fix up bare \n into \r\n for the terminal.
+        term.write(out.replace(/\n/g, "\r\n"));
+      }
+      writePrompt();
+    }
+
+    term.onData((data) => {
+      if (!evalSource) return; // module not ready yet
+      switch (data) {
+        case "\r": // Enter
+          submitLine();
+          return;
+        case "\t": // Tab: complete
+          completeWord();
+          return;
+        case "": // Backspace
+          if (cursor > 0) {
+            line = line.slice(0, cursor - 1) + line.slice(cursor);
+            cursor--;
+            redrawLine();
+          }
+          return;
+        case "": // Ctrl-C: cancel current line / abort multi-line block
+          term.write("^C\r\n");
+          line = "";
+          cursor = 0;
+          accumulated = "";
+          prompt = PROMPT;
+          writePrompt();
+          return;
+        case "": // Ctrl-A: start of line
+          cursor = 0;
+          redrawLine();
+          return;
+        case "": // Ctrl-E: end of line
+          cursor = line.length;
+          redrawLine();
+          return;
+        case "": // Ctrl-K: kill to end of line
+          line = line.slice(0, cursor);
+          redrawLine();
+          return;
+        case "": // Ctrl-U: kill whole line
+          line = "";
+          cursor = 0;
+          redrawLine();
+          return;
+        case "": { // Ctrl-W: delete word backward
+          let end = cursor;
+          let start = end;
+          while (start > 0 && line[start - 1] === " ") start--;
+          while (start > 0 && line[start - 1] !== " ") start--;
+          line = line.slice(0, start) + line.slice(end);
+          cursor = start;
+          redrawLine();
+          return;
+        }
+        case "[A": // Up: previous history entry
+          if (historyPos > 0) {
+            if (historyPos === history.length) draft = line;
+            historyPos--;
+            setLine(history[historyPos]);
+          }
+          return;
+        case "[B": // Down: next history entry
+          if (historyPos < history.length) {
+            historyPos++;
+            setLine(historyPos === history.length ? draft : history[historyPos]);
+          }
+          return;
+        case "[C": // Right
+          if (cursor < line.length) { cursor++; redrawLine(); }
+          return;
+        case "[D": // Left
+          if (cursor > 0) { cursor--; redrawLine(); }
+          return;
+        case "[H": case "[1~": // Home (some terminals)
+          cursor = 0;
+          redrawLine();
+          return;
+        case "[F": case "[4~": // End
+          cursor = line.length;
+          redrawLine();
+          return;
+      }
+      // Printable character (or a pasted chunk of them) — insert at cursor.
+      if (data >= " ") {
+        line = line.slice(0, cursor) + data + line.slice(cursor);
+        cursor += data.length;
+        redrawLine();
+      }
+    });
+
+    // Same word-break character set main.cxx configures via
+    // rl_completer_word_break_characters (see its REPL setup) — '.' and '"'
+    // are deliberately excluded so "IO.pri<TAB>" and "[1,2,3].ma<TAB>" are
+    // each treated as one word, matching the native REPL exactly.
+    const WORD_BREAK_CHARS = " \t\n\\@$><=;|&{(";
+
+    function findWordStart(s, end) {
+      let i = end;
+      while (i > 0 && WORD_BREAK_CHARS.indexOf(s[i - 1]) === -1) i--;
+      return i;
+    }
+
+    function longestCommonPrefix(strs) {
+      if (strs.length === 0) return "";
+      let prefix = strs[0];
+      for (let i = 1; i < strs.length && prefix; i++) {
+        let j = 0;
+        while (j < prefix.length && j < strs[i].length && prefix[j] === strs[i][j]) j++;
+        prefix = prefix.slice(0, j);
+      }
+      return prefix;
+    }
+
+    // Mirrors main.cxx's kexDisplayMatches: when showing the ambiguous-match
+    // list, strip the prefix shared by all matches up to its last '.' (so a
+    // list of List methods shows "map filter each" rather than repeating
+    // "List." on every entry) — display-only, doesn't affect what gets
+    // inserted into the line.
+    function stripSharedQualifierForDisplay(matches, lcp) {
+      const dot = lcp.lastIndexOf(".");
+      if (dot === -1) return matches;
+      const stripLen = dot + 1;
+      return matches.map((m) => (m.length > stripLen ? m.slice(stripLen) : m));
+    }
+
+    term.writeln("kex 0.1.0 — interactive REPL (wasm, in-browser)");
+    term.writeln("");
+    statusEl.textContent = "loading wasm module…";
+
+    // Without an explicit locateFile, the --preload-file package
+    // (kex_repl_wasm.data) resolves relative to the *page's* URL
+    // (window.location.pathname) rather than the JS module's own
+    // directory — a real bug, found the same way as the EXPORT_ES6 one
+    // above (by actually loading this page, not just smoke-testing in
+    // Node): it 404'd at /web/kex_repl_wasm.data instead of
+    // /build-wasm/kex_repl_wasm.data.
+    const Module = await createKexReplModule({
+      locateFile: (path) => "../build-wasm/" + path,
+    });
+    const session = Module.ccall("kex_repl_create", "number", [], []);
+
+    evalSource = async function (src) {
+      // kex_repl_eval is void-returning on purpose — see src/wasm_repl.cxx's
+      // doc comment: a direct return value from an Asyncify-instrumented
+      // export wasn't reliably reaching the JS caller, so the result is
+      // fetched via a second, ordinary synchronous call instead
+      // (kex_repl_last_result never touches Asyncify, so it's unaffected).
+      await Module.ccall(
+        "kex_repl_eval", null,
+        ["number", "string"], [session, src],
+        { async: true }
+      );
+      return Module.ccall("kex_repl_last_result", "string", ["number"], [session]);
+    };
+
+    completeWord = async function () {
+      const start = findWordStart(line, cursor);
+      const word = line.slice(start, cursor);
+      // kex_repl_complete is a plain synchronous export (no evaluator.execute()
+      // involved, so no Asyncify boundary to cross) — unlike kex_repl_eval it
+      // can return its result directly, no split fetch call needed.
+      const raw = Module.ccall(
+        "kex_repl_complete", "string",
+        ["number", "string", "number", "string"],
+        [session, line, start, word]
+      );
+      const matches = raw.split("\n").filter((m) => m.length > 0);
+
+      if (matches.length === 0) {
+        term.write("\x07"); // bell — no completions
+        return;
+      }
+      if (matches.length === 1) {
+        const repl = matches[0];
+        line = line.slice(0, start) + repl + line.slice(cursor);
+        cursor = start + repl.length;
+        redrawLine();
+        return;
+      }
+
+      const lcp = longestCommonPrefix(matches);
+      if (lcp.length > word.length) {
+        line = line.slice(0, start) + lcp + line.slice(cursor);
+        cursor = start + lcp.length;
+        redrawLine();
+        return;
+      }
+
+      // Already at the longest common prefix and still ambiguous — show the
+      // match list below the current line, like readline's double-TAB.
+      const display = stripSharedQualifierForDisplay(matches, lcp);
+      term.write("\r\n" + display.join("  ") + "\r\n");
+      redrawLine();
+    };
+
+    statusEl.textContent = "ready";
+    writePrompt();
+    term.focus();
+  </script>
+</body>
+</html>

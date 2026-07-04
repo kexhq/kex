@@ -236,11 +236,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::variant("Just", "Option", {Value::character(str->value[0])});
+            return Value::just(Value::character(str->value[0]));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
-            return Value::variant("Just", "Option", {list->elements[0]});
+            return Value::just(list->elements[0]);
         }
         return Value::none();
     });
@@ -249,11 +249,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.size() < 2) return Value::none();
-            return Value::variant("Just", "Option", {list->elements[1]});
+            return Value::just(list->elements[1]);
         }
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.size() < 2) return Value::none();
-            return Value::variant("Just", "Option", {Value::character(str->value[1])});
+            return Value::just(Value::character(str->value[1]));
         }
         return Value::none();
     });
@@ -262,11 +262,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.size() < 3) return Value::none();
-            return Value::variant("Just", "Option", {list->elements[2]});
+            return Value::just(list->elements[2]);
         }
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.size() < 3) return Value::none();
-            return Value::variant("Just", "Option", {Value::character(str->value[2])});
+            return Value::just(Value::character(str->value[2]));
         }
         return Value::none();
     });
@@ -286,11 +286,11 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::variant("Just", "Option", {Value::character(str->value.back())});
+            return Value::just(Value::character(str->value.back()));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
-            return Value::variant("Just", "Option", {list->elements.back()});
+            return Value::just(list->elements.back());
         }
         return Value::none();
     });
@@ -405,7 +405,7 @@ auto Evaluator::registerListBuiltins() -> void {
         auto elems = getElements(args[0]);
         for (size_t i = 0; i < elems.size(); i++)
             if (valuesEqual(elems[i], args[1]))
-                return Value::variant("Just", "Option", {Value::integer(static_cast<int64_t>(i))});
+                return Value::just(Value::integer(static_cast<int64_t>(i)));
         return Value::none();
     });
 
@@ -502,13 +502,13 @@ auto Evaluator::registerListBuiltins() -> void {
                     auto k = keyOf({elems[i]});
                     if (compareVia(k, bestKey) == "Less") { result = elems[i]; bestKey = k; }
                 }
-                return Value::variant("Just", "Option", {result});
+                return Value::just(result);
             }
         }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Less") result = elems[i];
-        return Value::variant("Just", "Option", {result});
+        return Value::just(result);
     });
 
     reg("max", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
@@ -525,13 +525,13 @@ auto Evaluator::registerListBuiltins() -> void {
                     auto k = keyOf({elems[i]});
                     if (compareVia(k, bestKey) == "Greater") { result = elems[i]; bestKey = k; }
                 }
-                return Value::variant("Just", "Option", {result});
+                return Value::just(result);
             }
         }
         auto result = elems[0];
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Greater") result = elems[i];
-        return Value::variant("Just", "Option", {result});
+        return Value::just(result);
     });
 
     auto numericSum = [](const std::vector<ValuePtr>& elems) -> ValuePtr {

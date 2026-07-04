@@ -2,6 +2,7 @@
 
 #include "../ast/ast.hxx"
 #include "environment.hxx"
+#include "scheduler.hxx"
 #include "value.hxx"
 #include <memory>
 #include <stdexcept>
@@ -39,6 +40,13 @@ private:
 };
 
 class Evaluator {
+    // Scheduler needs direct access to eval/evalBody/matchPattern/
+    // pushEnv/popEnv/m_env to run process bodies and implement
+    // blockingReceive's clause matching — see scheduler.cxx. Tightly
+    // coupled by design (docs/fiber-process-plan.md), not worth a larger
+    // public surface just to avoid friendship.
+    friend class Scheduler;
+
 public:
     Evaluator();
 
@@ -102,6 +110,7 @@ private:
     auto registerMapBuiltins() -> void;
     auto registerMathBuiltins() -> void;
     auto registerTestBuiltins() -> void;
+    auto registerProcessBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;
@@ -109,6 +118,11 @@ private:
 
     std::shared_ptr<Environment> m_env;
     std::shared_ptr<Environment> m_globalEnv;
+    // Owns every process (including "process 0", the top-level program
+    // itself — see Scheduler::runToCompletion) for this Evaluator's whole
+    // lifetime, so processes spawned on one execute() call (e.g. one REPL
+    // line) remain reachable via `send` from a later call.
+    std::unique_ptr<Scheduler> m_scheduler;
     std::string m_output;
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
     // Maps a sum-type variant name (e.g. "Just", "Ok", "Fizz") to the type

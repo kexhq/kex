@@ -1237,5 +1237,461 @@ int main() {
         });
     });
 
+    describe("Interpreter — Processes (fiber-based scheduler, phase 1)", []() {
+        it("spawn/send/receive round trip", []() {
+            auto out = runOutput(
+                "foul pingServer do\n"
+                "  spawn do\n"
+                "    loop\n"
+                "      receive do |sender|\n"
+                "        :ping -> sender.send(:pong)\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let server = pingServer()\n"
+                "  server.send(:ping)\n"
+                "  receive do\n"
+                "    :pong -> IO.printLine(\"pong\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("pong\n"));
+        });
+
+        it("selective receive skips non-matching messages already in the mailbox", []() {
+            // Sends (:a, ...) then (:b, ...) then (:c, ...); the receiver
+            // only has a clause for :b — proves it scans past the
+            // already-arrived :a rather than only ever checking the first
+            // queued message.
+            auto out = runOutput(
+                "foul echoer do\n"
+                "  spawn do\n"
+                "    receive do\n"
+                "      (:b, sender) -> sender.send(:got_b)\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let p = echoer()\n"
+                "  p.send((:a, Process.self))\n"
+                "  p.send((:b, Process.self))\n"
+                "  p.send((:c, Process.self))\n"
+                "  receive do\n"
+                "    :got_b -> IO.printLine(\"selective\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("selective\n"));
+        });
+
+        it("Process.self differs between spawner and spawned process", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    parent.send((:ready, Process.self))\n"
+                "  end\n"
+                "  receive do\n"
+                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("false\n"));
+        });
+
+        it("two processes with same-named top-level lets in their spawn bodies don't cross-contaminate", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  spawn do\n"
+                "    let n = 1\n"
+                "    parent.send(n)\n"
+                "  end\n"
+                "  spawn do\n"
+                "    let n = 2\n"
+                "    parent.send(n)\n"
+                "  end\n"
+                "  receive do\n"
+                "    n -> receive do\n"
+                "      m -> IO.printLine((n + m).to(String))\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+            );
+            // Order between the two spawned processes isn't guaranteed, but
+            // if either process's `n` leaked into the other's environment
+            // (the m_env-swap bug this test exists to catch), the sum would
+            // come out wrong (e.g. 2+2 or 1+1 instead of 1+2).
+            assertEqual(out, std::string("3\n"));
+        });
+
+        it("a process spawned on one execute() call is reachable from a later call on the same Evaluator", []() {
+            // Mirrors REPL usage: `let pid = spawn do ... end` on one line,
+            // then `pid.send(...)` on a later line — the Scheduler must
+            // persist across execute() calls, not be torn down between
+            // them, so a still-alive (blocked-in-receive) process from an
+            // earlier call keeps working on a later one.
+            Evaluator evaluator;
+            // Kept alive for the whole test, matching how main.cxx's REPL
+            // mode keeps every line's Program alive forever (`new`, never
+            // deleted) — spawn captures a raw pointer into the AST (same
+            // convention LambdaValue::body already uses), so a process
+            // still blocked in `receive` after execute() returns needs its
+            // originating Program to outlive it.
+            std::vector<ast::Program> keepAlive;
+
+            auto runOnEvaluator = [&](const std::string& source) {
+                Lexer lexer(source);
+                auto tokens = lexer.tokenizeAll();
+                Parser parser(std::move(tokens));
+                keepAlive.push_back(parser.parseProgram());
+                evaluator.execute(keepAlive.back());
+            };
+
+            // Top-level `let` (no `main` wrapper), matching the REPL's
+            // actual line-by-line shape — top-level `var` isn't a
+            // supported construct today, unrelated to this test's concern.
+            runOnEvaluator(
+                "let storedPid = spawn do\n"
+                "  receive do\n"
+                "    (:ping, sender) -> sender.send(:pong)\n"
+                "  end\n"
+                "end\n"
+            );
+            runOnEvaluator(
+                "main do\n"
+                "  storedPid.send((:ping, Process.self))\n"
+                "  receive do\n"
+                "    :pong -> IO.printLine(\"cross-call\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(evaluator.output(), std::string("cross-call\n"));
+        });
+    });
+
+    describe("Interpreter — Processes (phase 2: receive timeout/after)", []() {
+        it("fires `after` when nothing arrives before the deadline", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"unexpected\")\n"
+                "  after -> IO.printLine(\"timed out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("timed out\n"));
+        });
+
+        it("does not fire `after` when a matching message arrives first", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:early)\n"
+                "    end\n"
+                "  end\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 5000 do\n"
+                "    :early -> IO.printLine(\"got it early\")\n"
+                "  after -> IO.printLine(\"should not time out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got it early\n"));
+        });
+
+        it("a stale timeout from an earlier receive doesn't leak into a later one", []() {
+            // The first receive gets its message almost immediately, well
+            // before its own long deadline. That deadline is still sitting
+            // in the scheduler's timeout table, unfired, when the second
+            // (short-timeout) receive starts — it must not be mistaken for
+            // the second receive's own deadline (the waitGeneration guard
+            // in blockingReceive exists specifically for this).
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:early)\n"
+                "    end\n"
+                "  end\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 5000 do\n"
+                "    :early -> IO.printLine(\"first: got it\")\n"
+                "  after -> IO.printLine(\"first: should not happen\")\n"
+                "  end\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"second: unexpected message\")\n"
+                "  after -> IO.printLine(\"second: correctly timed out\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("first: got it\nsecond: correctly timed out\n"));
+        });
+    });
+
+    describe("Interpreter — Processes (phase 3: link/unlink/alive?)", []() {
+        it("alive?() is true while blocked in receive, false once the process finishes", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> parent.send(:done)\n"
+                "    end\n"
+                "  end\n"
+                "  IO.printLine(\"before: \" + child.alive?().to(String))\n"
+                "  child.send(:go)\n"
+                "  receive do\n"
+                "    :done -> IO.printLine(\"got done\")\n"
+                "  end\n"
+                "  # Give the child's own fiber a turn to actually finish —\n"
+                "  # it sent :done and returned in the same reduction, so by\n"
+                "  # the time we've been woken and resumed, it's already run\n"
+                "  # to completion.\n"
+                "  IO.printLine(\"after: \" + child.alive?().to(String))\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("before: true\ngot done\nafter: false\n"));
+        });
+
+        it("link() is passive bookkeeping — a linked partner exiting does not kill the other process", []() {
+            // Deliberately NOT BEAM's link model (docs/fiber-process-plan.md
+            // §8): this asserts the absence of cascading kill, since it'd be
+            // an easy regression to accidentally reintroduce later.
+            auto out = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  let child = spawn do\n"
+                "    receive do\n"
+                "      :go -> IO.printLine(\"child exiting\")\n"
+                "    end\n"
+                "  end\n"
+                "  child.link()\n"
+                "  child.send(:go)\n"
+                "  receive timeout: 20 do\n"
+                "    _ -> IO.printLine(\"unexpected\")\n"
+                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("child exiting\nparent still alive: true\n"));
+        });
+    });
+
+    describe("Interpreter — Processes (phase 4: Task)", []() {
+        it("Task.start/.await(timeout:) returns Ok(result) on success", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t = Task.start { 10 + 20 }\n"
+                "  match t.await(timeout: 2000) do\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got 30\n"));
+        });
+
+        it("await(timeout:) returns Error(:timeout) if the task never replies in time", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t = Task.start {\n"
+                "    receive do\n"
+                "      :never -> 1\n"
+                "    end\n"
+                "  }\n"
+                "  match t.await(timeout: 20) do\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("error :timeout\n"));
+        });
+
+        it("Task.awaitAll awaits multiple tasks in order, each as Ok(result)", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let t1 = Task.start { 1 + 1 }\n"
+                "  let t2 = Task.start { 2 + 2 }\n"
+                "  let results = Task.awaitAll([t1, t2])\n"
+                "  results.each { |r|\n"
+                "    match r do\n"
+                "      Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
+                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    end\n"
+                "  }\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("got 2\ngot 4\n"));
+        });
+    });
+
+    describe("Interpreter — Processes (regressions: bugs found while implementing the scheduler)", []() {
+        it("a runtime error at top level still propagates, not silently swallowed by the process wrapper", []() {
+            // Wrapping the top-level program in a process's fiber (see
+            // Scheduler::runToCompletion) needs a catch(...) to turn an
+            // uncaught Kex-level error into that process's exit value — an
+            // earlier version of this let the error vanish entirely
+            // instead of reaching Evaluator::execute()'s caller, because
+            // the fiber's outer catch(...) discarded it rather than
+            // propagating it back out. Would have silently swallowed
+            // every runtime error in top-level code, not just
+            // process-related code.
+            try {
+                run("main do\n  undefinedFunctionCall()\nend\n");
+                assertTrue(false, "expected an exception");
+            } catch (const std::exception& e) {
+                std::string msg = e.what();
+                assertTrue(msg.find("Undefined function") != std::string::npos, msg);
+            }
+        });
+
+        it("destroying a still-suspended process doesn't corrupt later, unrelated process operations", []() {
+            // Boost.Context resumes a still-suspended fiber one last time
+            // (to throw forced_unwind) when its Evaluator/Scheduler is
+            // destroyed — a generic catch(...) around a spawned process's
+            // entry function swallows that internal exception instead of
+            // letting it propagate, corrupting Boost.Context's state for
+            // every subsequent, unrelated fiber operation. First block
+            // spawns a process that never finishes (blocked in receive
+            // forever, same shape as examples/beam/proc_ping.kex's server
+            // loop) and lets its Evaluator be destroyed while still
+            // suspended; the second block proves a completely fresh,
+            // unrelated process round trip still works afterward.
+            {
+                auto out = runOutput(
+                    "main do\n"
+                    "  spawn do\n"
+                    "    receive do\n"
+                    "      :never -> IO.printLine(\"unreachable\")\n"
+                    "    end\n"
+                    "  end\n"
+                    "  IO.printLine(\"main done, child left suspended\")\n"
+                    "end\n"
+                );
+                assertEqual(out, std::string("main done, child left suspended\n"));
+            }
+            auto out2 = runOutput(
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  spawn do\n"
+                "    parent.send(:ok)\n"
+                "  end\n"
+                "  receive do\n"
+                "    :ok -> IO.printLine(\"still works\")\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out2, std::string("still works\n"));
+        });
+
+        it("a server process handling multiple round trips, interleaved with the caller, doesn't corrupt fiber state", []() {
+            // A single thread_local "which continuation does
+            // yieldToScheduler() resume" slot was only ever set once, when
+            // a fiber first started — resuming the SAME fiber a second
+            // time (after some OTHER fiber had run in between and
+            // repointed that global slot at itself) read a stale pointer
+            // into a different, unrelated, currently-suspended fiber's own
+            // stack. Boost.Context caught it as an assertion failure
+            // rather than silently corrupting memory, which is how this
+            // was found. Two fibers each yielding more than once,
+            // interleaved, is the minimal repro — a ping server handling
+            // more than one round trip.
+            auto out = runOutput(
+                "foul pingServer do\n"
+                "  spawn do\n"
+                "    loop\n"
+                "      receive do |sender|\n"
+                "        :ping -> sender.send(:pong)\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let server = pingServer()\n"
+                "  server.send(:ping)\n"
+                "  receive do :pong -> IO.printLine(\"pong1\") end\n"
+                "  server.send(:ping)\n"
+                "  receive do :pong -> IO.printLine(\"pong2\") end\n"
+                "  server.send(:ping)\n"
+                "  receive do :pong -> IO.printLine(\"pong3\") end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("pong1\npong2\npong3\n"));
+        });
+    });
+
+    describe("Interpreter — Processes (phase 5: Supervisor, :only_crashed only)", []() {
+        it("Supervisor.start(restart: :only_crashed) starts each worker and returns Ok(supervisorPid)", []() {
+            auto out = runOutput(
+                "foul startWorker do\n"
+                "  spawn do\n"
+                "    receive do\n"
+                "      :never -> 1\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let result = Supervisor.start(restart: :only_crashed) do\n"
+                "    [worker { startWorker() }]\n"
+                "  end\n"
+                "  match result do\n"
+                "    Ok(pid) -> IO.printLine(\"started\")\n"
+                "    Error(reason) -> IO.printLine(\"error: \" + reason.to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("started\n"));
+        });
+
+        it("respawns a worker that finishes, with a different pid, matching :only_crashed (one_for_one)", []() {
+            auto out = runOutput(
+                "foul startWorker(parent) do\n"
+                "  spawn do\n"
+                "    parent.send((:worker_started, Process.self))\n"
+                "    receive do\n"
+                "      :die -> IO.printLine(\"worker dying\")\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  let parent = Process.self\n"
+                "  Supervisor.start(restart: :only_crashed) do\n"
+                "    [worker { startWorker(parent) }]\n"
+                "  end\n"
+                "  receive do\n"
+                "    (:worker_started, pid1) -> do\n"
+                "      pid1.send(:die)\n"
+                "      receive timeout: 500 do\n"
+                "        (:worker_started, pid2) -> IO.printLine((pid1 == pid2).to(String))\n"
+                "      after -> IO.printLine(\"no restart\")\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("worker dying\nfalse\n"));
+        });
+
+        it("restart strategies other than :only_crashed return a clear Error, not silently wrong behavior", []() {
+            auto out = runOutput(
+                "main do\n"
+                "  let result = Supervisor.start(restart: :all) do [] end\n"
+                "  match result do\n"
+                "    Ok(_) -> IO.printLine(\"unexpected ok\")\n"
+                "    Error(reason) -> IO.printLine(\"rejected: \" + reason.to(String).contains?(\"only_crashed\").to(String))\n"
+                "  end\n"
+                "end\n"
+            );
+            assertEqual(out, std::string("rejected: true\n"));
+        });
+    });
+
     return runAll();
 }
