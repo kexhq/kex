@@ -2,7 +2,8 @@
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1, add/2,
          list_get/2, list_get/3, env_map/0, integer_parse/1, float_parse/1,
          math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
-         assert/1, assert/2, index_of/2, list_product/1]).
+         assert/1, assert/2, index_of/2, list_product/1,
+         is_digit/1, is_alpha/1, is_space/1, divide/2]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
@@ -135,6 +136,15 @@ to_string(X) when is_tuple(X)   ->
     "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
 
+%% divide/2 — polymorphic /: integer division (truncating, like Erlang's
+%% own div) when both operands are integers, float division otherwise.
+%% Matches src/interpreter/evaluator.cxx's BinaryOp::Slash case exactly —
+%% used by curried `~(/)` references (see core_erlang.cxx's CurryExpr
+%% handling); ordinary `/` expressions inline this same check directly
+%% rather than calling out here.
+divide(A, B) when is_integer(A), is_integer(B) -> A div B;
+divide(A, B) -> A / B.
+
 %% add/2 — polymorphic + for strings, numbers, and Char+String/String+Char.
 %% A Kex Char and a Kex Integer are both just plain Erlang integers (no
 %% distinct runtime tag), so `x.upperCase + rest` (Char + String, e.g.
@@ -217,6 +227,15 @@ index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 
 %% list.product — no lists:product/1 BIF.
 list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
+
+%% Char predicates — matches src/interpreter/stdlib/string.cxx's
+%% digit?/alpha?/space? exactly. Real top-level functions (not inlined at
+%% the call site) so `&digit?`/`&alpha?`/`&space?` (a first-class function
+%% reference — see core_erlang.cxx's ShorthandLambda handling) can call the
+%% exact same implementation, not just the direct `.digit?` method form.
+is_digit(C) -> C >= $0 andalso C =< $9.
+is_alpha(C) -> (C >= $A andalso C =< $Z) orelse (C >= $a andalso C =< $z).
+is_space(C) -> lists:member(C, [$\s, $\t, $\n, $\r, $\v, $\f]).
 
 %% ENV — a real Map<String,String> value (see
 %% src/interpreter/stdlib/env.cxx), a snapshot of the process environment.

@@ -1007,20 +1007,18 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // Char predicates — plain global Kex functions (see
             // src/interpreter/stdlib/string.cxx's digit?/alpha?/space?),
             // not stdlib-module-namespaced, called via UFCS on a Char
-            // (a plain Erlang integer codepoint). A real, reproduced bug
-            // otherwise: undef'd entirely (spec/char_predicates.kex,
-            // spec/char_type.kex).
+            // (a plain Erlang integer codepoint). Routed through real
+            // kex_io functions (not inlined here) so `&alpha?`/`&digit?`/
+            // `&space?` (see ShorthandLambda's Kind::Function handling
+            // above) can reference the exact same implementation — a real,
+            // reproduced bug otherwise: undef'd entirely
+            // (spec/char_predicates.kex, spec/char_type.kex, spec/list_hof.kex).
             if (node.method == "digit?" && node.args.empty())
-                return "call 'erlang':'and'(call 'erlang':'>='(" + recv + ", 48), call 'erlang':'=<'(" + recv + ", 57))";
+                return "call 'kex_io':'is_digit'(" + recv + ")";
             if (node.method == "space?" && node.args.empty())
-                return "call 'lists':'member'(" + recv + ", [32, 9, 10, 13, 11, 12])";
-            if (node.method == "alpha?" && node.args.empty()) {
-                auto cv = freshVar("C");
-                return "let <" + cv + "> =\n    " + recv + "\nin\n"
-                       "call 'erlang':'or'("
-                       "call 'erlang':'and'(call 'erlang':'>='(" + cv + ", 65), call 'erlang':'=<'(" + cv + ", 90)), "
-                       "call 'erlang':'and'(call 'erlang':'>='(" + cv + ", 97), call 'erlang':'=<'(" + cv + ", 122)))";
-            }
+                return "call 'kex_io':'is_space'(" + recv + ")";
+            if (node.method == "alpha?" && node.args.empty())
+                return "call 'kex_io':'is_alpha'(" + recv + ")";
 
             // Extra list methods
             if (node.method == "sum") {
@@ -1031,10 +1029,27 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 }
                 return "call 'lists':'sum'(" + recv + ")";
             }
-            if (node.method == "min")
-                return "call 'lists':'min'(" + recv + ")";
-            if (node.method == "max")
-                return "call 'lists':'max'(" + recv + ")";
+            // min/max return Just(value)/None (matches
+            // src/interpreter/stdlib/list.cxx exactly) — not the raw
+            // value, and NOT a crash on an empty receiver
+            // (lists:min([])/lists:max([]) both raise function_clause —
+            // spec/list_hof.kex).
+            if (node.method == "min") {
+                auto rv = freshVar("Recv");
+                return "let <" + rv + "> =\n    " + recv + "\nin\n"
+                       "case " + rv + " of\n"
+                       "  [] when 'true' -> 'none'\n"
+                       "  _ when 'true' -> {'Just', call 'lists':'min'(" + rv + ")}\n"
+                       "end";
+            }
+            if (node.method == "max") {
+                auto rv = freshVar("Recv");
+                return "let <" + rv + "> =\n    " + recv + "\nin\n"
+                       "case " + rv + " of\n"
+                       "  [] when 'true' -> 'none'\n"
+                       "  _ when 'true' -> {'Just', call 'lists':'max'(" + rv + ")}\n"
+                       "end";
+            }
             if (node.method == "sort")
                 return "call 'lists':'sort'(" + recv + ")";
             if (node.method == "uniq" || node.method == "unique")
@@ -1096,6 +1111,14 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'maps':'put'(" + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ", " + recv + ")";
             if (node.method == "delete" && node.args.size() == 1)
                 return "call 'maps':'remove'(" + firstArg() + ", " + recv + ")";
+            // .at(i) — String/List indexing, raw element (or 'none'), never
+            // Just-wrapped — matches src/interpreter/stdlib/string.cxx's
+            // `at` exactly. No Map ambiguity to resolve here (unlike
+            // `.get`): both String and List already compile to a plain
+            // Erlang list, so kex_io:list_get/2 (built for `.get`'s list
+            // case) works unchanged.
+            if (node.method == "at" && node.args.size() == 1)
+                return "call 'kex_io':'list_get'(" + recv + ", " + firstArg() + ")";
             if (node.method == "get" && node.args.size() == 1) {
                 // `get` doubles as list indexing (`list[i]` desugars to
                 // `list.get(i)` — see parsePostfix) — no static type info in
@@ -1335,8 +1358,124 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "fun (" + pv + ") ->\n    " + body;
             } else {
                 // Kind::Function (&funcName) — produces a 1-arg wrapper.
+                // Plain global Kex builtins (not stdlib-module-namespaced —
+                // see src/interpreter/stdlib/string.cxx/test.cxx) aren't
+                // real top-level functions in the compiled module, unlike a
+                // genuine user-defined `let alpha?(c) = ...` — calling them
+                // via `apply 'name'/1(...)` undefs. A real, reproduced bug
+                // otherwise: `word.filter(&alpha?)` (spec/char_predicates.kex).
+                static const std::unordered_map<std::string, std::pair<std::string,std::string>> builtinFns = {
+                    {"digit?", {"kex_io", "is_digit"}},
+                    {"alpha?", {"kex_io", "is_alpha"}},
+                    {"space?", {"kex_io", "is_space"}},
+                    {"assert", {"kex_io", "assert"}},
+                };
+                auto it = builtinFns.find(node.name);
+                if (it != builtinFns.end())
+                    return "fun (" + pv + ") ->\n    call '" + it->second.first + "':'" + it->second.second + "'(" + pv + ")";
                 return "fun (" + pv + ") ->\n    apply '" + node.name + "'/1(" + pv + ")";
             }
+        }
+
+        // --- CurryExpr: ~(op) / ~fn(args, _, ...) — full or partial
+        // application of an operator or a user-defined top-level function.
+        // Matches Evaluator::eval's CurryExpr handling: flatten every arg
+        // group into a flat slot list (each slot either bound to a real
+        // value or open — a CurryPlaceholder, `_`); if every slot is bound
+        // and there are enough of them, apply immediately; otherwise
+        // produce a fun taking one parameter per open slot, in order.
+        else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
+            struct Slot { bool isOpen; std::string valueExpr; };
+            std::vector<Slot> slots;
+            for (const auto& group : node.argGroups)
+                for (const auto& argExpr : group) {
+                    if (std::holds_alternative<ast::CurryPlaceholder>(argExpr->kind))
+                        slots.push_back({true, ""});
+                    else
+                        slots.push_back({false, emitExpr(argExpr)});
+                }
+
+            int arity = -1;
+            if (node.isOperator) {
+                arity = 2;
+            } else {
+                auto fit = m_topLevelFns.find(node.name);
+                if (fit != m_topLevelFns.end()) arity = fit->second;
+            }
+
+            int openCount = 0;
+            for (const auto& s : slots) if (s.isOpen) openCount++;
+            bool fullyApplied = openCount == 0 &&
+                                (arity >= 0 ? static_cast<int>(slots.size()) >= arity : !slots.empty());
+
+            // Operator name -> Erlang BIF operator symbol (same set
+            // BinaryOp emission supports — see its own && / || / + special
+            // cases above for why those three aren't in this table: +
+            // dispatches through kex_io:add for string-concat/Char+String
+            // polymorphism, and &&/|| need short-circuit, neither of which
+            // makes sense for a curried 2-arg function value here — a
+            // curried `~(&&)` would need its own short-circuit-preserving
+            // closure, not attempted here since it's not exercised by any
+            // known spec.
+            static const std::unordered_map<std::string, std::string> opBif = {
+                {"-", "-"}, {"*", "*"}, {"/", "/"}, {"%", "rem"},
+                {"==", "=:="}, {"!=", "=/="}, {"<", "<"}, {"<=", "=<"},
+                {">", ">"}, {">=", ">="},
+            };
+            auto emitCall = [&](const std::vector<std::string>& args) -> std::string {
+                if (node.isOperator && args.size() >= 2) {
+                    if (node.name == "+")
+                        return "call 'kex_io':'add'(" + args[0] + ", " + args[1] + ")";
+                    // / is polymorphic (int/int -> integer division) — see
+                    // BinaryOp's own Slash handling above for the full
+                    // rationale; kex_io:divide/2 shares that exact logic so
+                    // it isn't duplicated here. A real, reproduced bug
+                    // otherwise: `~(/)(_, 2)` then `div2(10)` returned
+                    // "5.0" instead of "5" (spec/currying.kex).
+                    if (node.name == "/")
+                        return "call 'kex_io':'divide'(" + args[0] + ", " + args[1] + ")";
+                    auto oit = opBif.find(node.name);
+                    if (oit != opBif.end())
+                        return "call 'erlang':'" + oit->second + "'(" + args[0] + ", " + args[1] + ")";
+                }
+                std::string argList;
+                for (size_t i = 0; i < args.size(); i++) { if (i) argList += ", "; argList += args[i]; }
+                return "apply '" + node.name + "'/" + std::to_string(args.size()) + "(" + argList + ")";
+            };
+
+            if (fullyApplied) {
+                std::vector<std::string> args;
+                for (const auto& s : slots) args.push_back(s.valueExpr);
+                return emitCall(args);
+            }
+
+            // Partial application: one fresh param per explicit open slot
+            // (placeholder `_`), PLUS — matching Evaluator::eval's
+            // CurryExpr lambda exactly — extra trailing params for any
+            // args beyond what's written at all, when arity is known (e.g.
+            // `~add(1)` on a 2-arity `add`: no placeholders, but only 1 of
+            // 2 args given, so the result still needs to accept exactly
+            // one more argument, appended after the explicit slots — not
+            // just `openCount` params, which would wrongly be 0 here). A
+            // real, reproduced bug otherwise: `~add(1)` produced a 0-arity
+            // fun, so calling `inc(5)` was an arity mismatch
+            // (spec/currying.kex).
+            int trailingCount = (arity >= 0) ? std::max(0, arity - static_cast<int>(slots.size())) : 0;
+            std::vector<std::string> params;
+            for (const auto& s : slots) if (s.isOpen) params.push_back(freshVar("P"));
+            std::vector<std::string> trailingParams;
+            for (int i = 0; i < trailingCount; i++) trailingParams.push_back(freshVar("T"));
+            std::string paramList;
+            for (size_t i = 0; i < params.size(); i++) { if (i) paramList += ", "; paramList += params[i]; }
+            for (size_t i = 0; i < trailingParams.size(); i++) {
+                if (!paramList.empty() || i > 0) paramList += ", ";
+                paramList += trailingParams[i];
+            }
+            std::vector<std::string> finalArgs;
+            size_t pIdx = 0;
+            for (const auto& s : slots) finalArgs.push_back(s.isOpen ? params[pIdx++] : s.valueExpr);
+            for (const auto& t : trailingParams) finalArgs.push_back(t);
+            return "fun (" + paramList + ") ->\n    " + emitCall(finalArgs);
         }
 
         // --- Spawn: bind body as a 0-arity fun, then call erlang:spawn/1.
