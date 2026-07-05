@@ -2,6 +2,8 @@
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "codegen/core_erlang.hxx"
+#include "ir/lower.hxx"
+#include "ir/emit_core.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
 #include "interpreter/evaluator.hxx"
@@ -655,6 +657,9 @@ int main(int argc, char *argv[])
         {"help", no_argument, nullptr, 'h'},
         {"version", no_argument, nullptr, 'v'},
         {"no-colors", no_argument, nullptr, 'N'},
+        // Opt into the new AST→IR→Core Erlang pipeline (strangler; default
+        // stays the string emitter). See src/ir/.
+        {"ir", no_argument, nullptr, 1000},
         {nullptr, 0, nullptr, 0}};
 
     std::string mode = "run";
@@ -668,10 +673,14 @@ int main(int argc, char *argv[])
     int opt;
 
     bool compileRun = false;
+    bool useIr = false;
     while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions, nullptr)) != -1)
     {
         switch (opt)
         {
+        case 1000:
+            useIr = true;
+            break;
         case 'r':
             mode = "run";
             break;
@@ -1611,8 +1620,36 @@ int main(int argc, char *argv[])
             // pure top-level `type`/`make`/`let` declarations plus bare
             // `comps.each { ... }` calls with no `main` block at all, and
             // runs identically under both backends once this guard is gone.
-            kex::codegen::CoreErlangEmitter emitter;
-            auto result = emitter.emitProgram(program, stem);
+            // Strangler: `--ir` routes through the new AST→IR→Core Erlang
+            // pipeline (src/ir/); default stays the string emitter. Both
+            // produce the same {source, moduleName, mainArity} shape, so the
+            // downstream erlc/erl path is identical. A LowerError means the
+            // IR path hasn't ported that construct yet — reported cleanly,
+            // never falling back (so `--ir` gaps are visible, not masked).
+            kex::codegen::CoreErlangEmitter::EmitResult result;
+            if (useIr)
+            {
+                try
+                {
+                    auto irMod = kex::ir::lowerProgram(program, stem);
+                    auto irRes = kex::ir::emitCore(irMod);
+                    result.source = irRes.source;
+                    result.moduleName = irRes.moduleName;
+                    result.mainArity = irRes.mainArity;
+                }
+                catch (const kex::ir::LowerError &e)
+                {
+                    std::cerr << "error: " << e.what() << "\n";
+                    if (compileRun && !outputDirExplicit && !tempDir.empty())
+                        std::filesystem::remove_all(tempDir);
+                    return 1;
+                }
+            }
+            else
+            {
+                kex::codegen::CoreErlangEmitter emitter;
+                result = emitter.emitProgram(program, stem);
+            }
 
             std::string outPath = outputDir + "/" + result.moduleName + ".core";
             std::ofstream outFile(outPath);

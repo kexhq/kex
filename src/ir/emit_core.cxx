@@ -1,0 +1,157 @@
+#include "emit_core.hxx"
+#include <sstream>
+
+namespace kex::ir {
+
+namespace {
+
+// Kex name / IR fresh name → Core Erlang variable. Fresh names already start
+// with '_' (valid); Kex names get their first letter uppercased.
+auto erlVar(const std::string& s) -> std::string {
+    if (s.empty()) return "_V";
+    if (s[0] == '_') return s;
+    std::string out;
+    out += static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    out += s.substr(1);
+    return out;
+}
+
+auto erlString(const std::string& s) -> std::string {
+    std::string out = "\"";
+    for (char c : s) {
+        if (c == '"') out += "\\\"";
+        else if (c == '\\') out += "\\\\";
+        else if (c == '\n') out += "\\n";
+        else if (c == '\t') out += "\\t";
+        else out += c;
+    }
+    return out + "\"";
+}
+
+struct Emitter {
+    auto emitLit(const Lit& l) -> std::string {
+        switch (l.kind) {
+            case LitKind::Int:    return l.text;
+            case LitKind::Float:  return l.text;
+            case LitKind::Char:   return std::to_string(static_cast<int>(l.text[0]));
+            case LitKind::String: return erlString(l.text);
+            case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
+            case LitKind::None:   return "'none'";
+            case LitKind::Atom:   return "'" + l.text + "'";
+        }
+        return "'undefined'";
+    }
+
+    auto emitIntrinsic(const Intrinsic& in) -> std::string {
+        auto a = [&](int i) { return emit(in.args[i]); };
+        switch (in.op) {
+            // + is polymorphic (numeric add / string concat) at runtime.
+            case Op::Add:    return "call 'kex_io':'add'(" + a(0) + ", " + a(1) + ")";
+            case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
+            case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
+            case Op::Div:    return "call 'kex_io':'divide'(" + a(0) + ", " + a(1) + ")";
+            case Op::Mod:    return "call 'erlang':'rem'(" + a(0) + ", " + a(1) + ")";
+            case Op::Neg:    return "call 'erlang':'-'(" + a(0) + ")";
+            case Op::Eq:     return "call 'erlang':'=:='(" + a(0) + ", " + a(1) + ")";
+            case Op::Neq:    return "call 'erlang':'=/='(" + a(0) + ", " + a(1) + ")";
+            case Op::Lt:     return "call 'erlang':'<'(" + a(0) + ", " + a(1) + ")";
+            case Op::Gt:     return "call 'erlang':'>'(" + a(0) + ", " + a(1) + ")";
+            case Op::Lte:    return "call 'erlang':'=<'(" + a(0) + ", " + a(1) + ")";
+            case Op::Gte:    return "call 'erlang':'>='(" + a(0) + ", " + a(1) + ")";
+            case Op::Not:    return "call 'erlang':'not'(" + a(0) + ")";
+            case Op::Concat: return "call 'erlang':'++'(" + a(0) + ", " + a(1) + ")";
+            case Op::And:    return "case " + a(0) + " of 'true' when 'true' -> " + a(1) +
+                                    " 'false' when 'true' -> 'false' end";
+            case Op::Or:     return "case " + a(0) + " of 'true' when 'true' -> 'true'" +
+                                    " 'false' when 'true' -> " + a(1) + " end";
+        }
+        return "'undefined'";
+    }
+
+    auto emitCall(const Call& c) -> std::string {
+        std::string args;
+        for (size_t i = 0; i < c.args.size(); i++) {
+            if (i) args += ", ";
+            args += emit(c.args[i]);
+        }
+        if (c.module.empty())
+            return "apply '" + c.name + "'/" + std::to_string(c.arity) + "(" + args + ")";
+        return "call '" + c.module + "':'" + c.name + "'(" + args + ")";
+    }
+
+    auto emit(const ExprPtr& e) -> std::string {
+        return std::visit([&](const auto& n) -> std::string {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, Lit>) {
+                return emitLit(n);
+            } else if constexpr (std::is_same_v<T, Var>) {
+                return erlVar(n.name);
+            } else if constexpr (std::is_same_v<T, Intrinsic>) {
+                return emitIntrinsic(n);
+            } else if constexpr (std::is_same_v<T, Call>) {
+                return emitCall(n);
+            } else if constexpr (std::is_same_v<T, Let>) {
+                return "let <" + erlVar(n.name) + "> =\n    " + emit(n.value) +
+                       "\nin\n" + emit(n.body);
+            } else if constexpr (std::is_same_v<T, Return>) {
+                // Skeleton: no early-return lowering pass yet, so a Return in
+                // tail position is just its value.
+                return emit(n.value);
+            } else {
+                return "call 'erlang':'error'('ir_unimplemented')";
+            }
+        }, e->node);
+    }
+
+    auto emitFunction(const FunDef& fn, std::vector<std::pair<std::string,int>>& exports)
+        -> std::string {
+        exports.push_back({fn.name, fn.arity});
+        // Skeleton: single clause, simple var params → direct fun.
+        const auto& cl = fn.clauses[0];
+        std::string head = "(";
+        for (size_t i = 0; i < cl.params.size(); i++) {
+            if (i) head += ", ";
+            head += erlVar(cl.params[i]->name);
+        }
+        head += ")";
+        std::ostringstream out;
+        out << "'" << fn.name << "'/" << fn.arity << " =\n";
+        out << "  fun " << head << " ->\n    " << emit(cl.body) << "\n";
+        return out.str();
+    }
+};
+
+} // namespace
+
+auto emitCore(const Module& mod) -> EmitResult {
+    Emitter em;
+    std::vector<std::pair<std::string,int>> exports;
+    std::vector<std::string> fns;
+    for (const auto& fn : mod.functions)
+        fns.push_back(em.emitFunction(fn, exports));
+
+    exports.push_back({"module_info", 0});
+    exports.push_back({"module_info", 1});
+
+    std::ostringstream out;
+    out << "module '" << mod.name << "' [";
+    for (size_t i = 0; i < exports.size(); i++) {
+        if (i) out << ", ";
+        out << "'" << exports[i].first << "'/" << exports[i].second;
+    }
+    out << "]\n  attributes []\n\n";
+    for (const auto& f : fns) out << f << "\n";
+    out << "'module_info'/0 =\n  fun () ->\n    call 'erlang':'get_module_info'('"
+        << mod.name << "')\n";
+    out << "'module_info'/1 =\n  fun (_Key) ->\n    call 'erlang':'get_module_info'('"
+        << mod.name << "', _Key)\n";
+    out << "end\n";
+
+    EmitResult r;
+    r.source = out.str();
+    r.moduleName = mod.name;
+    r.mainArity = mod.mainArity;
+    return r;
+}
+
+} // namespace kex::ir

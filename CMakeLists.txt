@@ -71,6 +71,8 @@ endif()
 
 add_library(kex_lib
     src/codegen/core_erlang.cxx
+    src/ir/lower.cxx
+    src/ir/emit_core.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
