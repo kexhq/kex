@@ -45,6 +45,21 @@ struct Lowering {
     // (element 1). Mirrors the string emitter's collision handling.
     std::unordered_map<std::string, std::vector<std::string>> methodOwners;
     std::unordered_set<std::string> collidingMethods;
+    // Operator symbols overloaded by a make block (`make T do let +(o) ...`).
+    // The corresponding binary-op Intrinsic then dispatches at runtime: a
+    // tuple (record) receiver → the user's `'+'/2`, otherwise the builtin.
+    std::unordered_set<std::string> overloadedOps;
+
+    static auto opSymbol(TokenType t) -> std::string {
+        switch (t) {
+            case TokenType::Plus: return "+";     case TokenType::Minus: return "-";
+            case TokenType::Star: return "*";     case TokenType::Slash: return "/";
+            case TokenType::Percent: return "%";  case TokenType::EqEq: return "==";
+            case TokenType::NotEq: return "!=";   case TokenType::LessThan: return "<";
+            case TokenType::GreaterThan: return ">"; case TokenType::LessEq: return "<=";
+            case TokenType::GreaterEq: return ">="; default: return "";
+        }
+    }
 
     static auto simpleTypeName(const ast::TypeExprPtr& t) -> std::string {
         if (t) if (auto* tn = std::get_if<ast::TypeName>(&t->kind))
@@ -65,6 +80,17 @@ struct Lowering {
     auto currentName(const std::string& kexName) -> std::string {
         auto it = subst.find(kexName);
         return it != subst.end() ? it->second : kexName;
+    }
+
+    // Clone an ATOMIC expr (Var/Lit) — used when an operand must appear in
+    // several positions (e.g. operator-overload dispatch). Only atomic nodes
+    // are ever cloned, so this stays trivial.
+    auto clone(const ExprPtr& e) -> ExprPtr {
+        if (auto* v = std::get_if<Var>(&e->node)) return var(v->name);
+        if (auto* l = std::get_if<Lit>(&e->node)) {
+            auto out = std::make_unique<Expr>(); out->node = *l; return out;
+        }
+        throw LowerError("IR lower: internal — clone of non-atomic expr");
     }
 
     // Wrap `body` in the accumulated let-bindings, evaluated left-to-right
@@ -159,6 +185,23 @@ struct Lowering {
                 std::vector<Binding> binds;
                 auto l = atomize(n.left, binds);
                 auto r = atomize(n.right, binds);
+                // Operator overloading: if this operator is defined by a make
+                // block, dispatch on the LHS at runtime — a tuple (record)
+                // uses the user's `'op'/2`, anything else the builtin op
+                // (spec/operator_overloading.kex).
+                std::string sym = opSymbol(n.op);
+                if (!sym.empty() && overloadedOps.count(sym)) {
+                    auto builtin = std::make_unique<Expr>();
+                    std::vector<ExprPtr> ba; ba.push_back(clone(l)); ba.push_back(clone(r));
+                    builtin->node = Intrinsic{opOf(n.op), std::move(ba)};
+                    std::vector<ExprPtr> ua; ua.push_back(clone(l)); ua.push_back(clone(r));
+                    auto userCall = std::make_unique<Expr>();
+                    userCall->node = Call{"", sym, 2, std::move(ua), false};
+                    auto dispatch = matchBool(
+                        callE("erlang", "is_tuple", 1, one(clone(l))),
+                        std::move(userCall), std::move(builtin));
+                    return wrapLets(binds, std::move(dispatch));
+                }
                 auto ex = std::make_unique<Expr>();
                 std::vector<ExprPtr> args;
                 args.push_back(std::move(l));
@@ -207,6 +250,11 @@ struct Lowering {
                 return lowerIf(n);
             } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
                 return lowerMatch(n);
+            } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
+                // `expr if cond` → cond ? expr : ok
+                return matchBool(lower(n.condition), lower(n.expr), lit(LitKind::Atom, "ok"));
+            } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+                return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Return{lower(n.value)};
@@ -658,22 +706,35 @@ struct Lowering {
     // Lower one make-block method to a FunDef. First cut: implicit-`this`
     // methods with named/simple params (the common `@field`/`this.method`
     // shape). Static constructors and receiver-pattern methods are deferred.
-    auto lowerMakeMethod(const ast::FunctionDef& fd, const std::string& typeName) -> FunDef {
-        bool isStaticCtor = !fd.name.empty()
-                          && std::isupper(static_cast<unsigned char>(fd.name[0]));
+    // Lower a group of same-name make-block methods (multi-clause) for one
+    // type. A method whose first param is an unnamed pattern (`@Less`,
+    // `{input, pos}`, `@[x|_]`) matches the RECEIVER directly — no implicit
+    // `this`. Otherwise `this` is prepended.
+    auto lowerMakeGroup(const std::vector<const ast::FunctionDef*>& group,
+                        const std::string& typeName) -> FunDef {
+        const auto& first = *group[0];
+        bool isStaticCtor = !first.name.empty()
+                          && std::isupper(static_cast<unsigned char>(first.name[0]));
         if (isStaticCtor)
-            throw LowerError("IR lower: static constructor '" + fd.name + "' not yet ported");
-        if (!fd.clauses.empty() && !fd.clauses[0].params.empty()) {
-            const auto& p0 = fd.clauses[0].params[0];
+            throw LowerError("IR lower: static constructor '" + first.name + "' not yet ported");
+        // A receiver pattern is specifically the `@` sigil (ThisPattern), a
+        // record destructure (RecordPattern), or a range (RangePattern) —
+        // NOT any pattern. A bare type-name param like `to(String)` is a
+        // ConstructorPattern *value* argument, and such a method still uses
+        // its implicit `this` (spec/type_dispatch.kex's `to(String)` body is
+        // `"(${@x}, ${@y})"`).
+        bool receiverPattern = false;
+        if (!first.clauses.empty() && !first.clauses[0].params.empty()) {
+            const auto& p0 = first.clauses[0].params[0];
             if (!p0.name && p0.pattern)
-                throw LowerError("IR lower: receiver-pattern method '" + fd.name
-                                 + "' not yet ported");
+                receiverPattern =
+                    std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
+                    std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
+                    std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind);
         }
-        auto def = lowerFunction(fd, "this");
-        // Colliding name across types → emit under a mangled name; the
-        // dispatcher (emitted separately) keeps the bare name.
-        if (collidingMethods.count(fd.name) && !typeName.empty())
-            def.name = fd.name + "__" + typeName;
+        auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
+        if (collidingMethods.count(first.name) && !typeName.empty())
+            def.name = first.name + "__" + typeName;
         return def;
     }
 
@@ -734,6 +795,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                 if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
                     if (*mfd) {
                         definedFns.insert((*mfd)->name);
+                        // Operator-symbol method name → an overloaded operator.
+                        const std::string& mn = (*mfd)->name;
+                        if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
+                            L.overloadedOps.insert(mn);
                         if (!typeName.empty()) {
                             auto& owners = L.methodOwners[(*mfd)->name];
                             if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
@@ -777,14 +842,21 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                 if (!node->implements.empty())
                     throw LowerError("IR lower: make ... implement (traits) not yet ported");
                 std::string typeName = Lowering::simpleTypeName(node->target);
+                std::vector<const ast::FunctionDef*> mgrp;
+                auto flushM = [&]{ if (!mgrp.empty()) { mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName)); mgrp.clear(); } };
                 for (const auto& bi : node->body) {
                     if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
-                        if (*mfd) mod.functions.push_back(L.lowerMakeMethod(**mfd, typeName));
+                        if (*mfd) {
+                            if (!mgrp.empty() && mgrp.front()->name != (*mfd)->name) flushM();
+                            mgrp.push_back(mfd->get());
+                        }
                     } else {
+                        flushM();
                         throw LowerError("IR lower: make-block item (visibility/annotation) "
                                          "not yet ported");
                     }
                 }
+                flushM();
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 if (node && (node->isExplicitMain || !node->synthetic)) {
                     if (!node->params.empty())
@@ -799,6 +871,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                     mod.functions.push_back(std::move(def));
                     mod.hasMain = true;
                     mod.mainArity = 0;
+                }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
+                                 std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                // Types/annotations are erased — nothing to emit.
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                // A nested module flattens its functions into this BEAM module
+                // (Kex modules are organizational namespaces — see
+                // beam-codegen-plan.md). First cut: direct FunctionDefs only.
+                if (node) {
+                    std::vector<const ast::FunctionDef*> grp;
+                    auto flush = [&]{ if (!grp.empty()) { mod.functions.push_back(L.lowerFunctionGroup(grp)); grp.clear(); } };
+                    for (const auto& bi : node->body) {
+                        if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                            if (*mfd) {
+                                if (!grp.empty() && grp.front()->name != (*mfd)->name) flush();
+                                grp.push_back(mfd->get());
+                            }
+                        } else { flush(); throw LowerError("IR lower: nested module non-function item not yet ported"); }
+                    }
+                    flush();
                 }
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
