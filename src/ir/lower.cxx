@@ -53,6 +53,14 @@ struct Lowering {
     // Top-level `let name = expr` bindings become 0-arity functions; a bare
     // reference to one compiles to `apply 'name'/0()`, not a variable.
     std::unordered_set<std::string> topLevelConstants;
+    // Top-level free function → its ordered parameter names ("" for an
+    // unnamed/pattern param). Lets a call with named args reorder them into
+    // positional slots.
+    std::unordered_map<std::string, std::vector<std::string>> fnParamNames;
+    // Names that are real functions in this module (top-level + make methods).
+    // A call to a name NOT in here is an indirect apply through a variable
+    // holding a fun (e.g. a `block` parameter).
+    std::unordered_set<std::string> knownFns;
 
     static auto opSymbol(TokenType t) -> std::string {
         switch (t) {
@@ -321,17 +329,63 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
-        if (!n.namedArgs.empty() || n.block)
-            throw LowerError("IR lower: named args / block calls not yet ported");
+        // Named args → reorder into the callee's positional slots by param
+        // name; then positional args (and a trailing block) fill remaining
+        // slots in order, leftovers default to None. Mirrors the string
+        // emitter / Evaluator::callFunction (spec/optional_parens_do.kex).
+        if (!n.namedArgs.empty()) {
+            auto it = fnParamNames.find(n.name);
+            if (it == fnParamNames.end())
+                throw LowerError("IR lower: named args to unknown function " + n.name);
+            const auto& pnames = it->second;
+            std::vector<Binding> binds;
+            std::vector<ExprPtr> slots(pnames.size());
+            for (const auto& [an, av] : n.namedArgs)
+                for (size_t i = 0; i < pnames.size(); i++)
+                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+            std::vector<ExprPtr> positional;
+            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+            if (n.block) positional.push_back(atomize(*n.block, binds));
+            size_t next = 0;
+            for (auto& p : positional) {
+                while (next < slots.size() && slots[next]) next++;
+                if (next >= slots.size()) break;
+                slots[next] = std::move(p);
+            }
+            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+            auto ex = std::make_unique<Expr>();
+            ex->node = Call{"", n.name, (int)slots.size(), std::move(slots), false};
+            return wrapLets(binds, std::move(ex));
+        }
         std::vector<Binding> binds;
+        // describe/it: the testing DSL → kex_test, block as a 0-arg fun.
+        if ((n.name == "describe" || n.name == "it") && n.block && n.args.size() == 1) {
+            auto name = atomize(n.args[0], binds);
+            auto fn = atomize(*n.block, binds);
+            return wrapLets(binds, callE("kex_test", n.name, 2, two(std::move(name), std::move(fn))));
+        }
+        // assert(cond[, msg]) — a plain global builtin, not a local function.
+        if (n.name == "assert" && !n.args.empty() && !n.block) {
+            std::vector<ExprPtr> as;
+            for (const auto& a : n.args) as.push_back(atomize(a, binds));
+            int ar = static_cast<int>(as.size());
+            return wrapLets(binds, callE("kex_io", "assert", ar, std::move(as)));
+        }
         std::vector<ExprPtr> args;
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
+        // A trailing do-block is passed as the function's last argument.
+        if (n.block) args.push_back(atomize(*n.block, binds));
         auto ex = std::make_unique<Expr>();
+        int arity = static_cast<int>(args.size());
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0])))
             ex->node = Construct{n.name, std::move(args)};
+        else if (knownFns.count(n.name))
+            ex->node = Call{"", n.name, arity, std::move(args), false};
         else
-            ex->node = Call{"", n.name, static_cast<int>(n.args.size()), std::move(args), false};
+            // Not a module function → a variable holding a fun (e.g. a `block`
+            // parameter): apply it indirectly.
+            ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
         return wrapLets(binds, std::move(ex));
     }
 
@@ -652,6 +706,15 @@ struct Lowering {
         auto e = std::make_unique<Expr>();
         e->node = Intrinsic{op, std::move(args)};
         return e;
+    }
+
+    // Run `body`, then kex_test:maybe_print_summary() (which prints the
+    // describe/it pass/fail tally, or nothing if no tests ran), returning
+    // body's value. Wraps every main.
+    auto withTestSummary(ExprPtr body) -> ExprPtr {
+        std::string r = fresh("R");
+        return makeLet(r, std::move(body),
+            makeLet(fresh("Sum"), callE("kex_test", "maybe_print_summary", 0, {}), var(r)));
     }
 
     // ---- Constructors -----------------------------------------------------
@@ -1222,7 +1285,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
                                 L.topLevelConstants.insert(vp->name);
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fd) definedFns.insert((*fd)->name);
+            if (*fd) {
+                definedFns.insert((*fd)->name);
+                if (!(*fd)->clauses.empty()) {
+                    std::vector<std::string> pnames;
+                    for (const auto& p : (*fd)->clauses[0].params)
+                        pnames.push_back(p.name ? *p.name : "");
+                    L.fnParamNames[(*fd)->name] = std::move(pnames);
+                }
+            }
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (!*md) continue;
             std::string typeName = Lowering::simpleTypeName((*md)->target);
@@ -1246,6 +1317,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
         if (owners.size() > 1) L.collidingMethods.insert(name);
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
+    L.knownFns = definedFns;
     L.localMethods = definedFns;
     for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
 
@@ -1329,7 +1401,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                         p->name = node->params[0].name ? *node->params[0].name : "_args";
                         fc.params.push_back(std::move(p));
                     }
-                    fc.body = std::move(body);
+                    fc.body = L.withTestSummary(std::move(body));
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
                     mod.hasMain = true;
@@ -1379,7 +1451,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
             let->node = Let{L.fresh("S"), std::move(val), std::move(rest)};
             return let;
         };
-        fc.body = bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0);
+        fc.body = L.withTestSummary(bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0));
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
         mod.hasMain = true; mod.mainArity = 0;
