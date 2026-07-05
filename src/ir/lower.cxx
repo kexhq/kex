@@ -266,6 +266,35 @@ struct Lowering {
                 return matchBool(lower(n.condition), lower(n.expr), lit(LitKind::Atom, "ok"));
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
+            } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
+                // `&.method` / `&func` → fun(_sx) -> _sx.method(). Reusing the
+                // UFCS method path means `&digit?` (a builtin) and `&myFn` (a
+                // local) both resolve correctly with no special-casing.
+                if (n.kind == ast::ShorthandLambda::Kind::MethodWithArgs && !n.args.empty())
+                    throw LowerError("IR lower: &.method(args) not yet ported");
+                std::string sx = fresh("Sx");
+                auto recvAst = std::make_unique<ast::Expr>();
+                recvAst->kind = ast::Identifier{sx};
+                ast::MethodCall mc;
+                mc.receiver = std::move(recvAst);
+                mc.method = n.name;
+                auto snap = subst; subst.erase(sx);
+                auto body = lowerMethodCall(mc);
+                subst = snap;
+                Lambda lam; lam.params = {sx}; lam.body = std::move(body);
+                auto ex = std::make_unique<Expr>(); ex->node = std::move(lam); return ex;
+            } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
+                if (n.entries.empty()) return callE("maps", "new", 0, {});
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> pairs;
+                for (const auto& ent : n.entries) {
+                    auto t = std::make_unique<Expr>();
+                    t->node = MakeTuple{two(atomize(ent.key, binds), atomize(ent.value, binds))};
+                    pairs.push_back(std::move(t));
+                }
+                auto lst = std::make_unique<Expr>();
+                lst->node = MakeList{std::move(pairs), std::nullopt};
+                return wrapLets(binds, callE("maps", "from_list", 1, one(std::move(lst))));
             } else if constexpr (std::is_same_v<T, ast::Lambda>) {
                 // Params shadow outer bindings: resolve to themselves inside.
                 auto snap = subst;
@@ -310,55 +339,163 @@ struct Lowering {
     // handful of forms an early target program needs; everything else errors
     // (to be widened as constructs are ported from core_erlang.cxx).
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
+        // A mutating `!` call rebinds its receiver — that's an assignment, not
+        // a plain method call, and belongs to the (deferred) mutation IR
+        // pass. Erroring here keeps the invariant that anything the IR path
+        // compiles is CORRECT (spec/mutating_calls.kex).
+        if (n.mutating)
+            throw LowerError("IR lower: mutating '!' call not yet ported");
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
         if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            if (uid->name == "IO") {
-                std::string fn = n.method == "printLine" ? "print_line"
-                               : n.method == "print"     ? "print"
-                               : throw LowerError("IR lower: IO." + n.method + " not yet ported");
+            auto nsCall = [&](const char* mod, const char* fn) {
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{"kex_io", fn, static_cast<int>(args.size()), std::move(args), false};
+                ex->node = Call{mod, fn, static_cast<int>(args.size()), std::move(args), false};
                 return wrapLets(binds, std::move(ex));
+            };
+            if (uid->name == "IO") {
+                if (n.method == "printLine") return nsCall("kex_io", "print_line");
+                if (n.method == "print")     return nsCall("kex_io", "print");
+                if (n.method == "printError") return nsCall("kex_io", "print_error");
+                throw LowerError("IR lower: IO." + n.method + " not yet ported");
+            }
+            if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_io", "integer_parse");
+            if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_io", "float_parse");
+            if (uid->name == "Math") {
+                if (n.method == "sqrt") return nsCall("math", "sqrt");
+                if (n.method == "pow" || n.method == "power") return nsCall("math", "pow");
+                if (n.method == "sin") return nsCall("math", "sin");
+                if (n.method == "cos") return nsCall("math", "cos");
+                if (n.method == "log") return nsCall("kex_io", "math_log");
+                if (n.method == "abs") return nsCall("erlang", "abs");
+                if (n.method == "floor") return nsCall("erlang", "floor");
+                if (n.method == "ceil") return nsCall("erlang", "ceil");
             }
             throw LowerError("IR lower: namespace call " + uid->name + "." + n.method
                              + " not yet ported");
         }
-        // UFCS method on a value receiver. Pure builtins (no block, no
-        // mutation) can build compound IR directly — the emitter prints
-        // nested calls fine, so strict ANF atomization isn't required here.
-        auto recv = lower(n.receiver);
+        // UFCS method on a value receiver. Atomize the receiver once so
+        // methods that use it several times (min/get/count/…) don't
+        // re-evaluate it; `ret` wraps the result in that binding.
+        std::vector<Binding> rb;
+        auto rv = atomize_ir(lower(n.receiver), rb);
         auto& m = n.method;
+        auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
+        auto arg0 = [&]() { return lower(n.args[0]); };
 
-        // No-arg builtins with a single-Call runtime target (receiver-first).
-        struct One { const char* method; const char* mod; const char* fn; };
-        static const One oneCall[] = {
-            {"product", "kex_io", "list_product"},
-            {"sum",     "lists",  "sum"},
-            {"reverse", "lists",  "reverse"},
-            {"abs",     "erlang", "abs"},
-            {"sqrt",    "math",   "sqrt"},
+        // `case rv of [] -> empty; _ -> nonEmpty end` (Just/None-on-empty).
+        auto onEmpty = [&](ExprPtr empty, ExprPtr nonEmpty) -> ExprPtr {
+            Match mm; mm.subjects.push_back(clone(rv));
+            MatchClause e; auto ep = std::make_unique<Pattern>();
+            ep->kind = PatKind::List; e.patterns.push_back(std::move(ep)); e.body = std::move(empty);
+            MatchClause ne; auto np = std::make_unique<Pattern>();
+            np->kind = PatKind::Wild; ne.patterns.push_back(std::move(np)); ne.body = std::move(nonEmpty);
+            mm.clauses.push_back(std::move(e)); mm.clauses.push_back(std::move(ne));
+            auto x = std::make_unique<Expr>(); x->node = std::move(mm); return x;
         };
-        for (const auto& b : oneCall)
-            if (m == b.method && n.args.empty() && !n.block)
-                return callE(b.mod, b.fn, 1, one(std::move(recv)));
+        auto justOf = [&](ExprPtr v) {
+            std::vector<ExprPtr> a; a.push_back(std::move(v));
+            auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
+        };
 
-        // modulo(x) → rem(recv, x)
+        // No-/one-arg builtins with a single runtime call (receiver first).
+        struct One { const char* method; const char* mod; const char* fn; int nargs; };
+        static const One calls[] = {
+            {"product","kex_io","list_product",0}, {"sum","lists","sum",0},
+            {"reverse","lists","reverse",0}, {"sort","lists","sort",0},
+            {"uniq","lists","usort",0}, {"unique","lists","usort",0},
+            {"abs","erlang","abs",0}, {"sqrt","math","sqrt",0},
+            {"upperCase","string","to_upper",0}, {"upcase","string","to_upper",0},
+            {"lowerCase","string","to_lower",0}, {"downcase","string","to_lower",0},
+            {"trim","string","trim",0}, {"at","kex_io","list_get",1},
+            {"digit?","kex_io","is_digit",0}, {"alpha?","kex_io","is_alpha",0},
+            {"space?","kex_io","is_space",0},
+        };
+        for (const auto& b : calls)
+            if (m == b.method && (int)n.args.size() == b.nargs && !n.block) {
+                std::vector<ExprPtr> a; a.push_back(clone(rv));
+                if (b.nargs == 1) a.push_back(arg0());
+                return ret(callE(b.mod, b.fn, b.nargs + 1, std::move(a)));
+            }
+
         if (m == "modulo" && n.args.size() == 1)
-            return callE("erlang", "rem", 2, two(std::move(recv), lower(n.args[0])));
+            return ret(callE("erlang","rem",2,two(clone(rv), arg0())));
         if (m == "even?" && n.args.empty())
-            return intrin(Op::Eq, two(callE("erlang","rem",2,two(std::move(recv),litInt(2))), litInt(0)));
+            return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(clone(rv),litInt(2))), litInt(0))));
         if (m == "odd?" && n.args.empty())
-            return intrin(Op::Neq, two(callE("erlang","rem",2,two(std::move(recv),litInt(2))), litInt(0)));
-        // Result predicates: tag inspection.
+            return ret(intrin(Op::Neq, two(callE("erlang","rem",2,two(clone(rv),litInt(2))), litInt(0))));
         if (m == "ok?" && n.args.empty())
-            return intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),std::move(recv))),
-                                      lit(LitKind::Atom, "Ok")));
+            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),clone(rv))), lit(LitKind::Atom,"Ok"))));
         if (m == "error?" && n.args.empty())
-            return intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),std::move(recv))),
-                                      lit(LitKind::Atom, "Error")));
+            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),clone(rv))), lit(LitKind::Atom,"Error"))));
+        if (m == "push" && n.args.size() == 1) {
+            auto lst = std::make_unique<Expr>();
+            lst->node = MakeList{one(arg0()), std::nullopt};
+            return ret(callE("erlang","++",2,two(clone(rv), std::move(lst))));
+        }
+        if (m == "in?" && n.args.size() == 1)
+            return ret(callE("lists","member",2,two(clone(rv), arg0())));
+        if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block)
+            return ret(callE("erlang","length",1,one(clone(rv))));
+        if (m == "min" && n.args.empty())
+            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","min",1,one(clone(rv))))));
+        if (m == "max" && n.args.empty())
+            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","max",1,one(clone(rv))))));
+        if (m == "first" && n.args.empty() && !localMethods.count("first"))
+            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(clone(rv))))));
+        if (m == "last" && n.args.empty() && !localMethods.count("last"))
+            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","last",1,one(clone(rv))))));
+        // .to(Type) numeric/string conversion (unless a user `to` method).
+        if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
+            std::string ty;
+            if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
+            if (ty == "String") return ret(callE("kex_io","to_string",1,one(clone(rv))));
+            if (ty == "Int" || ty == "Integer") return ret(callE("kex_io","to_integer",1,one(clone(rv))));
+            if (ty == "Float") return ret(callE("kex_io","to_float",1,one(clone(rv))));
+        }
+        // empty?: works for both maps and lists (size 0 / []).
+        if (m == "empty?" && n.args.empty() && !localMethods.count("empty?"))
+            return ret(matchBool(callE("erlang","is_map",1,one(clone(rv))),
+                intrin(Op::Eq, two(callE("maps","size",1,one(clone(rv))), litInt(0))),
+                intrin(Op::Eq, two(clone(rv), [&]{ auto e=std::make_unique<Expr>(); e->node=MakeList{{},std::nullopt}; return e; }()))));
+        // .or(default): unwrap Just/Some/Ok, else the default.
+        if (m == "or" && n.args.size() == 1) {
+            auto dflt = arg0();
+            Match mm; mm.subjects.push_back(clone(rv));
+            auto ctorPat = [&](const char* tag) {
+                auto p = std::make_unique<Pattern>(); p->kind = PatKind::Construct; p->tag = tag;
+                auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = "_v";
+                p->args.push_back(std::move(vp)); return p;
+            };
+            for (const char* tag : {"Just", "Some", "Ok"}) {
+                MatchClause c; c.patterns.push_back(ctorPat(tag)); c.body = var("_v");
+                mm.clauses.push_back(std::move(c));
+            }
+            MatchClause d; auto wp = std::make_unique<Pattern>(); wp->kind = PatKind::Wild;
+            d.patterns.push_back(std::move(wp)); d.body = std::move(dflt);
+            mm.clauses.push_back(std::move(d));
+            auto x = std::make_unique<Expr>(); x->node = std::move(mm);
+            return ret(std::move(x));
+        }
+        // list[i] / list.get(i): list → raw elem-or-none; map → Just/None.
+        if (m == "get" && n.args.size() == 1 && !localMethods.count("get")) {
+            auto idx = arg0();
+            Match inner; inner.subjects.push_back(callE("maps","find",2,two(clone(idx), clone(rv))));
+            MatchClause ok; auto okp = std::make_unique<Pattern>(); okp->kind = PatKind::Tuple;
+            auto okt = std::make_unique<Pattern>(); okt->kind = PatKind::Lit; okt->litKind = LitKind::Atom; okt->litText = "ok";
+            auto okv = std::make_unique<Pattern>(); okv->kind = PatKind::Var; okv->name = "_gv";
+            okp->args.push_back(std::move(okt)); okp->args.push_back(std::move(okv));
+            ok.patterns.push_back(std::move(okp)); ok.body = justOf(var("_gv"));
+            MatchClause er; auto erp = std::make_unique<Pattern>(); erp->kind = PatKind::Lit; erp->litKind = LitKind::Atom; erp->litText = "error";
+            er.patterns.push_back(std::move(erp)); er.body = lit(LitKind::None, "none");
+            inner.clauses.push_back(std::move(ok)); inner.clauses.push_back(std::move(er));
+            auto innerE = std::make_unique<Expr>(); innerE->node = std::move(inner);
+            return ret(matchBool(callE("erlang","is_list",1,one(clone(rv))),
+                callE("kex_io","list_get",2,two(clone(rv), clone(idx))),
+                std::move(innerE)));
+        }
 
         // Block/higher-order list methods. The block lowers to a Lambda,
         // which — being non-atomic — atomize() naturally let-binds (Core
@@ -368,19 +505,18 @@ struct Lowering {
         if (blk) {
             std::vector<Binding> binds;
             auto fn = atomize(*blk, binds);
-            auto build = [&](ExprPtr call) { return wrapLets(binds, std::move(call)); };
-            // fn(recv) helpers for the runtime list HOFs (fun first for
-            // lists:map/filter/foreach; fun/acc/list order for foldl).
+            // rb binds the receiver (outer), binds the block fn (inner).
+            auto build = [&](ExprPtr call) { return wrapLets(rb, wrapLets(binds, std::move(call))); };
             if (m == "each")
-                return build(callE("lists", "foreach", 2, two(std::move(fn), std::move(recv))));
+                return build(callE("lists", "foreach", 2, two(std::move(fn), clone(rv))));
             if (m == "map")
-                return build(callE("lists", "map", 2, two(std::move(fn), std::move(recv))));
+                return build(callE("lists", "map", 2, two(std::move(fn), clone(rv))));
             if (m == "filter" || m == "select")
-                return build(callE("lists", "filter", 2, two(std::move(fn), std::move(recv))));
+                return build(callE("lists", "filter", 2, two(std::move(fn), clone(rv))));
             if (m == "all?")
-                return build(callE("lists", "all", 2, two(std::move(fn), std::move(recv))));
+                return build(callE("lists", "all", 2, two(std::move(fn), clone(rv))));
             if (m == "any?" || m == "some?")
-                return build(callE("lists", "any", 2, two(std::move(fn), std::move(recv))));
+                return build(callE("lists", "any", 2, two(std::move(fn), clone(rv))));
             // reduce(seed) { |acc, x| } → lists:foldl(fun(x,acc)->fn(acc,x), seed, recv)
             if ((m == "reduce" || m == "inject") && n.args.size() == 1 && n.block) {
                 auto seed = atomize(n.args[0], binds);
@@ -391,7 +527,7 @@ struct Lowering {
                 auto swapFn = std::make_unique<Expr>(); swapFn->node = std::move(swap);
                 auto swapVar = atomize_ir(std::move(swapFn), binds);
                 return build(callE("lists", "foldl", 3,
-                    three(std::move(swapVar), std::move(seed), std::move(recv))));
+                    three(std::move(swapVar), std::move(seed), clone(rv))));
             }
         }
 
@@ -405,12 +541,12 @@ struct Lowering {
         if (localMethods.count(n.method) && !n.block && n.namedArgs.empty()) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
-            args.push_back(std::move(recv));
+            args.push_back(clone(rv));
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
             int arity = static_cast<int>(n.args.size()) + 1;
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.method, arity, std::move(args), false};
-            return wrapLets(binds, std::move(ex));
+            return ret(wrapLets(binds, std::move(ex)));
         }
         throw LowerError("IR lower: UFCS method ." + n.method + " (block/named args) not yet ported");
     }
@@ -957,14 +1093,29 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                         }
                     }
                 } else if (node->isExplicitMain) {
-                    if (!node->params.empty())
-                        throw LowerError("IR lower: main(args) not yet ported");
                     L.subst.clear();
-                    FunDef def; def.name = "main"; def.arity = 0;
-                    FunClause fc; fc.body = L.lowerBody(node->body);
+                    FunDef def; def.name = "main";
+                    ExprPtr body = L.lowerBody(node->body);
+                    FunClause fc;
+                    if (node->params.empty()) {
+                        def.arity = 0; mod.mainArity = 0;
+                    } else {
+                        // main(args) / main(args, env): param 0 is the args
+                        // list (from init:get_plain_arguments); a second param
+                        // is the ENV map, bound in the body.
+                        def.arity = 1; mod.mainArity = 1;
+                        if (node->params.size() >= 2 && node->params[1].name)
+                            body = L.makeLet(*node->params[1].name,
+                                             L.callE("kex_io", "env_map", 0, {}), std::move(body));
+                        auto p = std::make_unique<Pattern>();
+                        p->kind = PatKind::Var;
+                        p->name = node->params[0].name ? *node->params[0].name : "_args";
+                        fc.params.push_back(std::move(p));
+                    }
+                    fc.body = std::move(body);
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
-                    mod.hasMain = true; mod.mainArity = 0;
+                    mod.hasMain = true;
                 } else {
                     // Bare top-level expression(s) → accumulate for a synthetic main.
                     for (const auto& e : node->body) bareExprs.push_back(&e);
