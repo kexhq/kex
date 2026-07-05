@@ -30,6 +30,71 @@ auto erlString(const std::string& s) -> std::string {
 
 struct Emitter {
     int wildCounter = 0;
+    bool m_returnThrows = false;
+
+    // Does this IR subtree contain a Return node (not crossing a Lambda /
+    // LetRec, which are their own return scopes)?
+    static auto hasReturn(const ExprPtr& e) -> bool {
+        if (!e) return false;
+        return std::visit([](const auto& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            if constexpr (std::is_same_v<T, Return>) return true;
+            else if constexpr (std::is_same_v<T, Let>) return hasReturn(n.value) || hasReturn(n.body);
+            else if constexpr (std::is_same_v<T, Seq>) {
+                for (auto& x : n.exprs) if (hasReturn(x)) return true; return false;
+            } else if constexpr (std::is_same_v<T, Match>) {
+                for (auto& s : n.subjects) if (hasReturn(s)) return true;
+                for (auto& c : n.clauses) {
+                    if (c.guard && hasReturn(*c.guard)) return true;
+                    if (hasReturn(c.body)) return true;
+                }
+                return false;
+            } else if constexpr (std::is_same_v<T, Intrinsic>) {
+                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+            } else if constexpr (std::is_same_v<T, Call>) {
+                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+            } else if constexpr (std::is_same_v<T, CallIndirect>) {
+                if (hasReturn(n.callee)) return true;
+                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+            } else if constexpr (std::is_same_v<T, MakeTuple>) {
+                for (auto& a : n.elements) if (hasReturn(a)) return true; return false;
+            } else if constexpr (std::is_same_v<T, MakeList>) {
+                for (auto& a : n.elements) if (hasReturn(a)) return true;
+                return n.rest && hasReturn(*n.rest);
+            } else if constexpr (std::is_same_v<T, Construct>) {
+                for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+            }
+            // Lambda/LetRec bodies are separate return scopes; leaves have none.
+            return false;
+        }, e->node);
+    }
+
+    // Wrap a body so a thrown {'kex_return', V} becomes the value; anything
+    // else is re-raised. Structure mirrors what erlc emits for try/catch.
+    auto uniq(const char* p) -> std::string { return std::string(p) + std::to_string(wildCounter++); }
+    auto wrapReturnCatch(const std::string& body) -> std::string {
+        std::string rv = uniq("_Ret"), rvv = uniq("_RV");
+        std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
+        std::string t = uniq("_T"), c = uniq("_C"), r = uniq("_R"), tr = uniq("_Tr");
+        return "try\n    " + body + "\n"
+               "of <" + rv + "> -> " + rv + "\n"
+               "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
+               "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+               "    <'throw', {'kex_return', " + rvv + "}, " + t + "> when 'true' -> " + rvv + "\n"
+               "    <" + c + ", " + r + ", " + tr + "> when 'true' -> primop 'raise'(" +
+                    trc + ", " + rsn + ")\n"
+               "  end";
+    }
+    // Emit a clause body, wrapping it in the return try/catch iff it contains
+    // an early return.
+    auto emitClauseBody(const ExprPtr& body) -> std::string {
+        if (!hasReturn(body)) return emit(body);
+        bool saved = m_returnThrows;
+        m_returnThrows = true;
+        std::string b = wrapReturnCatch(emit(body));
+        m_returnThrows = saved;
+        return b;
+    }
     // Core Erlang treats `_` as a real variable, so repeating it within one
     // pattern is a duplicate-variable error — each wildcard needs a distinct
     // fresh name.
@@ -197,8 +262,13 @@ struct Emitter {
                        "  fun " + head + " ->\n    " + emit(n.funBody) + "\n"
                        "in\n" + emit(n.contBody);
             } else if constexpr (std::is_same_v<T, Return>) {
-                // Skeleton: no early-return lowering pass yet, so a Return in
-                // tail position is just its value.
+                // In a function that has any early return, a Return throws so
+                // it escapes nested contexts (a match arm whose value is
+                // consumed by an enclosing `let`); the function-body try/catch
+                // turns it back into the result. In a return-free tail spot
+                // it's just the value.
+                if (m_returnThrows)
+                    return "call 'erlang':'throw'({'kex_return', " + emit(n.value) + "})";
                 return emit(n.value);
             } else {
                 return "call 'erlang':'error'('ir_unimplemented')";
@@ -226,7 +296,7 @@ struct Emitter {
                                                              : erlVar(cl0.params[i]->name);
             }
             head += ")";
-            out << "  fun " << head << " ->\n    " << emit(cl0.body) << "\n";
+            out << "  fun " << head << " ->\n    " << emitClauseBody(cl0.body) << "\n";
             return out.str();
         }
 
@@ -249,7 +319,7 @@ struct Emitter {
             pats += ">";
             out << "      " << pats;
             out << (cl.guard ? " when " + emit(*cl.guard) : " when 'true'");
-            out << " ->\n        " << emit(cl.body) << "\n";
+            out << " ->\n        " << emitClauseBody(cl.body) << "\n";
         }
         // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`
         // repeated in a value-list is a duplicate-variable error).
