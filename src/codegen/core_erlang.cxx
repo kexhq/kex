@@ -44,6 +44,73 @@ auto CoreErlangEmitter::freshVar(const std::string& hint) -> std::string {
     return "_" + erlVar(hint) + std::to_string(m_varCounter++);
 }
 
+auto CoreErlangEmitter::emitReturnValue(const ast::ExprPtr& v) -> std::string {
+    if (m_returnThrows)
+        return "call 'erlang':'throw'({'kex_return', " + emitExpr(v) + "})";
+    return emitExpr(v);
+}
+
+// Wrap an emitted function body so a `throw({'kex_return', V})` from any
+// `return` inside it becomes the body's value; every other exception is
+// re-raised unchanged (via primop 'raise', preserving class/reason/trace).
+// Structure mirrors what erlc emits for a source-level try/catch.
+auto CoreErlangEmitter::wrapReturnCatch(const std::string& body) -> std::string {
+    std::string rv  = freshVar("Ret");
+    std::string rvV = freshVar("RV");
+    std::string cls = freshVar("Cls");
+    std::string rsn = freshVar("Rsn");
+    std::string trc = freshVar("Trc");
+    return "try\n    " + body + "\n"
+           "of <" + rv + "> -> " + rv + "\n"
+           "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
+           "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+           "    <'throw', {'kex_return', " + rvV + "}, " + freshVar("T") + "> when 'true' -> " + rvV + "\n"
+           "    <" + freshVar("C") + ", " + freshVar("R") + ", " + freshVar("Tr") +
+                "> when 'true' -> primop 'raise'(" + trc + ", " + rsn + ")\n"
+           "  end";
+}
+
+auto CoreErlangEmitter::exprHasReturn(const ast::ExprPtr& e) -> bool {
+    if (!e) return false;
+    return std::visit([](const auto& n) -> bool {
+        using T = std::decay_t<decltype(n)>;
+        if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
+            return true;
+        } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            if (bodyHasReturn(n.thenBody)) return true;
+            for (const auto& [c, b] : n.elifs) if (bodyHasReturn(b)) return true;
+            return n.elseBody && bodyHasReturn(*n.elseBody);
+        } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+            for (const auto& cl : n.clauses) if (exprHasReturn(cl.body)) return true;
+            return false;
+        } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+            return bodyHasReturn(n.body);
+        } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            return bodyHasReturn(n.body);
+        } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+            return bodyHasReturn(n.body);
+        } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
+            return exprHasReturn(n.expr) || exprHasReturn(n.condition);
+        } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
+            return exprHasReturn(n.thenExpr) || exprHasReturn(n.elseExpr) ||
+                   exprHasReturn(n.condition);
+        } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+            return exprHasReturn(n.value);
+        } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
+            return exprHasReturn(n.value);
+        } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+            return exprHasReturn(n.value);
+        }
+        // Don't cross Lambda boundaries — a lambda's `return` is its own.
+        return false;
+    }, e->kind);
+}
+
+auto CoreErlangEmitter::bodyHasReturn(const std::vector<ast::ExprPtr>& body) -> bool {
+    for (const auto& e : body) if (exprHasReturn(e)) return true;
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // String interpolation: "Hello, ${name}!" → iolist construction
 // ---------------------------------------------------------------------------
@@ -507,8 +574,13 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Return ---
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
-            // Early return not yet desugared; emit value and note the gap.
-            return emitExpr(node.value);
+            // In a function with early returns, a `return` appearing as a
+            // sub-expression (e.g. a match-arm value like `Error(e) ->
+            // return Error(e)`) throws so it exits the whole function
+            // rather than becoming that arm's value; wrapReturnCatch turns
+            // it back into the function result. Without an enclosing return
+            // scope this is just the value (tail position).
+            return emitReturnValue(node.value);
         }
 
         // --- Function call (free function) ---
@@ -1948,16 +2020,19 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         }
     }
 
-    // ReturnExpr → exit loop and enclosing function
+    // ReturnExpr → exit loop AND enclosing function. When the function has
+    // early returns, emitReturnValue throws so the return escapes the
+    // letrec loop out to the function's wrapReturnCatch — the only correct
+    // behavior when the loop isn't itself in the function's tail position.
     if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
             std::string cont = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
             return "case " + emitExpr(ti->condition) + " of\n"
-                   "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
+                   "  'true' when 'true' ->\n    " + emitReturnValue(ti->expr) + "\n"
                    "  'false' when 'true' ->\n    " + cont + "\n"
                    "end";
         }
-        return emitExpr(re->value);  // discard loop rest
+        return emitReturnValue(re->value);  // discard loop rest
     }
 
     // Shared by every BreakExpr site (bare, or wrapped in a TrailingIf) —
@@ -2145,7 +2220,7 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
                     armBody = "let <" + tmp + "> =\n    " + emitExpr(ae2->value) + "\nin\n" + contNow();
                 }
             } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
-                armBody = emitExpr(re2->value);  // exits the function entirely, ignores cont
+                armBody = emitReturnValue(re2->value);  // exits the function entirely
             } else if (auto* be2 = std::get_if<ast::BlockExpr>(&clause.body->kind)) {
                 // A `do ... end` arm body is a multi-statement loop-body
                 // fragment — emit it loop-aware (so its own assignments/
@@ -2428,12 +2503,15 @@ auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int 
         return "let <" + tmp + "> =\n    " + emitExpr(le->value) + "\nin\n" + rest;
     }
 
-    // ReturnExpr: early return (discard rest).
+    // ReturnExpr: early return (discard rest). emitReturnValue throws
+    // (caught by the function's wrapReturnCatch) when the function has any
+    // early return, so this is correct whether the return is in tail
+    // position or the conditional `return X if cond` continues to `cont`.
     if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
         if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
             std::string cont = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
             return "case " + emitExpr(ti->condition) + " of\n"
-                   "  'true' when 'true' ->\n    " + emitExpr(ti->expr) + "\n"
+                   "  'true' when 'true' ->\n    " + emitReturnValue(ti->expr) + "\n"
                    "  'false' when 'true' ->\n    " + cont + "\n"
                    "end";
         }
@@ -2446,7 +2524,7 @@ auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int 
                        "end";
             }
         }
-        return emitExpr(re->value);  // unconditional return — discard rest
+        return emitReturnValue(re->value);  // unconditional return — discard rest
     }
 
     // IfExpr with return-only then-branch (no else): false path continues to rest.
@@ -2560,6 +2638,18 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     int totalClauses = 0;
     for (const auto* fn : group) totalClauses += static_cast<int>(fn->clauses.size());
     if (totalClauses == 0) return "";
+
+    // If any clause has an early `return`, its returns compile to throws
+    // and the emitted body is wrapped in the kex_return try/catch. Scoped
+    // to this function via the RAII-ish save/restore of m_returnThrows so
+    // nested function emission isn't affected.
+    bool anyReturn = false;
+    for (const auto* fn : group)
+        for (const auto& cl : fn->clauses)
+            if (bodyHasReturn(cl.body)) { anyReturn = true; break; }
+    bool savedReturnThrows = m_returnThrows;
+    m_returnThrows = anyReturn;
+    auto restoreRet = [&]() { m_returnThrows = savedReturnThrows; };
 
     int explicitArity = static_cast<int>(first.clauses.empty() ? 0 : first.clauses[0].params.size());
     // If the make block adds `this` as an implicit first receiver, total arity is +1.
@@ -2679,10 +2769,13 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
         int argOffset = hasImplicitThis ? 1 : 0;
         for (size_t i = 0; i < clause.params.size(); i++)
             paramLets += bindParamLets(clause.params[i], argVars[i + argOffset]);
+        std::string bodyStr = emitBody(clause.body);
+        if (anyReturn) bodyStr = wrapReturnCatch(bodyStr);
         std::ostringstream out;
         out << "'" << emitName << "'/" << arity << " =\n";
         out << "  fun " << funHead << " ->\n";
-        out << "    " << paramLets << emitBody(clause.body) << "\n";
+        out << "    " << paramLets << bodyStr << "\n";
+        restoreRet();
         return out.str();
     }
 
@@ -2694,25 +2787,21 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     int caseArity = arity - argOffset;
     bool multiArg = caseArity > 1;
 
+    // Build the case dispatch into its own buffer so it can be wrapped in
+    // the kex_return try/catch (when anyReturn) without the fun header.
     std::ostringstream out;
-    out << "'" << emitName << "'/" << arity << " =\n";
-    out << "  fun " << funHead << " ->\n";
-    // Bind `this` first if implicit
-    if (hasImplicitThis)
-        out << "    let <This> = _Arg0 in\n";
-
     if (multiArg) {
-        out << "    case <";
+        out << "case <";
         for (int i = argOffset; i < arity; i++) {
             if (i > argOffset) out << ", ";
             out << argVars[i];
         }
         out << "> of\n";
     } else if (caseArity == 1) {
-        out << "    case " << argVars[argOffset] << " of\n";
+        out << "case " << argVars[argOffset] << " of\n";
     } else {
         // Zero explicit args: shouldn't have multi-clause but handle gracefully
-        out << "    case 'ok' of\n";
+        out << "case 'ok' of\n";
     }
 
     for (const auto* fn : group) {
@@ -2781,8 +2870,18 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
     } else {
         out << "      _ when 'true' -> call 'erlang':'error'('function_clause')\n";
     }
-    out << "    end\n";
-    return out.str();
+    out << "    end";
+
+    std::string caseStr = out.str();
+    if (anyReturn) caseStr = wrapReturnCatch(caseStr);
+    std::ostringstream fnOut;
+    fnOut << "'" << emitName << "'/" << arity << " =\n";
+    fnOut << "  fun " << funHead << " ->\n";
+    if (hasImplicitThis)
+        fnOut << "    let <This> = _Arg0 in\n";
+    fnOut << "    " << caseStr << "\n";
+    restoreRet();
+    return fnOut.str();
 }
 
 // ---------------------------------------------------------------------------
@@ -2799,6 +2898,17 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
     // any `it` actually ran (kex_test:maybe_print_summary/0 checks the
     // counters itself), so ordinary non-test programs see no extra
     // output (spec/optional_parens_do.kex, spec/json_parser.spec.kex).
+    // An early `return` in main throws and is caught here (so the test
+    // summary below still runs afterward, matching the tree-walker, which
+    // catches main's ReturnException at the function boundary too).
+    bool savedReturnThrows = m_returnThrows;
+    m_returnThrows = bodyHasReturn(main.body);
+    bool wrapMain = m_returnThrows;
+    auto emitMainBody = [&]() {
+        std::string b = emitBody(main.body);
+        return wrapMain ? wrapReturnCatch(b) : b;
+    };
+
     auto withTestSummary = [this](const std::string& body) {
         auto v = freshVar("MainResult");
         auto discard = freshVar("Summary");
@@ -2810,7 +2920,7 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
     out << "'main'/" << arity << " =\n";
     if (arity == 0) {
         out << "  fun () ->\n";
-        out << "    " << withTestSummary(emitBody(main.body)) << "\n";
+        out << "    " << withTestSummary(emitMainBody()) << "\n";
     } else {
         // main(args) — bind the args list from _Args
         std::string paramName = "Args";
@@ -2831,8 +2941,9 @@ auto CoreErlangEmitter::emitMainBlock(const ast::MainBlock& main) -> std::string
             out << "    let <" << erlVar(*main.params[1].name)
                 << "> = call 'kex_io':'env_map'() in\n";
         }
-        out << "    " << withTestSummary(emitBody(main.body)) << "\n";
+        out << "    " << withTestSummary(emitMainBody()) << "\n";
     }
+    m_returnThrows = savedReturnThrows;
     return out.str();
 }
 

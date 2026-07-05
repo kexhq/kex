@@ -125,6 +125,29 @@ private:
     // Escape a string for Core Erlang string literal syntax.
     static auto erlString(const std::string& s) -> std::string;
 
+    // True while emitting the body of a function that contains an early
+    // `return` (see bodyHasReturn). When set, a `return X` compiles to
+    // `throw({'kex_return', X})` and the whole body is wrapped in a
+    // try/catch that turns that throw back into the function's result —
+    // the same mechanism the tree-walker's ReturnException uses, and the
+    // only way to make a `return` buried inside a match/if arm (whose
+    // value is consumed by an enclosing `let`) actually exit the function
+    // rather than fall through as that arm's value (examples/json_parser.kex).
+    bool m_returnThrows = false;
+
+    // Emit `v` as a return: a throw when m_returnThrows, else the bare value
+    // (the legacy tail-position behavior for functions with no early return).
+    auto emitReturnValue(const ast::ExprPtr& v) -> std::string;
+
+    // Does this body / expression contain an early `return` (not crossing
+    // into a nested lambda, which has its own return scope)?
+    static auto bodyHasReturn(const std::vector<ast::ExprPtr>& body) -> bool;
+    static auto exprHasReturn(const ast::ExprPtr& e) -> bool;
+
+    // Wrap a fully-emitted function body in the kex_return try/catch (only
+    // used when m_returnThrows was set for it).
+    auto wrapReturnCatch(const std::string& body) -> std::string;
+
     // True while emitting a match-clause `when` guard. Core Erlang guards
     // may only use guard-safe operations — no arbitrary function calls —
     // so predicates that normally emit a `call 'kex_io':...` (digit?/
