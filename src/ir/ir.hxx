@@ -154,11 +154,22 @@ struct Return {
     ExprPtr value;
 };
 
+// A local tail-recursive function (loops lower to this). `name(params) =
+// funBody` is in scope for both funBody (recursion) and contBody (the entry
+// call + continuation). Emits Core Erlang `letrec 'name'/N = fun(...) ->
+// funBody in contBody`.
+struct LetRec {
+    std::string name;
+    std::vector<std::string> params;
+    ExprPtr funBody;
+    ExprPtr contBody;
+};
+
 // ---- Expr variant ---------------------------------------------------------
 struct Expr {
     std::variant<
         Lit, Var, Intrinsic, Call, CallIndirect,
-        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return
+        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, LetRec
     > node;
 };
 

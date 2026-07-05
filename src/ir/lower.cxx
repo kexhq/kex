@@ -338,13 +338,16 @@ struct Lowering {
     // Minimal UFCS/stdlib resolution for the walking skeleton. Only the
     // handful of forms an early target program needs; everything else errors
     // (to be widened as constructs are ported from core_erlang.cxx).
+    // Set while lowering a mutating `!` call's VALUE (the rebind itself is
+    // handled by the enclosing statement — see lowerBodyFrom/loop handling).
+    bool m_lowerMutatingAsValue = false;
+
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
-        // A mutating `!` call rebinds its receiver — that's an assignment, not
-        // a plain method call, and belongs to the (deferred) mutation IR
-        // pass. Erroring here keeps the invariant that anything the IR path
-        // compiles is CORRECT (spec/mutating_calls.kex).
-        if (n.mutating)
-            throw LowerError("IR lower: mutating '!' call not yet ported");
+        // A bare mutating `!` call used where its rebind can't be applied is
+        // an error (keeps the invariant that compiled code is correct); in
+        // statement position the caller lowers it as a value + rebind.
+        if (n.mutating && !m_lowerMutatingAsValue)
+            throw LowerError("IR lower: mutating '!' call in expression position not yet ported");
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
         if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
             std::vector<Binding> binds;
@@ -772,6 +775,205 @@ struct Lowering {
         return e;
     }
 
+    // ---- Loops ------------------------------------------------------------
+    // Collect the names a loop body reassigns — plain `x = ...` AND mutating
+    // `x.push!(..)` calls — recursing through if/match/block/nested-loops but
+    // not lambdas. These become the loop's threaded state.
+    void collectMutated(const ast::ExprPtr& e, std::unordered_set<std::string>& out) {
+        if (!e) return;
+        std::visit([&](const auto& nn) {
+            using T = std::decay_t<decltype(nn)>;
+            if constexpr (std::is_same_v<T, ast::AssignExpr>) out.insert(nn.name);
+            else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                if (nn.mutating && nn.receiver)
+                    if (auto* id = std::get_if<ast::Identifier>(&nn.receiver->kind)) out.insert(id->name);
+            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+                for (auto& s : nn.thenBody) collectMutated(s, out);
+                if (nn.elseBody) for (auto& s : *nn.elseBody) collectMutated(s, out);
+                for (auto& [c, b] : nn.elifs) for (auto& s : b) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+                for (auto& cl : nn.clauses) collectMutated(cl.body, out);
+            } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
+            }
+        }, e->kind);
+    }
+
+    // The loop's current threaded-state value: bare var for one, tuple for
+    // several, 'ok' for none.
+    auto stateExpr(const std::vector<std::string>& mutVars) -> ExprPtr {
+        if (mutVars.empty()) return lit(LitKind::Atom, "ok");
+        if (mutVars.size() == 1) return var(currentName(mutVars[0]));
+        std::vector<ExprPtr> els;
+        for (const auto& v : mutVars) els.push_back(var(currentName(v)));
+        auto e = std::make_unique<Expr>(); e->node = MakeTuple{std::move(els)}; return e;
+    }
+    auto tailCall(const std::string& loopFn, const std::vector<std::string>& mutVars) -> ExprPtr {
+        std::vector<ExprPtr> args;
+        for (const auto& v : mutVars) args.push_back(var(currentName(v)));
+        auto e = std::make_unique<Expr>();
+        e->node = Call{"", loopFn, (int)mutVars.size(), std::move(args), false};
+        return e;
+    }
+
+    // Lower the statements of a loop body in loop context. Falling off the end
+    // tail-calls the loop (next iteration); break yields the state; next
+    // tail-calls; assignments/mutations rebind and thread forward.
+    auto lowerLoopBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i,
+                           const std::string& loopFn,
+                           const std::vector<std::string>& mutVars) -> ExprPtr {
+        if (i >= body.size()) return tailCall(loopFn, mutVars);
+        const auto& e = body[i];
+        if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
+        if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
+        if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+            auto val = lower(ae->value);
+            std::string nv = fresh(ae->name); subst[ae->name] = nv;
+            return makeLet(nv, std::move(val), lowerLoopBodyFrom(body, i + 1, loopFn, mutVars));
+        }
+        if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
+            if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+                auto val = lowerMutatingAsValue(*mc);
+                std::string nv = fresh(id->name); subst[id->name] = nv;
+                return makeLet(nv, std::move(val), lowerLoopBodyFrom(body, i + 1, loopFn, mutVars));
+            }
+        }
+        if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
+            auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
+        }
+        if (auto* ie = std::get_if<ast::IfExpr>(&e->kind)) {
+            // Continuation after the if = the rest of the loop body. When the
+            // if is the LAST statement, each branch's own fall-through
+            // tail-calls the loop with THAT branch's post-assignment state
+            // (so conditional reassignment threads correctly — the merge is
+            // implicit in each branch recursing to its own tail call).
+            bool ifIsLast = (i + 1 >= body.size());
+            auto lowerBranch = [&](const std::vector<ast::ExprPtr>& bb) {
+                auto snap = subst;
+                ExprPtr r = ifIsLast
+                    ? lowerLoopBodyFrom(bb, 0, loopFn, mutVars)
+                    : lowerLoopBranchThen(bb, body, i + 1, loopFn, mutVars);
+                subst = snap;
+                return r;
+            };
+            auto cond = lower(ie->condition);
+            auto thenP = lowerBranch(ie->thenBody);
+            ExprPtr elseP = ie->elseBody ? lowerBranch(*ie->elseBody)
+                          : (ifIsLast ? lowerLoopBodyFrom(body, i + 1, loopFn, mutVars)
+                                      : lowerLoopBodyFrom(body, i + 1, loopFn, mutVars));
+            return matchBool(std::move(cond), std::move(thenP), std::move(elseP));
+        }
+        // Any other statement: evaluate for effect, continue.
+        auto val = lower(e);
+        return makeLet(fresh("S"), std::move(val), lowerLoopBodyFrom(body, i + 1, loopFn, mutVars));
+    }
+    // A branch body followed by the rest of the loop body (used when the `if`
+    // isn't the last loop statement).
+    auto lowerLoopBranchThen(const std::vector<ast::ExprPtr>& branch,
+                             const std::vector<ast::ExprPtr>& outer, size_t outerNext,
+                             const std::string& loopFn,
+                             const std::vector<std::string>& mutVars) -> ExprPtr {
+        std::function<ExprPtr(size_t)> go = [&](size_t j) -> ExprPtr {
+            if (j >= branch.size()) return lowerLoopBodyFrom(outer, outerNext, loopFn, mutVars);
+            const auto& e = branch[j];
+            if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
+            if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
+            if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+                auto val = lower(ae->value);
+                std::string nv = fresh(ae->name); subst[ae->name] = nv;
+                return makeLet(nv, std::move(val), go(j + 1));
+            }
+            if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
+                if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+                    auto val = lowerMutatingAsValue(*mc);
+                    std::string nv = fresh(id->name); subst[id->name] = nv;
+                    return makeLet(nv, std::move(val), go(j + 1));
+                }
+            }
+            if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
+                auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
+            }
+            auto val = lower(e);
+            return makeLet(fresh("S"), std::move(val), go(j + 1));
+        };
+        return go(0);
+    }
+
+    // Lower a mutating `x.method!(args)` as the VALUE it rebinds x to (the
+    // non-mutating method result).
+    auto lowerMutatingAsValue(const ast::MethodCall& mc) -> ExprPtr {
+        m_lowerMutatingAsValue = true;
+        auto r = lowerMethodCall(mc);
+        m_lowerMutatingAsValue = false;
+        return r;
+    }
+
+    // Lower a `loop`/`while` statement (at body position `outerStart`) plus
+    // the rest of the enclosing body as the continuation.
+    auto lowerLoopStmt(const std::vector<ast::ExprPtr>& loopBody,
+                       const ast::ExprPtr* cond,
+                       const std::vector<ast::ExprPtr>& outer, size_t outerStart) -> ExprPtr {
+        std::unordered_set<std::string> mset;
+        for (const auto& s : loopBody) collectMutated(s, mset);
+        std::vector<std::string> mutVars;
+        for (const auto& v : mset) if (subst.count(v)) mutVars.push_back(v);
+        std::sort(mutVars.begin(), mutVars.end());
+
+        std::string loopFn = "__loop" + std::to_string(counter++);
+        // Initial call args = current values.
+        std::vector<ExprPtr> initArgs;
+        for (const auto& v : mutVars) initArgs.push_back(var(currentName(v)));
+
+        // Loop function body: params are the mutVar names themselves (fresh
+        // scope); on entry subst[v] = v.
+        auto snap = subst;
+        for (const auto& v : mutVars) subst[v] = v;
+        // The while condition and the false-exit state must be evaluated
+        // against the ENTRY bindings — before the body reassigns them.
+        ExprPtr condExpr = cond ? lower(*cond) : nullptr;
+        ExprPtr falseState = cond ? stateExpr(mutVars) : nullptr;
+        ExprPtr inner = lowerLoopBodyFrom(loopBody, 0, loopFn, mutVars);
+        if (cond)
+            inner = matchBool(std::move(condExpr), std::move(inner), std::move(falseState));
+        subst = snap;
+
+        // Continuation: bind the loop result, extract state into fresh names,
+        // lower the rest of the outer body.
+        LetRec lr; lr.name = loopFn; lr.params = mutVars; lr.funBody = std::move(inner);
+        auto callLoop = std::make_unique<Expr>();
+        callLoop->node = Call{"", loopFn, (int)mutVars.size(), std::move(initArgs), false};
+
+        bool restIsLast = (outerStart + 1 >= outer.size());
+        if (mutVars.empty()) {
+            if (restIsLast) { lr.contBody = std::move(callLoop); }
+            else {
+                auto rest = lowerBodyFrom(outer, outerStart + 1);
+                lr.contBody = makeLet(fresh("S"), std::move(callLoop), std::move(rest));
+            }
+        } else {
+            std::string resVar = fresh("LR");
+            // Rebind each mutVar from the loop result (bare or element/N).
+            for (size_t k = 0; k < mutVars.size(); k++) subst[mutVars[k]] = fresh(mutVars[k]);
+            auto rest = restIsLast ? stateExpr(mutVars) : lowerBodyFrom(outer, outerStart + 1);
+            ExprPtr chained = std::move(rest);
+            if (mutVars.size() == 1) {
+                chained = makeLet(currentName(mutVars[0]), var(resVar), std::move(chained));
+            } else {
+                for (size_t k = mutVars.size(); k-- > 0; )
+                    chained = makeLet(currentName(mutVars[k]),
+                        callE("erlang", "element", 2, two(litInt((long)k + 1), var(resVar))),
+                        std::move(chained));
+            }
+            lr.contBody = makeLet(resVar, std::move(callLoop), std::move(chained));
+        }
+        auto e = std::make_unique<Expr>(); e->node = std::move(lr);
+        return e;
+    }
+
     // ---- Body lowering ----------------------------------------------------
     // A statement sequence. `let`/`var`/reassignments introduce SSA-renamed
     // bindings (updating `subst`); every other statement's value is bound to
@@ -814,6 +1016,21 @@ struct Lowering {
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
             return makeLet(ssa, std::move(val), std::move(rest));
         }
+        // x.push!(v) / name.upperCase!  → rebind x to the (non-mutating) result.
+        if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
+            if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+                auto val = lowerMutatingAsValue(*mc);
+                std::string ssa = fresh(id->name);
+                subst[id->name] = ssa;
+                auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
+                return makeLet(ssa, std::move(val), std::move(rest));
+            }
+        }
+        // loop / while → tail-recursive local function threading mutable state.
+        if (auto* le = std::get_if<ast::LoopExpr>(&e->kind))
+            return lowerLoopStmt(le->body, nullptr, body, i);
+        if (auto* we = std::get_if<ast::WhileExpr>(&e->kind))
+            return lowerLoopStmt(we->body, &we->condition, body, i);
 
         if (isLast) return lower(e);
         auto val = lower(e);

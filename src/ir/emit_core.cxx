@@ -186,6 +186,16 @@ struct Emitter {
                     args += emit(n.args[i]);
                 }
                 return "apply " + emit(n.callee) + "(" + args + ")";
+            } else if constexpr (std::is_same_v<T, LetRec>) {
+                std::string head = "(";
+                for (size_t i = 0; i < n.params.size(); i++) {
+                    if (i) head += ", ";
+                    head += erlVar(n.params[i]);
+                }
+                head += ")";
+                return "letrec '" + n.name + "'/" + std::to_string(n.params.size()) + " =\n"
+                       "  fun " + head + " ->\n    " + emit(n.funBody) + "\n"
+                       "in\n" + emit(n.contBody);
             } else if constexpr (std::is_same_v<T, Return>) {
                 // Skeleton: no early-return lowering pass yet, so a Return in
                 // tail position is just its value.
