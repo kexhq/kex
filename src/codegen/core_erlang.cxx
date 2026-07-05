@@ -2219,6 +2219,18 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
                     std::string tmp = freshVar("S");
                     armBody = "let <" + tmp + "> =\n    " + emitExpr(ae2->value) + "\nin\n" + contNow();
                 }
+            } else if (auto* mc2 = std::get_if<ast::MethodCall>(&clause.body->kind);
+                       mc2 && mc2->mutating && mc2->receiver &&
+                       std::get_if<ast::Identifier>(&mc2->receiver->kind)) {
+                // A mutating `x.push!(..)` arm rebinds its receiver, exactly
+                // like an AssignExpr arm — thread it into the continuation so
+                // the mutation survives the loop iteration (the nested-match
+                // escape arms in examples/json_parser.kex's parseString).
+                auto* id = std::get_if<ast::Identifier>(&mc2->receiver->kind);
+                std::string newVar = freshVar(id->name);
+                std::string val = emitExpr(clause.body);
+                m_varSubst[id->name] = newVar;
+                armBody = "let <" + newVar + "> =\n    " + val + "\nin\n" + contNow();
             } else if (auto* re2 = std::get_if<ast::ReturnExpr>(&clause.body->kind)) {
                 armBody = emitReturnValue(re2->value);  // exits the function entirely
             } else if (auto* be2 = std::get_if<ast::BlockExpr>(&clause.body->kind)) {
@@ -2419,6 +2431,51 @@ auto CoreErlangEmitter::emitLoopExpr(const std::vector<ast::ExprPtr>& loopBody,
     return out.str();
 }
 
+auto CoreErlangEmitter::emitBranchResult(const std::vector<ast::ExprPtr>& stmts, int idx,
+                                         const std::vector<std::string>& mergeVars) -> std::string {
+    if (idx >= (int)stmts.size()) {
+        auto sub = [&](const std::string& n) {
+            auto it = m_varSubst.find(n);
+            return it != m_varSubst.end() ? it->second : erlVar(n);
+        };
+        if (mergeVars.size() == 1) return sub(mergeVars[0]);
+        std::string t = "{";
+        for (size_t i = 0; i < mergeVars.size(); i++) {
+            if (i) t += ", ";
+            t += sub(mergeVars[i]);
+        }
+        return t + "}";
+    }
+    const auto& e = stmts[idx];
+    // Assignment → rebind, thread into the rest of the branch.
+    if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
+        std::string nv = freshVar(ae->name);
+        std::string val = emitExpr(ae->value);
+        m_varSubst[ae->name] = nv;
+        return "let <" + nv + "> =\n    " + val + "\nin\n" +
+               emitBranchResult(stmts, idx + 1, mergeVars);
+    }
+    // Mutating call (`chars.push!(c)`) → same, rebinding its receiver var.
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
+        if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+            std::string nv = freshVar(id->name);
+            std::string val = emitExpr(e);
+            m_varSubst[id->name] = nv;
+            return "let <" + nv + "> =\n    " + val + "\nin\n" +
+                   emitBranchResult(stmts, idx + 1, mergeVars);
+        }
+    }
+    // Early return throws out of the whole function (the merge tuple after
+    // is then dead code, which is fine).
+    if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind))
+        return emitReturnValue(re->value);
+    // Any other statement: evaluate for its effect, continue.
+    std::string tmp = freshVar("S");
+    std::string val = emitExpr(e);
+    return "let <" + tmp + "> =\n    " + val + "\nin\n" +
+           emitBranchResult(stmts, idx + 1, mergeVars);
+}
+
 auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int start) -> std::string {
     if (start >= (int)body.size()) return "'ok'";
 
@@ -2525,6 +2582,61 @@ auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int 
             }
         }
         return emitReturnValue(re->value);  // unconditional return — discard rest
+    }
+
+    // Conditional-assignment merge: a statement-level `if` whose branches
+    // reassign already-tracked mutable vars must make those new values
+    // visible to the statements AFTER the `if` — otherwise the assignments
+    // are lost when the branch's local SSA names go out of scope. Emit the
+    // `if` as a case that yields the post-branch values (bare var, or a
+    // tuple for several), then rebind them before continuing. A real,
+    // reproduced bug otherwise: examples/json_parser.kex's parseNumber
+    // consumes a leading `-` and advances the parser inside an `if` before
+    // its digit loop, but those updates reverted, so `-3.5` reached the
+    // loop with empty digits (spec/json_parser.spec.kex).
+    if (auto* ie = std::get_if<ast::IfExpr>(&e->kind);
+        ie && !isLast && ie->elifs.empty()) {
+        std::unordered_set<std::string> assignedSet;
+        collectAssigned(ie->thenBody, assignedSet);
+        if (ie->elseBody) collectAssigned(*ie->elseBody, assignedSet);
+        std::vector<std::string> mergeVars;
+        for (const auto& name : assignedSet)
+            if (m_varSubst.count(name)) mergeVars.push_back(name);
+        std::sort(mergeVars.begin(), mergeVars.end());
+        if (!mergeVars.empty()) {
+            auto snap = m_varSubst;
+            std::string thenRes = emitBranchResult(ie->thenBody, 0, mergeVars);
+            m_varSubst = snap;
+            std::string elseRes = ie->elseBody
+                ? emitBranchResult(*ie->elseBody, 0, mergeVars)
+                : emitBranchResult({}, 0, mergeVars); // no else: keep current values
+            m_varSubst = snap;
+
+            std::string caseExpr =
+                "case " + emitExpr(ie->condition) + " of\n"
+                "  'true' when 'true' ->\n    " + thenRes + "\n"
+                "  'false' when 'true' ->\n    " + elseRes + "\n"
+                "end";
+
+            std::string out;
+            if (mergeVars.size() == 1) {
+                std::string nv = freshVar(mergeVars[0]);
+                out = "let <" + nv + "> =\n    " + caseExpr + "\nin\n";
+                m_varSubst[mergeVars[0]] = nv;
+            } else {
+                std::string merged = freshVar("Merged");
+                out = "let <" + merged + "> =\n    " + caseExpr + "\nin\n";
+                for (size_t i = 0; i < mergeVars.size(); i++) {
+                    std::string nv = freshVar(mergeVars[i]);
+                    out += "let <" + nv + "> =\n    call 'erlang':'element'(" +
+                           std::to_string(i + 1) + ", " + merged + ")\nin\n";
+                    m_varSubst[mergeVars[i]] = nv;
+                }
+            }
+            std::string rest = emitBodyFrom(body, start + 1);
+            m_varSubst = snap;
+            return out + rest;
+        }
     }
 
     // IfExpr with return-only then-branch (no else): false path continues to rest.

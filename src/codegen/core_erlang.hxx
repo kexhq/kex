@@ -148,6 +148,16 @@ private:
     // used when m_returnThrows was set for it).
     auto wrapReturnCatch(const std::string& body) -> std::string;
 
+    // Emit `stmts[idx..]` as a let-chain ending in a value that carries the
+    // final SSA names of `mergeVars` (a bare var when there's one, else a
+    // tuple). Threads assignments/mutations into m_varSubst as it goes;
+    // the caller snapshots/restores. Used by emitBodyFrom's statement-level
+    // conditional-assignment merge, so a `var` reassigned inside an `if`
+    // branch is visible to code after the `if` (examples/json_parser.kex's
+    // parseNumber consumes a leading `-` in an `if` before its digit loop).
+    auto emitBranchResult(const std::vector<ast::ExprPtr>& stmts, int idx,
+                          const std::vector<std::string>& mergeVars) -> std::string;
+
     // True while emitting a match-clause `when` guard. Core Erlang guards
     // may only use guard-safe operations — no arbitrary function calls —
     // so predicates that normally emit a `call 'kex_io':...` (digit?/
