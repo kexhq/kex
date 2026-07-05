@@ -29,6 +29,11 @@ auto erlString(const std::string& s) -> std::string {
 }
 
 struct Emitter {
+    int wildCounter = 0;
+    // Core Erlang treats `_` as a real variable, so repeating it within one
+    // pattern is a duplicate-variable error — each wildcard needs a distinct
+    // fresh name.
+    auto freshWild() -> std::string { return "_Wc" + std::to_string(wildCounter++); }
     auto emitLit(const Lit& l) -> std::string {
         switch (l.kind) {
             case LitKind::Int:    return l.text;
@@ -81,7 +86,7 @@ struct Emitter {
 
     auto emitPattern(const Pattern& p) -> std::string {
         switch (p.kind) {
-            case PatKind::Wild: return "_";
+            case PatKind::Wild: return freshWild();
             case PatKind::Var:  return erlVar(p.name);
             case PatKind::Lit: {
                 Lit l; l.kind = p.litKind; l.text = p.litText; l.boolValue = p.litBool;
@@ -166,6 +171,21 @@ struct Emitter {
                 std::string s = "{'" + n.tag + "'";
                 for (const auto& a : n.args) s += ", " + emit(a);
                 return s + "}";
+            } else if constexpr (std::is_same_v<T, Lambda>) {
+                std::string head = "(";
+                for (size_t i = 0; i < n.params.size(); i++) {
+                    if (i) head += ", ";
+                    head += erlVar(n.params[i]);
+                }
+                head += ")";
+                return "fun " + head + " ->\n    " + emit(n.body);
+            } else if constexpr (std::is_same_v<T, CallIndirect>) {
+                std::string args;
+                for (size_t i = 0; i < n.args.size(); i++) {
+                    if (i) args += ", ";
+                    args += emit(n.args[i]);
+                }
+                return "apply " + emit(n.callee) + "(" + args + ")";
             } else if constexpr (std::is_same_v<T, Return>) {
                 // Skeleton: no early-return lowering pass yet, so a Return in
                 // tail position is just its value.

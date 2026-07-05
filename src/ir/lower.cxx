@@ -3,6 +3,7 @@
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
 #include <algorithm>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -49,6 +50,9 @@ struct Lowering {
     // The corresponding binary-op Intrinsic then dispatches at runtime: a
     // tuple (record) receiver → the user's `'+'/2`, otherwise the builtin.
     std::unordered_set<std::string> overloadedOps;
+    // Top-level `let name = expr` bindings become 0-arity functions; a bare
+    // reference to one compiles to `apply 'name'/0()`, not a variable.
+    std::unordered_set<std::string> topLevelConstants;
 
     static auto opSymbol(TokenType t) -> std::string {
         switch (t) {
@@ -161,6 +165,13 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::NoneLiteral>) {
                 return lit(LitKind::None, "none");
             } else if constexpr (std::is_same_v<T, ast::Identifier>) {
+                // A bare reference to a top-level `let` constant (not shadowed
+                // by a local) is a call to its 0-arity function.
+                if (!subst.count(n.name) && topLevelConstants.count(n.name)) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Call{"", n.name, 0, {}, false};
+                    return ex;
+                }
                 return var(currentName(n.name));
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 return var(currentName("this"));
@@ -255,6 +266,16 @@ struct Lowering {
                 return matchBool(lower(n.condition), lower(n.expr), lit(LitKind::Atom, "ok"));
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
+            } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+                // Params shadow outer bindings: resolve to themselves inside.
+                auto snap = subst;
+                Lambda lam;
+                for (const auto& p : n.params) { lam.params.push_back(p.name); subst.erase(p.name); }
+                lam.body = lowerBody(n.body);
+                subst = snap;
+                auto ex = std::make_unique<Expr>();
+                ex->node = std::move(lam);
+                return ex;
             } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Return{lower(n.value)};
@@ -338,6 +359,41 @@ struct Lowering {
         if (m == "error?" && n.args.empty())
             return intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),std::move(recv))),
                                       lit(LitKind::Atom, "Error")));
+
+        // Block/higher-order list methods. The block lowers to a Lambda,
+        // which — being non-atomic — atomize() naturally let-binds (Core
+        // Erlang requires funs to be bound before being passed as call args).
+        const ast::ExprPtr* blk = n.block ? &*n.block
+                                : (!n.args.empty() ? &n.args.back() : nullptr);
+        if (blk) {
+            std::vector<Binding> binds;
+            auto fn = atomize(*blk, binds);
+            auto build = [&](ExprPtr call) { return wrapLets(binds, std::move(call)); };
+            // fn(recv) helpers for the runtime list HOFs (fun first for
+            // lists:map/filter/foreach; fun/acc/list order for foldl).
+            if (m == "each")
+                return build(callE("lists", "foreach", 2, two(std::move(fn), std::move(recv))));
+            if (m == "map")
+                return build(callE("lists", "map", 2, two(std::move(fn), std::move(recv))));
+            if (m == "filter" || m == "select")
+                return build(callE("lists", "filter", 2, two(std::move(fn), std::move(recv))));
+            if (m == "all?")
+                return build(callE("lists", "all", 2, two(std::move(fn), std::move(recv))));
+            if (m == "any?" || m == "some?")
+                return build(callE("lists", "any", 2, two(std::move(fn), std::move(recv))));
+            // reduce(seed) { |acc, x| } → lists:foldl(fun(x,acc)->fn(acc,x), seed, recv)
+            if ((m == "reduce" || m == "inject") && n.args.size() == 1 && n.block) {
+                auto seed = atomize(n.args[0], binds);
+                // Kex block is (acc, elem); foldl passes (elem, acc) → swap.
+                Lambda swap;
+                swap.params = {"_e", "_a"};
+                swap.body = callE_indirect(clone(fn), two(var("_a"), var("_e")));
+                auto swapFn = std::make_unique<Expr>(); swapFn->node = std::move(swap);
+                auto swapVar = atomize_ir(std::move(swapFn), binds);
+                return build(callE("lists", "foldl", 3,
+                    three(std::move(swapVar), std::move(seed), std::move(recv))));
+            }
+        }
 
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so
@@ -428,6 +484,25 @@ struct Lowering {
     }
     auto two(ExprPtr a, ExprPtr b) -> std::vector<ExprPtr> {
         std::vector<ExprPtr> v; v.push_back(std::move(a)); v.push_back(std::move(b)); return v;
+    }
+    auto three(ExprPtr a, ExprPtr b, ExprPtr c) -> std::vector<ExprPtr> {
+        std::vector<ExprPtr> v;
+        v.push_back(std::move(a)); v.push_back(std::move(b)); v.push_back(std::move(c));
+        return v;
+    }
+    auto callE_indirect(ExprPtr callee, std::vector<ExprPtr> args) -> ExprPtr {
+        auto e = std::make_unique<Expr>();
+        e->node = CallIndirect{std::move(callee), std::move(args), false};
+        return e;
+    }
+    // Atomize an already-lowered IR expr: bind to a fresh Let if it isn't a
+    // Var/Lit, recording the binding.
+    auto atomize_ir(ExprPtr e, std::vector<Binding>& binds) -> ExprPtr {
+        if (std::holds_alternative<Var>(e->node) || std::holds_alternative<Lit>(e->node))
+            return e;
+        auto name = fresh();
+        binds.push_back({name, std::move(e)});
+        return var(name);
     }
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
         auto e = std::make_unique<Expr>();
@@ -786,6 +861,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
     for (const auto& item : prog.items) {
         if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
             if (*rd) L.collectRecord(**rd);
+        } else if (auto* mb = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
+            if (*mb && (*mb)->synthetic)
+                for (const auto& e : (*mb)->body)
+                    if (auto* le = std::get_if<ast::LetExpr>(&e->kind))
+                        if (le->pattern)
+                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
+                                L.topLevelConstants.insert(vp->name);
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             if (*fd) definedFns.insert((*fd)->name);
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
@@ -820,6 +902,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
     auto flushGroup = [&]() {
         if (!fnGroup.empty()) { mod.functions.push_back(L.lowerFunctionGroup(fnGroup)); fnGroup.clear(); }
     };
+    // Bare top-level expressions (no explicit `main`) → one synthetic main/0.
+    std::vector<const ast::ExprPtr*> bareExprs;
 
     for (const auto& item : prog.items) {
         if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
@@ -858,19 +942,32 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                 }
                 flushM();
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
-                if (node && (node->isExplicitMain || !node->synthetic)) {
+                if (!node) return;
+                if (node->synthetic) {
+                    // Top-level `let name = expr` → a 0-arity function.
+                    for (const auto& e : node->body) {
+                        if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
+                            if (le->pattern) if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                                L.subst.clear();
+                                FunDef def; def.name = vp->name; def.arity = 0;
+                                FunClause fc; fc.body = L.lower(le->value);
+                                def.clauses.push_back(std::move(fc));
+                                mod.functions.push_back(std::move(def));
+                            }
+                        }
+                    }
+                } else if (node->isExplicitMain) {
                     if (!node->params.empty())
                         throw LowerError("IR lower: main(args) not yet ported");
                     L.subst.clear();
-                    FunDef def;
-                    def.name = "main";
-                    def.arity = 0;
-                    FunClause fc;
-                    fc.body = L.lowerBody(node->body);
+                    FunDef def; def.name = "main"; def.arity = 0;
+                    FunClause fc; fc.body = L.lowerBody(node->body);
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
-                    mod.hasMain = true;
-                    mod.mainArity = 0;
+                    mod.hasMain = true; mod.mainArity = 0;
+                } else {
+                    // Bare top-level expression(s) → accumulate for a synthetic main.
+                    for (const auto& e : node->body) bareExprs.push_back(&e);
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
                                  std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
@@ -899,6 +996,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
         }, item);
     }
     flushGroup();
+
+    // Synthetic main/0 from bare top-level expressions, if no explicit main.
+    if (!bareExprs.empty() && !mod.hasMain) {
+        L.subst.clear();
+        FunDef def; def.name = "main"; def.arity = 0;
+        FunClause fc;
+        // Emit each expr as a statement; last is the value.
+        std::function<ExprPtr(size_t)> chain = [&](size_t i) -> ExprPtr {
+            if (i + 1 == bareExprs.size()) return L.lower(*bareExprs[i]);
+            auto val = L.lower(*bareExprs[i]);
+            auto rest = chain(i + 1);
+            auto let = std::make_unique<Expr>();
+            let->node = Let{L.fresh("S"), std::move(val), std::move(rest)};
+            return let;
+        };
+        fc.body = bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0);
+        def.clauses.push_back(std::move(fc));
+        mod.functions.push_back(std::move(def));
+        mod.hasMain = true; mod.mainArity = 0;
+    }
 
     // Cross-type collision dispatchers (bare name → tag dispatch). Arity is
     // taken from any emitted `name__Type` variant.
