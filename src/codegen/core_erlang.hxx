@@ -108,9 +108,13 @@ private:
     auto makeTailCall(const std::string& loopFn, int loopArity,
                       const std::vector<std::string>& mutParams) -> std::string;
 
-    // Collect all AssignExpr names in a body (not crossing lambda/function boundaries).
+    // Collect all reassigned var names in a body — plain `x = ...` and
+    // mutating `x.push!(..)` calls alike (not crossing lambda/function
+    // boundaries). collectAssignedExpr handles a single expression.
     static void collectAssigned(const std::vector<ast::ExprPtr>& body,
                                  std::unordered_set<std::string>& out);
+    static void collectAssignedExpr(const ast::ExprPtr& e,
+                                    std::unordered_set<std::string>& out);
 
     // Helpers
     auto freshVar(const std::string& hint = "V") -> std::string;

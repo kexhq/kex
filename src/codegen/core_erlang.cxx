@@ -1848,35 +1848,47 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 // Body: sequence of exprs → nested let chain (forward-recursive)
 // ---------------------------------------------------------------------------
 
+// Collect loop-threaded variable names from a single expression. A var is
+// "threaded" if the loop body reassigns it — via a plain `x = ...`
+// (AssignExpr) OR a mutating `x.push!(..)` call (which is really `x =
+// x.push(..)`, see emitBodyFrom's node.mutating handling). Recurses through
+// control flow (if/match/loop/block) so a reassignment buried in a branch
+// or a `do ... end` match arm is still found — a real, reproduced bug
+// otherwise: examples/json_parser.kex's parseNumber accumulates into `var
+// chars` only via `chars.push!(c)` inside a `do`-block match arm, so
+// `chars` was never threaded and the loop lost every appended char.
+void CoreErlangEmitter::collectAssignedExpr(const ast::ExprPtr& e,
+                                            std::unordered_set<std::string>& out) {
+    if (!e) return;
+    std::visit([&](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+            out.insert(node.name);
+        } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            if (node.mutating && node.receiver)
+                if (auto* id = std::get_if<ast::Identifier>(&node.receiver->kind))
+                    out.insert(id->name);
+        } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            collectAssigned(node.thenBody, out);
+            if (node.elseBody) collectAssigned(*node.elseBody, out);
+            for (auto& [cond, b] : node.elifs) collectAssigned(b, out);
+        } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+            collectAssigned(node.body, out);
+        } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            collectAssigned(node.body, out);
+        } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+            collectAssigned(node.body, out);
+        } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+            for (auto& clause : node.clauses)
+                collectAssignedExpr(clause.body, out);
+        }
+        // Don't cross Lambda boundaries — lambdas capture by value on BEAM.
+    }, e->kind);
+}
+
 void CoreErlangEmitter::collectAssigned(const std::vector<ast::ExprPtr>& body,
                                          std::unordered_set<std::string>& out) {
-    for (const auto& e : body) {
-        if (!e) continue;
-        std::visit([&](const auto& node) {
-            using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, ast::AssignExpr>) {
-                out.insert(node.name);
-            } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
-                collectAssigned(node.thenBody, out);
-                if (node.elseBody) collectAssigned(*node.elseBody, out);
-                for (auto& [cond, b] : node.elifs) collectAssigned(b, out);
-            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-                collectAssigned(node.body, out);
-            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
-                collectAssigned(node.body, out);
-            } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
-                for (auto& clause : node.clauses) {
-                    if (clause.body) {
-                        if (auto* ae = std::get_if<ast::AssignExpr>(&clause.body->kind))
-                            out.insert(ae->name);
-                        // Recurse into match arm bodies that are IfExprs or blocks
-                        // (single-expr bodies only for now)
-                    }
-                }
-            }
-            // Don't cross Lambda boundaries — lambdas capture by value on BEAM.
-        }, e->kind);
-    }
+    for (const auto& e : body) collectAssignedExpr(e, out);
 }
 
 auto CoreErlangEmitter::makeTailCall(const std::string& loopFn, int loopArity,
@@ -1914,6 +1926,26 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
         std::string tmp = freshVar("S");
         std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
         return "let <" + tmp + "> =\n    " + emitExpr(ae->value) + "\nin\n" + rest;
+    }
+
+    // Mutating method call (`chars.push!(c)`) inside a loop → rebind the
+    // receiver var and thread it into the next iteration, exactly like an
+    // AssignExpr (see the matching statement-level handling in emitBodyFrom
+    // for why a `!` call IS an assignment). Threading it is what lets a
+    // loop that accumulates into a `var` via `.push!` actually make
+    // progress (examples/json_parser.kex's parseNumber/parseArray).
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
+        mc && mc->mutating && mc->receiver) {
+        if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+            std::string newVar = freshVar(id->name);
+            std::string val = emitExpr(e);
+            bool tracked = m_varSubst.count(id->name) > 0;
+            std::string prev = tracked ? m_varSubst[id->name] : std::string{};
+            m_varSubst[id->name] = newVar;
+            std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
+            if (tracked) m_varSubst[id->name] = prev; else m_varSubst.erase(id->name);
+            return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
+        }
     }
 
     // ReturnExpr → exit loop and enclosing function
@@ -2343,6 +2375,28 @@ auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int 
         m_varSubst.erase(ae->name);
         if (!prev.empty()) m_varSubst[ae->name] = prev;
         return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
+    }
+
+    // Mutating method call (`x.push!(v)`, `name.upperCase!`): rebinds the
+    // receiver variable to the (non-mutating) call's result — exactly an
+    // `x = x.push(v)` assignment, matching Evaluator's node.mutating
+    // handling (Kex values are immutable; `!` only rebinds the binding).
+    // emitExpr already emits the underlying method call regardless of the
+    // `!`, so this just captures that result into a fresh SSA name for the
+    // receiver var (spec/mutating_calls.kex, examples/json_parser.kex's
+    // `chars.push!(c)`).
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
+        mc && mc->mutating && mc->receiver) {
+        if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+            std::string newVar = freshVar(id->name);
+            std::string val = emitExpr(e);
+            auto prev = m_varSubst.count(id->name) ? m_varSubst[id->name] : std::string{};
+            m_varSubst[id->name] = newVar;
+            std::string rest = isLast ? newVar : emitBodyFrom(body, start + 1);
+            m_varSubst.erase(id->name);
+            if (!prev.empty()) m_varSubst[id->name] = prev;
+            return "let <" + newVar + "> =\n    " + val + "\nin\n" + rest;
+        }
     }
 
     // LoopExpr / WhileExpr
