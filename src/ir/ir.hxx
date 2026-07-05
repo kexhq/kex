@@ -94,7 +94,7 @@ struct Seq {
 struct Pattern;
 using PatternPtr = std::unique_ptr<Pattern>;
 
-enum class PatKind { Lit, Var, Wild, Construct, Tuple };
+enum class PatKind { Lit, Var, Wild, Construct, Tuple, List };
 struct Pattern {
     PatKind kind;
     // Lit
@@ -103,9 +103,11 @@ struct Pattern {
     bool litBool = false;
     // Var
     std::string name;
-    // Construct: tag + args ; Tuple: args
+    // Construct: tag + args ; Tuple/List: args
     std::string tag;
     std::vector<PatternPtr> args;
+    // List: the `| rest` tail pattern, if any (else a proper list).
+    PatternPtr rest;
 };
 
 struct MatchClause {
@@ -123,6 +125,15 @@ struct Match {
 struct Construct {
     std::string tag;
     std::vector<ExprPtr> args; // atomic
+};
+// Untagged tuple: {a, b, ...}.
+struct MakeTuple {
+    std::vector<ExprPtr> elements; // atomic
+};
+// List: [a, b | rest].  rest empty => proper list [a, b].
+struct MakeList {
+    std::vector<ExprPtr> elements;  // atomic
+    std::optional<ExprPtr> rest;    // atomic
 };
 // Read field at a fixed 1-based tuple position (resolved from the record type).
 struct FieldGet {
@@ -147,7 +158,7 @@ struct Return {
 struct Expr {
     std::variant<
         Lit, Var, Intrinsic, Call, CallIndirect,
-        Let, Seq, Match, Construct, FieldGet, Lambda, Return
+        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return
     > node;
 };
 

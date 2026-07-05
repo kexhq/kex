@@ -79,6 +79,56 @@ struct Emitter {
         return "call '" + c.module + "':'" + c.name + "'(" + args + ")";
     }
 
+    auto emitPattern(const Pattern& p) -> std::string {
+        switch (p.kind) {
+            case PatKind::Wild: return "_";
+            case PatKind::Var:  return erlVar(p.name);
+            case PatKind::Lit: {
+                Lit l; l.kind = p.litKind; l.text = p.litText; l.boolValue = p.litBool;
+                return emitLit(l);
+            }
+            case PatKind::Construct: {
+                if (p.args.empty()) return "'" + p.tag + "'";
+                std::string s = "{'" + p.tag + "'";
+                for (const auto& a : p.args) s += ", " + emitPattern(*a);
+                return s + "}";
+            }
+            case PatKind::Tuple: {
+                std::string s = "{";
+                for (size_t i = 0; i < p.args.size(); i++) {
+                    if (i) s += ", ";
+                    s += emitPattern(*p.args[i]);
+                }
+                return s + "}";
+            }
+            case PatKind::List: {
+                if (p.args.empty() && !p.rest) return "[]";
+                std::string s = "[";
+                for (size_t i = 0; i < p.args.size(); i++) {
+                    if (i) s += ", ";
+                    s += emitPattern(*p.args[i]);
+                }
+                if (p.rest) s += "|" + emitPattern(*p.rest);
+                return s + "]";
+            }
+        }
+        return "_";
+    }
+
+    auto emitMatch(const Match& m) -> std::string {
+        // Single subject: `case S of ... end`. (Multi-value dispatch is a
+        // later addition — the skeleton lowers if/match/destructure to one
+        // subject.)
+        std::string out = "case " + emit(m.subjects[0]) + " of\n";
+        for (const auto& cl : m.clauses) {
+            out += "  " + emitPattern(*cl.patterns[0]);
+            out += cl.guard ? " when " + emit(*cl.guard) : " when 'true'";
+            out += " ->\n    " + emit(cl.body) + "\n";
+        }
+        out += "end";
+        return out;
+    }
+
     auto emit(const ExprPtr& e) -> std::string {
         return std::visit([&](const auto& n) -> std::string {
             using T = std::decay_t<decltype(n)>;
@@ -93,6 +143,29 @@ struct Emitter {
             } else if constexpr (std::is_same_v<T, Let>) {
                 return "let <" + erlVar(n.name) + "> =\n    " + emit(n.value) +
                        "\nin\n" + emit(n.body);
+            } else if constexpr (std::is_same_v<T, Match>) {
+                return emitMatch(n);
+            } else if constexpr (std::is_same_v<T, MakeTuple>) {
+                std::string s = "{";
+                for (size_t i = 0; i < n.elements.size(); i++) {
+                    if (i) s += ", ";
+                    s += emit(n.elements[i]);
+                }
+                return s + "}";
+            } else if constexpr (std::is_same_v<T, MakeList>) {
+                if (n.elements.empty() && !n.rest) return "[]";
+                std::string s = "[";
+                for (size_t i = 0; i < n.elements.size(); i++) {
+                    if (i) s += ", ";
+                    s += emit(n.elements[i]);
+                }
+                if (n.rest) s += "|" + emit(*n.rest);
+                return s + "]";
+            } else if constexpr (std::is_same_v<T, Construct>) {
+                if (n.args.empty()) return "'" + n.tag + "'";
+                std::string s = "{'" + n.tag + "'";
+                for (const auto& a : n.args) s += ", " + emit(a);
+                return s + "}";
             } else if constexpr (std::is_same_v<T, Return>) {
                 // Skeleton: no early-return lowering pass yet, so a Return in
                 // tail position is just its value.
