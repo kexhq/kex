@@ -1,5 +1,7 @@
 #include "lower.hxx"
 #include "../lexer/token.hxx"
+#include "../lexer/lexer.hxx"
+#include "../parser/parser.hxx"
 #include <algorithm>
 #include <unordered_map>
 #include <unordered_set>
@@ -36,6 +38,19 @@ struct Lowering {
     // receiver-first" fallback; any other `.method` is an unported builtin and
     // must error, not silently become a call to a nonexistent function.
     std::unordered_set<std::string> localMethods;
+    // Cross-type method-name collisions: a method name → the make-block type
+    // names that define it, in order. When more than one type defines the
+    // same name, each type's version is emitted mangled (`name__Type`) and a
+    // dispatcher under the bare name selects at runtime on the receiver's tag
+    // (element 1). Mirrors the string emitter's collision handling.
+    std::unordered_map<std::string, std::vector<std::string>> methodOwners;
+    std::unordered_set<std::string> collidingMethods;
+
+    static auto simpleTypeName(const ast::TypeExprPtr& t) -> std::string {
+        if (t) if (auto* tn = std::get_if<ast::TypeName>(&t->kind))
+            if (!tn->parts.empty()) return tn->parts.back();
+        return "";
+    }
     // SSA renaming: Kex source name → its current IR variable name. A `let`/
     // `var`/reassignment introduces a fresh name and updates this; Identifier
     // lowering consults it. Function params map to themselves (the emitter
@@ -109,7 +124,7 @@ struct Lowering {
                 return lit(LitKind::Float, n.value);
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
                 if (n.value.find("${") != std::string::npos)
-                    throw LowerError("IR lower: string interpolation not yet ported");
+                    return lowerInterpolatedString(n.value);
                 return lit(LitKind::String, n.value);
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
                 return litBool(n.value);
@@ -320,6 +335,42 @@ struct Lowering {
         auto ex = std::make_unique<Expr>();
         ex->node = Construct{n.typeName, std::move(args)};
         return wrapLets(binds, std::move(ex));
+    }
+
+    // "text ${expr} more" → a ++ chain of literal segments and to_string'd
+    // sub-expressions. The `${...}` sub-expressions are raw text in the AST,
+    // so they're re-lexed/parsed here and lowered like any other expression
+    // (matching CoreErlangEmitter::emitInterpolatedString).
+    auto lowerInterpolatedString(const std::string& raw) -> ExprPtr {
+        std::vector<ExprPtr> parts;
+        size_t pos = 0;
+        while (pos < raw.size()) {
+            auto dollar = raw.find("${", pos);
+            if (dollar == std::string::npos) {
+                if (pos < raw.size()) parts.push_back(lit(LitKind::String, raw.substr(pos)));
+                break;
+            }
+            if (dollar > pos) parts.push_back(lit(LitKind::String, raw.substr(pos, dollar - pos)));
+            size_t close = std::string::npos;
+            int depth = 1;
+            for (size_t k = dollar + 2; k < raw.size(); k++) {
+                if (raw[k] == '{') depth++;
+                else if (raw[k] == '}' && --depth == 0) { close = k; break; }
+            }
+            if (close == std::string::npos) break; // malformed → stop
+            std::string inner = raw.substr(dollar + 2, close - dollar - 2);
+            kex::Lexer lx(inner);
+            kex::Parser ps(lx.tokenizeAll());
+            auto innerAst = ps.parseExpr();
+            if (innerAst)
+                parts.push_back(callE("kex_io", "to_string", 1, one(lower(innerAst))));
+            pos = close + 1;
+        }
+        if (parts.empty()) return lit(LitKind::String, "");
+        ExprPtr result = std::move(parts[0]);
+        for (size_t i = 1; i < parts.size(); i++)
+            result = intrin(Op::Concat, two(std::move(result), std::move(parts[i])));
+        return result;
     }
 
     // ---- IR construction helpers -----------------------------------------
@@ -607,7 +658,7 @@ struct Lowering {
     // Lower one make-block method to a FunDef. First cut: implicit-`this`
     // methods with named/simple params (the common `@field`/`this.method`
     // shape). Static constructors and receiver-pattern methods are deferred.
-    auto lowerMakeMethod(const ast::FunctionDef& fd) -> FunDef {
+    auto lowerMakeMethod(const ast::FunctionDef& fd, const std::string& typeName) -> FunDef {
         bool isStaticCtor = !fd.name.empty()
                           && std::isupper(static_cast<unsigned char>(fd.name[0]));
         if (isStaticCtor)
@@ -618,7 +669,45 @@ struct Lowering {
                 throw LowerError("IR lower: receiver-pattern method '" + fd.name
                                  + "' not yet ported");
         }
-        return lowerFunction(fd, "this");
+        auto def = lowerFunction(fd, "this");
+        // Colliding name across types → emit under a mangled name; the
+        // dispatcher (emitted separately) keeps the bare name.
+        if (collidingMethods.count(fd.name) && !typeName.empty())
+            def.name = fd.name + "__" + typeName;
+        return def;
+    }
+
+    // A dispatcher `name/arity` for a colliding method: inspect the
+    // receiver's tag (element 1 of arg 0) and forward to `name__Type`.
+    auto makeDispatcher(const std::string& name, int arity) -> FunDef {
+        FunDef def; def.name = name; def.arity = arity;
+        FunClause fc;
+        std::vector<ExprPtr> fwdArgs;
+        for (int i = 0; i < arity; i++) {
+            auto pat = std::make_unique<Pattern>();
+            pat->kind = PatKind::Var; pat->name = "_a" + std::to_string(i);
+            fc.params.push_back(std::move(pat));
+            fwdArgs.push_back(var("_a" + std::to_string(i)));
+        }
+        Match m;
+        m.subjects.push_back(callE("erlang", "element", 2, two(litInt(1), var("_a0"))));
+        for (const auto& ty : methodOwners[name]) {
+            MatchClause mc;
+            auto p = std::make_unique<Pattern>();
+            p->kind = PatKind::Lit; p->litKind = LitKind::Atom; p->litText = ty;
+            mc.patterns.push_back(std::move(p));
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
+            auto call = std::make_unique<Expr>();
+            call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+            mc.body = std::move(call);
+            m.clauses.push_back(std::move(mc));
+        }
+        auto body = std::make_unique<Expr>();
+        body->node = std::move(m);
+        fc.body = std::move(body);
+        def.clauses.push_back(std::move(fc));
+        return def;
     }
 };
 
@@ -639,11 +728,22 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             if (*fd) definedFns.insert((*fd)->name);
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-            if (*md) for (const auto& bi : (*md)->body)
+            if (!*md) continue;
+            std::string typeName = Lowering::simpleTypeName((*md)->target);
+            for (const auto& bi : (*md)->body)
                 if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                    if (*mfd) definedFns.insert((*mfd)->name);
+                    if (*mfd) {
+                        definedFns.insert((*mfd)->name);
+                        if (!typeName.empty()) {
+                            auto& owners = L.methodOwners[(*mfd)->name];
+                            if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
+                                owners.push_back(typeName);
+                        }
+                    }
         }
     }
+    for (const auto& [name, owners] : L.methodOwners)
+        if (owners.size() > 1) L.collidingMethods.insert(name);
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
     L.localMethods = definedFns;
@@ -676,9 +776,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
                 if (!node) return;
                 if (!node->implements.empty())
                     throw LowerError("IR lower: make ... implement (traits) not yet ported");
+                std::string typeName = Lowering::simpleTypeName(node->target);
                 for (const auto& bi : node->body) {
                     if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
-                        if (*mfd) mod.functions.push_back(L.lowerMakeMethod(**mfd));
+                        if (*mfd) mod.functions.push_back(L.lowerMakeMethod(**mfd, typeName));
                     } else {
                         throw LowerError("IR lower: make-block item (visibility/annotation) "
                                          "not yet ported");
@@ -706,6 +807,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
         }, item);
     }
     flushGroup();
+
+    // Cross-type collision dispatchers (bare name → tag dispatch). Arity is
+    // taken from any emitted `name__Type` variant.
+    for (const auto& name : L.collidingMethods) {
+        int arity = -1;
+        for (const auto& fn : mod.functions)
+            if (fn.name.rfind(name + "__", 0) == 0) { arity = fn.arity; break; }
+        if (arity >= 1) mod.functions.push_back(L.makeDispatcher(name, arity));
+    }
 
     // Field accessors last (so definedFns is fully known).
     for (auto& acc : L.makeAccessors(definedFns)) mod.functions.push_back(std::move(acc));
