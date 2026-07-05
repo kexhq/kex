@@ -179,17 +179,54 @@ struct Emitter {
     auto emitFunction(const FunDef& fn, std::vector<std::pair<std::string,int>>& exports)
         -> std::string {
         exports.push_back({fn.name, fn.arity});
-        // Skeleton: single clause, simple var params → direct fun.
-        const auto& cl = fn.clauses[0];
-        std::string head = "(";
-        for (size_t i = 0; i < cl.params.size(); i++) {
-            if (i) head += ", ";
-            head += erlVar(cl.params[i]->name);
-        }
-        head += ")";
         std::ostringstream out;
         out << "'" << fn.name << "'/" << fn.arity << " =\n";
-        out << "  fun " << head << " ->\n    " << emit(cl.body) << "\n";
+
+        // Fast path: exactly one clause with only var/wildcard params → a bare
+        // fun, no case dispatch.
+        const auto& cl0 = fn.clauses[0];
+        bool singleSimple = fn.clauses.size() == 1 &&
+            std::all_of(cl0.params.begin(), cl0.params.end(),
+                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+        if (singleSimple) {
+            std::string head = "(";
+            for (size_t i = 0; i < cl0.params.size(); i++) {
+                if (i) head += ", ";
+                head += cl0.params[i]->kind == PatKind::Wild ? "_W" + std::to_string(i)
+                                                             : erlVar(cl0.params[i]->name);
+            }
+            head += ")";
+            out << "  fun " << head << " ->\n    " << emit(cl0.body) << "\n";
+            return out.str();
+        }
+
+        // General: dispatch clauses on the argument value-list.
+        std::string head = "(", subj = "<";
+        for (int i = 0; i < fn.arity; i++) {
+            if (i) { head += ", "; subj += ", "; }
+            head += "_Arg" + std::to_string(i);
+            subj += "_Arg" + std::to_string(i);
+        }
+        head += ")"; subj += ">";
+        out << "  fun " << head << " ->\n";
+        out << "    case " << subj << " of\n";
+        for (const auto& cl : fn.clauses) {
+            std::string pats = "<";
+            for (size_t i = 0; i < cl.params.size(); i++) {
+                if (i) pats += ", ";
+                pats += emitPattern(*cl.params[i]);
+            }
+            pats += ">";
+            out << "      " << pats;
+            out << (cl.guard ? " when " + emit(*cl.guard) : " when 'true'");
+            out << " ->\n        " << emit(cl.body) << "\n";
+        }
+        // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`
+        // repeated in a value-list is a duplicate-variable error).
+        out << "      <";
+        for (int i = 0; i < fn.arity; i++) { if (i) out << ", "; out << "_Wf" << i; }
+        out << "> when 'true' -> call 'erlang':'error'('function_clause')\n";
+        out << "    end\n";
         return out.str();
     }
 };

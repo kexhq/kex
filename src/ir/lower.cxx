@@ -1,6 +1,8 @@
 #include "lower.hxx"
 #include "../lexer/token.hxx"
+#include <algorithm>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace kex::ir {
 
@@ -16,6 +18,24 @@ struct Binding {
 
 struct Lowering {
     int counter = 0;
+    // Record layout, by record name: field names in declared order (tuple
+    // position = index + 2, since element 1 is the 'Name' tag) and their
+    // default-value exprs (nullptr = no default). Drives construction (fields
+    // in declared order, defaults filled) and field access.
+    struct RecordInfo {
+        std::vector<std::string> fields;
+        std::vector<const ast::ExprPtr*> defaults;
+    };
+    std::unordered_map<std::string, RecordInfo> records;
+    // field name → [(record name, 1-based position)]. A field can live in
+    // several records at (possibly different) positions; the emitted accessor
+    // dispatches on the tag when they differ. Mirrors the string emitter.
+    std::unordered_map<std::string, std::vector<std::pair<std::string, int>>> fieldAccessors;
+    // Names that resolve to a local function (top-level fn, make-block method,
+    // or record field accessor). Only these may use the "UFCS → local apply,
+    // receiver-first" fallback; any other `.method` is an unported builtin and
+    // must error, not silently become a call to a nonexistent function.
+    std::unordered_set<std::string> localMethods;
     // SSA renaming: Kex source name → its current IR variable name. A `let`/
     // `var`/reassignment introduces a fresh name and updates this; Identifier
     // lowering consults it. Function params map to themselves (the emitter
@@ -101,6 +121,16 @@ struct Lowering {
                 return lit(LitKind::None, "none");
             } else if constexpr (std::is_same_v<T, ast::Identifier>) {
                 return var(currentName(n.name));
+            } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
+                return var(currentName("this"));
+            } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+                // Bare capitalized name = nullary ADT constructor / None-like
+                // tag → the atom 'Name' (e.g. JsonNull, Less).
+                auto ex = std::make_unique<Expr>();
+                ex->node = Construct{n.name, {}};
+                return ex;
+            } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
+                return lowerRecordConstruction(n);
             } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
                 // && / || MUST short-circuit: the right operand is evaluated
                 // lazily, so it cannot be ANF-atomized (that would force it).
@@ -184,7 +214,11 @@ struct Lowering {
         std::vector<ExprPtr> args;
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
         auto ex = std::make_unique<Expr>();
-        ex->node = Call{"", n.name, static_cast<int>(n.args.size()), std::move(args), false};
+        // Capitalized name = ADT constructor with a payload → tagged tuple.
+        if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0])))
+            ex->node = Construct{n.name, std::move(args)};
+        else
+            ex->node = Call{"", n.name, static_cast<int>(n.args.size()), std::move(args), false};
         return wrapLets(binds, std::move(ex));
     }
 
@@ -242,7 +276,50 @@ struct Lowering {
             return intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),std::move(recv))),
                                       lit(LitKind::Atom, "Error")));
 
-        throw LowerError("IR lower: UFCS method ." + n.method + " not yet ported");
+        // Generic UFCS fallback: a field access or a make-block method are
+        // BOTH emitted as local functions taking the receiver first, so
+        // `x.foo(a, b)` → `apply 'foo'/3(x, a, b)`. This is exactly how the
+        // string emitter resolves record field access and make-block methods
+        // without needing types. Gated on localMethods so an UNPORTED builtin
+        // (e.g. `.get`/`.map`) errors loudly instead of silently becoming a
+        // call to a function that doesn't exist.
+        if (localMethods.count(n.method) && !n.block && n.namedArgs.empty()) {
+            std::vector<Binding> binds;
+            std::vector<ExprPtr> args;
+            args.push_back(std::move(recv));
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            int arity = static_cast<int>(n.args.size()) + 1;
+            auto ex = std::make_unique<Expr>();
+            ex->node = Call{"", n.method, arity, std::move(args), false};
+            return wrapLets(binds, std::move(ex));
+        }
+        throw LowerError("IR lower: UFCS method ." + n.method + " (block/named args) not yet ported");
+    }
+
+    // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
+    // defaults filled for omitted ones>}. Field ORDER and defaults come from
+    // the record definition (the accessors read fixed positions).
+    auto lowerRecordConstruction(const ast::RecordConstruction& n) -> ExprPtr {
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> args;
+        auto it = records.find(n.typeName);
+        if (it == records.end()) {
+            // Unknown record — fall back to fields as written.
+            for (const auto& [name, v] : n.fields) args.push_back(atomize(v, binds));
+        } else {
+            const auto& info = it->second;
+            for (size_t i = 0; i < info.fields.size(); i++) {
+                const ast::ExprPtr* provided = nullptr;
+                for (const auto& [name, v] : n.fields)
+                    if (name == info.fields[i]) { provided = &v; break; }
+                if (provided) args.push_back(atomize(*provided, binds));
+                else if (info.defaults[i]) args.push_back(atomize(*info.defaults[i], binds));
+                else args.push_back(lit(LitKind::None, "none"));
+            }
+        }
+        auto ex = std::make_unique<Expr>();
+        ex->node = Construct{n.typeName, std::move(args)};
+        return wrapLets(binds, std::move(ex));
     }
 
     // ---- IR construction helpers -----------------------------------------
@@ -435,26 +512,113 @@ struct Lowering {
     }
 
     // ---- Function / program ----------------------------------------------
-    auto lowerFunction(const ast::FunctionDef& fn) -> FunDef {
-        if (fn.clauses.size() != 1)
-            throw LowerError("IR lower: multi-clause functions not yet ported");
-        subst.clear(); // fresh scope; params resolve to themselves
-        const auto& clause = fn.clauses[0];
-        FunDef def;
-        def.name = fn.name;
-        def.arity = static_cast<int>(clause.params.size());
-        FunClause fc;
-        for (const auto& p : clause.params) {
-            if (!p.name)
-                throw LowerError("IR lower: non-simple parameter not yet ported");
+    // A single param → an IR pattern (var name or a destructuring pattern).
+    auto lowerParam(const ast::Param& p) -> PatternPtr {
+        if (p.name) {
             auto pat = std::make_unique<Pattern>();
-            pat->kind = PatKind::Var;
-            pat->name = *p.name;
-            fc.params.push_back(std::move(pat));
+            pat->kind = PatKind::Var; pat->name = *p.name;
+            return pat;
         }
-        fc.body = lowerBody(clause.body);
-        def.clauses.push_back(std::move(fc));
+        if (p.pattern) return lowerPattern(*p.pattern);
+        auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
+    }
+
+    // Lower a group of same-name FunctionDefs (Kex writes multi-clause
+    // functions as separate `let` declarations) into one multi-clause FunDef.
+    // implicitThisName: when non-empty, a receiver param of that name is
+    // prepended to every clause (make-block methods: `this`).
+    auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
+                            const std::string& implicitThisName = "") -> FunDef {
+        FunDef def;
+        def.name = group[0]->name;
+        int explicitArity = group[0]->clauses.empty()
+            ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
+        def.arity = explicitArity + (implicitThisName.empty() ? 0 : 1);
+        for (const auto* fn : group) {
+            for (const auto& clause : fn->clauses) {
+                subst.clear(); // fresh scope per clause
+                FunClause fc;
+                if (!implicitThisName.empty()) {
+                    auto pat = std::make_unique<Pattern>();
+                    pat->kind = PatKind::Var; pat->name = implicitThisName;
+                    fc.params.push_back(std::move(pat));
+                }
+                for (const auto& p : clause.params) fc.params.push_back(lowerParam(p));
+                fc.body = lowerBody(clause.body);
+                def.clauses.push_back(std::move(fc));
+            }
+        }
         return def;
+    }
+    auto lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName = "")
+        -> FunDef {
+        return lowerFunctionGroup({&fn}, implicitThisName);
+    }
+
+    // ---- Records ----------------------------------------------------------
+    void collectRecord(const ast::RecordDef& rec) {
+        RecordInfo info;
+        for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
+            info.fields.push_back(rec.fields[i].name);
+            info.defaults.push_back(rec.fields[i].defaultValue ? &*rec.fields[i].defaultValue
+                                                               : nullptr);
+            fieldAccessors[rec.fields[i].name].push_back({rec.name, i + 2});
+        }
+        records[rec.name] = std::move(info);
+    }
+
+    // Emit a `'field'/1` accessor for each record field, unless a real
+    // function/method of the same name exists (which shadows it). When a
+    // field sits at the same position in every record that has it, one
+    // element/2 call suffices; otherwise dispatch on the record tag.
+    auto makeAccessors(const std::unordered_set<std::string>& definedFns) -> std::vector<FunDef> {
+        std::vector<FunDef> out;
+        for (const auto& [field, entries] : fieldAccessors) {
+            if (definedFns.count(field)) continue;
+            FunDef def; def.name = field; def.arity = 1;
+            FunClause fc;
+            auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
+            fc.params.push_back(std::move(rp));
+            bool allSame = std::all_of(entries.begin(), entries.end(),
+                [&](const auto& e){ return e.second == entries[0].second; });
+            if (allSame) {
+                fc.body = callE("erlang", "element", 2, two(litInt(entries[0].second), var("_rec")));
+            } else {
+                Match m;
+                m.subjects.push_back(callE("erlang", "element", 2, two(litInt(1), var("_rec"))));
+                for (const auto& [recName, pos] : entries) {
+                    MatchClause mc;
+                    auto p = std::make_unique<Pattern>();
+                    p->kind = PatKind::Lit; p->litKind = LitKind::Atom; p->litText = recName;
+                    mc.patterns.push_back(std::move(p));
+                    mc.body = callE("erlang", "element", 2, two(litInt(pos), var("_rec")));
+                    m.clauses.push_back(std::move(mc));
+                }
+                auto e = std::make_unique<Expr>(); e->node = std::move(m);
+                fc.body = std::move(e);
+            }
+            def.clauses.push_back(std::move(fc));
+            out.push_back(std::move(def));
+        }
+        return out;
+    }
+
+    // ---- Make blocks ------------------------------------------------------
+    // Lower one make-block method to a FunDef. First cut: implicit-`this`
+    // methods with named/simple params (the common `@field`/`this.method`
+    // shape). Static constructors and receiver-pattern methods are deferred.
+    auto lowerMakeMethod(const ast::FunctionDef& fd) -> FunDef {
+        bool isStaticCtor = !fd.name.empty()
+                          && std::isupper(static_cast<unsigned char>(fd.name[0]));
+        if (isStaticCtor)
+            throw LowerError("IR lower: static constructor '" + fd.name + "' not yet ported");
+        if (!fd.clauses.empty() && !fd.clauses[0].params.empty()) {
+            const auto& p0 = fd.clauses[0].params[0];
+            if (!p0.name && p0.pattern)
+                throw LowerError("IR lower: receiver-pattern method '" + fd.name
+                                 + "' not yet ported");
+        }
+        return lowerFunction(fd, "this");
     }
 };
 
@@ -465,11 +629,61 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
     Module mod;
     mod.name = "kex_" + fileStem;
 
+    // Pre-pass: collect record layouts (needed for construction/field access
+    // before any body is lowered) and the set of real function/method names
+    // (so field accessors that would collide with them are suppressed).
+    std::unordered_set<std::string> definedFns;
     for (const auto& item : prog.items) {
+        if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+            if (*rd) L.collectRecord(**rd);
+        } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*fd) definedFns.insert((*fd)->name);
+        } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+            if (*md) for (const auto& bi : (*md)->body)
+                if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
+                    if (*mfd) definedFns.insert((*mfd)->name);
+        }
+    }
+    // A `.method` may use the local-apply UFCS fallback iff it names a real
+    // local function or a record field accessor.
+    L.localMethods = definedFns;
+    for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
+
+    // Buffer consecutive same-name top-level functions so they group into one
+    // multi-clause FunDef (flushed on any other item / name change / end).
+    std::vector<const ast::FunctionDef*> fnGroup;
+    auto flushGroup = [&]() {
+        if (!fnGroup.empty()) { mod.functions.push_back(L.lowerFunctionGroup(fnGroup)); fnGroup.clear(); }
+    };
+
+    for (const auto& item : prog.items) {
+        if (auto* fdp = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item); fdp && *fdp) {
+            if (!fnGroup.empty() && fnGroup.front()->name != (*fdp)->name) flushGroup();
+            fnGroup.push_back(fdp->get());
+            continue;
+        }
+        flushGroup();
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                if (node) mod.functions.push_back(L.lowerFunction(*node));
+                (void)node; // handled above
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                // Layout already collected; accessors emitted after the loop.
+                // A record with a `static do` block isn't ported yet.
+                if (node && node->staticBlock)
+                    throw LowerError("IR lower: record static block not yet ported");
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (!node) return;
+                if (!node->implements.empty())
+                    throw LowerError("IR lower: make ... implement (traits) not yet ported");
+                for (const auto& bi : node->body) {
+                    if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                        if (*mfd) mod.functions.push_back(L.lowerMakeMethod(**mfd));
+                    } else {
+                        throw LowerError("IR lower: make-block item (visibility/annotation) "
+                                         "not yet ported");
+                    }
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 if (node && (node->isExplicitMain || !node->synthetic)) {
                     if (!node->params.empty())
@@ -491,6 +705,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Modu
             }
         }, item);
     }
+    flushGroup();
+
+    // Field accessors last (so definedFns is fully known).
+    for (auto& acc : L.makeAccessors(definedFns)) mod.functions.push_back(std::move(acc));
     return mod;
 }
 
