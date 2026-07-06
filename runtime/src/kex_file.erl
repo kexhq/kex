@@ -1,5 +1,5 @@
 -module(kex_file).
--export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1]).
+-export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1, feed/1]).
 
 %% File.exists?(path) → true | false
 exists(Path) ->
@@ -53,3 +53,8 @@ delete(Path) ->
         ok -> true;
         _  -> false
     end.
+
+%% File.feed(path) → [String] | 'none' — lazy-stream placeholder; returns the
+%% same eager list as lines/1. `.take(1)`, `.each`, etc. work on lists just as
+%% they would on a stream.
+feed(Path) -> lines(Path).

@@ -1504,11 +1504,13 @@ int main(int argc, char *argv[])
         // Load explicitly — code:load_abs rejects when filename != module name,
         // so use code:load_binary which skips that check.
         std::string mainCall =
-            "{ok,_Bin}=file:read_file(\"" + absBeamPath + "\"), "
+            "try {ok,_Bin}=file:read_file(\"" + absBeamPath + "\"), "
             "code:load_binary('" + moduleName + "',\"" + absBeamPath + "\",_Bin), "
             "case lists:member({main,1},erlang:get_module_info('" + moduleName + "',exports)) of "
             "true -> '" + moduleName + "':main(init:get_plain_arguments()); "
-            "false -> '" + moduleName + "':main() end, halt()";
+            "false -> '" + moduleName + "':main() end of "
+            "Result -> halt() "
+            "catch _:Reason:_ -> io:format(standard_error, \"Internal error: runtime error: ~p~n\", [Reason]), halt(1) end";
         std::string runCmd = "erl -noshell -pa " + absBeamDir;
         if (!rtBeamDir.empty()) runCmd += " -pa " + rtBeamDir;
         // shellSingleQuote (see its own comment) wraps the whole -eval
@@ -1725,7 +1727,7 @@ int main(int argc, char *argv[])
             {
                 try
                 {
-                    auto irMod = kex::ir::lowerProgram(program, stem, migratedPreludeFns());
+                    auto irMod = kex::ir::lowerProgram(program, stem, migratedPreludeFns(), filepath);
                     auto irRes = kex::ir::emitCore(irMod);
                     result.source = irRes.source;
                     result.moduleName = irRes.moduleName;
@@ -1869,8 +1871,8 @@ int main(int argc, char *argv[])
                     "{ok,_B}=file:read_file(\"" + absBeam + "\"), "
                     "code:load_binary('" + result.moduleName + "',\"" + absBeam + "\",_B), ";
                 std::string mainCall = result.mainArity == 1
-                    ? loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()), halt()"
-                    : loadExpr + "'" + result.moduleName + "':main(), halt()";
+                    ? "try " + loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()) of Result -> halt() catch _:Reason:_ -> io:format(standard_error, \"Internal error: ~s~n\", [Reason]), halt(1) end"
+                    : "try " + loadExpr + "'" + result.moduleName + "':main() of Result -> halt() catch _:Reason:_ -> io:format(standard_error, \"Internal error: ~s~n\", [Reason]), halt(1) end";
                 // shellSingleQuote (see its own comment) wraps the whole
                 // -eval text as one shell argument, so quote characters
                 // embedded in it survive into erl correctly regardless of

@@ -174,6 +174,7 @@ to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
 %% used by curried `~(/)` references (see core_erlang.cxx's CurryExpr
 %% handling); ordinary `/` expressions inline this same check directly
 %% rather than calling out here.
+divide(A, B) when is_integer(A), is_integer(B), B =:= 0 -> erlang:error("runtime error: Division by zero");
 divide(A, B) when is_integer(A), is_integer(B) -> A div B;
 divide(A, B) -> A / B.
 

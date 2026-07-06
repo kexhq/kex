@@ -25,6 +25,7 @@ struct LowerError : std::runtime_error {
 // the set of stdlib function names provided by the shared kex_prelude module;
 // a UFCS call to one (that isn't a local method) routes to `kex_prelude:<fn>`.
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns = {}) -> Module;
+                  const std::unordered_set<std::string>& preludeFns = {},
+                  const std::string& sourcePath = "") -> Module;
 
 } // namespace kex::ir

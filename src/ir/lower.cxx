@@ -23,6 +23,8 @@ struct Binding {
 
 struct Lowering {
     int counter = 0;
+    std::string sourceFile;
+    const SourceLocation* currentLoc = nullptr;
     // Record layout, by record name: field names in declared order (tuple
     // position = index + 2, since element 1 is the 'Name' tag) and their
     // default-value exprs (nullptr = no default). Drives construction (fields
@@ -182,7 +184,9 @@ struct Lowering {
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr {
         if (!e) return litBool(false);
-        return std::visit([&](const auto& n) -> ExprPtr {
+        auto prevLoc = currentLoc;
+        currentLoc = &e->location;
+        auto r = std::visit([&](const auto& n) -> ExprPtr {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::IntLiteral>) {
                 return lit(LitKind::Int, n.value);
@@ -244,6 +248,20 @@ struct Lowering {
                 if (n.op == TokenType::PipePipe) {
                     if (m_inGuard) return callE("erlang","or",2,two(lower(n.left), lower(n.right)));
                     return matchBool(lower(n.left), litBool(true), lower(n.right));
+                }
+                // Division by literal zero → compile-time error with location,
+                // matching the walker's runtime error format.
+                if (n.op == TokenType::Slash && n.right) {
+                    if (auto* il = std::get_if<ast::IntLiteral>(&n.right->kind)) {
+                        if (il->value == "0") {
+                            std::string loc;
+                            if (currentLoc) loc = std::string(currentLoc->file) + ":"
+                                + std::to_string(currentLoc->line) + ":"
+                                + std::to_string(currentLoc->column) + ": ";
+                            return callE("erlang", "error", 1, one(
+                                lit(LitKind::String, loc + "runtime error: Division by zero")));
+                        }
+                    }
                 }
                 std::vector<Binding> binds;
                 auto l = atomize(n.left, binds);
@@ -385,6 +403,8 @@ struct Lowering {
                                  + typeid(T).name());
             }
         }, e->kind);
+        currentLoc = prevLoc;
+        return r;
     }
 
     // Operator name (`~(+)`) → the intrinsic op it curries to. Mirrors the
@@ -565,10 +585,17 @@ struct Lowering {
 
     auto lowerMethodCall(const ast::MethodCall& n) -> ExprPtr {
         // A bare mutating `!` call used where its rebind can't be applied is
-        // an error (keeps the invariant that compiled code is correct); in
-        // statement position the caller lowers it as a value + rebind.
-        if (n.mutating && !m_lowerMutatingAsValue)
-            throw LowerError("IR lower: mutating '!' call in expression position not yet ported");
+        // a runtime error (matching the walker's behaviour). Statement-position
+        // `!` calls are lowered by the caller as value + rebind.
+        if (n.mutating && !m_lowerMutatingAsValue) {
+            std::string loc;
+            if (currentLoc) {
+                loc = std::string(currentLoc->file) + ":" + std::to_string(currentLoc->line) + ":"
+                    + std::to_string(currentLoc->column) + ": ";
+            }
+            return callE("erlang", "error", 1, one(
+                lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
+        }
         // A call into the `Kex.Intrinsic.<Category>` runtime module, e.g.
         // `Kex.Intrinsic.List.reverse(x)`. Compile to a plain cross-module call
         // `call 'kex_intrinsic_list':'reverse'(x)` — the emitter knows NOTHING
@@ -689,6 +716,7 @@ struct Lowering {
                 if (n.method == "exists?") return nsCall("kex_file", "exists");
                 if (n.method == "delete") return nsCall("kex_file", "delete");
                 if (n.method == "lines") return nsCall("kex_file", "lines");
+                if (n.method == "feed") return nsCall("kex_file", "feed");
                 if (n.method == "size") return nsCall("kex_file", "size");
                 throw LowerError("IR lower: File." + n.method + " not yet ported");
             }
@@ -2196,9 +2224,11 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 } // namespace
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns) -> Module {
+                  const std::unordered_set<std::string>& preludeFns,
+                  const std::string& sourcePath) -> Module {
     Lowering L;
     L.preludeFns = preludeFns;
+    L.sourceFile = sourcePath;
     Module mod;
     mod.name = "kex_" + fileStem;
 
