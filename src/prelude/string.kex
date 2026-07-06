@@ -94,6 +94,7 @@ make String do
   #   "hello".startsWith?("hel")   # => true
   #   "hello".startsWith?("llo")   # => false
   startsWith? :> String -> Bool
+  let startsWith?(prefix) = Kex.Intrinsic.String.startsWith?(this, prefix)
 
   # Returns +true+ if the string ends with +suffix+.
   #
@@ -104,6 +105,7 @@ make String do
   #   "hello".endsWith?("llo")   # => true
   #   "hello".endsWith?("hel")   # => false
   endsWith? :> String -> Bool
+  let endsWith?(suffix) = Kex.Intrinsic.String.endsWith?(this, suffix)
 
   # Converts to another type. The most common target is +Integer+ or +Float+.
   # Returns +None+ when conversion is not possible.

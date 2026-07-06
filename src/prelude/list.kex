@@ -66,8 +66,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].count              # => 3
   #   [1, 2, 3, 4].count(&even?)   # => 2
   count :> Integer
-  let count(@[]) = 0
-  let count(@[_|xs]) = 1 + xs.count
+  let count = Kex.Intrinsic.List.length(this)
 
   # count(pred) is provided by the Enumerable trait.
   count :> (X -> Bool) -> Integer
@@ -169,8 +168,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
   reduce :> (Acc, (Acc, X -> Acc)) -> Acc
-  let reduce(@[], acc, _) = acc
-  let reduce(@[x|xs], acc, f) = xs.reduce(f(acc, x), f)
+  let reduce(acc, f) = Kex.Intrinsic.List.foldl(this, acc, f)
 
   # Returns the element at position +i+ (0-based) wrapped in +Just+,
   # or +None+ if the index is out of range.
@@ -373,14 +371,7 @@ make [Number] do
   #   [3, 1, 2].min   # => Just(1)
   #   [].min          # => None
   min :> Number?
-  let min(@[]) = None
-  let min(@[x]) = Just(x)
-  let min(@[x|xs]) do
-    return match xs.min do
-      None    -> Just(x)
-      Just(y) -> Just(x < y then x else y)
-    end
-  end
+  let min = Kex.Intrinsic.List.min(this)
 
   # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
   #
@@ -390,14 +381,7 @@ make [Number] do
   #   [3, 1, 2].max   # => Just(3)
   #   [].max          # => None
   max :> Number?
-  let max(@[]) = None
-  let max(@[x]) = Just(x)
-  let max(@[x|xs]) do
-    return match xs.max do
-      None    -> Just(x)
-      Just(y) -> Just(x > y then x else y)
-    end
-  end
+  let max = Kex.Intrinsic.List.max(this)
 end
 
 make [String | Char] do
@@ -411,12 +395,8 @@ make [String | Char] do
   #   ["hello", "world", "kex"].join(", ")   # => "hello, world, kex"
   #   ["a", "b", "c"].join                   # => "abc"
   join :> String -> String
-  let join(@[]) = ""
-  let join(@[x], _) = x
-  let join(@[x|xs], sep) = x + sep + xs.join(sep)
+  let join(sep) = Kex.Intrinsic.List.join(this, sep)
 
   join :> String
-  let join(@[]) = ""
-  let join(@[x]) = x
-  let join(@[x|xs]) = x + xs.join
+  let join = Kex.Intrinsic.List.join(this)
 end

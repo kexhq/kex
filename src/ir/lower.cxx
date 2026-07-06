@@ -885,9 +885,9 @@ struct Lowering {
         // — their ladder handlers were removed so the prelude's own (canonical)
         // definitions aren't shadowed during prelude compilation.
         if (m == "alive?"  && n.args.empty()) return ret(callE("erlang","is_process_alive",1,one(clone(rv))));
-        if (m == "join" && n.args.size() == 1)
-            return ret(callE("lists","flatten",1,
-                one(callE("lists","join",2,two(arg0(), clone(rv))))));
+        // join is migrated to the prelude (Kex.Intrinsic.List.join →
+        // lists:flatten / lists:join+flatten). Not guard-safe (lists:flatten/
+        // join aren't guard BIFs), so no guard fallback — removed outright.
         // .some?/.present? on an Option — the Some/Just tag check (the block
         // form `.some? { … }` is handled with the HOFs below).
         if ((m == "some?" || m == "present?") && n.args.empty() && !n.block) {

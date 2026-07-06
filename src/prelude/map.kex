@@ -54,7 +54,7 @@ make Map<K, V>, implement: Enumerable do
   #   { a: 1, b: 2 }.count                        # => 2
   #   { a: 1, b: 2 }.count { |k, v| v > 1 }       # => 1
   count :> Integer
-  let count = this.entries.count            # size (count/2 via Enumerable)
+  let count = Kex.Intrinsic.Map.size(this)
   count :> ((K, V) -> Bool) -> Integer
 
   # Returns all keys as a list, in insertion order.
