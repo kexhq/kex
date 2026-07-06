@@ -77,6 +77,10 @@ struct Lowering {
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
     std::unordered_set<std::string> knownFns;
+    // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
+    // by the dispatcher to wildcard-match any variant of a type, not just the
+    // type name itself (which isn't set as element(1) on any variant value).
+    std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
 
     static auto opSymbol(TokenType t) -> std::string {
         switch (t) {
@@ -890,25 +894,8 @@ struct Lowering {
         // join is migrated to the prelude (Kex.Intrinsic.List.join →
         // lists:flatten / lists:join+flatten). Not guard-safe (lists:flatten/
         // join aren't guard BIFs), so no guard fallback — removed outright.
-        // .some?/.present? on an Option — the Some/Just tag check (the block
-        // form `.some? { … }` is handled with the HOFs below).
-        if ((m == "some?" || m == "present?") && n.args.empty() && !n.block) {
-            // Match, not element/2 — None is the bare atom 'none', not a tuple.
-            Match mm; mm.subjects.push_back(clone(rv));
-            for (const char* tag : {"Some", "Just"}) {
-                MatchClause c; auto p = std::make_unique<Pattern>();
-                p->kind = PatKind::Construct; p->tag = tag;
-                auto wv = std::make_unique<Pattern>(); wv->kind = PatKind::Wild;
-                p->args.push_back(std::move(wv));
-                c.patterns.push_back(std::move(p)); c.body = litBool(true);
-                mm.clauses.push_back(std::move(c));
-            }
-            MatchClause d; auto wp = std::make_unique<Pattern>(); wp->kind = PatKind::Wild;
-            d.patterns.push_back(std::move(wp)); d.body = litBool(false);
-            mm.clauses.push_back(std::move(d));
-            auto x = std::make_unique<Expr>(); x->node = std::move(mm);
-            return ret(std::move(x));
-        }
+        // some?/present? migrated to the prelude (Optional.some?/present?).
+        // Not guard-safe (Match is illegal in guards), so no fallback — removed.
         if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block)
             return ret(matchBool(callE("erlang","is_map",1,one(clone(rv))),
                 callE("maps","size",1,one(clone(rv))),
@@ -2412,7 +2399,22 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // spliced into each implementing type's method group above.
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>> ||
                                  std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                // Types/annotations are erased — nothing to emit.
+                // Types/annotations are erased, but collect variant tags first
+                // so dispatchers can wildcard-match them (see the nested module
+                // handler below for the same logic).
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                    if (node && node->variants) {
+                        std::vector<std::string> tags;
+                        for (const auto& v : *node->variants) {
+                            auto t = Lowering::simpleTypeName(v);
+                            // Kex Nothing → Erlang atom 'none'.
+                            if (t == "Nothing") t = "none";
+                            if (!t.empty()) tags.push_back(t);
+                        }
+                        if (!tags.empty())
+                            L.typeVariantTags[node->name] = std::move(tags);
+                    }
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 // A nested module flattens its functions into this BEAM module
                 // (Kex modules are organizational namespaces — see
@@ -2436,7 +2438,20 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     push(vfd->get());
                         } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
                                    std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                            // Types/annotations are erased.
+                            // Types/annotations are erased, but collect variant
+                            // tags first so the dispatcher can wildcard-match them.
+                            if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
+                                if (*td && (*td)->variants) {
+                                    std::vector<std::string> tags;
+                                    for (const auto& v : *(*td)->variants) {
+                                        auto t = Lowering::simpleTypeName(v);
+                                        if (t == "Nothing") t = "none";
+                                        if (!t.empty()) tags.push_back(t);
+                                    }
+                                    if (!tags.empty())
+                                        L.typeVariantTags[(*td)->name] = std::move(tags);
+                                }
+                            }
                         } else { flush(); throw LowerError("IR lower: nested module non-function item not yet ported"); }
                     }
                     flush();
@@ -2480,23 +2495,63 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         for (const auto& fn : mod.functions)
             if (fn.name.rfind(prefix, 0) == 0)
                 ownersByArity[fn.arity].push_back(fn.name.substr(prefix.size()));
-        for (const auto& [arity, owners] : ownersByArity)
-            if (arity >= 1) mod.functions.push_back(L.makeDispatcher(name, arity, owners));
+        for (const auto& [arity, owners] : ownersByArity) {
+            if (arity < 1) continue;
+            // If every owner is an ADT type (has known variant tags), the
+            // clauses from the mangled functions have distinct top-level
+            // patterns — merge them into one function and skip the guard-
+            // based dispatcher entirely. Pattern matching handles dispatch
+            // natively, avoiding Core Erlang guard short-circuit issues.
+            bool allAdt = !owners.empty();
+            for (const auto& o : owners) {
+                if (!L.typeVariantTags.count(o)) { allAdt = false; break; }
+            }
+            if (allAdt) {
+                FunDef merged; merged.name = name; merged.arity = arity;
+                for (size_t i = 0; i < mod.functions.size(); ) {
+                    auto& f = mod.functions[i];
+                    std::string prefix = name + "__";
+                    if (f.name.rfind(prefix, 0) == 0 && f.arity == arity) {
+                        for (auto& c : f.clauses)
+                            merged.clauses.push_back(std::move(c));
+                        // Remove the mangled function (avoid duplicate and keep
+                        // mod.functions clean).
+                        mod.functions.erase(mod.functions.begin() + i);
+                    } else {
+                        ++i;
+                    }
+                }
+                mod.functions.push_back(std::move(merged));
+            } else {
+                mod.functions.push_back(L.makeDispatcher(name, arity, owners));
+            }
+        }
     }
 
     // Field accessors last (so definedFns is fully known).
     for (auto& acc : L.makeAccessors(definedFns)) mod.functions.push_back(std::move(acc));
 
-    // Drop duplicate function definitions (same name + arity), keeping the
-    // first. The prelude can legitimately repeat a method across make blocks
-    // for the same type (e.g. algebra.kex defines `identity`/`combine` for
-    // Integer under both Monoid and Group); erlc rejects duplicate functions.
+    // Merge duplicate function definitions (same name + arity) by concatenating
+    // their clauses. The prelude legitimately repeats a method across make blocks
+    // for different types with different clause patterns (e.g. optional.kex
+    // defines `or` for both Optional<X> and Result<X,E>); erlc needs a single
+    // function with all the clauses unified, not two conflicting definitions.
     {
-        std::set<std::pair<std::string, int>> seen;
-        std::vector<FunDef> uniq;
-        for (auto& f : mod.functions)
-            if (seen.insert({f.name, f.arity}).second) uniq.push_back(std::move(f));
-        mod.functions = std::move(uniq);
+        std::map<std::pair<std::string, int>, FunDef> merged;
+        for (auto& f : mod.functions) {
+            auto key = std::make_pair(f.name, f.arity);
+            auto it = merged.find(key);
+            if (it == merged.end()) {
+                merged.emplace(key, std::move(f));
+            } else {
+                auto& existing = it->second;
+                existing.clauses.insert(existing.clauses.end(),
+                    std::make_move_iterator(f.clauses.begin()),
+                    std::make_move_iterator(f.clauses.end()));
+            }
+        }
+        mod.functions.clear();
+        for (auto& [_, f] : merged) mod.functions.push_back(std::move(f));
     }
     return mod;
 }

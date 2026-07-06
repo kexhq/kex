@@ -46,6 +46,7 @@ make Map<K, V>, implement: Enumerable do
   # @example
   #   {}.empty?   # => true
   empty? :> Bool
+  let empty? = Kex.Intrinsic.Map.size(this) == 0
 
   # Returns the number of key-value pairs.
   # When given a predicate, counts only matching entries.

@@ -79,6 +79,7 @@ auto Evaluator::registerAdtConstructors() -> void {
         m_globalEnv->define(name, val);
     };
     regOptionPredicate("some?", true);
+    regOptionPredicate("present?", true);
     regOptionPredicate("none?", false);
 
     // `or` — fallback extraction, shared by both prelude ADTs: unwraps
