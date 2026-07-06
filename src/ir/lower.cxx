@@ -603,9 +603,17 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             };
             if (uid->name == "IO") {
-                if (n.method == "printLine") return nsCall("kex_io", "print_line");
-                if (n.method == "print")     return nsCall("kex_io", "print");
-                if (n.method == "printError") return nsCall("kex_io", "print_error");
+                auto ioCall = [&](const char* fn) {
+                    // No-arg print/printLine/printError: print an empty string
+                    // (match the walker's behaviour).
+                    if (args.empty()) args.push_back(atomize_ir(lit(LitKind::String, ""), binds));
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Call{"kex_io", fn, static_cast<int>(args.size()), std::move(args), false};
+                    return wrapLets(binds, std::move(ex));
+                };
+                if (n.method == "printLine")  return ioCall("print_line");
+                if (n.method == "print")      return ioCall("print");
+                if (n.method == "printError") return ioCall("print_error");
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_io", "integer_parse");
@@ -680,8 +688,9 @@ struct Lowering {
                 if (n.method == "append") return nsCall("kex_file", "append");
                 if (n.method == "exists?") return nsCall("kex_file", "exists");
                 if (n.method == "delete") return nsCall("kex_file", "delete");
-                if (n.method == "size") return nsCall("kex_file", "size");
                 if (n.method == "lines") return nsCall("kex_file", "lines");
+                if (n.method == "size") return nsCall("kex_file", "size");
+                throw LowerError("IR lower: File." + n.method + " not yet ported");
             }
             // ENV is a real Map value (kex_io:env_map()); its methods are just
             // map operations on that value.
@@ -760,7 +769,7 @@ struct Lowering {
         // prelude with the block appended as the trailing argument. Only
         // list-only HOFs (no map counterpart → no receiver-type dispatch) are
         // migrated so far.
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count"};
+        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition"};
         if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
@@ -845,7 +854,10 @@ struct Lowering {
             lst->node = MakeList{one(arg0()), std::nullopt};
             return ret(callE("erlang","++",2,two(clone(rv), std::move(lst))));
         }
-        if (m == "in?" && n.args.size() == 1)
+        // in? migrated to the prelude (Kex.Intrinsic.List.member →
+        // lists:member). Guard-safe (lists:member is a guard BIF on OTP≥21),
+        // so the ladder entry stays as the guard fallback.
+        if (m_inGuard && m == "in?" && n.args.size() == 1)
             return ret(callE("lists","member",2,two(clone(rv), arg0())));
         // pid.send(m) → erlang:send(Pid, {'kex_msg', M, self()}). Every Kex
         // message is wrapped with the sender pid for `receive |sender|`.
@@ -1121,12 +1133,8 @@ struct Lowering {
                 auto e = std::make_unique<Expr>(); e->node = std::move(mm);
                 return build(std::move(e));
             }
-            // partition → {matching, rest} 2-tuple (lists:partition returns
-            // exactly that pair).
-            if (m == "partition") {
-                auto p = callE("lists", "partition", 2, two(std::move(fn), clone(rv)));
-                return build(std::move(p));
-            }
+            // partition migrated to the prelude (Kex.Intrinsic.List.partition →
+            // lists:partition). Not guard-safe, no fallback — removed.
             if (m == "count") // count matching a predicate
                 return build(callE("erlang", "length", 1,
                     one(callE("lists", "filter", 2, two(std::move(fn), clone(rv))))));

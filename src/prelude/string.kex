@@ -145,4 +145,5 @@ make Char do
   #   'b'.in?('a'..'z')   # => true
   #   'B'.in?('a'..'z')   # => false
   in? :> Range<Char> -> Bool
+  let in?(range) = Kex.Intrinsic.List.member(this, range)
 end

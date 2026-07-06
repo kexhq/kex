@@ -7,7 +7,7 @@
 -module(kex_intrinsic_list).
 -export([reverse/1, sort/1, uniq/1, flatten/1, take/2, drop/2, zip/2, push/2,
          sum/1, product/1, indexOf/2, at/2, foldl/3, min/1, max/1, length/1,
-         join/1, join/2,
+         join/1, join/2, partition/2, member/2,
          %% Lower-level list ops used directly by the emitters (moved here from
          %% kex_io, where list operations didn't belong).
          list_get/2, list_get/3, index_of/2, list_product/1]).
@@ -29,6 +29,14 @@ at(L, I)   -> list_get(L, I).
 %% HOF derived from it). Kex's reducer takes (acc, elem); Erlang's lists:foldl
 %% takes fun(elem, acc), so swap the argument order at the boundary.
 foldl(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, L).
+
+%% partition/2 — splits into {Matching, NonMatching} per predicate. Kex is
+%% receiver-first; Erlang's lists:partition is fun-first, so swap.
+partition(L, Fun) -> lists:partition(Fun, L).
+
+%% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
+%% Element is the receiver, container is the arg.
+member(Elem, Container) -> lists:member(Elem, Container).
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old
