@@ -159,3 +159,8 @@ make Map<K, V>, implement: Enumerable do
   #   { a: 1, b: 2 }.find { |k, v| v > 1 }   # => Just((:b, 2))
   find :> ((K, V) -> Bool) -> (K, V)?
 end
+
+make Map<K,V>, implement: Blankable do
+  blank? :> Bool
+  let blank? = this.entries.empty?
+end

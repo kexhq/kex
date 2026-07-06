@@ -728,13 +728,15 @@ struct Lowering {
             // `method` is a local function/make-method. If that method has an
             // implicit `this`, pass a placeholder receiver (the type tag).
             if (knownTypes.count(uid->name) && localMethods.count(n.method)) {
+                std::string mangled = uid->name + "__" + n.method;
+                std::string callName = knownFns.count(mangled) ? mangled : n.method;
                 std::vector<ExprPtr> callArgs;
-                if (implicitThisMethods.count(n.method))
-                    callArgs.push_back(lit(LitKind::Atom, uid->name)); // placeholder receiver
+                if (implicitThisMethods.count(callName))
+                    callArgs.push_back(lit(LitKind::Atom, uid->name));
                 for (auto& a : args) callArgs.push_back(std::move(a));
                 int ar = static_cast<int>(callArgs.size());
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{"", n.method, ar, std::move(callArgs), false};
+                ex->node = Call{"", callName, ar, std::move(callArgs), false};
                 return wrapLets(binds, std::move(ex));
             }
             throw LowerError("IR lower: namespace call " + uid->name + "." + n.method
@@ -1971,9 +1973,10 @@ struct Lowering {
     // implicitThisName: when non-empty, a receiver param of that name is
     // prepended to every clause (make-block methods: `this`).
     auto lowerFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                            const std::string& implicitThisName = "") -> FunDef {
+                            const std::string& implicitThisName = "",
+                            const std::string& nameOverride = "") -> FunDef {
         FunDef def;
-        def.name = group[0]->name;
+        def.name = nameOverride.empty() ? group[0]->name : nameOverride;
         int explicitArity = group[0]->clauses.empty()
             ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
         def.arity = explicitArity + (implicitThisName.empty() ? 0 : 1);
@@ -2249,9 +2252,19 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // before any body is lowered) and the set of real function/method names
     // (so field accessors that would collide with them are suppressed).
     std::unordered_set<std::string> definedFns;
+    std::unordered_set<std::string> staticMethodNames; // record static blocks
     for (const auto& item : prog.items) {
         if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-            if (*rd) { L.collectRecord(**rd); L.knownTypes.insert((*rd)->name); }
+            if (*rd) {
+                L.collectRecord(**rd);
+                L.knownTypes.insert((*rd)->name);
+                if ((*rd)->staticBlock)
+                    for (const auto& sf : (*rd)->staticBlock->functions)
+                        if (sf) {
+                            definedFns.insert((*rd)->name + "__" + sf->name);
+                            staticMethodNames.insert(sf->name);
+                        }
+            }
         } else if (auto* mb = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
             if (*mb && (*mb)->synthetic)
                 for (const auto& e : (*mb)->body)
@@ -2303,6 +2316,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
+    for (const auto& n : staticMethodNames) L.localMethods.insert(n);
     for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
 
     // Buffer consecutive same-name top-level functions so they group into one
@@ -2327,9 +2341,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 (void)node; // handled above
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 // Layout already collected; accessors emitted after the loop.
-                // A record with a `static do` block isn't ported yet.
-                if (node && node->staticBlock)
-                    throw LowerError("IR lower: record static block not yet ported");
+                // Record static-block functions emit as top-level functions so
+                // `RecordName.method(...)` namespace calls find them.
+                if (node && node->staticBlock) {
+                    for (const auto& sf : node->staticBlock->functions) {
+                        if (!sf) continue;
+                        std::vector<const ast::FunctionDef*> tmp{sf.get()};
+                        std::string mangled = node->name + "__" + sf->name;
+                        mod.functions.push_back(L.lowerFunctionGroup(tmp, "", mangled));
+                    }
+                }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 if (!node) return;
                 std::string typeName = Lowering::simpleTypeName(node->target);
