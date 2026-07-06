@@ -256,6 +256,8 @@ auto Evaluator::registerListBuiltins() -> void {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements[0]);
         }
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::just(Value::integer(range->start));
         return Value::none();
     });
 
@@ -306,6 +308,8 @@ auto Evaluator::registerListBuiltins() -> void {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements.back());
         }
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::just(Value::integer(range->end));
         return Value::none();
     });
 

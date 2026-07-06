@@ -744,7 +744,8 @@ struct Lowering {
         // Not in a guard: a cross-module `kex_prelude:…` call is illegal inside
         // a Core Erlang guard, so migrated methods fall through to the guard-
         // safe ladder form there (e.g. `.count` → erlang:length).
-        if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()) {
+        if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
+            && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
             pargs.push_back(clone(rv));
             for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
@@ -756,7 +757,8 @@ struct Lowering {
         // list-only HOFs (no map counterpart → no receiver-type dispatch) are
         // migrated so far.
         static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count"};
-        if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()) {
+        if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
+            && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
             pargs.push_back(clone(rv));
             for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
