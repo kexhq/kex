@@ -502,7 +502,10 @@ static const std::unordered_set<std::string> &migratedPreludeFns()
         "modulo", "even?", "odd?",
         "keys", "values", "entries", "merge", "has?", "put", "delete",
         "abs", "sqrt", "none?", "some?", "present?", "ok?", "error?",
-        "first", "last", "empty?", "or", "in?"};
+        "first", "last", "empty?", "or", "in?",
+        "blank?", "present?", "truthy?", "falsy?",
+        "second", "third",
+        "floor", "ceil", "round", "toFloat", "toInteger"};
     return fns;
 }
 

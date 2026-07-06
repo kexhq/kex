@@ -25,6 +25,9 @@ struct Lowering {
     int counter = 0;
     std::string sourceFile;
     const SourceLocation* currentLoc = nullptr;
+    // Names bound with `let` (immutable) — a mutating `!` call on one is a
+    // runtime error matching the walker's behaviour.
+    std::unordered_set<std::string> immutableBindings;
     // Record layout, by record name: field names in declared order (tuple
     // position = index + 2, since element 1 is the 'Name' tag) and their
     // default-value exprs (nullptr = no default). Drives construction (fields
@@ -211,6 +214,15 @@ struct Lowering {
                     (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
                     auto ex = std::make_unique<Expr>();
                     ex->node = Call{"", n.name, 0, {}, false};
+                    return ex;
+                }
+                // Uppercase bare name not a known constant → nullary ADT
+                // constructor (matching the UpperIdentifier path). Without
+                // this, uppercase names in expression context become unbound
+                // variables in Core Erlang and erlc rejects them.
+                if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{n.name, {}};
                     return ex;
                 }
                 return var(currentName(n.name));
@@ -1659,13 +1671,28 @@ struct Lowering {
             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                 auto val = lower(le->value);
                 std::string nv = fresh(vp->name); subst[vp->name] = nv;
+                immutableBindings.insert(vp->name);
                 return makeLet(nv, std::move(val), cont());
             }
             auto val = lower(le->value); auto pat = lowerPattern(le->pattern);
+            // Collect destructured names as immutable.
+            if (le->pattern)
+                if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
+                    immutableBindings.insert(vp->name);
             return makeMatch1(std::move(val), std::move(pat), cont());
         }
         if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver)
             if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+                if (immutableBindings.count(id->name)) {
+                    std::string loc;
+                    if (currentLoc) loc = std::string(currentLoc->file) + ":"
+                        + std::to_string(currentLoc->line) + ":"
+                        + std::to_string(currentLoc->column) + ": ";
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Call{"erlang", "error", 1,
+                        one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
+                    return std::move(ex);
+                }
                 auto val = lowerMutatingAsValue(*mc);
                 std::string nv = fresh(id->name); subst[id->name] = nv;
                 return makeLet(nv, std::move(val), cont());
@@ -1871,6 +1898,8 @@ struct Lowering {
     auto lowerBodyFrom(const std::vector<ast::ExprPtr>& body, size_t i) -> ExprPtr {
         const auto& e = body[i];
         bool isLast = (i + 1 == body.size());
+        auto prevLoc = currentLoc;
+        currentLoc = &e->location;
 
         // let PATTERN = value
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
@@ -1878,6 +1907,7 @@ struct Lowering {
                 auto val = lower(le->value);
                 std::string ssa = subst.count(vp->name) ? fresh(vp->name) : vp->name;
                 subst[vp->name] = ssa;
+                immutableBindings.insert(vp->name);
                 auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
                 return makeLet(ssa, std::move(val), std::move(rest));
             }
@@ -1917,6 +1947,16 @@ struct Lowering {
         // x.push!(v) / name.upperCase!  → rebind x to the (non-mutating) result.
         if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver) {
             if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
+                if (immutableBindings.count(id->name)) {
+                    auto err = std::make_unique<Expr>();
+                    std::string loc;
+                    if (currentLoc) loc = std::string(currentLoc->file) + ":"
+                        + std::to_string(currentLoc->line) + ":"
+                        + std::to_string(currentLoc->column) + ": ";
+                    err->node = Call{"erlang", "error", 1,
+                        one(lit(LitKind::String, loc + "runtime error: Cannot use '!' on immutable binding: " + id->name)), false};
+                    return std::move(err);
+                }
                 auto val = lowerMutatingAsValue(*mc);
                 std::string ssa = fresh(id->name);
                 subst[id->name] = ssa;
@@ -2609,6 +2649,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         mod.functions.clear();
         for (auto& [_, f] : merged) mod.functions.push_back(std::move(f));
     }
+    mod.typeVariantTags = L.typeVariantTags;
     return mod;
 }
 

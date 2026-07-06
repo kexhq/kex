@@ -116,10 +116,10 @@ struct Emitter {
         auto a = [&](int i) { return emit(in.args[i]); };
         switch (in.op) {
             // + is polymorphic (numeric add / string concat) at runtime.
-            case Op::Add:    return "call 'kex_io':'add'(" + a(0) + ", " + a(1) + ")";
+            case Op::Add:    return "call 'kex_intrinsic_number':'add'(" + a(0) + ", " + a(1) + ")";
             case Op::Sub:    return "call 'erlang':'-'(" + a(0) + ", " + a(1) + ")";
             case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
-            case Op::Div:    return "call 'kex_io':'divide'(" + a(0) + ", " + a(1) + ")";
+            case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
             case Op::Mod:    return "call 'erlang':'rem'(" + a(0) + ", " + a(1) + ")";
             case Op::Neg:    return "call 'erlang':'-'(" + a(0) + ")";
             case Op::Eq:     return "call 'erlang':'=:='(" + a(0) + ", " + a(1) + ")";

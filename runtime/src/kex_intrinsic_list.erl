@@ -5,7 +5,7 @@
 %% `Kex.Intrinsic.List.<fn>`; the compiler maps that module path to a plain
 %% cross-module call here. Adding a primitive is a one-line function.
 -module(kex_intrinsic_list).
--export([reverse/1, sort/1, uniq/1, flatten/1, take/2, drop/2, zip/2, push/2,
+-export([reverse/1, sort/1, sort/2, uniq/1, flatten/1, take/2, drop/2, zip/2, push/2,
          sum/1, product/1, indexOf/2, at/2, foldl/3, min/1, max/1, length/1,
          join/1, join/2, partition/2, member/2,
          %% Lower-level list ops used directly by the emitters (moved here from
@@ -15,6 +15,9 @@
 %% Receiver is always the first argument (Kex UFCS convention).
 reverse(L) -> lists:reverse(L).
 sort(L)    -> lists:sort(L).
+%% sort/2 — custom comparator. Kex passes (list, fun), Erlang's lists:sort/2
+%% takes (fun, list), so swap the argument order.
+sort(L, Fun) -> lists:sort(Fun, L).
 uniq(L)    -> lists:usort(L).
 flatten(L) -> lists:flatten(L).
 take(L, N) -> lists:sublist(L, N).

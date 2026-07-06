@@ -1,9 +1,9 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1, add/2,
-         env_map/0, integer_parse/1, float_parse/1,
-         math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
-         assert/1, assert/2,
-         is_digit/1, is_alpha/1, is_space/1, divide/2, to_integer/1, to_float/1]).
+-export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1,
+          env_map/0, integer_parse/1, float_parse/1,
+          math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
+          assert/1, assert/2,
+          is_digit/1, is_alpha/1, is_space/1, to_integer/1, to_float/1]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
@@ -167,29 +167,6 @@ to_string(X) when is_tuple(X)   ->
     Parts = [to_string(E) || E <- tuple_to_list(X)],
     "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
-
-%% divide/2 — polymorphic /: integer division (truncating, like Erlang's
-%% own div) when both operands are integers, float division otherwise.
-%% Matches src/interpreter/evaluator.cxx's BinaryOp::Slash case exactly —
-%% used by curried `~(/)` references (see core_erlang.cxx's CurryExpr
-%% handling); ordinary `/` expressions inline this same check directly
-%% rather than calling out here.
-divide(A, B) when is_integer(A), is_integer(B), B =:= 0 -> erlang:error("runtime error: Division by zero");
-divide(A, B) when is_integer(A), is_integer(B) -> A div B;
-divide(A, B) -> A / B.
-
-%% add/2 — polymorphic + for strings, numbers, and Char+String/String+Char.
-%% A Kex Char and a Kex Integer are both just plain Erlang integers (no
-%% distinct runtime tag), so `x.upperCase + rest` (Char + String, e.g.
-%% spec/my_capitalize.kex) can't be told apart from actual integer
-%% arithmetic by value alone — bias toward treating an integer mixed with a
-%% list as a char code to splice in, matching Kex's Char+String convention
-%% (an integer never legitimately adds to a list otherwise: that's always
-%% a type error in Kex, so this heuristic has no real downside).
-add(A, B) when is_list(A), is_integer(B) -> A ++ [B];
-add(A, B) when is_integer(A), is_list(B) -> [A | B];
-add(A, B) when is_list(A) -> A ++ B;
-add(A, B) -> A + B.
 
 %% Float display — matches src/interpreter/value.cxx's toString exactly:
 %% format with 6 decimal places (not Erlang's ~g, which picks a variable,

@@ -1,0 +1,41 @@
+# Blankable — types that can be checked for blankness (Rails semantics).
+# A value is blank when it has no meaningful content: nil-equivalents,
+# empty strings/whitespace, empty collections.
+
+trait Blankable do
+  blank? :> Bool
+  let present? = !this.blank?
+end
+
+make Bool, implement: Blankable do
+  blank? :> Bool
+  let blank? = !this
+end
+
+make Integer, implement: Blankable do
+  blank? :> Bool
+  let blank?(@_) = false
+end
+
+make Float, implement: Blankable do
+  blank? :> Bool
+  let blank?(@NaN) = true
+  let blank?(@_) = false
+end
+
+make String, implement: Blankable do
+  blank? :> Bool
+  let blank? = this.trim.empty?
+end
+
+make Optional<X>, implement: Blankable do
+  blank? :> Bool
+  let blank?(@None) = true
+  let blank?(@Just(_)) = false
+end
+
+make [X], implement: Blankable do
+  blank? :> Bool
+  let blank?(@[]) = true
+  let blank?(@[_|_]) = false
+end

@@ -3,7 +3,7 @@
 %% in the Kex prelude (src/prelude/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2,
-         'startsWith?'/2, 'endsWith?'/2]).
+          'startsWith?'/2, 'endsWith?'/2, 'contains?'/2]).
 
 upperCase(S) -> string:to_upper(S).
 lowerCase(S) -> string:to_lower(S).
@@ -17,3 +17,6 @@ split(S, Sep) -> string:split(S, Sep, all).
 %% errored under --ir with "not yet ported").
 'startsWith?'(S, Pre) -> lists:prefix(Pre, S).
 'endsWith?'(S, Suf)   -> lists:suffix(Suf, S).
+%% contains?/2 — substring search. Kex strings are charlists, so string:find
+%% works naturally (returns nomatch when Sub is absent).
+'contains?'(S, Sub)   -> string:find(S, Sub) =/= nomatch.

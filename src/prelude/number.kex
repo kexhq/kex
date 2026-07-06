@@ -79,6 +79,22 @@ make Integer do
   # @example
   #   42.to(Float)   # => 42.0
   to :> Y -> Unknown
+
+  # Returns the greatest integer ≤ self. No-op on integers.
+  floor :> Integer
+  let floor = Kex.Intrinsic.Number.floor(this)
+
+  # Returns the smallest integer ≥ self. No-op on integers.
+  ceil :> Integer
+  let ceil = Kex.Intrinsic.Number.ceil(this)
+
+  # Rounds to the nearest integer. No-op on integers.
+  round :> Integer
+  let round = Kex.Intrinsic.Number.round(this)
+
+  # Converts the integer to a +Float+.
+  toFloat :> Float
+  let toFloat = Kex.Intrinsic.Number.toFloat(this)
 end
 
 make Float do
@@ -118,6 +134,22 @@ make Float do
   # @example
   #   3.9.to(Integer)   # => 3
   to :> Y -> Unknown
+
+  # Returns the greatest integer ≤ self.
+  floor :> Integer
+  let floor = Kex.Intrinsic.Number.floor(this)
+
+  # Returns the smallest integer ≥ self.
+  ceil :> Integer
+  let ceil = Kex.Intrinsic.Number.ceil(this)
+
+  # Rounds to the nearest integer.
+  round :> Integer
+  let round = Kex.Intrinsic.Number.round(this)
+
+  # Truncates toward zero, converting to an +Integer+.
+  toInteger :> Integer
+  let toInteger = Kex.Intrinsic.Number.toInteger(this)
 end
 
 # Integer.parse(s) : String -> Result<Integer, String>

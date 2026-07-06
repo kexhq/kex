@@ -135,12 +135,12 @@ int main() {
     });
 
     describe("CoreErlangEmitter — binary operators", []() {
-        it("emits addition via kex_io:add (polymorphic + for numbers and strings)", []() {
+         it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
-            // + dispatches through kex_io:add/2 which handles both number
+            // + dispatches through kex_intrinsic_number:add/2 which handles both number
             // addition (erlang:'+') and string concatenation (erlang:'++')
             // at runtime based on the operand types.
-            assertTrue(contains(out, "call 'kex_io':'add'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
         });
 
         it("emits subtraction via erlang:'-'", []() {

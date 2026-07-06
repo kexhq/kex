@@ -21,6 +21,8 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].second   # => Just(2)
   #   [1].second         # => None
   second :> X?
+  let second(@[_, x | _]) = Just(x)
+  let second(@_) = None
 
   # Returns the third element wrapped in +Just+, or +None+ if the list has
   # fewer than three elements.
@@ -31,6 +33,8 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].third   # => Just(3)
   #   [1, 2].third      # => None
   third :> X?
+  let third(@[_, _, x | _]) = Just(x)
+  let third(@_) = None
 
   # Returns all elements after the first. Returns +[]+ for an empty or
   # single-element list.
@@ -142,11 +146,7 @@ make [X], implement: Enumerable do
   # @example
   #   [1, 2, 3, 4].reject { |x| x.even? }   # => [1, 3]
   reject :> (X -> Bool) -> [X]
-  let reject(@[], _) = []
-  let reject(@[x|xs], pred) do
-    return xs.reject(pred) if pred(x)
-    return [x | xs.reject(pred)]
-  end
+  let reject(pred) = this.filter { |x| !pred(x) }
 
   # Calls +f+ with each element for its side effects. Returns unit.
   #
@@ -191,6 +191,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].contains?(2)   # => true
   #   [1, 2, 3].contains?(9)   # => false
   contains? :> X -> Bool
+  let contains?(elem) = Kex.Intrinsic.List.member(elem, this)
 
   # Returns +true+ if the first index at which +elem+ appears, wrapped in
   # +Just+, or +None+ if the element is not present.
@@ -312,6 +313,7 @@ make [X], implement: Enumerable do
   # @example
   #   [3, 1, 2].sort { |a, b| a > b }   # => [3, 2, 1]
   sort :> ((X, X) -> Bool) -> [X]
+  let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
   # Converts the collection to another representation.
   # Most commonly used to materialise a +Range+ into a +List+.
@@ -344,6 +346,7 @@ make [Number] do
   # @example
   #   ["hello", "hi"].sum { |s| s.count }   # => 7
   sum :> (X -> Number) -> Number
+  let sum(f) = this.map(f).sum
 
   # Multiplies all elements. Returns +1+ for an empty list.
   #
@@ -363,6 +366,7 @@ make [Number] do
   # @example
   #   [[1,2],[3,4]].product { |pair| pair.first.or(1) }   # => 3
   product :> (X -> Number) -> Number
+  let product(f) = this.map(f).product
 
   # Returns the smallest element wrapped in +Just+, or +None+ for an empty list.
   #

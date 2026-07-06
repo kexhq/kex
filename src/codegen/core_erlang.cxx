@@ -511,9 +511,9 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             }();
             std::string fallback;
             // + is overloaded: string concat (++) or arithmetic (+).
-            // Dispatch at runtime via kex_io:add/2 which checks is_list.
+            // Dispatch at runtime via kex_intrinsic_number:add/2 which checks is_list.
             if (node.op == TokenType::Plus)
-                fallback = "call 'kex_io':'add'(" + l + ", " + r + ")";
+                fallback = "call 'kex_intrinsic_number':'add'(" + l + ", " + r + ")";
             else
                 fallback = "call 'erlang':'" + op + "'(" + l + ", " + r + ")";
             if (!hasOverload) return fallback;
@@ -526,7 +526,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                    "  'true' when 'true' -> apply '" + overloadSymbol + "'/2(" + lv + ", " + rv + ")\n"
                    "  'false' when 'true' -> " +
                        (node.op == TokenType::Plus
-                            ? "call 'kex_io':'add'(" + lv + ", " + rv + ")"
+                            ? "call 'kex_intrinsic_number':'add'(" + lv + ", " + rv + ")"
                             : "call 'erlang':'" + op + "'(" + lv + ", " + rv + ")") + "\n"
                    "end";
         }
@@ -1799,7 +1799,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // Operator name -> Erlang BIF operator symbol (same set
             // BinaryOp emission supports — see its own && / || / + special
             // cases above for why those three aren't in this table: +
-            // dispatches through kex_io:add for string-concat/Char+String
+            // dispatches through kex_intrinsic_number:add for string-concat/Char+String
             // polymorphism, and &&/|| need short-circuit, neither of which
             // makes sense for a curried 2-arg function value here — a
             // curried `~(&&)` would need its own short-circuit-preserving
@@ -1813,15 +1813,15 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             auto emitCall = [&](const std::vector<std::string>& args) -> std::string {
                 if (node.isOperator && args.size() >= 2) {
                     if (node.name == "+")
-                        return "call 'kex_io':'add'(" + args[0] + ", " + args[1] + ")";
+                        return "call 'kex_intrinsic_number':'add'(" + args[0] + ", " + args[1] + ")";
                     // / is polymorphic (int/int -> integer division) — see
                     // BinaryOp's own Slash handling above for the full
-                    // rationale; kex_io:divide/2 shares that exact logic so
+                    // rationale; kex_intrinsic_number:divide/2 shares that exact logic so
                     // it isn't duplicated here. A real, reproduced bug
                     // otherwise: `~(/)(_, 2)` then `div2(10)` returned
                     // "5.0" instead of "5" (spec/currying.kex).
                     if (node.name == "/")
-                        return "call 'kex_io':'divide'(" + args[0] + ", " + args[1] + ")";
+                        return "call 'kex_intrinsic_number':'divide'(" + args[0] + ", " + args[1] + ")";
                     auto oit = opBif.find(node.name);
                     if (oit != opBif.end())
                         return "call 'erlang':'" + oit->second + "'(" + args[0] + ", " + args[1] + ")";

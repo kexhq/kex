@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 namespace kex::ir {
@@ -206,6 +207,10 @@ struct Module {
     std::vector<FunDef> functions;
     int mainArity = 0; // 0 = none / main/0, 1 = main/1
     bool hasMain = false;
+    // ADT type → variant tag names (e.g. Optional → {"Just","none"}),
+    // populated during lowering and needed by subsequent user-program
+    // lowerings so they can validate Construct tags against prelude types.
+    std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
 };
 
 // Small constructor helpers (keep lowering code readable).
