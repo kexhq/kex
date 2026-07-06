@@ -769,7 +769,7 @@ struct Lowering {
         // prelude with the block appended as the trailing argument. Only
         // list-only HOFs (no map counterpart → no receiver-type dispatch) are
         // migrated so far.
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition"};
+        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition", "times"};
         if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
@@ -912,14 +912,11 @@ struct Lowering {
             return ret(matchBool(callE("erlang","is_map",1,one(clone(rv))),
                 callE("maps","size",1,one(clone(rv))),
                 callE("erlang","length",1,one(clone(rv)))));
-        if (m == "min" && n.args.empty())
-            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","min",1,one(clone(rv))))));
-        if (m == "max" && n.args.empty())
-            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","max",1,one(clone(rv))))));
+        // min/max/last migrated to the prelude (→ Kex.Intrinsic.List.min/max,
+        // list.kex pattern-match). Not guard-safe (onEmpty uses case), so no
+        // fallback — removed.
         if (m == "first" && n.args.empty() && !localMethods.count("first"))
             return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(clone(rv))))));
-        if (m == "last" && n.args.empty() && !localMethods.count("last"))
-            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("lists","last",1,one(clone(rv))))));
         // .to(Type) numeric/string conversion (unless a user `to` method).
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;

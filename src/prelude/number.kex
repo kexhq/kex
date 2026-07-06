@@ -69,6 +69,7 @@ make Integer do
   # @example
   #   3.times { |i| IO.printLine(i) }   # prints 0, 1, 2
   times :> (Integer -> Unit) -> Unit
+  let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
   # Converts to another numeric type.
   #
