@@ -39,6 +39,7 @@ make String do
   split :> String -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
   split :> [String]
+  let split = Kex.Intrinsic.String.split(this)
 
   # Removes leading and trailing whitespace.
   #
@@ -129,8 +130,11 @@ make Char do
   #   '3'.digit?   # => true
   #   'a'.digit?   # => false
   digit? :> Bool
+  let digit? = Kex.Intrinsic.Char.is_digit(this)
   alpha? :> Bool
+  let alpha? = Kex.Intrinsic.Char.is_alpha(this)
   space? :> Bool
+  let space? = Kex.Intrinsic.Char.is_space(this)
 
   # Returns +true+ if the character falls within the given range (inclusive).
   #

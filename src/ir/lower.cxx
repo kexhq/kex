@@ -791,8 +791,8 @@ struct Lowering {
             {"upperCase","string","to_upper",0}, {"upcase","string","to_upper",0},
             {"lowerCase","string","to_lower",0}, {"downcase","string","to_lower",0},
             {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},
-            {"digit?","kex_io","is_digit",0}, {"alpha?","kex_io","is_alpha",0},
-            {"space?","kex_io","is_space",0},
+            // digit?/alpha?/space? migrated to the Kex prelude (→ Kex.Intrinsic.
+            // Char.is_*). Guard-inlined form below stays as the guard fallback.
         };
         // Char predicates in a guard must inline as guard-safe range checks
         // (a `kex_io:is_*` call is an illegal guard expression).

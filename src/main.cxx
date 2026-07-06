@@ -498,6 +498,7 @@ static const std::unordered_set<std::string> &migratedPreludeFns()
         "reverse", "sort", "uniq", "flatten", "take", "drop", "zip", "push",
         "sum", "product", "indexOf", "at", "min", "max", "count", "join",
         "upperCase", "lowerCase", "trim", "split", "startsWith?", "endsWith?",
+        "digit?", "alpha?", "space?",
         "modulo", "even?", "odd?",
         "keys", "values", "entries", "merge", "has?", "put", "delete",
         "abs"};
