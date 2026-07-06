@@ -33,7 +33,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
         table.define(Signature{std::move(name), std::move(params), std::move(result)});
     };
 
-    // src/interpreter/stdlib/integer.cxx
+    // src/interpreter/stdlib/number.cxx
     sig("even?", {integerLike()}, Type::boolean());
     sig("odd?", {integerLike()}, Type::boolean());
     sig("abs", {numberLike()}, numberLike());

@@ -95,7 +95,7 @@ add_library(kex_lib
     src/interpreter/stdlib/file.cxx
     src/interpreter/stdlib/list.cxx
     src/interpreter/stdlib/string.cxx
-    src/interpreter/stdlib/integer.cxx
+    src/interpreter/stdlib/number.cxx
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx

@@ -1761,7 +1761,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerMockBuiltins();
     registerListBuiltins();
     registerStringBuiltins();
-    registerIntegerBuiltins();
+    registerNumberBuiltins();
     registerStreamBuiltins();
     registerMapBuiltins();
     registerEnvBuiltins();

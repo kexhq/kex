@@ -29,6 +29,15 @@ make Integer do
   abs :> Integer
   let abs = Kex.Intrinsic.Number.abs(this)
 
+  # Returns the square root as a Float.
+  #
+  # @return [Float]
+  #
+  # @example
+  #   16.sqrt   # => 4.0
+  sqrt :> Float
+  let sqrt = Kex.Intrinsic.Number.sqrt(this)
+
   # Returns +self+ modulo +n+. The result has the same sign as +n+,
   # consistent with mathematical modulo (not C remainder).
   #
@@ -79,6 +88,15 @@ make Float do
   #   (-3.14).abs   # => 3.14
   abs :> Float
   let abs = Kex.Intrinsic.Number.abs(this)
+
+  # Returns the square root.
+  #
+  # @return [Float]
+  #
+  # @example
+  #   25.0.sqrt   # => 5.0
+  sqrt :> Float
+  let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
   # Returns +true+ if the float falls within +range+ (inclusive).
   #

@@ -789,7 +789,7 @@ struct Lowering {
             // Kex.Intrinsic.List.reverse). See docs/prelude-intrinsic-plan.md.
             {"sort","lists","sort",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
-            {"abs","erlang","abs",0}, {"sqrt","math","sqrt",0},
+            {"abs","erlang","abs",0},
             {"upperCase","string","to_upper",0}, {"upcase","string","to_upper",0},
             {"lowerCase","string","to_lower",0}, {"downcase","string","to_lower",0},
             {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},

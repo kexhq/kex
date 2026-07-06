@@ -160,6 +160,14 @@ the Enumerable default to return a Map (à la Ruby) — it enumerates sorted
 (`maps:from_list`). All green: `--ir` 92/106 zero violations, `ctest` 10/10,
 `make spec` 106/106, walker == `--ir` on all map HOFs.
 
+`reduce` itself is now intrinsic-backed (`Kex.Intrinsic.List.foldl` →
+`lists:foldl`), the first discard of an illustrative pure-Kex impl. Every
+Enumerable HOF routes through it, so this is iterative on both backends (the
+old `1 + xs.count`-style recursion was non-tail on the walker → C++ stack risk
+on large lists; BEAM's TCO masked it there). Kex's reducer is acc-first
+`f(acc, elem)`; Erlang's `lists:foldl` is elem-first `fun(elem, acc)`, so the
+intrinsic swaps the argument order at the boundary.
+
 Note: `--ir` map `find`/`map`/`each` are now *deterministic* (sorted-canonical),
 matching the walker; the **default string emitter's** map HOFs still use Erlang's
 non-deterministic map order, so they can differ from `--ir` on contrived inputs
@@ -181,14 +189,39 @@ HOFs dispatch by `is_list`/`is_map`. Existing record/variant dispatch
 ## Migrated so far (list + string + numeric)
 
 - **List** (`kex_intrinsic_list`): reverse, sort, uniq, flatten, take, drop, zip,
-  push, sum, product, indexOf, at. (Also moved list_get/index_of/list_product
-  out of kex_io into here.)
-- **String** (`kex_intrinsic_string`): upperCase, lowerCase, trim, split.
+  push, sum, product, indexOf, at, foldl (backs Enumerable.reduce), min, max
+  (Just/None-wrapped, None-on-empty), length (backs List.count), join/1,2
+  (backs [String|Char].join — was non-tail `x + sep + xs.join(sep)`). (Also moved
+  list_get/index_of/list_product out of kex_io into here.)
+- **Map** (`kex_intrinsic_map`): keys, values, entries, merge, has?, put, delete,
+  size (backs Map.count, O(1) vs the old entries-build-then-count).
+- **String** (`kex_intrinsic_string`): upperCase, lowerCase, trim, split/1,2
+  (arity-1 with sep via `string:split`, arity-0 into individual chars via
+  singleton-list wrap — was bodyless in the prelude, errored under `--ir`),
+  startsWith?, endsWith? (the last two closed a real BEAM gap — they worked on
+  the walker via native builtins but errored under `--ir` as "not yet ported";
+  now `lists:prefix`/`lists:suffix` since Kex strings are charlists).
+- **Char** (`kex_intrinsic_char`): is_digit, is_alpha, is_space (moved the
+  method form to the prelude's `make Char`; the guard-inlined range checks in
+  lower.cxx stay as the guard fallback; kex_io's copies remain for the default
+  emitter's `&digit?` shorthand-lambda path).
 - **Integer** (`kex_intrinsic_integer`): modulo; even?/odd? expressed in Kex on
   top of modulo.
 
 Names live in `migratedPreludeFns()` (main.cxx); the value-receiver path in
 lower.cxx routes them to `kex_prelude:<fn>` early, before the ladder.
+
+**Guard-safety rule:** both routing branches (`preludeFns` and `hofPreludeFns`)
+are gated on `!m_inGuard`. A cross-module `call 'kex_prelude':…` is illegal
+inside a Core Erlang guard (guards only allow the guard-safe BIF subset), so a
+migrated method used in a guard (`when s.count > 0`, `if x.isEmpty?`, …) must
+fall through to its guard-safe ladder form (`erlang:length`, etc.) instead. A
+real, reproduced regression otherwise: `count`'s arity unification made
+`when_guards.kex`'s `s.count > 0` route to `kex_prelude:count` and erlc/runtime-
+rejected the guard (`--ir` 92 → 91). `count`'s migration now exercises this live:
+arity-0 `count` routes to the prelude (→ `Kex.Intrinsic.List.length` /
+`Kex.Intrinsic.Map.size`) outside guards, and falls back to the ladder's
+`erlang:length`/`maps:size` inside them.
 
 ## Maps: unordered with a canonical (sorted) order — DONE
 

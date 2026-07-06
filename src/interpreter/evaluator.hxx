@@ -104,7 +104,7 @@ private:
     auto registerMockBuiltins() -> void;
     auto registerListBuiltins() -> void;
     auto registerStringBuiltins() -> void;
-    auto registerIntegerBuiltins() -> void;
+    auto registerNumberBuiltins() -> void;
     auto registerStreamBuiltins() -> void;
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;

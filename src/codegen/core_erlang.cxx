@@ -211,7 +211,7 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         // Integer/Float parsing — see kex_io.erl's integer_parse/float_parse
         // for why these need custom logic rather than a bare BIF mapping
         // (they return Ok(v)/Error(reason), matching
-        // src/interpreter/stdlib/integer.cxx exactly).
+        // src/interpreter/stdlib/number.cxx exactly).
         {"Integer::parse",  {"kex_io", "integer_parse"}},
         {"Float::parse",    {"kex_io", "float_parse"}},
         // String
