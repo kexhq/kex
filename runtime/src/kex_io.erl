@@ -68,6 +68,13 @@ inspect(X) when is_list(X) ->
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
                       ++ " " ++ ?CYAN ++ "List" ++ ?RESET ++ "~n", [X])
     end, X;
+inspect(X) when is_tuple(X), tuple_size(X) =:= 2, element(1, X) =:= 'Just',
+                   is_integer(element(2, X)), element(2, X) >= 32,
+                   element(2, X) =< 126 ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "Just("
+              ++ [element(2, X)] ++ ")" ++ ?RESET
+              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+              ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n"), X;
 inspect(X) when is_tuple(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -96,10 +103,15 @@ inspect(X) ->
 % no spaces) instead of `(Underscore, wooo)` (Kex's own tuple syntax:
 % parens, comma-space, unquoted) — spec/my_starts_with.kex.
 to_string(X) when is_list(X) ->
-    case io_lib:printable_unicode_list(X) of
-        true  -> X;
-        false ->
-            "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]"
+    case X of
+        [Elem | _] when is_list(Elem) ->
+            "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]";
+        _ ->
+            case io_lib:printable_unicode_list(X) of
+                true  -> X;
+                false ->
+                    "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]"
+            end
     end;
 to_string(X) when is_binary(X)  -> binary_to_list(X);
 % Kex's None is capitalized at the source level (an UpperIdentifier, like
@@ -141,6 +153,10 @@ to_string(X) when is_map(X)     ->
 % TupleValue toString) — this doesn't generalize to arbitrary user-defined
 % ADT tags used as a tuple's first element, but covers the tags that
 % actually appear from Kex's own prelude constructors.
+to_string(X) when is_tuple(X), tuple_size(X) =:= 2, element(1, X) =:= 'Just',
+                   is_integer(element(2, X)), element(2, X) >= 32,
+                   element(2, X) =< 126 ->
+    "Just(" ++ [element(2, X)] ++ ")";
 to_string(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
