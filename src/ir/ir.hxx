@@ -154,6 +154,21 @@ struct Return {
     ExprPtr value;
 };
 
+// A selective `receive`. Each message is the wire tuple {'kex_msg', Payload,
+// Sender}; a clause matches Payload with `pattern` (and optional guard), with
+// `senderVar` bound to the sender pid. Emits Core Erlang's native `receive`.
+struct ReceiveClause {
+    PatternPtr pattern; // matched against the payload
+    std::optional<ExprPtr> guard;
+    ExprPtr body;
+};
+struct Receive {
+    std::vector<ReceiveClause> clauses;
+    std::string senderVar;              // sender pid binding (fresh if unused)
+    std::optional<ExprPtr> timeout;     // `after <timeout> -> afterBody`
+    std::optional<ExprPtr> afterBody;
+};
+
 // A local tail-recursive function (loops lower to this). `name(params) =
 // funBody` is in scope for both funBody (recursion) and contBody (the entry
 // call + continuation). Emits Core Erlang `letrec 'name'/N = fun(...) ->
@@ -169,7 +184,7 @@ struct LetRec {
 struct Expr {
     std::variant<
         Lit, Var, Intrinsic, Call, CallIndirect,
-        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, LetRec
+        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, LetRec, Receive
     > node;
 };
 

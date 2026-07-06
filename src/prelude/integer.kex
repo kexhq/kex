@@ -7,6 +7,7 @@ make Integer do
   #   4.even?   # => true
   #   3.even?   # => false
   even? :> Bool
+  let even? = this.modulo(2) == 0
 
   # Returns +true+ if the integer is odd.
   #
@@ -16,6 +17,7 @@ make Integer do
   #   3.odd?   # => true
   #   4.odd?   # => false
   odd? :> Bool
+  let odd? = this.modulo(2) != 0
 
   # Returns the absolute value.
   #
@@ -25,6 +27,7 @@ make Integer do
   #   (-5).abs   # => 5
   #   5.abs      # => 5
   abs :> Integer
+  let abs = Kex.Intrinsic.Number.abs(this)
 
   # Returns +self+ modulo +n+. The result has the same sign as +n+,
   # consistent with mathematical modulo (not C remainder).
@@ -36,6 +39,7 @@ make Integer do
   #   7.modulo(3)     # => 1
   #   (-7).modulo(3)  # => 2
   modulo :> Integer -> Integer
+  let modulo(n) = Kex.Intrinsic.Integer.modulo(this, n)
 
   # Returns +true+ if the integer falls within +range+ (inclusive).
   #
@@ -74,6 +78,7 @@ make Float do
   # @example
   #   (-3.14).abs   # => 3.14
   abs :> Float
+  let abs = Kex.Intrinsic.Number.abs(this)
 
   # Returns +true+ if the float falls within +range+ (inclusive).
   #

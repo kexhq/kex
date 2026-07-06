@@ -186,16 +186,47 @@ struct Emitter {
     }
 
     auto emitMatch(const Match& m) -> std::string {
-        // Single subject: `case S of ... end`. (Multi-value dispatch is a
-        // later addition — the skeleton lowers if/match/destructure to one
-        // subject.)
-        std::string out = "case " + emit(m.subjects[0]) + " of\n";
+        // Single subject: `case S of P -> ... end`. Multiple subjects use Core
+        // Erlang's value-list dispatch: `case <S1,S2> of <P1,P2> -> ... end`
+        // (range-pattern matches lower to a 2-subject <first,last> dispatch).
+        bool multi = m.subjects.size() > 1;
+        auto seq = [&](auto&& emitOne, size_t n, auto&& get) {
+            std::string s;
+            for (size_t i = 0; i < n; i++) { if (i) s += ", "; s += emitOne(get(i)); }
+            return s;
+        };
+        std::string subj = multi
+            ? "<" + seq([&](const ExprPtr& e){ return emit(e); }, m.subjects.size(),
+                        [&](size_t i)->const ExprPtr&{ return m.subjects[i]; }) + ">"
+            : emit(m.subjects[0]);
+        std::string out = "case " + subj + " of\n";
         for (const auto& cl : m.clauses) {
-            out += "  " + emitPattern(*cl.patterns[0]);
+            std::string pat = multi
+                ? "<" + seq([&](const PatternPtr& p){ return emitPattern(*p); }, cl.patterns.size(),
+                            [&](size_t i)->const PatternPtr&{ return cl.patterns[i]; }) + ">"
+                : emitPattern(*cl.patterns[0]);
+            out += "  " + pat;
             out += cl.guard ? " when " + emit(*cl.guard) : " when 'true'";
             out += " ->\n    " + emit(cl.body) + "\n";
         }
         out += "end";
+        return out;
+    }
+
+    // Native Core Erlang `receive`. Each message is the wire tuple
+    // {'kex_msg', Payload, Sender}; the clause pattern matches Payload and the
+    // sender var binds Sender. A blocking receive uses `after 'infinity'`.
+    auto emitReceive(const Receive& r) -> std::string {
+        std::string out = "receive\n";
+        for (const auto& cl : r.clauses) {
+            out += "  {'kex_msg', " + emitPattern(*cl.pattern) + ", " + erlVar(r.senderVar) + "}";
+            out += cl.guard ? " when " + emit(*cl.guard) : " when 'true'";
+            out += " ->\n    " + emit(cl.body) + "\n";
+        }
+        if (r.timeout && r.afterBody)
+            out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);
+        else
+            out += "after 'infinity' ->\n    'true'";
         return out;
     }
 
@@ -215,6 +246,8 @@ struct Emitter {
                        "\nin\n" + emit(n.body);
             } else if constexpr (std::is_same_v<T, Match>) {
                 return emitMatch(n);
+            } else if constexpr (std::is_same_v<T, Receive>) {
+                return emitReceive(n);
             } else if constexpr (std::is_same_v<T, MakeTuple>) {
                 std::string s = "{";
                 for (size_t i = 0; i < n.elements.size(); i++) {

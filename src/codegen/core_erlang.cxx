@@ -1161,7 +1161,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // lists:indexOf/2 BIF exists in standard Erlang/OTP (confirmed
             // — undef); see kex_io:index_of/2 for the real implementation.
             if (node.method == "indexOf" && node.args.size() == 1)
-                return "call 'kex_io':'index_of'(" + firstArg() + ", " + recv + ")";
+                return "call 'kex_intrinsic_list':'index_of'(" + firstArg() + ", " + recv + ")";
             // product — no lists:product/1 BIF; see kex_io:list_product/1
             // (a bare inline `fun ... end` passed directly as a call
             // argument, e.g. lists:foldl(fun (...) -> ... end, 1, Recv),
@@ -1169,7 +1169,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // variable first, same reason bindFun exists for block-taking
             // methods elsewhere in this function).
             if (node.method == "product" && node.args.empty() && !node.block)
-                return "call 'kex_io':'list_product'(" + recv + ")";
+                return "call 'kex_intrinsic_list':'list_product'(" + recv + ")";
             if (node.method == "reduce" || node.method == "inject") {
                 // Two forms: `.reduce(seed) { |acc, x| ... }` (a block) and
                 // `.reduce(seed, fn)` (the fn as a second plain argument —
@@ -1410,7 +1410,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // Erlang list, so kex_io:list_get/2 (built for `.get`'s list
             // case) works unchanged.
             if (node.method == "at" && node.args.size() == 1)
-                return "call 'kex_io':'list_get'(" + recv + ", " + firstArg() + ")";
+                return "call 'kex_intrinsic_list':'list_get'(" + recv + ", " + firstArg() + ")";
             if (node.method == "get" && node.args.size() == 1) {
                 // `get` doubles as list indexing (`list[i]` desugars to
                 // `list.get(i)` — see parsePostfix) — no static type info in
@@ -1423,7 +1423,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 // receiver (spec/list_indexing.kex).
                 auto kv = freshVar("V");
                 return "case call 'erlang':'is_list'(" + recv + ") of\n"
-                       "  'true' when 'true' -> call 'kex_io':'list_get'(" + recv + ", " + firstArg() + ")\n"
+                       "  'true' when 'true' -> call 'kex_intrinsic_list':'list_get'(" + recv + ", " + firstArg() + ")\n"
                        "  'false' when 'true' ->\n"
                        "    case call 'maps':'find'(" + firstArg() + ", " + recv + ") of\n"
                        "      {'ok', " + kv + "} when 'true' -> {'Just', " + kv + "}\n"
@@ -1433,7 +1433,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             }
             if (node.method == "get" && node.args.size() == 2)
                 return "case call 'erlang':'is_list'(" + recv + ") of\n"
-                       "  'true' when 'true' -> call 'kex_io':'list_get'(" + recv + ", "
+                       "  'true' when 'true' -> call 'kex_intrinsic_list':'list_get'(" + recv + ", "
                        + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ")\n"
                        "  'false' when 'true' -> call 'maps':'get'(" + emitExpr(node.args[0]) + ", "
                        + recv + ", " + emitExpr(node.args[1]) + ")\n"
@@ -1442,12 +1442,15 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'maps':'merge'(" + recv + ", " + firstArg() + ")";
             if (node.method == "has?" && node.args.size() == 1)
                 return "call 'maps':'is_key'(" + firstArg() + ", " + recv + ")";
+            // keys/values/entries expose the canonical sorted order (maps are
+            // unordered; raw Erlang map order is non-deterministic) — delegate
+            // to the shared intrinsic so both backends and the walker agree.
             if (node.method == "keys" && node.args.empty())
-                return "call 'maps':'keys'(" + recv + ")";
+                return "call 'kex_intrinsic_map':'keys'(" + recv + ")";
             if (node.method == "values" && node.args.empty())
-                return "call 'maps':'values'(" + recv + ")";
+                return "call 'kex_intrinsic_map':'values'(" + recv + ")";
             if (node.method == "entries" && node.args.empty())
-                return "call 'maps':'to_list'(" + recv + ")";
+                return "call 'kex_intrinsic_map':'entries'(" + recv + ")";
             if (node.method == "size" && node.args.empty())
                 return "call 'maps':'size'(" + recv + ")";
             if (node.method == "mapKeys") {

@@ -11,6 +11,8 @@
 #include "ir.hxx"
 #include "../ast/ast.hxx"
 #include <stdexcept>
+#include <string>
+#include <unordered_set>
 
 namespace kex::ir {
 
@@ -19,7 +21,10 @@ struct LowerError : std::runtime_error {
 };
 
 // Lower a whole program to an IR module. `fileStem` becomes the module name
-// (`kex_<stem>`), matching the existing backend's convention.
-auto lowerProgram(const ast::Program& prog, const std::string& fileStem) -> Module;
+// (`kex_<stem>`), matching the existing backend's convention. `preludeFns` is
+// the set of stdlib function names provided by the shared kex_prelude module;
+// a UFCS call to one (that isn't a local method) routes to `kex_prelude:<fn>`.
+auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
+                  const std::unordered_set<std::string>& preludeFns = {}) -> Module;
 
 } // namespace kex::ir

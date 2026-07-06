@@ -655,6 +655,23 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return callFunction(node.name, std::move(args), std::move(namedArgs), expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.
+            // `Kex`, `Intrinsic`, `<Category>` are nested modules; dispatch the
+            // function to its native C++ builtin (the walker's intrinsics stay
+            // in C++). The typed stdlib in the Kex prelude sits on top of these.
+            if (node.receiver) {
+                if (auto* catMc = std::get_if<ast::MethodCall>(&node.receiver->kind))
+                    if (auto* intrMc = std::get_if<ast::MethodCall>(&catMc->receiver->kind))
+                        if (intrMc->method == "Intrinsic")
+                            if (auto* kexId = std::get_if<ast::UpperIdentifier>(&intrMc->receiver->kind))
+                                if (kexId->name == "Kex") {
+                                    std::vector<ValuePtr> args;
+                                    for (const auto& a : node.args)
+                                        args.push_back(a ? eval(*a) : Value::none());
+                                    if (node.block) args.push_back(eval(**node.block));
+                                    return callFunction(node.method, std::move(args), {}, expr.location);
+                                }
+            }
             // Pre-check: if the receiver is a bare UpperIdentifier that isn't
             // in the environment and isn't a known variant, treat it as a
             // namespace call WITHOUT evaluating the receiver — so that an

@@ -1,8 +1,8 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1, add/2,
-         list_get/2, list_get/3, env_map/0, integer_parse/1, float_parse/1,
+         env_map/0, integer_parse/1, float_parse/1,
          math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
-         assert/1, assert/2, index_of/2, list_product/1,
+         assert/1, assert/2,
          is_digit/1, is_alpha/1, is_space/1, divide/2, to_integer/1, to_float/1]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
@@ -191,18 +191,6 @@ format_float(X) ->
         _ -> S
     end.
 
-%% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw
-%% element (or none/Default if out of range) — NOT Just(value)-wrapped,
-%% unlike Map.get's 2-arg form. Matches
-%% src/interpreter/stdlib/map.cxx's `get` builtin exactly for ListValue
-%% receivers (see that file's comment on why list indexing and Map.get
-%% differ in wrapping behavior despite sharing one Kex-level name).
-list_get(List, Idx) -> list_get(List, Idx, 'none').
-list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < length(List) ->
-    lists:nth(Idx + 1, List);
-list_get(_List, _Idx, Default) ->
-    Default.
-
 %% Math.e / Math.E, Math.log(x[, base]), Math.hypot(a,b), Math.cbrt(x) —
 %% not plain 1:1 BIF forwards (math:exp/1 needs an argument so can't back a
 %% bare 0-arg constant; Erlang's math module has no log/2, hypot/2, or
@@ -233,16 +221,6 @@ is_truthy('none') -> false;
 is_truthy('ok') -> false;
 is_truthy(_) -> true.
 
-%% list.indexOf(value) -> Just(index) | None (0-based) — matches
-%% src/interpreter/stdlib/list.cxx's indexOf exactly. No lists:indexOf/2
-%% BIF exists in standard Erlang/OTP.
-index_of(Value, List) -> index_of(Value, List, 0).
-index_of(_Value, [], _I) -> 'none';
-index_of(Value, [Value | _], I) -> {'Just', I};
-index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
-
-%% list.product — no lists:product/1 BIF.
-list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
 
 %% Char predicates — matches src/interpreter/stdlib/string.cxx's
 %% digit?/alpha?/space? exactly. Real top-level functions (not inlined at

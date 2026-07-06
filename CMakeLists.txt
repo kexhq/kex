@@ -212,6 +212,25 @@ target_compile_definitions(kex PRIVATE
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
 endif()
+
+# ── Shared Kex prelude beam ──────────────────────────────────────────────
+# The stdlib is written in Kex (src/prelude/*.kex) and compiled once into a
+# shared kex_prelude.beam, placed alongside the runtime beams so BEAM runs put
+# it on the -pa path and lazy-load it on first use. Built by the freshly-built
+# kex binary (Kex → Core Erlang → beam), so it depends on `kex` and the runtime
+# intrinsic beams it calls (kex_intrinsic_*).
+if(KEX_HAS_RUNTIME_BEAMS)
+    set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
+    file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
+    add_custom_command(
+        OUTPUT ${KEX_PRELUDE_BEAM}
+        COMMAND $<TARGET_FILE:kex> --build-prelude ${KEX_RUNTIME_BEAM_DIR}
+        DEPENDS kex ${KEX_PRELUDE_SRC} ${KEX_RUNTIME_BEAMS}
+        COMMENT "Prebuilding Kex prelude (kex_prelude.beam)"
+        VERBATIM
+    )
+    add_custom_target(kex_prelude_beam ALL DEPENDS ${KEX_PRELUDE_BEAM})
+endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # NODERAWFS maps every fs call straight through to Node's real host
     # filesystem (no MEMFS sandbox, no --preload-file needed) — this is

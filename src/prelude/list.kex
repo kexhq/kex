@@ -1,6 +1,6 @@
 type List<X> = [X]
 
-make [X] do
+make [X], implement: Enumerable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
   # @return [X?]
@@ -69,9 +69,8 @@ make [X] do
   let count(@[]) = 0
   let count(@[_|xs]) = 1 + xs.count
 
+  # count(pred) is provided by the Enumerable trait.
   count :> (X -> Bool) -> Integer
-  let count(@[], _) = 0
-  let count(@[x|xs], pred) = (pred(x) then 1 else 0) + xs.count(pred)
 
   # Returns +true+ if the list contains no elements.
   #
@@ -93,12 +92,8 @@ make [X] do
   # @example
   #   [1, 2, 3].find { |x| x > 1 }   # => Just(2)
   #   [1, 2, 3].find { |x| x > 9 }   # => None
+  # find/any?/all? are provided by the Enumerable trait.
   find :> (X -> Bool) -> X?
-  let find(@[], _) = None
-  let find(@[x|xs], pred) do
-    return Just(x) if pred(x)
-    return xs.find(pred)
-  end
 
   # Returns +true+ if at least one element satisfies the predicate.
   #
@@ -109,8 +104,6 @@ make [X] do
   #   [1, 2, 3].any? { |x| x > 2 }   # => true
   #   [1, 2, 3].any? { |x| x > 9 }   # => false
   any? :> (X -> Bool) -> Bool
-  let any?(@[], _) = false
-  let any?(@[x|xs], pred) = pred(x) then true else xs.any?(pred)
 
   # Returns +true+ if every element satisfies the predicate.
   #
@@ -121,8 +114,6 @@ make [X] do
   #   [1, 2, 3].all? { |x| x > 0 }   # => true
   #   [1, 2, 3].all? { |x| x > 1 }   # => false
   all? :> (X -> Bool) -> Bool
-  let all?(@[], _) = true
-  let all?(@[x|xs], pred) = pred(x) then xs.all?(pred) else false
 
   # Transforms each element by applying +f+.
   #
@@ -131,9 +122,8 @@ make [X] do
   #
   # @example
   #   [1, 2, 3].map { |x| x * 2 }   # => [2, 4, 6]
+  # map/filter/each are provided by the Enumerable trait (in terms of reduce).
   map :> (X -> Y) -> [Y]
-  let map(@[], _) = []
-  let map(@[x|xs], f) = [f(x) | xs.map(f)]
 
   # Returns a new list containing only the elements for which +pred+ is +true+.
   #
@@ -143,11 +133,6 @@ make [X] do
   # @example
   #   [1, 2, 3, 4].filter { |x| x.even? }   # => [2, 4]
   filter :> (X -> Bool) -> [X]
-  let filter(@[], _) = []
-  let filter(@[x|xs], pred) do
-    return [x | xs.filter(pred)] if pred(x)
-    return xs.filter(pred)
-  end
 
   # Returns a new list with all elements for which +pred+ is +true+ removed.
   # The inverse of +filter+.
@@ -172,11 +157,6 @@ make [X] do
   # @example
   #   [1, 2, 3].each { |x| IO.printLine(x) }
   each :> (X -> Unit) -> Unit
-  let each(@[], _) = ()
-  let each(@[x|xs], f) do
-    f(x)
-    xs.each(f)
-  end
 
   # Folds the list from the left, starting with +acc+ and combining each
   # element via +f+.
@@ -202,6 +182,7 @@ make [X] do
   #   [10, 20, 30].at(1)   # => Just(20)
   #   [10, 20, 30].at(9)   # => None
   at :> Integer -> X?
+  let at(i) = Kex.Intrinsic.List.at(this, i)
 
   # Returns +true+ if +elem+ is present in the list.
   #
@@ -223,6 +204,7 @@ make [X] do
   #   [10, 20, 30].indexOf(20)   # => Just(1)
   #   [10, 20, 30].indexOf(99)   # => None
   indexOf :> X -> Integer?
+  let indexOf(elem) = Kex.Intrinsic.List.indexOf(this, elem)
 
   # Returns a new list with duplicate elements removed, preserving the
   # first occurrence of each element.
@@ -232,6 +214,7 @@ make [X] do
   # @example
   #   [1, 2, 3, 2, 1].uniq   # => [1, 2, 3]
   uniq :> [X]
+  let uniq = Kex.Intrinsic.List.uniq(this)
 
   # Splits the list into two lists: those for which +pred+ is +true+
   # (first) and those for which it is +false+ (second).
@@ -260,9 +243,7 @@ make [X] do
   # @example
   #   [1, 2, 3, 4, 5].take(3)   # => [1, 2, 3]
   take :> Integer -> [X]
-  let take(@[], _) = []
-  let take(@_, 0) = []
-  let take(@[x|xs], n) = [x | xs.take(n - 1)]
+  let take(n) = Kex.Intrinsic.List.take(this, n)
 
   # Drops the first +n+ elements.
   #
@@ -272,9 +253,7 @@ make [X] do
   # @example
   #   [1, 2, 3, 4, 5].drop(2)   # => [3, 4, 5]
   drop :> Integer -> [X]
-  let drop(@[], _) = []
-  let drop(@xs, 0) = xs
-  let drop(@[_|xs], n) = xs.drop(n - 1)
+  let drop(n) = Kex.Intrinsic.List.drop(this, n)
 
   # Returns a new list with +x+ appended at the end.
   #
@@ -284,8 +263,7 @@ make [X] do
   # @example
   #   [1, 2].push(3)   # => [1, 2, 3]
   push :> X -> [X]
-  let push(@[], x) = [x]
-  let push(@[h|t], x) = [h | t.push(x)]
+  let push(x) = Kex.Intrinsic.List.push(this, x)
 
   # Returns the elements in reverse order.
   #
@@ -294,8 +272,7 @@ make [X] do
   # @example
   #   [1, 2, 3].reverse   # => [3, 2, 1]
   reverse :> [X]
-  let reverse(@[]) = []
-  let reverse(@[x|xs]) = xs.reverse.push(x)
+  let reverse = Kex.Intrinsic.List.reverse(this)
 
   # Pairs each element of this list with the corresponding element of +other+.
   # Stops at the end of the shorter list.
@@ -306,9 +283,7 @@ make [X] do
   # @example
   #   [1, 2, 3].zip(["a", "b", "c"])   # => [(1, "a"), (2, "b"), (3, "c")]
   zip :> [Y] -> [(X, Y)]
-  let zip(@[], _) = []
-  let zip(@_, @[]) = []
-  let zip(@[x|xs], @[y|ys]) = [(x, y) | xs.zip(ys)]
+  let zip(other) = Kex.Intrinsic.List.zip(this, other)
 
   # Flattens exactly one level of nesting. Only valid on lists of lists.
   #
@@ -317,8 +292,7 @@ make [X] do
   # @example
   #   [[1, 2], [3, 4]].flatten   # => [1, 2, 3, 4]
   flatten :> [X]
-  let flatten(@[]) = []
-  let flatten(@[xs|xss]) = xs + xss.flatten
+  let flatten = Kex.Intrinsic.List.flatten(this)
 
   # Returns the elements sorted in ascending natural order.
   #
@@ -327,6 +301,7 @@ make [X] do
   # @example
   #   [3, 1, 2].sort   # => [1, 2, 3]
   sort :> [X]
+  let sort = Kex.Intrinsic.List.sort(this)
 
   # Returns the elements sorted using a custom comparator.
   # +comp+ should return +true+ when its first argument should come before
@@ -360,8 +335,7 @@ make [Number] do
   #   [1, 2, 3].sum   # => 6
   #   [].sum          # => 0
   sum :> Number
-  let sum(@[]) = 0
-  let sum(@[x|xs]) = x + xs.sum
+  let sum = Kex.Intrinsic.List.sum(this)
 
   # Maps each element through +f+ and sums the results.
   #
@@ -380,8 +354,7 @@ make [Number] do
   #   [1, 2, 3].product   # => 6
   #   [].product          # => 1
   product :> Number
-  let product(@[]) = 1
-  let product(@[x|xs]) = x * xs.product
+  let product = Kex.Intrinsic.List.product(this)
 
   # Maps each element through +f+ and multiplies the results.
   #

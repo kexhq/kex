@@ -7,6 +7,7 @@
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
 #include "interpreter/evaluator.hxx"
+#include <algorithm>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -486,6 +487,79 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void
 #endif
 }
 
+// Stdlib functions migrated to the Kex prelude so far — a UFCS call to one is
+// routed to the shared `kex_prelude` BEAM module instead of the emitter's
+// builtin ladder. Grows one method at a time as the prelude subsumes the ladder
+// (docs/prelude-intrinsic-plan.md). Each name here must also be removed from the
+// ladder in src/ir/lower.cxx so the call actually reaches the prelude route.
+static const std::unordered_set<std::string> &migratedPreludeFns()
+{
+    static const std::unordered_set<std::string> fns = {
+        "reverse", "sort", "uniq", "flatten", "take", "drop", "zip", "push",
+        "sum", "product", "indexOf", "at",
+        "upperCase", "lowerCase", "trim", "split",
+        "modulo", "even?", "odd?",
+        "keys", "values", "entries", "merge", "has?", "put", "delete",
+        "abs"};
+    return fns;
+}
+
+#ifdef KEX_PRELUDE_DIR
+// Parse+merge the Kex prelude (src/prelude/*.kex, MainBlocks dropped) into one
+// Program and lower it to the shared `kex_prelude` module's Core Erlang, written
+// to <dir>/kex_prelude.core. Returns false (with a message) if the prelude can't
+// be lowered yet.
+auto compilePreludeCore(const std::string &dir) -> bool
+{
+    namespace fs = std::filesystem;
+    kex::ast::Program merged;
+    std::error_code ec;
+    std::vector<std::string> files;
+    for (const auto &e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
+        if (e.path().extension() == ".kex")
+            files.push_back(e.path().string());
+    std::sort(files.begin(), files.end());
+    for (const auto &f : files)
+    {
+        kex::Lexer lex(readFile(f), f);
+        kex::Parser parser(lex.tokenizeAll(), f);
+        auto prog = parser.parseProgram();
+        // Skip files that don't lower yet (e.g. file.kex's nested modules), so
+        // the shared prelude still builds. Lower the file on its own first as a
+        // probe; only merge it if that succeeds.
+        kex::ast::Program probe;
+        for (auto &item : prog.items)
+            if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+                probe.items.push_back(std::move(item));
+        try
+        {
+            (void)kex::ir::lowerProgram(probe, "prelude_probe");
+        }
+        catch (const kex::ir::LowerError &)
+        {
+            continue; // not yet lowerable — omit from kex_prelude for now
+        }
+        for (auto &item : probe.items)
+            merged.items.push_back(std::move(item));
+    }
+    try
+    {
+        auto mod = kex::ir::lowerProgram(merged, "prelude");
+        auto res = kex::ir::emitCore(mod);
+        std::ofstream out(dir + "/kex_prelude.core");
+        if (!out)
+            return false;
+        out << res.source;
+    }
+    catch (const kex::ir::LowerError &e)
+    {
+        std::cerr << "error: prelude: " << e.what() << "\n";
+        return false;
+    }
+    return true;
+}
+#endif
+
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
 // Shared by `run` and `compile`/`-R` (BEAM) so both backends catch the same
@@ -660,6 +734,10 @@ int main(int argc, char *argv[])
         // Opt into the new AST→IR→Core Erlang pipeline (strangler; default
         // stays the string emitter). See src/ir/.
         {"ir", no_argument, nullptr, 1000},
+        // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
+        // kex_prelude.beam in the given dir. Used by the build to prebuild the
+        // shared stdlib module alongside the runtime beams.
+        {"build-prelude", required_argument, nullptr, 1001},
         {nullptr, 0, nullptr, 0}};
 
     std::string mode = "run";
@@ -681,6 +759,20 @@ int main(int argc, char *argv[])
         case 1000:
             useIr = true;
             break;
+        case 1001:
+        {
+#ifdef KEX_PRELUDE_DIR
+            std::string dir = optarg;
+            if (!compilePreludeCore(dir))
+                return 1;
+            std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir + " " +
+                              dir + "/kex_prelude.core";
+            return std::system(cmd.c_str()) == 0 ? 0 : 1;
+#else
+            std::cerr << "error: prelude dir not configured\n";
+            return 1;
+#endif
+        }
         case 'r':
             mode = "run";
             break;
@@ -1631,7 +1723,7 @@ int main(int argc, char *argv[])
             {
                 try
                 {
-                    auto irMod = kex::ir::lowerProgram(program, stem);
+                    auto irMod = kex::ir::lowerProgram(program, stem, migratedPreludeFns());
                     auto irRes = kex::ir::emitCore(irMod);
                     result.source = irRes.source;
                     result.moduleName = irRes.moduleName;
@@ -1704,6 +1796,24 @@ int main(int argc, char *argv[])
                     }
                 }
             }
+
+#ifdef KEX_PRELUDE_DIR
+            // Shared stdlib: kex_prelude.beam is normally prebuilt into the
+            // runtime beam dir (see CMakeLists.txt) and staged with the other
+            // runtime beams above, so BEAM lazy-loads it. Only fall back to a
+            // per-run compile when that prebuilt beam isn't present (e.g.
+            // running outside the build tree).
+            if (useIr &&
+                !std::filesystem::exists(std::filesystem::path{outputDir} / "kex_prelude.beam") &&
+                compilePreludeCore(outputDir))
+            {
+                std::string preCmd = "erlc +from_core -pa " + outputDir +
+                                     " -o " + outputDir + " " + outputDir + "/kex_prelude.core";
+                if (!tempDir.empty())
+                    preCmd += " > /dev/null 2>&1";
+                std::system(preCmd.c_str());
+            }
+#endif
 
             std::string coreCmd = "erlc +from_core -pa " + outputDir +
                                   " -o " + outputDir + " " + outPath;

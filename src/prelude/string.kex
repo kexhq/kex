@@ -37,6 +37,7 @@ make String do
   #   "a,b,c".split(",")   # => ["a", "b", "c"]
   #   "hi".split           # => ["h", "i"]
   split :> String -> [String]
+  let split(sep) = Kex.Intrinsic.String.split(this, sep)
   split :> [String]
 
   # Removes leading and trailing whitespace.
@@ -46,6 +47,7 @@ make String do
   # @example
   #   "  hello  ".trim   # => "hello"
   trim :> String
+  let trim = Kex.Intrinsic.String.trim(this)
 
   # Returns the string with all characters converted to upper case.
   #
@@ -54,6 +56,7 @@ make String do
   # @example
   #   "hello".upperCase   # => "HELLO"
   upperCase :> String
+  let upperCase = Kex.Intrinsic.String.upperCase(this)
 
   # Returns the string with all characters converted to lower case.
   #
@@ -62,6 +65,7 @@ make String do
   # @example
   #   "HELLO".lowerCase   # => "hello"
   lowerCase :> String
+  let lowerCase = Kex.Intrinsic.String.lowerCase(this)
 
   # Returns the string with its characters in reverse order.
   #

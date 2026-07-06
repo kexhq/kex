@@ -1,0 +1,49 @@
+# Algebraic traits
+
+trait Semigroup do
+  combine :> This -> This
+end
+
+trait Monoid do
+  identity :> This
+  combine :> This -> This
+end
+
+trait Group do
+  identity :> This
+  combine :> This -> This
+  inverse :> This
+end
+
+make Integer, implement: Monoid do
+  let identity = 0
+  let combine(other: This) -> This = this + other
+end
+
+make Integer, implement: Group do
+  let identity = 0
+  let combine(other: This) -> This = this + other
+  let inverse -> This = -this
+end
+
+make String, implement: Monoid do
+  let identity = ""
+  let combine(other: This) -> This = this + other
+end
+
+make [A], implement: Monoid do
+  let identity = []
+  let combine(other: This) -> This = this + other
+end
+
+# Generic fold — no seed needed when the element is a Monoid
+
+make [Monoid] do
+  fold :> Monoid
+  fold(@[], f) = f.identity
+  fold(@[x | xs]) = x.combine(xs.fold)
+
+  foldMap :> (A -> This) -> This
+  let foldMap(@[], f) = f.identity
+  let foldMap(@[x | xs], f) = f(x).combine(xs.foldMap(f))
+end
