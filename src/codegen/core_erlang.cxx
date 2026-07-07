@@ -183,9 +183,9 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"Math::sin",       {"math",   "sin"}},
         {"Math::cos",       {"math",   "cos"}},
         {"Math::tan",       {"math",   "tan"}},
-        // log maps to kex_io:math_log/1,2 (not a bare math:log forward) —
+        // log maps to kex_intrinsic_math:log/1,2 (not a bare math:log forward) —
         // Erlang's math module has no log/2 (arbitrary base) at all; see
-        // kex_io.erl's math_log for the ln(x)/ln(base) implementation
+        // kex_intrinsic_math.erl's log for the ln(x)/ln(base) implementation
         // matching src/interpreter/stdlib/math.cxx's Math::log exactly.
         {"Math::log",       {"kex_intrinsic_math", "log"}},
         {"Math::log2",      {"math",   "log2"}},
@@ -204,12 +204,12 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         // e/E is a bare 0-arg constant (Euler's number) — math:exp/1 needs
         // an argument, so it can't back this directly (a real, reproduced
         // undef crash otherwise: math:exp() with no args). See
-        // kex_io.erl's math_e/0.
+        // kex_intrinsic_math.erl's e/0.
         {"Math::e",         {"kex_intrinsic_math", "e"}},
         {"Math::E",         {"kex_intrinsic_math", "e"}},
         {"Math::inf",       {"erlang", "infinity"}},
-        // Integer/Float parsing — see kex_io.erl's integer_parse/float_parse
-        // for why these need custom logic rather than a bare BIF mapping
+        // Integer/Float parsing — see intrinsic modules for why these
+        // need custom logic rather than a bare BIF mapping
         // (they return Ok(v)/Error(reason), matching
         // src/interpreter/stdlib/number.cxx exactly).
         {"Integer::parse",  {"kex_intrinsic_integer", "integer_parse"}},
@@ -906,7 +906,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     "digit?", "alpha?", "space?",
                     "modulo", "even?", "odd?",
                     "keys", "values", "entries", "merge", "has?", "put", "delete",
-                    "abs", "sqrt", "none?", "some?", "present?", "ok?", "error?",
+                    "abs", "sqrt", "none?", "some?", "ok?", "error?",
                     "first", "last", "empty?", "or", "in?",
                     "blank?", "present?", "truthy?", "falsy?",
                     "second", "third",
@@ -929,75 +929,44 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 }
             }
 
-            auto secondArg = [&]() -> std::string {
-                return node.args.size() > 1 ? emitExpr(node.args[1]) : "";
-            };
-
-            // Task methods (UFCS on a task handle).
-            // `task.await(timeout: T)` → kex_task:await/2; default timeout = 'infinity'.
-            if (node.method == "await") {
-                std::string timeout = "'infinity'";
-                for (const auto& [k, v] : node.namedArgs)
-                    if (k == "timeout") timeout = emitExpr(v);
-                if (!node.args.empty()) timeout = firstArg();
-                return "call 'kex_task':'await'(" + recv + ", " + timeout + ")";
-            }
-
-            // Process / pid methods (UFCS on a pid receiver).
-            // `pid.send(m)` → erlang:send(Pid, {'kex_msg', M, self()})
-            if (node.method == "send" && node.args.size() == 1)
-                return "call 'erlang':'send'(" + recv + ", {'kex_msg', " + firstArg() +
-                       ", call 'erlang':'self'()})";
-            // `pid.link()` / `pid.unlink()` → erlang:link/1 / erlang:unlink/1
-            if (node.method == "link" && node.args.empty())
-                return "call 'erlang':'link'(" + recv + ")";
-            if (node.method == "unlink" && node.args.empty())
-                return "call 'erlang':'unlink'(" + recv + ")";
-            // `pid.monitor()` → erlang:monitor/2 (returns a reference)
-            if (node.method == "monitor" && node.args.empty())
-                return "call 'erlang':'monitor'('process', " + recv + ")";
-            // `pid.alive?()` → erlang:is_process_alive/1
+            // Task/process methods are routed through kex_prelude in non-guard
+            // context. Their implementations use non-guard BIFs (erlang:send,
+            // link, unlink, monitor, demonitor; kex_task:await) and are
+            // side-effecting — never valid in guards.
+            // `pid.alive?()` → erlang:is_process_alive/1 (guard-safe, keep)
             if (node.method == "alive?" && node.args.empty())
                 return "call 'erlang':'is_process_alive'(" + recv + ")";
-            // `ref.demonitor()` → erlang:demonitor/1
-            if (node.method == "demonitor" && node.args.empty())
-                return "call 'erlang':'demonitor'(" + recv + ")";
             // `pid.exit(reason)` (instance form) → erlang:exit/2
             if (node.method == "exit" && node.args.size() == 1)
                 return "call 'erlang':'exit'(" + recv + ", " + firstArg() + ")";
 
             // Integer/Float methods
             if (node.method == "modulo" && node.args.size() == 1)
-                return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";            if (node.method == "even?")
+                return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";
+            if (node.method == "even?")
                 return "call 'erlang':'=:='(call 'erlang':'rem'(" + recv + ", 2), 0)";
             if (node.method == "odd?")
                 return "call 'erlang':'=/='(call 'erlang':'rem'(" + recv + ", 2), 0)";
             if (node.method == "abs")
                 return "call 'erlang':'abs'(" + recv + ")";
-            if (node.method == "sqrt")
-                return "call 'math':'sqrt'(" + recv + ")";
+            // sqrt uses math:sqrt which is not a guard BIF; routed through
+            // kex_prelude in non-guard context.
             if (node.method == "floor")
                 return "call 'erlang':'floor'(" + recv + ")";
-            if (node.method == "ceil" || node.method == "ceiling")
+            if (node.method == "ceil")
                 return "call 'erlang':'ceil'(" + recv + ")";
             if (node.method == "round")
                 return "call 'erlang':'round'(" + recv + ")";
-            if (node.method == "toFloat" || node.method == "to_f")
+            if (node.method == "toFloat")
                 return "call 'erlang':'float'(" + recv + ")";
-            if (node.method == "toInteger" || node.method == "to_i" || node.method == "truncate")
+            if (node.method == "toInteger")
                 return "call 'erlang':'trunc'(" + recv + ")";
-            if (node.method == "toString" || node.method == "to_s")
-                return "call 'kex_io':'to_string'(" + recv + ")";
+            // toString is routed through kex_prelude; kex_io:to_string is not
+            // a guard BIF.
 
-            // String methods
-            if (node.method == "empty?" && node.args.empty()) {
-                auto tmp = freshVar("EV");
-                return "let <" + tmp + "> =\n    " + recv + "\nin\n"
-                       "case call 'erlang':'is_map'(" + tmp + ") of\n"
-                       "  'true' when 'true' -> call 'erlang':'=:='(call 'maps':'size'(" + tmp + "), 0)\n"
-                       "  'false' when 'true' -> call 'erlang':'=:='(" + tmp + ", [])\n"
-                       "end";
-            }
+            // empty? is routed through kex_prelude in non-guard context;
+            // its ladder implementation uses let/case which are never valid
+            // in Core Erlang guards.
             if ((node.method == "length" || node.method == "count") && !node.block && node.args.empty()) {
                 auto tmp = freshVar("SZ");
                 return "let <" + tmp + "> =\n    " + recv + "\nin\n"
@@ -1006,17 +975,10 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                        "  'false' when 'true' -> call 'erlang':'length'(" + tmp + ")\n"
                        "end";
             }
-            if (node.method == "upperCase" || node.method == "upcase")
-                return "call 'string':'to_upper'(" + recv + ")";
-            if (node.method == "lowerCase" || node.method == "downcase")
-                return "call 'string':'to_lower'(" + recv + ")";
-            if (node.method == "trim")
-                return "call 'string':'trim'(" + recv + ")";
-            if (node.method == "split" && node.args.size() == 1)
-                return "call 'string':'split'(" + recv + ", " + firstArg() + ", 'all')";
-            // List methods
-            if (node.method == "push" && node.args.size() == 1)
-                return "call 'erlang':'++'(" + recv + ", [" + firstArg() + "])";
+            // upperCase/lowerCase/trim/split/push are routed through kex_prelude
+            // in non-guard context; their implementations use non-guard BIFs
+            // (string:to_upper/to_lower/trim/split, erlang:++) that are never
+            // valid in guard context.
             if (node.method == "count" && node.args.empty() && !node.block)
                 return "call 'erlang':'length'(" + recv + ")";
             // first/last return Just(value)/None (matches
@@ -1032,24 +994,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // matching `to` guard above for why (spec/type_dispatch.kex
             // defines its own unwrapped first/last/empty?/head/tail over
             // `[A]`, which must win over this Just/None-wrapped default).
-            if (node.method == "first" && !m_topLevelFns.count("first")) {
-                auto rv = freshVar("Recv");
-                return "let <" + rv + "> =\n    " + recv + "\nin\n"
-                       "case " + rv + " of\n"
-                       "  [] when 'true' -> 'none'\n"
-                       "  _ when 'true' -> {'Just', call 'erlang':'hd'(" + rv + ")}\n"
-                       "end";
-            }
-            if (node.method == "last" && !m_topLevelFns.count("last")) {
-                auto rv = freshVar("Recv");
-                return "let <" + rv + "> =\n    " + recv + "\nin\n"
-                       "case " + rv + " of\n"
-                       "  [] when 'true' -> 'none'\n"
-                       "  _ when 'true' -> {'Just', call 'lists':'last'(" + rv + ")}\n"
-                       "end";
-            }
-            if (node.method == "reverse")
-                return "call 'lists':'reverse'(" + recv + ")";
+            // first/last are routed through kex_prelude in non-guard context;
+            // their ladder implementations use let/case which are never valid
+            // in Core Erlang guards.
+            // reverse is routed through kex_prelude in non-guard context;
+            // lists:reverse is not a guard BIF.
             // "abc".contains?("b") (substring search, needle is itself a
             // string) vs [1,2,3].contains?(2) / (1..10).contains?(5) /
             // ('a'..'z').contains?('m') (element membership, needle is a
@@ -1076,34 +1025,10 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // n.in?(range) / c.in?(range) — range membership. Ranges
             // compile to a materialized list (lists:seq — see emitExpr's
             // RangeExpr case), so this is just reversed lists:member — the
-            // receiver (an Int or Char, both plain integers) is the element
-            // being searched for, the range argument is the list.
-            if (node.method == "in?" && node.args.size() == 1)
-                return "call 'lists':'member'(" + recv + ", " + firstArg() + ")";
-            if (node.method == "join" && node.args.size() == 1)
-                return "call 'lists':'flatten'(call 'lists':'join'(" + firstArg() + ", " + recv + "))";
-            if (node.method == "flatten")
-                return "call 'lists':'flatten'(" + recv + ")";
+            // in?/join/flatten are routed through kex_prelude in non-guard
+            // context; their implementations use lists:member/join/flatten
+            // which are not guard BIFs.
 
-            // Higher-order list methods: bind the fun to a var first (Core Erlang
-            // does not allow inline `fun` expressions as call arguments).
-            auto bindFun = [&](const std::string& funExpr) -> std::pair<std::string,std::string> {
-                auto fnVar = freshVar("Fn");
-                return {fnVar, "let <" + fnVar + "> =\n    " + funExpr + " in\n"};
-            };
-            auto rawBlock = [&]() -> std::string {
-                if (node.block) return emitExpr(*node.block);
-                if (!node.args.empty()) return emitExpr(node.args.back());
-                return "fun (_) -> 'ok'";
-            };
-            // Returns true if the block/last-arg lambda has 2 parameters (map iteration).
-            auto blockArity2 = [&]() -> bool {
-                const ast::ExprPtr* blk = node.block ? &*node.block : (!node.args.empty() ? &node.args.back() : nullptr);
-                if (!blk) return false;
-                if (auto* lam = std::get_if<ast::Lambda>(&(*blk)->kind))
-                    return lam->params.size() == 2;
-                return false;
-            };
             // Type conversion: x.to(String), x.to(Int), x.to(Float) — unless
             // a `make Type do let to(Kind) ... end` block defined its own
             // `to`, which must take priority over this builtin fallback. A
@@ -1180,12 +1105,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // above) can reference the exact same implementation — a real,
             // reproduced bug otherwise: undef'd entirely
             // (spec/char_predicates.kex, spec/char_type.kex, spec/list_hof.kex).
-            // In a `when` guard, a `call 'kex_io':...` is an illegal guard
-            // expression (Erlang guards can't call arbitrary functions) —
-            // so inline the exact same range checks kex_io:is_digit/
-            // is_alpha/is_space use, as guard-safe boolean BIF trees
-            // (erlang:'>='/'=<'/'=:='/'and'/'or' are all allowed in
-            // guards). A real, reproduced bug otherwise: `Just(c) when
+            // In a `when` guard, a cross-module `call 'kex_intrinsic_char':...`
+            // is an illegal guard expression (Erlang guards can't call arbitrary
+            // functions) — so inline the exact same range checks as guard-safe
+            // boolean BIF trees (erlang:'>='/'=<'/'=:='/'and'/'or' are all
+            // allowed in guards). A real, reproduced bug otherwise: `Just(c) when
             // c.digit? || c == '-'` emitted `call 'kex_io':'is_digit'(C)`
             // inside the guard and erlc rejected the whole function with
             // "illegal guard expression" (examples/json_parser.kex's
@@ -1220,100 +1144,23 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'kex_intrinsic_char':'is_alpha'(" + recv + ")";
             }
 
-            // Extra list methods
-            if (node.method == "sum") {
-                return "call 'lists':'sum'(" + recv + ")";
-            }
-            // min/max return Just(value)/None (matches
-            // src/interpreter/stdlib/list.cxx exactly) — not the raw
-            // value, and NOT a crash on an empty receiver
-            // (lists:min([])/lists:max([]) both raise function_clause —
-            // spec/list_hof.kex).
-            if (node.method == "min") {
-                auto rv = freshVar("Recv");
-                return "let <" + rv + "> =\n    " + recv + "\nin\n"
-                       "case " + rv + " of\n"
-                       "  [] when 'true' -> 'none'\n"
-                       "  _ when 'true' -> {'Just', call 'lists':'min'(" + rv + ")}\n"
-                       "end";
-            }
-            if (node.method == "max") {
-                auto rv = freshVar("Recv");
-                return "let <" + rv + "> =\n    " + recv + "\nin\n"
-                       "case " + rv + " of\n"
-                       "  [] when 'true' -> 'none'\n"
-                       "  _ when 'true' -> {'Just', call 'lists':'max'(" + rv + ")}\n"
-                       "end";
-            }
-            if (node.method == "sort")
-                return "call 'lists':'sort'(" + recv + ")";
-            if (node.method == "uniq" || node.method == "unique")
-                return "call 'lists':'usort'(" + recv + ")";
-            if (node.method == "zip" && node.args.size() == 1)
-                return "call 'lists':'zip'(" + recv + ", " + firstArg() + ")";
-            if (node.method == "take" && node.args.size() == 1)
-                return "call 'lists':'sublist'(" + recv + ", " + firstArg() + ")";
-            if (node.method == "drop" && node.args.size() == 1)
-                return "call 'lists':'nthtail'(" + firstArg() + ", " + recv + ")";
+            // Extra list methods — plain forms are routed through kex_prelude
+            // in non-guard context; their ladder implementations use non-guard
+            // BIFs (lists:sum/min/max/sort/usort/zip/sublist/nthtail) that are
+            // never valid in guards, so the handlers are removed.
             if (node.method == "size" || (node.method == "length" && node.args.empty()))
                 return "call 'erlang':'length'(" + recv + ")";
 
-            // Positional accessors — runtime-dispatch on tuple vs list
-            auto nthOrElement = [&](int n) -> std::string {
-                auto tmp = freshVar("Pos");
-                return "let <" + tmp + "> = " + recv + " in\n"
-                       "case call 'erlang':'is_tuple'(" + tmp + ") of\n"
-                       "  'true' when 'true' -> call 'erlang':'element'("
-                           + std::to_string(n) + ", " + tmp + ")\n"
-                       "  'false' when 'true' -> call 'lists':'nth'("
-                           + std::to_string(n) + ", " + tmp + ")\n"
-                       "end";
-            };
-            if (node.method == "second" && node.args.empty()) return nthOrElement(2);
-            if (node.method == "third"  && node.args.empty()) return nthOrElement(3);
+            // Map methods: put, delete, merge are routed through kex_prelude;
+            // maps:put/remove/merge are not guard BIFs.
 
-            // Predicate combinators (any?, all?, none?, find, reject)
-            if (node.method == "any?" || node.method == "none?") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                auto matched = "call 'lists':'any'(" + fnVar + ", " + recv + ")";
-                if (node.method == "none?")
-                    matched = "call 'erlang':'not'(" + matched + ")";
-                return letExpr + matched;
-            }
-            if (node.method == "all?") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'all'(" + fnVar + ", " + recv + ")";
-            }
-            if (node.method == "reject") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                auto negVar = freshVar("Neg");
-                // Core Erlang funs have no 'end'; apply VarName(Args) calls a fun variable.
-                return letExpr +
-                       "let <" + negVar + "> = fun (_NX) -> call 'erlang':'not'(apply " + fnVar + "(_NX)) in\n"
-                       "call 'lists':'filter'(" + negVar + ", " + recv + ")";
-            }
-            if (node.method == "find") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                auto tmp = freshVar("Found");
-                return letExpr +
-                       "case call 'lists':'search'(" + fnVar + ", " + recv + ") of\n"
-                       "  {'value', " + tmp + "} when 'true' -> {'" + "Just', " + tmp + "}\n"
-                       "  'false' when 'true' -> 'none'\n"
-                       "end";
-            }
-            // Map methods: put, delete, get, merge, mapKeys, mapValues, keys, values
-            if (node.method == "put" && node.args.size() == 2)
-                return "call 'maps':'put'(" + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ", " + recv + ")";
-            if (node.method == "delete" && node.args.size() == 1)
-                return "call 'maps':'remove'(" + firstArg() + ", " + recv + ")";
             // .at(i) — String/List indexing, raw element (or 'none'), never
             // Just-wrapped — matches src/interpreter/stdlib/string.cxx's
             // `at` exactly. No Map ambiguity to resolve here (unlike
             // `.get`): both String and List already compile to a plain
-            // Erlang list, so kex_io:list_get/2 (built for `.get`'s list
+            // Erlang list, so kex_intrinsic_list:list_get/2 (built for `.get`'s list
             // case) works unchanged.
-            if (node.method == "at" && node.args.size() == 1)
-                return "call 'kex_intrinsic_list':'list_get'(" + recv + ", " + firstArg() + ")";
+            // at is routed through kex_prelude in non-guard context.
             if (node.method == "get" && node.args.size() == 1) {
                 // `get` doubles as list indexing (`list[i]` desugars to
                 // `list.get(i)` — see parsePostfix) — no static type info in
@@ -1340,42 +1187,17 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                        + emitExpr(node.args[0]) + ", " + emitExpr(node.args[1]) + ")\n"
                        "  'false' when 'true' -> call 'maps':'get'(" + emitExpr(node.args[0]) + ", "
                        + recv + ", " + emitExpr(node.args[1]) + ")\n"
-                       "end";
-            if (node.method == "merge" && node.args.size() == 1)
-                return "call 'maps':'merge'(" + recv + ", " + firstArg() + ")";
+                        "end";
+            // merge is routed through kex_prelude; maps:merge is not a guard BIF.
             if (node.method == "has?" && node.args.size() == 1)
                 return "call 'maps':'is_key'(" + firstArg() + ", " + recv + ")";
-            // keys/values/entries expose the canonical sorted order (maps are
-            // unordered; raw Erlang map order is non-deterministic) — delegate
-            // to the shared intrinsic so both backends and the walker agree.
-            if (node.method == "keys" && node.args.empty())
-                return "call 'kex_intrinsic_map':'keys'(" + recv + ")";
-            if (node.method == "values" && node.args.empty())
-                return "call 'kex_intrinsic_map':'values'(" + recv + ")";
-            if (node.method == "entries" && node.args.empty())
-                return "call 'kex_intrinsic_map':'entries'(" + recv + ")";
+            // keys/values/entries are routed through kex_prelude in non-guard
+            // context; their implementations use cross-module calls that are
+            // not valid in guards.
             if (node.method == "size" && node.args.empty())
                 return "call 'maps':'size'(" + recv + ")";
-            if (node.method == "mapKeys") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                auto accVar = freshVar("MA"); auto kVar = freshVar("K"); auto vVar = freshVar("V");
-                auto foldFun = "fun (" + kVar + ", " + vVar + ", " + accVar + ") ->\n    "
-                               "call 'maps':'put'(apply " + fnVar + "(" + kVar + "), " + vVar + ", " + accVar + ")";
-                auto [foldVar, foldLet] = bindFun(foldFun);
-                return letExpr + foldLet +
-                       "call 'maps':'fold'(" + foldVar + ", call 'maps':'new'(), " + recv + ")";
-            }
-            if (node.method == "mapValues") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                // maps:map needs fun(K, V) -> NewV. If user wrote |v| (1-arg), wrap it.
-                if (!blockArity2()) {
-                    auto kv = freshVar("K"); auto vv = freshVar("V");
-                    auto wrapFun = "fun (" + kv + ", " + vv + ") ->\n    apply " + fnVar + "(" + vv + ")";
-                    auto [wrapVar, wrapLet] = bindFun(wrapFun);
-                    return letExpr + wrapLet + "call 'maps':'map'(" + wrapVar + ", " + recv + ")";
-                }
-                return letExpr + "call 'maps':'map'(" + fnVar + ", " + recv + ")";
-            }
+            // mapKeys/mapValues are routed through kex_prelude in non-guard
+            // contexts; not valid in guards.
 
             // Fallback: unknown method — emit as local apply
             std::string args = recv;
