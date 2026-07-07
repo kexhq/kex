@@ -964,10 +964,13 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // toString is routed through kex_prelude; kex_io:to_string is not
             // a guard BIF.
 
-            // empty? is routed through kex_prelude in non-guard context;
-            // its ladder implementation uses let/case which are never valid
-            // in Core Erlang guards.
-            if ((node.method == "length" || node.method == "count") && !node.block && node.args.empty()) {
+            // count in guard context uses erlang:length (guard-safe); in
+            // non-guard context it routes through kex_prelude.
+            if (node.method == "count" && node.args.empty() && !node.block)
+                return "call 'erlang':'length'(" + recv + ")";
+            // length (alias) uses runtime is_map dispatch with case — not
+            // guard-safe, kept for backward compatibility.
+            if (node.method == "length" && !node.block && node.args.empty()) {
                 auto tmp = freshVar("SZ");
                 return "let <" + tmp + "> =\n    " + recv + "\nin\n"
                        "case call 'erlang':'is_map'(" + tmp + ") of\n"
@@ -979,8 +982,6 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // in non-guard context; their implementations use non-guard BIFs
             // (string:to_upper/to_lower/trim/split, erlang:++) that are never
             // valid in guard context.
-            if (node.method == "count" && node.args.empty() && !node.block)
-                return "call 'erlang':'length'(" + recv + ")";
             // first/last return Just(value)/None (matches
             // src/interpreter/stdlib/list.cxx exactly — works for both
             // String and List receivers, since a Char is just the head/
@@ -1146,8 +1147,8 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
             // Extra list methods — plain forms are routed through kex_prelude
             // in non-guard context; their ladder implementations use non-guard
-            // BIFs (lists:sum/min/max/sort/usort/zip/sublist/nthtail) that are
-            // never valid in guards, so the handlers are removed.
+            // size/length on lists uses erlang:length (guard-safe). Also
+            // works for maps at runtime (erlang:length returns map_size).
             if (node.method == "size" || (node.method == "length" && node.args.empty()))
                 return "call 'erlang':'length'(" + recv + ")";
 
@@ -1194,8 +1195,6 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // keys/values/entries are routed through kex_prelude in non-guard
             // context; their implementations use cross-module calls that are
             // not valid in guards.
-            if (node.method == "size" && node.args.empty())
-                return "call 'maps':'size'(" + recv + ")";
             // mapKeys/mapValues are routed through kex_prelude in non-guard
             // contexts; not valid in guards.
 
