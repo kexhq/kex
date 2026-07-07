@@ -1915,6 +1915,32 @@ int main(int argc, char *argv[])
             kex::interpreter::Evaluator evaluator;
             evaluator.setArgs(scriptArgs);
 
+#ifdef KEX_PRELUDE_DIR
+            {
+                static kex::ast::Program preludeProgram;
+                static bool preludeLoaded = false;
+                if (!preludeLoaded) {
+                    std::error_code ec;
+                    std::vector<std::string> files;
+                    for (const auto& e : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec))
+                        if (e.path().extension() == ".kex")
+                            files.push_back(e.path().string());
+                    std::sort(files.begin(), files.end());
+                    for (const auto& f : files) {
+                        auto src = readFile(f);
+                        kex::Lexer lex(std::move(src), f);
+                        kex::Parser parser(lex.tokenizeAll(), f);
+                        auto prog = parser.parseProgram();
+                        for (auto& item : prog.items)
+                            if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+                                preludeProgram.items.push_back(std::move(item));
+                    }
+                    preludeLoaded = true;
+                }
+                evaluator.execute(preludeProgram);
+            }
+#endif
+
             // Must outlive `evaluator.execute(program)` below: the
             // evaluator keeps raw `const ast::FunctionDef*` pointers into
             // whatever Program owns these nodes (see m_functionDefs), so a

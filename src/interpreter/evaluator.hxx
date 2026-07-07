@@ -118,6 +118,7 @@ private:
 
     std::shared_ptr<Environment> m_env;
     std::shared_ptr<Environment> m_globalEnv;
+    std::shared_ptr<Environment> m_intrinsicEnv;
     // Owns every process (including "process 0", the top-level program
     // itself — see Scheduler::runToCompletion) for this Evaluator's whole
     // lifetime, so processes spawned on one execute() call (e.g. one REPL

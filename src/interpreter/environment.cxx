@@ -45,4 +45,9 @@ auto Environment::parent() const -> std::shared_ptr<Environment> {
     return m_parent;
 }
 
+auto Environment::importAll(const Environment& other) -> void {
+    for (const auto& [name, b] : other.m_bindings)
+        m_bindings[name] = b;
+}
+
 } // namespace kex::interpreter

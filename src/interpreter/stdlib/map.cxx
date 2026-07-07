@@ -82,6 +82,17 @@ auto Evaluator::registerMapBuiltins() -> void {
         return args.size() >= 3 ? args[2] : Value::none();
     });
 
+    // Kex.Intrinsic.Map.getWithDefault(map, key, default) → raw value
+    // or the default. Backs the prelude's `get(key, default)` wrapper.
+    reg("getWithDefault", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3) return args.size() >= 2 ? args[1] : Value::none();
+        auto* map = std::get_if<MapValue>(&args[0]->data);
+        if (!map) return args[2];
+        for (const auto& [k, v] : sortedEntries(*map))
+            if (valuesEqual(k, args[1])) return v;
+        return args[2];
+    });
+
     // put(map, key, value) -> Map — replaces the value if key already
     // exists, otherwise appends a new entry.
     reg("put", [](std::vector<ValuePtr> args) -> ValuePtr {

@@ -19,6 +19,8 @@ public:
     // immutable so callers don't need a separate existence check.
     auto isMutable(const std::string& name) const -> bool;
     auto parent() const -> std::shared_ptr<Environment>;
+    // Copy all bindings from `other` into this environment.
+    auto importAll(const Environment& other) -> void;
 
 private:
     struct Binding {

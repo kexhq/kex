@@ -7,6 +7,7 @@ namespace kex::interpreter {
 
 Evaluator::Evaluator() {
     m_globalEnv = std::make_shared<Environment>();
+    m_intrinsicEnv = std::make_shared<Environment>();
     m_env = m_globalEnv;
     // Owns every process for this Evaluator's whole lifetime — see
     // docs/fiber-process-plan.md §2: there is no "outside of a process"
@@ -14,6 +15,10 @@ Evaluator::Evaluator() {
     // being created lazily on first spawn/receive use.
     m_scheduler = std::make_unique<Scheduler>(*this);
     registerBuiltins();
+    // Clone all builtins into m_intrinsicEnv so the Kex.Intrinsic.*
+    // dispatch path can look them up without hitting prelude wrappers
+    // (which may later shadow them in m_globalEnv).
+    m_intrinsicEnv->importAll(*m_globalEnv);
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
@@ -109,12 +114,11 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
 }
 
 auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
-    // Register default method implementations from the trait body.
-    // A `make X, implement: Trait` block that overrides a default registers
-    // its own function after this, which naturally shadows the default.
+    // Register default method implementations from the trait body under
+    // the trait name so `make X, implement: Trait` can inherit them.
     for (const auto& item : def.body) {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            execFunctionDef(**fn);
+            execFunctionDef(**fn, def.name);
         }
     }
 }
@@ -397,21 +401,46 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
             if (!generic->name.parts.empty()) typeName = generic->name.parts[0];
         } else if (std::holds_alternative<ast::ListType>(def.target->kind)) {
             typeName = "List";
+        } else if (std::holds_alternative<ast::MapType>(def.target->kind)) {
+            typeName = "Map";
         }
     }
 
+    // Collect the make block's own method names (both short and typed).
+    std::unordered_set<std::string> ownMethods;
+    for (const auto& item : def.body) {
+        if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+            ownMethods.insert((*fn)->name);
+        else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
+            if (*vb) for (const auto& vi : (*vb)->items)
+                if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                    ownMethods.insert(vf->get()->name);
+    }
+
+    // Process the make block's own methods.
     for (const auto& item : def.body) {
         std::visit([this, &typeName](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 execFunctionDef(*node, typeName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                // `private do ... end` / `public do ... end` inside a make
-                // block — methods defined there still belong to typeName.
                 execVisibilityBlock(*node, typeName);
             }
-            // TypeAnnotation: semantic-only, nothing to execute.
         }, item);
+    }
+
+    // Inherit default methods from implemented traits.
+    for (const auto& traitName : def.implements) {
+        std::string prefix = traitName + "::";
+        for (const auto& [key, fns] : m_functionDefs) {
+            if (key.rfind(prefix, 0) != 0) continue; // doesn't start with prefix
+            for (const auto* traitFn : fns) {
+                if (!traitFn) continue;
+                if (traitFn->clauses.empty() || traitFn->clauses[0].body.empty()) continue;
+                if (ownMethods.count(traitFn->name)) continue;
+                execFunctionDef(*traitFn, typeName);
+            }
+        }
     }
 }
 
@@ -669,7 +698,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     for (const auto& a : node.args)
                                         args.push_back(a ? eval(*a) : Value::none());
                                     if (node.block) args.push_back(eval(**node.block));
-                                    return callFunction(node.method, std::move(args), {}, expr.location);
+                                    // Look up in m_intrinsicEnv, not m_env —
+                                    // the prelude's Kex.Intrinsic.* wrappers
+                                    // live in m_globalEnv; the C++ native
+                                    // implementations live in m_intrinsicEnv.
+                                    auto val = m_intrinsicEnv->get(node.method);
+                                    if (!val)
+                                        throw RuntimeError("Undefined intrinsic: " + node.method, expr.location);
+                                    if (auto* func = std::get_if<FunctionValue>(&val->data))
+                                        return func->native(std::move(args));
+                                    throw RuntimeError("Intrinsic " + node.method + " is not a function", expr.location);
                                 }
             }
             // Pre-check: if the receiver is a bare UpperIdentifier that isn't
@@ -819,6 +857,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             std::vector<ValuePtr> elements;
             for (const auto& elem : node.elements) {
                 elements.push_back(elem ? eval(*elem) : Value::none());
+            }
+            if (node.rest) {
+                auto tailVal = eval(**node.rest);
+                if (auto* tailList = std::get_if<ListValue>(&tailVal->data)) {
+                    elements.insert(elements.end(),
+                        tailList->elements.begin(), tailList->elements.end());
+                } else {
+                    elements.push_back(tailVal);
+                }
             }
             return Value::list(std::move(elements));
         }
@@ -1468,6 +1515,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     m_scheduler->tickReduction();
 
     auto val = m_env->get(name);
+    if (!val) val = m_intrinsicEnv->get(name);
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
     }
@@ -1768,6 +1816,26 @@ auto Evaluator::registerBuiltins() -> void {
     registerMathBuiltins();
     registerTestBuiltins();
     registerProcessBuiltins();
+
+    // Kex.Intrinsic.Fun.applyItem(f, item) — auto-splat a pair into a
+    // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
+    // for Map enumeration where each item is a (K,V) tuple.
+    {
+        auto val = std::make_shared<Value>();
+        val->data = FunctionValue{"applyItem", [](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.size() < 2) return Value::none();
+            auto& fn = *args[0];
+            auto& item = *args[1];
+            auto* nf = std::get_if<FunctionValue>(&fn.data);
+            if (!nf || !nf->native) return Value::none();
+            // If item is a 2-tuple, spread it as two arguments.
+            if (auto* tv = std::get_if<TupleValue>(&item.data))
+                if (tv->elements.size() == 2)
+                    return nf->native({tv->elements[0], tv->elements[1]});
+            return nf->native({args[1]});
+        }};
+        m_globalEnv->define("applyItem", val);
+    }
 }
 
 auto Evaluator::pushEnv() -> void {

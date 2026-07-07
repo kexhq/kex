@@ -337,6 +337,42 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::integer(c);
     });
 
+    // Kex.Intrinsic.List.length — the low-level length intrinsic backing
+    // the prelude's `count` wrapper. Works on lists, strings, and maps.
+    reg("length", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto* list = std::get_if<ListValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(list->elements.size()));
+        if (auto* str = std::get_if<StringValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(str->value.size()));
+        if (auto* map = std::get_if<MapValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(map->entries.size()));
+        return Value::integer(0);
+    });
+
+    // Kex.Intrinsic.List.member(elem, container) — element membership check.
+    // Backs the prelude's `contains?` and `in?` wrappers.
+    reg("member", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto& elem = args[0];
+        auto& container = args[1];
+        if (auto* list = std::get_if<ListValue>(&container->data)) {
+            for (const auto& e : list->elements)
+                if (valuesEqual(e, elem)) return Value::boolean(true);
+        }
+        if (auto* range = std::get_if<RangeValue>(&container->data)) {
+            auto elems = rangeToList(*range);
+            for (const auto& e : elems)
+                if (valuesEqual(e, elem)) return Value::boolean(true);
+        }
+        if (auto* str = std::get_if<StringValue>(&container->data)) {
+            for (unsigned char c : str->value)
+                if (valuesEqual(Value::character(static_cast<char>(c)), elem))
+                    return Value::boolean(true);
+        }
+        return Value::boolean(false);
+    });
+
     reg("take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto n = std::get_if<IntValue>(&args[1]->data);
