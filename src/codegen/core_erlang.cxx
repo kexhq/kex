@@ -187,7 +187,7 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         // Erlang's math module has no log/2 (arbitrary base) at all; see
         // kex_io.erl's math_log for the ln(x)/ln(base) implementation
         // matching src/interpreter/stdlib/math.cxx's Math::log exactly.
-        {"Math::log",       {"kex_io", "math_log"}},
+        {"Math::log",       {"kex_intrinsic_math", "log"}},
         {"Math::log2",      {"math",   "log2"}},
         {"Math::log10",     {"math",   "log10"}},
         {"Math::exp",       {"math",   "exp"}},
@@ -197,23 +197,23 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"Math::abs",       {"erlang", "abs"}},
         {"Math::pow",       {"math",   "pow"}},
         {"Math::atan2",     {"math",   "atan2"}},
-        {"Math::hypot",     {"kex_io", "math_hypot"}},
-        {"Math::cbrt",      {"kex_io", "math_cbrt"}},
+        {"Math::hypot",     {"kex_intrinsic_math", "hypot"}},
+        {"Math::cbrt",      {"kex_intrinsic_math", "cbrt"}},
         {"Math::pi",        {"math",   "pi"}},
         {"Math::PI",        {"math",   "pi"}},
         // e/E is a bare 0-arg constant (Euler's number) — math:exp/1 needs
         // an argument, so it can't back this directly (a real, reproduced
         // undef crash otherwise: math:exp() with no args). See
         // kex_io.erl's math_e/0.
-        {"Math::e",         {"kex_io", "math_e"}},
-        {"Math::E",         {"kex_io", "math_e"}},
+        {"Math::e",         {"kex_intrinsic_math", "e"}},
+        {"Math::E",         {"kex_intrinsic_math", "e"}},
         {"Math::inf",       {"erlang", "infinity"}},
         // Integer/Float parsing — see kex_io.erl's integer_parse/float_parse
         // for why these need custom logic rather than a bare BIF mapping
         // (they return Ok(v)/Error(reason), matching
         // src/interpreter/stdlib/number.cxx exactly).
-        {"Integer::parse",  {"kex_io", "integer_parse"}},
-        {"Float::parse",    {"kex_io", "float_parse"}},
+        {"Integer::parse",  {"kex_intrinsic_integer", "integer_parse"}},
+        {"Float::parse",    {"kex_intrinsic_number", "float_parse"}},
         // String
         {"String::length",  {"erlang", "length"}},
         {"String::toUpper", {"string", "to_upper"}},
@@ -675,7 +675,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             // error (a real, reproduced bug: spec/traits.kex,
             // spec/my_starts_with.kex).
             if (node.name == "assert" && !node.args.empty())
-                return "call 'kex_io':'assert'(" + args + ")";
+                return "call 'kex_test':'assert'(" + args + ")";
             // describe(name) do ... end / it(name) do ... end — the rest
             // of Kex's testing DSL (see src/interpreter/stdlib/test.cxx
             // and runtime/src/kex_test.erl, which mirrors its exact
@@ -891,6 +891,44 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             auto firstArg = [&]() -> std::string {
                 return node.args.empty() ? "" : emitExpr(node.args[0]);
             };
+
+            // Stdlib methods migrated to the Kex prelude — route to the shared
+            // kex_prelude BEAM module instead of the hardcoded ladder, same as
+            // the --ir path does. Gated on !m_inGuard (cross-module calls are
+            // illegal inside Core Erlang guards). Excludes methods where the
+            // prelude's runtime type-dispatch can't distinguish the receiver
+            // (e.g. String vs List, both is_list at runtime — contains?).
+            if (!m_inGuard) {
+                static const std::unordered_set<std::string> preludeMethods = {
+                    "reverse", "sort", "uniq", "flatten", "take", "drop", "zip", "push",
+                    "sum", "product", "indexOf", "at", "min", "max", "count", "join",
+                    "upperCase", "lowerCase", "trim", "split", "startsWith?", "endsWith?",
+                    "digit?", "alpha?", "space?",
+                    "modulo", "even?", "odd?",
+                    "keys", "values", "entries", "merge", "has?", "put", "delete",
+                    "abs", "sqrt", "none?", "some?", "present?", "ok?", "error?",
+                    "first", "last", "empty?", "or", "in?",
+                    "blank?", "present?", "truthy?", "falsy?",
+                    "second", "third",
+                    "floor", "ceil", "round", "toFloat", "toInteger",
+                    "toString", "rest", "toOptional",
+                    // Process/concurrency primitives backed by Kex.Intrinsic.Process.
+                    "send", "link", "unlink", "monitor", "alive?",
+                    "demonitor", "await",
+                    // Higher-order functions provided by the Enumerable trait
+                    // and per-type make blocks in the prelude.
+                    "reduce", "map", "each", "filter", "reject",
+                    "all?", "any?", "find", "flatMap",
+                    "partition", "mapValues", "mapKeys", "times"};
+                if (preludeMethods.count(node.method)) {
+                    std::string allArgs = recv;
+                    for (const auto& a : node.args) allArgs += ", " + emitExpr(a);
+                    for (const auto& [_, v] : node.namedArgs) allArgs += ", " + emitExpr(v);
+                    if (node.block) allArgs += ", " + emitExpr(*node.block);
+                    return "call 'kex_prelude':'" + node.method + "'(" + allArgs + ")";
+                }
+            }
+
             auto secondArg = [&]() -> std::string {
                 return node.args.size() > 1 ? emitExpr(node.args[1]) : "";
             };
@@ -1066,136 +1104,6 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     return lam->params.size() == 2;
                 return false;
             };
-
-            // Map-aware higher-order dispatch: 2-param blocks → map operations.
-            if (blockArity2()) {
-                if (node.method == "each") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'maps':'foreach'(" + fnVar + ", " + recv + ")";
-                }
-                if (node.method == "map") {
-                    // produces a list: one result per (k,v) pair
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    auto kv = freshVar("K"); auto vv = freshVar("V"); auto accv = freshVar("Acc");
-                    auto foldF = "fun (" + kv + ", " + vv + ", " + accv + ") ->\n    "
-                                 "[apply " + fnVar + "(" + kv + ", " + vv + ")|" + accv + "]";
-                    auto [foldVar, foldLet] = bindFun(foldF);
-                    return letExpr + foldLet + "call 'lists':'reverse'(call 'maps':'fold'(" + foldVar + ", [], " + recv + "))";
-                }
-                if (node.method == "filter" || node.method == "select") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'maps':'filter'(" + fnVar + ", " + recv + ")";
-                }
-                if (node.method == "reject") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    auto kv = freshVar("K"); auto vv = freshVar("V");
-                    auto notFun = "fun (" + kv + ", " + vv + ") ->\n    call 'erlang':'not'(apply " + fnVar + "(" + kv + ", " + vv + "))";
-                    auto [notVar, notLet] = bindFun(notFun);
-                    return letExpr + notLet + "call 'maps':'filter'(" + notVar + ", " + recv + ")";
-                }
-                if (node.method == "any?") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'erlang':'>'("
-                           "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + ")), 0)";
-                }
-                if (node.method == "all?") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'erlang':'=:='("
-                           "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + ")), "
-                           "call 'maps':'size'(" + recv + "))";
-                }
-                if (node.method == "count" && (node.block || !node.args.empty())) {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'maps':'size'(call 'maps':'filter'(" + fnVar + ", " + recv + "))";
-                }
-                if (node.method == "find") {
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    auto kv = freshVar("K"); auto vv = freshVar("V"); auto accv = freshVar("Acc");
-                    auto foldF = "fun (" + kv + ", " + vv + ", " + accv + ") ->\n    "
-                                 "case " + accv + " of\n"
-                                 "  'none' when 'true' ->\n    case apply " + fnVar + "(" + kv + ", " + vv + ") of\n"
-                                 "      'true' when 'true' -> {'Just', {" + kv + ", " + vv + "}}\n"
-                                 "      'false' when 'true' -> 'none'\n    end\n"
-                                 "  _ when 'true' -> " + accv + "\n"
-                                 "end";
-                    auto [foldVar, foldLet] = bindFun(foldF);
-                    return letExpr + foldLet + "call 'maps':'fold'(" + foldVar + ", 'none', " + recv + ")";
-                }
-            }
-
-            if (node.method == "each") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'foreach'(" + fnVar + ", " + recv + ")";
-            }
-            if (node.method == "map") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'map'(" + fnVar + ", " + recv + ")";
-            }
-            // count { |x| pred } → length(filter(pred, list))
-            if (node.method == "count" && (node.block || !node.args.empty())) {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'erlang':'length'(call 'lists':'filter'(" + fnVar + ", " + recv + "))";
-            }
-            if (node.method == "filter" || node.method == "select") {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'filter'(" + fnVar + ", " + recv + ")";
-            }
-            // flatMap { |x| ... } — one level of flattening (matches
-            // src/interpreter/stdlib/list.cxx's flatMap: if the block's
-            // result is itself a list, splice its elements; this simpler
-            // lists:append(lists:map(...)) form assumes the common case —
-            // the block always returns a list — rather than replicating
-            // the interpreter's per-element is-it-a-list check).
-            if (node.method == "flatMap" && node.block) {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'append'(call 'lists':'map'(" + fnVar + ", " + recv + "))";
-            }
-            // partition { |x| ... } → (matching, nonMatching) — matches
-            // src/interpreter/stdlib/list.cxx's partition exactly.
-            if (node.method == "partition" && node.block) {
-                auto [fnVar, letExpr] = bindFun(rawBlock());
-                return letExpr + "call 'lists':'partition'(" + fnVar + ", " + recv + ")";
-            }
-            // indexOf(value) -> Just(index) | None — matches
-            // src/interpreter/stdlib/list.cxx's indexOf exactly. No
-            // lists:indexOf/2 BIF exists in standard Erlang/OTP (confirmed
-            // — undef); see kex_io:index_of/2 for the real implementation.
-            if (node.method == "indexOf" && node.args.size() == 1)
-                return "call 'kex_intrinsic_list':'index_of'(" + firstArg() + ", " + recv + ")";
-            // product — no lists:product/1 BIF; see kex_io:list_product/1
-            // (a bare inline `fun ... end` passed directly as a call
-            // argument, e.g. lists:foldl(fun (...) -> ... end, 1, Recv),
-            // isn't valid Core Erlang — fun literals must be let-bound to a
-            // variable first, same reason bindFun exists for block-taking
-            // methods elsewhere in this function).
-            if (node.method == "product" && node.args.empty() && !node.block)
-                return "call 'kex_intrinsic_list':'list_product'(" + recv + ")";
-            if (node.method == "reduce" || node.method == "inject") {
-                // Two forms: `.reduce(seed) { |acc, x| ... }` (a block) and
-                // `.reduce(seed, fn)` (the fn as a second plain argument —
-                // e.g. a curried operator reference like `~(+)`). A real,
-                // reproduced bug otherwise: the 2-plain-arg form fell
-                // through entirely, undef'd as a local `reduce/3` call
-                // (spec/currying.kex).
-                if (node.args.size() >= 1 && node.block) {
-                    auto init = emitExpr(node.args[0]);
-                    auto [fnVar, letExpr] = bindFun(emitExpr(*node.block));
-                    // Kex block args are (acc, elem); lists:foldl passes (elem, acc) — wrap to swap.
-                    auto ev = freshVar("E"); auto av = freshVar("A");
-                    auto swapFun = "fun (" + ev + ", " + av + ") ->\n    apply " + fnVar + "(" + av + ", " + ev + ")";
-                    auto [swapVar, swapLet] = bindFun(swapFun);
-                    return letExpr + swapLet + "call 'lists':'foldl'(" + swapVar + ", " + init + ", " + recv + ")";
-                }
-                if (node.args.size() == 2 && !node.block) {
-                    auto init = emitExpr(node.args[0]);
-                    auto [fnVar, letExpr] = bindFun(emitExpr(node.args[1]));
-                    auto ev = freshVar("E"); auto av = freshVar("A");
-                    auto swapFun = "fun (" + ev + ", " + av + ") ->\n    apply " + fnVar + "(" + av + ", " + ev + ")";
-                    auto [swapVar, swapLet] = bindFun(swapFun);
-                    return letExpr + swapLet + "call 'lists':'foldl'(" + swapVar + ", " + init + ", " + recv + ")";
-                }
-            }
-
             // Type conversion: x.to(String), x.to(Int), x.to(Float) — unless
             // a `make Type do let to(Kind) ... end` block defined its own
             // `to`, which must take priority over this builtin fallback. A
@@ -1224,9 +1132,9 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 // neither list.cxx's `static_cast<int64_t>` truncation
                 // nor a String receiver at all).
                 if (typeName == "Int" || typeName == "Integer")
-                    return "call 'kex_io':'to_integer'(" + recv + ")";
+                    return "call 'kex_intrinsic_number':'to_integer'(" + recv + ")";
                 if (typeName == "Float")
-                    return "call 'kex_io':'to_float'(" + recv + ")";
+                    return "call 'kex_intrinsic_number':'to_float'(" + recv + ")";
             }
 
             // Option/Result methods
@@ -1286,7 +1194,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 if (m_inGuard)
                     return "call 'erlang':'and'(call 'erlang':'>='(" + recv +
                            ", 48), call 'erlang':'=<'(" + recv + ", 57))";
-                return "call 'kex_io':'is_digit'(" + recv + ")";
+                return "call 'kex_intrinsic_char':'is_digit'(" + recv + ")";
             }
             if (node.method == "space?" && node.args.empty()) {
                 if (m_inGuard) {
@@ -1300,7 +1208,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     }
                     return chk;
                 }
-                return "call 'kex_io':'is_space'(" + recv + ")";
+                return "call 'kex_intrinsic_char':'is_space'(" + recv + ")";
             }
             if (node.method == "alpha?" && node.args.empty()) {
                 if (m_inGuard)
@@ -1309,16 +1217,11 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                            "call 'erlang':'=<'(" + recv + ", 90)), "
                            "call 'erlang':'and'(call 'erlang':'>='(" + recv + ", 97), "
                            "call 'erlang':'=<'(" + recv + ", 122)))";
-                return "call 'kex_io':'is_alpha'(" + recv + ")";
+                return "call 'kex_intrinsic_char':'is_alpha'(" + recv + ")";
             }
 
             // Extra list methods
             if (node.method == "sum") {
-                if (node.block || !node.args.empty()) {
-                    // sum { |x| expr } → lists:sum(lists:map(fun, recv))
-                    auto [fnVar, letExpr] = bindFun(rawBlock());
-                    return letExpr + "call 'lists':'sum'(call 'lists':'map'(" + fnVar + ", " + recv + "))";
-                }
                 return "call 'lists':'sum'(" + recv + ")";
             }
             // min/max return Just(value)/None (matches
@@ -1753,10 +1656,10 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 // via `apply 'name'/1(...)` undefs. A real, reproduced bug
                 // otherwise: `word.filter(&alpha?)` (spec/char_predicates.kex).
                 static const std::unordered_map<std::string, std::pair<std::string,std::string>> builtinFns = {
-                    {"digit?", {"kex_io", "is_digit"}},
-                    {"alpha?", {"kex_io", "is_alpha"}},
-                    {"space?", {"kex_io", "is_space"}},
-                    {"assert", {"kex_io", "assert"}},
+                    {"digit?", {"kex_intrinsic_char", "is_digit"}},
+                    {"alpha?", {"kex_intrinsic_char", "is_alpha"}},
+                    {"space?", {"kex_intrinsic_char", "is_space"}},
+                    {"assert", {"kex_test", "assert"}},
                 };
                 auto it = builtinFns.find(node.name);
                 if (it != builtinFns.end())

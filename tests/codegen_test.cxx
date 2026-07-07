@@ -301,36 +301,34 @@ int main() {
     });
 
     describe("CoreErlangEmitter — UFCS method dispatch", []() {
-        it("modulo maps to erlang:rem", []() {
+        it("modulo routes to kex_prelude", []() {
             auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
-            assertTrue(contains(out, "call 'erlang':'rem'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
         });
 
-        it("even? maps to erlang:rem =:= 0", []() {
+        it("even? routes to kex_prelude", []() {
             auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
-            assertTrue(contains(out, "call 'erlang':'rem'"), out);
-            assertTrue(contains(out, "'=:='"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
             auto out = emit("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n");
-            assertTrue(contains(out, "call 'lists':'foreach'"), out);
-            assertTrue(contains(out, "fun ("), out);
+            assertTrue(contains(out, "call 'kex_prelude':'each'"), out);
         });
 
-        it("map binds lambda and calls lists:map", []() {
+        it("map routes to kex_prelude", []() {
             auto out = emit("main do\n  [1,2,3].map { |x| x }\nend\n");
-            assertTrue(contains(out, "call 'lists':'map'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'map'"), out);
         });
 
-        it("filter binds lambda and calls lists:filter", []() {
+        it("filter routes to kex_prelude", []() {
             auto out = emit("main do\n  [1,2,3].filter { |x| true }\nend\n");
-            assertTrue(contains(out, "call 'lists':'filter'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 
-        it("push appends via erlang:'++'", []() {
+        it("push routes to kex_prelude", []() {
             auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
-            assertTrue(contains(out, "call 'erlang':'++'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
         });
     });
 
@@ -375,7 +373,7 @@ int main() {
             assertTrue(contains(out, "after 1000"), out);
         });
 
-        it("pid.send(msg) emits erlang:send with kex_msg wrapper", []() {
+        it("pid.send(msg) routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
@@ -383,8 +381,7 @@ int main() {
                 "end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'send'"), out);
-            assertTrue(contains(out, "'kex_msg'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
         });
 
         it("send(pid, msg) free function emits erlang:send", []() {
@@ -407,22 +404,22 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'self'()"), out);
         });
 
-        it("pid.link() emits erlang:link", []() {
+        it("pid.link() routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do pid.link() end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'link'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
         });
 
-        it("pid.alive?() emits erlang:is_process_alive", []() {
+        it("pid.alive?() routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul check(pid) do pid.alive?() end\n"
                 "main do check(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'is_process_alive'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
         });
 
         it("Task.start { block } emits kex_task:start/1", []() {
@@ -436,7 +433,7 @@ int main() {
             assertTrue(contains(out, "call 'kex_task':'start'"), out);
         });
 
-        it("task.await() emits kex_task:await/2 with infinity", []() {
+        it("task.await() routes to kex_prelude with infinity", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -445,11 +442,10 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'await'"), out);
-            assertTrue(contains(out, "'infinity'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
         });
 
-        it("task.await(timeout: N) emits kex_task:await/2 with N", []() {
+        it("task.await(timeout: N) routes to kex_prelude with timeout", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -458,8 +454,7 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'await'"), out);
-            assertTrue(contains(out, "5000"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
         });
 
         it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {

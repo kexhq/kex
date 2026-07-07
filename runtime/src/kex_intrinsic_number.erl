@@ -2,7 +2,9 @@
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
 -export([abs/1, sqrt/1, add/2, divide/2,
-          floor/1, ceil/1, round/1, toFloat/1, toInteger/1]).
+          floor/1, ceil/1, round/1, toFloat/1, toInteger/1,
+          'toString'/1, float_parse/1,
+          to_integer/1, to_float/1]).
 
 abs(N)  -> erlang:abs(N).
 sqrt(N) -> math:sqrt(N).
@@ -31,3 +33,47 @@ toFloat(N)    -> erlang:float(N).
 
 %% toInteger/1 — truncate toward zero (no-op on integers).
 toInteger(N)  -> erlang:trunc(N).
+
+%% toString/1 — convert number to string, matching Kex's display formatting
+%% (6 decimal places for floats, matching kex_io:to_string / interpreter).
+'toString'(N) -> kex_io:to_string(N).
+
+%% Float.parse(s) — parse a string to float, returning Ok(Float) or
+%% Error(reason). Matches src/interpreter/stdlib/number.cxx exactly.
+%% Moved from kex_io where parsing didn't belong.
+float_parse(S) ->
+    case string:to_float(S) of
+        {Flt, ""} -> {'Ok', Flt};
+        _ ->
+            case string:to_integer(S) of
+                {Int, ""} -> {'Ok', float(Int)};
+                _ -> {'Error', "invalid float: " ++ S}
+            end
+    end.
+
+%% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
+%% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
+%% an already-matching type, TRUNCATE (not round) a Float down to Integer,
+%% parse a String, and 'none' on anything else/unparseable.
+%% Moved from kex_io where type conversion didn't belong.
+to_integer(X) when is_integer(X) -> X;
+to_integer(X) when is_float(X) -> erlang:trunc(X);
+to_integer(X) when is_list(X) ->
+    case string:to_integer(X) of
+        {Int, ""} -> Int;
+        _ -> 'none'
+    end;
+to_integer(_) -> 'none'.
+
+to_float(X) when is_float(X) -> X;
+to_float(X) when is_integer(X) -> float(X);
+to_float(X) when is_list(X) ->
+    case string:to_float(X) of
+        {Flt, ""} -> Flt;
+        _ ->
+            case string:to_integer(X) of
+                {Int, ""} -> float(Int);
+                _ -> 'none'
+            end
+    end;
+to_float(_) -> 'none'.

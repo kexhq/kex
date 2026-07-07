@@ -530,7 +530,7 @@ struct Lowering {
             std::vector<ExprPtr> as;
             for (const auto& a : n.args) as.push_back(atomize(a, binds));
             int ar = static_cast<int>(as.size());
-            return wrapLets(binds, callE("kex_io", "assert", ar, std::move(as)));
+            return wrapLets(binds, callE("kex_test", "assert", ar, std::move(as)));
         }
         std::vector<ExprPtr> args;
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -655,8 +655,8 @@ struct Lowering {
                 if (n.method == "printError") return ioCall("print_error");
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
-            if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_io", "integer_parse");
-            if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_io", "float_parse");
+            if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
+            if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
             if (uid->name == "Process") {
                 if (n.method == "self" && args.empty()) return callE("erlang", "self", 0, {});
                 if (n.method == "exit" && args.size() == 2)
@@ -707,17 +707,17 @@ struct Lowering {
                 if (n.method == "sin") return nsCall("math", "sin");
                 if (n.method == "cos") return nsCall("math", "cos");
                 if (n.method == "tan") return nsCall("math", "tan");
-                if (n.method == "log") return nsCall("kex_io", "math_log");
+                if (n.method == "log") return nsCall("kex_intrinsic_math", "log");
                 if (n.method == "abs") return nsCall("erlang", "abs");
                 if (n.method == "floor") return nsCall("erlang", "floor");
                 if (n.method == "ceil") return nsCall("erlang", "ceil");
                 if (n.method == "PI" || n.method == "pi") return nsCall("math", "pi");
-                if (n.method == "E" || n.method == "e") return nsCall("kex_io", "math_e");
+                if (n.method == "E" || n.method == "e") return nsCall("kex_intrinsic_math", "e");
                 if (n.method == "atan2") return nsCall("math", "atan2");
                 if (n.method == "atan") return nsCall("math", "atan");
                 if (n.method == "log10") return nsCall("math", "log10");
-                if (n.method == "hypot") return nsCall("kex_io", "math_hypot");
-                if (n.method == "cbrt") return nsCall("kex_io", "math_cbrt");
+                if (n.method == "hypot") return nsCall("kex_intrinsic_math", "hypot");
+                if (n.method == "cbrt") return nsCall("kex_intrinsic_math", "cbrt");
                 if (n.method == "exp") return nsCall("math", "exp");
                 if (n.method == "log2") return nsCall("math", "log2");
             }
@@ -964,8 +964,8 @@ struct Lowering {
             std::string ty;
             if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
             if (ty == "String") return ret(callE("kex_io","to_string",1,one(clone(rv))));
-            if (ty == "Int" || ty == "Integer") return ret(callE("kex_io","to_integer",1,one(clone(rv))));
-            if (ty == "Float") return ret(callE("kex_io","to_float",1,one(clone(rv))));
+            if (ty == "Int" || ty == "Integer") return ret(callE("kex_intrinsic_number","to_integer",1,one(clone(rv))));
+            if (ty == "Float") return ret(callE("kex_intrinsic_number","to_float",1,one(clone(rv))));
         }
         // none?: an Option is None (Kex None → the 'none' atom).
         if (m == "none?" && n.args.empty() && !localMethods.count("none?"))
@@ -2193,6 +2193,7 @@ struct Lowering {
             {"Integer","is_integer"}, {"Char","is_integer"}, {"Float","is_float"},
             {"Number","is_number"}, {"String","is_list"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
+            {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         };
         auto it = prim.find(ty);
         if (it != prim.end())
@@ -2224,17 +2225,57 @@ struct Lowering {
         Match m;
         m.subjects.push_back(var("_a0"));
         for (const auto& ty : owners) {
-            MatchClause mc;
-            auto gv = std::make_unique<Pattern>();
-            gv->kind = PatKind::Var; gv->name = "_gv";
-            mc.patterns.push_back(std::move(gv));
-            mc.guard = typeGuard(ty, var("_gv"));
-            std::vector<ExprPtr> args;
-            for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
-            auto call = std::make_unique<Expr>();
-            call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
-            mc.body = std::move(call);
-            m.clauses.push_back(std::move(mc));
+            // ADT types with known variant tags: generate one pattern-match
+            // clause per variant instead of a single guard clause. This avoids
+            // Core Erlang's strict erlang:and/or in guards (element/2 throws
+            // badarg on non-tuples) and uses the correct variant tags rather
+            // than the type name (e.g. 'Just' not 'Optional').
+            auto vt = typeVariantTags.find(ty);
+            if (vt != typeVariantTags.end() && !vt->second.empty()) {
+                for (const auto& tag : vt->second) {
+                    MatchClause mc;
+                    // Nullary variant (lowercase → atom, e.g. 'none').
+                    if (!tag.empty() && std::islower(static_cast<unsigned char>(tag[0]))) {
+                        auto pat = std::make_unique<Pattern>();
+                        pat->kind = PatKind::Lit;
+                        pat->litKind = LitKind::Atom;
+                        pat->litText = tag;
+                        mc.patterns.push_back(std::move(pat));
+                    } else {
+                        // Payload variant: tuple pattern {Tag, _}.
+                        auto pat = std::make_unique<Pattern>();
+                        pat->kind = PatKind::Tuple;
+                        auto tagPat = std::make_unique<Pattern>();
+                        tagPat->kind = PatKind::Lit;
+                        tagPat->litKind = LitKind::Atom;
+                        tagPat->litText = tag;
+                        pat->args.push_back(std::move(tagPat));
+                        auto wild = std::make_unique<Pattern>();
+                        wild->kind = PatKind::Wild;
+                        pat->args.push_back(std::move(wild));
+                        mc.patterns.push_back(std::move(pat));
+                    }
+                    std::vector<ExprPtr> args;
+                    for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
+                    auto call = std::make_unique<Expr>();
+                    call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                    mc.body = std::move(call);
+                    m.clauses.push_back(std::move(mc));
+                }
+            } else {
+                // Primitive/record type: use a guard-based clause.
+                MatchClause mc;
+                auto gv = std::make_unique<Pattern>();
+                gv->kind = PatKind::Var; gv->name = "_gv";
+                mc.patterns.push_back(std::move(gv));
+                mc.guard = typeGuard(ty, var("_gv"));
+                std::vector<ExprPtr> args;
+                for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
+                auto call = std::make_unique<Expr>();
+                call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                mc.body = std::move(call);
+                m.clauses.push_back(std::move(mc));
+            }
         }
         auto body = std::make_unique<Expr>();
         body->node = std::move(m);
@@ -2507,7 +2548,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             if (t == "Nothing") t = "none";
                             if (!t.empty()) tags.push_back(t);
                         }
-                        if (!tags.empty())
+                        if (!tags.empty() && tags.size() >= 2)
                             L.typeVariantTags[node->name] = std::move(tags);
                     }
                 }

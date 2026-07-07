@@ -15,7 +15,9 @@ make Map<K, V>, implement: Enumerable do
   #   m.get(:name)         # => Just("Alice")
   #   m.get(:missing, 0)   # => 0
   get :> K -> V?
+  let get(key) = Kex.Intrinsic.Map.get(this, key)
   get :> (K, V) -> V
+  let get(key, default) = Kex.Intrinsic.Map.getWithDefault(this, key, default)
 
   # Returns a new map with +key+ mapped to +value+.
   # Use +put!+ to rebind the receiver variable.

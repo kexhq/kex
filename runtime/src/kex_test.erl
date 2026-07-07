@@ -1,5 +1,6 @@
 -module(kex_test).
--export([describe/2, it/2, maybe_print_summary/0]).
+-export([describe/2, it/2, maybe_print_summary/0,
+          assert/1, assert/2, is_truthy/1]).
 
 %% Minimal RSpec-style describe/it DSL, mirroring
 %% src/interpreter/stdlib/test.cxx exactly: describe is purely
@@ -69,3 +70,22 @@ counter(Key) ->
 inc(Key) -> put(Key, counter(Key) + 1).
 
 indent(Depth) -> lists:duplicate(Depth * 2, $\s).
+
+%% assert(cond[, msg]) — matches src/interpreter/stdlib/test.cxx's assert
+%% exactly: throws (here, erlang:error/1, caught the same way any other
+%% Kex runtime error is) when cond isn't truthy.
+%% Moved from kex_io where testing logic didn't belong.
+assert(Cond) -> assert(Cond, "assertion failed").
+assert(Cond, Msg) ->
+    case is_truthy(Cond) of
+        true -> true;
+        false -> erlang:error(lists:flatten("assertion failed: " ++ kex_io:to_string(Msg)))
+    end.
+
+%% Same truthiness rule as `if`/`while`/`&&`/`||` throughout this runtime:
+%% only false/none/'ok' (Kex's Unit) are falsy — everything else (0, "",
+%% [], any record/variant) is truthy.
+is_truthy(false) -> false;
+is_truthy('none') -> false;
+is_truthy('ok') -> false;
+is_truthy(_) -> true.

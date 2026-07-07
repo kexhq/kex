@@ -1,9 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1,
-          env_map/0, integer_parse/1, float_parse/1,
-          math_e/0, math_log/1, math_log/2, math_hypot/2, math_cbrt/1,
-          assert/1, assert/2,
-          is_digit/1, is_alpha/1, is_space/1, to_integer/1, to_float/1]).
+           env_map/0]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
@@ -185,45 +182,6 @@ format_float(X) ->
         _ -> S
     end.
 
-%% Math.e / Math.E, Math.log(x[, base]), Math.hypot(a,b), Math.cbrt(x) —
-%% not plain 1:1 BIF forwards (math:exp/1 needs an argument so can't back a
-%% bare 0-arg constant; Erlang's math module has no log/2, hypot/2, or
-%% cbrt/1 at all), matching
-%% src/interpreter/stdlib/math.cxx's Math::E/log/hypot/cbrt exactly.
-math_e() -> math:exp(1.0).
-math_log(X) -> math:log(X).
-math_log(X, Base) -> math:log(X) / math:log(Base).
-math_hypot(A, B) -> math:sqrt(A * A + B * B).
-math_cbrt(X) when X < 0 -> -math:pow(-X, 1.0 / 3.0);
-math_cbrt(X) -> math:pow(X, 1.0 / 3.0).
-
-%% assert(cond[, msg]) — matches src/interpreter/stdlib/test.cxx's assert
-%% exactly: throws (here, erlang:error/1, caught the same way any other
-%% Kex runtime error is) when cond isn't truthy.
-assert(Cond) -> assert(Cond, "assertion failed").
-assert(Cond, Msg) ->
-    case is_truthy(Cond) of
-        true -> true;
-        false -> erlang:error(lists:flatten("assertion failed: " ++ to_string(Msg)))
-    end.
-
-%% Same truthiness rule as `if`/`while`/`&&`/`||` throughout this runtime:
-%% only false/none/'ok' (Kex's Unit) are falsy — everything else (0, "",
-%% [], any record/variant) is truthy.
-is_truthy(false) -> false;
-is_truthy('none') -> false;
-is_truthy('ok') -> false;
-is_truthy(_) -> true.
-
-
-%% Char predicates — matches src/interpreter/stdlib/string.cxx's
-%% digit?/alpha?/space? exactly. Real top-level functions (not inlined at
-%% the call site) so `&digit?`/`&alpha?`/`&space?` (a first-class function
-%% reference — see core_erlang.cxx's ShorthandLambda handling) can call the
-%% exact same implementation, not just the direct `.digit?` method form.
-is_digit(C) -> C >= $0 andalso C =< $9.
-is_alpha(C) -> (C >= $A andalso C =< $Z) orelse (C >= $a andalso C =< $z).
-is_space(C) -> lists:member(C, [$\s, $\t, $\n, $\r, $\v, $\f]).
 
 %% ENV — a real Map<String,String> value (see
 %% src/interpreter/stdlib/env.cxx), a snapshot of the process environment.
@@ -238,55 +196,3 @@ split_env_entry(E) ->
         [K, V] -> {K, V};
         [K]    -> {K, ""}
     end.
-
-%% Integer.parse(s) / Float.parse(s) -> Ok(v) | Error(reason) — matches
-%% src/interpreter/stdlib/integer.cxx's Integer::parse/Float::parse exactly
-%% (arbitrary-precision integers included, via the same big-integer path
-%% Kex's own Value::bigInteger uses elsewhere in this runtime).
-integer_parse(S) ->
-    case string:to_integer(S) of
-        {Int, ""} -> {'Ok', Int};
-        _ -> {'Error', "invalid integer: " ++ S}
-    end.
-
-float_parse(S) ->
-    case string:to_float(S) of
-        {Flt, ""} -> {'Ok', Flt};
-        _ ->
-            % string:to_float/1 requires a decimal point (rejects "42");
-            % Kex's Float.parse accepts plain integers too.
-            case string:to_integer(S) of
-                {Int, ""} -> {'Ok', float(Int)};
-                _ -> {'Error', "invalid float: " ++ S}
-            end
-    end.
-
-%% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
-%% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
-%% an already-matching type, TRUNCATE (not round) a Float down to Integer,
-%% parse a String, and 'none' on anything else/unparseable — unlike
-%% integer_parse/float_parse above, the result is the bare value itself
-%% (or 'none'), not an Ok/Error-wrapped Result. A real, reproduced bug
-%% otherwise: `.to(Integer)` on a String receiver crashed outright
-%% (erlang:round/1 requires a number, not a list) (spec/fact.kex).
-to_integer(X) when is_integer(X) -> X;
-to_integer(X) when is_float(X) -> erlang:trunc(X);
-to_integer(X) when is_list(X) ->
-    case string:to_integer(X) of
-        {Int, ""} -> Int;
-        _ -> 'none'
-    end;
-to_integer(_) -> 'none'.
-
-to_float(X) when is_float(X) -> X;
-to_float(X) when is_integer(X) -> float(X);
-to_float(X) when is_list(X) ->
-    case string:to_float(X) of
-        {Flt, ""} -> Flt;
-        _ ->
-            case string:to_integer(X) of
-                {Int, ""} -> float(Int);
-                _ -> 'none'
-            end
-    end;
-to_float(_) -> 'none'.
