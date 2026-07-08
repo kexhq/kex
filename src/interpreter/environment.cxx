@@ -50,4 +50,11 @@ auto Environment::importAll(const Environment& other) -> void {
         m_bindings[name] = b;
 }
 
+auto Environment::names() const -> std::vector<std::string> {
+    std::vector<std::string> out;
+    out.reserve(m_bindings.size());
+    for (const auto& [name, b] : m_bindings) out.push_back(name);
+    return out;
+}
+
 } // namespace kex::interpreter

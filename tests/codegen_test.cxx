@@ -153,9 +153,9 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'*'"), out);
         });
 
-        it("emits division via erlang:'/'", []() {
-            auto out = emit("main do\n  10 / 2\nend\n");
-            assertTrue(contains(out, "call 'erlang':'/'"), out);
+        it("emits division via kex_intrinsic_number:divide", []() {
+            auto out = emit("main do\n  4 / 2\nend\n");
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'divide'"), out);
         });
 
         it("emits equality via erlang:'=:='", []() {

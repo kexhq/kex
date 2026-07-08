@@ -33,16 +33,9 @@ make Vec3 do
 end
 
 # Pattern matching on this with @
+# first/last/empty? come from the sealed stdlib; head/tail are new methods
+# added here to test @-pattern dispatch on `this`.
 make [A] do
-  let first(@[]) = None
-  let first(@[x | _]) = x
-
-  let last(@[]) = None
-  let last(@[x]) = x
-
-  let empty?(@[]) = true
-  let empty?(@_) = false
-
   let head(@[x | _]) = x
   let tail(@[_ | rest]) = rest
 end

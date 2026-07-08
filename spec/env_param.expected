@@ -1,4 +1,4 @@
 args count: 0
 has PATH? true
 env count > 0? true
-log level: info
+log level: None

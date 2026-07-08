@@ -479,10 +479,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 auto l = emitExpr(node.left);
                 auto r = emitExpr(node.right);
                 std::string body =
-                    "case {call 'erlang':'is_integer'(" + lv + "), call 'erlang':'is_integer'(" + rv + ")} of\n"
-                    "  {'true', 'true'} when 'true' -> call 'erlang':'div'(" + lv + ", " + rv + ")\n"
-                    "  _ when 'true' -> call 'erlang':'/'(" + lv + ", " + rv + ")\n"
-                    "end";
+                    "call 'kex_intrinsic_number':'divide'(" + lv + ", " + rv + ")";
                 if (hasOverload)
                     body = "case call 'erlang':'is_tuple'(" + lv + ") of\n"
                            "  'true' when 'true' -> apply '/'/2(" + lv + ", " + rv + ")\n"

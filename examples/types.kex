@@ -12,71 +12,13 @@ end
 type Integer < Number
 type Float < Number
 
+# Adding NEW methods to a builtin type is fine; redefining a sealed stdlib
+# method (modulo/even?/odd?/first/last/map/filter/sum/product/to — all provided
+# by the prelude) is a compile error, so those aren't defined here.
 make Integer do
-  let compare(other) = BuiltIn.Math.compare(this, other)
-  let add(other) = BuiltIn.Math.add(this, other)
-  let subtract(other) = BuiltIn.Math.subtract(this, other)
-
-  let modulo(other: This) -> This do
-    return BuiltIn.Math.modulo(this, other)
-  end
-
   let dividesBy?(other: This) -> Bool do
     return this.modulo(other) == 0
   end
-
-  let even? = this.modulo(2) == 0
-  let odd? = !this.even?
-end
-
-# Specialized make for [Int]
-make [Int] do
-  let sum = this.reduce(0, &+)
-  let product = this.reduce(1, &*)
-end
-
-# Generic make for all lists
-make [A] do
-  let first(@[]) = None
-  let first(@[x | _]) = Just(x)
-
-  let last(@[]) = None
-  let last(@[_ | rest]) = rest.last
-  let last(@[x]) = Just(x)
-
-  let map(f: A -> B) -> [B] do
-    match this do
-      [] -> []
-      [x | xs] -> [f(x) | xs.map(f)]
-    end
-  end
-
-  let filter(f: A -> Bool) -> [A] do
-    match this do
-      [] -> []
-      [x | xs] -> do
-        let rest = xs.filter(f)
-        return [x | rest] if f(x)
-        return rest
-      end
-    end
-  end
-end
-
-# Universal 'to' conversion pattern
-make Integer do
-  let to(String) = BuiltIn.Conversions.intToString(this)
-  let to(String, base: Integer) = BuiltIn.Conversions.intToStringBase(this, base)
-  let to(Float) = BuiltIn.Conversions.intToFloat(this)
-end
-
-make Float do
-  let to(String) = BuiltIn.Conversions.floatToString(this)
-  let to(Integer) = BuiltIn.Conversions.floatToInt(this)
-end
-
-make [A] do
-  let to(String) = "[" + this.map(&.to(String)).join(", ") + "]"
 end
 
 # Final make — closed, no reopening

@@ -1,11 +1,9 @@
 make [X] do
+  # `head` is a new method added to lists (`rest` already comes from the
+  # sealed stdlib, so it isn't redefined here).
   head :> X?
   let head(@[]) = None
   let head(@[x | _]) = Just(x)
-
-  rest :> This
-  let rest(@[]) = []
-  let rest(@[_ | xs]) = xs
 end
 
 main do

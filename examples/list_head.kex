@@ -12,10 +12,6 @@ make [X] do
   tail : This -> This
   let tail(@[]) = []
   let tail(@[_|xs]) = xs
-
-  tail : This -> Integer
-  let count(@[]) = 0
-  let count(@[_|xs]) = 1 + xs.count
 end
 
 minMaxOf : [String] -> (Integer, Integer)

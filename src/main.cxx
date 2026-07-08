@@ -568,6 +568,64 @@ auto compilePreludeCore(const std::string &dir) -> bool
 }
 #endif
 
+#ifdef KEX_PRELUDE_DIR
+// Method names the sealed stdlib prelude provides — make-block methods across
+// src/prelude/*.kex plus trait methods (Enumerable's map/filter/…). A user may
+// ADD new methods to a builtin type but not REDEFINE one of these on it (they
+// carry contracts like `first : X?`), so such a collision is a compile error.
+auto preludeMethodNames() -> const std::unordered_set<std::string> &
+{
+    static const std::unordered_set<std::string> names = [] {
+        std::unordered_set<std::string> s;
+        namespace fs = std::filesystem;
+        std::error_code ec;
+        auto addFn = [&](const kex::ast::FunctionDef *fd) { if (fd) s.insert(fd->name); };
+        for (const auto &e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
+        {
+            if (e.path().extension() != ".kex") continue;
+            try
+            {
+                kex::Lexer lex(readFile(e.path().string()), e.path().string());
+                kex::Parser parser(lex.tokenizeAll(), e.path().string());
+                auto prog = parser.parseProgram();
+                for (auto &item : prog.items)
+                {
+                    if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
+                    {
+                        if (*md) for (auto &bi : (*md)->body)
+                            if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
+                                addFn(fd->get());
+                    }
+                    else if (auto *td = std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item))
+                    {
+                        if (*td) for (auto &bi : (*td)->body)
+                            if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
+                                addFn(fd->get());
+                    }
+                }
+            }
+            catch (...) {}
+        }
+        return s;
+    }();
+    return names;
+}
+
+// The simple name of a `make` target, or "" — with "List"/"Map" for list/map
+// types. Builtin types are sealed against stdlib-method redefinition.
+auto makeTargetName(const kex::ast::TypeExprPtr &t) -> std::string
+{
+    if (!t) return "";
+    if (auto *tn = std::get_if<kex::ast::TypeName>(&t->kind))
+        if (!tn->parts.empty()) return tn->parts.back();
+    if (auto *g = std::get_if<kex::ast::GenericType>(&t->kind))
+        if (!g->name.parts.empty()) return g->name.parts.back();
+    if (std::holds_alternative<kex::ast::ListType>(t->kind)) return "List";
+    if (std::holds_alternative<kex::ast::MapType>(t->kind)) return "Map";
+    return "";
+}
+#endif
+
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
 // Shared by `run` and `compile`/`-R` (BEAM) so both backends catch the same
@@ -608,6 +666,44 @@ auto runSemanticCheck(const kex::ast::Program &program, const std::string &filep
     bool ok = analyzer.analyze(program);
     for (const auto &diag : analyzer.diagnostics())
         printDiag(diag);
+
+#ifdef KEX_PRELUDE_DIR
+    // Sealed stdlib: a make block on a builtin type may add new methods but may
+    // not redefine one the prelude already provides for it. Skip when checking a
+    // prelude file itself (it legitimately defines these).
+    bool inPrelude = filepath.find(KEX_PRELUDE_DIR) != std::string::npos;
+    if (!inPrelude)
+    {
+        static const std::unordered_set<std::string> builtins = {
+            "Integer", "Float", "Char", "Bool", "Number", "String", "List", "Map", "Range"};
+        auto checkMethod = [&](const kex::ast::FunctionDef *fd, const std::string &ty) {
+            if (fd && preludeMethodNames().count(fd->name))
+            {
+                std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
+                          << "error:" << kex::color::apply(kex::color::reset)
+                          << " cannot override sealed stdlib method '" << fd->name
+                          << "' on builtin type '" << ty << "'\n";
+                ok = false;
+            }
+        };
+        for (const auto &item : program.items)
+            if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
+            {
+                if (!*md) continue;
+                auto ty = makeTargetName((*md)->target);
+                if (!builtins.count(ty)) continue;
+                for (const auto &bi : (*md)->body)
+                {
+                    if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
+                        checkMethod(fd->get(), ty);
+                    else if (auto *vb = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&bi))
+                        if (*vb) for (const auto &vi : (*vb)->items)
+                            if (auto *vf = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi))
+                                checkMethod(vf->get(), ty);
+                }
+            }
+    }
+#endif
 
     return ok && dbOk;
 }

@@ -48,7 +48,7 @@ make Map<K, V>, implement: Enumerable do
   # @example
   #   {}.empty?   # => true
   empty? :> Bool
-  let empty? = Kex.Intrinsic.Map.size(this) == 0
+  let empty? = Kex.Intrinsic.Map.count(this) == 0
 
   # Returns the number of key-value pairs.
   # When given a predicate, counts only matching entries.
@@ -57,7 +57,7 @@ make Map<K, V>, implement: Enumerable do
   #   { a: 1, b: 2 }.count                        # => 2
   #   { a: 1, b: 2 }.count { |k, v| v > 1 }       # => 1
   count :> Integer
-  let count = Kex.Intrinsic.Map.size(this)
+  let count = Kex.Intrinsic.Map.count(this)
   count :> ((K, V) -> Bool) -> Integer
 
   # Returns all keys as a list, in insertion order.
