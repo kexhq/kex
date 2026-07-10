@@ -1,0 +1,19 @@
+# Range.items — materializes a range's elements into a real list.
+# A char range yields a [Char], which renders as a String.
+
+main do
+  IO.printLine((1..5).items)
+  IO.printLine((3..3).items)
+  IO.printLine(('a'..'e').items)
+
+  # The result is a real list — all the list methods work on it.
+  IO.printLine((1..4).items.reverse)
+  IO.printLine((1..4).items.sum)
+  IO.printLine((1..10).items.take(3))
+
+  # items is the same conversion as to(List) — and to(...) accepts any
+  # spelling of the type: List, List<X>, [X].
+  IO.printLine((1..3).items == (1..3).to(List))
+  IO.printLine((1..3).items == (1..3).to(List<Integer>))
+  IO.printLine((1..3).items == (1..3).to([Integer]))
+end

@@ -51,6 +51,11 @@ public:
     Evaluator();
 
     auto execute(const ast::Program& program) -> ValuePtr;
+    // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
+    // execute its declarations on this Evaluator, so the Kex-written stdlib
+    // shadows the native builtins. No-op if KEX_PRELUDE_DIR is unset or the
+    // directory can't be read. Idempotent per Evaluator instance.
+    auto loadPrelude() -> void;
     auto setReplMode(bool enabled) -> void;
     auto output() const -> const std::string&;
     // Script arguments (everything after the script path on the command
@@ -138,6 +143,10 @@ private:
     std::unordered_map<std::string, const ast::RecordDef*> m_recordDefs;
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
+    bool m_preludeLoaded = false;
+    // Method names defined by the prelude (sealed stdlib). Users may add new
+    // methods to builtin types but not redefine these.
+    std::unordered_set<std::string> m_sealedMethods;
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
 

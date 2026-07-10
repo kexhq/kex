@@ -30,6 +30,15 @@ make String do
   at :> Integer -> Char?
   let at(i) = Kex.Intrinsic.List.at(this, i)
 
+  # Returns a list of the individual characters in the string.
+  #
+  # @return [[Char]]
+  #
+  # @example
+  #   "hi".chars   # => ['h', 'i']
+  chars :> [Char]
+  let chars = Kex.Intrinsic.String.chars(this)
+
   # Splits on every occurrence of +sep+. With no argument, splits into
   # individual characters.
   #

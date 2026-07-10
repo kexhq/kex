@@ -653,6 +653,7 @@ struct Lowering {
                 if (n.method == "printLine")  return ioCall("print_line");
                 if (n.method == "print")      return ioCall("print");
                 if (n.method == "printError") return ioCall("print_error");
+                if (n.method == "inspect")    return ioCall("inspect");
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
@@ -811,7 +812,7 @@ struct Lowering {
         // prelude with the block appended as the trailing argument. Only
         // list-only HOFs (no map counterpart → no receiver-type dispatch) are
         // migrated so far.
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition", "times"};
+        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition", "times", "sort"};
         if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
@@ -966,6 +967,8 @@ struct Lowering {
             if (ty == "String") return ret(callE("kex_io","to_string",1,one(clone(rv))));
             if (ty == "Int" || ty == "Integer") return ret(callE("kex_intrinsic_number","to_integer",1,one(clone(rv))));
             if (ty == "Float") return ret(callE("kex_intrinsic_number","to_float",1,one(clone(rv))));
+            // to(List) — ranges (and lists) are already real lists on BEAM.
+            if (ty == "List") return ret(clone(rv));
         }
         // none?: an Option is None (Kex None → the 'none' atom).
         if (m == "none?" && n.args.empty() && !localMethods.count("none?"))
@@ -2193,6 +2196,10 @@ struct Lowering {
             {"Integer","is_integer"}, {"Char","is_integer"}, {"Float","is_float"},
             {"Number","is_number"}, {"String","is_list"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
+            // A range is a real list at BEAM runtime (`a..b` lowers to
+            // lists:seq/2 before any method call), so Range-owned prelude
+            // methods dispatch on is_list.
+            {"Range","is_list"},
             {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         };
         auto it = prim.find(ty);

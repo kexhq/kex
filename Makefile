@@ -103,12 +103,12 @@ spec: build
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
 # dispatches per-tag). Informational: prints a pass/fail count but always
-# exits 0, since a meaningful fraction of specs currently exercise features
-# with real, documented gaps in the BEAM codegen backend (operator
-# overloading and cross-type method-name collisions, trait default methods,
-# Streams, curried function references — see
-# docs/fiber-process-plan.md's "BEAM parity" section) rather than being
-# regressions to gate CI on.
+# exits 0. The remaining diffs are fundamental BEAM representation limits,
+# not codegen gaps: the integer-list/charlist render ambiguity (a [40, 50]
+# is indistinguishable from "(2" on BEAM — char_type, env, list_extras,
+# list_pattern_chained_pipe), frozen runtime-error text
+# (static_namespacing), and features BEAM codegen doesn't support at all
+# (Streams/Sequence, the testing DSL).
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \

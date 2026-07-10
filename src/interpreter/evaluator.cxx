@@ -1,7 +1,10 @@
 #include "evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
+#include <filesystem>
+#include <fstream>
 #include <iostream>
+#include <set>
 
 namespace kex::interpreter {
 
@@ -19,6 +22,17 @@ Evaluator::Evaluator() {
     // dispatch path can look them up without hitting prelude wrappers
     // (which may later shadow them in m_globalEnv).
     m_intrinsicEnv->importAll(*m_globalEnv);
+    // The Kex-written stdlib shadows the native builtins on every Evaluator, so
+    // there is a single source of truth for stdlib behaviour regardless of entry
+    // point (CLI, REPL, tests). No-op when KEX_PRELUDE_DIR is unset/unreadable.
+    loadPrelude();
+    // The prelude's type declarations (Optional, Result) re-register variant
+    // constructors (Just, Ok, Error) via execTypeDef — but the generic
+    // constructor loses typeParams/argParamIndex metadata that the native
+    // factories (Value::just/ok/error) provide. Re-register the native
+    // factories so they win and typeName() renders correctly
+    // (e.g. "Result<String, ?>" not bare "Result").
+    registerAdtConstructors();
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
@@ -53,6 +67,65 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     }
 
     return lastResult;
+}
+
+auto Evaluator::loadPrelude() -> void {
+#ifdef KEX_PRELUDE_DIR
+    if (m_preludeLoaded) return;
+    // Parse the prelude once and cache the merged declarations. The AST must
+    // outlive every Evaluator (m_functionDefs keeps raw pointers into it), so
+    // it is a function-local static — shared across all instances.
+    static const ast::Program* preludeProgram = []() -> const ast::Program* {
+        auto* prog = new ast::Program();
+        std::error_code ec;
+        std::vector<std::string> files;
+        // KEX_PRELUDE_DIR is the native source path; on wasm the same files
+        // are embedded into MEMFS at "/prelude" instead (see CMakeLists.txt's
+        // --preload-file and src/common/prelude_loader.hxx, which shares this
+        // convention for the REPL's SemanticDB).
+        for (const char* dir : {KEX_PRELUDE_DIR, "/prelude"}) {
+            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
+                if (e.path().extension() == ".kex")
+                    files.push_back(e.path().string());
+            if (!ec && !files.empty()) break;
+            files.clear();
+        }
+        if (files.empty()) return prog; // no prelude available — run without
+        std::sort(files.begin(), files.end());
+        for (const auto& f : files) {
+            std::ifstream in(f);
+            std::string src((std::istreambuf_iterator<char>(in)),
+                            std::istreambuf_iterator<char>());
+            Lexer lex(std::move(src), f);
+            Parser parser(lex.tokenizeAll(), f);
+            auto parsed = parser.parseProgram();
+            for (auto& item : parsed.items)
+                if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+                    prog->items.push_back(std::move(item));
+        }
+        return prog;
+    }();
+    // Collect sealed method names from make blocks and trait defs.
+    for (const auto& item : preludeProgram->items) {
+        auto addFn = [this](const ast::FunctionDef* fd) { if (fd) m_sealedMethods.insert(fd->name); };
+        if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+            if (*md) for (const auto& bi : (*md)->body) {
+                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
+                    addFn(fd->get());
+                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
+                    if (*vb) for (const auto& vi : (*vb)->items)
+                        if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                            addFn(vf->get());
+            }
+        } else if (auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
+            if (*td) for (const auto& bi : (*td)->body)
+                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
+                    addFn(fd->get());
+        }
+    }
+    for (const auto& item : preludeProgram->items) execTopLevel(item);
+    m_preludeLoaded = true;
+#endif
 }
 
 auto Evaluator::setReplMode(bool enabled) -> void {
@@ -356,6 +429,14 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                     // No arg and no default: leave unbound (may cause runtime error if accessed)
                 }
 
+                // Reject a clause that can't consume all the (post-receiver)
+                // args, so a lower-arity overload doesn't silently drop them
+                // (e.g. `sort/1`/`count/1` swallowing `.sort(cmp)`/`.count(pred)`
+                // instead of dispatching to the /2 form). Fewer args than params
+                // is still fine (defaults / unbound).
+                if (matched && args.size() > argOffset + clause.params.size())
+                    matched = false;
+
                 if (matched) {
                     // catch(...) (not just ReturnException) so a RuntimeError
                     // — e.g. a failed `assert` caught higher up by `it` — still
@@ -406,15 +487,56 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
         }
     }
 
-    // Collect the make block's own method names (both short and typed).
-    std::unordered_set<std::string> ownMethods;
+    // Sealed-stdlib enforcement: after the prelude has loaded, reject any
+    // user make-block on a builtin type that redefines a prelude method.
+    if (m_preludeLoaded && !m_sealedMethods.empty()) {
+        static const std::unordered_set<std::string> builtins = {
+            "Integer", "Float", "Char", "Bool", "Number", "String",
+            "List", "Map", "Range", "Optional", "Result"};
+        if (builtins.count(typeName)) {
+            auto checkSeal = [&](const ast::FunctionDef* fd) {
+                if (fd && m_sealedMethods.count(fd->name))
+                    throw RuntimeError(
+                        "cannot override sealed stdlib method '" + fd->name +
+                        "' on builtin type '" + typeName + "'", def.location);
+            };
+            for (const auto& bi : def.body) {
+                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
+                    checkSeal(fd->get());
+                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
+                    if (*vb) for (const auto& vi : (*vb)->items)
+                        if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                            checkSeal(vf->get());
+            }
+        }
+    }
+
+    // A method's call arity: AST param count, +1 for the implicit `this` unless
+    // the first param IS the receiver (an `@`/record/range pattern). So
+    // `count(@[])` is arity 1 but `count(pred)` is arity 2 — a type may define
+    // both, and a trait default for one must NOT be blocked by the other.
+    auto arityOf = [](const ast::FunctionDef* fd) -> size_t {
+        if (!fd || fd->clauses.empty()) return 1;
+        const auto& params = fd->clauses[0].params;
+        if (params.empty()) return 1;
+        const auto& p0 = params[0];
+        bool recv = p0.pattern && *p0.pattern &&
+            (std::holds_alternative<ast::ThisPattern>((*p0.pattern)->kind) ||
+             std::holds_alternative<ast::RecordPattern>((*p0.pattern)->kind) ||
+             std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind));
+        return recv ? params.size() : params.size() + 1;
+    };
+
+    // Collect the make block's own methods keyed by (name, arity).
+    std::set<std::pair<std::string, size_t>> ownMethods;
+    auto addOwn = [&](const ast::FunctionDef* fd) { if (fd) ownMethods.insert({fd->name, arityOf(fd)}); };
     for (const auto& item : def.body) {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
-            ownMethods.insert((*fn)->name);
+            addOwn(fn->get());
         else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
             if (*vb) for (const auto& vi : (*vb)->items)
                 if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                    ownMethods.insert(vf->get()->name);
+                    addOwn(vf->get());
     }
 
     // Process the make block's own methods.
@@ -437,7 +559,7 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
             for (const auto* traitFn : fns) {
                 if (!traitFn) continue;
                 if (traitFn->clauses.empty() || traitFn->clauses[0].body.empty()) continue;
-                if (ownMethods.count(traitFn->name)) continue;
+                if (ownMethods.count({traitFn->name, arityOf(traitFn)})) continue;
                 execFunctionDef(*traitFn, typeName);
             }
         }
@@ -1689,7 +1811,13 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             if (pat.elements.empty() && !pat.rest) {
                 return elements->empty();
             }
-            if (elements->size() < pat.elements.size()) return false;
+            if (pat.rest) {
+                // [x | xs] — at least as many elements as the fixed part
+                if (elements->size() < pat.elements.size()) return false;
+            } else {
+                // [x] or [x, y] — exact length match (no rest captures surplus)
+                if (elements->size() != pat.elements.size()) return false;
+            }
             for (size_t i = 0; i < pat.elements.size(); i++) {
                 if (!matchPattern(*pat.elements[i], (*elements)[i])) return false;
             }
@@ -1822,17 +1950,24 @@ auto Evaluator::registerBuiltins() -> void {
     // for Map enumeration where each item is a (K,V) tuple.
     {
         auto val = std::make_shared<Value>();
-        val->data = FunctionValue{"applyItem", [](std::vector<ValuePtr> args) -> ValuePtr {
+        val->data = FunctionValue{"applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];
             auto& item = *args[1];
-            auto* nf = std::get_if<FunctionValue>(&fn.data);
-            if (!nf || !nf->native) return Value::none();
-            // If item is a 2-tuple, spread it as two arguments.
-            if (auto* tv = std::get_if<TupleValue>(&item.data))
-                if (tv->elements.size() == 2)
-                    return nf->native({tv->elements[0], tv->elements[1]});
-            return nf->native({args[1]});
+            // Don't splat here — pass the item as-is. The lambda wrapper
+            // (line ~1094) auto-spreads a tuple into its params when the
+            // param count matches, mirroring BEAM's arity-check in
+            // kex_intrinsic_fun:applyItem/2. Splatting here would
+            // incorrectly spread a 2-tuple into a 1-param function.
+            std::vector<ValuePtr> callArgs = {args[1]};
+            // Native FunctionValue — fast path.
+            if (auto* nf = std::get_if<FunctionValue>(&fn.data); nf && nf->native)
+                return nf->native(callArgs);
+            // Named Kex function passed by reference (no native callback) —
+            // call through the evaluator's normal dispatch.
+            if (auto* nf = std::get_if<FunctionValue>(&fn.data))
+                return callFunction(nf->name, std::move(callArgs), {}, {});
+            return Value::none();
         }};
         m_globalEnv->define("applyItem", val);
     }

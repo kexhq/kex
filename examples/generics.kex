@@ -7,39 +7,19 @@ type Result<A, E> = Ok(A) | Error(E)
 
 type Either<A, B> = Left(A) | Right(B)
 
-# Make on generic type
+# Option/Result methods (map, flatMap, some?, none?, ok?, error?, or) come from
+# the sealed stdlib prelude — see src/prelude/optional.kex.
+
+# User-defined extensions on generic types still work — just not redefinitions
+# of sealed methods.
 make Option<A> do
-  let map(@Nothing, _: A -> B) = Nothing
-  let map(@Just(x), f: A -> B) = Just(f(x))
-
-  let flatMap(@Nothing, _: A -> Option<B>) = Nothing
-  let flatMap(@Just(x), f: A -> Option<B>) = f(x)
-
   let unwrapOr(@Just(x), _: A) = x
   let unwrapOr(@Nothing, default: A) = default
-
-  let some?(@Just(_)) = true
-  let some?(@Nothing) = false
-
-  let none?(@Just(_)) = false
-  let none?(@Nothing) = true
 end
 
 make Result<A, E> do
-  let map(@Ok(x), f: A -> B) = Ok(f(x))
-  let map(@Error(e), _) = Error(e)
-
-  let flatMap(@Ok(x), f: A -> Result<B, E>) = f(x)
-  let flatMap(@Error(e), _) = Error(e)
-
   let mapError(@Ok(x), _) = Ok(x)
   let mapError(@Error(e), f: E -> F) = Error(f(e))
-
-  let ok?(@Ok(_)) = true
-  let ok?(@Error(_)) = false
-
-  let error?(@Ok(_)) = false
-  let error?(@Error(_)) = true
 end
 
 # Type hierarchy with generics

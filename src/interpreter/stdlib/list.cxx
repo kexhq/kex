@@ -192,11 +192,11 @@ auto Evaluator::registerListBuiltins() -> void {
         return acc;
     });
 
-    // foldl — the intrinsic backing for Enumerable.reduce (Kex.Intrinsic.List.
-    // foldl). Same left fold as `reduce` above (acc-first reducer), exposed
+    // foldLeft — the intrinsic backing for Enumerable.reduce (Kex.Intrinsic.List.
+    // foldLeft). Same left fold as `reduce` above (acc-first reducer), exposed
     // under the primitive name so the prelude's reduce is a thin intrinsic
     // wrapper on both backends.
-    reg("foldl", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("foldLeft", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::none();
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[2]->data);
@@ -204,6 +204,16 @@ auto Evaluator::registerListBuiltins() -> void {
         auto acc = args[1];
         for (const auto& elem : elems) acc = fn->native({acc, elem});
         return acc;
+    });
+
+    // Kex.Intrinsic.Range.items — the range's elements as a real list.
+    // Backs the prelude's Range `items` (src/prelude/range.kex).
+    reg("items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::list(rangeToList(*range));
+        if (std::holds_alternative<ListValue>(args[0]->data)) return args[0];
+        return Value::list({});
     });
 
     reg("each", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {

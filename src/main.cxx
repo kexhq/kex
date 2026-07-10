@@ -506,7 +506,7 @@ static const std::unordered_set<std::string> &migratedPreludeFns()
         "blank?", "present?", "truthy?", "falsy?",
         "second", "third",
         "floor", "ceil", "round", "toFloat", "toInteger",
-        "toString", "rest", "toOptional",
+        "toString", "rest", "toOptional", "chars", "items",
         "send", "link", "unlink", "monitor", "alive?",
         "demonitor", "await"};
     return fns;
@@ -624,6 +624,43 @@ auto makeTargetName(const kex::ast::TypeExprPtr &t) -> std::string
     if (std::holds_alternative<kex::ast::MapType>(t->kind)) return "Map";
     return "";
 }
+
+// Sealed-stdlib violations: a make block on a builtin type redefining a
+// prelude-provided method. Returned as diagnostics so every check path (run,
+// -R, and --check) reports them identically. Prelude files are exempt.
+auto sealViolations(const kex::ast::Program &program, const std::string &filepath)
+    -> std::vector<kex::semantic::Diagnostic>
+{
+    std::vector<kex::semantic::Diagnostic> diags;
+    if (filepath.find(KEX_PRELUDE_DIR) != std::string::npos) return diags;
+    // Keep in sync with the evaluator-side seal (execMakeDef in evaluator.cxx).
+    static const std::unordered_set<std::string> builtins = {
+        "Integer", "Float", "Char", "Bool", "Number", "String", "List", "Map",
+        "Range", "Optional", "Result"};
+    auto check = [&](const kex::ast::FunctionDef *fd, const std::string &ty, const kex::SourceLocation &loc) {
+        if (fd && preludeMethodNames().count(fd->name))
+            diags.push_back({kex::semantic::Diagnostic::Level::Error, loc,
+                             "cannot override sealed stdlib method '" + fd->name +
+                                 "' on builtin type '" + ty + "'"});
+    };
+    for (const auto &item : program.items)
+        if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
+        {
+            if (!*md) continue;
+            auto ty = makeTargetName((*md)->target);
+            if (!builtins.count(ty)) continue;
+            for (const auto &bi : (*md)->body)
+            {
+                if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
+                    check(fd->get(), ty, (*md)->location);
+                else if (auto *vb = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&bi))
+                    if (*vb) for (const auto &vi : (*vb)->items)
+                        if (auto *vf = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi))
+                            check(vf->get(), ty, (*md)->location);
+            }
+        }
+    return diags;
+}
 #endif
 
 // Runs semantic analysis (undefined-name detection + type checking) and
@@ -668,40 +705,10 @@ auto runSemanticCheck(const kex::ast::Program &program, const std::string &filep
         printDiag(diag);
 
 #ifdef KEX_PRELUDE_DIR
-    // Sealed stdlib: a make block on a builtin type may add new methods but may
-    // not redefine one the prelude already provides for it. Skip when checking a
-    // prelude file itself (it legitimately defines these).
-    bool inPrelude = filepath.find(KEX_PRELUDE_DIR) != std::string::npos;
-    if (!inPrelude)
+    for (const auto &d : sealViolations(program, filepath))
     {
-        static const std::unordered_set<std::string> builtins = {
-            "Integer", "Float", "Char", "Bool", "Number", "String", "List", "Map", "Range"};
-        auto checkMethod = [&](const kex::ast::FunctionDef *fd, const std::string &ty) {
-            if (fd && preludeMethodNames().count(fd->name))
-            {
-                std::cerr << kex::color::apply(kex::color::bold) << kex::color::apply(kex::color::red)
-                          << "error:" << kex::color::apply(kex::color::reset)
-                          << " cannot override sealed stdlib method '" << fd->name
-                          << "' on builtin type '" << ty << "'\n";
-                ok = false;
-            }
-        };
-        for (const auto &item : program.items)
-            if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item))
-            {
-                if (!*md) continue;
-                auto ty = makeTargetName((*md)->target);
-                if (!builtins.count(ty)) continue;
-                for (const auto &bi : (*md)->body)
-                {
-                    if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
-                        checkMethod(fd->get(), ty);
-                    else if (auto *vb = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&bi))
-                        if (*vb) for (const auto &vi : (*vb)->items)
-                            if (auto *vf = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi))
-                                checkMethod(vf->get(), ty);
-                }
-            }
+        printDiag(d);
+        ok = false;
     }
 #endif
 
@@ -808,7 +815,8 @@ auto printUsage(const char *progName) -> void
               << "  -o <dir>          Output directory for -c / --emit-core (default: .)\n"
               << "  -h, --help        Show this help\n"
               << "  -v, --version     Show version\n"
-              << "  --no-colors       Disable ANSI color output\n";
+              << "  --no-colors       Disable ANSI color output\n"
+              << "  --legacy-emitter  Use the legacy string-based Core Erlang emitter\n";
 }
 
 auto printVersion() -> void
@@ -835,9 +843,12 @@ int main(int argc, char *argv[])
         {"help", no_argument, nullptr, 'h'},
         {"version", no_argument, nullptr, 'v'},
         {"no-colors", no_argument, nullptr, 'N'},
-        // Opt into the new AST→IR→Core Erlang pipeline (strangler; default
-        // stays the string emitter). See src/ir/.
+        // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
+        // backend; --ir is kept as a no-op for compatibility.
         {"ir", no_argument, nullptr, 1000},
+        // Escape hatch: route BEAM codegen through the legacy string emitter
+        // (src/codegen/core_erlang.cxx) instead of the IR pipeline.
+        {"legacy-emitter", no_argument, nullptr, 1002},
         // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
         // kex_prelude.beam in the given dir. Used by the build to prebuild the
         // shared stdlib module alongside the runtime beams.
@@ -855,13 +866,16 @@ int main(int argc, char *argv[])
     int opt;
 
     bool compileRun = false;
-    bool useIr = false;
+    bool useIr = true;
     while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions, nullptr)) != -1)
     {
         switch (opt)
         {
         case 1000:
-            useIr = true;
+            useIr = true; // already the default; kept for compatibility
+            break;
+        case 1002:
+            useIr = false;
             break;
         case 1001:
         {
@@ -1117,8 +1131,11 @@ int main(int argc, char *argv[])
                     auto tokens = lexer.tokenizeAll();
                     kex::Parser parser(std::move(tokens));
                     auto program = parser.parseProgram();
-                    kex::codegen::CoreErlangEmitter emitter;
-                    auto result = emitter.emitProgram(program, "irepl_" + std::to_string(iteration));
+                    // Same IR pipeline as compile/run mode; LowerError derives
+                    // from std::runtime_error so the catch below reports it.
+                    auto irMod = kex::ir::lowerProgram(program, "irepl_" + std::to_string(iteration),
+                                                       migratedPreludeFns());
+                    auto result = kex::ir::emitCore(irMod);
 
                     std::string corePath = beamDir + "/" + result.moduleName + ".core";
                     std::ofstream cf(corePath);
@@ -1818,12 +1835,12 @@ int main(int argc, char *argv[])
             // pure top-level `type`/`make`/`let` declarations plus bare
             // `comps.each { ... }` calls with no `main` block at all, and
             // runs identically under both backends once this guard is gone.
-            // Strangler: `--ir` routes through the new AST→IR→Core Erlang
-            // pipeline (src/ir/); default stays the string emitter. Both
-            // produce the same {source, moduleName, mainArity} shape, so the
-            // downstream erlc/erl path is identical. A LowerError means the
-            // IR path hasn't ported that construct yet — reported cleanly,
-            // never falling back (so `--ir` gaps are visible, not masked).
+            // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
+            // backend; `--legacy-emitter` opts back into the string emitter.
+            // Both produce the same {source, moduleName, mainArity} shape, so
+            // the downstream erlc/erl path is identical. A LowerError means
+            // the IR path doesn't support that construct — reported cleanly,
+            // never falling back (so gaps are visible, not masked).
             kex::codegen::CoreErlangEmitter::EmitResult result;
             if (useIr)
             {
@@ -1909,8 +1926,9 @@ int main(int argc, char *argv[])
             // runtime beams above, so BEAM lazy-loads it. Only fall back to a
             // per-run compile when that prebuilt beam isn't present (e.g.
             // running outside the build tree).
-            if (useIr &&
-                !std::filesystem::exists(std::filesystem::path{outputDir} / "kex_prelude.beam") &&
+            // Both backends emit `call 'kex_prelude':...` for migrated stdlib
+            // methods, so the fallback compile isn't gated on the backend.
+            if (!std::filesystem::exists(std::filesystem::path{outputDir} / "kex_prelude.beam") &&
                 compilePreludeCore(outputDir))
             {
                 std::string preCmd = "erlc +from_core -pa " + outputDir +
@@ -2011,31 +2029,8 @@ int main(int argc, char *argv[])
             kex::interpreter::Evaluator evaluator;
             evaluator.setArgs(scriptArgs);
 
-#ifdef KEX_PRELUDE_DIR
-            {
-                static kex::ast::Program preludeProgram;
-                static bool preludeLoaded = false;
-                if (!preludeLoaded) {
-                    std::error_code ec;
-                    std::vector<std::string> files;
-                    for (const auto& e : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec))
-                        if (e.path().extension() == ".kex")
-                            files.push_back(e.path().string());
-                    std::sort(files.begin(), files.end());
-                    for (const auto& f : files) {
-                        auto src = readFile(f);
-                        kex::Lexer lex(std::move(src), f);
-                        kex::Parser parser(lex.tokenizeAll(), f);
-                        auto prog = parser.parseProgram();
-                        for (auto& item : prog.items)
-                            if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
-                                preludeProgram.items.push_back(std::move(item));
-                    }
-                    preludeLoaded = true;
-                }
-                evaluator.execute(preludeProgram);
-            }
-#endif
+            // The Kex-written stdlib is loaded by the Evaluator's constructor
+            // (loadPrelude), so no explicit load is needed here.
 
             // Must outlive `evaluator.execute(program)` below: the
             // evaluator keeps raw `const ast::FunctionDef*` pointers into
@@ -2094,6 +2089,14 @@ int main(int argc, char *argv[])
         }
         for (const auto &d : analyzer.diagnostics())
             allDiags.push_back(d);
+
+#ifdef KEX_PRELUDE_DIR
+        for (const auto &d : sealViolations(program, filepath))
+        {
+            allDiags.push_back(d);
+            dbOk = false;
+        }
+#endif
 
         bool allOk = ok && dbOk;
 

@@ -6,7 +6,8 @@
 %% cross-module call here. Adding a primitive is a one-line function.
 -module(kex_intrinsic_list).
 -export([reverse/1, sort/1, sort/2, uniq/1, flatten/1, take/2, drop/2, zip/2, push/2,
-         sum/1, product/1, indexOf/2, at/2, foldl/3, min/1, max/1, length/1,
+         sum/1, product/1, indexOf/2, at/2, foldLeft/3, min/1, max/1, length/1,
+         first/1, last/1,
          join/1, join/2, partition/2, member/2,
          %% Lower-level list ops used directly by the emitters (moved here from
          %% kex_io, where list operations didn't belong).
@@ -28,10 +29,10 @@ sum(L)     -> lists:sum(L).
 product(L) -> list_product(L).
 indexOf(L, X) -> index_of(X, L).
 at(L, I)   -> list_get(L, I).
-%% foldl/3 — the universal left fold backing Enumerable.reduce (and so every
+%% foldLeft/3 — the universal left fold backing Enumerable.reduce (and so every
 %% HOF derived from it). Kex's reducer takes (acc, elem); Erlang's lists:foldl
 %% takes fun(elem, acc), so swap the argument order at the boundary.
-foldl(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, L).
+foldLeft(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, L).
 
 %% partition/2 — splits into {Matching, NonMatching} per predicate. Kex is
 %% receiver-first; Erlang's lists:partition is fun-first, so swap.
@@ -40,6 +41,14 @@ partition(L, Fun) -> lists:partition(Fun, L).
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
 member(Elem, Container) -> lists:member(Elem, Container).
+
+%% first/1, last/1 — the first/last element wrapped in Just, or None for [].
+%% Backing for the prelude's `first`/`last` (pattern-based impls hit the
+%% one-element-pattern semantics; a direct primitive is simpler and O(1)/O(n)).
+first([])      -> 'none';
+first([X | _]) -> {'Just', X}.
+last([])       -> 'none';
+last(L)        -> {'Just', lists:last(L)}.
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old

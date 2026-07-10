@@ -106,6 +106,13 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
+# The Kex-written stdlib (src/prelude/*.kex) is loaded at runtime by the
+# Evaluator (loadPrelude) so it shadows the native builtins. kex_lib needs the
+# path baked in — not just the `kex` executable — so the unit tests, which link
+# kex_lib directly, exercise the same prelude the CLI does.
+target_compile_definitions(kex_lib PUBLIC
+    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
+
 # GMP backs the arbitrary-precision `Integer` default (see
 # docs/type-system-plan.md's Runtime representation section). Required,
 # not optional like readline below.
@@ -206,7 +213,7 @@ endif()
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE
-    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
+    # KEX_PRELUDE_DIR is inherited (PUBLIC) from kex_lib.
     KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
 )
 if(KEX_HAS_RUNTIME_BEAMS)

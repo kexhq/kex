@@ -1,0 +1,16 @@
+# List pattern matching: @[x] matches only a 1-element list,
+# @[x|xs] matches 1+, @[] matches empty. Regression cover for
+# @[x] incorrectly matching any non-empty list.
+
+let describe(@[]) = "empty"
+let describe(@[x]) = "one: ${x}"
+let describe(@[x, y]) = "two: ${x}, ${y}"
+let describe(@[x|_]) = "many, head: ${x}"
+
+main do
+  IO.printLine(describe([]))
+  IO.printLine(describe([42]))
+  IO.printLine(describe([1, 2]))
+  IO.printLine(describe([1, 2, 3]))
+  IO.printLine(describe([1, 2, 3, 4, 5]))
+end

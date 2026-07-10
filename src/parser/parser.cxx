@@ -1148,6 +1148,35 @@ auto Parser::parsePostfix() -> ast::ExprPtr {
                             auto name = advance().value;
                             advance(); // :
                             namedArgs.push_back({name, parseExpr()});
+                        } else if (method == "to" &&
+                                   (check(TokenType::UpperIdent) ||
+                                    (check(TokenType::LBracket) && peekNext().type == TokenType::UpperIdent))) {
+                            // `.to(...)` receives a Type — any type spelling:
+                            // List, [X], Optional<Int>, a typedef… — so its
+                            // argument parses as a type expression, not a value
+                            // expression. At runtime a Type is (for now) its
+                            // outer constructor's module value, so the parsed
+                            // type desugars to that UpperIdentifier: to(List),
+                            // to(List<X>) and to([X]) are the same call. When
+                            // Type becomes a first-class runtime value (users
+                            // pattern-matching the type to define their own
+                            // conversions), carry the full TypeExpr through
+                            // instead of collapsing to the head here.
+                            auto ty = parseTypeExpr();
+                            std::string head;
+                            if (auto* tn = std::get_if<ast::TypeName>(&ty->kind)) {
+                                if (!tn->parts.empty()) head = tn->parts.back();
+                            } else if (auto* g = std::get_if<ast::GenericType>(&ty->kind)) {
+                                if (!g->name.parts.empty()) head = g->name.parts.back();
+                            } else if (std::holds_alternative<ast::ListType>(ty->kind)) {
+                                head = "List";
+                            } else if (std::holds_alternative<ast::MapType>(ty->kind)) {
+                                head = "Map";
+                            }
+                            auto mod = std::make_unique<ast::Expr>();
+                            mod->location = currentLocation();
+                            mod->kind = ast::UpperIdentifier{std::move(head)};
+                            args.push_back(std::move(mod));
                         } else {
                             args.push_back(parseExpr());
                         }
