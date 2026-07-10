@@ -935,6 +935,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 receiverType = "String";
             } else if (std::holds_alternative<RangeValue>(receiver->data)) {
                 receiverType = "Range";
+            } else if (std::holds_alternative<StreamValue>(receiver->data)) {
+                receiverType = "Stream";
             }
             if (!receiverType.empty()) {
                 auto typed = receiverType + "::" + node.method;

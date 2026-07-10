@@ -106,9 +106,8 @@ spec: build
 # exits 0. The remaining diffs are fundamental BEAM representation limits,
 # not codegen gaps: the integer-list/charlist render ambiguity (a [40, 50]
 # is indistinguishable from "(2" on BEAM — char_type, env, list_extras,
-# list_pattern_chained_pipe), frozen runtime-error text
-# (static_namespacing), and features BEAM codegen doesn't support at all
-# (Streams/Sequence, the testing DSL).
+# list_pattern_chained_pipe) and frozen runtime-error text
+# (static_namespacing).
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \

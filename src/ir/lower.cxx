@@ -225,7 +225,24 @@ struct Lowering {
                     ex->node = Construct{n.name, {}};
                     return ex;
                 }
-                return var(currentName(n.name));
+                if (auto it = subst.find(n.name); it != subst.end())
+                    return var(it->second);
+                // Bare reference to a defined function keeps the old free-var
+                // lowering (erlc rejects it loudly); guards can't call
+                // erlang:error, so they keep it too.
+                if (m_inGuard || knownFns.count(n.name))
+                    return var(n.name);
+                // Genuinely unbound: every binding site registers itself in
+                // `subst`, so absence means the walker would raise at runtime —
+                // emit the same error so `it`-caught failures match exactly.
+                {
+                    std::string loc;
+                    if (currentLoc) loc = std::string(currentLoc->file) + ":"
+                        + std::to_string(currentLoc->line) + ":"
+                        + std::to_string(currentLoc->column) + ": ";
+                    return callE("erlang", "error", 1, one(lit(LitKind::String,
+                        loc + "runtime error: Undefined variable: " + n.name)));
+                }
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 return var(currentName("this"));
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
@@ -349,20 +366,25 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-                // `&.method` / `&func` → fun(_sx) -> _sx.method(). Reusing the
-                // UFCS method path means `&digit?` (a builtin) and `&myFn` (a
-                // local) both resolve correctly with no special-casing.
-                if (n.kind == ast::ShorthandLambda::Kind::MethodWithArgs && !n.args.empty())
-                    throw LowerError("IR lower: &.method(args) not yet ported");
+                // `&.method` / `&func` / `&.method(args)` → fun(_sx) ->
+                // _sx.method(args). Reusing the UFCS method path means
+                // `&digit?` (a builtin) and `&myFn` (a local) both resolve
+                // correctly with no special-casing.
                 std::string sx = fresh("Sx");
                 auto recvAst = std::make_unique<ast::Expr>();
                 recvAst->kind = ast::Identifier{sx};
                 ast::MethodCall mc;
                 mc.receiver = std::move(recvAst);
                 mc.method = n.name;
-                auto snap = subst; subst.erase(sx);
+                // Borrow the shorthand's arg exprs for the synthetic call and
+                // restore them after — the AST node is shared and re-lowered
+                // (multi-clause functions), so it must be left intact.
+                auto& lentArgs = const_cast<std::vector<ast::ExprPtr>&>(n.args);
+                mc.args = std::move(lentArgs);
+                auto snap = subst; subst[sx] = sx;
                 auto body = lowerMethodCall(mc);
                 subst = snap;
+                lentArgs = std::move(mc.args);
                 Lambda lam; lam.params = {sx}; lam.body = std::move(body);
                 auto ex = std::make_unique<Expr>(); ex->node = std::move(lam); return ex;
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
@@ -381,7 +403,7 @@ struct Lowering {
                 // Params shadow outer bindings: resolve to themselves inside.
                 auto snap = subst;
                 Lambda lam;
-                for (const auto& p : n.params) { lam.params.push_back(p.name); subst.erase(p.name); }
+                for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
                 lam.body = lowerBody(n.body);
                 subst = snap;
                 auto ex = std::make_unique<Expr>();
@@ -489,6 +511,16 @@ struct Lowering {
         // slots in order, leftovers default to None. Mirrors the string
         // emitter / Evaluator::callFunction (spec/optional_parens_do.kex).
         if (!n.namedArgs.empty()) {
+            // Sequence(from: Seed) { |x| next } → an infinite lazy stream
+            // ({'Stream', Thunk} — see runtime/src/kex_intrinsic_stream.erl).
+            if (n.name == "Sequence" && n.block && n.namedArgs.size() == 1 &&
+                n.namedArgs[0].first == "from" && !knownFns.count("Sequence")) {
+                std::vector<Binding> binds;
+                auto seed = atomize(n.namedArgs[0].second, binds);
+                auto fn = atomize(*n.block, binds);
+                return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
+                                             two(std::move(seed), std::move(fn))));
+            }
             auto it = fnParamNames.find(n.name);
             if (it == fnParamNames.end())
                 throw LowerError("IR lower: named args to unknown function " + n.name);
@@ -658,6 +690,22 @@ struct Lowering {
             }
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
             if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
+            // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
+            // → kex_intrinsic_stream:make(Seed, Fun) — same lazy stream the
+            // bare Sequence(from:) form builds.
+            if (uid->name == "Stream" &&
+                (n.method == "Sequence" || n.method == "Iterate") && n.block) {
+                ExprPtr seed;
+                if (n.namedArgs.size() == 1 && n.namedArgs[0].first == "from")
+                    seed = atomize(n.namedArgs[0].second, binds);
+                else if (!args.empty())
+                    seed = std::move(args[0]);
+                if (seed) {
+                    auto fn = atomize(*n.block, binds);
+                    return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
+                                                 two(std::move(seed), std::move(fn))));
+                }
+            }
             if (uid->name == "Process") {
                 if (n.method == "self" && args.empty()) return callE("erlang", "self", 0, {});
                 if (n.method == "exit" && args.size() == 2)
@@ -723,6 +771,15 @@ struct Lowering {
                 if (n.method == "log2") return nsCall("math", "log2");
             }
             if (uid->name == "File") {
+                // File.open(path) do |handle| … end → kex_file:open(Path, Fun).
+                // The handle on BEAM is the path itself (kex_file ops are
+                // path-based); open returns the block's result, or 'none'
+                // when the file doesn't exist — matching the walker.
+                if (n.method == "open" && n.block && args.size() == 1) {
+                    auto fn = atomize(*n.block, binds);
+                    return wrapLets(binds, callE("kex_file", "open", 2,
+                                                 two(std::move(args[0]), std::move(fn))));
+                }
                 if (n.method == "read") return nsCall("kex_file", "read");
                 if (n.method == "write") return nsCall("kex_file", "write");
                 if (n.method == "append") return nsCall("kex_file", "append");
@@ -844,6 +901,8 @@ struct Lowering {
             // `reverse` migrated to the Kex prelude (kex_prelude:reverse →
             // Kex.Intrinsic.List.reverse). See docs/prelude-intrinsic-plan.md.
             {"sort","lists","sort",0},
+            // handle.feed — the File.open block handle is the path on BEAM.
+            {"feed","kex_file","feed",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
             {"abs","erlang","abs",0},
             {"upperCase","string","to_upper",0}, {"upcase","string","to_upper",0},
@@ -1418,6 +1477,7 @@ struct Lowering {
                 out->kind = PatKind::Wild;
             } else if constexpr (std::is_same_v<T, ast::VarPattern>) {
                 out->kind = PatKind::Var; out->name = pn.name;
+                subst[pn.name] = pn.name; // pattern vars are binding sites
             } else if constexpr (std::is_same_v<T, ast::LiteralPattern>) {
                 out->kind = PatKind::Lit;
                 switch (pn.literal.type) {
@@ -1506,9 +1566,11 @@ struct Lowering {
         ExprPtr subjIr = lower(n.subject);
         ExprPtr letWrap;
         std::string subjVar;
+        std::optional<std::string> subjPrev; // outer mapping to restore on exit
         if (n.subjectBinding) {
             subjVar = *n.subjectBinding;
-            std::string ssa = subst.count(subjVar) ? fresh(subjVar) : subjVar;
+            if (auto it = subst.find(subjVar); it != subst.end()) subjPrev = it->second;
+            std::string ssa = subjPrev ? fresh(subjVar) : subjVar;
             subst[subjVar] = ssa;
             letWrap = std::move(subjIr);
             subjIr = var(ssa);
@@ -1528,7 +1590,7 @@ struct Lowering {
         e->node = std::move(m);
         if (letWrap) {
             auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
-            subst.erase(subjVar);
+            if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);
             return r;
         }
         return e;
@@ -1539,7 +1601,7 @@ struct Lowering {
         r.senderVar = n.senderBinding ? *n.senderBinding : fresh("Sndr");
         for (const auto& cl : n.clauses) {
             auto snap = subst;
-            if (n.senderBinding) subst.erase(*n.senderBinding);
+            if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
             if (cl.guard) rc.guard = lowerGuard(*cl.guard);
@@ -2033,6 +2095,7 @@ struct Lowering {
         if (p.name) {
             auto pat = std::make_unique<Pattern>();
             pat->kind = PatKind::Var; pat->name = *p.name;
+            subst[*p.name] = *p.name;
             return pat;
         }
         if (p.pattern) return lowerPattern(*p.pattern);
@@ -2056,6 +2119,7 @@ struct Lowering {
                 subst.clear(); // fresh scope per clause
                 FunClause fc;
                 if (!implicitThisName.empty()) {
+                    subst[implicitThisName] = implicitThisName;
                     auto pat = std::make_unique<Pattern>();
                     pat->kind = PatKind::Var; pat->name = implicitThisName;
                     fc.params.push_back(std::move(pat));
@@ -2088,6 +2152,7 @@ struct Lowering {
                     }
                     fc.params.push_back(lowerParam(p));
                 }
+                for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 ExprPtr body = lowerBody(clause.body);
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
                     body = makeLet(it->first, std::move(it->second), std::move(body));
@@ -2512,6 +2577,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     }
                 } else if (node->isExplicitMain) {
                     L.subst.clear();
+                    for (const auto& p : node->params)
+                        if (p.name) L.subst[*p.name] = *p.name;
                     FunDef def; def.name = "main";
                     ExprPtr body = L.lowerBody(node->body);
                     FunClause fc;
@@ -2623,6 +2690,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             return let;
         };
         fc.body = L.withTestSummary(bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0));
+        def.clauses.push_back(std::move(fc));
+        mod.functions.push_back(std::move(def));
+        mod.hasMain = true; mod.mainArity = 0;
+    }
+    // Pure-declaration program (no main block, no bare exprs): synthesize an
+    // empty main/0 so `kex -R file.kex` runs it as the no-op it is on the
+    // walker, instead of erl dying with undef on the missing main.
+    if (!mod.hasMain) {
+        FunDef def; def.name = "main"; def.arity = 0;
+        FunClause fc; fc.body = lit(LitKind::Atom, "ok");
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
         mod.hasMain = true; mod.mainArity = 0;

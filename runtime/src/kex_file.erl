@@ -1,5 +1,6 @@
 -module(kex_file).
--export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1, feed/1]).
+-export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1, feed/1,
+         open/2]).
 
 %% File.exists?(path) → true | false
 exists(Path) ->
@@ -58,3 +59,12 @@ delete(Path) ->
 %% same eager list as lines/1. `.take(1)`, `.each`, etc. work on lists just as
 %% they would on a stream.
 feed(Path) -> lines(Path).
+
+%% File.open(path) do |handle| … end → the block's result, or 'none' when the
+%% file doesn't exist. The handle is the path itself — every kex_file op is
+%% path-based, so `handle.feed` etc. work on it directly.
+open(Path, Fun) ->
+    case exists(Path) of
+        true  -> Fun(Path);
+        false -> none
+    end.
