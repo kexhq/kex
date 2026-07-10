@@ -13,7 +13,7 @@
 
 describe(Name, Fun) ->
     Depth = get_depth(),
-    io:format("~s~s~n", [indent(Depth), kex_io:to_string(Name)]),
+    io:format("~s~ts~n", [indent(Depth), kex_io:to_string(Name)]),
     put(kex_test_depth, Depth + 1),
     try
         Fun()
@@ -28,10 +28,10 @@ it(Name, Fun) ->
     case run_case(Fun) of
         ok ->
             inc(kex_test_passed),
-            io:format("~s~ts ~s~n", [Indent, [16#2713], kex_io:to_string(Name)]);
+            io:format("~s~ts ~ts~n", [Indent, [16#2713], kex_io:to_string(Name)]);
         {failed, Msg} ->
             inc(kex_test_failed),
-            io:format("~s~ts ~s: ~s~n", [Indent, [16#2717], kex_io:to_string(Name), Msg])
+            io:format("~s~ts ~ts: ~ts~n", [Indent, [16#2717], kex_io:to_string(Name), Msg])
     end,
     'none'.
 
@@ -46,6 +46,7 @@ run_case(Fun) ->
         Fun(),
         ok
     catch
+        error:Reason when is_binary(Reason) -> {failed, Reason};
         error:Reason when is_list(Reason) -> {failed, Reason};
         error:Reason -> {failed, lists:flatten(io_lib:format("~p", [Reason]))};
         throw:Reason -> {failed, lists:flatten(io_lib:format("~p", [Reason]))}

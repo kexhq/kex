@@ -86,6 +86,26 @@ struct Lowering {
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
     std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
+    // Every variant tag of every ADT (flat), and every record static-block
+    // member name. A bare use of a static-only name is out of scope — it
+    // lives behind its record (Temperature.Fahrenheit) — so it must be a
+    // runtime error like the walker's, not a silent constructor tuple.
+    std::unordered_set<std::string> variantTagSet;
+    std::unordered_set<std::string> staticCtorNames;
+    auto staticCtorOutOfScope(const std::string& name) -> bool {
+        return staticCtorNames.count(name) && !variantTagSet.count(name)
+            && !records.count(name) && !knownFns.count(name);
+    }
+    // An erlang:error carrying the walker's exact runtime-error text,
+    // prefixed with the current source location.
+    auto runtimeError(const std::string& msg) -> ExprPtr {
+        std::string loc;
+        if (currentLoc) loc = std::string(currentLoc->file) + ":"
+            + std::to_string(currentLoc->line) + ":"
+            + std::to_string(currentLoc->column) + ": ";
+        return callE("erlang", "error", 1, one(lit(LitKind::String,
+            loc + "runtime error: " + msg)));
+    }
 
     static auto opSymbol(TokenType t) -> std::string {
         switch (t) {
@@ -221,6 +241,8 @@ struct Lowering {
                 // this, uppercase names in expression context become unbound
                 // variables in Core Erlang and erlc rejects them.
                 if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))) {
+                    if (staticCtorOutOfScope(n.name))
+                        return runtimeError("Undefined identifier: " + n.name);
                     auto ex = std::make_unique<Expr>();
                     ex->node = Construct{n.name, {}};
                     return ex;
@@ -235,14 +257,7 @@ struct Lowering {
                 // Genuinely unbound: every binding site registers itself in
                 // `subst`, so absence means the walker would raise at runtime —
                 // emit the same error so `it`-caught failures match exactly.
-                {
-                    std::string loc;
-                    if (currentLoc) loc = std::string(currentLoc->file) + ":"
-                        + std::to_string(currentLoc->line) + ":"
-                        + std::to_string(currentLoc->column) + ": ";
-                    return callE("erlang", "error", 1, one(lit(LitKind::String,
-                        loc + "runtime error: Undefined variable: " + n.name)));
-                }
+                return runtimeError("Undefined variable: " + n.name);
             } else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
                 return var(currentName("this"));
             } else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
@@ -257,6 +272,8 @@ struct Lowering {
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
+                if (staticCtorOutOfScope(n.name))
+                    return runtimeError("Undefined identifier: " + n.name);
                 auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.name, {}};
                 return ex;
@@ -300,10 +317,21 @@ struct Lowering {
                 // uses the user's `'op'/2`, anything else the builtin op
                 // (spec/operator_overloading.kex).
                 std::string sym = opSymbol(n.op);
+                // User == / != (outside guards, which only allow BIFs) go
+                // through the coercing runtime eq: a [Char] charlist and a
+                // String binary holding the same text ARE equal in Kex.
+                auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
+                    Op op = opOf(n.op);
+                    if ((op == Op::Eq || op == Op::Neq) && !m_inGuard)
+                        return callE("kex_intrinsic_number",
+                                     op == Op::Eq ? "eq" : "neq", 2,
+                                     two(std::move(a), std::move(b)));
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
+                    return ex;
+                };
                 if (!sym.empty() && overloadedOps.count(sym)) {
-                    auto builtin = std::make_unique<Expr>();
-                    std::vector<ExprPtr> ba; ba.push_back(clone(l)); ba.push_back(clone(r));
-                    builtin->node = Intrinsic{opOf(n.op), std::move(ba)};
+                    auto builtin = builtinOp(clone(l), clone(r));
                     std::vector<ExprPtr> ua; ua.push_back(clone(l)); ua.push_back(clone(r));
                     auto userCall = std::make_unique<Expr>();
                     userCall->node = Call{"", sym, 2, std::move(ua), false};
@@ -312,12 +340,7 @@ struct Lowering {
                         std::move(userCall), std::move(builtin));
                     return wrapLets(binds, std::move(dispatch));
                 }
-                auto ex = std::make_unique<Expr>();
-                std::vector<ExprPtr> args;
-                args.push_back(std::move(l));
-                args.push_back(std::move(r));
-                ex->node = Intrinsic{opOf(n.op), std::move(args)};
-                return wrapLets(binds, std::move(ex));
+                return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
             } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
                 std::vector<Binding> binds;
                 auto a = atomize(n.operand, binds);
@@ -576,8 +599,11 @@ struct Lowering {
             (zeroArgFns.count(n.name) || topLevelConstants.count(n.name));
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
-            && !zeroArgThunk)
+            && !zeroArgThunk) {
+            if (staticCtorOutOfScope(n.name))
+                return wrapLets(binds, runtimeError("Undefined function: " + n.name));
             ex->node = Construct{n.name, std::move(args)};
+        }
         else if (zeroArgThunk && !args.empty()) {
             auto thunk = std::make_unique<Expr>();
             thunk->node = Call{"", n.name, 0, {}, false};
@@ -905,8 +931,10 @@ struct Lowering {
             {"feed","kex_file","feed",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
             {"abs","erlang","abs",0},
-            {"upperCase","string","to_upper",0}, {"upcase","string","to_upper",0},
-            {"lowerCase","string","to_lower",0}, {"downcase","string","to_lower",0},
+            // kex_intrinsic_string handles both String binaries and bare
+            // Char codepoints (string:uppercase alone rejects integers).
+            {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
+            {"lowerCase","kex_intrinsic_string","lowerCase",0}, {"downcase","kex_intrinsic_string","lowerCase",0},
             {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},
             // digit?/alpha?/space? migrated to the Kex prelude (→ Kex.Intrinsic.
             // Char.is_*). Guard-inlined form below stays as the guard fallback.
@@ -936,7 +964,14 @@ struct Lowering {
         }
         for (const auto& b : calls)
             if (m == b.method && (int)n.args.size() == b.nargs && !n.block) {
-                std::vector<ExprPtr> a; a.push_back(clone(rv));
+                std::vector<ExprPtr> a;
+                // lists:* entries also serve String receivers ([Char] IS
+                // String) — coerce a binary to its codepoint list first.
+                bool coerce = std::string(b.mod) == "lists" ||
+                              std::string(b.fn) == "list_product";
+                a.push_back(coerce
+                    ? callE("kex_intrinsic_list", "as_list", 1, one(clone(rv)))
+                    : clone(rv));
                 if (b.nargs == 1) a.push_back(arg0());
                 return ret(callE(b.mod, b.fn, b.nargs + 1, std::move(a)));
             }
@@ -986,17 +1021,22 @@ struct Lowering {
             return ret(callE("kex_task", "await", 2,
                 two(clone(rv), atomize_ir(std::move(timeout), rb))));
         }
-        // contains?: String/List/Range are all plain lists at runtime, so the
-        // needle type disambiguates — a list needle means substring search
-        // (string:find), a scalar means element membership (lists:member).
+        // contains?: a String (binary) needle means substring search
+        // (string:find handles binary and charlist receivers alike); a
+        // scalar needle means element membership (lists:member).
         if (m == "contains?" && n.args.size() == 1) {
             auto needle = atomize_ir(lower(n.args[0]), rb);
             auto substr = intrin(Op::Neq, two(
                 callE("string","find",2,two(clone(rv), clone(needle))),
                 lit(LitKind::Atom, "nomatch")));
+            auto substr2 = intrin(Op::Neq, two(
+                callE("string","find",2,two(clone(rv), clone(needle))),
+                lit(LitKind::Atom, "nomatch")));
             auto member = callE("lists","member",2,two(clone(needle), clone(rv)));
-            return ret(matchBool(callE("erlang","is_list",1,one(clone(needle))),
-                                 std::move(substr), std::move(member)));
+            return ret(matchBool(callE("erlang","is_binary",1,one(clone(needle))),
+                std::move(substr),
+                matchBool(callE("erlang","is_list",1,one(clone(needle))),
+                    std::move(substr2), std::move(member))));
         }
         if (m == "indexOf" && n.args.size() == 1)
             return ret(callE("kex_intrinsic_list","index_of",2,two(arg0(), clone(rv))));
@@ -1010,10 +1050,13 @@ struct Lowering {
         // join aren't guard BIFs), so no guard fallback — removed outright.
         // some?/present? migrated to the prelude (Optional.some?/present?).
         // Not guard-safe (Match is illegal in guards), so no fallback — removed.
-        if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block)
+        if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block
+            && !localMethods.count(m))
             return ret(matchBool(callE("erlang","is_map",1,one(clone(rv))),
                 callE("maps","size",1,one(clone(rv))),
-                callE("erlang","length",1,one(clone(rv)))));
+                matchBool(callE("erlang","is_binary",1,one(clone(rv))),
+                    callE("string","length",1,one(clone(rv))),
+                    callE("erlang","length",1,one(clone(rv))))));
         // min/max/last migrated to the prelude (→ Kex.Intrinsic.List.min/max,
         // list.kex pattern-match). Not guard-safe (onEmpty uses case), so no
         // fallback — removed.
@@ -1023,7 +1066,7 @@ struct Lowering {
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;
             if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
-            if (ty == "String") return ret(callE("kex_io","to_string",1,one(clone(rv))));
+            if (ty == "String") return ret(callE("kex_io","to_string_bin",1,one(clone(rv))));
             if (ty == "Int" || ty == "Integer") return ret(callE("kex_intrinsic_number","to_integer",1,one(clone(rv))));
             if (ty == "Float") return ret(callE("kex_intrinsic_number","to_float",1,one(clone(rv))));
             // to(List) — ranges (and lists) are already real lists on BEAM.
@@ -1160,18 +1203,22 @@ struct Lowering {
                         lit(LitKind::None, "none"), clone(rv))));
                 }
             }
+            // List HOFs also serve String receivers ([Char] IS String):
+            // as_list coerces a binary to its codepoint list, everything
+            // else passes through.
+            auto rvList = [&]{ return callE("kex_intrinsic_list", "as_list", 1, one(clone(rv))); };
             if (m == "each")
-                return build(callE("lists", "foreach", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "foreach", 2, two(std::move(fn), rvList())));
             if (m == "map")
-                return build(callE("lists", "map", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "map", 2, two(std::move(fn), rvList())));
             if (m == "filter" || m == "select")
-                return build(callE("lists", "filter", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "filter", 2, two(std::move(fn), rvList())));
             if (m == "all?")
-                return build(callE("lists", "all", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "all", 2, two(std::move(fn), rvList())));
             if (m == "any?" || m == "some?")
-                return build(callE("lists", "any", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "any", 2, two(std::move(fn), rvList())));
             if (m == "flatMap" || m == "flat_map")
-                return build(callE("lists", "flatmap", 2, two(std::move(fn), clone(rv))));
+                return build(callE("lists", "flatmap", 2, two(std::move(fn), rvList())));
             // reject { pred } → keep elements where pred is false.
             if (m == "reject") {
                 std::string nx = fresh("Nx");
@@ -1179,7 +1226,7 @@ struct Lowering {
                 neg.body = intrin(Op::Not, one(callE_indirect(clone(fn), one(var(nx)))));
                 auto negFn = std::make_unique<Expr>(); negFn->node = std::move(neg);
                 auto negV = atomize_ir(std::move(negFn), binds);
-                return build(callE("lists", "filter", 2, two(std::move(negV), clone(rv))));
+                return build(callE("lists", "filter", 2, two(std::move(negV), rvList())));
             }
             // Block arity of the original `{ ... }` (−1 if not a Lambda).
             auto blockArity = [&](const ast::ExprPtr* b) -> int {
@@ -1216,7 +1263,7 @@ struct Lowering {
             if (m == "find") {
                 std::string found = fresh("Found");
                 Match mm;
-                mm.subjects.push_back(callE("lists", "search", 2, two(std::move(fn), clone(rv))));
+                mm.subjects.push_back(callE("lists", "search", 2, two(std::move(fn), rvList())));
                 MatchClause hit;
                 auto tp = std::make_unique<Pattern>(); tp->kind = PatKind::Tuple;
                 auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Lit;
@@ -1238,7 +1285,7 @@ struct Lowering {
             // lists:partition). Not guard-safe, no fallback — removed.
             if (m == "count") // count matching a predicate
                 return build(callE("erlang", "length", 1,
-                    one(callE("lists", "filter", 2, two(std::move(fn), clone(rv))))));
+                    one(callE("lists", "filter", 2, two(std::move(fn), rvList())))));
             // reduce(seed) { |acc, x| } / reduce(seed, fn) → lists:foldl(
             // fun(x,acc)->fn(acc,x), seed, recv). The fn is either a trailing
             // block or the 2nd positional arg (e.g. a curried `~(+)`).
@@ -1252,7 +1299,7 @@ struct Lowering {
                 auto swapFn = std::make_unique<Expr>(); swapFn->node = std::move(swap);
                 auto swapVar = atomize_ir(std::move(swapFn), binds);
                 return build(callE("lists", "foldl", 3,
-                    three(std::move(swapVar), std::move(seed), clone(rv))));
+                    three(std::move(swapVar), std::move(seed), rvList())));
             }
         }
 
@@ -1344,10 +1391,14 @@ struct Lowering {
             pos = close + 1;
         }
         if (parts.empty()) return lit(LitKind::String, "");
-        ExprPtr result = std::move(parts[0]);
-        for (size_t i = 1; i < parts.size(); i++)
-            result = intrin(Op::Concat, two(std::move(result), std::move(parts[i])));
-        return result;
+        // A single literal segment IS the string; otherwise build an iolist
+        // (binary literals + to_string charlists both qualify) and flatten it
+        // to the UTF-8 binary that a Kex String is on BEAM.
+        if (parts.size() == 1 && std::holds_alternative<Lit>(parts[0]->node))
+            return std::move(parts[0]);
+        auto lst = std::make_unique<Expr>();
+        lst->node = MakeList{std::move(parts), std::nullopt};
+        return callE("unicode", "characters_to_binary", 1, one(std::move(lst)));
     }
 
     // ---- IR construction helpers -----------------------------------------
@@ -2246,10 +2297,54 @@ struct Lowering {
                     std::holds_alternative<ast::RangePattern>((*p0.pattern)->kind);
         }
         if (!receiverPattern) implicitThisMethods.insert(first.name);
+        // A make-String method matching the receiver with LIST patterns
+        // (`myCapitalize(@[x | rest])`) — legal, since [Char] IS String —
+        // can't match a binary receiver directly. Detect it so the whole
+        // group gets wrapped in an as_list coercion below.
+        bool listReceiver = false;
+        if (receiverPattern && typeName == "String")
+            for (const auto* fn : group)
+                for (const auto& cl : fn->clauses)
+                    if (!cl.params.empty() && !cl.params[0].name && cl.params[0].pattern)
+                        if (auto* tp = std::get_if<ast::ThisPattern>(&(*cl.params[0].pattern)->kind))
+                            if (tp->inner && std::holds_alternative<ast::ListPattern>(tp->inner->kind))
+                                listReceiver = true;
         auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
+        if (listReceiver) def = coerceListReceiver(std::move(def));
         if (collidingMethods.count(first.name) && !typeName.empty())
             def.name = first.name + "__" + typeName;
         return def;
+    }
+
+    // Rewrap a FunDef whose clauses pattern-match the receiver as a list:
+    // one wrapper clause binds raw params, then a multi-subject Match runs
+    // the original clause patterns against `as_list(receiver)` (a String
+    // binary becomes its [Char] codepoint list; lists pass through).
+    auto coerceListReceiver(FunDef def) -> FunDef {
+        FunDef out; out.name = def.name; out.arity = def.arity;
+        FunClause fc;
+        Match m;
+        for (int i = 0; i < def.arity; i++) {
+            std::string p = "_cr" + std::to_string(i);
+            auto pat = std::make_unique<Pattern>();
+            pat->kind = PatKind::Var; pat->name = p;
+            fc.params.push_back(std::move(pat));
+            m.subjects.push_back(i == 0
+                ? callE("kex_intrinsic_list", "as_list", 1, one(var(p)))
+                : var(p));
+        }
+        for (auto& cl : def.clauses) {
+            MatchClause mc;
+            mc.patterns = std::move(cl.params);
+            mc.guard = std::move(cl.guard);
+            mc.body = std::move(cl.body);
+            m.clauses.push_back(std::move(mc));
+        }
+        auto b = std::make_unique<Expr>();
+        b->node = std::move(m);
+        fc.body = std::move(b);
+        out.clauses.push_back(std::move(fc));
+        return out;
     }
 
     // A dispatcher `name/arity` for a colliding method: inspect the
@@ -2259,7 +2354,7 @@ struct Lowering {
     auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
         static const std::unordered_map<std::string, const char*> prim = {
             {"Integer","is_integer"}, {"Char","is_integer"}, {"Float","is_float"},
-            {"Number","is_number"}, {"String","is_list"}, {"Bool","is_boolean"},
+            {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
             // A range is a real list at BEAM runtime (`a..b` lowers to
             // lists:seq/2 before any method call), so Range-owned prelude
@@ -2348,6 +2443,27 @@ struct Lowering {
                 mc.body = std::move(call);
                 m.clauses.push_back(std::move(mc));
             }
+        }
+        // [Char] IS String: a method owned by List but not by String must
+        // still take a String receiver — coerce the binary to its codepoint
+        // list and forward to the List impl. This clause goes FIRST: the
+        // record/variant owner clauses guard with element(1, _) which erlc
+        // does not soft-fail for a binary falling through to them.
+        bool hasString = std::find(owners.begin(), owners.end(), "String") != owners.end();
+        bool hasList = std::find(owners.begin(), owners.end(), "List") != owners.end();
+        if (hasList && !hasString) {
+            MatchClause mc;
+            auto gv = std::make_unique<Pattern>();
+            gv->kind = PatKind::Var; gv->name = "_gv";
+            mc.patterns.push_back(std::move(gv));
+            mc.guard = callE("erlang", "is_binary", 1, one(var("_gv")));
+            std::vector<ExprPtr> args;
+            args.push_back(callE("unicode", "characters_to_list", 1, one(var("_a0"))));
+            for (int i = 1; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
+            auto call = std::make_unique<Expr>();
+            call->node = Call{"", name + "__List", arity, std::move(args), false};
+            mc.body = std::move(call);
+            m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
         auto body = std::make_unique<Expr>();
         body->node = std::move(m);
@@ -2466,6 +2582,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     L.fnParamNames[(*fd)->name] = std::move(pnames);
                 }
             }
+        } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
+            if (*td && (*td)->variants)
+                for (const auto& v : *(*td)->variants) {
+                    auto t = Lowering::simpleTypeName(v);
+                    if (!t.empty()) L.variantTagSet.insert(t);
+                }
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (!*md) continue;
             std::string typeName = Lowering::simpleTypeName((*md)->target);
@@ -2499,6 +2621,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
+    L.staticCtorNames = staticMethodNames;
     for (const auto& n : staticMethodNames) L.localMethods.insert(n);
     for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
 

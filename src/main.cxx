@@ -1990,9 +1990,16 @@ int main(int argc, char *argv[])
                 std::string loadExpr =
                     "{ok,_B}=file:read_file(\"" + absBeam + "\"), "
                     "code:load_binary('" + result.moduleName + "',\"" + absBeam + "\",_B), ";
+                // Kex runtime errors carry a String (binary/charlist) reason
+                // printed verbatim; anything else (raw BEAM errors like
+                // badarg tuples) falls back to ~p.
+                std::string reasonFmt =
+                    "case Reason of _R when is_binary(_R); is_list(_R) -> "
+                    "io:format(standard_error, \"Internal error: ~ts~n\", [_R]); "
+                    "_R -> io:format(standard_error, \"Internal error: ~p~n\", [_R]) end";
                 std::string mainCall = result.mainArity == 1
-                    ? "try " + loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()) of Result -> halt() catch _:Reason:_ -> io:format(standard_error, \"Internal error: ~s~n\", [Reason]), halt(1) end"
-                    : "try " + loadExpr + "'" + result.moduleName + "':main() of Result -> halt() catch _:Reason:_ -> io:format(standard_error, \"Internal error: ~s~n\", [Reason]), halt(1) end";
+                    ? "try " + loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()) of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end"
+                    : "try " + loadExpr + "'" + result.moduleName + "':main() of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end";
                 // shellSingleQuote (see its own comment) wraps the whole
                 // -eval text as one shell argument, so quote characters
                 // embedded in it survive into erl correctly regardless of

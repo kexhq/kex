@@ -6,16 +6,15 @@
 exists(Path) ->
     filelib:is_regular(Path).
 
-%% File.lines(path) → [String] | 'none'
+%% File.lines(path) → [String] | 'none' (Strings are UTF-8 binaries)
 lines(Path) ->
     case file:read_file(Path) of
         {ok, Bin} ->
-            Content = binary_to_list(Bin),
-            Lines = string:split(Content, "\n", all),
+            Lines = string:split(Bin, <<"\n">>, all),
             % Drop trailing empty line from final newline
             case lists:reverse(Lines) of
-                [""|Rest] -> lists:reverse(Rest);
-                _         -> Lines
+                [<<>>|Rest] -> lists:reverse(Rest);
+                _           -> Lines
             end;
         _ -> none
     end.
@@ -23,7 +22,7 @@ lines(Path) ->
 %% File.read(path) → String | 'none'
 read(Path) ->
     case file:read_file(Path) of
-        {ok, Bin} -> binary_to_list(Bin);
+        {ok, Bin} -> Bin;
         _         -> none
     end.
 

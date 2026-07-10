@@ -16,16 +16,20 @@ auto erlVar(const std::string& s) -> std::string {
     return out;
 }
 
-auto erlString(const std::string& s) -> std::string {
-    std::string out = "\"";
-    for (char c : s) {
-        if (c == '"') out += "\\\"";
-        else if (c == '\\') out += "\\\\";
-        else if (c == '\n') out += "\\n";
-        else if (c == '\t') out += "\\t";
-        else out += c;
+// A Kex String is a UTF-8 binary on BEAM (charlists are ambiguous with
+// integer lists). Emit one 8-bit segment per byte — the source text is
+// already UTF-8, so no re-encoding is needed, and byte segments work
+// identically in expression and pattern position.
+auto erlBinary(const std::string& s) -> std::string {
+    std::string out = "#{";
+    bool first = true;
+    for (unsigned char c : s) {
+        if (!first) out += ",";
+        first = false;
+        out += "#<" + std::to_string(static_cast<int>(c))
+             + ">(8,1,'integer',['unsigned'|['big']])";
     }
-    return out + "\"";
+    return out + "}#";
 }
 
 struct Emitter {
@@ -104,7 +108,7 @@ struct Emitter {
             case LitKind::Int:    return l.text;
             case LitKind::Float:  return l.text;
             case LitKind::Char:   return std::to_string(static_cast<int>(l.text[0]));
-            case LitKind::String: return erlString(l.text);
+            case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'none'";
             case LitKind::Atom:   return "'" + l.text + "'";

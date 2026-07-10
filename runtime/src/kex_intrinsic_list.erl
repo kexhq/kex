@@ -8,71 +8,93 @@
 -export([reverse/1, sort/1, sort/2, uniq/1, flatten/1, take/2, drop/2, zip/2, push/2,
          sum/1, product/1, indexOf/2, at/2, foldLeft/3, min/1, max/1, length/1,
          first/1, last/1,
-         join/1, join/2, partition/2, member/2,
+         join/1, join/2, partition/2, member/2, as_list/1,
          %% Lower-level list ops used directly by the emitters (moved here from
          %% kex_io, where list operations didn't belong).
          list_get/2, list_get/3, index_of/2, list_product/1]).
 
-%% Receiver is always the first argument (Kex UFCS convention).
+%% as_list/1 — a String receiver (UTF-8 binary) as its [Char] codepoint list;
+%% everything else unchanged. The list HOF lowerings wrap their receiver in
+%% this so `"h3llo".filter(&alpha?)` etc. work — the result is a [Char],
+%% which IS String in Kex (display and == treat them identically).
+as_list(B) when is_binary(B) -> unicode:characters_to_list(B);
+as_list(L) -> L.
+
+%% Receiver is always the first argument (Kex UFCS convention). A Kex String
+%% is a UTF-8 binary, and the prelude's String methods reuse several List
+%% intrinsics (length/at/reverse/member) — so those take binaries too.
+%% Every receiver goes through as_list/1, so each function transparently
+%% takes a String binary as its [Char] codepoint list.
+reverse(B) when is_binary(B) ->
+    unicode:characters_to_binary(lists:reverse(unicode:characters_to_list(B)));
 reverse(L) -> lists:reverse(L).
-sort(L)    -> lists:sort(L).
+sort(L)    -> lists:sort(as_list(L)).
 %% sort/2 — custom comparator. Kex passes (list, fun), Erlang's lists:sort/2
 %% takes (fun, list), so swap the argument order.
-sort(L, Fun) -> lists:sort(Fun, L).
-uniq(L)    -> lists:usort(L).
-flatten(L) -> lists:flatten(L).
-take(L, N) -> lists:sublist(L, N).
-drop(L, N) -> lists:nthtail(N, L).
-zip(L, R)  -> lists:zip(L, R).
-push(L, X) -> L ++ [X].
-sum(L)     -> lists:sum(L).
-product(L) -> list_product(L).
-indexOf(L, X) -> index_of(X, L).
+sort(L, Fun) -> lists:sort(Fun, as_list(L)).
+uniq(L)    -> lists:usort(as_list(L)).
+flatten(L) -> lists:flatten(as_list(L)).
+take(L, N) -> lists:sublist(as_list(L), N).
+drop(L, N) -> lists:nthtail(N, as_list(L)).
+zip(L, R)  -> lists:zip(as_list(L), as_list(R)).
+push(L, X) -> as_list(L) ++ [X].
+sum(L)     -> lists:sum(as_list(L)).
+product(L) -> list_product(as_list(L)).
+indexOf(L, X) -> index_of(X, as_list(L)).
 at(L, I)   -> list_get(L, I).
 %% foldLeft/3 — the universal left fold backing Enumerable.reduce (and so every
 %% HOF derived from it). Kex's reducer takes (acc, elem); Erlang's lists:foldl
 %% takes fun(elem, acc), so swap the argument order at the boundary.
-foldLeft(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, L).
+foldLeft(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, as_list(L)).
 
 %% partition/2 — splits into {Matching, NonMatching} per predicate. Kex is
 %% receiver-first; Erlang's lists:partition is fun-first, so swap.
-partition(L, Fun) -> lists:partition(Fun, L).
+partition(L, Fun) -> lists:partition(Fun, as_list(L)).
 
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
+member(Elem, Container) when is_binary(Container) ->
+    lists:member(Elem, unicode:characters_to_list(Container));
 member(Elem, Container) -> lists:member(Elem, Container).
 
 %% first/1, last/1 — the first/last element wrapped in Just, or None for [].
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the
 %% one-element-pattern semantics; a direct primitive is simpler and O(1)/O(n)).
+first(B) when is_binary(B) -> first(unicode:characters_to_list(B));
 first([])      -> 'none';
 first([X | _]) -> {'Just', X}.
+last(B) when is_binary(B) -> last(unicode:characters_to_list(B));
 last([])       -> 'none';
 last(L)        -> {'Just', lists:last(L)}.
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old
 %% recursive impl was non-tail and returned this same Just/None form).
+min(B) when is_binary(B) -> min(unicode:characters_to_list(B));
 min([]) -> 'none';
 min(L)  -> {'Just', lists:min(L)}.
+max(B) when is_binary(B) -> max(unicode:characters_to_list(B));
 max([]) -> 'none';
 max(L)  -> {'Just', lists:max(L)}.
 
 %% length/1 — element count, backing List.count (was a non-tail `1 + xs.count`
-%% recursion in the prelude). Also covers charlist strings on BEAM.
+%% recursion in the prelude). Also backs String.count (codepoint count).
+length(B) when is_binary(B) -> string:length(B);
 length(L) -> erlang:length(L).
 
-%% join/1,2 — string join for [String|Char] lists. The old prelude form was
-%% non-tail recursive (`x + sep + xs.join(sep)` — the ++ wraps the call, so it
-%% nests O(n) deep on both backends). join/1 concatenates directly; join/2
-%% inserts Sep between each pair.
-join(L)      -> lists:flatten(L).
-join(L, Sep) -> lists:flatten(lists:join(Sep, L)).
+%% join/1,2 — string join for [String|Char] lists, producing a String (UTF-8
+%% binary). Elements/separator are chardata (binaries, Chars, charlists), so
+%% unicode:characters_to_binary flattens them directly. The old prelude form
+%% was non-tail recursive (`x + sep + xs.join(sep)`).
+join(L)      -> unicode:characters_to_binary(L).
+join(L, Sep) -> unicode:characters_to_binary(lists:join(Sep, L)).
 
 %% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
 %% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's
 %% 2-arg form.
 list_get(List, Idx) -> list_get(List, Idx, 'none').
+list_get(Bin, Idx, Default) when is_binary(Bin) ->
+    list_get(unicode:characters_to_list(Bin), Idx, Default);
 list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < erlang:length(List) ->
     lists:nth(Idx + 1, List);
 list_get(_List, _Idx, Default) ->

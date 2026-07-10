@@ -11,8 +11,13 @@ times(N, Fun) -> lists:foreach(Fun, lists:seq(0, N - 1)).
 %% Integer.parse(s) — parse a string to integer, returning Ok(Int) or
 %% Error(reason). Matches src/interpreter/stdlib/number.cxx exactly.
 %% Moved from kex_io where parsing didn't belong.
+integer_parse(S) when is_binary(S) ->
+    case string:to_integer(S) of
+        {Int, <<>>} -> {'Ok', Int};
+        _ -> {'Error', <<"invalid integer: ", S/binary>>}
+    end;
 integer_parse(S) ->
     case string:to_integer(S) of
         {Int, ""} -> {'Ok', Int};
-        _ -> {'Error', "invalid integer: " ++ S}
+        _ -> {'Error', unicode:characters_to_binary(["invalid integer: ", S])}
     end.

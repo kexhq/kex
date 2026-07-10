@@ -103,11 +103,11 @@ spec: build
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
 # dispatches per-tag). Informational: prints a pass/fail count but always
-# exits 0. The remaining diffs are fundamental BEAM representation limits,
-# not codegen gaps: the integer-list/charlist render ambiguity (a [40, 50]
-# is indistinguishable from "(2" on BEAM — char_type, env, list_extras,
-# list_pattern_chained_pipe) and frozen runtime-error text
-# (static_namespacing).
+# exits 0. Strings are UTF-8 binaries on BEAM, so string-vs-list ambiguity
+# is gone; the remaining diffs are the Char/Int ambiguity (a Char is a bare
+# codepoint integer, so 'e' displays as 101 and a printable [Int] like
+# [40, 50] still renders as text — char_type, list_pattern_chained_pipe).
+# Fixing those means a tagged Char representation ({'Char', N}).
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \

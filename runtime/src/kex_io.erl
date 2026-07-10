@@ -1,25 +1,25 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1,
-           env_map/0]).
+           to_string_bin/1, env_map/0]).
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
-    io:format("~s~n", [to_string(X)]).
+    io:format("~ts~n", [to_string(X)]).
 
 %% IO.print(x) — print x without a trailing newline.
 print(X) ->
-    io:format("~s", [to_string(X)]).
+    io:format("~ts", [to_string(X)]).
 
 %% IO.printError / IO.warn / IO.warning — print to stderr.
 print_error(X) ->
-    io:format(standard_error, "~s~n", [to_string(X)]).
+    io:format(standard_error, "~ts~n", [to_string(X)]).
 
-%% IO.readLine — read a line from stdin, returns a charlist.
+%% IO.readLine — read a line from stdin, returns a String (UTF-8 binary).
 read_line() ->
     case io:get_line("") of
         eof -> none;
         {error, _} -> none;
-        Line -> string:trim(Line, trailing, "\n")
+        Line -> unicode:characters_to_binary(string:trim(Line, trailing, "\n"))
     end.
 
 %% IO.inspect — print "=> <value> : <Type>" with ANSI colours, returns value.
@@ -54,6 +54,10 @@ inspect(X) when is_atom(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ":" ++ atom_to_list(X)
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n"), X;
+inspect(X) when is_binary(X) ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
+              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+              ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [X]), X;
 inspect(X) when is_list(X) ->
     case io_lib:printable_list(X) of
         true ->
@@ -79,16 +83,13 @@ inspect(X) when is_tuple(X) ->
 inspect(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p~n", [X]), X.
 
+%% Any Kex value as a Kex String VALUE (UTF-8 binary) — what `.to(String)`
+%% and toString-style conversions return. to_string/1 below stays a charlist
+%% because its output feeds io:format/iolists, not user code.
+to_string_bin(X) when is_binary(X) -> X;
+to_string_bin(X) -> unicode:characters_to_binary(to_string(X)).
+
 %% Internal: convert any Kex value to a printable charlist.
-% An empty Kex list and an empty Kex string are both just Erlang's [] —
-% genuinely indistinguishable at this point by value alone
-% (io_lib:printable_unicode_list([]) is vacuously true). Tried special-
-% casing to_string([]) -> "[]" to fix spec/env.kex's `args: ${args}`
-% (an empty [String] prints "args: " instead of "args: []"), but that
-% directly regressed spec/my_capitalize.kex (an empty STRING result needs
-% to print blank, not "[]") — a genuine, irreconcilable-by-value ambiguity
-% between these two specs. Left as a known limitation (blank wins, since
-% it's the more common case) rather than fixing one at the other's expense.
 % Nested elements (inside a List/Tuple/Map) use exactly the same to_string
 % recursively — NO quoting of nested strings — matching
 % src/interpreter/value.cxx's ListValue/TupleValue toString exactly (both
@@ -99,9 +100,17 @@ inspect(X) ->
 % (spec/io_ops.kex), and `{Underscore,"wooo"}` (Erlang tuple syntax, quoted,
 % no spaces) instead of `(Underscore, wooo)` (Kex's own tuple syntax:
 % parens, comma-space, unquoted) — spec/my_starts_with.kex.
+% A Kex String is a UTF-8 binary now, so [] is unambiguously an empty LIST
+% and prints "[]" (the old blank-vs-"[]" tie between spec/env.kex and
+% spec/my_capitalize.kex is resolved for real: an empty string is <<>>).
+% What remains on the printable-list heuristic is only [Char]: Chars are
+% still bare codepoint integers, so a [Char] (which IS String in Kex and
+% displays as text) and a printable [Int] are still the same value.
+to_string(X) when is_binary(X)  -> unicode:characters_to_list(X);
+to_string([]) -> "[]";
 to_string(X) when is_list(X) ->
     case X of
-        [Elem | _] when is_list(Elem) ->
+        [Elem | _] when is_list(Elem) orelse is_binary(Elem) ->
             "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]";
         _ ->
             case io_lib:printable_unicode_list(X) of
@@ -110,7 +119,6 @@ to_string(X) when is_list(X) ->
                     "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]"
             end
     end;
-to_string(X) when is_binary(X)  -> binary_to_list(X);
 % Kex's None is capitalized at the source level (an UpperIdentifier, like
 % the interpreter's NoneValue prints as "None") — every other atom (Kex's
 % own lowercase :atoms, true/false) prints as its literal name, so this
@@ -193,6 +201,6 @@ env_map() ->
 
 split_env_entry(E) ->
     case string:split(E, "=") of
-        [K, V] -> {K, V};
-        [K]    -> {K, ""}
+        [K, V] -> {unicode:characters_to_binary(K), unicode:characters_to_binary(V)};
+        [K]    -> {unicode:characters_to_binary(K), <<>>}
     end.
