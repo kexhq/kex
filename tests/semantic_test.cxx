@@ -2,9 +2,12 @@
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
+#include "../src/semantic/db.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
 #include "../src/semantic/stdlib_signatures.hxx"
+#include <filesystem>
+#include <fstream>
 
 using namespace kex;
 using namespace test;
@@ -41,6 +44,95 @@ auto noErrors(const std::string& source) -> bool {
 }
 
 int main() {
+    describe("SemanticDB — Modules", []() {
+        it("resolves selectively imported names across indexed files", []() {
+            semantic::SemanticDB db;
+            db.updateFile("util.kex",
+                "module Util\n"
+                "let twice(n) = n * 2\n");
+            db.updateFile("main.kex",
+                "using Util, only: [twice]\n"
+                "main do\n"
+                "  twice(21)\n"
+                "end\n");
+            bool hasError = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
+            assertFalse(hasError);
+            auto* symbol = db.symbolInModule("Util", "twice");
+            assertTrue(symbol != nullptr);
+            assertTrue(!symbol->references.empty());
+        });
+
+        it("rejects importing a private module symbol", []() {
+            semantic::SemanticDB db;
+            db.updateFile("secrets.kex",
+                "module Secrets\n"
+                "private do\n"
+                "  let hidden() = 42\n"
+                "end\n");
+            db.updateFile("main.kex",
+                "using Secrets, only: [hidden]\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.message.find("private name `hidden`") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("does not leak module members into the enclosing file", []() {
+            semantic::SemanticDB db;
+            db.updateFile("main.kex",
+                "module Helpers do\n"
+                "  let answer() = 42\n"
+                "end\n"
+                "main do\n"
+                "  answer()\n"
+                "end\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.message.find("Undefined function: `answer`") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("keeps top-level definitions file-local", []() {
+            semantic::SemanticDB db;
+            db.updateFile("one.kex", "let helper() = 42\n");
+            db.updateFile("two.kex", "main do\n  helper()\nend\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("two.kex"))
+                if (diagnostic.message.find("Undefined function: `helper`") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("discovers an unindexed module from configured source roots", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-semantic-module-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "http");
+            {
+                std::ofstream module(root / "http/router.kex");
+                module << "module Http.Router\n"
+                          "let get(path) = path\n";
+            }
+            semantic::SemanticDB db;
+            db.setModuleRoots({root.string()});
+            db.updateFile("main.kex",
+                "using Http.Router, only: [get]\n"
+                "main do\n"
+                "  get(\"/\")\n"
+                "end\n");
+            fs::remove_all(root);
+            assertTrue(db.hasModule("Http.Router"));
+            bool hasError = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
+            assertFalse(hasError);
+        });
+    });
+
     describe("Semantic — Purity", []() {
         it("allows foul calls in main (implicitly foul)", []() {
             assertTrue(noErrors(

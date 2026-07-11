@@ -453,6 +453,8 @@ struct RecordDef {
     std::optional<StaticBlock> staticBlock;
 };
 
+struct UsingBlock;
+
 struct VisibilityBlock {
     bool isPublic;
     std::vector<std::variant<
@@ -460,7 +462,8 @@ struct VisibilityBlock {
         std::unique_ptr<TypeAnnotation>,
         std::unique_ptr<struct MakeDef>,
         std::unique_ptr<TypeDef>,
-        std::unique_ptr<RecordDef>
+        std::unique_ptr<RecordDef>,
+        std::unique_ptr<UsingBlock>
     >> items;
 };
 

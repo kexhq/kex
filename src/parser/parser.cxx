@@ -119,7 +119,16 @@ auto Parser::parseProgram() -> ast::Program {
 
     while (!atEnd()) {
         try {
-            program.items.push_back(parseTopLevelItem());
+            if ((check(TokenType::Module)
+                 || (check(TokenType::Foul) && peekNext().type == TokenType::Module))
+                && program.items.empty()) {
+                program.items.push_back(parseModuleDef(true));
+            } else {
+                program.items.push_back(parseTopLevelItem());
+            }
+            for (auto& deferred : m_deferredTopLevelItems)
+                program.items.push_back(std::move(deferred));
+            m_deferredTopLevelItems.clear();
         } catch (const ParseError&) {
             // Diagnostic already recorded in m_diagnostics; skip to the next
             // safe top-level keyword and continue parsing.
@@ -191,7 +200,8 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
 
 // ===== Module =====
 
-auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
+auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModule)
+    -> std::unique_ptr<ast::ModuleDef> {
     auto mod = std::make_unique<ast::ModuleDef>();
     mod->location = currentLocation();
 
@@ -205,17 +215,21 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
         if (i) mod->name += ".";
         mod->name += moduleName.parts[i];
     }
+    if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
+        mod->name = parentModule + "." + mod->name;
     // A file-level `module Name` without `do` is desugared into the same
     // ModuleDef used for `module Name do ... end`; it simply runs to EOF.
     // Keeping one AST form means all later phases remain unaware of the
     // source-level shorthand.
     const bool standalone = !match(TokenType::Do);
+    if (standalone && !allowStandalone)
+        error("standalone 'module' must be the first statement in a file");
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
         if (check(TokenType::Module) ||
             (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
-            mod->body.push_back(parseModuleDef());
+            mod->body.push_back(parseModuleDef(false, mod->name));
         } else if (check(TokenType::Type)) {
             mod->body.push_back(parseTypeDef());
         } else if (check(TokenType::Record)) {
@@ -232,6 +246,10 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
             mod->body.push_back(parseExportDecl());
         } else if (check(TokenType::Public) || check(TokenType::Private)) {
             mod->body.push_back(parseVisibilityBlock());
+        } else if (check(TokenType::Main)) {
+            if (!standalone)
+                error("'main' blocks are not allowed inside block modules");
+            m_deferredTopLevelItems.push_back(parseMainBlock());
         } else if (check(TokenType::Foul)) {
             advance();
             mod->body.push_back(parseFunctionDef(true));
@@ -2771,6 +2789,8 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
             block->items.push_back(parseTypeDef());
         } else if (check(TokenType::Record)) {
             block->items.push_back(parseRecordDef());
+        } else if (check(TokenType::Using)) {
+            block->items.push_back(parseUsingBlock());
         } else {
             error("Unexpected token in visibility block: " +
                   std::string(tokenTypeName(peek().type)));

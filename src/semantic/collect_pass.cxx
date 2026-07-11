@@ -109,6 +109,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
                 m_state->symbols.push_back(std::move(info));
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
                 for (const auto& vitem : ptr->items) {
+                    const auto firstNewSymbol = m_state->symbols.size();
                     std::visit([&](const auto& vptr) {
                         using VT = std::decay_t<decltype(*vptr)>;
                         if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
@@ -123,6 +124,8 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
                             collectMake(*vptr, m_currentModule);
                         }
                     }, vitem);
+                    for (size_t i = firstNewSymbol; i < m_state->symbols.size(); ++i)
+                        m_state->symbols[i].isExported = ptr->isPublic;
                 }
             }
             // UsingBlock, CompiledBlock: skip

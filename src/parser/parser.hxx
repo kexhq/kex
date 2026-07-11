@@ -35,7 +35,8 @@ private:
 
     // Top-level
     auto parseTopLevelItem() -> ast::TopLevelItem;
-    auto parseModuleDef() -> std::unique_ptr<ast::ModuleDef>;
+    auto parseModuleDef(bool allowStandalone = false,
+                        const std::string& parentModule = "") -> std::unique_ptr<ast::ModuleDef>;
     auto parseTypeDef() -> std::unique_ptr<ast::TypeDef>;
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
@@ -122,6 +123,7 @@ private:
     std::string_view m_filename;
     int m_pos = 0;
     bool m_noDoBlocks = false;
+    std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
     bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
     std::vector<ParseDiagnostic> m_diagnostics;
 };

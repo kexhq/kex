@@ -61,6 +61,7 @@ public:
     // Script arguments (everything after the script path on the command
     // line), exposed to Kex code via Args.all/Args.get/Args.count.
     auto setArgs(std::vector<std::string> args) -> void;
+    auto setModuleRoots(std::vector<std::string> roots) -> void;
 
 private:
     // Top-level
@@ -73,7 +74,15 @@ private:
     auto execTraitDef(const ast::TraitDef& def) -> void;
     auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope = "") -> void;
+    auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
+    auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
+                            const std::string& currentModule = "") -> std::string;
+    auto resolvePendingExports() -> void;
+    auto defineImported(const std::string& bindingName, const std::string& logicalName,
+                        const std::string& sourceModule, bool explicitImport,
+                        const std::string& moduleScope, ValuePtr value,
+                        SourceLocation loc) -> void;
 
     // Expressions
     auto eval(const ast::Expr& expr) -> ValuePtr;
@@ -123,6 +132,7 @@ private:
 
     struct ModuleEntry {
         std::unordered_map<std::string, ValuePtr> exports;
+        std::unordered_set<std::string> privateNames;
         std::unordered_map<std::string, std::string> submodules;
         bool isFoul = false;
     };
@@ -140,6 +150,14 @@ private:
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
     std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
     std::vector<PendingExport> m_pendingExports;
+    std::unordered_set<std::string> m_loadingModules;
+    std::vector<std::string> m_moduleRoots{"lib", "src"};
+    std::vector<std::unique_ptr<std::string>> m_loadedModulePaths;
+    std::vector<std::unique_ptr<ast::Program>> m_loadedModulePrograms;
+    std::string m_currentModule;
+    struct ImportOrigin { std::string module; bool explicitImport = false; };
+    std::vector<std::unordered_map<std::string, ImportOrigin>> m_importScopes{{}};
+    std::unordered_map<std::string, ImportOrigin> m_moduleImportOrigins;
     // Maps a sum-type variant name (e.g. "Just", "Ok", "Fizz") to the type
     // that declared it (e.g. "Option", "Result", "FizzBuzz"). Populated in
     // execTopLevel's TypeDef handling. Lets method dispatch resolve

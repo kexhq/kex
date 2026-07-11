@@ -39,6 +39,15 @@ auto runWithArgs(const std::string& source, std::vector<std::string> args) -> Va
     return evaluator.execute(program);
 }
 
+auto runWithModuleRoots(const std::string& source, std::vector<std::string> roots) -> ValuePtr {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    Evaluator evaluator;
+    evaluator.setModuleRoots(std::move(roots));
+    return evaluator.execute(program);
+}
+
 int main() {
     describe("Interpreter — Modules", []() {
         it("imports selected module exports with using", []() {
@@ -64,6 +73,278 @@ int main() {
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("discovers and loads an unresolved module from a source root", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "http");
+            {
+                std::ofstream module(root / "http/router.kex");
+                module << "module Http.Router\n"
+                          "let twice(n) = n * 2\n";
+            }
+            auto result = runWithModuleRoots(
+                "main do\n"
+                "  using Http.Router, only: [twice]\n"
+                "  twice(21)\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("resolves a relative using from the enclosing module", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-relative-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "http");
+            {
+                std::ofstream module(root / "http/router.kex");
+                module << "module Http.Router\n"
+                          "let twice(n) = n * 2\n";
+            }
+            auto result = runWithModuleRoots(
+                "module Http do\n"
+                "  using Router, only: [twice]\n"
+                "  let answer() = twice(21)\n"
+                "end\n"
+                "main do\n"
+                "  Http.answer()\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("loads a nested module from its containing module file", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-container-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            {
+                std::ofstream module(root / "shop.kex");
+                module << "module Shop do\n"
+                          "  module Cart do\n"
+                          "    let total() = 42\n"
+                          "  end\n"
+                          "end\n";
+            }
+            auto result = runWithModuleRoots(
+                "main do\n"
+                "  using Shop.Cart, only: [total]\n"
+                "  total()\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("allows private module functions only from within their module", []() {
+            auto result = run(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "  public do\n"
+                "    let reveal() = hidden()\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  Secrets.reveal()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+
+            bool rejected = false;
+            try {
+                run(
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  Secrets.hidden()\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("rejects importing a private name explicitly", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Secrets, only: [hidden]\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("resolves a filtered forward re-export as a nested namespace", []() {
+            auto result = run(
+                "module App do\n"
+                "  export Http.Methods, as: Methods, only: [get]\n"
+                "end\n"
+                "module Http.Methods do\n"
+                "  let get() = 42\n"
+                "  let post() = 99\n"
+                "end\n"
+                "main do\n"
+                "  App.Methods.get()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("rejects exporting a module's private name", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module App do\n"
+                    "  export Secrets, only: [hidden]\n"
+                    "end\n"
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("cannot export private name `hidden`")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("rejects a module exporting itself", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module App do\n"
+                    "  export App\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("module cannot export itself")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("uses an import alias for qualified access", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  using Util, as: U\n"
+                "  U.twice(21)\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("does not leak names from a scoped using block", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module Util do\n"
+                    "  let twice(n) = n * 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Util do\n"
+                    "    twice(10)\n"
+                    "  end\n"
+                    "  twice(21)\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("Undefined function: twice")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("lets an explicit import override a wildcard import", []() {
+            auto result = run(
+                "module A do\n"
+                "  let value() = 1\n"
+                "end\n"
+                "module B do\n"
+                "  let value() = 2\n"
+                "end\n"
+                "main do\n"
+                "  using A\n"
+                "  using B, only: [value]\n"
+                "  value()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
+        });
+
+        it("rejects ambiguous wildcard imports", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module A do\n"
+                    "  let value() = 1\n"
+                    "end\n"
+                    "module B do\n"
+                    "  let value() = 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using A\n"
+                    "  using B\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("ambiguous name `value`")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("keeps imports inside a visibility block positional and scoped", []() {
+            auto inside = run(
+                "module Util do\n"
+                "  let value() = 42\n"
+                "end\n"
+                "module App do\n"
+                "  private do\n"
+                "    using Util, only: [value]\n"
+                "    let inside() = value()\n"
+                "  end\n"
+                "  let reveal() = inside()\n"
+                "end\n"
+                "main do\n"
+                "  App.reveal()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(inside->data).value, int64_t(42));
+
+            bool outsideRejected = false;
+            try {
+                run(
+                    "module Util do\n"
+                    "  let value() = 42\n"
+                    "end\n"
+                    "module App do\n"
+                    "  private do\n"
+                    "    using Util, only: [value]\n"
+                    "  end\n"
+                    "  let outside() = value()\n"
+                    "end\n"
+                    "main do\n"
+                    "  App.outside()\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                outsideRejected = std::string(error.what()).find("Undefined function: value")
+                    != std::string::npos;
+            }
+            assertTrue(outsideRejected);
         });
     });
 

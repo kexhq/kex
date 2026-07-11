@@ -96,6 +96,25 @@ int main() {
             assertEqual(mod->body.size(), size_t(1));
         });
 
+        it("keeps main outside a standalone module", []() {
+            auto program = parse(
+                "module App\n"
+                "let answer() = 42\n"
+                "main do\n"
+                "  App.answer()\n"
+                "end\n");
+            assertEqual(program.items.size(), size_t(2));
+            assertTrue(std::holds_alternative<std::unique_ptr<ast::ModuleDef>>(program.items[0]));
+            assertTrue(std::holds_alternative<std::unique_ptr<ast::MainBlock>>(program.items[1]));
+        });
+
+        it("rejects a standalone module after another statement", []() {
+            assertTrue(parseFails(
+                "let before() = 1\n"
+                "module App\n"
+                "let answer() = 42\n"));
+        });
+
         it("parses module with functions", []() {
             auto program = parse(
                 "module Math do\n"
@@ -115,6 +134,8 @@ int main() {
             );
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(1));
+            auto& nested = std::get<std::unique_ptr<ast::ModuleDef>>(mod->body[0]);
+            assertEqual(nested->name, std::string("A.B"));
         });
 
         it("parses using alias and selective imports", []() {

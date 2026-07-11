@@ -326,6 +326,11 @@ target_link_libraries(parser_test PRIVATE kex_lib)
 target_include_directories(parser_test PRIVATE tests)
 add_test(NAME parser_test COMMAND parser_test)
 
+add_executable(module_resolver_test tests/module_resolver_test.cxx)
+target_link_libraries(module_resolver_test PRIVATE kex_lib)
+target_include_directories(module_resolver_test PRIVATE tests)
+add_test(NAME module_resolver_test COMMAND module_resolver_test)
+
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)
 target_include_directories(semantic_test PRIVATE tests)

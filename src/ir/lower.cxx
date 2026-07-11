@@ -3358,4 +3358,131 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     return mod;
 }
 
+namespace {
+
+auto rewriteModuleCalls(ExprPtr& expr,
+                        const std::unordered_map<std::string, std::pair<std::string, std::string>>& targets)
+    -> void {
+    if (!expr) return;
+    std::visit([&](auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        auto visit = [&](ExprPtr& child) { rewriteModuleCalls(child, targets); };
+        if constexpr (std::is_same_v<T, Call>) {
+            if (node.module.empty()) {
+                if (auto it = targets.find(node.name); it != targets.end()) {
+                    node.module = it->second.first;
+                    node.name = it->second.second;
+                }
+            }
+            for (auto& arg : node.args) visit(arg);
+        } else if constexpr (std::is_same_v<T, Intrinsic>) {
+            for (auto& arg : node.args) visit(arg);
+        } else if constexpr (std::is_same_v<T, CallIndirect>) {
+            visit(node.callee); for (auto& arg : node.args) visit(arg);
+        } else if constexpr (std::is_same_v<T, Let>) {
+            visit(node.value); visit(node.body);
+        } else if constexpr (std::is_same_v<T, Seq>) {
+            for (auto& item : node.exprs) visit(item);
+        } else if constexpr (std::is_same_v<T, Match>) {
+            for (auto& subject : node.subjects) visit(subject);
+            for (auto& clause : node.clauses) {
+                if (clause.guard) visit(*clause.guard);
+                visit(clause.body);
+            }
+        } else if constexpr (std::is_same_v<T, Construct>) {
+            for (auto& arg : node.args) visit(arg);
+        } else if constexpr (std::is_same_v<T, MakeTuple>) {
+            for (auto& item : node.elements) visit(item);
+        } else if constexpr (std::is_same_v<T, MakeList>) {
+            for (auto& item : node.elements) visit(item);
+            if (node.rest) visit(*node.rest);
+        } else if constexpr (std::is_same_v<T, FieldGet>) {
+            visit(node.record);
+        } else if constexpr (std::is_same_v<T, Lambda>) {
+            visit(node.body);
+        } else if constexpr (std::is_same_v<T, Return>) {
+            visit(node.value);
+        } else if constexpr (std::is_same_v<T, LetRec>) {
+            visit(node.funBody); visit(node.contBody);
+        } else if constexpr (std::is_same_v<T, Receive>) {
+            for (auto& clause : node.clauses) {
+                if (clause.guard) visit(*clause.guard);
+                visit(clause.body);
+            }
+            if (node.timeout) visit(*node.timeout);
+            if (node.afterBody) visit(*node.afterBody);
+        }
+    }, expr->node);
+}
+
+} // namespace
+
+auto lowerModules(const ast::Program& prog, const std::string& fileStem,
+                  const std::unordered_set<std::string>& preludeFns,
+                  const std::string& sourcePath) -> std::vector<Module> {
+    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath);
+    flat.name = "Kex.Global";
+
+    struct Definition { std::string path; std::string sourceName; bool exported; };
+    std::unordered_map<std::string, Definition> definitions;
+    std::function<void(const ast::ModuleDef&, const std::string&)> collect;
+    collect = [&](const ast::ModuleDef& module, const std::string& parent) {
+        const auto path = parent.empty() ? module.name : parent + "." + module.name;
+        std::string prefix;
+        for (char c : path) prefix += c == '.' ? "__" : std::string(1, c);
+        auto add = [&](const ast::FunctionDef* fn, bool exported) {
+            if (fn) definitions[prefix + "__" + fn->name] = {path, fn->name, exported};
+        };
+        for (const auto& item : module.body) {
+            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) add(fn->get(), true);
+            else if (auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                if (*visibility) for (const auto& entry : (*visibility)->items)
+                    if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
+                        add(fn->get(), (*visibility)->isPublic);
+            } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*child) collect(**child, path);
+            }
+        }
+    };
+    for (const auto& item : prog.items)
+        if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item); module && *module)
+            collect(**module, "");
+
+    std::unordered_map<std::string, std::pair<std::string, std::string>> targets;
+    for (const auto& [emitted, def] : definitions)
+        targets[emitted] = {"Kex." + def.path, def.sourceName};
+
+    std::vector<Module> result;
+    std::unordered_map<std::string, size_t> moduleIndexes;
+    std::vector<FunDef> globalFunctions;
+    for (auto& fn : flat.functions) {
+        auto found = definitions.find(fn.name);
+        if (found == definitions.end()) {
+            globalFunctions.push_back(std::move(fn));
+            continue;
+        }
+        const auto& def = found->second;
+        auto [it, inserted] = moduleIndexes.emplace(def.path, result.size());
+        if (inserted) { Module module; module.name = "Kex." + def.path; result.push_back(std::move(module)); }
+        fn.name = def.sourceName;
+        fn.exported = def.exported;
+        result[it->second].functions.push_back(std::move(fn));
+    }
+    flat.functions = std::move(globalFunctions);
+
+    for (auto& module : result)
+        for (auto& fn : module.functions)
+            for (auto& clause : fn.clauses) {
+                if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
+                rewriteModuleCalls(clause.body, targets);
+            }
+    for (auto& fn : flat.functions)
+        for (auto& clause : fn.clauses) {
+            if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
+            rewriteModuleCalls(clause.body, targets);
+        }
+    result.insert(result.begin(), std::move(flat));
+    return result;
+}
+
 } // namespace kex::ir

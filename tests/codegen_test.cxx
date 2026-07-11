@@ -399,6 +399,30 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
+        it("maps each Kex module to a separate BEAM module", []() {
+            kex::Lexer lexer(
+                "module Util do\n"
+                "  let double(n) = n * 2\n"
+                "  private do\n"
+                "    let hidden() = 0\n"
+                "  end\n"
+                "end\n"
+                "main do Util.double(21) end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "module_mapping");
+            assertEqual(modules.size(), size_t{2});
+            assertEqual(modules[0].name, std::string("Kex.Global"));
+            assertEqual(modules[1].name, std::string("Kex.Util"));
+            assertEqual(modules[1].functions.size(), size_t{2});
+            assertEqual(modules[1].functions[0].name, std::string("double"));
+            assertTrue(modules[1].functions[0].exported);
+            assertEqual(modules[1].functions[1].name, std::string("hidden"));
+            assertFalse(modules[1].functions[1].exported);
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
+        });
+
         it("does not block main on nested declaration-only module items", []() {
             auto output = runIrOnBeam(
                 "module Schema do\n"

@@ -1,7 +1,9 @@
 #include "resolver.hxx"
 
+#include <cctype>
 #include <filesystem>
 #include <sstream>
+#include <utility>
 
 namespace kex::module {
 
@@ -13,20 +15,53 @@ auto Resolver::isForeignNamespace(const std::string& name) -> bool {
     return false;
 }
 
-auto Resolver::resolve(const std::string& moduleName) const -> std::optional<std::string> {
-    if (isForeignNamespace(moduleName)) return std::nullopt;
+namespace {
+
+auto sourcePath(const std::string& moduleName) -> std::filesystem::path {
     std::stringstream parts(moduleName);
-    std::vector<std::string> path;
+    std::filesystem::path path;
     std::string part;
     while (std::getline(parts, part, '.')) {
-        for (auto& c : part) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
-        path.push_back(std::move(part));
+        for (auto& c : part)
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        path /= part;
     }
+    path += ".kex";
+    return path;
+}
+
+auto candidates(const std::string& moduleName, std::string currentModule)
+    -> std::vector<std::string> {
+    std::vector<std::string> result;
+    while (!currentModule.empty()) {
+        result.push_back(currentModule + "." + moduleName);
+        const auto dot = currentModule.rfind('.');
+        if (dot == std::string::npos) break;
+        currentModule.resize(dot);
+    }
+    result.push_back(moduleName);
+    return result;
+}
+
+} // namespace
+
+auto Resolver::resolve(const std::string& moduleName,
+                       const std::string& currentModule) const -> std::optional<Resolution> {
+    if (isForeignNamespace(moduleName)) return std::nullopt;
     for (const auto& root : m_roots) {
-        std::filesystem::path candidate(root);
-        for (const auto& segment : path) candidate /= segment;
-        candidate += ".kex";
-        if (std::filesystem::is_regular_file(candidate)) return candidate.string();
+        for (const auto& candidateName : candidates(moduleName, currentModule)) {
+            auto direct = std::filesystem::path(root) / sourcePath(candidateName);
+            if (std::filesystem::is_regular_file(direct))
+                return Resolution{candidateName, direct.string()};
+
+            const auto dot = candidateName.find('.');
+            if (dot != std::string::npos) {
+                auto container = std::filesystem::path(root)
+                    / sourcePath(candidateName.substr(0, dot));
+                if (std::filesystem::is_regular_file(container))
+                    return Resolution{candidateName, container.string()};
+            }
+        }
     }
     return std::nullopt;
 }

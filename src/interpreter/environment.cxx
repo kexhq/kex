@@ -9,6 +9,10 @@ auto Environment::define(const std::string& name, ValuePtr value, bool isMutable
     m_bindings[name] = Binding{std::move(value), isMutable};
 }
 
+auto Environment::erase(const std::string& name) -> void {
+    m_bindings.erase(name);
+}
+
 auto Environment::set(const std::string& name, ValuePtr value) -> bool {
     auto it = m_bindings.find(name);
     if (it != m_bindings.end()) {

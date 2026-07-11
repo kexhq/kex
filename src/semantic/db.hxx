@@ -4,7 +4,9 @@
 #include "symbol.hxx"
 #include "types.hxx"
 #include <string>
+#include <optional>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::semantic {
@@ -37,14 +39,20 @@ class SemanticDB {
 public:
     auto updateFile(const std::string& path, std::string source) -> void;
     auto removeFile(const std::string& path) -> void;
+    auto setModuleRoots(std::vector<std::string> roots) -> void;
+    auto ensureModule(const std::string& moduleName,
+                      const std::string& currentModule = "") -> std::optional<std::string>;
 
     auto diagnosticsFor(const std::string& file) const -> const std::vector<Diagnostic>&;
     auto symbolsFor(const std::string& file) const -> const std::vector<SymbolInfo>&;
     auto exportsFor(const std::string& moduleName) const -> std::vector<SymbolInfo*>;
+    auto hasModule(const std::string& moduleName) const -> bool;
+    auto symbolInModule(const std::string& moduleName,
+                        const std::string& name) -> SymbolInfo*;
 
-    // Returns true if `name` appears as a top-level symbol in ANY indexed file.
-    // Used by ResolvePass to check prelude-sourced names without a per-call
-    // stdlib table lookup.
+    // Returns true if `name` appears as a file-level symbol in any indexed
+    // file. This is an index query, not a name-resolution rule: top-level Kex
+    // definitions remain file-local.
     auto isGloballyKnown(const std::string& name) const -> bool;
 
     // Finds the SymbolInfo for `name`, preferring symbols from `preferFile`.
@@ -72,6 +80,8 @@ private:
 
     std::unordered_map<std::string, FileState> m_files;
     std::unordered_map<std::string, std::vector<SymbolInfo*>> m_moduleExports;
+    std::vector<std::string> m_moduleRoots{"lib", "src"};
+    std::unordered_set<std::string> m_loadingModules;
 
     static const std::vector<Diagnostic> s_emptyDiagnostics;
     static const std::vector<SymbolInfo> s_emptySymbols;
