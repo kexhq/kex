@@ -99,6 +99,42 @@ int main() {
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(1));
         });
+
+        it("parses using alias and selective imports", []() {
+            auto program = parse(
+                "module App do\n"
+                "  using Http.Router, as: Router, only: [get, Request]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
+            assertTrue(usingBlock->alias.has_value());
+            assertEqual(*usingBlock->alias, std::string("Router"));
+            assertEqual(usingBlock->onlyNames.size(), size_t(2));
+            assertEqual(usingBlock->onlyNames[0], std::string("get"));
+            assertEqual(usingBlock->onlyNames[1], std::string("Request"));
+        });
+
+        it("parses using except with operators", []() {
+            auto program = parse(
+                "module App do\n"
+                "  using Math, except: [(+), (==)]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
+            assertEqual(usingBlock->exceptNames.size(), size_t(2));
+            assertEqual(usingBlock->exceptNames[0], std::string("+"));
+            assertEqual(usingBlock->exceptNames[1], std::string("=="));
+        });
+
+        it("rejects using only and except together", []() {
+            assertTrue(parseFails(
+                "module App do\n"
+                "  using Math, only: [sqrt], except: [sin]\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Parser — Types", []() {

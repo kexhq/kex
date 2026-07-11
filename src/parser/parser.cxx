@@ -220,6 +220,8 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
             mod->body.push_back(parseCompiledBlock());
         } else if (check(TokenType::Using)) {
             mod->body.push_back(parseUsingBlock());
+        } else if (check(TokenType::Export)) {
+            mod->body.push_back(parseExportDecl());
         } else if (check(TokenType::Public) || check(TokenType::Private)) {
             mod->body.push_back(parseVisibilityBlock());
         } else if (check(TokenType::Foul)) {
@@ -1580,6 +1582,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         advance(); // consume 'using'
         ast::UsingExpr usingExpr;
         usingExpr.module = parseTypeName();
+        if (match(TokenType::Comma)) {
+            parseUsingOptions(usingExpr.alias, usingExpr.onlyNames, usingExpr.exceptNames);
+        }
         if (match(TokenType::Do)) {
             skipNewlines();
             while (!check(TokenType::End) && !atEnd()) {
@@ -2620,6 +2625,9 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     expect(TokenType::Using, "Expected 'using'");
 
     block->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(block->alias, block->onlyNames, block->exceptNames);
+    }
     skipNewlines();
 
     // using Module do...end (scoped) or using Module (bare import, rest of scope)
@@ -2634,6 +2642,60 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     // Bare using — no body (applies to enclosing scope)
 
     return block;
+}
+
+auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
+    auto decl = std::make_unique<ast::ExportDecl>();
+    decl->location = currentLocation();
+    expect(TokenType::Export, "Expected 'export'");
+    decl->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
+    }
+    return decl;
+}
+
+auto Parser::parseUsingOptions(std::optional<std::string>& alias,
+                               std::vector<std::string>& onlyNames,
+                               std::vector<std::string>& exceptNames) -> void {
+    auto parseName = [&]() -> std::string {
+        if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) return advance().value;
+        if (match(TokenType::LParen)) {
+            if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
+                check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::EqEq) ||
+                check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
+                check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+                auto name = std::string(tokenTypeName(advance().type));
+                expect(TokenType::RParen, "Expected ')' after operator");
+                return name;
+            }
+            error("Expected name or operator in using option list");
+        }
+        error("Expected name in using option list");
+    };
+
+    do {
+        const auto key = expect(TokenType::LowerIdent, "Expected using option").value;
+        expect(TokenType::Colon, "Expected ':' after using option");
+        if (key == "as") {
+            if (alias) error("Duplicate 'as' using option");
+            alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'").value;
+        } else if (key == "only" || key == "except") {
+            auto& names = key == "only" ? onlyNames : exceptNames;
+            if (!names.empty()) error("Duplicate '" + key + "' using option");
+            expect(TokenType::LBracket, "Expected '[' after using option");
+            if (!check(TokenType::RBracket)) {
+                do { names.push_back(parseName()); } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RBracket, "Expected ']' after using option list");
+        } else {
+            error("Unknown using option '" + key + "'");
+        }
+    } while (match(TokenType::Comma));
+
+    if (!onlyNames.empty() && !exceptNames.empty()) {
+        error("'only' and 'except' using options are mutually exclusive");
+    }
 }
 
 auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {

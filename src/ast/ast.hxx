@@ -336,6 +336,9 @@ struct ErrorNode {
 // Brings the module's compiled-block definitions into the current scope.
 struct UsingExpr {
     TypeName module;
+    std::optional<std::string> alias;
+    std::vector<std::string> onlyNames;
+    std::vector<std::string> exceptNames;
     std::vector<ExprPtr> body; // empty for bare `using Module`
 };
 
@@ -503,7 +506,18 @@ struct CompiledBlock {
 struct UsingBlock {
     SourceLocation location;
     TypeName module;
+    std::optional<std::string> alias;
+    std::vector<std::string> onlyNames;
+    std::vector<std::string> exceptNames;
     std::vector<ExprPtr> body;
+};
+
+struct ExportDecl {
+    SourceLocation location;
+    TypeName module;
+    std::optional<std::string> alias;
+    std::vector<std::string> onlyNames;
+    std::vector<std::string> exceptNames;
 };
 
 struct MainBlock {
@@ -536,6 +550,7 @@ using ModuleItem = std::variant<
     std::unique_ptr<CompiledBlock>,
     std::unique_ptr<VisibilityBlock>,
     std::unique_ptr<UsingBlock>,
+    std::unique_ptr<ExportDecl>,
     std::unique_ptr<TypeAnnotation>
 >;
 

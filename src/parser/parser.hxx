@@ -43,6 +43,10 @@ private:
     auto parseFunctionDef(bool isFoul = false) -> std::unique_ptr<ast::FunctionDef>;
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
+    auto parseExportDecl() -> std::unique_ptr<ast::ExportDecl>;
+    auto parseUsingOptions(std::optional<std::string>& alias,
+                           std::vector<std::string>& onlyNames,
+                           std::vector<std::string>& exceptNames) -> void;
     auto parseMainBlock() -> std::unique_ptr<ast::MainBlock>;
     auto parsePragma() -> std::unique_ptr<ast::Pragma>;
     auto parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock>;
