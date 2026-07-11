@@ -595,12 +595,8 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 #endif
 }
 
-// Stdlib functions migrated to the Kex prelude so far — a UFCS call to one is
-// routed to the shared `kex_prelude` BEAM module instead of the emitter's
-// builtin ladder. Grows one method at a time as the prelude subsumes the ladder
-// (docs/prelude-intrinsic-plan.md). Each name here must also be removed from
-// the ladder in src/ir/lower.cxx so the call actually reaches the prelude
-// route.
+// Stdlib functions in the Kex prelude — UFCS calls to these route to the
+// shared `kex_prelude` BEAM module instead of the emitter's inline ladder.
 static const std::unordered_set<std::string> &migratedPreludeFns() {
   static const std::unordered_set<std::string> fns = {
       "reverse",     "sort",      "uniq",      "flatten", "take",

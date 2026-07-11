@@ -1051,14 +1051,8 @@ struct Lowering {
             && !localMethods.count(m))
             return ret(callE("kex_intrinsic_fun", "or_else", 2,
                              two(rv(), atomize_ir(lower(n.args[0]), rb))));
-        // Migrated stdlib functions route straight to the shared kex_prelude
-        // module, bypassing the builtin ladder below (so migrating a method is
-        // just adding its name to migratedPreludeFns + a prelude wrapper — no
-        // ladder surgery). Block/named-arg forms carry polymorphic dispatch, so
-        // they stay on the ladder for now.
-        // Not in a guard: a cross-module `kex_prelude:…` call is illegal inside
-        // a Core Erlang guard, so migrated methods fall through to the guard-
-        // safe ladder form there (e.g. `.count` → erlang:length).
+        // Prelude stdlib functions → kex_prelude module.
+        // Not in a guard (cross-module calls are illegal in Core Erlang guards).
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
@@ -1084,11 +1078,7 @@ struct Lowering {
                 }
             }
         }
-        // Higher-order stdlib functions take a block/function argument (so
-        // they're excluded from the plain routing above). Route them to the
-        // prelude with the block appended as the trailing argument. Only
-        // list-only HOFs (no map counterpart → no receiver-type dispatch) are
-        // migrated so far.
+        // HOF prelude functions (take a block/function argument).
         static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition", "times", "sort"};
         if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
@@ -1119,8 +1109,6 @@ struct Lowering {
         struct One { const char* method; const char* mod; const char* fn; int nargs; };
         static const One calls[] = {
             {"product","kex_intrinsic_list","list_product",0}, {"sum","lists","sum",0},
-            // `reverse` migrated to the Kex prelude (kex_prelude:reverse →
-            // Kex.Intrinsic.List.reverse). See docs/prelude-intrinsic-plan.md.
             {"sort","lists","sort",0},
             // handle.feed — the File.open block handle is the path on BEAM.
             {"feed","kex_file","feed",0},
@@ -1138,8 +1126,7 @@ struct Lowering {
             {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
             {"lowerCase","kex_intrinsic_string","lowerCase",0}, {"downcase","kex_intrinsic_string","lowerCase",0},
             {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},
-            // digit?/alpha?/space? migrated to the Kex prelude (→ Kex.Intrinsic.
-            // Char.is_*). Guard-inlined form below stays as the guard fallback.
+            // digit?/alpha?/space? — guard-inlined form below is the guard fallback.
         };
         // Char predicates in a guard must inline as guard-safe range checks
         // (a `kex_io:is_*` call is an illegal guard expression).
@@ -1196,9 +1183,7 @@ struct Lowering {
             lst->node = MakeList{one(arg0()), std::nullopt};
             return ret(callE("erlang","++",2,two(rv(), std::move(lst))));
         }
-        // in? migrated to the prelude (Kex.Intrinsic.List.member →
-        // lists:member). Guard-safe (lists:member is a guard BIF on OTP≥21),
-        // so the ladder entry stays as the guard fallback.
+        // in? guard fallback (lists:member is guard-safe on OTP≥21).
         if (m_inGuard && m == "in?" && n.args.size() == 1)
             return ret(callE("lists","member",2,two(rv(), arg0())));
         // pid.send(m) → erlang:send(Pid, {'kex_msg', M, self()}). Every Kex
@@ -1245,16 +1230,7 @@ struct Lowering {
         }
         if (m == "indexOf" && n.args.size() == 1)
             return ret(callE("kex_intrinsic_list","index_of",2,two(arg0(), rv())));
-        // NOTE: put/keys/values/entries/delete/merge/has? (map) and
-        // zip/flatten/take/drop/split (list/string) are migrated to the prelude
-        // — their ladder handlers were removed so the prelude's own (canonical)
-        // definitions aren't shadowed during prelude compilation.
         if (m == "alive?"  && n.args.empty()) return ret(callE("erlang","is_process_alive",1,one(rv())));
-        // join is migrated to the prelude (Kex.Intrinsic.List.join →
-        // lists:flatten / lists:join+flatten). Not guard-safe (lists:flatten/
-        // join aren't guard BIFs), so no guard fallback — removed outright.
-        // some?/present? migrated to the prelude (Optional.some?/present?).
-        // Not guard-safe (Match is illegal in guards), so no fallback — removed.
         if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block
             && !localMethods.count(m))
             return ret(matchBool(callE("erlang","is_map",1,one(rv())),
@@ -1262,9 +1238,6 @@ struct Lowering {
                 matchBool(callE("erlang","is_binary",1,one(rv())),
                     callE("string","length",1,one(rv())),
                     callE("erlang","length",1,one(rv())))));
-        // min/max/last migrated to the prelude (→ Kex.Intrinsic.List.min/max,
-        // list.kex pattern-match). Not guard-safe (onEmpty uses case), so no
-        // fallback — removed.
         if (m == "first" && n.args.empty() && !localMethods.count("first"))
             return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(rv())))));
         // .to(Type) numeric/string conversion (unless a user `to` method).
@@ -1446,8 +1419,6 @@ struct Lowering {
                 auto e = std::make_unique<Expr>(); e->node = std::move(mm);
                 return build(std::move(e));
             }
-            // partition migrated to the prelude (Kex.Intrinsic.List.partition →
-            // lists:partition). Not guard-safe, no fallback — removed.
             if (m == "count") // count matching a predicate
                 return build(callE("erlang", "length", 1,
                     one(callE("lists", "filter", 2, two(std::move(fn), rvList())))));
