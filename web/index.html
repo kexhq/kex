@@ -285,8 +285,6 @@
       return matches.map((m) => (m.length > stripLen ? m.slice(stripLen) : m));
     }
 
-    term.writeln("kex 0.1.0 — interactive REPL (wasm, in-browser)");
-    term.writeln("");
     statusEl.textContent = "loading wasm module…";
 
     // Without an explicit locateFile, the --preload-file package
@@ -300,6 +298,8 @@
       locateFile: (path) => "../build-wasm/" + path,
     });
     const session = Module.ccall("kex_repl_create", "number", [], []);
+    const banner = Module.ccall("kex_repl_banner", "string", [], []);
+    term.write(banner);
 
     evalSource = async function (src) {
       // kex_repl_eval is void-returning on purpose — see src/wasm_repl.cxx's

@@ -279,7 +279,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # history — testing only through Node wasn't sufficient here.
         -sEXPORT_ES6=1
         -sEXPORT_NAME=createKexReplModule
-        -sEXPORTED_FUNCTIONS=_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free
+        -sEXPORTED_FUNCTIONS=_kex_version,_kex_repl_banner,_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free
         -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
         # Embeds src/prelude/*.kex into MEMFS at "/prelude" so the wasm
         # REPL's SemanticDB can index the same prelude the native REPL does

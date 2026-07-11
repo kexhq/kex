@@ -1,6 +1,8 @@
 #pragma once
 
-#include <iomanip>
+#include "color.hxx"
+#include "version.hxx"
+
 #include <iostream>
 #include <string>
 #include <vector>
@@ -61,6 +63,25 @@ inline auto replCommandCompletions(const std::string &prefix)
 inline auto isReplExit(const std::string &input) -> bool {
     return input == "exit" || input == "/exit" || input == "/quit" ||
            input == "/q";
+}
+
+inline auto printReplBanner(std::ostream &out, const std::string &backend)
+    -> void {
+    out << "\n"
+        << color::apply(color::bold) << color::apply(color::yellow)
+        << "Kex Interactive" << color::apply(color::reset) << " "
+        << color::apply(color::green) << kVersion << color::apply(color::reset);
+    if (!backend.empty())
+        out << " " << color::apply(color::gray) << "(" << backend << ")"
+            << color::apply(color::reset);
+    out << " " << color::apply(color::gray) << "—"
+        << color::apply(color::reset) << " press "
+        << color::apply(color::cyan) << "Ctrl+C"
+        << color::apply(color::reset) << " to exit "
+        << color::apply(color::gray) << "(type "
+        << color::apply(color::cyan) << "/help"
+        << color::apply(color::gray) << " ENTER for commands)"
+        << color::apply(color::reset) << "\n\n";
 }
 
 } // namespace kex

@@ -12,6 +12,7 @@
 #include "common/completion.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
+#include "common/version.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "interpreter/evaluator.hxx"
@@ -58,6 +59,19 @@ struct KexReplSession {
 };
 
 extern "C" {
+
+static std::string g_banner;
+
+EMSCRIPTEN_KEEPALIVE
+const char* kex_version() { return kex::kVersion; }
+
+EMSCRIPTEN_KEEPALIVE
+const char* kex_repl_banner() {
+    std::ostringstream os;
+    kex::printReplBanner(os, "wasm");
+    g_banner = os.str();
+    return g_banner.c_str();
+}
 
 EMSCRIPTEN_KEEPALIVE
 KexReplSession* kex_repl_create() {

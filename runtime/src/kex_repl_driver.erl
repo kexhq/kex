@@ -37,6 +37,9 @@ loop() ->
 
 handle("quit") ->
     halt(0);
+handle("info " ++ Nonce) ->
+    io:format("~s", [erlang:system_info(system_version)]),
+    sentinel(Nonce, ok);
 handle(Cmd) ->
     case string:tokens(Cmd, " ") of
         ["load", Nonce, Mod, BeamFile] ->

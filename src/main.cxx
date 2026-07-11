@@ -943,7 +943,9 @@ auto printUsage(const char *progName) -> void {
          "emitter\n";
 }
 
-auto printVersion() -> void { std::cout << "kex 0.1.0\n"; }
+auto printVersion() -> void {
+  std::cout << "kex " << kex::kVersion << "\n";
+}
 
 int main(int argc, char *argv[]) {
   static struct option longOptions[] = {
@@ -1163,8 +1165,19 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    std::cout << "kex 0.1.0 — interactive REPL (BEAM)\n";
-    std::cout << "Type /help for available commands, exit to quit.\n\n";
+    {
+      std::string nonce = "info_boot";
+      std::string sentinel = "KEX_REPL_DONE " + nonce + " ";
+      vm.writeLine("info " + nonce);
+      std::string status;
+      std::string otpInfo = vm.readUntilSentinel(sentinel, status);
+      while (!otpInfo.empty() && otpInfo.back() == '\n')
+        otpInfo.pop_back();
+      if (!otpInfo.empty())
+        std::cout << kex::color::apply(kex::color::gray) << otpInfo
+                  << kex::color::apply(kex::color::reset) << "\n";
+    }
+    kex::printReplBanner(std::cout, "BEAM");
 
     // Top-level definitions, tracked by name so redefining a function
     // REPLACES its earlier clauses rather than appending duplicates (a
@@ -1460,8 +1473,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (mode == "repl") {
-    std::cout << "kex 0.1.0 — interactive REPL\n";
-    std::cout << "Type /help for available commands, exit to quit.\n\n";
+    kex::printReplBanner(std::cout, "");
 
 #ifdef HAS_READLINE
     std::string historyFile;
