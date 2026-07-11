@@ -18,6 +18,16 @@ make Optional<X> do
   let some?(@Just(_)) = true
   let some?(@None) = false
 
+  # Alias for +some?+.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Just(42).present?   # => true
+  #   None.present?       # => false
+  present? :> Bool
+  let present? = this.some?
+
   # Returns +true+ if this optional is empty.
   #
   # @return [Bool]

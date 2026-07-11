@@ -47,9 +47,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 
     # emscripten_fiber_swap (src/interpreter/fiber.cxx's wasm backend)
     # requires Asyncify at link time — confirmed empirically, matching
-    # Emscripten's own docs (see docs/fiber-process-plan.md's fiber
-    # section): fibers are built ON TOP OF Asyncify, not an alternative to
-    # it, so this cost is unavoidable for the wasm target regardless of
+    # Emscripten's own docs: fibers are built ON TOP OF Asyncify, not an
+    # alternative to it, so this cost is unavoidable for the wasm target regardless of
     # which fiber API is used.
     add_link_options(-sASYNCIFY)
     # Default ASYNCIFY_STACK_SIZE (4KB) is nowhere near enough for this
@@ -71,6 +70,8 @@ endif()
 
 add_library(kex_lib
     src/codegen/core_erlang.cxx
+    src/ir/lower.cxx
+    src/ir/emit_core.cxx
     src/lexer/token.cxx
     src/lexer/lexer.cxx
     src/parser/parser.cxx
@@ -93,7 +94,7 @@ add_library(kex_lib
     src/interpreter/stdlib/file.cxx
     src/interpreter/stdlib/list.cxx
     src/interpreter/stdlib/string.cxx
-    src/interpreter/stdlib/integer.cxx
+    src/interpreter/stdlib/number.cxx
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx
@@ -103,6 +104,13 @@ add_library(kex_lib
 )
 
 target_include_directories(kex_lib PUBLIC src)
+
+# The Kex-written stdlib (src/prelude/*.kex) is loaded at runtime by the
+# Evaluator (loadPrelude) so it shadows the native builtins. kex_lib needs the
+# path baked in — not just the `kex` executable — so the unit tests, which link
+# kex_lib directly, exercise the same prelude the CLI does.
+target_compile_definitions(kex_lib PUBLIC
+    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
 
 # GMP backs the arbitrary-precision `Integer` default (see
 # docs/type-system-plan.md's Runtime representation section). Required,
@@ -157,8 +165,8 @@ target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 
 # Boost.Context backs the native (non-Emscripten) fiber/coroutine primitive
-# used for Kex's process model (see src/interpreter/fiber.cxx and
-# docs/fiber-process-plan.md). Plain ucontext was tried first and rejected —
+# used for Kex's process model (see src/interpreter/fiber.cxx). Plain
+# ucontext was tried first and rejected —
 # on Apple Silicon macOS, swapcontext doesn't reliably save/restore FP/NEON
 # register state across a context switch, causing heap corruption. Boost's
 # fcontext backend is the well-tested primitive purpose-built for this.
@@ -204,11 +212,30 @@ endif()
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE
-    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
+    # KEX_PRELUDE_DIR is inherited (PUBLIC) from kex_lib.
     KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
 )
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
+endif()
+
+# ── Shared Kex prelude beam ──────────────────────────────────────────────
+# The stdlib is written in Kex (src/prelude/*.kex) and compiled once into a
+# shared kex_prelude.beam, placed alongside the runtime beams so BEAM runs put
+# it on the -pa path and lazy-load it on first use. Built by the freshly-built
+# kex binary (Kex → Core Erlang → beam), so it depends on `kex` and the runtime
+# intrinsic beams it calls (kex_intrinsic_*).
+if(KEX_HAS_RUNTIME_BEAMS)
+    set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
+    file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
+    add_custom_command(
+        OUTPUT ${KEX_PRELUDE_BEAM}
+        COMMAND $<TARGET_FILE:kex> --build-prelude ${KEX_RUNTIME_BEAM_DIR}
+        DEPENDS kex ${KEX_PRELUDE_SRC} ${KEX_RUNTIME_BEAMS}
+        COMMENT "Prebuilding Kex prelude (kex_prelude.beam)"
+        VERBATIM
+    )
+    add_custom_target(kex_prelude_beam ALL DEPENDS ${KEX_PRELUDE_BEAM})
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # NODERAWFS maps every fs call straight through to Node's real host
@@ -249,8 +276,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # neither `module` nor `exports` exist there. Confirmed the hard
         # way via an actual headless-browser run of web/index.html, not
         # just the Node-based smoke tests used earlier in this file's
-        # history — see docs/fiber-process-plan.md's "JS REPL bindings"
-        # section for why testing only through Node wasn't sufficient here.
+        # history — testing only through Node wasn't sufficient here.
         -sEXPORT_ES6=1
         -sEXPORT_NAME=createKexReplModule
         -sEXPORTED_FUNCTIONS=_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free

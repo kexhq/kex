@@ -192,6 +192,30 @@ auto Evaluator::registerListBuiltins() -> void {
         return acc;
     });
 
+    // foldLeft — the intrinsic backing for Enumerable.reduce (Kex.Intrinsic.List.
+    // foldLeft). Same left fold as `reduce` above (acc-first reducer), exposed
+    // under the primitive name so the prelude's reduce is a thin intrinsic
+    // wrapper on both backends.
+    reg("foldLeft", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3) return Value::none();
+        auto elems = getElements(args[0]);
+        auto* fn = std::get_if<FunctionValue>(&args[2]->data);
+        if (!fn || !fn->native) return args[1];
+        auto acc = args[1];
+        for (const auto& elem : elems) acc = fn->native({acc, elem});
+        return acc;
+    });
+
+    // Kex.Intrinsic.Range.items — the range's elements as a real list.
+    // Backs the prelude's Range `items` (src/prelude/range.kex).
+    reg("items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::list(rangeToList(*range));
+        if (std::holds_alternative<ListValue>(args[0]->data)) return args[0];
+        return Value::list({});
+    });
+
     reg("each", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -242,6 +266,8 @@ auto Evaluator::registerListBuiltins() -> void {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements[0]);
         }
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::just(Value::integer(range->start));
         return Value::none();
     });
 
@@ -292,6 +318,8 @@ auto Evaluator::registerListBuiltins() -> void {
             if (list->elements.empty()) return Value::none();
             return Value::just(list->elements.back());
         }
+        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
+            return Value::just(Value::integer(range->end));
         return Value::none();
     });
 
@@ -317,6 +345,42 @@ auto Evaluator::registerListBuiltins() -> void {
             if (fn->native({elem})->isTrue()) c++;
         }
         return Value::integer(c);
+    });
+
+    // Kex.Intrinsic.List.length — the low-level length intrinsic backing
+    // the prelude's `count` wrapper. Works on lists, strings, and maps.
+    reg("length", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto* list = std::get_if<ListValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(list->elements.size()));
+        if (auto* str = std::get_if<StringValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(str->value.size()));
+        if (auto* map = std::get_if<MapValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(map->entries.size()));
+        return Value::integer(0);
+    });
+
+    // Kex.Intrinsic.List.member(elem, container) — element membership check.
+    // Backs the prelude's `contains?` and `in?` wrappers.
+    reg("member", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto& elem = args[0];
+        auto& container = args[1];
+        if (auto* list = std::get_if<ListValue>(&container->data)) {
+            for (const auto& e : list->elements)
+                if (valuesEqual(e, elem)) return Value::boolean(true);
+        }
+        if (auto* range = std::get_if<RangeValue>(&container->data)) {
+            auto elems = rangeToList(*range);
+            for (const auto& e : elems)
+                if (valuesEqual(e, elem)) return Value::boolean(true);
+        }
+        if (auto* str = std::get_if<StringValue>(&container->data)) {
+            for (unsigned char c : str->value)
+                if (valuesEqual(Value::character(static_cast<char>(c)), elem))
+                    return Value::boolean(true);
+        }
+        return Value::boolean(false);
     });
 
     reg("take", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -532,6 +596,32 @@ auto Evaluator::registerListBuiltins() -> void {
         for (size_t i = 1; i < elems.size(); i++)
             if (compareVia(elems[i], result) == "Greater") result = elems[i];
         return Value::just(result);
+    });
+
+    // minBy/maxBy — the intrinsic backing for the prelude's `min { |x| key }`
+    // and `max { |x| key }` (Kex.Intrinsic.List.minBy/maxBy): the element
+    // whose key is smallest/largest, Just-wrapped, or None for [].
+    auto extremeBy = [getElements, compareVia](std::vector<ValuePtr>& args,
+                                               const char* wins) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto elems = getElements(args[0]);
+        if (elems.empty()) return Value::none();
+        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+        if (!fn || !fn->native) return Value::none();
+        auto keyOf = fn->native;
+        auto result = elems[0];
+        auto bestKey = keyOf({result});
+        for (size_t i = 1; i < elems.size(); i++) {
+            auto k = keyOf({elems[i]});
+            if (compareVia(k, bestKey) == wins) { result = elems[i]; bestKey = k; }
+        }
+        return Value::just(result);
+    };
+    reg("minBy", [extremeBy](std::vector<ValuePtr> args) -> ValuePtr {
+        return extremeBy(args, "Less");
+    });
+    reg("maxBy", [extremeBy](std::vector<ValuePtr> args) -> ValuePtr {
+        return extremeBy(args, "Greater");
     });
 
     auto numericSum = [](const std::vector<ValuePtr>& elems) -> ValuePtr {

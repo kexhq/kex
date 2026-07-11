@@ -7,6 +7,7 @@ make String do
   #   "hello".count   # => 5
   #   "".count        # => 0
   count :> Integer
+  let count = Kex.Intrinsic.List.length(this)
 
   # Returns +true+ if the string contains no characters.
   #
@@ -16,6 +17,7 @@ make String do
   #   "".empty?       # => true
   #   "hi".empty?     # => false
   empty? :> Bool
+  let empty? = Kex.Intrinsic.List.length(this) == 0
 
   # Returns the character at position +i+ (0-based), or +None+ if out of range.
   #
@@ -26,6 +28,16 @@ make String do
   #   "hello".at(1)   # => Just('e')
   #   "hello".at(9)   # => None
   at :> Integer -> Char?
+  let at(i) = Kex.Intrinsic.List.at(this, i)
+
+  # Returns a list of the individual characters in the string.
+  #
+  # @return [[Char]]
+  #
+  # @example
+  #   "hi".chars   # => ['h', 'i']
+  chars :> [Char]
+  let chars = Kex.Intrinsic.String.chars(this)
 
   # Splits on every occurrence of +sep+. With no argument, splits into
   # individual characters.
@@ -37,7 +49,9 @@ make String do
   #   "a,b,c".split(",")   # => ["a", "b", "c"]
   #   "hi".split           # => ["h", "i"]
   split :> String -> [String]
+  let split(sep) = Kex.Intrinsic.String.split(this, sep)
   split :> [String]
+  let split = Kex.Intrinsic.String.split(this)
 
   # Removes leading and trailing whitespace.
   #
@@ -46,6 +60,7 @@ make String do
   # @example
   #   "  hello  ".trim   # => "hello"
   trim :> String
+  let trim = Kex.Intrinsic.String.trim(this)
 
   # Returns the string with all characters converted to upper case.
   #
@@ -54,6 +69,7 @@ make String do
   # @example
   #   "hello".upperCase   # => "HELLO"
   upperCase :> String
+  let upperCase = Kex.Intrinsic.String.upperCase(this)
 
   # Returns the string with all characters converted to lower case.
   #
@@ -62,6 +78,7 @@ make String do
   # @example
   #   "HELLO".lowerCase   # => "hello"
   lowerCase :> String
+  let lowerCase = Kex.Intrinsic.String.lowerCase(this)
 
   # Returns the string with its characters in reverse order.
   #
@@ -70,6 +87,7 @@ make String do
   # @example
   #   "hello".reverse   # => "olleh"
   reverse :> String
+  let reverse = Kex.Intrinsic.List.reverse(this)
 
   # Returns +true+ if +sub+ appears anywhere within the string.
   #
@@ -80,6 +98,7 @@ make String do
   #   "hello world".contains?("world")   # => true
   #   "hello world".contains?("xyz")     # => false
   contains? :> String -> Bool
+  let contains?(sub) = Kex.Intrinsic.String.contains?(this, sub)
 
   # Returns +true+ if the string begins with +prefix+.
   #
@@ -90,6 +109,7 @@ make String do
   #   "hello".startsWith?("hel")   # => true
   #   "hello".startsWith?("llo")   # => false
   startsWith? :> String -> Bool
+  let startsWith?(prefix) = Kex.Intrinsic.String.startsWith?(this, prefix)
 
   # Returns +true+ if the string ends with +suffix+.
   #
@@ -100,6 +120,7 @@ make String do
   #   "hello".endsWith?("llo")   # => true
   #   "hello".endsWith?("hel")   # => false
   endsWith? :> String -> Bool
+  let endsWith?(suffix) = Kex.Intrinsic.String.endsWith?(this, suffix)
 
   # Converts to another type. The most common target is +Integer+ or +Float+.
   # Returns +None+ when conversion is not possible.
@@ -123,8 +144,11 @@ make Char do
   #   '3'.digit?   # => true
   #   'a'.digit?   # => false
   digit? :> Bool
+  let digit? = Kex.Intrinsic.Char.is_digit(this)
   alpha? :> Bool
+  let alpha? = Kex.Intrinsic.Char.is_alpha(this)
   space? :> Bool
+  let space? = Kex.Intrinsic.Char.is_space(this)
 
   # Returns +true+ if the character falls within the given range (inclusive).
   #
@@ -135,4 +159,5 @@ make Char do
   #   'b'.in?('a'..'z')   # => true
   #   'B'.in?('a'..'z')   # => false
   in? :> Range<Char> -> Bool
+  let in?(range) = Kex.Intrinsic.List.member(this, range)
 end

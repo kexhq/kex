@@ -1,0 +1,44 @@
+# Truthyable — types that can be checked for boolean truthiness (Crystal semantics).
+# Only false, None, () (Unit), and NaN are falsy; everything else is truthy.
+
+trait Truthyable do
+  truthy? :> Bool
+  let falsy? = !this.truthy?
+end
+
+make Bool, implement: Truthyable do
+  truthy? :> Bool
+  let truthy? = this
+end
+
+make Integer, implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@_) = true
+end
+
+make Float, implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@NaN) = false
+  let truthy?(@_) = true
+end
+
+make String, implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@_) = true
+end
+
+make Optional<X>, implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@None) = false
+  let truthy?(@Just(_)) = true
+end
+
+make [X], implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@_) = true
+end
+
+make Map<K,V>, implement: Truthyable do
+  truthy? :> Bool
+  let truthy?(@_) = true
+end

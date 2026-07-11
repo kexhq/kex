@@ -9,8 +9,8 @@
 // confirmed empirically (heap corruption from garbage freed as a pointer
 // whose bytes were exactly the bit pattern of 1.0f) before switching to
 // this. Boost.Context's fcontext backend is the well-tested primitive
-// purpose-built for this; see docs/fiber-process-plan.md's fiber section
-// for the fuller writeup of why plain ucontext was rejected.
+// purpose-built for this (the comment above covers why plain ucontext
+// was rejected).
 #include <boost/context/fiber.hpp>
 #endif
 

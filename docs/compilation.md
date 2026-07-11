@@ -57,12 +57,18 @@ The `compiled` block runs at compile time before type-checking:
 
 ## Compiler Implementation
 
-The compiler is written in C++20, targeting WASM output. Structure:
+The compiler is written in C++20, with a tree-walk interpreter and a Core Erlang (BEAM) codegen backend, plus an Emscripten/WASM build of the interpreter. Structure:
 
 ```
 src/
-  lexer/   — tokenizer
-  parser/  — recursive descent parser
-  ast/     — AST node types
-  main.cxx — CLI entry point
+  lexer/       — tokenizer
+  parser/      — recursive descent parser
+  ast/         — AST node types
+  semantic/    — SemanticDB, collect/resolve passes, typechecker, traits
+  interpreter/ — tree-walk interpreter, fiber/scheduler process runtime, stdlib
+  ir/          — lowering IR + IR→Core Erlang emitter
+  codegen/     — AST→Core Erlang emitter
+  common/      — shared helpers (color, completion, prelude loader)
+  prelude/     — prelude .kex sources
+  main.cxx     — CLI entry point
 ```

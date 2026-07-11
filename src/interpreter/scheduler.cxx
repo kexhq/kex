@@ -26,7 +26,7 @@ namespace {
 // MUST propagate all the way back out of the entry function uncaught —
 // swallowing it in a `catch (...)` (as both fiber entry points below
 // otherwise would) corrupts Boost.Context's internal state and crashes
-// later, unrelated fiber operations. See docs/fiber-process-plan.md.
+// later, unrelated fiber operations.
 #ifndef __EMSCRIPTEN__
 auto rethrowIfForcedUnwind() -> void {
     try {
@@ -105,8 +105,7 @@ auto Scheduler::driveUntilFinished(ProcessId target) -> ValuePtr {
             // "managing threads" in the sense this design deliberately
             // avoids (no new thread, no lock) — acceptable for native
             // script/REPL execution; a wasm/browser embed drives via
-            // step() instead (see docs/fiber-process-plan.md §2) and would
-            // never reach this branch that way.
+            // step() instead and would never reach this branch that way.
             std::this_thread::sleep_until(m_timeouts.begin()->first);
             continue;
         }
@@ -208,8 +207,7 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
         } catch (...) {
             rethrowIfForcedUnwind();
             // No OS-level monitor/DOWN signal to lean on here — catching
-            // the escaping exception IS the mechanism (see
-            // docs/fiber-process-plan.md §9). The message itself is
+            // the escaping exception IS the mechanism. The message itself is
             // intentionally generic (no exception-type introspection) —
             // callers match on the (:task_failed, _) shape via Task::await.
             resultMsg = Value::tuple({Value::atom("task_failed"), Value::string("task failed")});

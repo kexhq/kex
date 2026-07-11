@@ -29,8 +29,8 @@ help:
 	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
 	@echo "  make spec-beam    Run the spec suite through the BEAM backend (-R) and"
 	@echo "                    report how many match the tree-walker's golden output."
-	@echo "                    Informational only — never fails the build (see"
-	@echo "                    docs/fiber-process-plan.md for known backend gaps)."
+	@echo "                    Informational only — never fails the build (BEAM is a"
+	@echo "                    secondary backend, kept non-gating by design)."
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
@@ -43,8 +43,7 @@ build:
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
-# See docs/fiber-process-plan.md's "Phase 6" section and
-# third_party/gmp-wasm/README.md — requires `emsdk` active (pinned to
+# See third_party/gmp-wasm/README.md — requires `emsdk` active (pinned to
 # 5.0.7; newer versions have a real Asyncify+exceptions regression) and a
 # prebuilt third_party/gmp-wasm/{include,lib} (not checked in — rebuild
 # locally per that README, or see .github/workflows/ci.yml for how CI
@@ -103,12 +102,9 @@ spec: build
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
 # dispatches per-tag). Informational: prints a pass/fail count but always
-# exits 0, since a meaningful fraction of specs currently exercise features
-# with real, documented gaps in the BEAM codegen backend (operator
-# overloading and cross-type method-name collisions, trait default methods,
-# Streams, curried function references — see
-# docs/fiber-process-plan.md's "BEAM parity" section) rather than being
-# regressions to gate CI on.
+# exits 0. Strings are UTF-8 binaries and Chars are tagged {'Char', N}
+# tuples on BEAM, so the old charlist ambiguities ([] vs "", [Int] vs
+# String, Char vs Int) are gone — the suite matches the walker 109/109.
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \

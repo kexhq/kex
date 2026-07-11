@@ -1,0 +1,22 @@
+# Overloaded methods must dispatch by arity, so a lower-arity clause never
+# silently swallows the extra argument of a higher-arity one. Regression cover
+# for: `.sort(cmp)` ignoring its comparator (fell to sort/1), `.count(pred)`
+# returning the length (fell to count/1), and `.get(key, default)` returning
+# None (fell to the Optional get/1 instead of get-with-default).
+
+main do
+  # sort/1 (natural) vs sort/2 (comparator).
+  IO.printLine([3, 1, 2].sort)
+  IO.printLine([3, 1, 2].sort { |a, b| a > b })
+
+  # count/1 (length) vs count/2 (predicate).
+  IO.printLine([1, 2, 3, 4].count)
+  IO.printLine([1, 2, 3, 4].count { |n| n.even? })
+
+  # get/2 (Optional) vs get/3 (with default).
+  let m = { a: 1, b: 2 }
+  IO.printLine(m.get(:a))
+  IO.printLine(m.get(:z))
+  IO.printLine(m.get(:a, 0))
+  IO.printLine(m.get(:z, 99))
+end

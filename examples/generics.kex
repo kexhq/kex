@@ -7,39 +7,19 @@ type Result<A, E> = Ok(A) | Error(E)
 
 type Either<A, B> = Left(A) | Right(B)
 
-# Make on generic type
+# Option/Result methods (map, flatMap, some?, none?, ok?, error?, or) come from
+# the sealed stdlib prelude — see src/prelude/optional.kex.
+
+# User-defined extensions on generic types still work — just not redefinitions
+# of sealed methods.
 make Option<A> do
-  let map(@Nothing, _: A -> B) = Nothing
-  let map(@Just(x), f: A -> B) = Just(f(x))
-
-  let flatMap(@Nothing, _: A -> Option<B>) = Nothing
-  let flatMap(@Just(x), f: A -> Option<B>) = f(x)
-
   let unwrapOr(@Just(x), _: A) = x
   let unwrapOr(@Nothing, default: A) = default
-
-  let some?(@Just(_)) = true
-  let some?(@Nothing) = false
-
-  let none?(@Just(_)) = false
-  let none?(@Nothing) = true
 end
 
 make Result<A, E> do
-  let map(@Ok(x), f: A -> B) = Ok(f(x))
-  let map(@Error(e), _) = Error(e)
-
-  let flatMap(@Ok(x), f: A -> Result<B, E>) = f(x)
-  let flatMap(@Error(e), _) = Error(e)
-
   let mapError(@Ok(x), _) = Ok(x)
   let mapError(@Error(e), f: E -> F) = Error(f(e))
-
-  let ok?(@Ok(_)) = true
-  let ok?(@Error(_)) = false
-
-  let error?(@Ok(_)) = false
-  let error?(@Error(_)) = true
 end
 
 # Type hierarchy with generics
@@ -52,74 +32,8 @@ type Enumerable do
 end
 
 # Specialized make
-make [A] do
-  let size(@[]) = 0
-  let size(@[_ | rest]) = 1 + rest.size
+# List's size/each/reduce/flatMap/contains?/find/reject/take/drop all come from
+# the sealed stdlib (via the Enumerable trait) — no need to define them here.
 
-  let each(@[], _) = ()
-  let each(@[x | rest], f: A -> ()) do
-    f(x)
-    rest.each(f)
-  end
-
-  let reduce(@[], acc: B, _: B -> A -> B) = acc
-  let reduce(@[x | rest], acc: B, f: B -> A -> B) do
-    return rest.reduce(f(acc, x), f)
-  end
-
-  let flatMap(f: A -> [B]) -> [B] do
-    return this.reduce([]) { |acc, x| acc + f(x) }
-  end
-
-  let contains?(item: A) -> Bool do
-    return this.find { |x| x == item }.some?
-  end
-
-  let find(f: A -> Bool) -> A? do
-    match this do
-      [] -> Nothing
-      [x | rest] -> do
-        return Just(x) if f(x)
-        return rest.find(f)
-      end
-    end
-  end
-
-  let reject(f: A -> Bool) -> [A] do
-    return this.filter { |x| !f(x) }
-  end
-
-  let take(@[], _: Int) = []
-  let take(@_, 0) = []
-  let take(@[x | rest], n: Int) = [x | rest.take(n - 1)]
-
-  let drop(@[], _: Int) = []
-  let drop(@xs, 0) = xs
-  let drop(@[_ | rest], n: Int) = rest.drop(n - 1)
-end
-
-# Map with type parameters
-make Map<K, V> do
-  let get(key: K) -> V? = BuiltIn.Map.get(this, key)
-  let put(key: K, value: V) -> Map<K, V> = BuiltIn.Map.put(this, key, value)
-  let delete(key: K) -> Map<K, V> = BuiltIn.Map.delete(this, key)
-  let has?(key: K) -> Bool = BuiltIn.Map.has(this, key)
-  let keys -> [K] = BuiltIn.Map.keys(this)
-  let values -> [V] = BuiltIn.Map.values(this)
-  let size -> Int = BuiltIn.Map.size(this)
-
-  let merge(other: Map<K, V>) -> Map<K, V> do
-    return other.reduce(this) { |acc, k, v| acc.put(k, v) }
-  end
-
-  let map(f: K -> V -> W) -> Map<K, W> do
-    return this.reduce({}) { |acc, k, v| acc.put(k, f(k, v)) }
-  end
-
-  let filter(f: K -> V -> Bool) -> Map<K, V> do
-    return this.reduce({}) do |acc, k, v|
-      return acc.put(k, v) if f(k, v)
-      return acc
-    end
-  end
-end
+# Map's get/put/delete/has?/keys/values/size/merge/map/filter all come from the
+# sealed stdlib — no need to define them here either.

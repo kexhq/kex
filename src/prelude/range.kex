@@ -1,0 +1,10 @@
+# Range — a range computes everything from its two bounds; `items`
+# materializes the elements into a real list when one is needed.
+make Range do
+  # The range's elements as a list.
+  #
+  # @example
+  #   (1..3).items      # => [1, 2, 3]
+  #   ('a'..'c').items  # => ['a', 'b', 'c']
+  let items = Kex.Intrinsic.Range.items(this)
+end

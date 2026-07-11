@@ -1,0 +1,15 @@
+# kex: run-beam
+main do
+  (0..8).each do |n|
+    assert(n.truthy?, "should be truthy")
+  end
+
+  assert(0.truthy?, "0 should be truthy")
+  assert(1.0.truthy?, "1.0 should be truthy")
+  assert(0.0.truthy?, "0.0 should be truthy")
+
+  assert(None.falsy?, "None should be falsy")
+  assert(false.falsy?, "false should be falsy")
+
+  IO.printLine("All integers and non-NaN floats are truthy, as expected.")
+end

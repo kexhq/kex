@@ -1,7 +1,12 @@
 # Maps are immutable key-value stores. Mutation methods (suffixed +!+)
 # return a new map and rebind the receiver variable — they do not modify
 # in place. Keys are compared by structural equality.
-make Map<K, V> do
+make Map<K, V>, implement: Enumerable do
+  # Enumerable primitive: fold over (key, value) pairs in canonical (sorted)
+  # order. map/filter/each come from the Enumerable trait; their two-arg blocks
+  # auto-splat each pair.
+  let reduce(acc, g) = this.entries.reduce(acc, g)
+
   # Returns the value for +key+ wrapped in +Just+, or +None+ if absent.
   # When a +default+ is supplied, returns the raw unwrapped value instead.
   #
@@ -10,7 +15,9 @@ make Map<K, V> do
   #   m.get(:name)         # => Just("Alice")
   #   m.get(:missing, 0)   # => 0
   get :> K -> V?
+  let get(key) = Kex.Intrinsic.Map.get(this, key)
   get :> (K, V) -> V
+  let get(key, default) = Kex.Intrinsic.Map.getWithDefault(this, key, default)
 
   # Returns a new map with +key+ mapped to +value+.
   # Use +put!+ to rebind the receiver variable.
@@ -19,6 +26,7 @@ make Map<K, V> do
   #   m = {}
   #   m.put!(:x, 1)   # => { x: 1 }
   put :> (K, V) -> Map<K, V>
+  let put(k, v) = Kex.Intrinsic.Map.put(this, k, v)
 
   # Returns a new map without +key+. No-op if the key is absent.
   # Use +delete!+ to rebind the receiver variable.
@@ -26,18 +34,21 @@ make Map<K, V> do
   # @example
   #   { a: 1, b: 2 }.delete(:a)   # => { b: 2 }
   delete :> K -> Map<K, V>
+  let delete(key) = Kex.Intrinsic.Map.delete(this, key)
 
   # Returns +true+ if +key+ exists in the map.
   #
   # @example
   #   { a: 1 }.has?(:a)   # => true
   has? :> K -> Bool
+  let has?(key) = Kex.Intrinsic.Map.has?(this, key)
 
   # Returns +true+ if the map has no entries.
   #
   # @example
   #   {}.empty?   # => true
   empty? :> Bool
+  let empty? = Kex.Intrinsic.Map.count(this) == 0
 
   # Returns the number of key-value pairs.
   # When given a predicate, counts only matching entries.
@@ -46,6 +57,7 @@ make Map<K, V> do
   #   { a: 1, b: 2 }.count                        # => 2
   #   { a: 1, b: 2 }.count { |k, v| v > 1 }       # => 1
   count :> Integer
+  let count = Kex.Intrinsic.Map.count(this)
   count :> ((K, V) -> Bool) -> Integer
 
   # Returns all keys as a list, in insertion order.
@@ -53,18 +65,21 @@ make Map<K, V> do
   # @example
   #   { a: 1, b: 2 }.keys   # => [:a, :b]
   keys :> [K]
+  let keys = Kex.Intrinsic.Map.keys(this)
 
   # Returns all values as a list, in insertion order.
   #
   # @example
   #   { a: 1, b: 2 }.values   # => [1, 2]
   values :> [V]
+  let values = Kex.Intrinsic.Map.values(this)
 
   # Returns all key-value pairs as a list of tuples, in insertion order.
   #
   # @example
   #   { a: 1, b: 2 }.entries   # => [(:a, 1), (:b, 2)]
   entries :> [(K, V)]
+  let entries = Kex.Intrinsic.Map.entries(this)
 
   # Calls +f+ with each key-value pair for its side effects.
   #
@@ -83,24 +98,41 @@ make Map<K, V> do
   # @example
   #   { a: 1, b: 2 }.mapValues { |v| v * 10 }   # => { a: 10, b: 20 }
   mapValues :> (V -> W) -> Map<K, W>
+  let mapValues(f) do
+    let pairs = this.entries.map { |k, v| (k, f(v)) }
+    return Kex.Intrinsic.Map.fromEntries(pairs)
+  end
 
   # Returns a new map with all keys transformed by +f+.
   #
   # @example
   #   { a: 1, b: 2 }.mapKeys { |k| k.upperCase }   # => { A: 1, B: 2 }
   mapKeys :> (K -> J) -> Map<J, V>
+  let mapKeys(f) do
+    let pairs = this.entries.map { |k, v| (f(k), v) }
+    return Kex.Intrinsic.Map.fromEntries(pairs)
+  end
 
   # Returns a new map keeping only entries for which +pred+ returns +true+.
   #
   # @example
   #   { a: 1, b: 2, c: 3 }.filter { |k, v| v > 1 }   # => { b: 2, c: 3 }
+  # Map overrides the map-returning HOFs (Enumerable's default returns a list).
   filter :> ((K, V) -> Bool) -> Map<K, V>
+  let filter(pred) do
+    let kept = this.entries.filter { |pair| Kex.Intrinsic.Fun.applyItem(pred, pair) }
+    return Kex.Intrinsic.Map.fromEntries(kept)
+  end
 
   # Returns a new map with all entries for which +pred+ returns +true+ removed.
   #
   # @example
   #   { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }   # => { a: 1 }
   reject :> ((K, V) -> Bool) -> Map<K, V>
+  let reject(pred) do
+    let kept = this.entries.reject { |pair| Kex.Intrinsic.Fun.applyItem(pred, pair) }
+    return Kex.Intrinsic.Map.fromEntries(kept)
+  end
 
   # Returns a new map combining +self+ and +other+.
   # On key conflict, +other+'s value wins.
@@ -108,6 +140,7 @@ make Map<K, V> do
   # @example
   #   { a: 1, b: 2 }.merge({ b: 99, c: 3 })   # => { a: 1, b: 99, c: 3 }
   merge :> Map<K, V> -> Map<K, V>
+  let merge(other) = Kex.Intrinsic.Map.merge(this, other)
 
   # Returns +true+ if at least one entry satisfies +pred+.
   #
@@ -127,4 +160,9 @@ make Map<K, V> do
   # @example
   #   { a: 1, b: 2 }.find { |k, v| v > 1 }   # => Just((:b, 2))
   find :> ((K, V) -> Bool) -> (K, V)?
+end
+
+make Map<K,V>, implement: Blankable do
+  blank? :> Bool
+  let blank? = this.entries.empty?
 end

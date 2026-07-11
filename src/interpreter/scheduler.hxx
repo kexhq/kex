@@ -36,9 +36,9 @@ struct Process {
     // runToCompletion() back on the caller's own stack once the process
     // finishes, preserving normal error reporting (Evaluator::execute()'s
     // caller, e.g. main.cxx, still sees the real exception). Processes
-    // created by spawn() deliberately do NOT do this — see
-    // docs/fiber-process-plan.md §8: an uncaught error in a spawned
-    // process just ends that process, nothing propagates anywhere.
+    // created by spawn() deliberately do NOT do this: an uncaught error
+    // in a spawned process just ends that process, nothing propagates
+    // anywhere.
     std::exception_ptr error;
     std::vector<ProcessId> links;
     // This process's own root scope (a child of whatever environment was
@@ -75,11 +75,10 @@ struct Process {
     bool wokeByTimeout = false;
 };
 
-// Cooperative, single-OS-thread scheduler over Fiber-backed processes. See
-// docs/fiber-process-plan.md for the full design rationale — in short: no
-// OS threads, no locks, exactly one fiber's code ever executing at a time,
-// concurrency (not parallelism) only. BEAM remains the answer for anything
-// needing real multicore parallelism.
+// Cooperative, single-OS-thread scheduler over Fiber-backed processes — in
+// short: no OS threads, no locks, exactly one fiber's code ever executing at
+// a time, concurrency (not parallelism) only. BEAM remains the answer for
+// anything needing real multicore parallelism.
 class Scheduler {
 public:
     explicit Scheduler(Evaluator& evaluator);
@@ -92,7 +91,7 @@ public:
     // the next REPL line) can still `send` to them. This is how
     // Evaluator::execute() runs the top-level program — there is no
     // "outside of a process" execution mode, matching BEAM, where even the
-    // shell is just a process (see docs/fiber-process-plan.md §2).
+    // shell is just a process.
     auto runToCompletion(std::function<ValuePtr()> body, std::shared_ptr<Environment> env) -> ValuePtr;
 
     // Registers a new process running `body` (evaluated via Evaluator's
@@ -128,9 +127,8 @@ public:
     // `trap_exit`, no exit-reason signal delivery. A process only ever
     // dies by finishing its own body; nothing external ever force-
     // terminates it, so there's no signal-propagation machinery to build
-    // here. See docs/fiber-process-plan.md §8 for the full rationale (real
-    // BEAM remains the answer for anything that needs actual supervision
-    // robustness).
+    // here — real BEAM remains the answer for anything that needs actual
+    // supervision robustness.
     auto link(ProcessId other) -> void;
     auto unlink(ProcessId other) -> void;
 
@@ -142,7 +140,7 @@ public:
     // reply always goes to the real spawner even if the block itself calls
     // spawn/receive. An escaping exception sends `(:task_failed, message)`
     // instead — there's no OS-level monitor/DOWN signal to lean on, so
-    // catching here is what replaces it (see docs/fiber-process-plan.md §9).
+    // catching here is what replaces it.
     auto startTask(ValuePtr blockFn) -> ProcessId;
 
     // Blocks (same yield/timeout mechanics as blockingReceive, but scanning
@@ -167,8 +165,8 @@ public:
     // supervisor: no push notification on crash (nothing in this design
     // ever signals process death — see `link`'s doc comment), so polling
     // is the only option; only `:only_crashed` (one_for_one-equivalent) is
-    // supported — see docs/fiber-process-plan.md §9 for why `:all`/
-    // `:crashed_and_newer` are cut from scope entirely, not deferred.
+    // supported — `:all`/`:crashed_and_newer` are cut from scope entirely,
+    // not deferred.
     // `childBlocks` are the already-evaluated zero-arg FunctionValues from
     // each `worker { ... }` spec.
     auto startSupervisor(std::vector<ValuePtr> childBlocks) -> ProcessId;
@@ -177,7 +175,7 @@ public:
     // compute-bound process that never calls `receive` still yields
     // periodically — BEAM's reduction-counting preemption, placed at the
     // same kind of safe point (function-call boundaries), not on every
-    // single eval() node. See docs/fiber-process-plan.md §5.
+    // single eval() node.
     auto tickReduction() -> void;
 
 private:

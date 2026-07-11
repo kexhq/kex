@@ -1,9 +1,10 @@
 #include "../evaluator.hxx"
+#include <cmath>
 #include <stdexcept>
 
 namespace kex::interpreter {
 
-auto Evaluator::registerIntegerBuiltins() -> void {
+auto Evaluator::registerNumberBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};
@@ -27,6 +28,14 @@ auto Evaluator::registerIntegerBuiltins() -> void {
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
             return Value::floating(f->value < 0 ? -f->value : f->value);
         return args[0];
+    });
+
+    reg("sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::floating(0.0);
+        if (auto* i = std::get_if<IntValue>(&args[0]->data)) return Value::floating(std::sqrt(static_cast<double>(i->value)));
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::floating(std::sqrt(f->value));
+        return Value::floating(0.0);
     });
 
     // n.times { |i| ... } — runs the block n times, passing the index 0..n-1.

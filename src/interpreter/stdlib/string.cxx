@@ -33,6 +33,18 @@ auto Evaluator::registerStringBuiltins() -> void {
         return i < str->value.size() ? Value::character(str->value[i]) : Value::none();
     });
 
+    // Kex.Intrinsic.String.chars — the string's characters as a [Char].
+    // Backs the prelude's String `chars` (src/prelude/string.kex).
+    reg("chars", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        if (!str) return Value::list({});
+        std::vector<ValuePtr> elems;
+        elems.reserve(str->value.size());
+        for (char c : str->value) elems.push_back(Value::character(c));
+        return Value::list(std::move(elems));
+    });
+
     // c.digit? -> Bool — true for '0'..'9'. UFCS-callable on a Char.
     // Throws for a non-Char receiver rather than silently answering
     // `false` — "hello".digit? or 5.digit? are caller bugs, not "no".

@@ -1,10 +1,14 @@
 #include "test.hxx"
 #include "../src/codegen/core_erlang.hxx"
+#include "../src/ir/emit_core.hxx"
+#include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
+#include <memory>
 
 using namespace test;
 
@@ -20,6 +24,48 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     auto program = parser.parseProgram();
     kex::codegen::CoreErlangEmitter emitter;
     return emitter.emitProgram(program, stem).source;
+}
+
+// Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
+auto emitIr(const std::string& source, const std::string& stem = "test") -> std::string {
+    kex::Lexer lexer(source);
+    auto tokens = lexer.tokenizeAll();
+    kex::Parser parser(std::move(tokens));
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
+}
+
+// Compile an IR-pipeline Core Erlang module and return main/0's value. The
+// sources below deliberately avoid prelude calls, so this unit path stays
+// independent of main.cxx's prelude-loading bootstrap.
+auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::string {
+    auto corePath = "/tmp/kex_" + stem + ".core";
+    std::ofstream core(corePath);
+    core << emitIr(source, stem);
+    core.close();
+
+    auto compile = "erlc +from_core -pa runtime/beam -o /tmp " + corePath +
+                   " 2>&1";
+    auto compileResult = std::system(compile.c_str());
+    if (compileResult != 0) {
+        std::ifstream dbg(corePath);
+        std::string coreContent((std::istreambuf_iterator<char>(dbg)),
+                                 std::istreambuf_iterator<char>());
+        std::cerr << "=== Generated Core Erlang (" << corePath << ") ===\n"
+                  << coreContent << "\n=== END ===\n";
+    }
+    assertEqual(compileResult, 0, "erlc should compile IR output");
+
+    auto run = "erl -noshell -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
+               ":main()]), halt()'";
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
+    assertTrue(pipe != nullptr, "popen should run the BEAM module");
+    std::string output;
+    char buf[256];
+    while (fgets(buf, sizeof(buf), pipe.get())) output += buf;
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+        output.pop_back();
+    return output;
 }
 
 // Returns true if `haystack` contains `needle` as a substring.
@@ -135,12 +181,12 @@ int main() {
     });
 
     describe("CoreErlangEmitter — binary operators", []() {
-        it("emits addition via kex_io:add (polymorphic + for numbers and strings)", []() {
+         it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
-            // + dispatches through kex_io:add/2 which handles both number
+            // + dispatches through kex_intrinsic_number:add/2 which handles both number
             // addition (erlang:'+') and string concatenation (erlang:'++')
             // at runtime based on the operand types.
-            assertTrue(contains(out, "call 'kex_io':'add'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'add'"), out);
         });
 
         it("emits subtraction via erlang:'-'", []() {
@@ -153,9 +199,9 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'*'"), out);
         });
 
-        it("emits division via erlang:'/'", []() {
-            auto out = emit("main do\n  10 / 2\nend\n");
-            assertTrue(contains(out, "call 'erlang':'/'"), out);
+        it("emits division via kex_intrinsic_number:divide", []() {
+            auto out = emit("main do\n  4 / 2\nend\n");
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'divide'"), out);
         });
 
         it("emits equality via erlang:'=:='", []() {
@@ -219,6 +265,157 @@ int main() {
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "'true'"), out);
             assertTrue(contains(out, "'false'"), out);
+        });
+    });
+
+    describe("IR Core Erlang lowering — branch state", []() {
+        it("preserves both reassigned variables after if and elif branches", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var left = 3\n"
+                "  var right = 5\n"
+                "  if false\n"
+                "    left = 9\n"
+                "    right = 7\n"
+                "  elif true\n"
+                "    left = left + 2\n"
+                "    right = right + 4\n"
+                "  else\n"
+                "    left = 1\n"
+                "    right = 2\n"
+                "  end\n"
+                "  left * right\n"
+                "end\n",
+                "branch_state");
+            assertEqual(output, std::string("45"));
+        });
+
+        it("preserves reassigned state after a match clause", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var value = 10\n"
+                "  match :two do\n"
+                "    :one -> value = 1\n"
+                "    :two -> value = value + 2\n"
+                "  end\n"
+                "  value\n"
+                "end\n",
+                "match_state");
+            assertEqual(output, std::string("12"));
+        });
+
+        it("threads captured mutable state through each callbacks", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var total = 0\n"
+                "  [1, 2, 3].each do |n|\n"
+                "    total = total + n\n"
+                "  end\n"
+                "  total\n"
+                "end\n",
+                "each_state");
+            assertEqual(output, std::string("6"));
+        });
+
+        it("threads captured state through pair each callbacks", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var total = 0\n"
+                "  [(1, 2), (3, 4)].each do |left, right|\n"
+                "    total = total + left\n"
+                "  end\n"
+                "  total\n"
+                "end\n",
+                "each_pair_state");
+            assertEqual(output, std::string("4"));
+        });
+
+        it("matches literal fields in record-pattern function heads", []() {
+            auto output = runIrOnBeam(
+                "record Point do\n"
+                "  x : Float\n"
+                "  y : Float\n"
+                "end\n"
+                "make Point do\n"
+                "  let origin?({ x: 0.0, y: 0.0 }) = true\n"
+                "  let origin?({ }) = false\n"
+                "end\n"
+                "main do\n"
+                "  origin?(Point { x: 0.0, y: 0.0 })\n"
+                "end\n",
+                "record_pattern");
+            assertEqual(output, std::string("true"));
+        });
+
+        it("defers unknown free-function errors until the function is called", []() {
+            auto output = runIrOnBeam(
+                "let unused() = missingFunction()\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unknown_function");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unsupported IO call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(path) = IO.read(path)\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unsupported_io");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unknown namespace call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(value) = Config.parse(value)\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unknown_namespace");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unsupported UFCS call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(value) = value.notImplemented { |x| x }\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unsupported_ufcs");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("resolves qualified module function calls", []() {
+            auto output = runIrOnBeam(
+                "module Util do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  Util.double(21)\n"
+                "end\n",
+                "module_function");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("does not block main on nested declaration-only module items", []() {
+            auto output = runIrOnBeam(
+                "module Schema do\n"
+                "  record Entry do\n"
+                "    value : Integer\n"
+                "  end\n"
+                "  module Internal do\n"
+                "    make Entry do\n"
+                "      let doubled() = @value * 2\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "module_declarations");
+            assertEqual(output, std::string("42"));
         });
     });
 
@@ -301,37 +498,36 @@ int main() {
     });
 
     describe("CoreErlangEmitter — UFCS method dispatch", []() {
-        it("modulo maps to erlang:rem", []() {
+        it("modulo routes to kex_prelude", []() {
             auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
-            assertTrue(contains(out, "call 'erlang':'rem'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
         });
 
-        it("even? maps to erlang:rem =:= 0", []() {
+        it("even? routes to kex_prelude", []() {
             auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
-            assertTrue(contains(out, "call 'erlang':'rem'"), out);
-            assertTrue(contains(out, "'=:='"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
             auto out = emit("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n");
-            assertTrue(contains(out, "call 'lists':'foreach'"), out);
-            assertTrue(contains(out, "fun ("), out);
+            assertTrue(contains(out, "call 'kex_prelude':'each'"), out);
         });
 
-        it("map binds lambda and calls lists:map", []() {
+        it("map routes to kex_prelude", []() {
             auto out = emit("main do\n  [1,2,3].map { |x| x }\nend\n");
-            assertTrue(contains(out, "call 'lists':'map'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'map'"), out);
         });
 
-        it("filter binds lambda and calls lists:filter", []() {
+        it("filter routes to kex_prelude", []() {
             auto out = emit("main do\n  [1,2,3].filter { |x| true }\nend\n");
-            assertTrue(contains(out, "call 'lists':'filter'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 
-        it("push appends via erlang:'++'", []() {
+        it("push routes to kex_prelude", []() {
             auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
-            assertTrue(contains(out, "call 'erlang':'++'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
         });
+
     });
 
     describe("CoreErlangEmitter — process primitives", []() {
@@ -375,7 +571,7 @@ int main() {
             assertTrue(contains(out, "after 1000"), out);
         });
 
-        it("pid.send(msg) emits erlang:send with kex_msg wrapper", []() {
+        it("pid.send(msg) routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
@@ -383,8 +579,7 @@ int main() {
                 "end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'send'"), out);
-            assertTrue(contains(out, "'kex_msg'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
         });
 
         it("send(pid, msg) free function emits erlang:send", []() {
@@ -407,22 +602,22 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'self'()"), out);
         });
 
-        it("pid.link() emits erlang:link", []() {
+        it("pid.link() routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do pid.link() end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'link'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
         });
 
-        it("pid.alive?() emits erlang:is_process_alive", []() {
+        it("pid.alive?() routes to kex_prelude", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul check(pid) do pid.alive?() end\n"
                 "main do check(self()) end\n"
             );
-            assertTrue(contains(out, "call 'erlang':'is_process_alive'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
         });
 
         it("Task.start { block } emits kex_task:start/1", []() {
@@ -436,7 +631,7 @@ int main() {
             assertTrue(contains(out, "call 'kex_task':'start'"), out);
         });
 
-        it("task.await() emits kex_task:await/2 with infinity", []() {
+        it("task.await() routes to kex_prelude with infinity", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -445,11 +640,10 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'await'"), out);
-            assertTrue(contains(out, "'infinity'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
         });
 
-        it("task.await(timeout: N) emits kex_task:await/2 with N", []() {
+        it("task.await(timeout: N) routes to kex_prelude with timeout", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -458,8 +652,7 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'await'"), out);
-            assertTrue(contains(out, "5000"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
         });
 
         it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {

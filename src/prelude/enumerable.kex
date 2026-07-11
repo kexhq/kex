@@ -1,0 +1,64 @@
+# Enumerable — the shared higher-order collection interface.
+#
+# A type is Enumerable by providing `reduce` (the universal left fold over its
+# items). Every other HOF derives from it, so List, Map, Range, and Stream all
+# get map/filter/each/… from one place. Blocks are applied via
+# Kex.Intrinsic.Fun.applyItem, which auto-splats a pair item into a two-arg
+# block — so `list.map { |x| … }` and `map.map { |k, v| … }` both work.
+
+trait Enumerable do
+  reduce :> (A, (A, T) -> A) -> A
+
+  # Transforms each item by applying +f+, collecting the results into a list.
+  let map(f) do
+    let acc = this.reduce([]) do |a, item|
+      [Kex.Intrinsic.Fun.applyItem(f, item) | a]
+    end
+    return acc.reverse
+  end
+
+  # Keeps the items for which +pred+ holds.
+  let filter(pred) do
+    let acc = this.reduce([]) do |a, item|
+      Kex.Intrinsic.Fun.applyItem(pred, item) then [item | a] else a
+    end
+    return acc.reverse
+  end
+
+  # Applies +f+ to each item for its side effects. Returns unit.
+  let each(f) do
+    this.reduce(0) do |_, item|
+      Kex.Intrinsic.Fun.applyItem(f, item)
+      0
+    end
+    return ()
+  end
+
+  # True if every item satisfies +pred+.
+  let all?(pred) = this.reduce(true) do |acc, item|
+    acc && Kex.Intrinsic.Fun.applyItem(pred, item)
+  end
+
+  # True if at least one item satisfies +pred+.
+  let any?(pred) = this.reduce(false) do |acc, item|
+    acc || Kex.Intrinsic.Fun.applyItem(pred, item)
+  end
+
+  # The first item satisfying +pred+ wrapped in Just, or None.
+  let find(pred) = this.reduce(None) do |acc, item|
+    match acc do
+      Just(_) -> acc
+      None    -> Kex.Intrinsic.Fun.applyItem(pred, item) then Just(item) else None
+    end
+  end
+
+  # Maps each item to a list and concatenates the results.
+  let flatMap(f) = this.reduce([]) do |acc, item|
+    acc + Kex.Intrinsic.Fun.applyItem(f, item)
+  end
+
+  # Counts the items for which +pred+ holds.
+  let count(pred) = this.reduce(0) do |acc, item|
+    Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc
+  end
+end

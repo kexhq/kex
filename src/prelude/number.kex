@@ -7,6 +7,7 @@ make Integer do
   #   4.even?   # => true
   #   3.even?   # => false
   even? :> Bool
+  let even? = this.modulo(2) == 0
 
   # Returns +true+ if the integer is odd.
   #
@@ -16,6 +17,7 @@ make Integer do
   #   3.odd?   # => true
   #   4.odd?   # => false
   odd? :> Bool
+  let odd? = this.modulo(2) != 0
 
   # Returns the absolute value.
   #
@@ -25,6 +27,16 @@ make Integer do
   #   (-5).abs   # => 5
   #   5.abs      # => 5
   abs :> Integer
+  let abs = Kex.Intrinsic.Number.abs(this)
+
+  # Returns the square root as a Float.
+  #
+  # @return [Float]
+  #
+  # @example
+  #   16.sqrt   # => 4.0
+  sqrt :> Float
+  let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
   # Returns +self+ modulo +n+. The result has the same sign as +n+,
   # consistent with mathematical modulo (not C remainder).
@@ -36,6 +48,7 @@ make Integer do
   #   7.modulo(3)     # => 1
   #   (-7).modulo(3)  # => 2
   modulo :> Integer -> Integer
+  let modulo(n) = Kex.Intrinsic.Integer.modulo(this, n)
 
   # Returns +true+ if the integer falls within +range+ (inclusive).
   #
@@ -46,6 +59,7 @@ make Integer do
   #   5.in?(1..10)    # => true
   #   11.in?(1..10)   # => false
   in? :> Range<Integer> -> Bool
+  let in?(range) = Kex.Intrinsic.List.member(this, range)
 
   # Calls +f+ exactly +self+ times, passing the current index (0-based).
   #
@@ -55,6 +69,7 @@ make Integer do
   # @example
   #   3.times { |i| IO.printLine(i) }   # prints 0, 1, 2
   times :> (Integer -> Unit) -> Unit
+  let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
   # Converts to another numeric type.
   #
@@ -64,6 +79,26 @@ make Integer do
   # @example
   #   42.to(Float)   # => 42.0
   to :> Y -> Unknown
+
+  # Returns the greatest integer ≤ self. No-op on integers.
+  floor :> Integer
+  let floor = Kex.Intrinsic.Number.floor(this)
+
+  # Returns the smallest integer ≥ self. No-op on integers.
+  ceil :> Integer
+  let ceil = Kex.Intrinsic.Number.ceil(this)
+
+  # Rounds to the nearest integer. No-op on integers.
+  round :> Integer
+  let round = Kex.Intrinsic.Number.round(this)
+
+  # Converts the integer to a +Float+.
+  toFloat :> Float
+  let toFloat = Kex.Intrinsic.Number.toFloat(this)
+
+  # Converts the integer to its string representation.
+  toString :> String
+  let toString = Kex.Intrinsic.Number.toString(this)
 end
 
 make Float do
@@ -74,6 +109,16 @@ make Float do
   # @example
   #   (-3.14).abs   # => 3.14
   abs :> Float
+  let abs = Kex.Intrinsic.Number.abs(this)
+
+  # Returns the square root.
+  #
+  # @return [Float]
+  #
+  # @example
+  #   25.0.sqrt   # => 5.0
+  sqrt :> Float
+  let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
   # Returns +true+ if the float falls within +range+ (inclusive).
   #
@@ -83,6 +128,7 @@ make Float do
   # @example
   #   1.5.in?(1.0..2.0)   # => true
   in? :> Range<Float> -> Bool
+  let in?(range) = Kex.Intrinsic.List.member(this, range)
 
   # Converts to another numeric type.
   #
@@ -92,6 +138,26 @@ make Float do
   # @example
   #   3.9.to(Integer)   # => 3
   to :> Y -> Unknown
+
+  # Returns the greatest integer ≤ self.
+  floor :> Integer
+  let floor = Kex.Intrinsic.Number.floor(this)
+
+  # Returns the smallest integer ≥ self.
+  ceil :> Integer
+  let ceil = Kex.Intrinsic.Number.ceil(this)
+
+  # Rounds to the nearest integer.
+  round :> Integer
+  let round = Kex.Intrinsic.Number.round(this)
+
+  # Truncates toward zero, converting to an +Integer+.
+  toInteger :> Integer
+  let toInteger = Kex.Intrinsic.Number.toInteger(this)
+
+  # Converts the float to its string representation.
+  toString :> String
+  let toString = Kex.Intrinsic.Number.toString(this)
 end
 
 # Integer.parse(s) : String -> Result<Integer, String>

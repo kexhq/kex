@@ -28,11 +28,10 @@ jobs:
         run: make spec
 
       # Informational only (make spec-beam always exits 0 — see its own
-      # comment in the Makefile) — a meaningful fraction of specs exercise
-      # real, documented gaps in the BEAM codegen backend (operator
-      # overloading and cross-type method-name collisions, trait default
-      # methods, Streams, curried function references) rather than
-      # regressions, so this reports a pass/fail count without gating CI.
+      # comment in the Makefile). BEAM is a secondary backend behind the
+      # tree-walk interpreter, so this reports the match count without
+      # gating CI — currently at full parity (109/109), but kept non-gating
+      # so BEAM-backend work doesn't block unrelated PRs.
       - name: Spec suite via BEAM (informational)
         run: make spec-beam
 

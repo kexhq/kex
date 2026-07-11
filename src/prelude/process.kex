@@ -1,0 +1,42 @@
+# Process and concurrency primitives — backed by Kex.Intrinsic.Process and
+# the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
+# spawned process with an awaitable result.
+
+make Pid do
+  # Sends +msg+ to the process, wrapped in the standard Kex message format.
+  send :> X -> Unit
+  let send(msg) = Kex.Intrinsic.Process.send(this, msg)
+
+  # Links the calling process to this one (bidirectional exit propagation).
+  link :> Unit
+  let link = Kex.Intrinsic.Process.link(this)
+
+  # Removes the link between the calling process and this one.
+  unlink :> Unit
+  let unlink = Kex.Intrinsic.Process.unlink(this)
+
+  # Starts monitoring this process. Returns a reference for +demonitor+.
+  monitor :> Unit
+  let monitor = Kex.Intrinsic.Process.monitor(this)
+
+  # Returns +true+ if the process is currently alive.
+  alive? :> Bool
+  let alive? = Kex.Intrinsic.Process.alive?(this)
+end
+
+make Task do
+  # Waits for the task's result indefinitely.
+  await :> X
+  let await = Kex.Intrinsic.Process.await(this, :infinity)
+
+  # Waits for the task's result, with a timeout in milliseconds.
+  # Returns +None+ on timeout.
+  await :> Integer -> X
+  let await(ms) = Kex.Intrinsic.Process.await(this, ms)
+end
+
+make Reference do
+  # Stops monitoring the process that produced this reference.
+  demonitor :> Unit
+  let demonitor = Kex.Intrinsic.Process.demonitor(this)
+end

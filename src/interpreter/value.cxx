@@ -1,5 +1,6 @@
 #include "value.hxx"
 #include "../common/color.hxx"
+#include <algorithm>
 #include <optional>
 
 namespace kex::interpreter {
@@ -23,8 +24,8 @@ auto Value::bigInteger(mpz_class v) -> ValuePtr {
 auto asInteger(const ValuePtr& v) -> std::optional<mpz_class> {
     // Deliberately NOT `mpz_class(static_cast<long>(i->value))`: `long` is
     // 64-bit on every native LP64 target this project has ever built on
-    // (macOS/Linux), but wasm32 (see docs/fiber-process-plan.md's phase 6
-    // notes) has a 32-bit `long` — that cast would silently truncate any
+    // (macOS/Linux), but wasm32 has a 32-bit `long` — that cast would
+    // silently truncate any
     // IntValue outside 32-bit range before it ever reached GMP. Round-
     // tripping through decimal string construction is slower but portable
     // regardless of the platform's `long` width, and Integer arithmetic
@@ -183,10 +184,14 @@ auto Value::toString() const -> std::string {
             return result + ")";
         }
         else if constexpr (std::is_same_v<T, MapValue>) {
+            auto entries = v.entries;
+            std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                return a.first->toString() < b.first->toString();
+            });
             std::string result = "{ ";
-            for (size_t i = 0; i < v.entries.size(); i++) {
+            for (size_t i = 0; i < entries.size(); i++) {
                 if (i > 0) result += ", ";
-                result += v.entries[i].first->toString() + ": " + v.entries[i].second->toString();
+                result += entries[i].first->toString() + ": " + entries[i].second->toString();
             }
             return result + " }";
         }
@@ -219,11 +224,17 @@ auto Value::toString() const -> std::string {
                 }
                 return result + ")";
             }
+            // Sorted field order: deterministic, and reproducible by the
+            // BEAM backend (the unordered_map's hash order isn't).
+            std::vector<std::string> keys;
+            keys.reserve(v.fields.size());
+            for (const auto& [key, _] : v.fields) keys.push_back(key);
+            std::sort(keys.begin(), keys.end());
             std::string result = v.typeName + " { ";
             bool first = true;
-            for (const auto& [key, val] : v.fields) {
+            for (const auto& key : keys) {
                 if (!first) result += ", ";
-                result += key + ": " + val->toString();
+                result += key + ": " + v.fields.at(key)->toString();
                 first = false;
             }
             return result + " }";

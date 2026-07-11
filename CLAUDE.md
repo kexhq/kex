@@ -35,6 +35,12 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/lexer/` — tokenizer (token.hxx/cxx, lexer.hxx/cxx)
   - `src/parser/` — recursive descent parser (parser.hxx/cxx)
   - `src/ast/` — AST node types (ast.hxx)
+  - `src/semantic/` — semantic analysis: SemanticDB, collect/resolve passes, typechecker, traits
+  - `src/interpreter/` — tree-walk interpreter, fiber/scheduler process runtime, stdlib (stdlib/)
+  - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
+  - `src/codegen/` — AST→Core Erlang emitter (core_erlang.hxx/cxx)
+  - `src/common/` — shared helpers (color, completion, prelude_loader)
+  - `src/prelude/` — prelude `.kex` sources
   - `src/main.cxx` — CLI entry point
 
 ## Code Style
@@ -48,4 +54,4 @@ make test-wasm    # + runs the interpreter test suite via Node
 
 ## Current Status
 
-Lexer, parser, AST, semantic analysis, and tree-walk interpreter are complete. Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented. Next: codegen (BEAM/WASM) or process runtime.
+Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. The BEAM backend matches the interpreter at full spec parity (109/109). Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented. Next: the `.kexo` binary IR/distribution format, a full module system, and packaging.

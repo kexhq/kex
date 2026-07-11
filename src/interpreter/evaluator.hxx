@@ -43,14 +43,19 @@ class Evaluator {
     // Scheduler needs direct access to eval/evalBody/matchPattern/
     // pushEnv/popEnv/m_env to run process bodies and implement
     // blockingReceive's clause matching — see scheduler.cxx. Tightly
-    // coupled by design (docs/fiber-process-plan.md), not worth a larger
-    // public surface just to avoid friendship.
+    // coupled by design, not worth a larger public surface just to
+    // avoid friendship.
     friend class Scheduler;
 
 public:
     Evaluator();
 
     auto execute(const ast::Program& program) -> ValuePtr;
+    // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
+    // execute its declarations on this Evaluator, so the Kex-written stdlib
+    // shadows the native builtins. No-op if KEX_PRELUDE_DIR is unset or the
+    // directory can't be read. Idempotent per Evaluator instance.
+    auto loadPrelude() -> void;
     auto setReplMode(bool enabled) -> void;
     auto output() const -> const std::string&;
     // Script arguments (everything after the script path on the command
@@ -104,7 +109,7 @@ private:
     auto registerMockBuiltins() -> void;
     auto registerListBuiltins() -> void;
     auto registerStringBuiltins() -> void;
-    auto registerIntegerBuiltins() -> void;
+    auto registerNumberBuiltins() -> void;
     auto registerStreamBuiltins() -> void;
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;
@@ -118,6 +123,7 @@ private:
 
     std::shared_ptr<Environment> m_env;
     std::shared_ptr<Environment> m_globalEnv;
+    std::shared_ptr<Environment> m_intrinsicEnv;
     // Owns every process (including "process 0", the top-level program
     // itself — see Scheduler::runToCompletion) for this Evaluator's whole
     // lifetime, so processes spawned on one execute() call (e.g. one REPL
@@ -137,6 +143,10 @@ private:
     std::unordered_map<std::string, const ast::RecordDef*> m_recordDefs;
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
+    bool m_preludeLoaded = false;
+    // Method names defined by the prelude (sealed stdlib). Users may add new
+    // methods to builtin types but not redefine these.
+    std::unordered_set<std::string> m_sealedMethods;
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
 

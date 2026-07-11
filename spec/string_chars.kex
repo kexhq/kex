@@ -1,0 +1,11 @@
+# String.chars — the string's characters as a [Char].
+# A [Char] renders as a String, so the round trip is invisible in output;
+# element access shows the pieces are real Chars.
+
+main do
+  IO.printLine("hi".chars)
+  IO.printLine("".chars.count)
+  IO.printLine("abc".chars.count)
+  IO.printLine("abc".chars.first)
+  IO.printLine("abc".chars.reverse)
+end

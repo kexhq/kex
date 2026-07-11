@@ -1,6 +1,28 @@
 #include "../evaluator.hxx"
+#include <algorithm>
 
 namespace kex::interpreter {
+
+namespace {
+// Maps are unordered; keys/values/entries expose a deterministic CANONICAL
+// order (sorted by key) so the tree-walker and both BEAM backends agree — plain
+// Erlang map order is non-deterministic across VM invocations. Matches Erlang's
+// lists:sort term order for the common homogeneous key types.
+auto mapKeyLess(const ValuePtr& a, const ValuePtr& b) -> bool {
+    if (auto* ai = std::get_if<IntValue>(&a->data)) if (auto* bi = std::get_if<IntValue>(&b->data)) return ai->value < bi->value;
+    if (auto* af = std::get_if<FloatValue>(&a->data)) if (auto* bf = std::get_if<FloatValue>(&b->data)) return af->value < bf->value;
+    if (auto* as = std::get_if<StringValue>(&a->data)) if (auto* bs = std::get_if<StringValue>(&b->data)) return as->value < bs->value;
+    if (auto* ac = std::get_if<CharValue>(&a->data)) if (auto* bc = std::get_if<CharValue>(&b->data)) return ac->value < bc->value;
+    if (auto* aa = std::get_if<AtomValue>(&a->data)) if (auto* ba = std::get_if<AtomValue>(&b->data)) return aa->name < ba->name;
+    return false; // unknown/mixed key types — keep stable order
+}
+auto sortedEntries(const MapValue& m) -> std::vector<std::pair<ValuePtr, ValuePtr>> {
+    auto es = m.entries;
+    std::stable_sort(es.begin(), es.end(),
+        [](const auto& x, const auto& y) { return mapKeyLess(x.first, y.first); });
+    return es;
+}
+} // namespace
 
 // Map operations (UFCS: first arg is the map). Maps are immutable —
 // put/delete return a new MapValue rather than mutating in place (the
@@ -52,12 +74,23 @@ auto Evaluator::registerMapBuiltins() -> void {
         }
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return args.size() >= 3 ? args[2] : Value::none();
-        for (const auto& [k, v] : map->entries) {
+        for (const auto& [k, v] : sortedEntries(*map)) {
             if (valuesEqual(k, args[1])) {
                 return args.size() >= 3 ? v : Value::just(v);
             }
         }
         return args.size() >= 3 ? args[2] : Value::none();
+    });
+
+    // Kex.Intrinsic.Map.getWithDefault(map, key, default) → raw value
+    // or the default. Backs the prelude's `get(key, default)` wrapper.
+    reg("getWithDefault", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3) return args.size() >= 2 ? args[1] : Value::none();
+        auto* map = std::get_if<MapValue>(&args[0]->data);
+        if (!map) return args[2];
+        for (const auto& [k, v] : sortedEntries(*map))
+            if (valuesEqual(k, args[1])) return v;
+        return args[2];
     });
 
     // put(map, key, value) -> Map — replaces the value if key already
@@ -66,7 +99,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         if (args.size() < 3) return args.empty() ? Value::list({}) : args[0];
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return args[0];
-        auto entries = map->entries;
+        auto entries = sortedEntries(*map);
         for (auto& [k, v] : entries) {
             if (valuesEqual(k, args[1])) {
                 v = args[2];
@@ -87,7 +120,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return args[0];
         std::vector<std::pair<ValuePtr, ValuePtr>> entries;
-        for (const auto& [k, v] : map->entries) {
+        for (const auto& [k, v] : sortedEntries(*map)) {
             if (!valuesEqual(k, args[1])) entries.push_back({k, v});
         }
         auto result = std::make_shared<Value>();
@@ -99,7 +132,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         if (args.size() < 2) return Value::boolean(false);
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return Value::boolean(false);
-        for (const auto& [k, v] : map->entries) {
+        for (const auto& [k, v] : sortedEntries(*map)) {
             if (valuesEqual(k, args[1])) return Value::boolean(true);
         }
         return Value::boolean(false);
@@ -110,7 +143,7 @@ auto Evaluator::registerMapBuiltins() -> void {
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return Value::list({});
         std::vector<ValuePtr> result;
-        for (const auto& [k, v] : map->entries) result.push_back(k);
+        for (const auto& [k, v] : sortedEntries(*map)) result.push_back(k);
         return Value::list(std::move(result));
     });
 
@@ -119,95 +152,16 @@ auto Evaluator::registerMapBuiltins() -> void {
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return Value::list({});
         std::vector<ValuePtr> result;
-        for (const auto& [k, v] : map->entries) result.push_back(v);
+        for (const auto& [k, v] : sortedEntries(*map)) result.push_back(v);
         return Value::list(std::move(result));
     });
 
-    // empty?(map) -> Bool
-    wrap("empty?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(true);
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        return Value::boolean(map && map->entries.empty());
-    });
-
-    // each(map, fn(k, v)) -> Unit
-    wrap("each", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::unit();
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return Value::unit();
-        for (const auto& [k, v] : map->entries) fn->native({k, v});
-        return Value::unit();
-    });
-
-    // map(map, fn(k, v) -> R) -> [R]  — transforms entries into a list
-    wrap("map", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::list({});
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return Value::list({});
-        std::vector<ValuePtr> result;
-        for (const auto& [k, v] : map->entries) result.push_back(fn->native({k, v}));
-        return Value::list(std::move(result));
-    });
-
-    // mapValues(map, fn(v) -> V2) -> Map<K, V2>
-    reg("mapValues", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return args[0];
-        std::vector<std::pair<ValuePtr, ValuePtr>> entries;
-        for (const auto& [k, v] : map->entries) entries.push_back({k, fn->native({v})});
-        auto result = std::make_shared<Value>();
-        result->data = MapValue{std::move(entries)};
-        return result;
-    });
-
-    // mapKeys(map, fn(k) -> K2) -> Map<K2, V>
-    reg("mapKeys", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return args[0];
-        std::vector<std::pair<ValuePtr, ValuePtr>> entries;
-        for (const auto& [k, v] : map->entries) entries.push_back({fn->native({k}), v});
-        auto result = std::make_shared<Value>();
-        result->data = MapValue{std::move(entries)};
-        return result;
-    });
-
-    // filter(map, fn(k, v) -> Bool) -> Map<K, V>
-    wrap("filter", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return args[0];
-        std::vector<std::pair<ValuePtr, ValuePtr>> entries;
-        for (const auto& [k, v] : map->entries) {
-            auto r = fn->native({k, v});
-            if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) entries.push_back({k, v});
-        }
-        auto result = std::make_shared<Value>();
-        result->data = MapValue{std::move(entries)};
-        return result;
-    });
-
-    // reject(map, fn(k, v) -> Bool) -> Map<K, V>
-    wrap("reject", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return args[0];
-        std::vector<std::pair<ValuePtr, ValuePtr>> entries;
-        for (const auto& [k, v] : map->entries) {
-            auto r = fn->native({k, v});
-            if (auto* b = std::get_if<BoolValue>(&r->data); !b || !b->value) entries.push_back({k, v});
-        }
-        auto result = std::make_shared<Value>();
-        result->data = MapValue{std::move(entries)};
-        return result;
-    });
+    // Map HOFs (empty?, each, map, filter, reject, any?, all?, find,
+    // mapValues, mapKeys) are provided by the Kex prelude (Enumerable trait
+    // + Map overrides in src/prelude/map.kex) built on entries/fromEntries/
+    // reduce — no native versions needed. `count` stays below: the prelude
+    // calls it as Kex.Intrinsic.Map.count, and the intrinsic env snapshot
+    // resolves by bare function name, so the map-aware chain must exist.
 
     // merge(map, other) -> Map<K, V>  — other's values win on conflict
     reg("merge", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -229,32 +183,6 @@ auto Evaluator::registerMapBuiltins() -> void {
         return result;
     });
 
-    // any?(map, fn(k, v) -> Bool) -> Bool
-    wrap("any?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return Value::boolean(false);
-        for (const auto& [k, v] : map->entries) {
-            auto r = fn->native({k, v});
-            if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) return Value::boolean(true);
-        }
-        return Value::boolean(false);
-    });
-
-    // all?(map, fn(k, v) -> Bool) -> Bool
-    wrap("all?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(true);
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return Value::boolean(true);
-        for (const auto& [k, v] : map->entries) {
-            auto r = fn->native({k, v});
-            if (auto* b = std::get_if<BoolValue>(&r->data); !b || !b->value) return Value::boolean(false);
-        }
-        return Value::boolean(true);
-    });
-
     // count(map, fn(k, v) -> Bool) -> Int
     wrap("count", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) {
@@ -266,28 +194,11 @@ auto Evaluator::registerMapBuiltins() -> void {
         auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
         if (!map || !fn || !fn->native) return Value::integer(0);
         int64_t n = 0;
-        for (const auto& [k, v] : map->entries) {
+        for (const auto& [k, v] : sortedEntries(*map)) {
             auto r = fn->native({k, v});
             if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) ++n;
         }
         return Value::integer(n);
-    });
-
-    // find(map, fn(k, v) -> Bool) -> (K, V)?
-    wrap("find", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::none();
-        auto* map = std::get_if<MapValue>(&args[0]->data);
-        auto* fn  = std::get_if<FunctionValue>(&args[1]->data);
-        if (!map || !fn || !fn->native) return Value::none();
-        for (const auto& [k, v] : map->entries) {
-            auto r = fn->native({k, v});
-            if (auto* b = std::get_if<BoolValue>(&r->data); b && b->value) {
-                auto tuple = std::make_shared<Value>();
-                tuple->data = TupleValue{{k, v}};
-                return Value::just(tuple);
-            }
-        }
-        return Value::none();
     });
 
     // entries(map) -> [(K, V)]
@@ -296,12 +207,35 @@ auto Evaluator::registerMapBuiltins() -> void {
         auto* map = std::get_if<MapValue>(&args[0]->data);
         if (!map) return Value::list({});
         std::vector<ValuePtr> result;
-        for (const auto& [k, v] : map->entries) {
+        for (const auto& [k, v] : sortedEntries(*map)) {
             auto tuple = std::make_shared<Value>();
             tuple->data = TupleValue{{k, v}};
             result.push_back(tuple);
         }
         return Value::list(std::move(result));
+    });
+
+    reg("fromEntries", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) {
+            auto r = std::make_shared<Value>();
+            r->data = MapValue{};
+            return r;
+        }
+        auto* list = std::get_if<ListValue>(&args[0]->data);
+        if (!list) {
+            auto r = std::make_shared<Value>();
+            r->data = MapValue{};
+            return r;
+        }
+        std::vector<std::pair<ValuePtr, ValuePtr>> entries;
+        for (const auto& elem : list->elements) {
+            auto* tv = std::get_if<TupleValue>(&elem->data);
+            if (tv && tv->elements.size() >= 2)
+                entries.push_back({tv->elements[0], tv->elements[1]});
+        }
+        auto result = std::make_shared<Value>();
+        result->data = MapValue{std::move(entries)};
+        return result;
     });
 }
 

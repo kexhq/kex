@@ -28,8 +28,12 @@ private:
     // Top-level emitters
     auto emitFunctionDef(const ast::FunctionDef& fn) -> std::string;
     // Emit a group of same-name FunctionDef nodes as a single function.
+    // emitNameOverride, when non-empty, is used as the emitted Erlang
+    // function's name instead of group[0]->name — see emitProgram's
+    // cross-type method-name-collision mangling (`add` -> `add__Vec2`).
     auto emitFunctionGroup(const std::vector<const ast::FunctionDef*>& group,
-                           bool hasImplicitThis = false) -> std::string;
+                           bool hasImplicitThis = false,
+                           const std::string& emitNameOverride = "") -> std::string;
     auto emitMainBlock(const ast::MainBlock& main) -> std::string;
 
     // Expression emitter — returns a Core Erlang expression string.
@@ -104,9 +108,13 @@ private:
     auto makeTailCall(const std::string& loopFn, int loopArity,
                       const std::vector<std::string>& mutParams) -> std::string;
 
-    // Collect all AssignExpr names in a body (not crossing lambda/function boundaries).
+    // Collect all reassigned var names in a body — plain `x = ...` and
+    // mutating `x.push!(..)` calls alike (not crossing lambda/function
+    // boundaries). collectAssignedExpr handles a single expression.
     static void collectAssigned(const std::vector<ast::ExprPtr>& body,
                                  std::unordered_set<std::string>& out);
+    static void collectAssignedExpr(const ast::ExprPtr& e,
+                                    std::unordered_set<std::string>& out);
 
     // Helpers
     auto freshVar(const std::string& hint = "V") -> std::string;
@@ -117,6 +125,46 @@ private:
     // Escape a string for Core Erlang string literal syntax.
     static auto erlString(const std::string& s) -> std::string;
 
+    // True while emitting the body of a function that contains an early
+    // `return` (see bodyHasReturn). When set, a `return X` compiles to
+    // `throw({'kex_return', X})` and the whole body is wrapped in a
+    // try/catch that turns that throw back into the function's result —
+    // the same mechanism the tree-walker's ReturnException uses, and the
+    // only way to make a `return` buried inside a match/if arm (whose
+    // value is consumed by an enclosing `let`) actually exit the function
+    // rather than fall through as that arm's value (examples/json_parser.kex).
+    bool m_returnThrows = false;
+
+    // Emit `v` as a return: a throw when m_returnThrows, else the bare value
+    // (the legacy tail-position behavior for functions with no early return).
+    auto emitReturnValue(const ast::ExprPtr& v) -> std::string;
+
+    // Does this body / expression contain an early `return` (not crossing
+    // into a nested lambda, which has its own return scope)?
+    static auto bodyHasReturn(const std::vector<ast::ExprPtr>& body) -> bool;
+    static auto exprHasReturn(const ast::ExprPtr& e) -> bool;
+
+    // Wrap a fully-emitted function body in the kex_return try/catch (only
+    // used when m_returnThrows was set for it).
+    auto wrapReturnCatch(const std::string& body) -> std::string;
+
+    // Emit `stmts[idx..]` as a let-chain ending in a value that carries the
+    // final SSA names of `mergeVars` (a bare var when there's one, else a
+    // tuple). Threads assignments/mutations into m_varSubst as it goes;
+    // the caller snapshots/restores. Used by emitBodyFrom's statement-level
+    // conditional-assignment merge, so a `var` reassigned inside an `if`
+    // branch is visible to code after the `if` (examples/json_parser.kex's
+    // parseNumber consumes a leading `-` in an `if` before its digit loop).
+    auto emitBranchResult(const std::vector<ast::ExprPtr>& stmts, int idx,
+                          const std::vector<std::string>& mergeVars) -> std::string;
+
+    // True while emitting a match-clause `when` guard. Core Erlang guards
+    // may only use guard-safe operations — no arbitrary function calls —
+    // so predicates that normally emit a `call 'kex_io':...` (digit?/
+    // alpha?/space?) must instead expand to an inline guard-safe boolean
+    // expression when this is set (see emitExpr's MethodCall handling).
+    bool m_inGuard = false;
+
     std::string m_moduleName;
     int m_varCounter = 0;
     int m_loopCounter = 0;
@@ -125,11 +173,21 @@ private:
     std::unordered_map<std::string, std::string> m_varSubst;
     // name → arity for all top-level functions defined in this module.
     std::unordered_map<std::string, int> m_topLevelFns;
+    // name → ordered parameter names (first clause) for top-level free
+    // functions, so a call with named args (`f(b: 2, a: 1)`) or a trailing
+    // do-block can reorder those args into positional slots by param name
+    // (see emitExpr's FunctionCall reordering). "" for an unnamed/pattern
+    // param — such a slot can only ever be filled positionally.
+    std::unordered_map<std::string, std::vector<std::string>> m_topLevelParams;
     // "TypeName::ConstName" → mangled function name for 0-arity static constants.
     std::unordered_map<std::string, std::string> m_staticCtors;
     // field_name → [(record_name, 1-based tuple position)]
     // Used to generate direct element() calls during field destructuring.
     std::unordered_map<std::string, std::vector<std::pair<std::string,int>>> m_fieldAccessors;
+    // record_name → its RecordDef, so RecordConstruction can emit fields in
+    // DECLARED order and fill in defaults for omitted fields (the tuple
+    // layout must match the fixed positions the field accessors assume).
+    std::unordered_map<std::string, const ast::RecordDef*> m_records;
 };
 
 } // namespace kex::codegen
