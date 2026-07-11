@@ -1,8 +1,8 @@
 # GMP, prebuilt for Emscripten (wasm32)
 
-Static build of GMP 6.3.0 targeting `wasm32-unknown-emscripten`, used only by
-the wasm build (see `docs/fiber-process-plan.md`'s phase 6 notes). The native
-build is unaffected — it keeps finding GMP via Homebrew, dynamically linked
+Static build of GMP 6.3.0 targeting `wasm32-unknown-emscripten`, used only
+by the wasm build. The native build is unaffected — it keeps finding GMP
+via Homebrew, dynamically linked
 only, per CMakeLists.txt's existing GPL/LGPL note.
 
 No prebuilt wasm GMP exists via Emscripten's port system or Homebrew, so this

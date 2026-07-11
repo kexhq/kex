@@ -12,10 +12,10 @@ Evaluator::Evaluator() {
     m_globalEnv = std::make_shared<Environment>();
     m_intrinsicEnv = std::make_shared<Environment>();
     m_env = m_globalEnv;
-    // Owns every process for this Evaluator's whole lifetime — see
-    // docs/fiber-process-plan.md §2: there is no "outside of a process"
-    // execution mode, matching BEAM, so this always exists rather than
-    // being created lazily on first spawn/receive use.
+    // Owns every process for this Evaluator's whole lifetime — there is
+    // no "outside of a process" execution mode, matching BEAM, so this
+    // always exists rather than being created lazily on first
+    // spawn/receive use.
     m_scheduler = std::make_unique<Scheduler>(*this);
     registerBuiltins();
     // Clone all builtins into m_intrinsicEnv so the Kex.Intrinsic.*
@@ -1632,9 +1632,8 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
 
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
-    // BEAM-style reduction-counted auto-yield (docs/fiber-process-plan.md
-    // §5): placed at function-call boundaries, the same kind of safe point
-    // BEAM itself uses, so a compute-bound process that never calls
+    // BEAM-style reduction-counted auto-yield: placed at function-call
+    // boundaries, the same kind of safe point BEAM itself uses, so a compute-bound process that never calls
     // `receive` still gives other processes a turn periodically.
     m_scheduler->tickReduction();
 

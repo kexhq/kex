@@ -29,8 +29,8 @@ help:
 	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
 	@echo "  make spec-beam    Run the spec suite through the BEAM backend (-R) and"
 	@echo "                    report how many match the tree-walker's golden output."
-	@echo "                    Informational only — never fails the build (see"
-	@echo "                    docs/fiber-process-plan.md for known backend gaps)."
+	@echo "                    Informational only — never fails the build (BEAM is a"
+	@echo "                    secondary backend, kept non-gating by design)."
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
@@ -43,8 +43,7 @@ build:
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
 
-# See docs/fiber-process-plan.md's "Phase 6" section and
-# third_party/gmp-wasm/README.md — requires `emsdk` active (pinned to
+# See third_party/gmp-wasm/README.md — requires `emsdk` active (pinned to
 # 5.0.7; newer versions have a real Asyncify+exceptions regression) and a
 # prebuilt third_party/gmp-wasm/{include,lib} (not checked in — rebuild
 # locally per that README, or see .github/workflows/ci.yml for how CI

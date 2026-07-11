@@ -16,6 +16,12 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#ifndef __EMSCRIPTEN__
+#include <unistd.h>
+#include <sys/wait.h>
+#include <csignal>
+#include <cerrno>
+#endif
 
 // Pure string logic, no actual readline API dependency — needed
 // unconditionally by `--complete`/`-K` (used by shell completion scripts,
@@ -56,6 +62,96 @@ static auto shellSingleQuote(const std::string& s) -> std::string {
     out += "'";
     return out;
 }
+
+#ifndef __EMSCRIPTEN__
+// Persistent-VM driver for the BEAM REPL. Keeps one `erl -noshell` process
+// alive for the whole REPL session, talking to runtime/src/kex_repl_driver.erl
+// over stdin/stdout with a nonce-delimited protocol (see that module's header
+// for the full rationale). This is what makes the BEAM REPL a real persistent
+// VM — spawned processes, registered names, and ETS tables survive across
+// inputs, and the recompiled session module is hot-loaded via
+// code:load_binary rather than re-running a cold `erl` per line.
+struct BeamVm {
+    pid_t pid = -1;
+    int inFd = -1;   // write end → child stdin
+    int outFd = -1;  // read end ← child stdout
+
+    auto start(const std::vector<std::string>& argv) -> bool {
+        signal(SIGPIPE, SIG_IGN);  // a dead erl shouldn't SIGPIPE the REPL
+        int inPipe[2], outPipe[2];
+        if (pipe(inPipe) != 0 || pipe(outPipe) != 0) return false;
+        pid = fork();
+        if (pid < 0) return false;
+        if (pid == 0) {
+            dup2(inPipe[0], STDIN_FILENO);
+            dup2(outPipe[1], STDOUT_FILENO);
+            ::close(inPipe[0]); ::close(inPipe[1]);
+            ::close(outPipe[0]); ::close(outPipe[1]);
+            std::vector<char*> args;
+            for (auto& a : argv) args.push_back(const_cast<char*>(a.c_str()));
+            args.push_back(nullptr);
+            execvp(args[0], args.data());
+            _exit(127);
+        }
+        ::close(inPipe[0]); ::close(outPipe[1]);
+        inFd = inPipe[1]; outFd = outPipe[0];
+        return true;
+    }
+
+    void writeLine(const std::string& s) {
+        if (inFd < 0) return;
+        std::string line = s + "\n";
+        const char* p = line.data();
+        size_t remaining = line.size();
+        while (remaining > 0) {
+            ssize_t n = write(inFd, p, remaining);
+            if (n <= 0) { if (errno == EINTR) continue; break; }
+            p += n; remaining -= n;
+        }
+    }
+
+    // Read child stdout line-by-line until a line beginning with
+    // `sentinelPrefix` (e.g. "KEX_REPL_DONE <nonce> "). Returns everything
+    // read before that line (the command's program output); sets `status` to
+    // the token ("ok"/"error") following the nonce on the sentinel line.
+    auto readUntilSentinel(const std::string& sentinelPrefix, std::string& status) -> std::string {
+        std::string collected, line;
+        char ch;
+        while (true) {
+            ssize_t r = read(outFd, &ch, 1);
+            if (r <= 0) { status = "eof"; return collected; }
+            if (ch == '\n') {
+                if (line.rfind(sentinelPrefix, 0) == 0) {
+                    status = line.substr(sentinelPrefix.size());
+                    return collected;
+                }
+                collected += line;
+                collected += '\n';
+                line.clear();
+            } else {
+                line += ch;
+            }
+        }
+    }
+
+    void close() {
+        if (inFd >= 0) { ::close(inFd); inFd = -1; }
+        if (outFd >= 0) { ::close(outFd); outFd = -1; }
+        if (pid > 0) { kill(pid, SIGTERM); int st; waitpid(pid, &st, 0); pid = -1; }
+    }
+};
+#else
+// Emscripten has no fork/exec/pipe, and the BEAM REPL is meaningless under
+// wasm anyway (no erl in a browser/Node context). Stub so main.cxx compiles
+// unchanged — start() fails and the beam-repl path reports unavailable.
+struct BeamVm {
+    int pid = -1;
+    auto start(const std::vector<std::string>&) -> bool { return false; }
+    void writeLine(const std::string&) {}
+    auto readUntilSentinel(const std::string&, std::string& s) -> std::string { s = "eof"; return {}; }
+    void close() {}
+};
+#endif
 
 #ifdef HAS_READLINE
 #include <readline/readline.h>
@@ -1011,6 +1107,24 @@ int main(int argc, char *argv[])
             }
         }
 
+        // Spawn ONE persistent erl VM for the whole session — driven by
+        // runtime/src/kex_repl_driver.erl over stdin/stdout. This is what
+        // makes spawned processes / registered names survive across REPL
+        // inputs and turns session recompiles into hot-loads instead of
+        // cold re-runs.
+        BeamVm vm;
+        {
+            std::vector<std::string> erlArgs = {"erl", "-noshell", "-pa", beamDir};
+            if (!rtPaDir.empty()) { erlArgs.push_back("-pa"); erlArgs.push_back(rtPaDir); }
+            erlArgs.push_back("-eval");
+            erlArgs.push_back("kex_repl_driver:loop()");
+            if (!vm.start(erlArgs)) {
+                std::cerr << "error: could not start erl VM for BEAM REPL\n";
+                std::filesystem::remove_all(beamDir);
+                return 1;
+            }
+        }
+
         std::cout << "kex 0.1.0 — interactive REPL (BEAM)\n";
         std::cout << "Type :help for available commands, exit to quit.\n\n";
 
@@ -1134,7 +1248,7 @@ int main(int argc, char *argv[])
                     auto program = parser.parseProgram();
                     // Same IR pipeline as compile/run mode; LowerError derives
                     // from std::runtime_error so the catch below reports it.
-                    auto irMod = kex::ir::lowerProgram(program, "irepl_" + std::to_string(iteration),
+                    auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
                                                        migratedPreludeFns());
                     auto result = kex::ir::emitCore(irMod);
 
@@ -1150,26 +1264,36 @@ int main(int argc, char *argv[])
                     std::filesystem::remove(corePath);
                     if (erlcRet != 0) { std::cerr << "  error: compilation failed\n"; continue; }
 
-                    // The module name needs to be a quoted Erlang atom in
-                    // the -eval text — a stem containing a literal '.'
-                    // (e.g. "json_parser.spec" → kex_json_parser.spec)
-                    // otherwise makes Erlang's OWN parser choke on the
-                    // embedded '.' as a statement terminator ("syntax
-                    // error before: '.'"), a real, reproduced bug
-                    // (spec/json_parser.spec.kex). shellSingleQuote wraps
-                    // the whole -eval text as one shell argument, so the
-                    // quotes around the atom survive into erl regardless
-                    // of where they land (see its own comment for why a
-                    // hand-placed escape at just this one spot isn't
-                    // reliable).
-                    std::string evalExpr = "'" + result.moduleName + "':main(), halt()";
-                    std::string runCmd = "erl -noshell -pa " + beamDir +
-                                         (rtPaDir.empty() ? "" : " -pa " + rtPaDir) +
-                                         " -eval " + shellSingleQuote(evalExpr) +
-                                         " < /dev/null";
-                    std::system(runCmd.c_str());
-                    std::filesystem::remove(beamDir + "/" + result.moduleName + ".beam");
-                    ++iteration;
+                    // Hot-load the freshly compiled session module into the
+                    // persistent VM, then evaluate it. The stable module
+                    // name (kex_repl_session) means each reload is a new
+                    // version superseding the previous one — code:load_binary's
+                    // native code-upgrade path, not a cold re-run of erl per
+                    // line. Two nonce-guarded round-trips keep the program's
+                    // own stdout output from colliding with the protocol
+                    // delimiter (see kex_repl_driver.erl).
+                    std::string beamPath = beamDir + "/" + result.moduleName + ".beam";
+                    std::string loadNonce = std::to_string(++iteration);
+                    vm.writeLine("load " + loadNonce + " " + result.moduleName + " " + beamPath);
+                    std::string loadStatus;
+                    vm.readUntilSentinel("KEX_REPL_DONE " + loadNonce + " ", loadStatus);
+                    if (loadStatus != "ok") {
+                        std::cerr << "  " << kex::color::apply(kex::color::red) << "error:"
+                                  << kex::color::apply(kex::color::reset)
+                                  << " failed to load session module\n";
+                        continue;
+                    }
+                    std::string evalNonce = std::to_string(++iteration);
+                    vm.writeLine("eval " + evalNonce + " " + result.moduleName);
+                    std::string evalStatus;
+                    std::string output = vm.readUntilSentinel(
+                        "KEX_REPL_DONE " + evalNonce + " ", evalStatus);
+                    if (evalStatus == "ok") {
+                        std::cout << output;  // program's IO.inspect output
+                    } else {
+                        std::cerr << "  " << kex::color::apply(kex::color::red) << "error:"
+                                  << kex::color::apply(kex::color::reset) << " " << output;
+                    }
 
                     if (isLocalLet)
                         localBinds += "  " + source + "\n";
@@ -1180,6 +1304,7 @@ int main(int argc, char *argv[])
             }
         }
 
+        vm.close();
         std::filesystem::remove_all(beamDir);
         return 0;
     }

@@ -43,8 +43,8 @@ class Evaluator {
     // Scheduler needs direct access to eval/evalBody/matchPattern/
     // pushEnv/popEnv/m_env to run process bodies and implement
     // blockingReceive's clause matching — see scheduler.cxx. Tightly
-    // coupled by design (docs/fiber-process-plan.md), not worth a larger
-    // public surface just to avoid friendship.
+    // coupled by design, not worth a larger public surface just to
+    // avoid friendship.
     friend class Scheduler;
 
 public:

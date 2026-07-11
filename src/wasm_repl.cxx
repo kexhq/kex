@@ -34,7 +34,7 @@ namespace {
 
 // Every parsed Program must outlive anything that might still reference
 // its AST — a `spawn`'d process captures raw pointers into the AST it was
-// spawned from (see docs/fiber-process-plan.md's fiber-lifetime notes) and
+// spawned from and
 // can outlive the call that spawned it (e.g. a `loop { receive ... }`
 // server, matching examples/proc_ping.kex). Kept alive for the whole
 // session, same convention main.cxx's REPL uses (`replPrograms`, `new
@@ -117,7 +117,7 @@ auto looksLikeTopLevelDef(const std::string& source) -> bool {
 // Evaluator, storing the result in the session (see kex_repl_last_result)
 // rather than returning it directly. Deliberately split this way: this
 // function's call chain runs through execute()'s Asyncify-based fiber
-// machinery (see docs/fiber-process-plan.md), and a direct return value
+// machinery, and a direct return value
 // from an Asyncify-instrumented export was not reliably reaching the JS
 // caller through ccall's async plumbing (confirmed with a hardcoded
 // static-string return — still came back as a null pointer on the JS
@@ -190,9 +190,8 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
     // `emscripten_sleep(0)` is the issue's own documented workaround: it
     // still defers one tick to the browser event loop (imperceptible at
     // 0ms) but "kicks" Asyncify's return-value/rewind plumbing back onto
-    // the right track. This is what the "still-unresolved yield-crossing
-    // Asyncify/JS-interop bug" section in docs/fiber-process-plan.md used
-    // to describe — that section has been updated now that this is fixed.
+    // the right track. This resolves the yield-crossing Asyncify/JS-interop
+    // bug that previously caused duplicated output and lost state.
     emscripten_sleep(0);
 #endif
 }

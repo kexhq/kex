@@ -1,4 +1,6 @@
 #include "emit_core.hxx"
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 
 namespace kex::ir {

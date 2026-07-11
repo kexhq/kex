@@ -47,9 +47,8 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 
     # emscripten_fiber_swap (src/interpreter/fiber.cxx's wasm backend)
     # requires Asyncify at link time — confirmed empirically, matching
-    # Emscripten's own docs (see docs/fiber-process-plan.md's fiber
-    # section): fibers are built ON TOP OF Asyncify, not an alternative to
-    # it, so this cost is unavoidable for the wasm target regardless of
+    # Emscripten's own docs: fibers are built ON TOP OF Asyncify, not an
+    # alternative to it, so this cost is unavoidable for the wasm target regardless of
     # which fiber API is used.
     add_link_options(-sASYNCIFY)
     # Default ASYNCIFY_STACK_SIZE (4KB) is nowhere near enough for this
@@ -166,8 +165,8 @@ target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 
 # Boost.Context backs the native (non-Emscripten) fiber/coroutine primitive
-# used for Kex's process model (see src/interpreter/fiber.cxx and
-# docs/fiber-process-plan.md). Plain ucontext was tried first and rejected —
+# used for Kex's process model (see src/interpreter/fiber.cxx). Plain
+# ucontext was tried first and rejected —
 # on Apple Silicon macOS, swapcontext doesn't reliably save/restore FP/NEON
 # register state across a context switch, causing heap corruption. Boost's
 # fcontext backend is the well-tested primitive purpose-built for this.
@@ -277,8 +276,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # neither `module` nor `exports` exist there. Confirmed the hard
         # way via an actual headless-browser run of web/index.html, not
         # just the Node-based smoke tests used earlier in this file's
-        # history — see docs/fiber-process-plan.md's "JS REPL bindings"
-        # section for why testing only through Node wasn't sufficient here.
+        # history — testing only through Node wasn't sufficient here.
         -sEXPORT_ES6=1
         -sEXPORT_NAME=createKexReplModule
         -sEXPORTED_FUNCTIONS=_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free

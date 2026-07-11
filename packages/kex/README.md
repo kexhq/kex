@@ -3,8 +3,7 @@
 The [Kex](https://github.com/kexhq/kex) language interpreter compiled to
 WebAssembly, packaged for embedding a Kex REPL in a web page or a Node
 script. This is the same wasm binary built and tested in the main repo
-(`src/wasm_repl.cxx`, `web/index.html`) — see `docs/fiber-process-plan.md`
-there for the full design/testing history.
+(`src/wasm_repl.cxx`, `web/index.html`).
 
 Published to GitHub Packages, not the public npm registry — see
 "Installing" below.
@@ -18,7 +17,7 @@ real version is cut.
 
 **Known limitation:** none currently — the Asyncify/JS-interop bug that
 used to cause duplicated output and lost state for `receive`,
-`receive timeout:`, and `Task.await` is fixed (see `docs/fiber-process-plan.md`).
+`receive timeout:`, and `Task.await` is fixed.
 
 ## Installing
 

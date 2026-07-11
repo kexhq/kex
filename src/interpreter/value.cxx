@@ -24,8 +24,8 @@ auto Value::bigInteger(mpz_class v) -> ValuePtr {
 auto asInteger(const ValuePtr& v) -> std::optional<mpz_class> {
     // Deliberately NOT `mpz_class(static_cast<long>(i->value))`: `long` is
     // 64-bit on every native LP64 target this project has ever built on
-    // (macOS/Linux), but wasm32 (see docs/fiber-process-plan.md's phase 6
-    // notes) has a 32-bit `long` — that cast would silently truncate any
+    // (macOS/Linux), but wasm32 has a 32-bit `long` — that cast would
+    // silently truncate any
     // IntValue outside 32-bit range before it ever reached GMP. Round-
     // tripping through decimal string construction is slower but portable
     // regardless of the platform's `long` width, and Integer arithmetic

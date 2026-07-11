@@ -1460,8 +1460,8 @@ int main() {
         });
 
         it("link() is passive bookkeeping — a linked partner exiting does not kill the other process", []() {
-            // Deliberately NOT BEAM's link model (docs/fiber-process-plan.md
-            // §8): this asserts the absence of cascading kill, since it'd be
+            // Deliberately NOT BEAM's link model: this asserts the
+            // absence of cascading kill, since it'd be
             // an easy regression to accidentally reintroduce later.
             auto out = runOutput(
                 "main do\n"
