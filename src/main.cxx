@@ -32,11 +32,6 @@
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
 
-#ifdef HAS_READLINE
-#include <readline/readline.h>
-#include <readline/history.h>
-
-// Completion state — populated before the REPL loop, read by the C callback.
 // Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
 // embedded `'` via the standard close-quote/escaped-literal-quote/reopen
 // idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
@@ -61,6 +56,12 @@ static auto shellSingleQuote(const std::string& s) -> std::string {
     out += "'";
     return out;
 }
+
+#ifdef HAS_READLINE
+#include <readline/readline.h>
+#include <readline/history.h>
+
+// Completion state — populated before the REPL loop, read by the C callback.
 
 static kex::semantic::SemanticDB *g_replDb = nullptr;
 static std::vector<std::string> g_completionMatches;
