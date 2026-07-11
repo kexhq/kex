@@ -11,6 +11,7 @@
 #include "common/color.hxx"
 #include "common/completion.hxx"
 #include "common/prelude_loader.hxx"
+#include "common/repl_commands.hxx"
 #include "lexer/lexer.hxx"
 #include "parser/parser.hxx"
 #include "interpreter/evaluator.hxx"
@@ -27,6 +28,7 @@
 #endif
 
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -130,6 +132,37 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
     using namespace kex::interpreter;
 
     std::string source(sourceIn ? sourceIn : "");
+
+    if (kex::isReplExit(source)) {
+        session->lastResult = "";
+        return;
+    }
+    if (!source.empty() && source[0] == '/') {
+        if (source == "/help" || source == "/h") {
+            std::ostringstream os;
+            kex::printReplHelp(os);
+            session->lastResult = os.str();
+            return;
+        }
+        if (source == "/reset") {
+            session->evaluator = kex::interpreter::Evaluator();
+            session->evaluator.setReplMode(true);
+            session->replAccumSource.clear();
+            g_programs.clear();
+            session->lastResult = "  (bindings cleared)\n";
+            return;
+        }
+        if (source.substr(0, 5) == "/set " || source == "/set" ||
+            source.substr(0, 7) == "/unset ") {
+            session->lastResult = "  not yet implemented in the web REPL\n";
+            return;
+        }
+        if (source.substr(0, 6) == "/load " || source == "/reload") {
+            session->lastResult = "  not available in the web REPL (no filesystem)\n";
+            return;
+        }
+    }
+
     bool isDef = looksLikeTopLevelDef(source);
     std::string toParse = isDef ? source : ("main do\n" + source + "\nend\n");
     std::string result;
