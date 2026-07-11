@@ -34,6 +34,7 @@
 // Homebrew.
 #include "common/completion.hxx"
 #include "common/prelude_loader.hxx"
+#include "common/repl_commands.hxx"
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
@@ -197,6 +198,7 @@ static std::vector<std::string> g_completionMatches;
 static std::string g_completionWord;
 static std::string g_completionStripPrefix;
 static std::string g_completionRewriteTo;
+static bool g_completionPreloaded = false;
 
 extern "C" {
 // Display hook: strip the shared "Qualifier." prefix from every entry so the
@@ -244,12 +246,15 @@ static void kexDisplayMatches(char **matches, int num_matches,
 
 static char *kexCompletionEntry(const char * /*text*/, int state) {
   if (state == 0) {
-    g_completionMatches.clear();
-    if (g_replDb) {
-      auto raw = g_replDb->completionsFor(g_completionWord);
-      g_completionMatches = kex::rewriteCompletions(
-          std::move(raw), g_completionStripPrefix, g_completionRewriteTo);
+    if (!g_completionPreloaded) {
+      g_completionMatches.clear();
+      if (g_replDb) {
+        auto raw = g_replDb->completionsFor(g_completionWord);
+        g_completionMatches = kex::rewriteCompletions(
+            std::move(raw), g_completionStripPrefix, g_completionRewriteTo);
+      }
     }
+    g_completionPreloaded = false;
   }
   if (state < static_cast<int>(g_completionMatches.size()))
     return strdup(g_completionMatches[state].c_str());
@@ -258,6 +263,13 @@ static char *kexCompletionEntry(const char * /*text*/, int state) {
 static char **kexCompletion(const char *text, int start, int end) {
   rl_attempted_completion_over = 1;
   rl_completion_suppress_append = 1; // no trailing space/quote after completion
+
+  if (start == 0 && text[0] == '/') {
+    g_completionMatches = kex::replCommandCompletions(text);
+    g_completionPreloaded = true;
+    return rl_completion_matches(text, kexCompletionEntry);
+  }
+
   auto cq = kex::resolveCompletionQuery(rl_line_buffer, start, text);
 
   // If the DB query still has an unresolved lowercase qualifier (e.g. "x.")
@@ -931,7 +943,9 @@ auto printUsage(const char *progName) -> void {
          "emitter\n";
 }
 
-auto printVersion() -> void { std::cout << "kex 0.1.0\n"; }
+auto printVersion() -> void {
+  std::cout << "kex " << kex::kVersion << "\n";
+}
 
 int main(int argc, char *argv[]) {
   static struct option longOptions[] = {
@@ -1151,8 +1165,19 @@ int main(int argc, char *argv[]) {
     }
 #endif
 
-    std::cout << "kex 0.1.0 — interactive REPL (BEAM)\n";
-    std::cout << "Type :help for available commands, exit to quit.\n\n";
+    {
+      std::string nonce = "info_boot";
+      std::string sentinel = "KEX_REPL_DONE " + nonce + " ";
+      vm.writeLine("info " + nonce);
+      std::string status;
+      std::string otpInfo = vm.readUntilSentinel(sentinel, status);
+      while (!otpInfo.empty() && otpInfo.back() == '\n')
+        otpInfo.pop_back();
+      if (!otpInfo.empty())
+        std::cout << kex::color::apply(kex::color::gray) << otpInfo
+                  << kex::color::apply(kex::color::reset) << "\n";
+    }
+    kex::printReplBanner(std::cout, "BEAM");
 
     // Top-level definitions, tracked by name so redefining a function
     // REPLACES its earlier clauses rather than appending duplicates (a
@@ -1232,22 +1257,30 @@ int main(int argc, char *argv[]) {
       }
       if (input.empty())
         continue;
-      if (input == "exit" || input == ":exit" || input == ":quit" ||
-          input == ":q")
+      if (kex::isReplExit(input))
         break;
-      if (input == ":help" || input == ":h") {
-        std::cout << "\n  Commands:\n"
-                  << "    exit          Exit the REPL\n"
-                  << "    :help         Show this help\n"
-                  << "    :reset        Clear all accumulated bindings\n"
-                  << "\n";
+      if (input == "/help" || input == "/h") {
+        kex::printReplHelp(std::cout);
         continue;
       }
-      if (input == ":reset") {
+      if (input == "/reset") {
         topDefs.clear();
         localBinds.clear();
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
+        continue;
+      }
+      if (input == "/set" || input.substr(0, 5) == "/set " ||
+          input.substr(0, 7) == "/unset " || input.substr(0, 10) == "/complete ") {
+        std::cerr << "  not yet available in the BEAM REPL\n";
+        continue;
+      }
+      if (input.substr(0, 6) == "/load ") {
+        std::cerr << "  /load not yet implemented\n";
+        continue;
+      }
+      if (input == "/reload") {
+        std::cerr << "  /reload not yet implemented\n";
         continue;
       }
 
@@ -1440,8 +1473,7 @@ int main(int argc, char *argv[]) {
   }
 
   if (mode == "repl") {
-    std::cout << "kex 0.1.0 — interactive REPL\n";
-    std::cout << "Type :help for available commands, exit to quit.\n\n";
+    kex::printReplBanner(std::cout, "");
 
 #ifdef HAS_READLINE
     std::string historyFile;
@@ -1515,20 +1547,11 @@ int main(int argc, char *argv[]) {
     bool showAst = false;
     bool showTokens = false;
 
-    auto printReplHelp = [&]() {
-      std::cout << "\n  Commands:\n"
-                << "    exit          Exit the REPL\n"
-                << "    :help         Show this help\n"
-                << "    :set <opt>    Enable a feature\n"
-                << "    :unset <opt>  Disable a feature\n"
-                << "    :complete <p> Show completions for prefix p\n"
-                << "\n"
-                << "  Options for :set / :unset:\n"
-                << "    types         Show type of each result\n"
-                << "    ast           Show AST for each input\n"
-                << "    tokens        Show token stream for each input\n"
-                << "\n";
-    };
+    static const std::string setOptionsHelp =
+        "  Options for /set / /unset:\n"
+        "    types         Show type of each result\n"
+        "    ast           Show AST for each input\n"
+        "    tokens        Show token stream for each input\n";
 
     auto handleSet = [&](const std::string &arg, bool enable) {
       if (arg == "types") {
@@ -1561,31 +1584,31 @@ int main(int argc, char *argv[]) {
       if (!ok)
         break;
       line = input;
-      if (line == "exit" || line == ":exit" || line == ":quit" || line == ":q")
+      if (kex::isReplExit(line))
         break;
       if (line.empty())
         continue;
 
       // REPL commands
-      if (line == ":help" || line == ":h") {
-        printReplHelp();
+      if (line == "/help" || line == "/h") {
+        kex::printReplHelp(std::cout, setOptionsHelp);
         continue;
       }
-      if (line == ":set") {
+      if (line == "/set") {
         std::cout << "  types:  " << (showTypes ? "on" : "off") << "\n"
                   << "  ast:    " << (showAst ? "on" : "off") << "\n"
                   << "  tokens: " << (showTokens ? "on" : "off") << "\n";
         continue;
       }
-      if (line.substr(0, 5) == ":set ") {
+      if (line.substr(0, 5) == "/set ") {
         handleSet(line.substr(5), true);
         continue;
       }
-      if (line.substr(0, 7) == ":unset ") {
+      if (line.substr(0, 7) == "/unset ") {
         handleSet(line.substr(7), false);
         continue;
       }
-      if (line.substr(0, 10) == ":complete ") {
+      if (line.substr(0, 10) == "/complete ") {
         auto prefix = line.substr(10);
         auto results = replDb.completionsFor(prefix);
         if (results.empty()) {
@@ -1596,8 +1619,15 @@ int main(int argc, char *argv[]) {
         }
         continue;
       }
-      // If it starts with : but isn't a known command, treat as atom expression
-      // (known commands already handled above)
+      if (line.substr(0, 6) == "/load ") {
+        auto filePath = line.substr(6);
+        std::cerr << "  /load not yet implemented (file: " << filePath << ")\n";
+        continue;
+      }
+      if (line == "/reload") {
+        std::cerr << "  /reload not yet implemented\n";
+        continue;
+      }
 
       // Multi-line: accumulate if there are unmatched do/end blocks
       std::string source = line;

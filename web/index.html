@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Kex — in-browser REPL (test page)</title>
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="vendor/xterm/xterm.css">
 <style>
   :root { color-scheme: dark; }
@@ -47,6 +48,7 @@
     import { FitAddon } from "./vendor/xterm/addon-fit.mjs";
     import createKexReplModule from "../build-wasm/kex_repl_wasm.js";
 
+    (async () => {
     const statusEl = document.getElementById("status");
 
     // A real terminal emulator (xterm.js), not a hand-rolled textarea —
@@ -228,18 +230,28 @@
           }
           return;
         case "[C": // Right
-          if (cursor < line.length) { cursor++; redrawLine(); }
+          if (cursor < line.length) {
+            cursor++;
+            term.write("\x1b[C");
+          }
           return;
         case "[D": // Left
-          if (cursor > 0) { cursor--; redrawLine(); }
+          if (cursor > 0) {
+            cursor--;
+            term.write("\x1b[D");
+          }
           return;
         case "[H": case "[1~": // Home (some terminals)
-          cursor = 0;
-          redrawLine();
+          if (cursor > 0) {
+            term.write(`\x1b[${cursor}D`);
+            cursor = 0;
+          }
           return;
         case "[F": case "[4~": // End
-          cursor = line.length;
-          redrawLine();
+          if (cursor < line.length) {
+            term.write(`\x1b[${line.length - cursor}C`);
+            cursor = line.length;
+          }
           return;
       }
       // Printable character (or a pasted chunk of them) — insert at cursor.
@@ -285,8 +297,6 @@
       return matches.map((m) => (m.length > stripLen ? m.slice(stripLen) : m));
     }
 
-    term.writeln("kex 0.1.0 — interactive REPL (wasm, in-browser)");
-    term.writeln("");
     statusEl.textContent = "loading wasm module…";
 
     // Without an explicit locateFile, the --preload-file package
@@ -296,10 +306,46 @@
     // above (by actually loading this page, not just smoke-testing in
     // Node): it 404'd at /web/kex_repl_wasm.data instead of
     // /build-wasm/kex_repl_wasm.data.
-    const Module = await createKexReplModule({
-      locateFile: (path) => "../build-wasm/" + path,
-    });
-    const session = Module.ccall("kex_repl_create", "number", [], []);
+    let Module, session;
+
+    // Emscripten 6.0.2's generated UTF-8 helper passes a view of growable
+    // Wasm memory straight to TextDecoder. Recent Chromium exposes that
+    // memory through a resizable ArrayBuffer, which TextDecoder rejects.
+    // The generated module creates and retains its decoder synchronously,
+    // so install a compatible decoder only while it is initialized. Fixed
+    // buffers retain Emscripten's normal zero-copy path.
+    const NativeTextDecoder = globalThis.TextDecoder;
+    class ResizableMemoryTextDecoder extends NativeTextDecoder {
+      decode(input, options) {
+        if (ArrayBuffer.isView(input) && input.buffer.resizable) {
+          input = input.slice();
+        } else if (input instanceof ArrayBuffer && input.resizable) {
+          input = input.slice(0);
+        }
+        return super.decode(input, options);
+      }
+    }
+
+    try {
+      globalThis.TextDecoder = ResizableMemoryTextDecoder;
+      try {
+        Module = await createKexReplModule({
+          locateFile: (path) => "../build-wasm/" + path,
+        });
+      } finally {
+        globalThis.TextDecoder = NativeTextDecoder;
+      }
+      session = Module.ccall("kex_repl_create", "number", [], []);
+      const banner = Module.ccall("kex_repl_banner", "string", [], []);
+      // xterm treats bare LF as a vertical move only; normalize the native
+      // REPL's Unix newlines so the prompt returns to column zero.
+      term.write(banner.replace(/\n/g, "\r\n"));
+    } catch (e) {
+      statusEl.textContent = "error";
+      term.writeln("\r\n\x1b[31merror loading wasm: " + e.message + "\x1b[0m");
+      console.error("wasm init failed:", e);
+      return;
+    }
 
     evalSource = async function (src) {
       // kex_repl_eval is void-returning on purpose — see src/wasm_repl.cxx's
@@ -358,6 +404,7 @@
     statusEl.textContent = "ready";
     writePrompt();
     term.focus();
+    })();
   </script>
 </body>
 </html>
