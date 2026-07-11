@@ -46,6 +46,8 @@ struct Lowering {
     // receiver-first" fallback; any other `.method` is an unported builtin and
     // must error, not silently become a call to a nonexistent function.
     std::unordered_set<std::string> localMethods;
+    // Make-method trailing defaults, indexed by explicit parameter position.
+    std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
     // same name, each type's version is emitted mangled (`name__Type`) and a
@@ -82,6 +84,10 @@ struct Lowering {
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
     std::unordered_set<std::string> knownFns;
+    // Qualified Kex module function (`Util.Math.double`) -> local BEAM name.
+    // Modules in a single source file still flatten into one BEAM module, so
+    // this preserves qualification without a cross-module call.
+    std::unordered_map<std::string, std::string> moduleFunctions;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -640,10 +646,13 @@ struct Lowering {
             ex->node = Call{"", n.name, 0, {}, false};
         else if (knownFns.count(n.name))
             ex->node = Call{"", n.name, arity, std::move(args), false};
-        else
-            // Not a module function → a variable holding a fun (e.g. a `block`
-            // parameter): apply it indirectly.
+        else if (subst.count(n.name))
+            // A lexical binding (for example a `block` parameter) can hold a
+            // callable value. Keep this indirect apply distinct from a truly
+            // unknown free function, which must fail only if executed.
             ex->node = CallIndirect{var(currentName(n.name)), std::move(args), false};
+        else
+            return wrapLets(binds, runtimeError("Undefined function: " + n.name));
         return wrapLets(binds, std::move(ex));
     }
 
@@ -732,11 +741,44 @@ struct Lowering {
                     callE("kex_file", fn, static_cast<int>(args.size()), std::move(args)));
             }
         }
+        // User module function: `Util.double(21)` / `Util.Math.double(21)`.
+        // The module body is flattened into this BEAM module under a stable
+        // mangled name, while this map preserves the source-level qualifier.
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) && !n.namedArgs.empty())
+                throw LowerError("IR lower: named args to module function not yet ported");
+            if (modulePath(*n.receiver, path)) {
+                std::string key;
+                for (size_t i = 0; i < path.size(); i++) {
+                    if (i) key += ".";
+                    key += path[i];
+                }
+                if (!key.empty()) key += "." + n.method;
+                auto it = moduleFunctions.find(key);
+                if (it != moduleFunctions.end()) {
+                    std::vector<Binding> binds;
+                    std::vector<ExprPtr> args;
+                    for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                    if (n.block) args.push_back(atomize(*n.block, binds));
+                    return wrapLets(binds, callE("", it->second,
+                        static_cast<int>(args.size()), std::move(args)));
+                }
+            }
+        }
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
         if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            if (auto it = moduleFunctions.find(uid->name + "." + n.method);
+                it != moduleFunctions.end()) {
+                if (!n.namedArgs.empty())
+                    throw LowerError("IR lower: named args to module function not yet ported");
+                if (n.block) args.push_back(atomize(*n.block, binds));
+                return wrapLets(binds, callE("", it->second,
+                    static_cast<int>(args.size()), std::move(args)));
+            }
             auto nsCall = [&](const char* mod, const char* fn) {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Call{mod, fn, static_cast<int>(args.size()), std::move(args), false};
@@ -755,6 +797,11 @@ struct Lowering {
                 if (n.method == "print")      return ioCall("print");
                 if (n.method == "printError") return ioCall("print_error");
                 if (n.method == "inspect")    return ioCall("inspect");
+                // IO.read is still an aspirational API. Preserve the walker's
+                // lazy failure semantics: an unused function containing it
+                // must not prevent the program from compiling on BEAM.
+                if (n.method == "read")
+                    return wrapLets(binds, runtimeError("Undefined function: IO.read"));
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
@@ -936,8 +983,7 @@ struct Lowering {
                 ex->node = Call{"", callName, ar, std::move(callArgs), false};
                 return wrapLets(binds, std::move(ex));
             }
-            throw LowerError("IR lower: namespace call " + uid->name + "." + n.method
-                             + " not yet ported");
+            return wrapLets(binds, runtimeError("Undefined function: " + uid->name + "." + n.method));
         }
         // UFCS method on a value receiver. Atomize the receiver once so
         // methods that use it several times (min/get/count/…) don't
@@ -1034,8 +1080,9 @@ struct Lowering {
             {"eof?","kex_file","handle_eof?",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
             {"abs","erlang","abs",0},
-            // x.inspect — the UFCS form of IO.inspect (prints, returns x).
-            {"inspect","kex_io","inspect",0},
+            // x.inspect returns the pretty-printed representation; IO.inspect
+            // is the separate diagnostic form handled above.
+            {"inspect","kex_io","inspect_value",0},
             // kex_intrinsic_string handles both String binaries and bare
             // Char codepoints (string:uppercase alone rejects integers).
             {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
@@ -1378,7 +1425,10 @@ struct Lowering {
             std::vector<ExprPtr> args;
             args.push_back(clone(rv));
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            int arity = static_cast<int>(n.args.size()) + 1;
+            if (auto it = methodDefaults.find(n.method); it != methodDefaults.end())
+                for (size_t i = n.args.size(); i < it->second.size(); i++)
+                    if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
+            int arity = static_cast<int>(args.size());
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.method, arity, std::move(args), false};
             return ret(wrapLets(binds, std::move(ex)));
@@ -1395,7 +1445,7 @@ struct Lowering {
             int arity = static_cast<int>(n.args.size()) + 1;
             return ret(wrapLets(binds, callE("kex_prelude", n.method, arity, std::move(args))));
         }
-        throw LowerError("IR lower: UFCS method ." + n.method + " (block/named args) not yet ported");
+        return ret(runtimeError("Undefined method: " + n.method));
     }
 
     // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
@@ -2196,20 +2246,36 @@ struct Lowering {
             std::vector<std::string> mutVars;
             for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
             std::sort(mutVars.begin(), mutVars.end());
-            if (lam && lam->params.size() == 1 && !mutVars.empty()) {
+            if (lam && (lam->params.size() == 1 || lam->params.size() == 2) && !mutVars.empty()) {
                 std::vector<Binding> binds;
                 auto receiver = atomize_ir(lower(mc->receiver), binds);
                 auto snap = subst;
-                std::string item = lam->params[0].name;
+                std::string item = lam->params.size() == 1 ? lam->params[0].name : fresh("EachItem");
                 std::string state = fresh("EachState");
                 Lambda fold;
                 fold.params = {item, state};
-                subst[item] = item;
+                if (lam->params.size() == 1) {
+                    subst[lam->params[0].name] = item;
+                } else {
+                    subst[lam->params[0].name] = lam->params[0].name;
+                    subst[lam->params[1].name] = lam->params[1].name;
+                }
+                auto bindItem = [&](ExprPtr callback) -> ExprPtr {
+                    if (lam->params.size() == 1) return callback;
+                    auto pair = std::make_unique<Pattern>();
+                    pair->kind = PatKind::Tuple;
+                    for (const auto& p : lam->params) {
+                        auto name = std::make_unique<Pattern>();
+                        name->kind = PatKind::Var; name->name = p.name;
+                        pair->args.push_back(std::move(name));
+                    }
+                    return makeMatch1(var(item), std::move(pair), std::move(callback));
+                };
 
                 if (mutVars.size() == 1) {
                     subst[mutVars[0]] = state;
-                    fold.body = lowerLoopBodyFrom(lam->body, 0, "", mutVars,
-                        [&] { return stateExpr(mutVars); });
+                    fold.body = bindItem(lowerLoopBodyFrom(lam->body, 0, "", mutVars,
+                        [&] { return stateExpr(mutVars); }));
                 } else {
                     auto statePat = std::make_unique<Pattern>();
                     statePat->kind = PatKind::Tuple;
@@ -2222,7 +2288,7 @@ struct Lowering {
                     }
                     auto body = lowerLoopBodyFrom(lam->body, 0, "", mutVars,
                         [&] { return stateExpr(mutVars); });
-                    fold.body = makeMatch1(var(state), std::move(statePat), std::move(body));
+                    fold.body = makeMatch1(var(state), std::move(statePat), bindItem(std::move(body)));
                 }
                 subst = snap;
 
@@ -2834,6 +2900,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
                     owners.push_back(typeName);
             }
+            if (!fd->clauses.empty()) {
+                std::vector<const ast::ExprPtr*> defaults;
+                for (const auto& p : fd->clauses[0].params)
+                    defaults.push_back(p.defaultValue ? &*p.defaultValue : nullptr);
+                if (std::any_of(defaults.begin(), defaults.end(), [](auto* d) { return d != nullptr; }))
+                    L.methodDefaults[fd->name] = std::move(defaults);
+            }
         };
         for (const auto& bi : md.body) {
             if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
@@ -2845,6 +2918,51 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         // Inherited trait defaults count as this type's methods too.
         for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
+    };
+    std::function<void(const ast::ModuleDef&, const std::string&)> preModule;
+    preModule = [&](const ast::ModuleDef& module, const std::string& prefix) {
+        const std::string path = prefix.empty() ? module.name : prefix + "." + module.name;
+        const std::string mangledPrefix = [&] {
+            std::string out;
+            for (char c : path) out += c == '.' ? "__" : std::string(1, c);
+            return out;
+        }();
+        auto preModuleFn = [&](const ast::FunctionDef* fd) {
+            if (!fd) return;
+            const std::string emitted = mangledPrefix + "__" + fd->name;
+            definedFns.insert(emitted);
+            L.moduleFunctions[path + "." + fd->name] = emitted;
+        };
+        for (const auto& item : module.body) {
+            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                preModuleFn(fd->get());
+            else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+                if (*rd) preRecord(**rd);
+            } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                if (*md) preMake(**md);
+            } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
+                if (*td) preType(**td);
+            } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
+                if (*cb) for (const auto& ci : (*cb)->items) {
+                    if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci))
+                        preModuleFn(cfd->get());
+                    else if (auto* crd = std::get_if<std::unique_ptr<ast::RecordDef>>(&ci)) {
+                        if (*crd) preRecord(**crd);
+                    } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
+                        if (*cmd) preMake(**cmd);
+                    } else if (auto* ctd = std::get_if<std::unique_ptr<ast::TypeDef>>(&ci)) {
+                        if (*ctd) preType(**ctd);
+                    }
+                }
+            }
+            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                if (*vb) for (const auto& vi : (*vb)->items)
+                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                        preModuleFn(vfd->get());
+            } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*child) preModule(**child, path);
+            }
+        }
     };
     for (const auto& item : prog.items) {
         if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
@@ -2862,6 +2980,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (*td) preType(**td);
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (*md) preMake(**md);
+        } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+            if (*module) preModule(**module, "");
         }
     }
     for (const auto& [name, owners] : L.methodOwners)
@@ -3006,12 +3126,48 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // one BEAM module), which replaces this handler entirely.
                 if (node) {
                     std::vector<const ast::FunctionDef*> grp;
-                    auto flush = [&]{ if (!grp.empty()) { mod.functions.push_back(L.lowerFunctionGroup(grp)); grp.clear(); } };
+                    std::string currentPath;
+                    auto flush = [&]{
+                        if (!grp.empty()) {
+                            auto it = L.moduleFunctions.find(currentPath + "." + grp.front()->name);
+                            mod.functions.push_back(L.lowerFunctionGroup(grp, "",
+                                it == L.moduleFunctions.end() ? grp.front()->name : it->second));
+                            grp.clear();
+                        }
+                    };
                     auto push = [&](const ast::FunctionDef* fd) {
                         if (!fd) return;
                         if (!grp.empty() && (grp.front()->name != fd->name || beamArity(grp.front()) != beamArity(fd))) flush();
                         grp.push_back(fd);
                     };
+                    auto emitMake = [&](const ast::MakeDef* mk) {
+                        if (!mk) return;
+                        std::string typeName = Lowering::simpleTypeName(mk->target);
+                        std::vector<const ast::FunctionDef*> methods;
+                        auto flushMethods = [&] {
+                            if (!methods.empty()) {
+                                mod.functions.push_back(L.lowerMakeGroup(methods, typeName));
+                                methods.clear();
+                            }
+                        };
+                        auto pushMethod = [&](const ast::FunctionDef* fd) {
+                            if (!fd) return;
+                            if (!methods.empty() && (methods.front()->name != fd->name ||
+                                beamArity(methods.front()) != beamArity(fd))) flushMethods();
+                            methods.push_back(fd);
+                        };
+                        for (const auto& mi : mk->body) {
+                            if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
+                                pushMethod(fd->get());
+                            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi))
+                                if (*vb) for (const auto& vi : (*vb)->items)
+                                    if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                                        pushMethod(fd->get());
+                        }
+                        for (const auto* fd : inheritedDefaults(*mk)) pushMethod(fd);
+                        flushMethods();
+                    };
+                    currentPath = node->name;
                     for (const auto& bi : node->body) {
                         if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                             push(mfd->get());
@@ -3021,6 +3177,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             if (*vb) for (const auto& vi : (*vb)->items)
                                 if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                                     push(vfd->get());
+                        } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
+                            flush();
+                            emitMake(mk->get());
+                        } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
+                            if (*cb) for (const auto& ci : (*cb)->items) {
+                                if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
+                                    push(cfd->get());
+                                } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
+                                    flush();
+                                    emitMake(cmd->get());
+                                }
+                            }
                         } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
                                    std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                             // Types/annotations are erased, but collect variant
@@ -3037,7 +3205,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         L.typeVariantTags[(*td)->name] = std::move(tags);
                                 }
                             }
-                        } else { flush(); throw LowerError("IR lower: nested module non-function item not yet ported"); }
+                        } else {
+                            // Per-module records, make blocks, compiled blocks, and
+                            // nested namespaces need the full module emitter. Until
+                            // that lands, they are declaration-only in this
+                            // compatibility flattener; direct module functions above
+                            // remain usable through their qualified local names.
+                            flush();
+                        }
                     }
                     flush();
                 }

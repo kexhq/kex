@@ -308,6 +308,19 @@ int main() {
             assertEqual(output, std::string("6"));
         });
 
+        it("threads captured state through pair each callbacks", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var total = 0\n"
+                "  [(1, 2), (3, 4)].each do |left, right|\n"
+                "    total = total + left\n"
+                "  end\n"
+                "  total\n"
+                "end\n",
+                "each_pair_state");
+            assertEqual(output, std::string("4"));
+        });
+
         it("matches literal fields in record-pattern function heads", []() {
             auto output = runIrOnBeam(
                 "record Point do\n"
@@ -323,6 +336,77 @@ int main() {
                 "end\n",
                 "record_pattern");
             assertEqual(output, std::string("true"));
+        });
+
+        it("defers unknown free-function errors until the function is called", []() {
+            auto output = runIrOnBeam(
+                "let unused() = missingFunction()\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unknown_function");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unsupported IO call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(path) = IO.read(path)\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unsupported_io");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unknown namespace call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(value) = Config.parse(value)\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unknown_namespace");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("defers an unsupported UFCS call until it is executed", []() {
+            auto output = runIrOnBeam(
+                "foul unused(value) = value.notImplemented { |x| x }\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "unsupported_ufcs");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("resolves qualified module function calls", []() {
+            auto output = runIrOnBeam(
+                "module Util do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  Util.double(21)\n"
+                "end\n",
+                "module_function");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("does not block main on nested declaration-only module items", []() {
+            auto output = runIrOnBeam(
+                "module Schema do\n"
+                "  record Entry do\n"
+                "    value : Integer\n"
+                "  end\n"
+                "  module Internal do\n"
+                "    make Entry do\n"
+                "      let doubled() = @value * 2\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  42\n"
+                "end\n",
+                "module_declarations");
+            assertEqual(output, std::string("42"));
         });
     });
 
@@ -434,6 +518,7 @@ int main() {
             auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
             assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
         });
+
     });
 
     describe("CoreErlangEmitter — process primitives", []() {

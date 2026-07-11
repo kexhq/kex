@@ -1,5 +1,5 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1,
+-export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, inspect_value/1, to_string/1,
            to_string_bin/1, env_map/0, register_display/2]).
 
 %% register_display/2 — called once at main start with the compiling module's
@@ -91,6 +91,20 @@ inspect(X) when is_tuple(X) ->
               ++ " " ++ ?CYAN ++ "Tuple" ++ ?RESET ++ "~n", [X]), X;
 inspect(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p~n", [X]), X.
+
+%% UFCS value.inspect() — return the colored representation as a String.
+inspect_value(X) -> unicode:characters_to_binary(inspect_string(X)).
+
+inspect_string(X) when is_binary(X) ->
+    ?GREEN ++ "\"" ++ unicode:characters_to_list(X) ++ "\"" ++ ?RESET;
+inspect_string(X) when is_integer(X) -> ?YELL ++ integer_to_list(X) ++ ?RESET;
+inspect_string(true) -> ?YELL ++ "true" ++ ?RESET;
+inspect_string(false) -> ?YELL ++ "false" ++ ?RESET;
+inspect_string(none) -> ?GRAY ++ "None" ++ ?RESET;
+inspect_string(X) when is_list(X) ->
+    "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
+inspect_string(X) when is_atom(X) -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET;
+inspect_string(X) -> unicode:characters_to_list(to_string(X)).
 
 %% Any Kex value as a Kex String VALUE (UTF-8 binary) — what `.to(String)`
 %% and toString-style conversions return. to_string/1 below stays a charlist
