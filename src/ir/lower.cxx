@@ -88,6 +88,9 @@ struct Lowering {
     // Modules in a single source file still flatten into one BEAM module, so
     // this preserves qualification without a cross-module call.
     std::unordered_map<std::string, std::string> moduleFunctions;
+    // Bare imported function name → mangled name. Populated by `using M, only:`
+    // inside module bodies so bare calls resolve to the correct cross-module fn.
+    std::unordered_map<std::string, std::string> moduleImports;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -517,6 +520,32 @@ struct Lowering {
                 return lowerFunctionCall(n);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 return lowerMethodCall(n);
+            } else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+                std::string srcMod;
+                for (size_t i = 0; i < n.module.parts.size(); i++) {
+                    if (i) srcMod += ".";
+                    srcMod += n.module.parts[i];
+                }
+                auto saved = moduleImports;
+                if (!n.onlyNames.empty()) {
+                    for (const auto& name : n.onlyNames) {
+                        auto key = srcMod + "." + name;
+                        if (auto it = moduleFunctions.find(key); it != moduleFunctions.end())
+                            moduleImports[name] = it->second;
+                    }
+                } else {
+                    for (const auto& [key, val] : moduleFunctions)
+                        if (key.rfind(srcMod + ".", 0) == 0) {
+                            auto bare = key.substr(srcMod.size() + 1);
+                            if (bare.find('.') == std::string::npos
+                                && std::find(n.exceptNames.begin(), n.exceptNames.end(), bare)
+                                    == n.exceptNames.end())
+                                moduleImports[bare] = val;
+                        }
+                }
+                auto result = lowerBody(n.body);
+                moduleImports = std::move(saved);
+                return result;
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());
@@ -680,6 +709,8 @@ struct Lowering {
             ex->node = Call{"", n.name, 0, {}, false};
         else if (knownFns.count(n.name))
             ex->node = Call{"", n.name, arity, std::move(args), false};
+        else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
+            ex->node = Call{"", imp->second, arity, std::move(args), false};
         else if (subst.count(n.name))
             // A lexical binding (for example a `block` parameter) can hold a
             // callable value. Keep this indirect apply distinct from a truly
@@ -3022,6 +3053,27 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 if (*vb) for (const auto& vi : (*vb)->items)
                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                         preModuleFn(vfd->get());
+            } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {
+                if (*ed) {
+                    std::string srcMod;
+                    for (size_t i = 0; i < (*ed)->module.parts.size(); i++) {
+                        if (i) srcMod += ".";
+                        srcMod += (*ed)->module.parts[i];
+                    }
+                    auto alias = (*ed)->alias.value_or((*ed)->module.parts.back());
+                    auto nsPath = path + "." + alias;
+                    for (const auto& [key, val] : L.moduleFunctions) {
+                        if (key.rfind(srcMod + ".", 0) != 0) continue;
+                        auto bare = key.substr(srcMod.size() + 1);
+                        if (bare.find('.') != std::string::npos) continue;
+                        if (!(*ed)->onlyNames.empty()
+                            && std::find((*ed)->onlyNames.begin(), (*ed)->onlyNames.end(), bare)
+                                == (*ed)->onlyNames.end()) continue;
+                        if (std::find((*ed)->exceptNames.begin(), (*ed)->exceptNames.end(), bare)
+                            != (*ed)->exceptNames.end()) continue;
+                        L.moduleFunctions[nsPath + "." + bare] = val;
+                    }
+                }
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*child) preModule(**child);
             }
@@ -3228,8 +3280,42 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     std::function<void(const ast::ModuleDef&)> lowerModuleBody;
                     lowerModuleBody = [&](const ast::ModuleDef& m) {
                         currentPath = m.name;
+                        auto savedImports = L.moduleImports;
+                        auto prefix = m.name + ".";
+                        for (const auto& [key, val] : L.moduleFunctions)
+                            if (key.rfind(prefix, 0) == 0) {
+                                auto bare = key.substr(prefix.size());
+                                if (bare.find('.') == std::string::npos)
+                                    L.moduleImports[bare] = val;
+                            }
                         for (const auto& bi : m.body) {
-                            if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                            if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
+                                if (!*ub) continue;
+                                std::string srcMod;
+                                for (size_t i = 0; i < (*ub)->module.parts.size(); i++) {
+                                    if (i) srcMod += ".";
+                                    srcMod += (*ub)->module.parts[i];
+                                }
+                                auto importName = [&](const std::string& name) {
+                                    auto key = srcMod + "." + name;
+                                    if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
+                                        L.moduleImports[name] = it->second;
+                                };
+                                if (!(*ub)->onlyNames.empty()) {
+                                    for (const auto& name : (*ub)->onlyNames) importName(name);
+                                } else if ((*ub)->body.empty()) {
+                                    for (const auto& [key, val] : L.moduleFunctions)
+                                        if (key.rfind(srcMod + ".", 0) == 0) {
+                                            auto bare = key.substr(srcMod.size() + 1);
+                                            if (bare.find('.') == std::string::npos
+                                                && std::find((*ub)->exceptNames.begin(),
+                                                             (*ub)->exceptNames.end(), bare)
+                                                    == (*ub)->exceptNames.end())
+                                                L.moduleImports[bare] = val;
+                                        }
+                                }
+                                continue;
+                            } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
                             } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
                                 if (*vb) for (const auto& vi : (*vb)->items)
@@ -3270,6 +3356,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             }
                         }
                         flush();
+                        L.moduleImports = std::move(savedImports);
                     };
                     lowerModuleBody(*node);
                 }

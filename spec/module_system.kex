@@ -50,6 +50,48 @@ module Aliased do
   end
 end
 
+# Selective import with only:
+module SelectiveOnly do
+  using Outer, only: [double]
+
+  let run do
+    IO.printLine(double(21).to(String))
+  end
+end
+
+# Selective import with except:
+module SelectiveExcept do
+  using Greet, except: [hello]
+
+  let run do
+    IO.printLine(Greet.hello("Except"))
+  end
+end
+
+# Private visibility
+module WithPrivate do
+  private do
+    let secret -> String = "hidden"
+  end
+
+  let reveal -> String = secret()
+end
+
+# Scoped using block
+module ScopedUsing do
+  let run do
+    using Outer do
+      IO.printLine(double(100).to(String))
+    end
+    IO.printLine(Outer.double(50).to(String))
+  end
+end
+
+# Export re-exports
+module Toolkit do
+  export Greet, only: [hello]
+end
+
 main do
   # Direct module function calls
   IO.printLine(Greet.hello("World"))
@@ -68,4 +110,17 @@ main do
   let c = Shapes.Circle {}
   IO.printLine(c.radius.to(String))
   IO.printLine(c.area.to(String))
+
+  # Selective imports
+  SelectiveOnly.run
+  SelectiveExcept.run
+
+  # Private name accessible internally
+  IO.printLine(WithPrivate.reveal)
+
+  # Scoped using
+  ScopedUsing.run
+
+  # Re-export (hierarchical: Toolkit.Greet.hello)
+  IO.printLine(Toolkit.Greet.hello("Toolkit"))
 end
