@@ -13,11 +13,12 @@
          %% kex_io, where list operations didn't belong).
          list_get/2, list_get/3, index_of/2, list_product/1]).
 
-%% as_list/1 — a String receiver (UTF-8 binary) as its [Char] codepoint list;
-%% everything else unchanged. The list HOF lowerings wrap their receiver in
-%% this so `"h3llo".filter(&alpha?)` etc. work — the result is a [Char],
-%% which IS String in Kex (display and == treat them identically).
-as_list(B) when is_binary(B) -> unicode:characters_to_list(B);
+%% as_list/1 — a String receiver (UTF-8 binary) as its [Char] list of tagged
+%% {'Char', N} tuples; everything else unchanged. The list HOF lowerings wrap
+%% their receiver in this so `"h3llo".filter(&alpha?)` etc. work — the result
+%% is a [Char], which IS String in Kex (display and == treat them identically).
+as_list(B) when is_binary(B) ->
+    [{'Char', C} || C <- unicode:characters_to_list(B)];
 as_list(L) -> L.
 
 %% Receiver is always the first argument (Kex UFCS convention). A Kex String
@@ -54,26 +55,26 @@ partition(L, Fun) -> lists:partition(Fun, as_list(L)).
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
 member(Elem, Container) when is_binary(Container) ->
-    lists:member(Elem, unicode:characters_to_list(Container));
+    lists:member(Elem, as_list(Container));
 member(Elem, Container) -> lists:member(Elem, Container).
 
 %% first/1, last/1 — the first/last element wrapped in Just, or None for [].
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the
 %% one-element-pattern semantics; a direct primitive is simpler and O(1)/O(n)).
-first(B) when is_binary(B) -> first(unicode:characters_to_list(B));
+first(B) when is_binary(B) -> first(as_list(B));
 first([])      -> 'none';
 first([X | _]) -> {'Just', X}.
-last(B) when is_binary(B) -> last(unicode:characters_to_list(B));
+last(B) when is_binary(B) -> last(as_list(B));
 last([])       -> 'none';
 last(L)        -> {'Just', lists:last(L)}.
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old
 %% recursive impl was non-tail and returned this same Just/None form).
-min(B) when is_binary(B) -> min(unicode:characters_to_list(B));
+min(B) when is_binary(B) -> min(as_list(B));
 min([]) -> 'none';
 min(L)  -> {'Just', lists:min(L)}.
-max(B) when is_binary(B) -> max(unicode:characters_to_list(B));
+max(B) when is_binary(B) -> max(as_list(B));
 max([]) -> 'none';
 max(L)  -> {'Just', lists:max(L)}.
 
@@ -83,18 +84,23 @@ length(B) when is_binary(B) -> string:length(B);
 length(L) -> erlang:length(L).
 
 %% join/1,2 — string join for [String|Char] lists, producing a String (UTF-8
-%% binary). Elements/separator are chardata (binaries, Chars, charlists), so
-%% unicode:characters_to_binary flattens them directly. The old prelude form
-%% was non-tail recursive (`x + sep + xs.join(sep)`).
-join(L)      -> unicode:characters_to_binary(L).
-join(L, Sep) -> unicode:characters_to_binary(lists:join(Sep, L)).
+%% binary). Tagged Chars normalize to their codepoints; binaries and nested
+%% lists are chardata already. The old prelude form was non-tail recursive
+%% (`x + sep + xs.join(sep)`).
+join(L)      -> unicode:characters_to_binary(untag(as_list(L))).
+join(L, Sep) -> unicode:characters_to_binary(lists:join(untag_one(Sep), untag(as_list(L)))).
+
+untag(L) -> [untag_one(E) || E <- L].
+untag_one({'Char', C}) -> C;
+untag_one(E) when is_list(E) -> untag(E);
+untag_one(E) -> E.
 
 %% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
 %% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's
 %% 2-arg form.
 list_get(List, Idx) -> list_get(List, Idx, 'none').
 list_get(Bin, Idx, Default) when is_binary(Bin) ->
-    list_get(unicode:characters_to_list(Bin), Idx, Default);
+    list_get(as_list(Bin), Idx, Default);
 list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < erlang:length(List) ->
     lists:nth(Idx + 1, List);
 list_get(_List, _Idx, Default) ->

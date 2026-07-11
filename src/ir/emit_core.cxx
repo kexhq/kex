@@ -107,7 +107,11 @@ struct Emitter {
         switch (l.kind) {
             case LitKind::Int:    return l.text;
             case LitKind::Float:  return l.text;
-            case LitKind::Char:   return std::to_string(static_cast<int>(l.text[0]));
+            // A Char is a tagged tuple {'Char', Codepoint} — a bare integer
+            // is indistinguishable from Int (display, dispatch, [Char] vs
+            // [Int]). Works in both expression and pattern position.
+            case LitKind::Char:   return "{'Char'," +
+                std::to_string(static_cast<int>(static_cast<unsigned char>(l.text[0]))) + "}";
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'none'";

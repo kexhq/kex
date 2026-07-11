@@ -103,11 +103,9 @@ spec: build
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
 # dispatches per-tag). Informational: prints a pass/fail count but always
-# exits 0. Strings are UTF-8 binaries on BEAM, so string-vs-list ambiguity
-# is gone; the remaining diffs are the Char/Int ambiguity (a Char is a bare
-# codepoint integer, so 'e' displays as 101 and a printable [Int] like
-# [40, 50] still renders as text — char_type, list_pattern_chained_pipe).
-# Fixing those means a tagged Char representation ({'Char', N}).
+# exits 0. Strings are UTF-8 binaries and Chars are tagged {'Char', N}
+# tuples on BEAM, so the old charlist ambiguities ([] vs "", [Int] vs
+# String, Char vs Int) are gone — the suite matches the walker 109/109.
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \

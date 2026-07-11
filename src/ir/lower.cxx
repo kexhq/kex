@@ -353,7 +353,9 @@ struct Lowering {
                 ex->node = Intrinsic{op, std::move(args)};
                 return wrapLets(binds, std::move(ex));
             } else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
-                // a..b  →  lists:seq(a, b)  (materialized ascending list)
+                // a..b → a materialized ascending list. kex_intrinsic_range
+                // wraps lists:seq and handles Char endpoints ({'Char', N}
+                // bounds produce a [Char], not an [Int]).
                 std::vector<Binding> binds;
                 auto s = atomize(n.start, binds);
                 auto en = atomize(n.end, binds);
@@ -361,7 +363,7 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 args.push_back(std::move(s));
                 args.push_back(std::move(en));
-                ex->node = Call{"lists", "seq", 2, std::move(args), false};
+                ex->node = Call{"kex_intrinsic_range", "make", 2, std::move(args), false};
                 return wrapLets(binds, std::move(ex));
             } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
                 std::vector<Binding> binds;
@@ -947,16 +949,19 @@ struct Lowering {
         if (m_inGuard && n.args.empty() && !n.block) {
             auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
             auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
+            // A Char is {'Char', Codepoint} — compare its element(2, _)
+            // (guard-safe; the receiver is always a Char where these fire).
+            auto code = [&]{ return callE("erlang","element",2,two(litInt(2), clone(rv))); };
             auto between = [&](long lo, long hi) {
-                return gand(intrin(Op::Gte, two(clone(rv), litInt(lo))),
-                            intrin(Op::Lte, two(clone(rv), litInt(hi))));
+                return gand(intrin(Op::Gte, two(code(), litInt(lo))),
+                            intrin(Op::Lte, two(code(), litInt(hi))));
             };
             if (m == "digit?") return ret(between('0', '9'));
             if (m == "alpha?") return ret(gor(between('A','Z'), between('a','z')));
             if (m == "space?") {
                 ExprPtr chk;
                 for (int c : {' ', '\t', '\n', '\r'}) {
-                    auto eq = intrin(Op::Eq, two(clone(rv), litInt(c)));
+                    auto eq = intrin(Op::Eq, two(code(), litInt(c)));
                     chk = chk ? gor(std::move(chk), std::move(eq)) : std::move(eq);
                 }
                 return ret(std::move(chk));
@@ -2352,8 +2357,10 @@ struct Lowering {
     // A guard testing that `v` has runtime type `ty`. Primitive types use the
     // matching is_* BIF; everything else is a tagged tuple `{'ty', …}`.
     auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
+        // Char has no is_* entry: a Char is the tagged tuple {'Char', N},
+        // so it falls to the record/variant branch below.
         static const std::unordered_map<std::string, const char*> prim = {
-            {"Integer","is_integer"}, {"Char","is_integer"}, {"Float","is_float"},
+            {"Integer","is_integer"}, {"Float","is_float"},
             {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
             // A range is a real list at BEAM runtime (`a..b` lowers to
@@ -2429,6 +2436,28 @@ struct Lowering {
                     mc.body = std::move(call);
                     m.clauses.push_back(std::move(mc));
                 }
+            } else if (ty == "Char") {
+                // A Char is always the 2-tuple {'Char', _} — match it
+                // structurally. (An element(1,_) guard would badarg, not
+                // soft-fail, for a primitive receiver reaching this clause.)
+                MatchClause mc;
+                auto pat = std::make_unique<Pattern>();
+                pat->kind = PatKind::Tuple;
+                auto tagPat = std::make_unique<Pattern>();
+                tagPat->kind = PatKind::Lit;
+                tagPat->litKind = LitKind::Atom;
+                tagPat->litText = "Char";
+                pat->args.push_back(std::move(tagPat));
+                auto wild = std::make_unique<Pattern>();
+                wild->kind = PatKind::Wild;
+                pat->args.push_back(std::move(wild));
+                mc.patterns.push_back(std::move(pat));
+                std::vector<ExprPtr> args;
+                for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
+                auto call = std::make_unique<Expr>();
+                call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                mc.body = std::move(call);
+                m.clauses.push_back(std::move(mc));
             } else {
                 // Primitive/record type: use a guard-based clause.
                 MatchClause mc;
@@ -2458,7 +2487,7 @@ struct Lowering {
             mc.patterns.push_back(std::move(gv));
             mc.guard = callE("erlang", "is_binary", 1, one(var("_gv")));
             std::vector<ExprPtr> args;
-            args.push_back(callE("unicode", "characters_to_list", 1, one(var("_a0"))));
+            args.push_back(callE("kex_intrinsic_list", "as_list", 1, one(var("_a0"))));
             for (int i = 1; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
             auto call = std::make_unique<Expr>();
             call->node = Call{"", name + "__List", arity, std::move(args), false};

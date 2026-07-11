@@ -10,22 +10,25 @@ abs(N)  -> erlang:abs(N).
 sqrt(N) -> math:sqrt(N).
 
 %% add/2 — polymorphic + : string concat, Char+String splicing, list append,
-%% numeric add. A Kex String is a UTF-8 binary; a Char is a codepoint integer;
-%% a [Char] charlist counts as a String too, so mixed operands coerce.
+%% numeric add. A Kex String is a UTF-8 binary; a Char is a tagged tuple
+%% {'Char', Codepoint}; a [Char] list counts as a String too.
+add({'Char', A}, {'Char', B}) -> <<A/utf8, B/utf8>>;
+add(A, {'Char', B}) when is_binary(A) -> <<A/binary, B/utf8>>;
+add({'Char', A}, B) when is_binary(B) -> <<A/utf8, B/binary>>;
+add(A, B = {'Char', _}) when is_list(A) -> A ++ [B];
+add(A = {'Char', _}, B) when is_list(B) -> [A | B];
 add(A, B) when is_binary(A), is_binary(B) -> <<A/binary, B/binary>>;
-add(A, B) when is_binary(A), is_integer(B) -> <<A/binary, B/utf8>>;
-add(A, B) when is_integer(A), is_binary(B) -> <<A/utf8, B/binary>>;
-add(A, B) when is_binary(A), is_list(B) -> <<A/binary, (unicode:characters_to_binary(B))/binary>>;
-add(A, B) when is_list(A), is_binary(B) -> <<(unicode:characters_to_binary(A))/binary, B/binary>>;
+add(A, B) when is_binary(A), is_list(B) -> <<A/binary, (unicode:characters_to_binary(charlist(B)))/binary>>;
+add(A, B) when is_list(A), is_binary(B) -> <<(unicode:characters_to_binary(charlist(A)))/binary, B/binary>>;
 add(A, B) when is_list(A), is_integer(B) -> A ++ [B];
 add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
 add(A, B) -> A + B.
 
 %% eq/neq — Kex ==. Strict equality except the one representation split the
-%% language defines away: [Char] IS String, so a flat charlist and a binary
-%% holding the same text are equal. Nothing else coerces (a [String] list is
-%% NOT equal to the concatenated string, hence the flat-integer check).
+%% language defines away: [Char] IS String, so a list of tagged Chars and a
+%% binary holding the same text are equal. Nothing else coerces (an [Int]
+%% list is NOT a String, and a [String] list is NOT the concatenated string).
 eq(A, B) when is_list(A), is_binary(B) -> charlist_eq(A, B);
 eq(A, B) when is_binary(A), is_list(B) -> charlist_eq(B, A);
 eq(A, B) -> A =:= B.
@@ -33,14 +36,25 @@ eq(A, B) -> A =:= B.
 neq(A, B) -> not eq(A, B).
 
 charlist_eq(L, Bin) ->
-    case lists:all(fun erlang:is_integer/1, L) of
-        true ->
-            case unicode:characters_to_binary(L) of
+    case charlist_opt(L, []) of
+        {ok, Cs} ->
+            case unicode:characters_to_binary(Cs) of
                 B2 when is_binary(B2) -> B2 =:= Bin;
                 _ -> false
             end;
-        false -> false
+        error -> false
     end.
+
+%% The codepoint list of a [Char] (tagged) — errors on anything else.
+charlist(L) ->
+    case charlist_opt(L, []) of
+        {ok, Cs} -> Cs;
+        error -> L
+    end.
+
+charlist_opt([], Acc) -> {ok, lists:reverse(Acc)};
+charlist_opt([{'Char', C} | T], Acc) when is_integer(C) -> charlist_opt(T, [C | Acc]);
+charlist_opt(_, _) -> error.
 
 %% divide/2 — polymorphic / : integer division when both integers, float
 %% otherwise. Division-by-zero is a runtime error (caught in the emitter).
@@ -91,6 +105,7 @@ float_parse(S) ->
 %% an already-matching type, TRUNCATE (not round) a Float down to Integer,
 %% parse a String, and 'none' on anything else/unparseable.
 %% Moved from kex_io where type conversion didn't belong.
+to_integer({'Char', C}) -> C;
 to_integer(X) when is_integer(X) -> X;
 to_integer(X) when is_float(X) -> erlang:trunc(X);
 to_integer(X) when is_binary(X) ->
