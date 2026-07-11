@@ -598,6 +598,32 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::just(result);
     });
 
+    // minBy/maxBy — the intrinsic backing for the prelude's `min { |x| key }`
+    // and `max { |x| key }` (Kex.Intrinsic.List.minBy/maxBy): the element
+    // whose key is smallest/largest, Just-wrapped, or None for [].
+    auto extremeBy = [getElements, compareVia](std::vector<ValuePtr>& args,
+                                               const char* wins) -> ValuePtr {
+        if (args.size() < 2) return Value::none();
+        auto elems = getElements(args[0]);
+        if (elems.empty()) return Value::none();
+        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+        if (!fn || !fn->native) return Value::none();
+        auto keyOf = fn->native;
+        auto result = elems[0];
+        auto bestKey = keyOf({result});
+        for (size_t i = 1; i < elems.size(); i++) {
+            auto k = keyOf({elems[i]});
+            if (compareVia(k, bestKey) == wins) { result = elems[i]; bestKey = k; }
+        }
+        return Value::just(result);
+    };
+    reg("minBy", [extremeBy](std::vector<ValuePtr> args) -> ValuePtr {
+        return extremeBy(args, "Less");
+    });
+    reg("maxBy", [extremeBy](std::vector<ValuePtr> args) -> ValuePtr {
+        return extremeBy(args, "Greater");
+    });
+
     auto numericSum = [](const std::vector<ValuePtr>& elems) -> ValuePtr {
         bool hasFloat = false;
         for (const auto& e : elems)

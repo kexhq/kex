@@ -375,6 +375,17 @@ make [Number] do
   min :> Number?
   let min = Kex.Intrinsic.List.min(this)
 
+  # Returns the element with the smallest +f+ key wrapped in +Just+, or
+  # +None+ for an empty list.
+  #
+  # @param f [X -> Y]
+  # @return [X?]
+  #
+  # @example
+  #   ["hey", "hi"].min { |s| s.count }   # => Just("hi")
+  min :> (X -> Y) -> X?
+  let min(f) = Kex.Intrinsic.List.minBy(this, f)
+
   # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
   #
   # @return [Number?]
@@ -384,6 +395,17 @@ make [Number] do
   #   [].max          # => None
   max :> Number?
   let max = Kex.Intrinsic.List.max(this)
+
+  # Returns the element with the largest +f+ key wrapped in +Just+, or
+  # +None+ for an empty list.
+  #
+  # @param f [X -> Y]
+  # @return [X?]
+  #
+  # @example
+  #   ["hey", "hi"].max { |s| s.count }   # => Just("hey")
+  max :> (X -> Y) -> X?
+  let max(f) = Kex.Intrinsic.List.maxBy(this, f)
 end
 
 make [String | Char] do

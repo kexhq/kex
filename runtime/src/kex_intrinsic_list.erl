@@ -9,6 +9,7 @@
          sum/1, product/1, indexOf/2, at/2, foldLeft/3, min/1, max/1, length/1,
          first/1, last/1,
          join/1, join/2, partition/2, member/2, as_list/1,
+         sum_by/2, product_by/2, minBy/2, maxBy/2,
          %% Lower-level list ops used directly by the emitters (moved here from
          %% kex_io, where list operations didn't belong).
          list_get/2, list_get/3, index_of/2, list_product/1]).
@@ -114,3 +115,21 @@ index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 
 %% list.product — no lists:product/1 BIF.
 list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
+
+%% *_by/2 — the block forms of the aggregations: `.sum { |x| key }` maps then
+%% sums; `.max { |x| key }` returns Just(elem) with the greatest key (None
+%% for []), mirroring src/interpreter/stdlib/list.cxx's fn-arg branches.
+sum_by(L, F) -> lists:sum([kex_intrinsic_fun:applyItem(F, I) || I <- as_list(L)]).
+product_by(L, F) ->
+    lists:foldl(fun(I, A) -> A * kex_intrinsic_fun:applyItem(F, I) end, 1, as_list(L)).
+minBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A < B end).
+maxBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A > B end).
+
+extreme_by([], _F, _Wins) -> 'none';
+extreme_by([H | T], F, Wins) ->
+    Seed = {H, kex_intrinsic_fun:applyItem(F, H)},
+    {Best, _} = lists:foldl(fun(I, {B, BK}) ->
+        K = kex_intrinsic_fun:applyItem(F, I),
+        case Wins(K, BK) of true -> {I, K}; false -> {B, BK} end
+    end, Seed, T),
+    {'Just', Best}.

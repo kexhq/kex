@@ -1,3 +1,4 @@
+#include <algorithm>
 #include "../evaluator.hxx"
 #include <filesystem>
 #include <fstream>
@@ -7,11 +8,16 @@ namespace kex::interpreter {
 
 // Helper: open mode from an Atom (Read/Write/Append/ReadWrite)
 static auto modeFlags(const ValuePtr& modeVal) -> std::ios::openmode {
-    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) {
-        if (atom->name == "Write")     return std::ios::out | std::ios::trunc;
-        if (atom->name == "Append")    return std::ios::out | std::ios::app;
-        if (atom->name == "ReadWrite") return std::ios::in  | std::ios::out;
-    }
+    // A bare `Read`/`Append` mode is a nullary constructor — a VariantValue
+    // (an AtomValue only via `:append`-style literals). Accept both; the
+    // VariantValue case was a real bug: `File.open(p, Append)` fell through
+    // to read-only and writes through the handle silently failed.
+    std::string name;
+    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) name = atom->name;
+    else if (auto* var = std::get_if<VariantValue>(&modeVal->data)) name = var->tag;
+    if (name == "Write")     return std::ios::out | std::ios::trunc;
+    if (name == "Append")    return std::ios::out | std::ios::app;
+    if (name == "ReadWrite") return std::ios::in  | std::ios::out;
     return std::ios::in;
 }
 
@@ -543,10 +549,13 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 
         std::error_code ec;
         if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
-        std::vector<ValuePtr> entries;
+        std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
-            if (!ec) entries.push_back(Value::string(entry.path().filename().string()));
+            if (!ec) names.push_back(entry.path().filename().string());
         }
+        std::sort(names.begin(), names.end());
+        std::vector<ValuePtr> entries;
+        for (auto& nm : names) entries.push_back(Value::string(nm));
         return Value::list(std::move(entries));
     });
 
@@ -570,11 +579,14 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 
         std::error_code ec;
         if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
-        std::vector<ValuePtr> files;
+        std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
             if (!ec && std::filesystem::is_regular_file(entry.path(), ec))
-                files.push_back(Value::string(entry.path().filename().string()));
+                names.push_back(entry.path().filename().string());
         }
+        std::sort(names.begin(), names.end());
+        std::vector<ValuePtr> files;
+        for (auto& nm : names) files.push_back(Value::string(nm));
         return Value::list(std::move(files));
     });
 
@@ -599,11 +611,14 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 
         std::error_code ec;
         if (!std::filesystem::is_directory(dirPath, ec)) return Value::none();
-        std::vector<ValuePtr> dirs;
+        std::vector<std::string> names;
         for (const auto& entry : std::filesystem::directory_iterator(dirPath, ec)) {
             if (!ec && std::filesystem::is_directory(entry.path(), ec))
-                dirs.push_back(Value::string(entry.path().filename().string()));
+                names.push_back(entry.path().filename().string());
         }
+        std::sort(names.begin(), names.end());
+        std::vector<ValuePtr> dirs;
+        for (auto& nm : names) dirs.push_back(Value::string(nm));
         return Value::list(std::move(dirs));
     });
 

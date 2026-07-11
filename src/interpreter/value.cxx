@@ -1,5 +1,6 @@
 #include "value.hxx"
 #include "../common/color.hxx"
+#include <algorithm>
 #include <optional>
 
 namespace kex::interpreter {
@@ -219,11 +220,17 @@ auto Value::toString() const -> std::string {
                 }
                 return result + ")";
             }
+            // Sorted field order: deterministic, and reproducible by the
+            // BEAM backend (the unordered_map's hash order isn't).
+            std::vector<std::string> keys;
+            keys.reserve(v.fields.size());
+            for (const auto& [key, _] : v.fields) keys.push_back(key);
+            std::sort(keys.begin(), keys.end());
             std::string result = v.typeName + " { ";
             bool first = true;
-            for (const auto& [key, val] : v.fields) {
+            for (const auto& key : keys) {
                 if (!first) result += ", ";
-                result += key + ": " + val->toString();
+                result += key + ": " + v.fields.at(key)->toString();
                 first = false;
             }
             return result + " }";

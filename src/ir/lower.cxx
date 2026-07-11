@@ -184,6 +184,20 @@ struct Lowering {
         return var(name);
     }
 
+    // The kex_intrinsic_fun `*2` helper backing a pair-iterating HOF (a
+    // 2-param `{ |k, v| }` block), or nullptr for methods whose 2-param
+    // block means something else (reduce's (acc, x), sort's comparator).
+    static auto hof2Name(const std::string& m) -> const char* {
+        static const std::unordered_map<std::string, const char*> hof2 = {
+            {"each","each2"}, {"filter","filter2"}, {"select","filter2"},
+            {"map","map2"}, {"count","count2"},
+            {"any?","any2"}, {"some?","any2"}, {"all?","all2"},
+            {"reject","reject2"}, {"find","find2"},
+        };
+        auto it = hof2.find(m);
+        return it != hof2.end() ? it->second : nullptr;
+    }
+
     auto opOf(TokenType t) -> Op {
         switch (t) {
             case TokenType::Plus: return Op::Add;
@@ -391,6 +405,13 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
+                // `&name` where name is a LOCAL binding holding a fun (e.g.
+                // `let inc = { |x| … }; xs.map(&inc)`) — the reference IS the
+                // fun; pass it through (the UFCS path below would look for a
+                // method `.inc`, which doesn't exist).
+                if (n.kind == ast::ShorthandLambda::Kind::Function &&
+                    n.args.empty() && subst.count(n.name))
+                    return var(currentName(n.name));
                 // `&.method` / `&func` / `&.method(args)` → fun(_sx) ->
                 // _sx.method(args). Reusing the UFCS method path means
                 // `&digit?` (a builtin) and `&myFn` (a local) both resolve
@@ -606,14 +627,16 @@ struct Lowering {
                 return wrapLets(binds, runtimeError("Undefined function: " + n.name));
             ex->node = Construct{n.name, std::move(args)};
         }
-        else if (zeroArgThunk && !args.empty()) {
+        else if (zeroArgThunk && (!args.empty() || topLevelConstants.count(n.name))) {
+            // A `let` constant holding a fun: `name(...)` resolves the
+            // constant, then applies — including `thunk()` with NO args (the
+            // walker looks the identifier up and applies the lambda once).
+            // A real 0-arity FUNCTION `f()` stays a plain call below: its
+            // result is returned as-is, never auto-applied.
             auto thunk = std::make_unique<Expr>();
             thunk->node = Call{"", n.name, 0, {}, false};
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
-            // `thunk()` with no args → just evaluate the 0-arity function (its
-            // value may itself be a fun; matching the default emitter, we do
-            // NOT auto-apply it further).
             ex->node = Call{"", n.name, 0, {}, false};
         else if (knownFns.count(n.name))
             ex->node = Call{"", n.name, arity, std::move(args), false};
@@ -689,6 +712,24 @@ struct Lowering {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Call{mod, n.method, static_cast<int>(args.size()), std::move(args), false};
                 return wrapLets(binds, std::move(ex));
+            }
+        }
+        // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
+        // Mock.FS.clear() — the in-memory test filesystem, mirrored by
+        // kex_file's mock registry.
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) &&
+                path.size() == 2 && path[0] == "Mock" && path[1] == "FS") {
+                const char* fn = n.method == "File" ? "mock_file"
+                               : n.method == "Directory" ? "mock_dir"
+                               : n.method == "clear" ? "mock_clear" : nullptr;
+                if (!fn) throw LowerError("IR lower: Mock.FS." + n.method + " not supported");
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                return wrapLets(binds,
+                    callE("kex_file", fn, static_cast<int>(args.size()), std::move(args)));
             }
         }
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
@@ -808,6 +849,13 @@ struct Lowering {
                     return wrapLets(binds, callE("kex_file", "open", 2,
                                                  two(std::move(args[0]), std::move(fn))));
                 }
+                // File.open(path, Mode) do |f| … end → a real io-device
+                // handle, closed when the block returns.
+                if (n.method == "open" && n.block && args.size() == 2) {
+                    auto fn = atomize(*n.block, binds);
+                    return wrapLets(binds, callE("kex_file", "open", 3,
+                        three(std::move(args[0]), std::move(args[1]), std::move(fn))));
+                }
                 if (n.method == "read") return nsCall("kex_file", "read");
                 if (n.method == "write") return nsCall("kex_file", "write");
                 if (n.method == "append") return nsCall("kex_file", "append");
@@ -816,7 +864,30 @@ struct Lowering {
                 if (n.method == "lines") return nsCall("kex_file", "lines");
                 if (n.method == "feed") return nsCall("kex_file", "feed");
                 if (n.method == "size") return nsCall("kex_file", "size");
+                if (n.method == "file?") return nsCall("kex_file", "file?");
+                if (n.method == "directory?") return nsCall("kex_file", "directory?");
+                if (n.method == "basename") return nsCall("kex_file", "basename");
+                if (n.method == "dirname") return nsCall("kex_file", "dirname");
+                if (n.method == "extension") return nsCall("kex_file", "extension");
+                if (n.method == "join") return nsCall("kex_file", "join");
+                if (n.method == "absolute") return nsCall("kex_file", "absolute");
+                if (n.method == "copy") return nsCall("kex_file", "copy");
+                if (n.method == "rename") return nsCall("kex_file", "rename");
                 throw LowerError("IR lower: File." + n.method + " not yet ported");
+            }
+            if (uid->name == "Directory") {
+                if (n.method == "current") return nsCall("kex_file", "dir_current");
+                if (n.method == "home") return nsCall("kex_file", "dir_home");
+                if (n.method == "exists?" || n.method == "directory?")
+                    return nsCall("kex_file", "dir_exists?");
+                if (n.method == "file?") return nsCall("kex_file", "dir_file?");
+                if (n.method == "create") return nsCall("kex_file", "dir_create");
+                if (n.method == "delete") return nsCall("kex_file", "dir_delete");
+                if (n.method == "deleteAll") return nsCall("kex_file", "dir_delete_all");
+                if (n.method == "list") return nsCall("kex_file", "dir_list");
+                if (n.method == "files") return nsCall("kex_file", "dir_files");
+                if (n.method == "directories") return nsCall("kex_file", "dir_directories");
+                throw LowerError("IR lower: Directory." + n.method + " not yet ported");
             }
             // ENV is a real Map value (kex_io:env_map()); its methods are just
             // map operations on that value.
@@ -877,6 +948,14 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
+        // `.or(default)` is universal in the walker — Just/Ok unwrap,
+        // None/Error yield the default, anything else returns itself — so it
+        // can't go through the Optional-owned prelude dispatcher (a plain
+        // value receiver would be a function_clause error).
+        if (!m_inGuard && m == "or" && n.args.size() == 1 && !n.block
+            && !localMethods.count(m))
+            return ret(callE("kex_intrinsic_fun", "or_else", 2,
+                             two(clone(rv), atomize_ir(lower(n.args[0]), rb))));
         // Migrated stdlib functions route straight to the shared kex_prelude
         // module, bypassing the builtin ladder below (so migrating a method is
         // just adding its name to migratedPreludeFns + a prelude wrapper — no
@@ -891,6 +970,24 @@ struct Lowering {
             pargs.push_back(clone(rv));
             for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
             return ret(callE("kex_prelude", m, static_cast<int>(n.args.size()) + 1, std::move(pargs)));
+        }
+        // `{ |k, v| }` two-param blocks iterate PAIRS: the receiver is a Map
+        // or a list of pairs (`m.entries.map { |k, v| … }`), which only the
+        // runtime can tell apart — kex_intrinsic_fun's *2 helpers dispatch
+        // on is_map. This must intercept before the kex_prelude routing
+        // below, whose dispatchers send a Map to the reduce-based List
+        // defaults (which can't iterate a map). reduce/sort also take
+        // 2-param blocks but are NOT pair iteration — hof2Name excludes them.
+        if (!m_inGuard && n.block && n.args.empty() && n.namedArgs.empty()
+            && !localMethods.count(m)) {
+            auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind);
+            if (lam && lam->params.size() == 2) {
+                if (const char* fn2 = hof2Name(m)) {
+                    auto fnV = atomize_ir(lower(*n.block), rb);
+                    return ret(callE("kex_intrinsic_fun", fn2, 2,
+                                     two(clone(rv), std::move(fnV))));
+                }
+            }
         }
         // Higher-order stdlib functions take a block/function argument (so
         // they're excluded from the plain routing above). Route them to the
@@ -931,6 +1028,10 @@ struct Lowering {
             {"sort","lists","sort",0},
             // handle.feed — the File.open block handle is the path on BEAM.
             {"feed","kex_file","feed",0},
+            // FileHandle methods (File.open(path, Mode) block handles).
+            {"readLine","kex_file","handle_read_line",0},
+            {"writeLine","kex_file","handle_write_line",1},
+            {"eof?","kex_file","handle_eof?",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
             {"abs","erlang","abs",0},
             // kex_intrinsic_string handles both String binaries and bare
@@ -1140,73 +1241,28 @@ struct Lowering {
             auto fn = atomize(*blk, binds);
             // rb binds the receiver (outer), binds the block fn (inner).
             auto build = [&](ExprPtr call) { return wrapLets(rb, wrapLets(binds, std::move(call))); };
-            // A 2-parameter block (|k, v|) means map iteration — route the
-            // shared HOF names to their maps:* equivalents (the string emitter
-            // does the same via its blockArity2 check).
+            // A 2-parameter block (|k, v|) iterates pairs — but the receiver
+            // may be a Map OR a list of pairs (`m.entries.map { |k, v| … }`),
+            // which only the runtime can tell apart. kex_intrinsic_fun's *2
+            // helpers dispatch on is_map and auto-splat tuples for lists.
             bool mapForm = false;
             if (auto* lam = std::get_if<ast::Lambda>(&(*blk)->kind))
                 mapForm = lam->params.size() == 2;
             if (mapForm) {
-                if (m == "each")
-                    return build(callE("maps", "foreach", 2, two(std::move(fn), clone(rv))));
-                if (m == "filter" || m == "select")
-                    return build(callE("maps", "filter", 2, two(std::move(fn), clone(rv))));
-                if (m == "map") {
-                    // one result per (k,v): reverse(fold(fun(k,v,acc)->[fn(k,v)|acc], [], m)).
-                    std::string kk = fresh("K"), vv = fresh("V"), acc = fresh("Acc");
-                    Lambda fold; fold.params = {kk, vv, acc};
-                    auto cell = std::make_unique<Expr>();
-                    cell->node = MakeList{one(callE_indirect(std::move(fn), two(var(kk), var(vv)))),
-                                          std::optional<ExprPtr>(var(acc))};
-                    fold.body = std::move(cell);
-                    auto ff = std::make_unique<Expr>(); ff->node = std::move(fold);
-                    auto foldV = atomize_ir(std::move(ff), binds);
-                    return build(callE("lists", "reverse", 1, one(
-                        callE("maps", "fold", 3, three(std::move(foldV),
-                            [&]{ auto e = std::make_unique<Expr>(); e->node = MakeList{{}, std::nullopt}; return e; }(),
-                            clone(rv))))));
-                }
-                auto mapCount = [&](ExprPtr f) {
-                    return callE("maps", "size", 1, one(callE("maps", "filter", 2, two(std::move(f), clone(rv)))));
+                if (const char* fn2 = hof2Name(m))
+                    return build(callE("kex_intrinsic_fun", fn2, 2,
+                                       two(clone(rv), std::move(fn))));
+            }
+            // Aggregations with a key block: `.sum { |x| k }` maps then sums,
+            // `.max { |x| k }` picks the element with the greatest key.
+            {
+                static const std::unordered_map<std::string, const char*> aggBy = {
+                    {"sum","sum_by"}, {"product","product_by"},
+                    {"min","minBy"}, {"max","maxBy"},
                 };
-                if (m == "count") return build(mapCount(std::move(fn)));
-                if (m == "any?" || m == "some?")
-                    return build(intrin(Op::Gt, two(mapCount(std::move(fn)), litInt(0))));
-                if (m == "all?")
-                    return build(intrin(Op::Eq, two(mapCount(std::move(fn)),
-                                                    callE("maps", "size", 1, one(clone(rv))))));
-                if (m == "reject") {
-                    std::string kk = fresh("K"), vv = fresh("V");
-                    Lambda neg; neg.params = {kk, vv};
-                    neg.body = intrin(Op::Not, one(callE_indirect(std::move(fn), two(var(kk), var(vv)))));
-                    auto nf = std::make_unique<Expr>(); nf->node = std::move(neg);
-                    auto negV = atomize_ir(std::move(nf), binds);
-                    return build(callE("maps", "filter", 2, two(std::move(negV), clone(rv))));
-                }
-                // find { |k,v| } → maps:fold keeping the first matching {k,v} as
-                // Just({k,v}), else 'none'.
-                if (m == "find") {
-                    std::string kk = fresh("K"), vv = fresh("V"), acc = fresh("Acc");
-                    auto pair = std::make_unique<Expr>();
-                    pair->node = MakeTuple{two(var(kk), var(vv))};
-                    auto justPair = std::make_unique<Expr>();
-                    justPair->node = Construct{"Just", one(std::move(pair))};
-                    auto inner = matchBool(callE_indirect(std::move(fn), two(var(kk), var(vv))),
-                                           std::move(justPair), lit(LitKind::None, "none"));
-                    // case Acc of 'none' -> inner ; _ -> Acc
-                    Match outer; outer.subjects.push_back(var(acc));
-                    MatchClause c1; auto np = std::make_unique<Pattern>();
-                    np->kind = PatKind::Lit; np->litKind = LitKind::None; np->litText = "none";
-                    c1.patterns.push_back(std::move(np)); c1.body = std::move(inner);
-                    MatchClause c2; c2.patterns.push_back(wildPat()); c2.body = var(acc);
-                    outer.clauses.push_back(std::move(c1)); outer.clauses.push_back(std::move(c2));
-                    Lambda fold; fold.params = {kk, vv, acc};
-                    fold.body = std::make_unique<Expr>(); fold.body->node = std::move(outer);
-                    auto ff = std::make_unique<Expr>(); ff->node = std::move(fold);
-                    auto foldV = atomize_ir(std::move(ff), binds);
-                    return build(callE("maps", "fold", 3, three(std::move(foldV),
-                        lit(LitKind::None, "none"), clone(rv))));
-                }
+                if (auto it = aggBy.find(m); it != aggBy.end())
+                    return build(callE("kex_intrinsic_list", it->second, 2,
+                                       two(clone(rv), std::move(fn))));
             }
             // List HOFs also serve String receivers ([Char] IS String):
             // as_list coerces a binary to its codepoint list, everything
@@ -1451,6 +1507,47 @@ struct Lowering {
         std::string r = fresh("R");
         return makeLet(r, std::move(body),
             makeLet(fresh("Sum"), callE("kex_test", "maybe_print_summary", 0, {}), var(r)));
+    }
+
+    // Payload arity per ADT variant tag (nullary variants lower to atoms and
+    // never need display info).
+    std::unordered_map<std::string, int> variantArity;
+
+    // Prepend a kex_io:register_display/2 call carrying this module's record
+    // layouts and variant arities — only the compiler knows which tuples are
+    // records/variants, and the runtime needs that to render
+    // `Name { field: value }` / `Tag(args)` instead of plain tuples.
+    auto withDisplayInfo(ExprPtr body) -> ExprPtr {
+        bool anyVariant = std::any_of(variantArity.begin(), variantArity.end(),
+                                      [](const auto& kv){ return kv.second >= 1; });
+        if (records.empty() && !anyVariant) return std::move(body);
+        auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
+        auto mapFrom = [&](std::vector<ExprPtr> pairs) {
+            auto lst = std::make_unique<Expr>();
+            lst->node = MakeList{std::move(pairs), std::nullopt};
+            return callE("maps", "from_list", 1, one(std::move(lst)));
+        };
+        std::vector<ExprPtr> recPairs;
+        for (const auto& [name, info] : records) {
+            std::vector<ExprPtr> fields;
+            for (const auto& f : info.fields) fields.push_back(atomLit(f));
+            auto fl = std::make_unique<Expr>();
+            fl->node = MakeList{std::move(fields), std::nullopt};
+            auto t = std::make_unique<Expr>();
+            t->node = MakeTuple{two(atomLit(name), std::move(fl))};
+            recPairs.push_back(std::move(t));
+        }
+        std::vector<ExprPtr> varPairs;
+        for (const auto& [tag, ar] : variantArity) {
+            if (ar < 1) continue;
+            auto t = std::make_unique<Expr>();
+            t->node = MakeTuple{two(atomLit(tag), litInt(ar))};
+            varPairs.push_back(std::move(t));
+        }
+        return makeLet(fresh("Disp"),
+            callE("kex_io", "register_display", 2,
+                  two(mapFrom(std::move(recPairs)), mapFrom(std::move(varPairs)))),
+            std::move(body));
     }
 
     // ---- Constructors -----------------------------------------------------
@@ -2615,7 +2712,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (*td && (*td)->variants)
                 for (const auto& v : *(*td)->variants) {
                     auto t = Lowering::simpleTypeName(v);
-                    if (!t.empty()) L.variantTagSet.insert(t);
+                    if (t.empty()) continue;
+                    L.variantTagSet.insert(t);
+                    if (auto* g = std::get_if<ast::GenericType>(&v->kind))
+                        L.variantArity[t] = static_cast<int>(g->args.size());
+                    else
+                        L.variantArity[t] = 0;
                 }
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (!*md) continue;
@@ -2749,7 +2851,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         p->name = node->params[0].name ? *node->params[0].name : "_args";
                         fc.params.push_back(std::move(p));
                     }
-                    fc.body = L.withTestSummary(std::move(body));
+                    fc.body = L.withTestSummary(L.withDisplayInfo(std::move(body)));
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
                     mod.hasMain = true;
@@ -2841,7 +2943,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             let->node = Let{L.fresh("S"), std::move(val), std::move(rest)};
             return let;
         };
-        fc.body = L.withTestSummary(bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0));
+        fc.body = L.withTestSummary(L.withDisplayInfo(
+            bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0)));
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
         mod.hasMain = true; mod.mainArity = 0;

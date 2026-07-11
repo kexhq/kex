@@ -1,6 +1,16 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, to_string/1,
-           to_string_bin/1, env_map/0]).
+           to_string_bin/1, env_map/0, register_display/2]).
+
+%% register_display/2 — called once at main start with the compiling module's
+%% record layouts (#{Tag => [field, …]} in declaration order) and ADT payload
+%% variant arities (#{Tag => Arity}). Only the compiler knows these; without
+%% them a record and a plain tuple are the same term, so to_string falls back
+%% to tuple rendering.
+register_display(Records, Variants) ->
+    persistent_term:put(kex_display_records, Records),
+    persistent_term:put(kex_display_variants, Variants),
+    ok.
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
@@ -135,9 +145,12 @@ to_string(X) when is_atom(X) ->
     end;
 to_string(X) when is_integer(X) -> integer_to_list(X);
 to_string(X) when is_float(X)   -> format_float(X);
+% Kex map syntax (matching the walker's MapValue::toString): `{ :k: v, … }`,
+% and `{  }` when empty. Note key ORDER can still differ from the walker —
+% Erlang maps don't preserve insertion order after put/delete.
 to_string(X) when is_map(X)     ->
-    Pairs = [to_string(K) ++ " => " ++ to_string(V) || {K, V} <- maps:to_list(X)],
-    "#{" ++ lists:flatten(lists:join(", ", Pairs)) ++ "}";
+    Pairs = [to_string(K) ++ ": " ++ to_string(V) || {K, V} <- maps:to_list(X)],
+    "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
 % A plain Kex Tuple (structural pairing, e.g. `(Underscore, rest)`) and a
 % prelude ADT variant with a payload (e.g. Just(1)) are BOTH just an
 % Erlang {Atom, Args...} tuple — genuinely indistinguishable by value alone
@@ -151,13 +164,40 @@ to_string(X) when is_map(X)     ->
 to_string(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
-    [Tag | Args] = tuple_to_list(X),
-    Parts = [to_string(E) || E <- Args],
-    atom_to_list(Tag) ++ "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
+    variant_string(X);
+% A registered record renders as `Name { field: value, … }` (fields sorted,
+% matching the walker); a registered payload-variant tag as `Tag(args)`;
+% anything else stays a plain Kex tuple `(a, b)`. The tag AND arity must
+% both match — `(Underscore, "wooo")`, a tuple whose head happens to be a
+% nullary variant VALUE, still renders as a tuple.
+to_string(X) when is_tuple(X), tuple_size(X) >= 1 ->
+    Tag = element(1, X),
+    Arity = tuple_size(X) - 1,
+    Recs = persistent_term:get(kex_display_records, #{}),
+    case is_atom(Tag) andalso maps:get(Tag, Recs, undefined) of
+        Fields when is_list(Fields), length(Fields) =:= Arity ->
+            Pairs = lists:sort(lists:zip([atom_to_list(F) || F <- Fields],
+                                         lists:seq(2, tuple_size(X)))),
+            Body = [F ++ ": " ++ to_string(element(I, X)) || {F, I} <- Pairs],
+            atom_to_list(Tag) ++ " { " ++ lists:flatten(lists:join(", ", Body)) ++ " }";
+        _ ->
+            Vars = persistent_term:get(kex_display_variants, #{}),
+            case is_atom(Tag) andalso maps:get(Tag, Vars, undefined) of
+                Arity -> variant_string(X);
+                _ ->
+                    Parts = [to_string(E) || E <- tuple_to_list(X)],
+                    "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")"
+            end
+    end;
 to_string(X) when is_tuple(X)   ->
     Parts = [to_string(E) || E <- tuple_to_list(X)],
     "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")";
 to_string(X)                    -> lists:flatten(io_lib:format("~p", [X])).
+
+variant_string(X) ->
+    [Tag | Args] = tuple_to_list(X),
+    Parts = [to_string(E) || E <- Args],
+    atom_to_list(Tag) ++ "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")".
 
 %% Float display — matches src/interpreter/value.cxx's toString exactly:
 %% format with 6 decimal places (not Erlang's ~g, which picks a variable,
