@@ -225,7 +225,7 @@ endif()
 # it on the -pa path and lazy-load it on first use. Built by the freshly-built
 # kex binary (Kex → Core Erlang → beam), so it depends on `kex` and the runtime
 # intrinsic beams it calls (kex_intrinsic_*).
-if(KEX_HAS_RUNTIME_BEAMS)
+if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
     file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
     add_custom_command(
