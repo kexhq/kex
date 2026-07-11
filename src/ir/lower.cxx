@@ -1623,6 +1623,39 @@ struct Lowering {
             }
         }
     }
+    // Function-head record patterns also need to preserve non-variable field
+    // constraints (`{ x: 0.0 }`, tuple/list patterns). Register the variables
+    // before lowering the clause body, then wrap that body in field reads and
+    // Core Erlang matches so the constraint is enforced at call time.
+    void collectRecordBindings(const ast::RecordPattern& rp, std::vector<std::string>& names) {
+        for (const auto& field : rp.fields) {
+            if (!field.pattern) {
+                names.push_back(field.name);
+            } else if (auto* vp = std::get_if<ast::VarPattern>(&(*field.pattern)->kind)) {
+                names.push_back(vp->name);
+            } else if (auto* nested = std::get_if<ast::RecordPattern>(&(*field.pattern)->kind)) {
+                collectRecordBindings(*nested, names);
+            }
+        }
+    }
+    auto wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
+                           ExprPtr body) -> ExprPtr {
+        for (auto it = rp.fields.rbegin(); it != rp.fields.rend(); ++it) {
+            auto value = fieldAccess(it->name, var(baseVar));
+            if (!it->pattern) {
+                body = makeLet(it->name, std::move(value), std::move(body));
+            } else if (auto* vp = std::get_if<ast::VarPattern>(&(*it->pattern)->kind)) {
+                body = makeLet(vp->name, std::move(value), std::move(body));
+            } else if (auto* nested = std::get_if<ast::RecordPattern>(&(*it->pattern)->kind)) {
+                std::string sub = fresh("rec");
+                body = wrapRecordPattern(sub, *nested, std::move(body));
+                body = makeLet(sub, std::move(value), std::move(body));
+            } else {
+                body = makeMatch1(std::move(value), lowerPattern(*it->pattern), std::move(body));
+            }
+        }
+        return body;
+    }
     auto lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
         if (!p) { auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }
         return std::visit([&](const auto& pn) -> PatternPtr {
@@ -2149,6 +2182,76 @@ struct Lowering {
                 return makeLet(ssa, std::move(val), std::move(rest));
             }
         }
+        // A closure captures the walker's mutable bindings by reference, but
+        // BEAM closures only capture values. For a list `each` callback that
+        // reassigns an outer variable, lower it to foldl and use the fold
+        // accumulator as the callback's explicit mutable state. Once the
+        // callback completes, rebind that state in the enclosing SSA scope.
+        if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
+            mc && mc->method == "each" && mc->receiver && mc->args.empty()
+            && mc->namedArgs.empty() && mc->block) {
+            auto* lam = std::get_if<ast::Lambda>(&(*mc->block)->kind);
+            std::unordered_set<std::string> muts;
+            if (lam) for (const auto& stmt : lam->body) collectMutated(stmt, muts);
+            std::vector<std::string> mutVars;
+            for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
+            std::sort(mutVars.begin(), mutVars.end());
+            if (lam && lam->params.size() == 1 && !mutVars.empty()) {
+                std::vector<Binding> binds;
+                auto receiver = atomize_ir(lower(mc->receiver), binds);
+                auto snap = subst;
+                std::string item = lam->params[0].name;
+                std::string state = fresh("EachState");
+                Lambda fold;
+                fold.params = {item, state};
+                subst[item] = item;
+
+                if (mutVars.size() == 1) {
+                    subst[mutVars[0]] = state;
+                    fold.body = lowerLoopBodyFrom(lam->body, 0, "", mutVars,
+                        [&] { return stateExpr(mutVars); });
+                } else {
+                    auto statePat = std::make_unique<Pattern>();
+                    statePat->kind = PatKind::Tuple;
+                    for (const auto& v : mutVars) {
+                        std::string sv = fresh(v);
+                        subst[v] = sv;
+                        auto p = std::make_unique<Pattern>();
+                        p->kind = PatKind::Var; p->name = sv;
+                        statePat->args.push_back(std::move(p));
+                    }
+                    auto body = lowerLoopBodyFrom(lam->body, 0, "", mutVars,
+                        [&] { return stateExpr(mutVars); });
+                    fold.body = makeMatch1(var(state), std::move(statePat), std::move(body));
+                }
+                subst = snap;
+
+                auto foldExpr = std::make_unique<Expr>();
+                foldExpr->node = std::move(fold);
+                auto foldFn = atomize_ir(std::move(foldExpr), binds);
+                auto initial = atomize_ir(stateExpr(mutVars), binds);
+                auto result = wrapLets(binds, callE("lists", "foldl", 3,
+                    three(std::move(foldFn), std::move(initial), std::move(receiver))));
+
+                if (mutVars.size() == 1) {
+                    std::string nv = fresh(mutVars[0]);
+                    subst[mutVars[0]] = nv;
+                    auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
+                    return makeLet(nv, std::move(result), std::move(rest));
+                }
+                auto resultPat = std::make_unique<Pattern>();
+                resultPat->kind = PatKind::Tuple;
+                for (const auto& v : mutVars) {
+                    std::string nv = fresh(v);
+                    subst[v] = nv;
+                    auto p = std::make_unique<Pattern>();
+                    p->kind = PatKind::Var; p->name = nv;
+                    resultPat->args.push_back(std::move(p));
+                }
+                auto rest = isLast ? lit(LitKind::Atom, "ok") : lowerBodyFrom(body, i + 1);
+                return makeMatch1(std::move(result), std::move(resultPat), std::move(rest));
+            }
+        }
         // Statement-position if/match whose branches REASSIGN outer vars —
         // thread the mutated state through, exactly like loops do: each
         // branch yields the (possibly reassigned) values, and the code after
@@ -2282,6 +2385,7 @@ struct Lowering {
                 // position, and a range is a materialized list) — bind it to a
                 // fresh var and prepend field/element bindings to the body.
                 std::vector<std::pair<std::string, ExprPtr>> prefix;
+                std::vector<std::pair<std::string, const ast::RecordPattern*>> recordPatterns;
                 for (const auto& p : clause.params) {
                     if (!p.name && p.pattern) {
                         auto& pk = (*p.pattern)->kind;
@@ -2289,7 +2393,10 @@ struct Lowering {
                             std::string rv = fresh("rec");
                             auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = rv;
                             fc.params.push_back(std::move(vp));
-                            destructureRecordPattern(rv, *rp, prefix);
+                            recordPatterns.push_back({rv, rp});
+                            std::vector<std::string> names;
+                            collectRecordBindings(*rp, names);
+                            for (const auto& name : names) subst[name] = name;
                             continue;
                         }
                         if (auto* rgp = std::get_if<ast::RangePattern>(&pk)) {
@@ -2309,6 +2416,8 @@ struct Lowering {
                 ExprPtr body = lowerBody(clause.body);
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
                     body = makeLet(it->first, std::move(it->second), std::move(body));
+                for (auto it = recordPatterns.rbegin(); it != recordPatterns.rend(); ++it)
+                    body = wrapRecordPattern(it->first, *it->second, std::move(body));
                 fc.body = std::move(body);
                 def.clauses.push_back(std::move(fc));
             }

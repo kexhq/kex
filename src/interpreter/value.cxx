@@ -184,10 +184,14 @@ auto Value::toString() const -> std::string {
             return result + ")";
         }
         else if constexpr (std::is_same_v<T, MapValue>) {
+            auto entries = v.entries;
+            std::stable_sort(entries.begin(), entries.end(), [](const auto& a, const auto& b) {
+                return a.first->toString() < b.first->toString();
+            });
             std::string result = "{ ";
-            for (size_t i = 0; i < v.entries.size(); i++) {
+            for (size_t i = 0; i < entries.size(); i++) {
                 if (i > 0) result += ", ";
-                result += v.entries[i].first->toString() + ": " + v.entries[i].second->toString();
+                result += entries[i].first->toString() + ": " + entries[i].second->toString();
             }
             return result + " }";
         }

@@ -149,7 +149,7 @@ to_string(X) when is_float(X)   -> format_float(X);
 % and `{  }` when empty. Note key ORDER can still differ from the walker —
 % Erlang maps don't preserve insertion order after put/delete.
 to_string(X) when is_map(X)     ->
-    Pairs = [to_string(K) ++ ": " ++ to_string(V) || {K, V} <- maps:to_list(X)],
+    Pairs = [to_string(K) ++ ": " ++ to_string(V) || {K, V} <- lists:sort(maps:to_list(X))],
     "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
 % A plain Kex Tuple (structural pairing, e.g. `(Underscore, rest)`) and a
 % prelude ADT variant with a payload (e.g. Just(1)) are BOTH just an

@@ -294,6 +294,36 @@ int main() {
                 "match_state");
             assertEqual(output, std::string("12"));
         });
+
+        it("threads captured mutable state through each callbacks", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var total = 0\n"
+                "  [1, 2, 3].each do |n|\n"
+                "    total = total + n\n"
+                "  end\n"
+                "  total\n"
+                "end\n",
+                "each_state");
+            assertEqual(output, std::string("6"));
+        });
+
+        it("matches literal fields in record-pattern function heads", []() {
+            auto output = runIrOnBeam(
+                "record Point do\n"
+                "  x : Float\n"
+                "  y : Float\n"
+                "end\n"
+                "make Point do\n"
+                "  let origin?({ x: 0.0, y: 0.0 }) = true\n"
+                "  let origin?({ }) = false\n"
+                "end\n"
+                "main do\n"
+                "  origin?(Point { x: 0.0, y: 0.0 })\n"
+                "end\n",
+                "record_pattern");
+            assertEqual(output, std::string("true"));
+        });
     });
 
     describe("CoreErlangEmitter — function definitions", []() {

@@ -148,5 +148,19 @@ int main() {
         });
     });
 
+    describe("CLI — Map Display", []() {
+        it("uses canonical key order on both backends", []() {
+            const std::string source =
+                "main do\n"
+                "  IO.printLine({ \"kex\": 3, \"fast\": 4, \"is\": 2 })\n"
+                "end\n";
+            const std::string expected = "{ fast: 4, is: 2, kex: 3 }";
+            auto interpreter = runRepl("IO.printLine({ \"kex\": 3, \"fast\": 4, \"is\": 2 })\n");
+            auto beam = runBeamFile(source, "");
+            assertTrue(interpreter.find(expected) != std::string::npos, interpreter);
+            assertTrue(beam.find(expected) != std::string::npos, beam);
+        });
+    });
+
     return runAll();
 }
