@@ -356,15 +356,31 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
-        std::visit([&publicNames, &privateNames](const auto& node) {
+        std::visit([&publicNames, &privateNames, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                auto shortName = node->name;
+                auto prefixLen = mod.name.size() + 1;
+                if (shortName.size() > prefixLen && shortName.rfind(mod.name + ".", 0) == 0)
+                    shortName = shortName.substr(prefixLen);
+                publicNames.insert(shortName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 for (const auto& visible : node->items) {
                     if (const auto* function =
                             std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
                         (node->isPublic ? publicNames : privateNames).insert((*function)->name);
+                    else if (const auto* record =
+                            std::get_if<std::unique_ptr<ast::RecordDef>>(&visible))
+                        (node->isPublic ? publicNames : privateNames).insert((*record)->name);
+                    else if (const auto* typeDef =
+                            std::get_if<std::unique_ptr<ast::TypeDef>>(&visible))
+                        (node->isPublic ? publicNames : privateNames).insert((*typeDef)->name);
                 }
             }
         }, item);
@@ -379,7 +395,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 execTypeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                execRecordDef(*node);
+                execRecordDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
@@ -522,14 +538,15 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     }
 }
 
-auto Evaluator::execRecordDef(const ast::RecordDef& def) -> void {
-    // Register record name as a namespace for static access (e.g. Vector2D.Polar)
+auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& moduleScope) -> void {
     m_env->define(def.name, Value::record(def.name, {}));
     m_recordDefs[def.name] = &def;
+    if (!moduleScope.empty()) {
+        const auto scoped = moduleScope + "::" + def.name;
+        m_env->define(scoped, Value::record(def.name, {}));
+        m_recordDefs[scoped] = &def;
+    }
     if (def.staticBlock) {
-        // Static constructors/constants are namespaced under the record
-        // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
-        // "Static Functions (Constructors)".
         for (const auto& func : def.staticBlock->functions) {
             execFunctionDef(*func, def.name);
         }
@@ -1181,6 +1198,29 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (node.args.empty() && node.namedArgs.empty() && !node.block
                         && std::holds_alternative<ModuleValue>(target->data))
                         return target;
+                    if (std::holds_alternative<RecordValue>(target->data)) {
+                        const auto& recName = std::get<RecordValue>(target->data).typeName;
+                        std::unordered_map<std::string, ValuePtr> fields;
+                        if (node.block) {
+                            auto blockVal = eval(**node.block);
+                            if (auto* mv = std::get_if<MapValue>(&blockVal->data))
+                                for (const auto& [k, v] : mv->entries)
+                                    if (auto* sv = std::get_if<StringValue>(&k->data))
+                                        fields[sv->value] = v;
+                        }
+                        for (const auto& [name, val] : node.namedArgs)
+                            fields[name] = val ? eval(*val) : Value::none();
+                        auto defIt = m_recordDefs.find(mangled);
+                        if (defIt == m_recordDefs.end()) defIt = m_recordDefs.find(recName);
+                        if (defIt != m_recordDefs.end()) {
+                            for (const auto& field : defIt->second->fields) {
+                                if (fields.count(field.name)) continue;
+                                if (field.defaultValue && *field.defaultValue)
+                                    fields[field.name] = eval(**field.defaultValue);
+                            }
+                        }
+                        return Value::record(recName, std::move(fields));
+                    }
                     dispatchName = mangled;
                 }
                 return callFunction(dispatchName, std::move(args), std::move(namedArgs), expr.location);

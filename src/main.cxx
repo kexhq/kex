@@ -2172,14 +2172,20 @@ int main(int argc, char *argv[]) {
         program.items.push_back(std::move(item));
 #endif
       kex::codegen::CoreErlangEmitter::EmitResult result;
+      std::vector<kex::codegen::CoreErlangEmitter::EmitResult> moduleResults;
       if (useIr) {
         try {
-          auto irMod = kex::ir::lowerProgram(program, stem,
-                                             migratedPreludeFns(), filepath);
-          auto irRes = kex::ir::emitCore(irMod);
-          result.source = irRes.source;
-          result.moduleName = irRes.moduleName;
-          result.mainArity = irRes.mainArity;
+          auto irModules = kex::ir::lowerModules(program, stem,
+                                                 migratedPreludeFns(), filepath);
+          for (const auto &irMod : irModules) {
+            auto irRes = kex::ir::emitCore(irMod);
+            kex::codegen::CoreErlangEmitter::EmitResult emitted;
+            emitted.source = std::move(irRes.source);
+            emitted.moduleName = std::move(irRes.moduleName);
+            emitted.mainArity = irRes.mainArity;
+            moduleResults.push_back(std::move(emitted));
+          }
+          result = moduleResults.front();
         } catch (const kex::ir::LowerError &e) {
           std::cerr << "error: " << e.what() << "\n";
           if (compileRun && !outputDirExplicit && !tempDir.empty())
@@ -2189,18 +2195,23 @@ int main(int argc, char *argv[]) {
       } else {
         kex::codegen::CoreErlangEmitter emitter;
         result = emitter.emitProgram(program, stem);
+        moduleResults.push_back(result);
       }
 
-      std::string outPath = outputDir + "/" + result.moduleName + ".core";
-      std::ofstream outFile(outPath);
-      if (!outFile) {
-        std::cerr << "error: cannot write " << outPath << "\n";
-        return 1;
+      std::vector<std::string> corePaths;
+      for (const auto &emitted : moduleResults) {
+        std::string path = outputDir + "/" + emitted.moduleName + ".core";
+        std::ofstream outFile(path);
+        if (!outFile) {
+          std::cerr << "error: cannot write " << path << "\n";
+          return 1;
+        }
+        outFile << emitted.source;
+        corePaths.push_back(std::move(path));
       }
-      outFile << result.source;
-      outFile.close();
+      const std::string &outPath = corePaths.front();
       if (mode == "emit-core") {
-        std::cerr << "wrote " << outPath << "\n";
+        for (const auto &path : corePaths) std::cerr << "wrote " << path << "\n";
         return 0;
       }
 
@@ -2256,9 +2267,11 @@ int main(int argc, char *argv[]) {
       }
 #endif
 
-      std::string coreCmd = "erlc +from_core -pa " + outputDir + " -o " +
-                            outputDir + " " + outPath;
-      if (!tempDir.empty()) {
+      int erlcRet = 0;
+      for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
+        std::string coreCmd = "erlc +from_core -pa " + outputDir + " -o " +
+                              outputDir + " " + corePaths[moduleIndex];
+        if (!tempDir.empty()) {
         // Suppress erlc noise in temp-dir (interpreter/-R) mode —
         // was `2>&1` (merging stderr into stdout), the OPPOSITE of
         // what this comment always said it should do. erlc prints
@@ -2271,16 +2284,16 @@ int main(int argc, char *argv[]) {
         // of the running program's own visible output. erlc
         // failures are still caught via the exit-code check below
         // regardless of where its diagnostic text went.
-        coreCmd += " > /dev/null 2>&1";
-      } else {
-        std::cerr << "  erlc  " << result.moduleName << "\n";
-      }
-      int erlcRet = std::system(coreCmd.c_str());
-      if (erlcRet != 0) {
-        std::cerr << "error: erlc failed\n";
-        if (!tempDir.empty())
-          std::filesystem::remove_all(tempDir);
-        return 1;
+          coreCmd += " > /dev/null 2>&1";
+        } else {
+          std::cerr << "  erlc  " << moduleResults[moduleIndex].moduleName << "\n";
+        }
+        erlcRet = std::system(coreCmd.c_str());
+        if (erlcRet != 0) {
+          std::cerr << "error: erlc failed\n";
+          if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
+          return 1;
+        }
       }
       // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
       // The internal Erlang module name stays kex_<stem> inside the file.

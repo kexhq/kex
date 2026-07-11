@@ -97,12 +97,6 @@ end
 # Using the router
 module App do
   using Http do
-    let router = Router.Config {}
-      .use(&logMiddleware)
-      .get("/", &handleHome)
-      .get("/users", &handleUsers)
-      .post("/users", &handleCreateUser)
-
     let handleHome(req: Request) -> Response do
       return Response.ok("Welcome!")
     end
@@ -131,6 +125,12 @@ module App do
         handler(req)
       }
     end
+
+    let router = Router.Config {}
+      .use(&logMiddleware)
+      .get("/", &handleHome)
+      .get("/users", &handleUsers)
+      .post("/users", &handleCreateUser)
   end
 
   foul start(router: Router.Config) do

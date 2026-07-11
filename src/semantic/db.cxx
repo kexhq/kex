@@ -198,7 +198,11 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
         std::string memberPrefix = prefix.substr(dotPos + 1);
         for (const auto& [path, state] : m_files) {
             for (const auto& sym : state.symbols) {
-                bool matchesMod = (sym.module == qualifier);
+                bool matchesMod = (sym.module == qualifier)
+                    || (sym.module.size() > qualifier.size()
+                        && sym.module.compare(sym.module.size() - qualifier.size(),
+                                              qualifier.size(), qualifier) == 0
+                        && sym.module[sym.module.size() - qualifier.size() - 1] == '.');
                 bool matchesMake = (!sym.makeTarget.empty() && sym.makeTarget == qualifier);
                 if ((matchesMod || matchesMake) && sym.isExported
                     && sym.name.rfind(memberPrefix, 0) == 0) {
