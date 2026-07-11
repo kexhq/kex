@@ -1023,6 +1023,39 @@ struct Lowering {
                 ex->node = Call{"", callName, ar, std::move(callArgs), false};
                 return wrapLets(binds, std::move(ex));
             }
+            if (auto rit = records.find(n.method); rit != records.end()) {
+                const auto& info = rit->second;
+                std::unordered_map<std::string, const ast::ExprPtr*> provided;
+                for (const auto& [name, val] : n.namedArgs)
+                    provided[name] = &val;
+                if (n.block) {
+                    auto extractMap = [&](const ast::MapExpr* map) {
+                        for (const auto& entry : map->entries)
+                            if (auto* atom = std::get_if<ast::AtomLiteral>(&entry.key->kind))
+                                provided[atom->name] = &entry.value;
+                    };
+                    if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind)) {
+                        if (!lam->body.empty())
+                            if (auto* map = std::get_if<ast::MapExpr>(&lam->body.back()->kind))
+                                extractMap(map);
+                    } else if (auto* map = std::get_if<ast::MapExpr>(&(*n.block)->kind)) {
+                        extractMap(map);
+                    }
+                }
+                std::vector<ExprPtr> fieldArgs;
+                for (size_t i = 0; i < info.fields.size(); i++) {
+                    auto pit = provided.find(info.fields[i]);
+                    if (pit != provided.end() && *pit->second)
+                        fieldArgs.push_back(lower(*pit->second));
+                    else if (info.defaults[i])
+                        fieldArgs.push_back(lower(*info.defaults[i]));
+                    else
+                        fieldArgs.push_back(lit(LitKind::None, "none"));
+                }
+                auto ex = std::make_unique<Expr>();
+                ex->node = Construct{n.method, std::move(fieldArgs)};
+                return wrapLets(binds, std::move(ex));
+            }
             return wrapLets(binds, runtimeError("Undefined function: " + uid->name + "." + n.method));
         }
         // UFCS method on a value receiver. Atomize the receiver once so
@@ -3427,12 +3460,38 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
             if (fn) definitions[prefix + "__" + fn->name] = {path, fn->name, exported};
         };
+        auto addMake = [&](const ast::MakeDef* mk) {
+            if (!mk) return;
+            auto collectMethod = [&](const ast::FunctionDef* fd) {
+                if (!fd) return;
+                if (!definitions.count(fd->name))
+                    definitions[fd->name] = {path, fd->name, true};
+            };
+            for (const auto& mi : mk->body) {
+                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
+                    collectMethod(fd->get());
+                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&mi))
+                    if (*vb) for (const auto& vi : (*vb)->items)
+                        if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                            collectMethod(fd->get());
+            }
+        };
+        auto addRecord = [&](const ast::RecordDef* rd) {
+            if (!rd) return;
+            for (const auto& field : rd->fields)
+                if (!definitions.count(field.name))
+                    definitions[field.name] = {path, field.name, true};
+        };
         for (const auto& item : module.body) {
             if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) add(fn->get(), true);
             else if (auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
                 if (*visibility) for (const auto& entry : (*visibility)->items)
                     if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
                         add(fn->get(), (*visibility)->isPublic);
+            } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                addMake(mk->get());
+            } else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+                addRecord(rd->get());
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*child) collect(**child);
             }
