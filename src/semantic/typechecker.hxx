@@ -111,7 +111,7 @@ private:
     // param, so the "receiver is argument 0" UFCS desugaring used here
     // would mis-count arity for them (see checkMakeDef).
     auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                   SourceLocation loc) -> TypePtr;
+                   SourceLocation loc, bool isMethodCall = false) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
 

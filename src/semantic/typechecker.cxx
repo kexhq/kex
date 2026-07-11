@@ -1282,7 +1282,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return msgType;
             }
-            return checkCall(callName, argTypes, expr.location);
+            return checkCall(node.method, argTypes, expr.location, /*isMethodCall=*/true);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             TypePtr elemType = Type::unknown();
@@ -1911,7 +1911,7 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 }
 
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                            SourceLocation loc) -> TypePtr {
+                            SourceLocation loc, bool isMethodCall) -> TypePtr {
     const std::vector<Signature>* stdlibSigs = m_stdlib.lookup(name);
     auto userIt = m_userSignatures.find(name);
     bool hasUser = (userIt != m_userSignatures.end());
@@ -2003,6 +2003,19 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
     }
 
+    // Trait-bounded receiver: `item.describe()` where `item: Describable`.
+    // The trait method takes priority over any stdlib overload of the same name.
+    if (!argTypes.empty()) {
+        auto receiver = resolve(argTypes[0]);
+        if (auto* ct = std::get_if<ConstrainedType>(&receiver->kind)) {
+            if (const TraitDef* trait = m_traits.get(ct->traitName)) {
+                for (const auto& req : trait->requiredMethods) {
+                    if (req.name == name) return req.result;
+                }
+            }
+        }
+    }
+
     // Namespace call heuristic: `BuiltIn.foo(x)` or any call where the
     // receiver resolves to Unknown (an undefined namespace sentinel like
     // `BuiltIn`). The UFCS desugaring adds the receiver as argTypes[0], but
@@ -2028,11 +2041,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // user-defined `make CustomType do let modulo(...) ... end` would
     // otherwise get checked against the *stdlib* `modulo`'s signature
     // purely because the names match — a different, unrelated function.
-    // Only kick in when the receiver/first argument is itself a NamedType
-    // (a record/ADT/custom-type value) — a builtin-primitive mismatch
-    // (e.g. `even?('c')`) must still error normally; this only suppresses
-    // the case where nothing in the known overload set could ever apply.
-    if (!argTypes.empty() && std::holds_alternative<NamedType>(argTypes[0]->kind)) {
+    // Applies to any receiver type (NamedType or primitive) — if no
+    // stdlib overload's first param can accept the receiver, this is a
+    // make-block method call, not a stdlib call.
+    if (!argTypes.empty() && (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
+                              (isMethodCall && !hasUser &&
+                               (std::holds_alternative<PrimitiveType>(argTypes[0]->kind) ||
+                                std::holds_alternative<SizedIntType>(argTypes[0]->kind))))) {
         bool anyFirstParamPlausible = false;
         bool anyConstrainedFirstParam = false;
         for (const auto& sig : *sigs) {
