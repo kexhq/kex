@@ -200,8 +200,16 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
     }
 
     expect(TokenType::Module, "Expected 'module'");
-    mod->name = expect(TokenType::UpperIdent, "Expected module name").value;
-    expect(TokenType::Do, "Expected 'do' after module name");
+    auto moduleName = parseTypeName();
+    for (size_t i = 0; i < moduleName.parts.size(); ++i) {
+        if (i) mod->name += ".";
+        mod->name += moduleName.parts[i];
+    }
+    // A file-level `module Name` without `do` is desugared into the same
+    // ModuleDef used for `module Name do ... end`; it simply runs to EOF.
+    // Keeping one AST form means all later phases remain unaware of the
+    // source-level shorthand.
+    const bool standalone = !match(TokenType::Do);
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
@@ -237,7 +245,9 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close module");
+    if (!standalone) {
+        expect(TokenType::End, "Expected 'end' to close module");
+    }
     return mod;
 }
 

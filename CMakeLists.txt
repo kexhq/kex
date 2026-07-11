@@ -84,6 +84,7 @@ add_library(kex_lib
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/module/resolver.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
     src/interpreter/fiber.cxx

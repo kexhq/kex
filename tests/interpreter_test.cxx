@@ -40,6 +40,33 @@ auto runWithArgs(const std::string& source, std::vector<std::string> args) -> Va
 }
 
 int main() {
+    describe("Interpreter — Modules", []() {
+        it("imports selected module exports with using", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  using Util, only: [twice]\n"
+                "  twice(21)\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("calls a module function through its qualified name", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  Util.twice(21)\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+    });
+
     describe("Interpreter — Literals", []() {
         it("evaluates integers", []() {
             auto result = run("main do\n  42\nend\n");

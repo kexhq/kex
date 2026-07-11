@@ -39,6 +39,21 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     for (const auto& item : program.items) {
         execTopLevel(item);
     }
+    for (const auto& pending : m_pendingExports) {
+        std::string targetName;
+        for (size_t i = 0; i < pending.decl->module.parts.size(); ++i) {
+            if (i) targetName += ".";
+            targetName += pending.decl->module.parts[i];
+        }
+        auto target = m_moduleRegistry.find(targetName);
+        if (target == m_moduleRegistry.end())
+            throw RuntimeError("Unknown module exported by " + pending.owner + ": " + targetName,
+                               pending.decl->location);
+        auto& owner = m_moduleRegistry[pending.owner];
+        const auto name = pending.decl->alias.value_or(pending.decl->module.parts.back());
+        owner.submodules[name] = targetName;
+    }
+    m_pendingExports.clear();
 
     // The top-level program itself runs as one process (see
     // Scheduler::runToCompletion) — spawn/receive/Process.self at top level
@@ -162,11 +177,13 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
 }
 
 auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
+    const auto before = m_env->names();
+    std::unordered_set<std::string> existing(before.begin(), before.end());
     for (const auto& item : mod.body) {
-        std::visit([this](const auto& node) {
+        std::visit([this, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node);
+                execFunctionDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
@@ -181,8 +198,56 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 execTraitDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
                 execCompiledBlock(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                std::string moduleName;
+                for (size_t i = 0; i < node->module.parts.size(); ++i) {
+                    if (i) moduleName += ".";
+                    moduleName += node->module.parts[i];
+                }
+                auto imported = m_moduleRegistry.find(moduleName);
+                if (imported == m_moduleRegistry.end()) {
+                    throw RuntimeError("Unknown module: " + moduleName, node->location);
+                }
+                for (const auto& [name, value] : imported->second.exports) {
+                    if (!node->onlyNames.empty() &&
+                        std::find(node->onlyNames.begin(), node->onlyNames.end(), name) == node->onlyNames.end()) continue;
+                    if (std::find(node->exceptNames.begin(), node->exceptNames.end(), name) != node->exceptNames.end()) continue;
+                    m_env->define(name, value);
+                }
+                if (node->alias) m_env->define(*node->alias, Value::module(moduleName));
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
+                m_pendingExports.push_back({mod.name, node.get()});
             }
         }, item);
+    }
+
+    ModuleEntry entry;
+    entry.isFoul = mod.isFoul;
+    for (const auto& name : m_env->names()) {
+        const auto prefix = mod.name + "::";
+        if (!existing.contains(name) && name.rfind(prefix, 0) == 0) {
+            if (auto value = m_env->get(name)) entry.exports.emplace(name.substr(prefix.size()), std::move(value));
+        }
+    }
+    m_moduleRegistry[mod.name] = std::move(entry);
+
+    // Make each segment of a qualified module path available to the existing
+    // namespace dispatcher. For `Http.Router.get()`, `Http` resolves to a
+    // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
+    size_t dot = mod.name.find('.');
+    if (dot == std::string::npos) {
+        m_env->define(mod.name, Value::module(mod.name));
+    } else {
+        const auto parent = mod.name.substr(0, dot);
+        m_env->define(parent, Value::module(parent));
+        while (dot != std::string::npos) {
+            const auto next = mod.name.find('.', dot + 1);
+            const auto child = mod.name.substr(dot + 1, next - dot - 1);
+            const auto qualified = mod.name.substr(0, next);
+            const auto owner = mod.name.substr(0, dot);
+            m_env->define(owner + "::" + child, Value::module(qualified));
+            dot = next;
+        }
     }
 }
 
@@ -1416,11 +1481,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return m_scheduler->blockingReceive(node);
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
-            // `using Module` inside a body: execute the module's compiled
-            // block functions in the current scope so their names become
-            // available as plain identifiers (e.g. `html`, `body` after
-            // `using Html.Language`). Currently a no-op because compiled
-            // block functions are already registered globally by execModule.
+            std::string moduleName;
+            for (size_t i = 0; i < node.module.parts.size(); ++i) {
+                if (i) moduleName += ".";
+                moduleName += node.module.parts[i];
+            }
+            auto it = m_moduleRegistry.find(moduleName);
+            if (it == m_moduleRegistry.end()) {
+                throw RuntimeError("Unknown module: " + moduleName, expr.location);
+            }
+            for (const auto& [name, value] : it->second.exports) {
+                if (!node.onlyNames.empty() &&
+                    std::find(node.onlyNames.begin(), node.onlyNames.end(), name) == node.onlyNames.end()) continue;
+                if (std::find(node.exceptNames.begin(), node.exceptNames.end(), name) != node.exceptNames.end()) continue;
+                m_env->define(name, value);
+            }
+            if (node.alias) m_env->define(*node.alias, Value::module(moduleName));
             if (!node.body.empty()) {
                 for (const auto& e : node.body) {
                     if (e) eval(*e);

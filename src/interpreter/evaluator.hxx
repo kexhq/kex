@@ -121,6 +121,13 @@ private:
     auto pushEnv() -> void;
     auto popEnv() -> void;
 
+    struct ModuleEntry {
+        std::unordered_map<std::string, ValuePtr> exports;
+        std::unordered_map<std::string, std::string> submodules;
+        bool isFoul = false;
+    };
+    struct PendingExport { std::string owner; const ast::ExportDecl* decl; };
+
     std::shared_ptr<Environment> m_env;
     std::shared_ptr<Environment> m_globalEnv;
     std::shared_ptr<Environment> m_intrinsicEnv;
@@ -131,6 +138,8 @@ private:
     std::unique_ptr<Scheduler> m_scheduler;
     std::string m_output;
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
+    std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
+    std::vector<PendingExport> m_pendingExports;
     // Maps a sum-type variant name (e.g. "Just", "Ok", "Fizz") to the type
     // that declared it (e.g. "Option", "Result", "FizzBuzz"). Populated in
     // execTopLevel's TypeDef handling. Lets method dispatch resolve

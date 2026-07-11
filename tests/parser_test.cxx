@@ -79,6 +79,23 @@ int main() {
             assertTrue(mod->isFoul);
         });
 
+        it("parses a qualified module name", []() {
+            auto program = parse("module Http.Router do\nend");
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(mod->name, std::string("Http.Router"));
+        });
+
+        it("desugars a standalone file module", []() {
+            auto program = parse(
+                "module Math\n"
+                "let twice(n: Int) = n * 2\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(mod->name, std::string("Math"));
+            assertEqual(mod->body.size(), size_t(1));
+        });
+
         it("parses module with functions", []() {
             auto program = parse(
                 "module Math do\n"
