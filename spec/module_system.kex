@@ -1,0 +1,71 @@
+# Module system: exports, using, records across modules, nested modules
+# kex: no-check
+
+module Greet do
+  let hello(name: String) -> String do
+    return "Hello, ${name}!"
+  end
+end
+
+module Outer do
+  let double(n: Int) -> Int = n * 2
+
+  module Inner do
+    let triple(n: Int) -> Int = n * 3
+  end
+end
+
+module Shapes do
+  record Circle do
+    radius : Float = 1.0
+  end
+
+  record Rect do
+    width : Float
+    height : Float = 10.0
+  end
+
+  make Circle do
+    let area -> Float do
+      return 3.14159 * this.radius * this.radius
+    end
+  end
+end
+
+# Qualified record construction
+module Direct do
+  let run do
+    let c = Shapes.Circle { radius: 7.0 }
+    IO.printLine(c.area.to(String))
+  end
+end
+
+# Using with alias
+module Aliased do
+  using Shapes, as: S
+
+  let run do
+    let c = S.Circle { radius: 2.0 }
+    IO.printLine(c.radius.to(String))
+  end
+end
+
+main do
+  # Direct module function calls
+  IO.printLine(Greet.hello("World"))
+  IO.printLine(Outer.double(5).to(String))
+
+  # Nested module access
+  IO.printLine(Outer.Inner.triple(5).to(String))
+
+  # Qualified record construction
+  Direct.run
+
+  # Using with alias
+  Aliased.run
+
+  # Inline record construction via module namespace
+  let c = Shapes.Circle {}
+  IO.printLine(c.radius.to(String))
+  IO.printLine(c.area.to(String))
+end

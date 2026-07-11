@@ -1146,8 +1146,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                     if (!isKnownVariant && !m_env->get(upperIdent->name)) {
+                        auto resolved = (!m_currentModule.empty())
+                            ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
+                        if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
+                            namespaceName = std::get<ModuleValue>(resolved->data).name;
+                        } else {
+                            namespaceName = upperIdent->name;
+                        }
                         isNamespaceCall = true;
-                        namespaceName = upperIdent->name;
                     }
                 }
             }
@@ -1204,9 +1210,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         if (node.block) {
                             auto blockVal = eval(**node.block);
                             if (auto* mv = std::get_if<MapValue>(&blockVal->data))
-                                for (const auto& [k, v] : mv->entries)
+                                for (const auto& [k, v] : mv->entries) {
                                     if (auto* sv = std::get_if<StringValue>(&k->data))
                                         fields[sv->value] = v;
+                                    else if (auto* av = std::get_if<AtomValue>(&k->data))
+                                        fields[av->name] = v;
+                                }
                         }
                         for (const auto& [name, val] : node.namedArgs)
                             fields[name] = val ? eval(*val) : Value::none();
@@ -1734,6 +1743,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // user record types) are registered in the environment at
             // declaration time. An unknown name here is a real error.
             auto val = m_env->get(node.name);
+            if (!val && !m_currentModule.empty())
+                val = m_env->get(m_currentModule + "::" + node.name);
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }

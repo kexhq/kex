@@ -783,7 +783,7 @@ struct Lowering {
             std::vector<std::string> path;
             if (modulePath(*n.receiver, path) && !n.namedArgs.empty())
                 throw LowerError("IR lower: named args to module function not yet ported");
-            if (modulePath(*n.receiver, path)) {
+            if (!path.empty() || modulePath(*n.receiver, path)) {
                 std::string key;
                 for (size_t i = 0; i < path.size(); i++) {
                     if (i) key += ".";
@@ -2949,9 +2949,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         // Inherited trait defaults count as this type's methods too.
         for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
     };
-    std::function<void(const ast::ModuleDef&, const std::string&)> preModule;
-    preModule = [&](const ast::ModuleDef& module, const std::string& prefix) {
-        const std::string path = prefix.empty() ? module.name : prefix + "." + module.name;
+    std::function<void(const ast::ModuleDef&)> preModule;
+    preModule = [&](const ast::ModuleDef& module) {
+        const auto& path = module.name;
         const std::string mangledPrefix = [&] {
             std::string out;
             for (char c : path) out += c == '.' ? "__" : std::string(1, c);
@@ -2990,7 +2990,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                         preModuleFn(vfd->get());
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*child) preModule(**child, path);
+                if (*child) preModule(**child);
             }
         }
     };
@@ -3011,7 +3011,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
             if (*md) preMake(**md);
         } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-            if (*module) preModule(**module, "");
+            if (*module) preModule(**module);
         }
     }
     for (const auto& [name, owners] : L.methodOwners)
@@ -3149,11 +3149,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     }
                 }
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                // A nested module flattens its functions into this BEAM module
-                // (Kex modules are organizational namespaces — see
-                // beam-codegen-plan.md). First cut: direct FunctionDefs only;
-                // the full design is docs/module-sys-plan.md (one Kex module =
-                // one BEAM module), which replaces this handler entirely.
                 if (node) {
                     std::vector<const ast::FunctionDef*> grp;
                     std::string currentPath;
@@ -3197,54 +3192,53 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         for (const auto* fd : inheritedDefaults(*mk)) pushMethod(fd);
                         flushMethods();
                     };
-                    currentPath = node->name;
-                    for (const auto& bi : node->body) {
-                        if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
-                            push(mfd->get());
-                        } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
-                            // `private do ... end` / `public do ... end` inside a
-                            // module — visibility is erased on BEAM; flatten it.
-                            if (*vb) for (const auto& vi : (*vb)->items)
-                                if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                                    push(vfd->get());
-                        } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
-                            flush();
-                            emitMake(mk->get());
-                        } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
-                            if (*cb) for (const auto& ci : (*cb)->items) {
-                                if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
-                                    push(cfd->get());
-                                } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
-                                    flush();
-                                    emitMake(cmd->get());
-                                }
-                            }
-                        } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
-                                   std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                            // Types/annotations are erased, but collect variant
-                            // tags first so the dispatcher can wildcard-match them.
-                            if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                                if (*td && (*td)->variants) {
-                                    std::vector<std::string> tags;
-                                    for (const auto& v : *(*td)->variants) {
-                                        auto t = Lowering::simpleTypeName(v);
-                                        if (t == "Nothing") t = "none";
-                                        if (!t.empty()) tags.push_back(t);
+                    std::function<void(const ast::ModuleDef&)> lowerModuleBody;
+                    lowerModuleBody = [&](const ast::ModuleDef& m) {
+                        currentPath = m.name;
+                        for (const auto& bi : m.body) {
+                            if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
+                                push(mfd->get());
+                            } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
+                                if (*vb) for (const auto& vi : (*vb)->items)
+                                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                                        push(vfd->get());
+                            } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
+                                flush();
+                                emitMake(mk->get());
+                            } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&bi)) {
+                                if (*cb) for (const auto& ci : (*cb)->items) {
+                                    if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci)) {
+                                        push(cfd->get());
+                                    } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
+                                        flush();
+                                        emitMake(cmd->get());
                                     }
-                                    if (!tags.empty())
-                                        L.typeVariantTags[(*td)->name] = std::move(tags);
                                 }
+                            } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
+                                flush();
+                                if (*child) lowerModuleBody(**child);
+                                currentPath = m.name;
+                            } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
+                                       std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
+                                if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
+                                    if (*td && (*td)->variants) {
+                                        std::vector<std::string> tags;
+                                        for (const auto& v : *(*td)->variants) {
+                                            auto t = Lowering::simpleTypeName(v);
+                                            if (t == "Nothing") t = "none";
+                                            if (!t.empty()) tags.push_back(t);
+                                        }
+                                        if (!tags.empty())
+                                            L.typeVariantTags[(*td)->name] = std::move(tags);
+                                    }
+                                }
+                            } else {
+                                flush();
                             }
-                        } else {
-                            // Per-module records, make blocks, compiled blocks, and
-                            // nested namespaces need the full module emitter. Until
-                            // that lands, they are declaration-only in this
-                            // compatibility flattener; direct module functions above
-                            // remain usable through their qualified local names.
-                            flush();
                         }
-                    }
-                    flush();
+                        flush();
+                    };
+                    lowerModuleBody(*node);
                 }
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
@@ -3425,9 +3419,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;
-    std::function<void(const ast::ModuleDef&, const std::string&)> collect;
-    collect = [&](const ast::ModuleDef& module, const std::string& parent) {
-        const auto path = parent.empty() ? module.name : parent + "." + module.name;
+    std::function<void(const ast::ModuleDef&)> collect;
+    collect = [&](const ast::ModuleDef& module) {
+        const auto& path = module.name;
         std::string prefix;
         for (char c : path) prefix += c == '.' ? "__" : std::string(1, c);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
@@ -3440,13 +3434,13 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                     if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
                         add(fn->get(), (*visibility)->isPublic);
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
-                if (*child) collect(**child, path);
+                if (*child) collect(**child);
             }
         }
     };
     for (const auto& item : prog.items)
         if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item); module && *module)
-            collect(**module, "");
+            collect(**module);
 
     std::unordered_map<std::string, std::pair<std::string, std::string>> targets;
     for (const auto& [emitted, def] : definitions)
