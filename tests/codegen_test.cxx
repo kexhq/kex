@@ -7,6 +7,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iostream>
 #include <memory>
 
 using namespace test;
@@ -44,8 +45,16 @@ auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::str
     core.close();
 
     auto compile = "erlc +from_core -pa runtime/beam -o /tmp " + corePath +
-                   " > /dev/null 2>&1";
-    assertEqual(std::system(compile.c_str()), 0, "erlc should compile IR output");
+                   " 2>&1";
+    auto compileResult = std::system(compile.c_str());
+    if (compileResult != 0) {
+        std::ifstream dbg(corePath);
+        std::string coreContent((std::istreambuf_iterator<char>(dbg)),
+                                 std::istreambuf_iterator<char>());
+        std::cerr << "=== Generated Core Erlang (" << corePath << ") ===\n"
+                  << coreContent << "\n=== END ===\n";
+    }
+    assertEqual(compileResult, 0, "erlc should compile IR output");
 
     auto run = "erl -noshell -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
                ":main()]), halt()'";

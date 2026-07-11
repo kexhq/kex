@@ -626,7 +626,8 @@ struct Lowering {
             }
             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
             auto ex = std::make_unique<Expr>();
-            ex->node = Call{"", n.name, (int)slots.size(), std::move(slots), false};
+            int ar = (int)slots.size();
+            ex->node = Call{"", n.name, ar, std::move(slots), false};
             return wrapLets(binds, std::move(ex));
         }
         std::vector<Binding> binds;
@@ -752,7 +753,8 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{mod, n.method, static_cast<int>(args.size()), std::move(args), false};
+                int ar = static_cast<int>(args.size());
+                ex->node = Call{mod, n.method, ar, std::move(args), false};
                 return wrapLets(binds, std::move(ex));
             }
         }
@@ -770,8 +772,8 @@ struct Lowering {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                return wrapLets(binds,
-                    callE("kex_file", fn, static_cast<int>(args.size()), std::move(args)));
+                int ar = static_cast<int>(args.size());
+                return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
             }
         }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
@@ -794,8 +796,8 @@ struct Lowering {
                     std::vector<ExprPtr> args;
                     for (const auto& a : n.args) args.push_back(atomize(a, binds));
                     if (n.block) args.push_back(atomize(*n.block, binds));
-                    return wrapLets(binds, callE("", it->second,
-                        static_cast<int>(args.size()), std::move(args)));
+                    int ar = static_cast<int>(args.size());
+                    return wrapLets(binds, callE("", it->second, ar, std::move(args)));
                 }
             }
         }
@@ -809,12 +811,13 @@ struct Lowering {
                 if (!n.namedArgs.empty())
                     throw LowerError("IR lower: named args to module function not yet ported");
                 if (n.block) args.push_back(atomize(*n.block, binds));
-                return wrapLets(binds, callE("", it->second,
-                    static_cast<int>(args.size()), std::move(args)));
+                int ar = static_cast<int>(args.size());
+                return wrapLets(binds, callE("", it->second, ar, std::move(args)));
             }
             auto nsCall = [&](const char* mod, const char* fn) {
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{mod, fn, static_cast<int>(args.size()), std::move(args), false};
+                int ar = static_cast<int>(args.size());
+                ex->node = Call{mod, fn, ar, std::move(args), false};
                 return wrapLets(binds, std::move(ex));
             };
             if (uid->name == "IO") {
@@ -823,7 +826,8 @@ struct Lowering {
                     // (match the walker's behaviour).
                     if (args.empty()) args.push_back(atomize_ir(lit(LitKind::String, ""), binds));
                     auto ex = std::make_unique<Expr>();
-                    ex->node = Call{"kex_io", fn, static_cast<int>(args.size()), std::move(args), false};
+                    int ar = static_cast<int>(args.size());
+                    ex->node = Call{"kex_io", fn, ar, std::move(args), false};
                     return wrapLets(binds, std::move(ex));
                 };
                 if (n.method == "printLine")  return ioCall("print_line");
@@ -1092,7 +1096,8 @@ struct Lowering {
             pargs.push_back(rv());
             for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
             if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
-            return ret(callE("kex_prelude", m, static_cast<int>(pargs.size()), std::move(pargs)));
+            int ar = static_cast<int>(pargs.size());
+            return ret(callE("kex_prelude", m, ar, std::move(pargs)));
         }
 
         // `case rv of [] -> empty; _ -> nonEmpty end` (Just/None-on-empty).
