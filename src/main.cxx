@@ -1626,7 +1626,7 @@ int main(int argc, char *argv[])
             "try {ok,_Bin}=file:read_file(\"" + absBeamPath + "\"), "
             "code:load_binary('" + moduleName + "',\"" + absBeamPath + "\",_Bin), "
             "case lists:member({main,1},erlang:get_module_info('" + moduleName + "',exports)) of "
-            "true -> '" + moduleName + "':main(init:get_plain_arguments()); "
+            "true -> '" + moduleName + "':main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]); "
             "false -> '" + moduleName + "':main() end of "
             "Result -> halt() "
             "catch _:Reason:_ -> io:format(standard_error, \"Internal error: runtime error: ~p~n\", [Reason]), halt(1) end";
@@ -1998,7 +1998,7 @@ int main(int argc, char *argv[])
                     "io:format(standard_error, \"Internal error: ~ts~n\", [_R]); "
                     "_R -> io:format(standard_error, \"Internal error: ~p~n\", [_R]) end";
                 std::string mainCall = result.mainArity == 1
-                    ? "try " + loadExpr + "'" + result.moduleName + "':main(init:get_plain_arguments()) of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end"
+                    ? "try " + loadExpr + "'" + result.moduleName + "':main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end"
                     : "try " + loadExpr + "'" + result.moduleName + "':main() of Result -> halt() catch _:Reason:_ -> " + reasonFmt + ", halt(1) end";
                 // shellSingleQuote (see its own comment) wraps the whole
                 // -eval text as one shell argument, so quote characters

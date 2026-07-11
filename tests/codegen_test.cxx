@@ -1,10 +1,13 @@
 #include "test.hxx"
 #include "../src/codegen/core_erlang.hxx"
+#include "../src/ir/emit_core.hxx"
+#include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <memory>
 
 using namespace test;
 
@@ -20,6 +23,40 @@ auto emit(const std::string& source, const std::string& stem = "test") -> std::s
     auto program = parser.parseProgram();
     kex::codegen::CoreErlangEmitter emitter;
     return emitter.emitProgram(program, stem).source;
+}
+
+// Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
+auto emitIr(const std::string& source, const std::string& stem = "test") -> std::string {
+    kex::Lexer lexer(source);
+    auto tokens = lexer.tokenizeAll();
+    kex::Parser parser(std::move(tokens));
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
+}
+
+// Compile an IR-pipeline Core Erlang module and return main/0's value. The
+// sources below deliberately avoid prelude calls, so this unit path stays
+// independent of main.cxx's prelude-loading bootstrap.
+auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::string {
+    auto corePath = "/tmp/kex_" + stem + ".core";
+    std::ofstream core(corePath);
+    core << emitIr(source, stem);
+    core.close();
+
+    auto compile = "erlc +from_core -pa runtime/beam -o /tmp " + corePath +
+                   " > /dev/null 2>&1";
+    assertEqual(std::system(compile.c_str()), 0, "erlc should compile IR output");
+
+    auto run = "erl -noshell -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
+               ":main()]), halt()'";
+    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
+    assertTrue(pipe != nullptr, "popen should run the BEAM module");
+    std::string output;
+    char buf[256];
+    while (fgets(buf, sizeof(buf), pipe.get())) output += buf;
+    while (!output.empty() && (output.back() == '\n' || output.back() == '\r'))
+        output.pop_back();
+    return output;
 }
 
 // Returns true if `haystack` contains `needle` as a substring.
@@ -219,6 +256,43 @@ int main() {
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "'true'"), out);
             assertTrue(contains(out, "'false'"), out);
+        });
+    });
+
+    describe("IR Core Erlang lowering — branch state", []() {
+        it("preserves both reassigned variables after if and elif branches", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var left = 3\n"
+                "  var right = 5\n"
+                "  if false\n"
+                "    left = 9\n"
+                "    right = 7\n"
+                "  elif true\n"
+                "    left = left + 2\n"
+                "    right = right + 4\n"
+                "  else\n"
+                "    left = 1\n"
+                "    right = 2\n"
+                "  end\n"
+                "  left * right\n"
+                "end\n",
+                "branch_state");
+            assertEqual(output, std::string("45"));
+        });
+
+        it("preserves reassigned state after a match clause", []() {
+            auto output = runIrOnBeam(
+                "main do\n"
+                "  var value = 10\n"
+                "  match :two do\n"
+                "    :one -> value = 1\n"
+                "    :two -> value = value + 2\n"
+                "  end\n"
+                "  value\n"
+                "end\n",
+                "match_state");
+            assertEqual(output, std::string("12"));
         });
     });
 

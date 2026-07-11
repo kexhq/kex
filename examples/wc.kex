@@ -21,7 +21,7 @@ foul wordCount(path: String) -> [Int] do
 end
 
 # Prints one wc-style row: "  lines  words  bytes  label"
-foul printRow(counts: [Int], label: String) -> Unit do
+foul printRow(counts: [Int], label: String) do
   let lc    = counts.first.or(0)
   let words = counts.second.or(0)
   let bytes = counts.third.or(0)

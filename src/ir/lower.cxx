@@ -1034,6 +1034,8 @@ struct Lowering {
             {"eof?","kex_file","handle_eof?",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
             {"abs","erlang","abs",0},
+            // x.inspect — the UFCS form of IO.inspect (prints, returns x).
+            {"inspect","kex_io","inspect",0},
             // kex_intrinsic_string handles both String binaries and bare
             // Char codepoints (string:uppercase alone rejects integers).
             {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
@@ -2003,41 +2005,6 @@ struct Lowering {
         return r;
     }
 
-    // Lower a branch body's statements (updating subst), ending in a value
-    // that carries the final SSA names of `mergeVars` — used by the
-    // conditional-assignment merge so a `var` reassigned inside an `if` branch
-    // is visible after the `if` (examples/json_parser.kex's parseNumber
-    // consumes a leading `-` inside an `if`).
-    auto lowerBranchState(const std::vector<ast::ExprPtr>& branch,
-                          const std::vector<std::string>& mergeVars) -> ExprPtr {
-        std::function<ExprPtr(size_t)> go = [&](size_t j) -> ExprPtr {
-            if (j >= branch.size()) return stateExpr(mergeVars);
-            const auto& e = branch[j];
-            if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
-                auto val = lower(ae->value);
-                std::string nv = fresh(ae->name); subst[ae->name] = nv;
-                return makeLet(nv, std::move(val), go(j + 1));
-            }
-            if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
-                auto val = lower(ve->value);
-                std::string nv = fresh(ve->name); subst[ve->name] = nv;
-                return makeLet(nv, std::move(val), go(j + 1));
-            }
-            if (auto* mc = std::get_if<ast::MethodCall>(&e->kind); mc && mc->mutating && mc->receiver)
-                if (auto* id = std::get_if<ast::Identifier>(&mc->receiver->kind)) {
-                    auto val = lowerMutatingAsValue(*mc);
-                    std::string nv = fresh(id->name); subst[id->name] = nv;
-                    return makeLet(nv, std::move(val), go(j + 1));
-                }
-            if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind)) {
-                auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
-            }
-            auto val = lower(e);
-            return makeLet(fresh("S"), std::move(val), go(j + 1));
-        };
-        return go(0);
-    }
-
     // Lower a `loop`/`while` to a LetRec threading its mutable state.
     // `restIsLast`: the loop is the last statement (its result is the value).
     // `mkRest`: produces the continuation after the loop (with the extracted
@@ -2182,47 +2149,80 @@ struct Lowering {
                 return makeLet(ssa, std::move(val), std::move(rest));
             }
         }
+        // Statement-position if/match whose branches REASSIGN outer vars —
+        // thread the mutated state through, exactly like loops do: each
+        // branch yields the (possibly reassigned) values, and the code after
+        // sees fresh SSA names (`var sql = …; if c sql = sql + x end; …`).
+        {
+            auto* ie = std::get_if<ast::IfExpr>(&e->kind);
+            auto* me = std::get_if<ast::MatchExpr>(&e->kind);
+            if (ie || (me && !me->subjectBinding)) {
+                std::unordered_set<std::string> muts;
+                collectMutated(e, muts);
+                std::vector<std::string> mutVars;
+                for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
+                std::sort(mutVars.begin(), mutVars.end());
+                if (!mutVars.empty()) {
+                    std::function<ExprPtr()> yieldState =
+                        [&]() -> ExprPtr { return stateExpr(mutVars); };
+                    ExprPtr caseE;
+                    if (ie) {
+                        auto branch = [&](const std::vector<ast::ExprPtr>& bb) {
+                            auto snap = subst;
+                            auto r = lowerLoopBodyFrom(bb, 0, "", mutVars, yieldState);
+                            subst = snap; return r;
+                        };
+                        ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
+                                                     : stateExpr(mutVars);
+                        for (auto it2 = ie->elifs.rbegin(); it2 != ie->elifs.rend(); ++it2)
+                            elseP = matchBool(lower(it2->first), branch(it2->second),
+                                              std::move(elseP));
+                        caseE = matchBool(lower(ie->condition), branch(ie->thenBody),
+                                          std::move(elseP));
+                    } else {
+                        Match m;
+                        m.subjects.push_back(lower(me->subject));
+                        for (const auto& cl : me->clauses) {
+                            auto snap = subst;
+                            MatchClause mc;
+                            for (const auto& p : cl.patterns)
+                                mc.patterns.push_back(lowerPattern(p));
+                            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+                            mc.body = lowerLoopArmU(cl.body, "", mutVars, yieldState);
+                            subst = snap;
+                            m.clauses.push_back(std::move(mc));
+                        }
+                        auto x = std::make_unique<Expr>();
+                        x->node = std::move(m);
+                        caseE = std::move(x);
+                    }
+                    // Rebind the mutated names to the yielded values.
+                    if (mutVars.size() == 1) {
+                        std::string nv = fresh(mutVars[0]);
+                        subst[mutVars[0]] = nv;
+                        auto rest = isLast ? var(nv) : lowerBodyFrom(body, i + 1);
+                        return makeLet(nv, std::move(caseE), std::move(rest));
+                    }
+                    auto pat = std::make_unique<Pattern>();
+                    pat->kind = PatKind::Tuple;
+                    for (const auto& v : mutVars) {
+                        std::string nv = fresh(v);
+                        subst[v] = nv;
+                        auto vp = std::make_unique<Pattern>();
+                        vp->kind = PatKind::Var; vp->name = nv;
+                        pat->args.push_back(std::move(vp));
+                    }
+                    auto rest = isLast ? lit(LitKind::Atom, "ok")
+                                       : lowerBodyFrom(body, i + 1);
+                    return makeMatch1(std::move(caseE), std::move(pat), std::move(rest));
+                }
+            }
+        }
         // loop / while → tail-recursive local function threading mutable state.
         if (auto* le = std::get_if<ast::LoopExpr>(&e->kind))
             return lowerLoopStmt(le->body, nullptr, body, i);
         if (auto* we = std::get_if<ast::WhileExpr>(&e->kind))
             return lowerLoopStmt(we->body, &we->condition, body, i);
-
-        // Conditional-assignment merge: a statement-level `if` whose branches
-        // reassign tracked vars used AFTER the if must yield those new values
-        // (a bare `if` via lower()/lowerBodyScoped would discard them). Emit a
-        // case that produces the post-branch state, then rebind + continue.
-        if (auto* ie = std::get_if<ast::IfExpr>(&e->kind); ie && !isLast && ie->elifs.empty()) {
-            std::unordered_set<std::string> aset;
-            for (auto& s : ie->thenBody) collectMutated(s, aset);
-            if (ie->elseBody) for (auto& s : *ie->elseBody) collectMutated(s, aset);
-            std::vector<std::string> mv;
-            for (const auto& v : aset) if (subst.count(v)) mv.push_back(v);
-            std::sort(mv.begin(), mv.end());
-            if (!mv.empty()) {
-                auto snap = subst;
-                auto thenS = lowerBranchState(ie->thenBody, mv); subst = snap;
-                auto elseS = ie->elseBody ? lowerBranchState(*ie->elseBody, mv) : stateExpr(mv);
-                subst = snap;
-                auto caseExpr = matchBool(lower(ie->condition), std::move(thenS), std::move(elseS));
-                if (mv.size() == 1) {
-                    std::string nv = fresh(mv[0]); subst[mv[0]] = nv;
-                    return makeLet(nv, std::move(caseExpr), lowerBodyFrom(body, i + 1));
-                }
-                std::string merged = fresh("M");
-                // Capture the extracted names BEFORE lowering the continuation
-                // — a loop in the continuation reassigns subst[v] via its own
-                // state extraction, so currentName() afterward would differ.
-                std::vector<std::string> boundNames;
-                for (const auto& v : mv) { std::string nv = fresh(v); subst[v] = nv; boundNames.push_back(nv); }
-                ExprPtr chained = lowerBodyFrom(body, i + 1);
-                for (size_t k = mv.size(); k-- > 0; )
-                    chained = makeLet(boundNames[k],
-                        callE("erlang","element",2,two(litInt((long)k + 1), var(merged))),
-                        std::move(chained));
-                return makeLet(merged, std::move(caseExpr), std::move(chained));
-            }
-        }
 
         // `return X if cond` as a non-last statement: return only when cond
         // holds, otherwise fall through to the rest (a plain ReturnExpr lowers
@@ -2676,20 +2676,70 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Pre-pass: collect record layouts (needed for construction/field access
     // before any body is lowered) and the set of real function/method names
     // (so field accessors that would collide with them are suppressed).
+    // Factored into per-kind lambdas so the flattened module items go
+    // through the exact same collection as top-level items.
     std::unordered_set<std::string> definedFns;
     std::unordered_set<std::string> staticMethodNames; // record static blocks
+    auto preRecord = [&](const ast::RecordDef& rd) {
+        L.collectRecord(rd);
+        L.knownTypes.insert(rd.name);
+        if (rd.staticBlock)
+            for (const auto& sf : rd.staticBlock->functions)
+                if (sf) {
+                    definedFns.insert(rd.name + "__" + sf->name);
+                    staticMethodNames.insert(sf->name);
+                }
+    };
+    auto preFn = [&](const ast::FunctionDef& fd) {
+        definedFns.insert(fd.name);
+        if (!fd.clauses.empty()) {
+            std::vector<std::string> pnames;
+            for (const auto& p : fd.clauses[0].params)
+                pnames.push_back(p.name ? *p.name : "");
+            if (pnames.empty()) L.zeroArgFns.insert(fd.name);
+            L.fnParamNames[fd.name] = std::move(pnames);
+        }
+    };
+    auto preType = [&](const ast::TypeDef& td) {
+        if (!td.variants) return;
+        for (const auto& v : *td.variants) {
+            auto t = Lowering::simpleTypeName(v);
+            if (t.empty()) continue;
+            L.variantTagSet.insert(t);
+            if (auto* g = std::get_if<ast::GenericType>(&v->kind))
+                L.variantArity[t] = static_cast<int>(g->args.size());
+            else
+                L.variantArity[t] = 0;
+        }
+    };
+    auto preMake = [&](const ast::MakeDef& md) {
+        std::string typeName = Lowering::simpleTypeName(md.target);
+        auto collectMethod = [&](const ast::FunctionDef* fd) {
+            if (!fd) return;
+            definedFns.insert(fd->name);
+            const std::string& mn = fd->name;
+            if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
+                L.overloadedOps.insert(mn);
+            if (!typeName.empty()) {
+                auto& owners = L.methodOwners[fd->name];
+                if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
+                    owners.push_back(typeName);
+            }
+        };
+        for (const auto& bi : md.body) {
+            if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
+                collectMethod(mfd->get());
+            else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
+                if (*vb) for (const auto& vi : (*vb)->items)
+                    if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
+                        collectMethod(vfd->get());
+        }
+        // Inherited trait defaults count as this type's methods too.
+        for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
+    };
     for (const auto& item : prog.items) {
         if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-            if (*rd) {
-                L.collectRecord(**rd);
-                L.knownTypes.insert((*rd)->name);
-                if ((*rd)->staticBlock)
-                    for (const auto& sf : (*rd)->staticBlock->functions)
-                        if (sf) {
-                            definedFns.insert((*rd)->name + "__" + sf->name);
-                            staticMethodNames.insert(sf->name);
-                        }
-            }
+            if (*rd) preRecord(**rd);
         } else if (auto* mb = std::get_if<std::unique_ptr<ast::MainBlock>>(&item)) {
             if (*mb && (*mb)->synthetic)
                 for (const auto& e : (*mb)->body)
@@ -2698,52 +2748,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
                                 L.topLevelConstants.insert(vp->name);
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            if (*fd) {
-                definedFns.insert((*fd)->name);
-                if (!(*fd)->clauses.empty()) {
-                    std::vector<std::string> pnames;
-                    for (const auto& p : (*fd)->clauses[0].params)
-                        pnames.push_back(p.name ? *p.name : "");
-                    if (pnames.empty()) L.zeroArgFns.insert((*fd)->name);
-                    L.fnParamNames[(*fd)->name] = std::move(pnames);
-                }
-            }
+            if (*fd) preFn(**fd);
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
-            if (*td && (*td)->variants)
-                for (const auto& v : *(*td)->variants) {
-                    auto t = Lowering::simpleTypeName(v);
-                    if (t.empty()) continue;
-                    L.variantTagSet.insert(t);
-                    if (auto* g = std::get_if<ast::GenericType>(&v->kind))
-                        L.variantArity[t] = static_cast<int>(g->args.size());
-                    else
-                        L.variantArity[t] = 0;
-                }
+            if (*td) preType(**td);
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-            if (!*md) continue;
-            std::string typeName = Lowering::simpleTypeName((*md)->target);
-            auto collectMethod = [&](const ast::FunctionDef* fd) {
-                if (!fd) return;
-                definedFns.insert(fd->name);
-                const std::string& mn = fd->name;
-                if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
-                    L.overloadedOps.insert(mn);
-                if (!typeName.empty()) {
-                    auto& owners = L.methodOwners[fd->name];
-                    if (std::find(owners.begin(), owners.end(), typeName) == owners.end())
-                        owners.push_back(typeName);
-                }
-            };
-            for (const auto& bi : (*md)->body) {
-                if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                    collectMethod(mfd->get());
-                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
-                    if (*vb) for (const auto& vi : (*vb)->items)
-                        if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                            collectMethod(vfd->get());
-            }
-            // Inherited trait defaults count as this type's methods too.
-            for (const auto* fd : inheritedDefaults(**md)) collectMethod(fd);
+            if (*md) preMake(**md);
         }
     }
     for (const auto& [name, owners] : L.methodOwners)
@@ -2883,7 +2892,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 // A nested module flattens its functions into this BEAM module
                 // (Kex modules are organizational namespaces — see
-                // beam-codegen-plan.md). First cut: direct FunctionDefs only.
+                // beam-codegen-plan.md). First cut: direct FunctionDefs only;
+                // the full design is docs/module-sys-plan.md (one Kex module =
+                // one BEAM module), which replaces this handler entirely.
                 if (node) {
                     std::vector<const ast::FunctionDef*> grp;
                     auto flush = [&]{ if (!grp.empty()) { mod.functions.push_back(L.lowerFunctionGroup(grp)); grp.clear(); } };

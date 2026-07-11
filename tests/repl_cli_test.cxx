@@ -55,6 +55,30 @@ auto runRepl(const std::string& input) -> std::string {
     return stripAnsi(result);
 }
 
+auto runBeamFile(const std::string& source, const std::string& argument) -> std::string {
+    char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
+    int fd = mkstemps(sourcePath, 4);
+    assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+    {
+        std::ofstream f(sourcePath);
+        f << source;
+    }
+    close(fd);
+
+    std::string cmd = std::string(KEX_BINARY_PATH) + " -R " + sourcePath + " " + argument + " 2>&1";
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+            result.append(buf.data(), n);
+        pclose(pipe);
+    }
+    std::remove(sourcePath);
+    return stripAnsi(result);
+}
+
 } // namespace
 
 int main() {
@@ -104,6 +128,23 @@ int main() {
         it("renders a Char literal with quotes, not a bare '?'", []() {
             auto out = runRepl("'a'\n");
             assertTrue(out.find("=> 'a' : Char") != std::string::npos, out);
+        });
+    });
+
+    describe("BEAM CLI — Script Arguments", []() {
+        it("passes main(args) path values as Kex strings", []() {
+            char inputPath[] = "/tmp/kex_beam_arg_test_XXXXXX";
+            int fd = mkstemp(inputPath);
+            assertTrue(fd >= 0, "mkstemp should create an input file");
+            close(fd);
+
+            auto out = runBeamFile(
+                "main(args) do\n"
+                "  IO.printLine(File.exists?(args.first.or(\"\")))\n"
+                "end\n",
+                inputPath);
+            std::remove(inputPath);
+            assertTrue(out.find("true") != std::string::npos, out);
         });
     });
 
