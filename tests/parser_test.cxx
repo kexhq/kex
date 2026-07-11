@@ -135,6 +135,21 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("parses export declaration options", []() {
+            auto program = parse(
+                "module App do\n"
+                "  export Http.Methods, as: Methods, only: [get, (+)]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& exportDecl = std::get<std::unique_ptr<ast::ExportDecl>>(mod->body[0]);
+            assertTrue(exportDecl->alias.has_value());
+            assertEqual(*exportDecl->alias, std::string("Methods"));
+            assertEqual(exportDecl->onlyNames.size(), size_t(2));
+            assertEqual(exportDecl->onlyNames[0], std::string("get"));
+            assertEqual(exportDecl->onlyNames[1], std::string("+"));
+        });
     });
 
     describe("Parser — Types", []() {
