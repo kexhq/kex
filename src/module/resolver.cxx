@@ -48,20 +48,33 @@ auto candidates(const std::string& moduleName, std::string currentModule)
 auto Resolver::resolve(const std::string& moduleName,
                        const std::string& currentModule) const -> std::optional<Resolution> {
     if (isForeignNamespace(moduleName)) return std::nullopt;
-    for (const auto& root : m_roots) {
-        for (const auto& candidateName : candidates(moduleName, currentModule)) {
+    // Relative module identities take precedence over absolute ones. Once an
+    // identity has a winning source-root match, record any later matches so
+    // callers can diagnose the shadowing without changing resolution order.
+    for (const auto& candidateName : candidates(moduleName, currentModule)) {
+        std::optional<Resolution> result;
+        for (const auto& root : m_roots) {
             auto direct = std::filesystem::path(root) / sourcePath(candidateName);
-            if (std::filesystem::is_regular_file(direct))
-                return Resolution{candidateName, direct.string()};
+            std::optional<std::string> matchedPath;
+            if (std::filesystem::is_regular_file(direct)) {
+                matchedPath = direct.string();
+            }
 
             const auto dot = candidateName.find('.');
-            if (dot != std::string::npos) {
+            if (!matchedPath && dot != std::string::npos) {
                 auto container = std::filesystem::path(root)
                     / sourcePath(candidateName.substr(0, dot));
                 if (std::filesystem::is_regular_file(container))
-                    return Resolution{candidateName, container.string()};
+                    matchedPath = container.string();
             }
+
+            if (!matchedPath) continue;
+            if (!result)
+                result = Resolution{candidateName, *matchedPath, {}};
+            else if (*matchedPath != result->path)
+                result->shadowedPaths.push_back(*matchedPath);
         }
+        if (result) return result;
     }
     return std::nullopt;
 }

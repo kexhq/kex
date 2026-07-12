@@ -31,6 +31,9 @@ int main() {
             assertTrue(resolved.has_value());
             assertEqual(resolved->moduleName, std::string("Http.Router"));
             assertEqual(resolved->path, (base / "lib/http/router.kex").string());
+            assertEqual(resolved->shadowedPaths.size(), size_t{1});
+            assertEqual(resolved->shadowedPaths[0],
+                        (base / "src/http/router.kex").string());
         });
 
         it("resolves a relative module against its enclosing module", [&]() {

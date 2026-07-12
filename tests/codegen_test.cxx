@@ -451,6 +451,48 @@ int main() {
             assertEqual(output, std::string("21"));
         });
 
+        it("resolves a using alias in BEAM codegen", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module App do\n"
+                "  using Utils, as: U\n"
+                "  let compute(x) = U.double(x) + 1\n"
+                "end\n"
+                "main do App.compute(10) end\n",
+                "using_alias_cross_module");
+            assertEqual(output, std::string("21"));
+        });
+
+        it("keeps expression-level using aliases scoped", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "let compute(x) do\n"
+                "  using Utils, as: U do\n"
+                "    U.double(x)\n"
+                "  end\n"
+                "end\n"
+                "main do compute(21) end\n",
+                "using_alias_scoped");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("resolves hierarchical re-exports in BEAM codegen", []() {
+            auto output = runIrOnBeam(
+                "module Math do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module Toolkit do\n"
+                "  export Math, only: [double]\n"
+                "end\n"
+                "main do Toolkit.Math.double(21) end\n",
+                "module_hierarchical_export");
+            assertEqual(output, std::string("42"));
+        });
+
         it("nested module calls resolve relative to the enclosing module", []() {
             auto output = runIrOnBeam(
                 "module Http do\n"

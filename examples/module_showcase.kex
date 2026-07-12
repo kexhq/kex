@@ -1,0 +1,40 @@
+# Modules map one-to-one to Kex-prefixed BEAM modules.
+
+module Pricing do
+  let subtotal(price, quantity) = price * quantity
+  let withTax(amount, rate) = amount + amount * rate
+
+  private do
+    let internalRate() = 0.20
+  end
+
+  let standardTotal(price, quantity) do
+    return withTax(subtotal(price, quantity), 0.20)
+  end
+end
+
+module Shop do
+  module Receipt do
+    let label(total: Float64) -> String = "total: ${total}"
+  end
+
+  # Re-export Pricing as Shop.Pricing.
+  export Pricing, only: [subtotal, standardTotal]
+
+  let receipt(total) = Receipt.label(total)
+end
+
+# Import one function and keep a short alias for qualified access.
+using Pricing, as: Price, only: [subtotal]
+
+main do
+  let raw = subtotal(12.5, 4.0)
+  let total = Price.standardTotal(12.5, 4.0)
+  IO.printLine(Shop.receipt(total))
+  IO.printLine(Shop.Pricing.subtotal(10.0, 3.0).to(String))
+
+  # This alias exists only inside the block.
+  using Pricing, as: P do
+    IO.printLine(P.withTax(raw, 0.10).to(String))
+  end
+end

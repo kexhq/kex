@@ -51,6 +51,8 @@ public:
                         const std::string& name) -> SymbolInfo*;
     auto isModuleLoading(const std::string& moduleName,
                          const std::string& fromFile = "") const -> bool;
+    auto shadowedModulePaths(const std::string& moduleName) const
+        -> const std::vector<std::string>&;
 
     // Returns true if `name` appears as a file-level symbol in any indexed
     // file. This is an index query, not a name-resolution rule: top-level Kex
@@ -85,9 +87,11 @@ private:
     std::vector<std::string> m_moduleRoots{"lib", "src"};
     std::unordered_set<std::string> m_loadingModules;
     std::unordered_set<std::string> m_resolvingFiles;
+    std::unordered_map<std::string, std::vector<std::string>> m_shadowedModulePaths;
 
     static const std::vector<Diagnostic> s_emptyDiagnostics;
     static const std::vector<SymbolInfo> s_emptySymbols;
+    static const std::vector<std::string> s_emptyPaths;
 };
 
 } // namespace kex::semantic

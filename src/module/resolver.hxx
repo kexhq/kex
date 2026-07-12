@@ -9,6 +9,8 @@ namespace kex::module {
 struct Resolution {
     std::string moduleName;
     std::string path;
+    // Later source-root matches hidden by `path`, in source-root order.
+    std::vector<std::string> shadowedPaths;
 };
 
 class Resolver {

@@ -94,6 +94,9 @@ struct Lowering {
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
+    // Lexically visible `using Source, as: Alias` mappings. The receiver's
+    // first path segment is expanded before qualified module lookup.
+    std::unordered_map<std::string, std::string> moduleAliases;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -530,6 +533,8 @@ struct Lowering {
                     srcMod += n.module.parts[i];
                 }
                 auto saved = moduleImports;
+                auto savedAliases = moduleAliases;
+                if (n.alias) moduleAliases[*n.alias] = srcMod;
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
                         auto key = srcMod + "." + name;
@@ -548,6 +553,7 @@ struct Lowering {
                 }
                 auto result = lowerBody(n.body);
                 moduleImports = std::move(saved);
+                moduleAliases = std::move(savedAliases);
                 return result;
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
@@ -862,7 +868,16 @@ struct Lowering {
                     return out;
                 };
                 std::vector<std::string> candidates;
-                candidates.push_back(pathToString(path));
+                auto explicitPath = pathToString(path);
+                if (!path.empty()) {
+                    if (auto alias = moduleAliases.find(path.front());
+                        alias != moduleAliases.end()) {
+                        explicitPath = alias->second;
+                        for (size_t i = 1; i < path.size(); ++i)
+                            explicitPath += "." + path[i];
+                    }
+                }
+                candidates.push_back(explicitPath);
                 if (!currentModulePath.empty() && path.size() == 1) {
                     std::string relative = currentModulePath;
                     relative += "." + pathToString(path);
@@ -3368,6 +3383,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         auto savedModulePath = L.currentModulePath;
                         L.currentModulePath = m.name;
                         auto savedImports = L.moduleImports;
+                        auto savedAliases = L.moduleAliases;
                         auto prefix = m.name + ".";
                         for (const auto& [key, val] : L.moduleFunctions)
                             if (key.rfind(prefix, 0) == 0) {
@@ -3383,6 +3399,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                     if (i) srcMod += ".";
                                     srcMod += (*ub)->module.parts[i];
                                 }
+                                if ((*ub)->alias) L.moduleAliases[*(*ub)->alias] = srcMod;
                                 auto importName = [&](const std::string& name) {
                                     auto key = srcMod + "." + name;
                                     if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
@@ -3443,6 +3460,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         }
                         flush();
                         L.moduleImports = std::move(savedImports);
+                        L.moduleAliases = std::move(savedAliases);
                         L.currentModulePath = std::move(savedModulePath);
                     };
                     lowerModuleBody(*node);
@@ -3454,6 +3472,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (i) srcMod += ".";
                     srcMod += node->module.parts[i];
                 }
+                if (node->alias) L.moduleAliases[*node->alias] = srcMod;
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {
                         auto key = srcMod + "." + name;

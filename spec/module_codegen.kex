@@ -1,0 +1,36 @@
+# Module features exercised through the BEAM backend.
+# kex: run-beam
+
+module Numbers do
+  let double(n) = n * 2
+  let increment(n) = n + 1
+
+  private do
+    let secret() = 999
+  end
+end
+
+module Http do
+  module Router do
+    let status() = 200
+  end
+
+  let routeStatus() = Router.status
+end
+
+module Toolkit do
+  export Numbers, only: [double]
+end
+
+using Numbers, except: [increment]
+
+main do
+  IO.printLine(double(10).to(String))
+
+  using Numbers, as: N do
+    IO.printLine(N.increment(40).to(String))
+  end
+
+  IO.printLine(Toolkit.Numbers.double(21).to(String))
+  IO.printLine(Http.routeStatus.to(String))
+end

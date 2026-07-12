@@ -188,12 +188,13 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
         return;
     }
 
-    if (m_db->isModuleLoading(resolved, m_state ? m_state->path : "")) {
-        error(loc, "circular dependency: module " + resolved +
-                   " is still being loaded (required by " +
-                   (m_currentModule.empty() ? "top-level" : m_currentModule) + ")");
-        return;
-    }
+    for (const auto& path : m_db->shadowedModulePaths(resolved))
+        warning(loc, "shadowed module definition for " + resolved + ": " + path);
+
+    // A module that is already being loaded has completed collection, so its
+    // signatures are safe for type references and lazy function calls. Kex
+    // currently has no eager module value initializers; when those arrive,
+    // their value dependency graph (not this import graph) must detect cycles.
 
     for (const auto& name : onlyNames) {
         if (auto* symbol = m_db->symbolInModule(resolved, name)) {

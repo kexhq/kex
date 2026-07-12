@@ -13,6 +13,7 @@ namespace kex::semantic {
 
 const std::vector<Diagnostic> SemanticDB::s_emptyDiagnostics;
 const std::vector<SymbolInfo> SemanticDB::s_emptySymbols;
+const std::vector<std::string> SemanticDB::s_emptyPaths;
 
 auto SemanticDB::updateFile(const std::string& path, std::string source) -> void {
     FileState& state = m_files[path];
@@ -78,6 +79,7 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
     module::Resolver resolver(m_moduleRoots);
     auto resolution = resolver.resolve(moduleName, currentModule);
     if (!resolution) return std::nullopt;
+    m_shadowedModulePaths[resolution->moduleName] = resolution->shadowedPaths;
     if (hasModule(resolution->moduleName)) return resolution->moduleName;
     if (!m_loadingModules.insert(resolution->moduleName).second)
         return resolution->moduleName;
@@ -133,6 +135,12 @@ auto SemanticDB::isModuleLoading(const std::string& moduleName,
                 return true;
     }
     return false;
+}
+
+auto SemanticDB::shadowedModulePaths(const std::string& moduleName) const
+    -> const std::vector<std::string>& {
+    const auto found = m_shadowedModulePaths.find(moduleName);
+    return found == m_shadowedModulePaths.end() ? s_emptyPaths : found->second;
 }
 
 auto SemanticDB::isGloballyKnown(const std::string& name) const -> bool {

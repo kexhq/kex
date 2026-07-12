@@ -64,6 +64,41 @@ int main() {
             assertTrue(!symbol->references.empty());
         });
 
+        it("supports go-to-definition for an imported name across files", []() {
+            semantic::SemanticDB db;
+            db.updateFile("util.kex",
+                "module Util\n"
+                "let twice(n) = n * 2\n");
+            db.updateFile("main.kex",
+                "using Util, only: [twice]\n"
+                "main do\n"
+                "  twice(21)\n"
+                "end\n");
+            auto* definition = db.symbolInModule("Util", "twice");
+            assertTrue(definition != nullptr);
+            assertTrue(!definition->references.empty());
+            const auto& reference = definition->references.back();
+            const auto* atReference = db.symbolAt(
+                std::string(reference.file), reference.line, reference.column);
+            assertTrue(atReference == definition);
+            assertEqual(std::string(atReference->definition.file), std::string("util.kex"));
+        });
+
+        it("completes public module members but hides private ones", []() {
+            semantic::SemanticDB db;
+            db.updateFile("util.kex",
+                "module Util\n"
+                "let visible() = 1\n"
+                "private do\n"
+                "  let hidden() = 2\n"
+                "end\n");
+            const auto completions = db.completionsFor("Util.");
+            assertTrue(std::find(completions.begin(), completions.end(), "Util.visible")
+                       != completions.end());
+            assertTrue(std::find(completions.begin(), completions.end(), "Util.hidden")
+                       == completions.end());
+        });
+
         it("rejects importing a private module symbol", []() {
             semantic::SemanticDB db;
             db.updateFile("secrets.kex",
@@ -132,6 +167,31 @@ int main() {
             assertFalse(hasError);
         });
 
+        it("warns when a later source root shadows a module", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-semantic-shadow-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "lib");
+            fs::create_directories(root / "src");
+            {
+                std::ofstream first(root / "lib/util.kex");
+                first << "module Util\nlet value() = 1\n";
+                std::ofstream second(root / "src/util.kex");
+                second << "module Util\nlet value() = 2\n";
+            }
+            semantic::SemanticDB db;
+            db.setModuleRoots({(root / "lib").string(), (root / "src").string()});
+            db.updateFile("main.kex", "using Util, only: [value]\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.level == semantic::Diagnostic::Level::Warning
+                    && diagnostic.message.find("shadowed module definition for Util")
+                        != std::string::npos)
+                    found = true;
+            fs::remove_all(root);
+            assertTrue(found);
+        });
+
         it("rejects only: and except: together", []() {
             semantic::SemanticDB db;
             db.updateFile("util.kex",
@@ -190,7 +250,7 @@ int main() {
             assertTrue(found);
         });
 
-        it("detects circular module dependency", []() {
+        it("allows circular dependencies between lazy module functions", []() {
             namespace fs = std::filesystem;
             const auto root = fs::temp_directory_path() / "kex-cycle-test";
             fs::remove_all(root);
@@ -205,12 +265,11 @@ int main() {
             db.updateFile("a.kex",
                 "module A\nusing B\nlet fa() = 1\n");
             fs::remove_all(root);
-            // B's resolve pass should detect that A is still loading
-            bool found = false;
+            bool foundError = false;
             for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))
-                if (diagnostic.message.find("circular dependency") != std::string::npos)
-                    found = true;
-            assertTrue(found);
+                if (diagnostic.level == semantic::Diagnostic::Level::Error)
+                    foundError = true;
+            assertFalse(foundError);
         });
     });
 
