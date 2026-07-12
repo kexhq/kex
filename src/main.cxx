@@ -4,6 +4,7 @@
 #include "ir/emit_core.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
+#include "module/resolver.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
@@ -600,6 +601,83 @@ auto fileExists(const std::string &path) -> bool {
   std::ifstream probe(path);
   return probe.good();
 }
+
+namespace {
+
+auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
+  std::vector<std::string> result;
+  auto addFrom = [&](const kex::ast::TypeName &tn) {
+    std::string name;
+    for (size_t i = 0; i < tn.parts.size(); i++) {
+      if (i) name += ".";
+      name += tn.parts[i];
+    }
+    if (!kex::module::Resolver::isForeignNamespace(name))
+      result.push_back(std::move(name));
+  };
+  auto scanModuleBody = [&](auto &self,
+                            const std::vector<kex::ast::ModuleItem> &body) -> void {
+    for (const auto &item : body) {
+      if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
+        if (*ub) addFrom((*ub)->module);
+      if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+        if (*md) self(self, (*md)->body);
+    }
+  };
+  for (const auto &item : program.items) {
+    if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
+      if (*ub) addFrom((*ub)->module);
+    if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+      if (*md) scanModuleBody(scanModuleBody, (*md)->body);
+  }
+  return result;
+}
+
+struct LoadedDep {
+  std::unique_ptr<std::string> source;
+  std::unique_ptr<kex::ast::Program> program;
+};
+
+auto resolveBeamDeps(kex::ast::Program &program,
+                     const std::vector<std::string> &roots)
+    -> std::vector<LoadedDep> {
+  std::vector<LoadedDep> deps;
+  std::unordered_set<std::string> loaded;
+  kex::module::Resolver resolver(roots);
+
+  std::function<void(const kex::ast::Program &)> resolve =
+      [&](const kex::ast::Program &prog) {
+    for (const auto &modName : collectUsingModules(prog)) {
+      auto resolved = resolver.resolve(modName);
+      if (!resolved) continue;
+      if (!loaded.insert(resolved->path).second) continue;
+
+      auto src = std::make_unique<std::string>(readFile(resolved->path));
+      kex::Lexer lexer(std::string(*src), resolved->path);
+      kex::Parser parser(lexer.tokenizeAll(), resolved->path);
+      auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
+      if (parser.diagnostics().empty()) {
+        resolve(*depProg);
+        deps.push_back({std::move(src), std::move(depProg)});
+      }
+    }
+  };
+  resolve(program);
+
+  if (!deps.empty()) {
+    std::vector<kex::ast::TopLevelItem> merged;
+    for (auto &dep : deps)
+      for (auto &item : dep.program->items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.push_back(std::move(item));
+    for (auto &item : program.items)
+      merged.push_back(std::move(item));
+    program.items = std::move(merged);
+  }
+  return deps;
+}
+
+} // namespace
 
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 #ifdef KEX_PRELUDE_DIR
@@ -2158,6 +2236,22 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+      // Cross-file dependency resolution: walk `using` statements,
+      // resolve module files, parse them, and merge into the program
+      // so the IR lowering sees all definitions.
+      {
+        namespace fs = std::filesystem;
+        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
+        std::vector<std::string> roots;
+        for (const auto &r : {"lib", "src"}) {
+          auto full = srcDir + "/" + r;
+          if (fs::is_directory(full)) roots.push_back(full);
+        }
+        if (roots.empty()) roots.push_back(srcDir);
+        auto deps = resolveBeamDeps(program, roots);
+        (void)deps;
+      }
+
       // An explicit `main do ... end` is no longer required here —
       // CoreErlangEmitter already synthesizes one from trailing bare
       // top-level expressions when there isn't one (see its
@@ -2378,6 +2472,16 @@ int main(int argc, char *argv[]) {
     if (mode == "run") {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
+      {
+        namespace fs = std::filesystem;
+        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
+        std::vector<std::string> roots;
+        for (const auto &r : {"lib", "src"}) {
+          auto full = srcDir + "/" + r;
+          if (fs::is_directory(full)) roots.push_back(full);
+        }
+        if (!roots.empty()) evaluator.setModuleRoots(std::move(roots));
+      }
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.

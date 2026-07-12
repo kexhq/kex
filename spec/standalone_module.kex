@@ -1,0 +1,24 @@
+# Standalone module: file-level scoping without do...end
+# kex: no-check
+
+module Calc
+
+let add(a, b) = a + b
+let mul(a, b) = a * b
+
+record Result do
+  value : Int = 0
+  label : String = ""
+end
+
+module Helpers do
+  let format(r) = r.label + ": " + r.value.to(String)
+end
+
+main do
+  IO.printLine(Calc.add(10, 20).to(String))
+  IO.printLine(Calc.mul(6, 7).to(String))
+
+  let r = Calc.Result { value: 42, label: "answer" }
+  IO.printLine(Calc.Helpers.format(r))
+end

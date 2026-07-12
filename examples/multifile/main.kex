@@ -1,0 +1,25 @@
+# Multi-file project: cross-file using with convention-based resolution
+# Math.Vec2 → lib/math/vec2.kex
+# Math.Shapes → lib/math/shapes.kex
+
+using Math.Vec2
+using Math.Shapes
+
+main do
+  let a = Vec2 { x: 1.0, y: 2.0 }
+  let b = Vec2 { x: 3.0, y: 4.0 }
+  let sum = Math.Vec2.add(a, b)
+  IO.printLine("add: (" + sum.x.to(String) + ", " + sum.y.to(String) + ")")
+
+  let scaled = Math.Vec2.scale(a, 3.0)
+  IO.printLine("scale: (" + scaled.x.to(String) + ", " + scaled.y.to(String) + ")")
+
+  IO.printLine("length: " + Math.Vec2.length(b).to(String))
+  IO.printLine("dot: " + Math.Vec2.dot(a, b).to(String))
+
+  let c = Circle { radius: 5.0 }
+  IO.printLine("circle area: " + Math.Shapes.circleArea(c).to(String))
+
+  let r = Rect { width: 4.0, height: 6.0 }
+  IO.printLine("rect area: " + Math.Shapes.rectArea(r).to(String))
+end

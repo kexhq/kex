@@ -451,6 +451,34 @@ int main() {
             assertEqual(output, std::string("21"));
         });
 
+        it("nested module calls resolve relative to the enclosing module", []() {
+            auto output = runIrOnBeam(
+                "module Http do\n"
+                "  module Router do\n"
+                "    let get() = 41\n"
+                "  end\n"
+                "  let route() = Router.get() + 1\n"
+                "end\n"
+                "main do Http.route() end\n",
+                "nested_module_relative");
+            assertEqual(output, std::string("42"));
+
+            kex::Lexer lexer(
+                "module Http do\n"
+                "  module Router do\n"
+                "    let get() = 41\n"
+                "  end\n"
+                "  let route() = Router.get() + 1\n"
+                "end\n"
+                "main do Http.route() end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "nested_module_relative");
+            assertEqual(modules.size(), size_t{3});
+            assertEqual(modules[1].name, std::string("Kex.Http"));
+            assertEqual(modules[2].name, std::string("Kex.Http.Router"));
+        });
+
         it("does not block main on nested declaration-only module items", []() {
             auto output = runIrOnBeam(
                 "module Schema do\n"

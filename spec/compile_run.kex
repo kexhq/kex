@@ -1,0 +1,33 @@
+# Compile-run roundtrip: -c produces a .kx.beam that runs correctly
+# kex: compile-run
+# kex: no-check
+
+let greet(name) = "Hello, " + name + "!"
+
+module Math do
+  let square(x) = x * x
+  let cube(x) = x * x * x
+end
+
+record Point do
+  x : Int = 0
+  y : Int = 0
+end
+
+main do
+  IO.printLine(greet("World"))
+  IO.printLine(Math.square(7).to(String))
+  IO.printLine(Math.cube(3).to(String))
+
+  let p = Point { x: 10, y: 20 }
+  IO.printLine(p.x.to(String) + ", " + p.y.to(String))
+
+  let xs = [1, 2, 3, 4, 5]
+  IO.printLine(xs.map { |x| x * 2 }.to(String))
+
+  IO.printLine(match 42 do
+    0 -> "zero"
+    42 -> "forty-two"
+    _ -> "other"
+  end)
+end

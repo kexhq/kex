@@ -88,6 +88,9 @@ struct Lowering {
     // Modules in a single source file still flatten into one BEAM module, so
     // this preserves qualification without a cross-module call.
     std::unordered_map<std::string, std::string> moduleFunctions;
+    // Current module path while lowering a module body. Nested module-relative
+    // qualified calls (`Router.get` inside `module Http`) resolve against it.
+    std::string currentModulePath;
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
@@ -842,28 +845,41 @@ struct Lowering {
             }
         }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
-        // The module body is flattened into this BEAM module under a stable
-        // mangled name, while this map preserves the source-level qualifier.
+        // Resolve first against the explicit receiver path, then relative to
+        // the enclosing module path so nested modules can refer to siblings.
         {
             std::vector<std::string> path;
             if (modulePath(*n.receiver, path) && !n.namedArgs.empty() &&
                 records.find(n.method) == records.end())
                 throw LowerError("IR lower: named args to module function not yet ported");
             if (!path.empty() || modulePath(*n.receiver, path)) {
-                std::string key;
-                for (size_t i = 0; i < path.size(); i++) {
-                    if (i) key += ".";
-                    key += path[i];
+                auto pathToString = [&](const std::vector<std::string>& p) {
+                    std::string out;
+                    for (size_t i = 0; i < p.size(); i++) {
+                        if (i) out += ".";
+                        out += p[i];
+                    }
+                    return out;
+                };
+                std::vector<std::string> candidates;
+                candidates.push_back(pathToString(path));
+                if (!currentModulePath.empty() && path.size() == 1) {
+                    std::string relative = currentModulePath;
+                    relative += "." + pathToString(path);
+                    candidates.push_back(std::move(relative));
                 }
-                if (!key.empty()) key += "." + n.method;
-                auto it = moduleFunctions.find(key);
-                if (it != moduleFunctions.end()) {
-                    std::vector<Binding> binds;
-                    std::vector<ExprPtr> args;
-                    for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                    if (n.block) args.push_back(atomize(*n.block, binds));
-                    int ar = static_cast<int>(args.size());
-                    return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+                std::unordered_set<std::string> tried;
+                for (const auto& candidate : candidates) {
+                    if (candidate.empty() || !tried.insert(candidate).second) continue;
+                    auto it = moduleFunctions.find(candidate + "." + n.method);
+                    if (it != moduleFunctions.end()) {
+                        std::vector<Binding> binds;
+                        std::vector<ExprPtr> args;
+                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                        if (n.block) args.push_back(atomize(*n.block, binds));
+                        int ar = static_cast<int>(args.size());
+                        return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+                    }
                 }
                 if (auto rit = records.find(n.method); rit != records.end()) {
                     std::vector<Binding> binds;
@@ -2598,6 +2614,7 @@ struct Lowering {
         int explicitArity = group[0]->clauses.empty()
             ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
         def.arity = explicitArity + (implicitThisName.empty() ? 0 : 1);
+        auto savedModulePath = currentModulePath;
         for (const auto* fn : group) {
             for (const auto& clause : fn->clauses) {
                 subst.clear(); // fresh scope per clause
@@ -2650,6 +2667,7 @@ struct Lowering {
                 def.clauses.push_back(std::move(fc));
             }
         }
+        currentModulePath = std::move(savedModulePath);
         return def;
     }
     auto lowerFunction(const ast::FunctionDef& fn, const std::string& implicitThisName = "")
@@ -3305,10 +3323,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) {
                     std::vector<const ast::FunctionDef*> grp;
-                    std::string currentPath;
                     auto flush = [&]{
                         if (!grp.empty()) {
-                            auto it = L.moduleFunctions.find(currentPath + "." + grp.front()->name);
+                            auto it = L.moduleFunctions.find(L.currentModulePath + "." + grp.front()->name);
                             mod.functions.push_back(L.lowerFunctionGroup(grp, "",
                                 it == L.moduleFunctions.end() ? grp.front()->name : it->second));
                             grp.clear();
@@ -3348,7 +3365,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     };
                     std::function<void(const ast::ModuleDef&)> lowerModuleBody;
                     lowerModuleBody = [&](const ast::ModuleDef& m) {
-                        currentPath = m.name;
+                        auto savedModulePath = L.currentModulePath;
+                        L.currentModulePath = m.name;
                         auto savedImports = L.moduleImports;
                         auto prefix = m.name + ".";
                         for (const auto& [key, val] : L.moduleFunctions)
@@ -3405,7 +3423,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&bi)) {
                                 flush();
                                 if (*child) lowerModuleBody(**child);
-                                currentPath = m.name;
                             } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
                                        std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
@@ -3426,6 +3443,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         }
                         flush();
                         L.moduleImports = std::move(savedImports);
+                        L.currentModulePath = std::move(savedModulePath);
                     };
                     lowerModuleBody(*node);
                 }
@@ -3631,9 +3649,13 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;
+    std::vector<std::string> modulePaths;
+    std::unordered_set<std::string> seenModulePaths;
     std::function<void(const ast::ModuleDef&)> collect;
     collect = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
+        if (seenModulePaths.insert(path).second)
+            modulePaths.push_back(path);
         std::string prefix;
         for (char c : path) prefix += c == '.' ? "__" : std::string(1, c);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
@@ -3685,7 +3707,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         targets[emitted] = {"Kex." + def.path, def.sourceName};
 
     std::vector<Module> result;
-    std::unordered_map<std::string, size_t> moduleIndexes;
+    std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;
     std::vector<FunDef> globalFunctions;
     for (auto& fn : flat.functions) {
         auto found = definitions.find(fn.name);
@@ -3694,13 +3716,20 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
             continue;
         }
         const auto& def = found->second;
-        auto [it, inserted] = moduleIndexes.emplace(def.path, result.size());
-        if (inserted) { Module module; module.name = "Kex." + def.path; result.push_back(std::move(module)); }
         fn.name = def.sourceName;
         fn.exported = def.exported;
-        result[it->second].functions.push_back(std::move(fn));
+        moduleBuckets[def.path].push_back(std::move(fn));
     }
     flat.functions = std::move(globalFunctions);
+
+    result.push_back(std::move(flat));
+    for (const auto& path : modulePaths) {
+        Module module;
+        module.name = "Kex." + path;
+        if (auto it = moduleBuckets.find(path); it != moduleBuckets.end())
+            module.functions = std::move(it->second);
+        result.push_back(std::move(module));
+    }
 
     for (auto& module : result)
         for (auto& fn : module.functions)
@@ -3708,12 +3737,6 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                 if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
                 rewriteModuleCalls(clause.body, targets);
             }
-    for (auto& fn : flat.functions)
-        for (auto& clause : fn.clauses) {
-            if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
-            rewriteModuleCalls(clause.body, targets);
-        }
-    result.insert(result.begin(), std::move(flat));
     return result;
 }
 

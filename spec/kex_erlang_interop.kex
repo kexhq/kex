@@ -1,0 +1,33 @@
+# Kex modules calling Erlang modules and vice versa
+# kex: run-beam
+# kex: no-check
+
+module MyList do
+  let double_all(xs) = xs.map { |x| x * 2 }
+
+  let sorted(xs) = Erlang.Lists.sort(xs)
+
+  let reversed(xs) = Erlang.Lists.reverse(xs)
+
+  let sum(xs) = Erlang.Lists.foldl({ |x, acc| acc + x }, 0, xs)
+end
+
+module MyMath do
+  let hypotenuse(a, b) = Erlang.Math.sqrt(a * a + b * b)
+
+  let clamp(x, lo, hi) = Erlang.Erlang.min(Erlang.Erlang.max(x, lo), hi)
+end
+
+main do
+  let xs = [5, 3, 1, 4, 2]
+
+  IO.printLine(MyList.double_all(xs).to(String))
+  IO.printLine(MyList.sorted(xs).to(String))
+  IO.printLine(MyList.reversed(xs).to(String))
+  IO.printLine(MyList.sum(xs).to(String))
+
+  IO.printLine(MyMath.hypotenuse(3.0, 4.0).to(String))
+  IO.printLine(MyMath.clamp(15, 0, 10).to(String))
+  IO.printLine(MyMath.clamp(-5, 0, 10).to(String))
+  IO.printLine(MyMath.clamp(5, 0, 10).to(String))
+end
