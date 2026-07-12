@@ -1282,7 +1282,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return msgType;
             }
-            return checkCall(node.method, argTypes, expr.location, /*isMethodCall=*/true);
+            return checkCall(callName, argTypes, expr.location, /*isMethodCall=*/true);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             TypePtr elemType = Type::unknown();
