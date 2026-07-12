@@ -702,6 +702,29 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
+    // collect(f) — map each element through f (X -> Y?), keep+unwrap Just(y),
+    // drop None. One-pass filter+map fused via an Optional-returning function.
+    reg("collect", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::list({});
+        auto elems = getElements(args[0]);
+        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
+        if (!fn || !fn->native) return Value::list({});
+        std::vector<ValuePtr> result;
+        for (const auto& elem : elems) {
+            auto mapped = fn->native({elem});
+            if (std::holds_alternative<NoneValue>(mapped->data)) continue;
+            if (auto* var = std::get_if<VariantValue>(&mapped->data)) {
+                if (var->tag == "Just") {
+                    if (!var->args.empty()) result.push_back(var->args[0]);
+                    continue;
+                }
+            }
+            // Raw value (not Just/None) — keep as-is.
+            result.push_back(mapped);
+        }
+        return Value::list(std::move(result));
+    });
+
     // inspect() — pretty-printed representation of any value (UFCS on all types)
     reg("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");

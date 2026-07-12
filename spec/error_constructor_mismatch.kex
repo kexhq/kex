@@ -1,0 +1,6 @@
+# Spec: typechecker rejects wrong constructor patterns in let
+main do
+  let Ok((v, r)) = Integer.parsePrefix("42")  # prefix returns Optional, Ok is for Result
+  let Just(x)   = Integer.parse("42")          # parse returns Result, Just is for Optional
+  IO.printLine("unreachable")
+end

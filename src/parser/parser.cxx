@@ -1928,11 +1928,18 @@ auto Parser::isLetFunctionDefAhead() -> bool {
     bool isUpperName = nextType == TokenType::UpperIdent;
     if (!isLowerName && !isUpperName) return false;  // `let { ... }`, `let ( ... )`, `let [ ... ]`
 
-    // UpperIdent after `let` is always a zero-arg constant definition
-    // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`). UpperIdent can't
-    // be a variable-binding pattern in a let expression, so there's no
-    // ambiguity with the synthetic-MainBlock path.
-    if (isUpperName) return true;
+    // UpperIdent after `let` is a zero-arg constant definition
+    // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`), UNLESS it's
+    // followed by `(` which makes it a constructor pattern
+    // (`let Ok((v, r)) = parse(s)` -> pattern binding).
+    if (isUpperName) {
+        auto savedPos2 = m_pos;
+        advance(); // let
+        advance(); // UpperIdent name
+        bool isPattern = check(TokenType::LParen);
+        m_pos = savedPos2;
+        return !isPattern;
+    }
 
     // Look further: is there a ( after the name? Or is it let name = expr (simple binding)?
     auto savedPos = m_pos;

@@ -74,11 +74,11 @@ make Integer do
   # Converts to another numeric type.
   #
   # @param type [Y]
-  # @return [Unknown]
+  # @return [Y?]
   #
   # @example
   #   42.to(Float)   # => 42.0
-  to :> Y -> Unknown
+  to :> Y -> Y?
 
   # Returns the greatest integer ≤ self. No-op on integers.
   floor :> Integer
@@ -160,22 +160,37 @@ make Float do
   let toString = Kex.Intrinsic.Number.toString(this)
 end
 
-# Integer.parse(s) : String -> Result<Integer, String>
+# Integer.parse(s) : String -> Result<Integer, ParseError>
 #
 # Parses a string as an +Integer+. Returns +Ok(n)+ on success or
-# +Error(msg)+ on failure. Supports arbitrary-precision integers.
+# +Error(ParseError)+ on failure. The ParseError carries the input, the
+# byte +position+ where parsing stopped (and can be continued), and a
+# diagnostic +message+. Supports arbitrary-precision integers.
 # This is a native function registered on the +Integer+ namespace.
 #
 # @example
-#   Integer.parse("42")    # => Ok(42)
-#   Integer.parse("abc")   # => Error("invalid integer: abc")
+#   Integer.parse("42")      # => Ok(42)
+#   Integer.parse("12abc")   # => Error(ParseError { input: "12abc", position: 2, ... })
 
-# Float.parse(s) : String -> Result<Float, String>
+# Integer.parsePrefix(s) : String -> Optional<(Integer, String)>
+#
+# Parses a leading integer from +s+, returning +Just((n, rest))+ with the
+# unconsumed suffix, or +None+ if no integer prefix is found.
+#
+# @example
+#   let Just((n, rest)) = Integer.parsePrefix("6 USD")   # => n = 6, rest = " USD"
+#   Integer.parsePrefix("abc")                            # => None
+
+# Float.parse(s) : String -> Result<Float, ParseError>
 #
 # Parses a string as a +Float+. Returns +Ok(f)+ on success or
-# +Error(msg)+ on failure.
-# This is a native function registered on the +Float+ namespace.
+# +Error(ParseError)+ on failure. A bare integer like "5" is accepted.
 #
 # @example
 #   Float.parse("3.14")   # => Ok(3.14)
-#   Float.parse("abc")    # => Error("invalid float: abc")
+#   Float.parse("abc")    # => Error(ParseError { input: "abc", position: 0, ... })
+
+# Float.parsePrefix(s) : String -> Optional<(Float, String)>
+#
+# Parses a leading float from +s+, returning +Just((f, rest))+ with the
+# unconsumed suffix, or +None+ if no float prefix is found.

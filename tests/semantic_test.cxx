@@ -1512,8 +1512,8 @@ int main() {
         });
     });
 
-    describe("Void type (bottom type)", []() {
-        it("loop returns Void and is compatible with any branch", []() {
+    describe("Never type (bottom type)", []() {
+        it("loop returns Never and is compatible with any branch", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let result = if true then 42 else\n"
@@ -1525,22 +1525,74 @@ int main() {
             ));
         });
 
-        it("Void return annotation is accepted by the parser and resolver", []() {
-            // The stdlib `panic` is already typed `String -> Void`.
-            // Calling it without binding the result should not error.
+        it("Never return annotation is accepted for a diverging function", []() {
+            // `die` is typed `String -> Never` (bottom); a function annotated
+            // `-> Never` whose body diverges typechecks.
             assertTrue(noErrors(
-                "main do\n"
-                "  IO.printLine(\"before\")\n"
+                "let crash(msg: String) -> Never do\n"
+                "  die(msg)\n"
                 "end\n"
+                "main do IO.printLine(\"before\") end\n"
             ));
         });
 
-        it("if-else where one branch is die (Void) takes the other branch type", []() {
+        it("if-else where one branch is die (Never) takes the other branch type", []() {
             assertTrue(noErrors(
                 "let safeDivide(a: Integer, b: Integer) do\n"
                 "  if b == 0 then die(\"div by zero\") else a end\n"
                 "end\n"
                 "main do IO.printLine(safeDivide(10, 2)) end\n"
+            ));
+        });
+
+        it("Void is an alias for the unit type ()", []() {
+            // Swift-style: `Void` is `()`, not the bottom type. A function
+            // returning `Void` may return `()`.
+            assertTrue(noErrors(
+                "let noop() -> Void do\n"
+                "  return ()\n"
+                "end\n"
+                "main do noop() end\n"
+            ));
+        });
+    });
+
+    describe("let constructor pattern vs type mismatch", []() {
+        it("Ok pattern on Optional value errors", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let Ok((v, r)) = Integer.parsePrefix(\"42\")\n"
+                "  IO.printLine(v)\n"
+                "end\n",
+                "cannot match `Ok`"
+            ));
+        });
+
+        it("Just pattern on Result value errors", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let Just(v) = Integer.parse(\"42\")\n"
+                "  IO.printLine(v)\n"
+                "end\n",
+                "cannot match `Just`"
+            ));
+        });
+
+        it("Ok pattern on Result value is ok", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let Ok(n) = Integer.parse(\"42\")\n"
+                "  IO.printLine(n)\n"
+                "end\n"
+            ));
+        });
+
+        it("Just pattern on Optional value is ok", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let Just((v, r)) = Integer.parsePrefix(\"42\")\n"
+                "  IO.printLine(v)\n"
+                "end\n"
             ));
         });
     });

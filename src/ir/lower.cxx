@@ -842,7 +842,10 @@ struct Lowering {
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
+            if (uid->name == "Integer" && n.method == "parsePrefix") return nsCall("kex_intrinsic_integer", "integer_parse_prefix");
             if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
+            if (uid->name == "Float" && n.method == "parsePrefix")   return nsCall("kex_intrinsic_number", "float_parse_prefix");
+            if (uid->name == "Number" && n.method == "parse")  return nsCall("kex_intrinsic_number", "number_parse");
             // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
             // → kex_intrinsic_stream:make(Seed, Fun) — same lazy stream the
             // bare Sequence(from:) form builds.
@@ -1079,7 +1082,7 @@ struct Lowering {
             }
         }
         // HOF prelude functions (take a block/function argument).
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "count", "partition", "times", "sort"};
+        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "collect", "count", "partition", "times", "sort"};
         if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
