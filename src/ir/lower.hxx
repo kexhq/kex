@@ -12,6 +12,7 @@
 #include "../ast/ast.hxx"
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -25,9 +26,20 @@ struct LowerError : std::runtime_error {
 // (`kex_<stem>`), matching the existing backend's convention. `preludeFns` is
 // the set of stdlib function names provided by the shared kex_prelude module;
 // a UFCS call to one (that isn't a local method) routes to `kex_prelude:<fn>`.
+// externalModules maps loaded-module short names (e.g. "BinaryTree") to their
+// BEAM atoms (e.g. "Kex.BinaryTree"). Used by the REPL to resolve calls into
+// modules loaded via /load. Each module's exports/methods are in externalExports
+// keyed by "ModuleName.functionName".
+struct ExternalModules {
+    std::unordered_map<std::string, std::string> nameToAtom;
+    std::unordered_map<std::string, std::string> exportToBeamFn;
+    std::unordered_map<std::string, int> exportArity;
+};
+
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns = {},
-                  const std::string& sourcePath = "") -> Module;
+                  const std::string& sourcePath = "",
+                  const ExternalModules* externals = nullptr) -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
 // result is the file-local Kex.Global module; every explicit Kex module is a

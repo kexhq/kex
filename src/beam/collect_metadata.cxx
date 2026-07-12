@@ -63,6 +63,20 @@ auto convertTypeExpr(const kex::ast::TypeExprPtr& te) -> KexiTypePtr {
     }, te->kind);
 }
 
+auto methodBeamArity(const kex::ast::FunctionDef& fd) -> int {
+    if (fd.clauses.empty()) return 1;
+    const auto& params = fd.clauses[0].params;
+    if (params.empty()) return 1;
+    const auto& p0 = params[0];
+    bool receiverPat = !p0.name && p0.pattern &&
+        (std::holds_alternative<kex::ast::ThisPattern>((*p0.pattern)->kind) ||
+         std::holds_alternative<kex::ast::RecordPattern>((*p0.pattern)->kind) ||
+         std::holds_alternative<kex::ast::RangePattern>((*p0.pattern)->kind));
+    return receiverPat
+        ? static_cast<int>(params.size())
+        : static_cast<int>(params.size()) + 1;
+}
+
 auto makeTargetString(const kex::ast::TypeExprPtr& t) -> std::string {
     if (!t) return "";
     if (auto* tn = std::get_if<kex::ast::TypeName>(&t->kind)) {
@@ -123,8 +137,7 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
             method.receiverType = receiverType;
             method.isFoul = (*fd)->isFoul;
             if (!(*fd)->clauses.empty()) {
-                // +1 for the implicit @this receiver param on BEAM
-                method.beamArity = static_cast<int>((*fd)->clauses[0].params.size()) + 1;
+                method.beamArity = methodBeamArity(**fd);
                 for (const auto& p : (*fd)->clauses[0].params) {
                     if (p.type && *p.type)
                         method.paramTypes.push_back(convertTypeExpr(*p.type));
@@ -156,7 +169,7 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                     method.receiverType = receiverType;
                     method.isFoul = (*vfd)->isFoul;
                     if (!(*vfd)->clauses.empty()) {
-                        method.beamArity = static_cast<int>((*vfd)->clauses[0].params.size()) + 1;
+                        method.beamArity = methodBeamArity(**vfd);
                         for (const auto& p : (*vfd)->clauses[0].params) {
                             if (p.type && *p.type)
                                 method.paramTypes.push_back(convertTypeExpr(*p.type));

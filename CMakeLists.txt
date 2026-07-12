@@ -107,6 +107,7 @@ add_library(kex_lib
     src/beam/etf.cxx
     src/beam/kexi.cxx
     src/beam/collect_metadata.cxx
+    src/beam/kexi_registry.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)

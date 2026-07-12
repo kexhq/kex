@@ -97,6 +97,8 @@ struct Lowering {
     // Lexically visible `using Source, as: Alias` mappings. The receiver's
     // first path segment is expanded before qualified module lookup.
     std::unordered_map<std::string, std::string> moduleAliases;
+    // Loaded external modules from KexI registry (/load).
+    const ExternalModules* externalModules = nullptr;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -896,6 +898,26 @@ struct Lowering {
                         return wrapLets(binds, callE("", it->second, ar, std::move(args)));
                     }
                 }
+                // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
+                if (externalModules) {
+                    for (const auto& candidate : candidates) {
+                        if (candidate.empty()) continue;
+                        auto qualKey = candidate + "." + n.method;
+                        auto eit = externalModules->exportToBeamFn.find(qualKey);
+                        if (eit != externalModules->exportToBeamFn.end()) {
+                            auto ait = externalModules->nameToAtom.find(candidate);
+                            if (ait != externalModules->nameToAtom.end()) {
+                                std::vector<Binding> binds;
+                                std::vector<ExprPtr> args;
+                                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                                if (n.block) args.push_back(atomize(*n.block, binds));
+                                int ar = static_cast<int>(args.size());
+                                return wrapLets(binds,
+                                    callE(ait->second, eit->second, ar, std::move(args)));
+                            }
+                        }
+                    }
+                }
                 if (auto rit = records.find(n.method); rit != records.end()) {
                     std::vector<Binding> binds;
                     const auto& info = rit->second;
@@ -944,6 +966,19 @@ struct Lowering {
                 if (n.block) args.push_back(atomize(*n.block, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+            }
+            if (externalModules) {
+                auto qualKey = uid->name + "." + n.method;
+                auto eit = externalModules->exportToBeamFn.find(qualKey);
+                if (eit != externalModules->exportToBeamFn.end()) {
+                    auto ait = externalModules->nameToAtom.find(uid->name);
+                    if (ait != externalModules->nameToAtom.end()) {
+                        if (n.block) args.push_back(atomize(*n.block, binds));
+                        int ar = static_cast<int>(args.size());
+                        return wrapLets(binds,
+                            callE(ait->second, eit->second, ar, std::move(args)));
+                    }
+                }
             }
             auto nsCall = [&](const char* mod, const char* fn) {
                 auto ex = std::make_unique<Expr>();
@@ -1226,6 +1261,32 @@ struct Lowering {
             && !localMethods.count(m))
             return ret(callE("kex_intrinsic_fun", "or_else", 2,
                              two(rv(), atomize_ir(lower(n.args[0]), rb))));
+        // External loaded module methods take priority over prelude for UFCS.
+        if (!m_inGuard && externalModules && n.namedArgs.empty()
+            && !localMethods.count(m)) {
+            for (const auto& [qualKey, beamFn] : externalModules->exportToBeamFn) {
+                auto dot = qualKey.rfind('.');
+                if (dot != std::string::npos && qualKey.substr(dot + 1) == m) {
+                    auto modName = qualKey.substr(0, dot);
+                    auto ait = externalModules->nameToAtom.find(modName);
+                    if (ait != externalModules->nameToAtom.end()) {
+                        auto arit = externalModules->exportArity.find(qualKey);
+                        int expectedArity = arit != externalModules->exportArity.end()
+                            ? arit->second : -1;
+                        int blockExtra = n.block ? 1 : 0;
+                        int actualArity = static_cast<int>(n.args.size()) + 1 + blockExtra;
+                        if (expectedArity == -1 || expectedArity == actualArity) {
+                            std::vector<ExprPtr> pargs;
+                            pargs.push_back(rv());
+                            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
+                            if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
+                            return ret(callE(ait->second, beamFn,
+                                static_cast<int>(pargs.size()), std::move(pargs)));
+                        }
+                    }
+                }
+            }
+        }
         // Prelude stdlib functions → kex_prelude module.
         // Not in a guard (cross-module calls are illegal in Core Erlang guards).
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
@@ -1649,6 +1710,7 @@ struct Lowering {
             int arity = static_cast<int>(n.args.size()) + 1;
             return ret(wrapLets(binds, callE("kex_prelude", n.method, arity, std::move(args))));
         }
+        // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
         return ret(runtimeError("Undefined method: " + n.method));
     }
 
@@ -3003,10 +3065,12 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
-                  const std::string& sourcePath) -> Module {
+                  const std::string& sourcePath,
+                  const ExternalModules* externals) -> Module {
     Lowering L;
     L.preludeFns = preludeFns;
     L.sourceFile = sourcePath;
+    L.externalModules = externals;
     Module mod;
     mod.name = "kex_" + fileStem;
 

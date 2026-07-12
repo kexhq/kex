@@ -1,6 +1,7 @@
 #include "beam/beam_file.hxx"
 #include "beam/collect_metadata.hxx"
 #include "beam/kexi.hxx"
+#include "beam/kexi_registry.hxx"
 #include "codegen/core_erlang.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
@@ -1316,6 +1317,15 @@ int main(int argc, char *argv[]) {
     }
     kex::printReplBanner(std::cout, "BEAM");
 
+    kex::semantic::SemanticDB beamReplDb;
+#ifdef HAS_READLINE
+    g_replDb = &beamReplDb;
+    rl_attempted_completion_function = kexCompletion;
+    rl_completion_display_matches_hook = kexDisplayMatches;
+    rl_completer_word_break_characters = (char *)" \t\n\\@$><=;|&{(";
+    rl_completer_quote_characters = (char *)"";
+#endif
+
     // Top-level definitions, tracked by name so redefining a function
     // REPLACES its earlier clauses rather than appending duplicates (a
     // stale first clause would otherwise shadow the new one — the
@@ -1325,7 +1335,8 @@ int main(int argc, char *argv[]) {
     std::string localBinds; // let x = ... — re-emitted inside main do each eval
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
     int iteration = 0;
-    std::vector<std::string> loadedBeamFiles; // paths loaded via /load
+    std::vector<std::string> loadedBeamFiles; // .kex paths loaded via /load
+    kex::beam::KexiRegistry kexiRegistry;
 
     auto topDefsStr = [&]() -> std::string {
       std::string s;
@@ -1409,21 +1420,89 @@ int main(int argc, char *argv[]) {
         continue;
       }
       if (input == "/set" || input.substr(0, 5) == "/set " ||
-          input.substr(0, 7) == "/unset " || input.substr(0, 10) == "/complete ") {
+          input.substr(0, 7) == "/unset ") {
         std::cerr << "  not yet available in the BEAM REPL\n";
+        continue;
+      }
+      if (input.substr(0, 10) == "/complete ") {
+        auto prefix = input.substr(10);
+        auto results = beamReplDb.completionsFor(prefix);
+        if (results.empty())
+          std::cout << "  (no completions for \"" << prefix << "\")\n";
+        else
+          for (const auto& r : results) std::cout << "  " << r << "\n";
         continue;
       }
       if (input.substr(0, 6) == "/load ") {
         std::string filePath = input.substr(6);
         size_t start = filePath.find_first_not_of(" \t");
         if (start != std::string::npos) filePath = filePath.substr(start);
+        size_t end = filePath.find_last_not_of(" \t\r\n");
+        if (end != std::string::npos) filePath = filePath.substr(0, end + 1);
         if (!fileExists(filePath)) {
           std::cerr << "  /load: file not found: " << filePath << "\n";
           continue;
         }
-        // Validate syntax eagerly — a malformed file stored as a
-        // definition would turn every subsequent REPL input into a
-        // parse error.
+
+        // Compiled .beam/.kx.beam: load via KexI registry + hot-load into VM
+        bool isBeam = (filePath.size() > 5 &&
+                       filePath.substr(filePath.size() - 5) == ".beam");
+        if (isBeam) {
+          auto absPath = std::filesystem::weakly_canonical(filePath).string();
+          auto errors = kexiRegistry.loadUnit(absPath);
+          if (!errors.empty()) {
+            for (const auto& err : errors)
+              std::cerr << "  /load: " << err.message << "\n";
+            continue;
+          }
+          auto* unit = kexiRegistry.getUnit(
+              kexiRegistry.lastLoadedEntryAtom());
+          if (!unit) {
+            std::cerr << "  /load: internal error\n";
+            continue;
+          }
+          // Hot-load each module into the running BEAM VM using the
+          // VM's "load" protocol command.
+          bool loadOk = true;
+          for (const auto& mod : unit->modules) {
+            std::string nonce = std::to_string(++iteration);
+            vm.writeLine("load " + nonce + " " + mod.beamAtom +
+                         " " + mod.beamPath);
+            std::string status;
+            vm.readUntilSentinel("KEX_REPL_DONE " + nonce + " ", status);
+            if (status != "ok") {
+              std::cerr << "  /load: failed to hot-load " << mod.beamAtom
+                        << "\n";
+              loadOk = false;
+              break;
+            }
+          }
+          if (!loadOk) continue;
+
+          auto displayExpr = kexiRegistry.generateDisplayRegistration(*unit);
+          if (!displayExpr.empty()) {
+            std::string dn = std::to_string(++iteration);
+            vm.writeLine("exec " + dn + " " + displayExpr);
+            std::string ds;
+            vm.readUntilSentinel("KEX_REPL_DONE " + dn + " ", ds);
+          }
+
+          auto stubs = kexiRegistry.generateCompletionStubs(*unit);
+          if (!stubs.empty()) {
+            try {
+              beamReplDb.updateFile("<kexi:" +
+                  kexiRegistry.lastLoadedEntryAtom() + ">", stubs);
+            } catch (...) {}
+          }
+
+          std::cout << "  loaded " << filePath;
+          if (unit->modules.size() > 1)
+            std::cout << " (" << unit->modules.size() << " modules)";
+          std::cout << "\n";
+          continue;
+        }
+
+        // Source .kex file: validate syntax and register for session build
         try {
           auto src = readFile(filePath);
           kex::Lexer lex(std::move(src), filePath);
@@ -1434,6 +1513,40 @@ int main(int argc, char *argv[]) {
         } catch (const std::exception& e) {
           std::cerr << "  /load parse error: " << e.what() << "\n";
         }
+        continue;
+      }
+      if (input.substr(0, 8) == "/unload ") {
+        std::string modName = input.substr(8);
+        size_t start = modName.find_first_not_of(" \t");
+        if (start != std::string::npos) modName = modName.substr(start);
+        size_t end = modName.find_last_not_of(" \t\r\n");
+        if (end != std::string::npos) modName = modName.substr(0, end + 1);
+
+        std::string entryAtom;
+        if (kexiRegistry.isLoaded(modName))
+          entryAtom = modName;
+        else
+          entryAtom = kexiRegistry.findEntryByShortName(modName);
+
+        if (entryAtom.empty()) {
+          std::cerr << "  /unload: module '" << modName << "' is not loaded\n";
+          continue;
+        }
+
+        auto* unit = kexiRegistry.getUnit(entryAtom);
+        if (unit) {
+          for (const auto& mod : unit->modules) {
+            std::string dn = std::to_string(++iteration);
+            vm.writeLine("exec " + dn + " code:purge('" + mod.beamAtom +
+                         "'), code:delete('" + mod.beamAtom + "')");
+            std::string ds;
+            vm.readUntilSentinel("KEX_REPL_DONE " + dn + " ", ds);
+          }
+        }
+
+        beamReplDb.removeFile("<kexi:" + entryAtom + ">");
+        kexiRegistry.unloadUnit(entryAtom);
+        std::cout << "  unloaded " << modName << "\n";
         continue;
       }
       if (input == "/reload") {
@@ -1581,8 +1694,10 @@ int main(int argc, char *argv[]) {
               // file changed underneath us, just skip it this round.
             }
           }
+          auto extMods = kexiRegistry.buildExternalModules();
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
-                                             migratedPreludeFns());
+                                             migratedPreludeFns(), "",
+                                             extMods.nameToAtom.empty() ? nullptr : &extMods);
           auto result = kex::ir::emitCore(irMod);
 
           std::string corePath = beamDir + "/" + result.moduleName + ".core";
@@ -2427,7 +2542,7 @@ int main(int argc, char *argv[]) {
         // regardless of where its diagnostic text went.
           coreCmd += " > /dev/null 2>&1";
         } else {
-          std::cerr << "  erlc  " << moduleResults[moduleIndex].moduleName << "\n";
+          std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
         }
         erlcRet = std::system(coreCmd.c_str());
         if (erlcRet != 0) {
@@ -2450,22 +2565,16 @@ int main(int argc, char *argv[]) {
                 : kex::beam::KexiModuleRole::Companion;
             if (copts.role == kex::beam::KexiModuleRole::Companion) {
               copts.entryBackPointer = moduleResults[0].moduleName;
-              // IR names companions "Kex.ModuleName"; the AST module
-              // name is the part after "Kex." (possibly dotted for
-              // nested modules like "Kex.Http.Router" -> "Http.Router").
               auto irName = moduleResults[moduleIndex].moduleName;
               if (irName.rfind("Kex.", 0) == 0)
                 copts.moduleName = irName.substr(4);
             }
             auto chunk = kex::beam::collectMetadata(program, copts);
-            // For entry modules, build the companion manifest.
             if (moduleIndex == 0 && moduleResults.size() > 1) {
               for (size_t ci = 1; ci < moduleResults.size(); ci++) {
                 kex::beam::KexiCompanion comp;
                 comp.beamAtom = moduleResults[ci].moduleName;
                 comp.relativePath = moduleResults[ci].moduleName + ".beam";
-                // Hash will be filled after all companions are written;
-                // for now store a zero hash (first pass).
                 chunk.metadata.companions.push_back(std::move(comp));
               }
             }
@@ -2480,6 +2589,38 @@ int main(int argc, char *argv[]) {
           }
         }
       }
+
+      // Second pass: backfill companion hashes into the entry module's
+      // KexI companion manifest now that all companions have been written.
+      if (!compileRun && moduleResults.size() > 1) {
+        try {
+          std::string entryBeam = outputDir + "/" +
+                                  moduleResults[0].moduleName + ".beam";
+          auto entryBf = kex::beam::readBeamFile(entryBeam);
+          auto* kexiChk = entryBf.findChunk(kex::beam::KEXI_CHUNK_ID);
+          if (kexiChk) {
+            auto entryChunk = kex::beam::deserializeKexi(kexiChk->data);
+            for (auto& comp : entryChunk.metadata.companions) {
+              std::string compBeam = outputDir + "/" + comp.beamAtom + ".beam";
+              auto compBf = kex::beam::readBeamFile(compBeam);
+              auto* compChk = compBf.findChunk(kex::beam::KEXI_CHUNK_ID);
+              if (compChk) {
+                auto compChunk = kex::beam::deserializeKexi(compChk->data);
+                comp.expectedHash = compChunk.interfaceHash;
+              }
+            }
+            entryChunk.interfaceHash =
+                kex::beam::computeInterfaceHash(entryChunk);
+            auto payload = kex::beam::serializeKexi(entryChunk);
+            entryBf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
+            kex::beam::writeBeamFile(entryBf, entryBeam);
+          }
+        } catch (const std::exception& e) {
+          std::cerr << "warning: could not backfill companion hashes: "
+                    << e.what() << "\n";
+        }
+      }
+
       // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
       // The internal Erlang module name stays kex_<stem> inside the file.
       std::string internalBeam = outputDir + "/" + result.moduleName + ".beam";

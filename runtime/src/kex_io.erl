@@ -9,8 +9,10 @@
 %% them a record and a plain tuple are the same term, so to_string falls back
 %% to tuple rendering.
 register_display(Records, Variants) ->
-    persistent_term:put(kex_display_records, Records),
-    persistent_term:put(kex_display_variants, Variants),
+    Old_R = persistent_term:get(kex_display_records, #{}),
+    Old_V = persistent_term:get(kex_display_variants, #{}),
+    persistent_term:put(kex_display_records, maps:merge(Old_R, Records)),
+    persistent_term:put(kex_display_variants, maps:merge(Old_V, Variants)),
     ok.
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
@@ -137,7 +139,11 @@ inspect_string(X) when is_map(X) ->
     Pairs = [inspect_string(K) ++ ": " ++ inspect_string(V)
              || {K, V} <- lists:sort(maps:to_list(X))],
     "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
-inspect_string(X) when is_atom(X) -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET;
+inspect_string(X) when is_atom(X) ->
+    case variant_metadata(X) of
+        {0, _Owner} -> atom_to_list(X);
+        _ -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET
+    end;
 inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
                        (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                         element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
