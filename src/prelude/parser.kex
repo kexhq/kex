@@ -1,0 +1,51 @@
+# Parses Kex source code into a structured AST at runtime.
+#
+# Returns +Result<Program, ParseError>+ — the AST includes module
+# definitions, function signatures, type/record definitions, traits,
+# make blocks, and doc-comments extracted from +#+ lines.
+#
+# Function bodies are intentionally omitted from the output.
+module Parser do
+  # Parses a Kex source string into a structured AST.
+  parse : String -> Result<Program, ParseError>
+  parse : (String, String) -> Result<Program, ParseError>
+
+  # Reads a file and parses it.
+  parseFile : String -> Result<Program, ParseError>
+
+  # Parses a type expression string into a TypeRef.
+  parseType : String -> Result<TypeRef, ParseError>
+end
+
+# Structured representation of type expressions.
+type TypeRef
+  = NamedType(String, [TypeRef])
+  | FunctionType([TypeRef], TypeRef)
+  | TupleType([TypeRef])
+  | ListType(TypeRef)
+  | MapType(TypeRef, TypeRef)
+  | UnionType([TypeRef])
+  | NullableType(TypeRef)
+  | TypeVar(String)
+  | AnyType
+  | NoneType
+
+make TypeRef do
+  # Pretty-prints the type reference to a human-readable string.
+  toString :> String
+end
+
+# Structured representation of patterns.
+type PatternRef
+  = BindPattern(String)
+  | LiteralPattern(String)
+  | ConstructorPattern(String, [PatternRef])
+  | TuplePattern([PatternRef])
+  | ListPattern([PatternRef])
+  | WildcardPattern
+  | GuardedPattern(PatternRef, String)
+
+make PatternRef do
+  # Pretty-prints the pattern to a human-readable string.
+  toString :> String
+end

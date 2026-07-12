@@ -126,6 +126,8 @@ private:
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;
     auto registerProcessBuiltins() -> void;
+    auto registerParserBuiltins() -> void;
+    auto registerEvalBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;

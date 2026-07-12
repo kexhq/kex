@@ -103,6 +103,8 @@ add_library(kex_lib
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/console.cxx
     src/interpreter/stdlib/test.cxx
+    src/interpreter/stdlib/parser.cxx
+    src/interpreter/stdlib/eval.cxx
     src/beam/beam_file.cxx
     src/beam/etf.cxx
     src/beam/kexi.cxx
