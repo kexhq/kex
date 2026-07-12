@@ -4,7 +4,7 @@
 
 namespace kex::interpreter {
 
-// Helper: extract an integer field from an EvalOptions record
+// Helper: extract an integer field from an EvaluatorOptions record
 static auto getIntField(const RecordValue& rec, const std::string& name, int64_t def) -> int64_t {
     auto it = rec.fields.find(name);
     if (it == rec.fields.end()) return def;
@@ -12,7 +12,7 @@ static auto getIntField(const RecordValue& rec, const std::string& name, int64_t
     return def;
 }
 
-// Helper: extract the allow list from EvalOptions
+// Helper: extract the allow list from EvaluatorOptions
 static auto getAllowList(const RecordValue& rec) -> std::vector<std::string> {
     auto it = rec.fields.find("allow");
     if (it == rec.fields.end()) return {"Math", "List", "String", "Integer", "Map", "Stream"};
@@ -56,13 +56,13 @@ auto Evaluator::registerEvalBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
-    m_globalEnv->define("Eval", Value::module("Eval"));
+    m_globalEnv->define("Evaluator", Value::module("Evaluator"));
 
-    // Eval.run(source) or Eval.run(source, opts)
-    reg("Eval::run", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("Eval.run requires a source string"));
+    // Evaluator.run(source) or Evaluator.run(source, opts)
+    reg("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::error(Value::string("Evaluator.run requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(Value::string("Eval.run requires a source string"));
+        if (!srcVal) return Value::error(Value::string("Evaluator.run requires a source string"));
 
         int64_t maxSteps = 1000000;
         int64_t maxDepth = 256;
@@ -79,11 +79,11 @@ auto Evaluator::registerEvalBuiltins() -> void {
         return sandboxedEval(srcVal->value, false, maxSteps, maxDepth, allow);
     });
 
-    // Eval.expr(source) or Eval.expr(source, opts)
-    reg("Eval::expr", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("Eval.expr requires a source string"));
+    // Evaluator.expression(source) or Evaluator.expression(source, opts)
+    reg("Evaluator::expression", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::error(Value::string("Evaluator.expression requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(Value::string("Eval.expr requires a source string"));
+        if (!srcVal) return Value::error(Value::string("Evaluator.expression requires a source string"));
 
         int64_t maxSteps = 1000000;
         int64_t maxDepth = 256;

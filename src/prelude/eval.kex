@@ -2,17 +2,17 @@
 #
 # Creates a fresh, isolated evaluator for each call — the caller's
 # environment is never shared. Returns +Result<Any, String>+.
-module Eval do
+module Evaluator do
   # Evaluates a full Kex program string.
   run : String -> Result<Any, String>
-  run : (String, EvalOptions) -> Result<Any, String>
+  run : (String, EvaluatorOptions) -> Result<Any, String>
 
   # Evaluates a single Kex expression.
-  expr : String -> Result<Any, String>
-  expr : (String, EvalOptions) -> Result<Any, String>
+  expression : String -> Result<Any, String>
+  expression : (String, EvaluatorOptions) -> Result<Any, String>
 end
 
-record EvalOptions do
+record EvaluatorOptions do
   allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]
   modules : {String: {String: (Any -> Any)}} = {}
   maxSteps : Int = 1_000_000
