@@ -62,7 +62,7 @@ private:
 
     // Stdlib module names whose methods are inherently foul (I/O, network, etc.).
     // IO.inspect is the one documented exception — always allowed even in pure fns.
-    static constexpr std::string_view kFoulModules[] = {"IO", "Net", "File", "Directory", "Mock", "Http", "Database", "Supervisor"};
+    static constexpr std::string_view kFoulModules[] = {"IO", "System", "Net", "File", "Directory", "Mock", "Http", "Database", "Supervisor"};
 
     // break/next bind to the nearest enclosing Loop marker, but a Closure
     // marker in between makes them illegal — they don't cross into a

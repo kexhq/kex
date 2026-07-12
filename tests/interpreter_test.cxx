@@ -1557,6 +1557,18 @@ int main() {
             assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(40));
         });
 
+        it("supports method chains inside shorthand lambdas", []() {
+            auto result = run(
+                "main do\n"
+                "  (1..3).items.map(&.to(String).or(\"\"))\n"
+                "end\n");
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value,
+                        std::string("1"));
+            assertEqual(std::get<StringValue>(list.elements[2]->data).value,
+                        std::string("3"));
+        });
+
         it("collects over a range via Enumerable", []() {
             auto result = run(
                 "main do\n"

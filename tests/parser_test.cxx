@@ -627,6 +627,17 @@ int main() {
             assertEqual(main->body.size(), size_t(1));
         });
 
+        it("desugars a chained shorthand method lambda", []() {
+            auto program = parse(
+                "main do\n"
+                "  let x = (1..10).items.map(&.to(String).or(\"\"))\n"
+                "end\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& map = std::get<ast::MethodCall>(let.value->kind);
+            assertTrue(std::holds_alternative<ast::Lambda>(map.args[0]->kind));
+        });
+
         it("parses shorthand function lambda", []() {
             auto program = parse("main do\n  let x = list.sort(&compare)\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);

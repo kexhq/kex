@@ -220,7 +220,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("IO::printError", {genA()}, Type::unit());
     sig("IO::warn",       {genA()}, Type::unit());
     sig("IO::warning",    {genA()}, Type::unit());
-    sig("IO::exit",       {Type::integer()}, Type::voidType());
+    sig("System::exit",   {Type::integer()}, Type::voidType());
     // Testing DSL: describe/it/assert
     sig("describe",     {Type::string(), Type::func({}, Type::unit())}, Type::unit());
     sig("it",           {Type::string(), Type::func({}, Type::unit())}, Type::unit());

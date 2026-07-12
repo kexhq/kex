@@ -367,6 +367,14 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
+        it("lowers System.exit to erlang:halt", []() {
+            auto core = emitIr(
+                "foul stop(code) = System.exit(code)\n"
+                "main do 42 end\n",
+                "system_exit");
+            assertTrue(contains(core, "call 'erlang':'halt'"), core);
+        });
+
         it("defers an unknown namespace call until it is executed", []() {
             auto output = runIrOnBeam(
                 "foul unused(value) = Config.parse(value)\n"

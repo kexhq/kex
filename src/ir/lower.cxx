@@ -1416,7 +1416,7 @@ struct Lowering {
             std::string ty;
             if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
             if (ty == "String")
-                return ret(justOf(callE("kex_io","to_string_bin",1,one(rv()))));
+                return ret(callE("kex_io","to_string_optional",1,one(rv())));
             if (ty == "Int" || ty == "Integer")
                 return ret(callE("kex_intrinsic_number","to_integer",1,one(rv())));
             if (ty == "Float")

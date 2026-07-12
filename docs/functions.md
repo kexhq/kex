@@ -60,25 +60,26 @@ Universal conversion via `value.to(TargetType, ...options)`:
 
 ```kex
 make Integer do
-  let to(String) = BuiltIn.intToString(this)
-  let to(String, base: Integer) = BuiltIn.intToStringBase(this, base)
-  let to(Float) = BuiltIn.intToFloat(this)
+  let to(String) = Just(BuiltIn.intToString(this))
+  let to(String, base: Integer) = Just(BuiltIn.intToStringBase(this, base))
+  let to(Float) = Just(BuiltIn.intToFloat(this))
 end
 
 make Vector2D do
-  let to(String) -> String do
-    return "(${this.x}, ${this.y})"
+  let to(String) -> String? do
+    return Just("(${this.x}, ${this.y})")
   end
 end
 
 # Usage:
-42.to(String)             # "42"
-42.to(String, base: 16)   # "2a"
-3.14.to(Integer)          # 3
-myVec.to(String)          # "(3.0, 4.0)"
+42.to(String)             # Just("42")
+42.to(String, base: 16)   # Just("2a")
+3.14.to(Integer)          # Just(3)
+"nope".to(Integer)        # None
+myVec.to(String).or("")    # "(3.0, 4.0)"
 ```
 
-The first argument is the target type (pattern matched). Additional arguments are options for the conversion. Every type that supports conversion implements `to` in its `make` block.
+The first argument is the target type (pattern matched). Additional arguments are options for the conversion. `to` returns `Optional<TargetType>` because conversion can fail; callers explicitly unwrap, pattern-match, or propagate that result.
 
 ## Pattern Matching in Functions
 

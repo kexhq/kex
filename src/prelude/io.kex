@@ -48,9 +48,4 @@ foul module IO do
   # Alias for +printError+ — longer form of +warn+.
   warning : String -> Unit
 
-  # Terminates the process with the given numeric exit code.
-  # Like C's exit(3); the shell sees this code.
-  #
-  # @example  IO.exit(1)
-  exit : Integer -> Unit
 end

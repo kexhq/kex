@@ -1,0 +1,8 @@
+# Operations concerning the running Kex system process.
+foul module System do
+  # Terminates the process with the given numeric exit code.
+  # The invoking shell receives this code.
+  #
+  # @example  System.exit(1)
+  exit : Integer -> Void
+end

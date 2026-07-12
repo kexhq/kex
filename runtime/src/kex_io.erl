@@ -1,5 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, inspect_value/1, to_string/1,
+           to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2]).
 
 %% register_display/2 — called once at main start with the compiling module's
@@ -111,6 +112,11 @@ inspect_string(X) -> unicode:characters_to_list(to_string(X)).
 %% because its output feeds io:format/iolists, not user code.
 to_string_bin(X) when is_binary(X) -> X;
 to_string_bin(X) -> unicode:characters_to_binary(to_string(X)).
+
+%% Universal `value.to(String)` conversion. Keep the Optional construction
+%% behind a runtime call so Core Erlang does not fold a subsequent
+%% Just/None match and warn that the failure branch is unreachable.
+to_string_optional(X) -> {'Just', to_string_bin(X)}.
 
 %% Internal: convert any Kex value to a printable charlist.
 % Nested elements (inside a List/Tuple/Map) use exactly the same to_string

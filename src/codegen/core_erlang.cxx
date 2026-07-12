@@ -1044,7 +1044,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 else if (auto* ve = std::get_if<ast::VarExpr>(&node.args[0]->kind))
                     typeName = ve->name;
                 if (typeName == "String")
-                    return "{'Just', call 'kex_io':'to_string'(" + recv + ")}";
+                    return "call 'kex_io':'to_string_optional'(" + recv + ")";
                 // "Integer" is the real Kex type name (see
                 // src/interpreter/stdlib/list.cxx's own `.to` — "Int"
                 // alone is never actually used at the source level); a
