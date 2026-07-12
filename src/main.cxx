@@ -1103,6 +1103,7 @@ int main(int argc, char *argv[]) {
       // Escape hatch: route BEAM codegen through the legacy string emitter
       // (src/codegen/core_erlang.cxx) instead of the IR pipeline.
       {"legacy-emitter", no_argument, nullptr, 1002},
+      {"no-prelude", no_argument, nullptr, 1003},
       // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
@@ -1121,6 +1122,7 @@ int main(int argc, char *argv[]) {
 
   bool compileRun = false;
   bool useIr = true;
+  bool skipPrelude = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -1129,6 +1131,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1002:
       useIr = false;
+      break;
+    case 1003:
+      skipPrelude = true;
       break;
     case 1001: {
 #ifdef KEX_PRELUDE_DIR
@@ -1318,6 +1323,8 @@ int main(int argc, char *argv[]) {
     kex::printReplBanner(std::cout, "BEAM");
 
     kex::semantic::SemanticDB beamReplDb;
+    if (!skipPrelude)
+      loadPrelude(beamReplDb);
 #ifdef HAS_READLINE
     g_replDb = &beamReplDb;
     rl_attempted_completion_function = kexCompletion;
@@ -1787,7 +1794,8 @@ int main(int argc, char *argv[]) {
 
     // SemanticDB for REPL: prelude loaded once, updated on each input.
     kex::semantic::SemanticDB replDb;
-    loadPrelude(replDb);
+    if (!skipPrelude)
+      loadPrelude(replDb);
 #ifdef HAS_READLINE
     g_replDb = &replDb;
     rl_attempted_completion_function = kexCompletion;

@@ -326,8 +326,12 @@ int main() {
         });
         it("top-level bare prefix — global names", []() {
             auto db = makePreludeDb();
+            // Module-scoped and make-scoped names are not bare completions;
+            // only truly top-level symbols (modules, types, traits) match.
             auto r = simulate(db, "fil", 0, "fil");
-            assertTrue(has(r, "filter"));
+            assertTrue(!has(r, "filter"));
+            auto r2 = simulate(db, "List.fil", 0, "List.fil");
+            assertTrue(has(r2, "List.filter"));
         });
         it("user-defined function after updateFile", []() {
             auto db = makePreludeDb();

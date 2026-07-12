@@ -235,9 +235,11 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
             }
         }
     } else {
-        // Top-level names (no module) and module names themselves
+        // Top-level names only — module-scoped and make-scoped symbols
+        // require a dot qualifier (e.g. Math.sin, List.map)
         for (const auto& [path, state] : m_files) {
             for (const auto& sym : state.symbols) {
+                if (!sym.module.empty() || !sym.makeTarget.empty()) continue;
                 if (sym.name.rfind(prefix, 0) == 0) {
                     results.push_back(sym.name);
                 }

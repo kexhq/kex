@@ -134,6 +134,27 @@ int main() {
         });
     });
 
+    describe("REPL CLI — loaded definitions", []() {
+        it("keeps a loaded module's AST alive for later bindings", []() {
+            char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "module Loaded do\n"
+                     "  let values() = [5, 6, 7]\n"
+                     "end\n";
+            }
+            close(fd);
+
+            auto out = runRepl(std::string("/load ") + sourcePath +
+                               "\nlet t = Loaded.values()\nt\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("loaded ") != std::string::npos, out);
+            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
+        });
+    });
+
     describe("REPL CLI — ADT Display", []() {
         it("renders positional records as Name(args), not a field dump", []() {
             auto out = runRepl("Ok(\"hi\")\n");
@@ -181,6 +202,25 @@ int main() {
     });
 
     describe("BEAM REPL — Kex Value Display", []() {
+        it("keeps loaded modules visible to later bindings", []() {
+            char sourcePath[] = "/tmp/kex_beam_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "module Loaded do\n"
+                     "  let values() = [5, 6, 7]\n"
+                     "end\n";
+            }
+            close(fd);
+
+            auto out = runBeamRepl(std::string("/load ") + sourcePath +
+                                   "\nlet t = Loaded.values()\nt\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("loaded ") != std::string::npos, out);
+            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
+        });
+
         it("renders String lists as Kex strings and suppresses IO Unit", []() {
             auto out = runBeamRepl(
                 "(1..3).items.map(&.to(String).or(\"\"))\n"
