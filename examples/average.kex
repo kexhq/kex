@@ -23,7 +23,6 @@ end
 main(args) do
   printUsageAndExitWith("No arguments provided!") if args.empty?
 
-  # let numbers = args.collect(&.to(Float))
   let numbers = numbersFrom(args)
 
   let sum = numbers.sum

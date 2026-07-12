@@ -15,15 +15,18 @@ register_display(Records, Variants) ->
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
-    io:format("~ts~n", [to_string(X)]).
+    io:format("~ts~n", [to_string(X)]),
+    'Kex.Unit'.
 
 %% IO.print(x) — print x without a trailing newline.
 print(X) ->
-    io:format("~ts", [to_string(X)]).
+    io:format("~ts", [to_string(X)]),
+    'Kex.Unit'.
 
 %% IO.printError / IO.warn / IO.warning — print to stderr.
 print_error(X) ->
-    io:format(standard_error, "~ts~n", [to_string(X)]).
+    io:format(standard_error, "~ts~n", [to_string(X)]),
+    'Kex.Unit'.
 
 %% IO.readLine — read a line from stdin, returns a String (UTF-8 binary).
 read_line() ->
@@ -57,6 +60,8 @@ inspect(false) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "false" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), false;
+inspect('Kex.Unit') ->
+    'Kex.Unit';
 inspect(none) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -74,9 +79,10 @@ inspect([{'Char', _} | _] = X) ->
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [to_string(X)]), X;
 inspect(X) when is_list(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p"
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "List" ++ ?RESET ++ "~n", [X]), X;
+              ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+              [inspect_string(X), list_type_name(X)]), X;
 inspect({'Char', C}) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "'~ts'" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -106,6 +112,26 @@ inspect_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
 inspect_string(X) when is_atom(X) -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET;
 inspect_string(X) -> unicode:characters_to_list(to_string(X)).
+
+list_type_name([]) -> "[?]";
+list_type_name([H | T]) ->
+    Type = value_type_name(H),
+    case lists:all(fun(E) -> value_type_name(E) =:= Type end, T) of
+        true -> "[" ++ Type ++ "]";
+        false -> "[Any]"
+    end.
+
+value_type_name(X) when is_binary(X) -> "String";
+value_type_name(X) when is_integer(X) -> "Int";
+value_type_name(X) when is_float(X) -> "Float";
+value_type_name(true) -> "Bool";
+value_type_name(false) -> "Bool";
+value_type_name({'Char', _}) -> "Char";
+value_type_name(X) when is_list(X) -> list_type_name(X);
+value_type_name(X) when is_map(X) -> "Map";
+value_type_name(X) when is_tuple(X) -> "Tuple";
+value_type_name(X) when is_atom(X) -> "Atom";
+value_type_name(_) -> "Any".
 
 %% Any Kex value as a Kex String VALUE (UTF-8 binary) — what `.to(String)`
 %% and toString-style conversions return. to_string/1 below stays a charlist

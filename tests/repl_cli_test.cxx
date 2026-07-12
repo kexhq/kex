@@ -55,6 +55,30 @@ auto runRepl(const std::string& input) -> std::string {
     return stripAnsi(result);
 }
 
+auto runBeamRepl(const std::string& input) -> std::string {
+    char tmpPath[] = "/tmp/kex_beam_repl_cli_test_XXXXXX";
+    int fd = mkstemp(tmpPath);
+    {
+        std::ofstream f(tmpPath);
+        f << input;
+    }
+    close(fd);
+
+    std::string cmd = std::string(KEX_BINARY_PATH) +
+        " -i --no-colors < " + tmpPath + " 2>&1";
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+            result.append(buf.data(), n);
+        pclose(pipe);
+    }
+    std::remove(tmpPath);
+    return stripAnsi(result);
+}
+
 auto runBeamFile(const std::string& source, const std::string& argument) -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
     int fd = mkstemps(sourcePath, 4);
@@ -145,6 +169,18 @@ int main() {
                 inputPath);
             std::remove(inputPath);
             assertTrue(out.find("true") != std::string::npos, out);
+        });
+    });
+
+    describe("BEAM REPL — Kex Value Display", []() {
+        it("renders String lists as Kex strings and suppresses IO Unit", []() {
+            auto out = runBeamRepl(
+                "(1..3).items.map(&.to(String).or(\"\"))\n"
+                "IO.printLine({ \"kex\": 3 })\n");
+            assertTrue(out.find("=> [\"1\", \"2\", \"3\"] : [String]")
+                       != std::string::npos, out);
+            assertTrue(out.find("<<\"1\">>") == std::string::npos, out);
+            assertTrue(out.find("=> :ok : Atom") == std::string::npos, out);
         });
     });
 
