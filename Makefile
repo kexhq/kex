@@ -81,7 +81,15 @@ spec: build
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then kex_flags="-R --no-colors"; fi; \
+		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
+			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
+			$(KEX) -c --no-colors -o "$$tmpdir" "$$f" > /dev/null 2>&1; \
+			beamfile="$$tmpdir/$$(basename "$${f%.kex}").kx.beam"; \
+			actual=$$($(KEX) "$$beamfile" 2>&1); \
+			rm -rf "$$tmpdir"; \
+		else \
 		actual=$$($(KEX) $$kex_flags "$$f" 2>&1); \
+		fi; \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \

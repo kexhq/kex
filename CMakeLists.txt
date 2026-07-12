@@ -84,6 +84,7 @@ add_library(kex_lib
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/module/resolver.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
     src/interpreter/fiber.cxx
@@ -100,7 +101,13 @@ add_library(kex_lib
     src/interpreter/stdlib/process.cxx
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
+    src/interpreter/stdlib/console.cxx
     src/interpreter/stdlib/test.cxx
+    src/beam/beam_file.cxx
+    src/beam/etf.cxx
+    src/beam/kexi.cxx
+    src/beam/collect_metadata.cxx
+    src/beam/kexi_registry.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -163,6 +170,12 @@ endif()
 
 target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
+
+# SHA-256 for KexI interface hashing: CommonCrypto on macOS, OpenSSL on Linux
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(kex_lib PUBLIC OpenSSL::Crypto)
+endif()
 
 # Boost.Context backs the native (non-Emscripten) fiber/coroutine primitive
 # used for Kex's process model (see src/interpreter/fiber.cxx). Plain
@@ -310,6 +323,11 @@ foreach(src IN LISTS PRELUDE_SOURCES)
     )
 endforeach()
 
+add_executable(beam_test tests/beam_test.cxx)
+target_link_libraries(beam_test PRIVATE kex_lib)
+target_include_directories(beam_test PRIVATE tests)
+add_test(NAME beam_test COMMAND beam_test)
+
 add_executable(codegen_test tests/codegen_test.cxx)
 target_link_libraries(codegen_test PRIVATE kex_lib)
 target_include_directories(codegen_test PRIVATE tests)
@@ -324,6 +342,11 @@ add_executable(parser_test tests/parser_test.cxx)
 target_link_libraries(parser_test PRIVATE kex_lib)
 target_include_directories(parser_test PRIVATE tests)
 add_test(NAME parser_test COMMAND parser_test)
+
+add_executable(module_resolver_test tests/module_resolver_test.cxx)
+target_link_libraries(module_resolver_test PRIVATE kex_lib)
+target_include_directories(module_resolver_test PRIVATE tests)
+add_test(NAME module_resolver_test COMMAND module_resolver_test)
 
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)

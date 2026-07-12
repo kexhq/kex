@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/color.hxx"
 #include <iostream>
 
 namespace kex::interpreter {
@@ -55,10 +56,12 @@ auto Evaluator::registerTestBuiltins() -> void {
             try {
                 fn->native({});
                 m_testsPassed++;
-                line = indent + "\xE2\x9C\x93 " + label + "\n"; // ✓
+                line = indent + color::apply(color::green) + "\xE2\x9C\x93" +
+                       color::apply(color::reset) + " " + label + "\n"; // ✓
             } catch (const std::exception& e) {
                 m_testsFailed++;
-                line = indent + "\xE2\x9C\x97 " + label + ": " + e.what() + "\n"; // ✗
+                line = indent + color::apply(color::red) + "\xE2\x9C\x97" +
+                       color::apply(color::reset) + " " + label + ": " + e.what() + "\n"; // ✗
             }
         }
         m_output += line;

@@ -1,0 +1,10 @@
+# Cross-file using: resolves Utils.Strings from lib/utils/strings.kex
+# kex: no-check
+
+using Utils.Strings
+
+main do
+  IO.printLine(Utils.Strings.shout("hello"))
+  IO.printLine(Utils.Strings.whisper("WORLD"))
+  IO.printLine(Utils.Strings.repeat("ab", 3))
+end

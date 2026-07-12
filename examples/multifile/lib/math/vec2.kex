@@ -1,0 +1,14 @@
+module Math.Vec2
+
+record Vec2 do
+  x : Float = 0.0
+  y : Float = 0.0
+end
+
+let add(a, b) = Vec2 { x: a.x + b.x, y: a.y + b.y }
+
+let scale(v, s) = Vec2 { x: v.x * s, y: v.y * s }
+
+let length(v) = (v.x * v.x + v.y * v.y).sqrt()
+
+let dot(a, b) = a.x * b.x + a.y * b.y

@@ -1,0 +1,18 @@
+module Math.Shapes
+
+record Circle do
+  center_x : Float = 0.0
+  center_y : Float = 0.0
+  radius : Float = 1.0
+end
+
+record Rect do
+  x : Float = 0.0
+  y : Float = 0.0
+  width : Float = 0.0
+  height : Float = 0.0
+end
+
+let circleArea(c) = 3.14159265 * c.radius * c.radius
+
+let rectArea(r) = r.width * r.height

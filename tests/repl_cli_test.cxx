@@ -55,6 +55,30 @@ auto runRepl(const std::string& input) -> std::string {
     return stripAnsi(result);
 }
 
+auto runBeamRepl(const std::string& input) -> std::string {
+    char tmpPath[] = "/tmp/kex_beam_repl_cli_test_XXXXXX";
+    int fd = mkstemp(tmpPath);
+    {
+        std::ofstream f(tmpPath);
+        f << input;
+    }
+    close(fd);
+
+    std::string cmd = std::string(KEX_BINARY_PATH) +
+        " -i --no-colors < " + tmpPath + " 2>&1";
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+            result.append(buf.data(), n);
+        pclose(pipe);
+    }
+    std::remove(tmpPath);
+    return stripAnsi(result);
+}
+
 auto runBeamFile(const std::string& source, const std::string& argument) -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
     int fd = mkstemps(sourcePath, 4);
@@ -92,6 +116,14 @@ int main() {
             auto out = runRepl("let x = 5\nx + 3\n");
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
+
+        it("acknowledges native definitions", []() {
+            auto out = runRepl(
+                "let double(n) = n * 2\n"
+                "type Traffic = Red | Go(Integer)\n");
+            assertTrue(out.find("=> defined double") != std::string::npos, out);
+            assertTrue(out.find("=> defined Traffic") != std::string::npos, out);
+        });
     });
 
     describe("REPL CLI — Immutability", []() {
@@ -99,6 +131,27 @@ int main() {
             auto out = runRepl("let kx = \"a\"\nkx = \"b\"\nkx\n");
             assertTrue(out.find("Cannot assign to immutable binding: kx") != std::string::npos, out);
             assertTrue(out.find("=> \"a\" : String") != std::string::npos, out);
+        });
+    });
+
+    describe("REPL CLI — loaded definitions", []() {
+        it("keeps a loaded module's AST alive for later bindings", []() {
+            char sourcePath[] = "/tmp/kex_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "module Loaded do\n"
+                     "  let values() = [5, 6, 7]\n"
+                     "end\n";
+            }
+            close(fd);
+
+            auto out = runRepl(std::string("/load ") + sourcePath +
+                               "\nlet t = Loaded.values()\nt\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("loaded ") != std::string::npos, out);
+            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
         });
     });
 
@@ -145,6 +198,77 @@ int main() {
                 inputPath);
             std::remove(inputPath);
             assertTrue(out.find("true") != std::string::npos, out);
+        });
+    });
+
+    describe("BEAM REPL — Kex Value Display", []() {
+        it("keeps loaded modules visible to later bindings", []() {
+            char sourcePath[] = "/tmp/kex_beam_repl_load_test_XXXXXX.kex";
+            int fd = mkstemps(sourcePath, 4);
+            assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+            {
+                std::ofstream f(sourcePath);
+                f << "module Loaded do\n"
+                     "  let values() = [5, 6, 7]\n"
+                     "end\n";
+            }
+            close(fd);
+
+            auto out = runBeamRepl(std::string("/load ") + sourcePath +
+                                   "\nlet t = Loaded.values()\nt\n");
+            std::remove(sourcePath);
+            assertTrue(out.find("loaded ") != std::string::npos, out);
+            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
+        });
+
+        it("renders String lists as Kex strings and suppresses IO Unit", []() {
+            auto out = runBeamRepl(
+                "(1..3).items.map(&.to(String).or(\"\"))\n"
+                "IO.printLine({ \"kex\": 3 })\n");
+            assertTrue(out.find("=> [\"1\", \"2\", \"3\"] : [String]")
+                       != std::string::npos, out);
+            assertTrue(out.find("<<\"1\">>") == std::string::npos, out);
+            assertTrue(out.find("=> :ok : Atom") == std::string::npos, out);
+        });
+
+        it("renders Optional and Result values as Kex ADTs", []() {
+            auto out = runBeamRepl(
+                "Just(42)\n"
+                "Ok(\"ready\")\n"
+                "Error(\"bad\")\n");
+            assertTrue(out.find("=> Just(42) : Option<Int>")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Error(\"bad\") : Result<?, String>")
+                       != std::string::npos, out);
+            assertTrue(out.find("{'Just',42}") == std::string::npos, out);
+        });
+
+        it("renders tuples, maps, and nullary variants without Erlang syntax", []() {
+            auto out = runBeamRepl(
+                "(1, \"x\")\n"
+                "{ \"x\": 1 }\n"
+                "Less\n");
+            assertTrue(out.find("=> (1, \"x\") : Tuple")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> { \"x\": 1 } : Map")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Less : Ordering")
+                       != std::string::npos, out);
+            assertTrue(out.find("#{") == std::string::npos, out);
+            assertTrue(out.find("<<\"x\">>") == std::string::npos, out);
+        });
+
+        it("renders custom nullary and payload ADTs with their declared type", []() {
+            auto out = runBeamRepl(
+                "type Traffic = Red | Go(Integer)\n"
+                "Red\n"
+                "Go(3)\n");
+            assertTrue(out.find("=> defined Traffic") != std::string::npos, out);
+            assertTrue(out.find("=> Red : Traffic") != std::string::npos, out);
+            assertTrue(out.find("=> Go(3) : Traffic") != std::string::npos, out);
+            assertTrue(out.find("{'Go',3}") == std::string::npos, out);
         });
     });
 

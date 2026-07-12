@@ -65,7 +65,7 @@ module SQL do
       let emit() -> Query do
         let field_str = match @fields do
           [:all] -> "*"
-          fs     -> fs.map(&.to(String)).join(", ")
+          fs     -> fs.map(&.to(String).or("")).join(", ")
         end
 
         var sql = "SELECT ${field_str} FROM ${@table}"

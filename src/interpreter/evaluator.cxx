@@ -1,5 +1,6 @@
 #include "evaluator.hxx"
 #include "../lexer/lexer.hxx"
+#include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
 #include <filesystem>
 #include <fstream>
@@ -39,6 +40,7 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     for (const auto& item : program.items) {
         execTopLevel(item);
     }
+    resolvePendingExports();
 
     // The top-level program itself runs as one process (see
     // Scheduler::runToCompletion) — spawn/receive/Process.self at top level
@@ -67,6 +69,135 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     }
 
     return lastResult;
+}
+
+auto Evaluator::resolvePendingExports() -> void {
+    while (!m_pendingExports.empty()) {
+        auto pendingExports = std::move(m_pendingExports);
+        m_pendingExports.clear();
+        for (const auto& pending : pendingExports) {
+            std::string targetName;
+            for (size_t i = 0; i < pending.decl->module.parts.size(); ++i) {
+                if (i) targetName += ".";
+                targetName += pending.decl->module.parts[i];
+            }
+            if (targetName == pending.owner)
+                throw RuntimeError("module cannot export itself", pending.decl->location);
+
+            auto target = m_moduleRegistry.find(targetName);
+            if (target == m_moduleRegistry.end()) {
+                targetName = ensureModuleLoaded(targetName, pending.decl->location, pending.owner);
+                target = m_moduleRegistry.find(targetName);
+            }
+            if (target == m_moduleRegistry.end())
+                throw RuntimeError("Unknown module exported by " + pending.owner + ": " + targetName,
+                                   pending.decl->location);
+
+            for (const auto& requested : pending.decl->onlyNames)
+                if (target->second.privateNames.contains(requested))
+                    throw RuntimeError("cannot export private name `" + requested + "` from " + targetName,
+                                       pending.decl->location);
+            for (const auto& requested : pending.decl->exceptNames)
+                if (target->second.privateNames.contains(requested))
+                    throw RuntimeError("cannot reference private name `" + requested + "` from " + targetName,
+                                       pending.decl->location);
+
+            const auto alias = pending.decl->alias.value_or(pending.decl->module.parts.back());
+            const auto viewName = pending.owner + "." + alias;
+            ModuleEntry view;
+            view.isFoul = target->second.isFoul;
+            for (const auto& [name, value] : target->second.exports) {
+                if (!pending.decl->onlyNames.empty()
+                    && std::find(pending.decl->onlyNames.begin(), pending.decl->onlyNames.end(), name)
+                        == pending.decl->onlyNames.end()) continue;
+                if (std::find(pending.decl->exceptNames.begin(), pending.decl->exceptNames.end(), name)
+                    != pending.decl->exceptNames.end()) continue;
+                view.exports.emplace(name, value);
+                m_env->define(viewName + "::" + name, value);
+            }
+            if (view.exports.empty())
+                throw RuntimeError("module export exposes no public names from " + targetName,
+                                   pending.decl->location);
+
+            auto& owner = m_moduleRegistry[pending.owner];
+            owner.submodules[alias] = viewName;
+            m_moduleRegistry[viewName] = std::move(view);
+            m_env->define(pending.owner + "::" + alias, Value::module(viewName));
+        }
+    }
+}
+
+auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
+                                   const std::string& currentModule) -> std::string {
+    if (m_moduleRegistry.contains(moduleName)) return moduleName;
+
+    module::Resolver resolver(m_moduleRoots);
+    auto resolved = resolver.resolve(moduleName, currentModule);
+    if (!resolved) {
+        if (module::Resolver::isForeignNamespace(moduleName))
+            throw RuntimeError("Foreign module interop is not implemented: " + moduleName, loc);
+        throw RuntimeError("Unknown module: " + moduleName, loc);
+    }
+    const auto canonicalName = resolved->moduleName;
+    if (m_moduleRegistry.contains(canonicalName)) return canonicalName;
+    if (!m_loadingModules.insert(canonicalName).second) return canonicalName;
+
+    auto path = std::make_unique<std::string>(std::move(resolved->path));
+    std::ifstream input(*path);
+    std::string source((std::istreambuf_iterator<char>(input)),
+                       std::istreambuf_iterator<char>());
+    Lexer lexer(std::move(source), *path);
+    Parser parser(lexer.tokenizeAll(), *path);
+    auto program = std::make_unique<ast::Program>(parser.parseProgram());
+    if (!parser.diagnostics().empty()) {
+        const auto& diagnostic = parser.diagnostics().front();
+        m_loadingModules.erase(canonicalName);
+        throw RuntimeError("Failed to parse module " + canonicalName + ": " + diagnostic.message,
+                           diagnostic.location);
+    }
+
+    m_loadedModulePaths.push_back(std::move(path));
+    auto* ownedProgram = program.get();
+    m_loadedModulePrograms.push_back(std::move(program));
+    for (const auto& item : ownedProgram->items) execTopLevel(item);
+    m_loadingModules.erase(canonicalName);
+
+    if (!m_moduleRegistry.contains(canonicalName))
+        throw RuntimeError("Resolved file does not define module " + canonicalName, loc);
+    return canonicalName;
+}
+
+auto Evaluator::defineImported(const std::string& bindingName, const std::string& logicalName,
+                               const std::string& sourceModule, bool explicitImport,
+                               const std::string& moduleScope, ValuePtr value,
+                               SourceLocation loc) -> void {
+    ImportOrigin* existing = nullptr;
+    if (!moduleScope.empty()) {
+        const auto key = moduleScope + "::" + logicalName;
+        if (auto it = m_moduleImportOrigins.find(key); it != m_moduleImportOrigins.end())
+            existing = &it->second;
+        if (!existing) m_moduleImportOrigins[key] = {sourceModule, explicitImport};
+    } else {
+        for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
+            if (auto found = it->find(logicalName); found != it->end()) {
+                existing = &found->second;
+                break;
+            }
+        }
+        if (!existing) m_importScopes.back()[logicalName] = {sourceModule, explicitImport};
+    }
+
+    if (existing && existing->module != sourceModule) {
+        if (explicitImport && !existing->explicitImport) {
+            *existing = {sourceModule, true};
+        } else if (!explicitImport && existing->explicitImport) {
+            return;
+        } else {
+            throw RuntimeError("ambiguous name `" + logicalName + "`, imported from both `"
+                               + existing->module + "` and `" + sourceModule + "`", loc);
+        }
+    }
+    m_env->define(bindingName, std::move(value));
 }
 
 auto Evaluator::loadPrelude() -> void {
@@ -136,6 +267,10 @@ auto Evaluator::setArgs(std::vector<std::string> args) -> void {
     m_scriptArgs = std::move(args);
 }
 
+auto Evaluator::setModuleRoots(std::vector<std::string> roots) -> void {
+    m_moduleRoots = std::move(roots);
+}
+
 auto Evaluator::output() const -> const std::string& {
     return m_output;
 }
@@ -157,32 +292,165 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             execTraitDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
             execCompiledBlock(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+            execUsingBlock(*node);
         }
     }, item);
 }
 
+auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
+                               const std::string& moduleScope) -> void {
+    std::string moduleName;
+    for (size_t i = 0; i < block.module.parts.size(); ++i) {
+        if (i) moduleName += ".";
+        moduleName += block.module.parts[i];
+    }
+    auto imported = m_moduleRegistry.find(moduleName);
+    if (imported == m_moduleRegistry.end()) {
+        moduleName = ensureModuleLoaded(moduleName, block.location, moduleScope);
+        imported = m_moduleRegistry.find(moduleName);
+        if (imported == m_moduleRegistry.end())
+            throw RuntimeError("Unknown module: " + moduleName, block.location);
+    }
+
+    const bool scoped = !block.body.empty();
+    if (scoped) pushEnv();
+    try {
+        for (const auto& requested : block.onlyNames)
+            if (imported->second.privateNames.contains(requested))
+                throw RuntimeError("cannot import private name `" + requested
+                                   + "` from " + moduleName, block.location);
+        for (const auto& requested : block.exceptNames)
+            if (imported->second.privateNames.contains(requested))
+                throw RuntimeError("cannot reference private name `" + requested
+                                   + "` from " + moduleName, block.location);
+        for (const auto& [name, value] : imported->second.exports) {
+            if (!block.onlyNames.empty()
+                && std::find(block.onlyNames.begin(), block.onlyNames.end(), name)
+                    == block.onlyNames.end()) continue;
+            if (std::find(block.exceptNames.begin(), block.exceptNames.end(), name)
+                != block.exceptNames.end()) continue;
+            const auto binding = scoped || moduleScope.empty() ? name : moduleScope + "::" + name;
+            defineImported(binding, name, moduleName, !block.onlyNames.empty(),
+                           scoped ? "" : moduleScope, value, block.location);
+        }
+        if (block.alias) {
+            const auto binding = scoped || moduleScope.empty()
+                ? *block.alias : moduleScope + "::" + *block.alias;
+            defineImported(binding, *block.alias, moduleName, true,
+                           scoped ? "" : moduleScope, Value::module(moduleName), block.location);
+        }
+        for (const auto& expression : block.body)
+            if (expression) eval(*expression);
+    } catch (...) {
+        if (scoped) popEnv();
+        throw;
+    }
+    if (scoped) popEnv();
+}
+
 auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
+    // Publish the module shell before its body so a dependency cycle can see
+    // already-known module identity while definitions are still registering.
+    m_moduleRegistry.try_emplace(mod.name, ModuleEntry{});
+    std::unordered_set<std::string> publicNames;
+    std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
-        std::visit([this](const auto& node) {
+        std::visit([&publicNames, &privateNames, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node);
+                publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                publicNames.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                auto shortName = node->name;
+                auto prefixLen = mod.name.size() + 1;
+                if (shortName.size() > prefixLen && shortName.rfind(mod.name + ".", 0) == 0)
+                    shortName = shortName.substr(prefixLen);
+                publicNames.insert(shortName);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                for (const auto& visible : node->items) {
+                    if (const auto* function =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
+                        (node->isPublic ? publicNames : privateNames).insert((*function)->name);
+                    else if (const auto* record =
+                            std::get_if<std::unique_ptr<ast::RecordDef>>(&visible))
+                        (node->isPublic ? publicNames : privateNames).insert((*record)->name);
+                    else if (const auto* typeDef =
+                            std::get_if<std::unique_ptr<ast::TypeDef>>(&visible))
+                        (node->isPublic ? publicNames : privateNames).insert((*typeDef)->name);
+                }
+            }
+        }, item);
+    }
+    for (const auto& item : mod.body) {
+        std::visit([this, &mod](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                execFunctionDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 execTypeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                execRecordDef(*node);
+                execRecordDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                execVisibilityBlock(*node);
+                execVisibilityBlock(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
                 execTraitDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
                 execCompiledBlock(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                execUsingBlock(*node, mod.name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
+                m_pendingExports.push_back({mod.name, node.get()});
             }
         }, item);
+    }
+
+    ModuleEntry entry;
+    entry.isFoul = mod.isFoul;
+    entry.privateNames = std::move(privateNames);
+    entry.submodules = std::move(m_moduleRegistry[mod.name].submodules);
+    const auto prefix = mod.name + "::";
+    for (const auto& name : publicNames) {
+        const auto qualified = prefix + name;
+        if (auto value = m_env->get(qualified))
+            entry.exports.emplace(name, std::move(value));
+    }
+    m_moduleRegistry[mod.name] = std::move(entry);
+
+    // Make each segment of a qualified module path available to the existing
+    // namespace dispatcher. For `Http.Router.get()`, `Http` resolves to a
+    // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
+    size_t dot = mod.name.find('.');
+    if (dot == std::string::npos) {
+        m_env->define(mod.name, Value::module(mod.name));
+    } else {
+        const auto parent = mod.name.substr(0, dot);
+        m_env->define(parent, Value::module(parent));
+        while (dot != std::string::npos) {
+            const auto next = mod.name.find('.', dot + 1);
+            const auto child = mod.name.substr(dot + 1, next - dot - 1);
+            const auto qualified = mod.name.substr(0, next);
+            const auto owner = mod.name.substr(0, dot);
+            m_env->define(owner + "::" + child, Value::module(qualified));
+            auto& parentEntry = m_moduleRegistry[owner];
+            parentEntry.submodules[child] = qualified;
+            dot = next;
+        }
+    }
+
+    std::vector<std::string> moduleImports;
+    for (const auto& [name, _] : m_moduleImportOrigins)
+        if (name.rfind(prefix, 0) == 0) moduleImports.push_back(name);
+    for (const auto& name : moduleImports) {
+        m_env->erase(name);
+        m_moduleImportOrigins.erase(name);
     }
 }
 
@@ -270,14 +538,15 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     }
 }
 
-auto Evaluator::execRecordDef(const ast::RecordDef& def) -> void {
-    // Register record name as a namespace for static access (e.g. Vector2D.Polar)
+auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& moduleScope) -> void {
     m_env->define(def.name, Value::record(def.name, {}));
     m_recordDefs[def.name] = &def;
+    if (!moduleScope.empty()) {
+        const auto scoped = moduleScope + "::" + def.name;
+        m_env->define(scoped, Value::record(def.name, {}));
+        m_recordDefs[scoped] = &def;
+    }
     if (def.staticBlock) {
-        // Static constructors/constants are namespaced under the record
-        // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
-        // "Static Functions (Constructors)".
         for (const auto& func : def.staticBlock->functions) {
             execFunctionDef(*func, def.name);
         }
@@ -285,10 +554,11 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def) -> void {
 }
 
 auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope) -> void {
-    // Visibility (public/private) isn't enforced anywhere yet (see
-    // semantic/analyzer.cxx's "TODO: handle visibility") — both kinds are
-    // registered identically; only their accessibility differs, which
-    // isn't checked at this stage.
+    std::unordered_set<std::string> importsBefore;
+    const auto prefix = typeScope.empty() ? std::string{} : typeScope + "::";
+    for (const auto& [name, _] : m_moduleImportOrigins)
+        if (!prefix.empty() && name.rfind(prefix, 0) == 0) importsBefore.insert(name);
+
     for (const auto& item : block.items) {
         std::visit([this, &typeScope](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -300,9 +570,21 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std
                 execTypeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 execRecordDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                execUsingBlock(*node, typeScope);
             }
             // TypeAnnotation: semantic-only, nothing to execute.
         }, item);
+    }
+    if (!prefix.empty()) {
+        std::vector<std::string> scopedImports;
+        for (const auto& [name, _] : m_moduleImportOrigins)
+            if (name.rfind(prefix, 0) == 0 && !importsBefore.contains(name))
+                scopedImports.push_back(name);
+        for (const auto& name : scopedImports) {
+            m_env->erase(name);
+            m_moduleImportOrigins.erase(name);
+        }
     }
 }
 
@@ -358,10 +640,26 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
     // A name containing "::" was registered with a type scope → it's a UFCS
     // method and the first arg is always the receiver ("this").
     bool isMethod = regName.find("::") != std::string::npos;
-    funcValue->data = FunctionValue{def.name, [this, regName, isMethod](std::vector<ValuePtr> args) -> ValuePtr {
+    const std::string moduleScope = m_moduleRegistry.contains(typeScope) ? typeScope : "";
+    std::vector<std::pair<std::string, ValuePtr>> capturedImports;
+    if (!moduleScope.empty()) {
+        const auto prefix = moduleScope + "::";
+        for (const auto& [name, _] : m_moduleImportOrigins)
+            if (name.rfind(prefix, 0) == 0)
+                if (auto value = m_env->get(name)) capturedImports.push_back({name, value});
+    }
+    funcValue->data = FunctionValue{def.name, [this, regName, isMethod, moduleScope,
+                                               capturedImports](std::vector<ValuePtr> args) -> ValuePtr {
+        struct ModuleScopeGuard {
+            std::string& current;
+            std::string saved;
+            ~ModuleScopeGuard() { current = std::move(saved); }
+        } guard{m_currentModule, m_currentModule};
+        if (!moduleScope.empty()) m_currentModule = moduleScope;
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
                 pushEnv();
+                for (const auto& [name, value] : capturedImports) m_env->define(name, value);
                 bool matched = true;
 
                 // UFCS: if this function is a type-scoped method (name contains "::"),
@@ -848,8 +1146,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                     if (!isKnownVariant && !m_env->get(upperIdent->name)) {
+                        auto resolved = (!m_currentModule.empty())
+                            ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
+                        if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
+                            namespaceName = std::get<ModuleValue>(resolved->data).name;
+                        } else {
+                            namespaceName = upperIdent->name;
+                        }
                         isNamespaceCall = true;
-                        namespaceName = upperIdent->name;
                     }
                 }
             }
@@ -883,13 +1187,51 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (node.block) {
                     args.push_back(eval(**node.block));
                 }
+                if (auto registered = m_moduleRegistry.find(namespaceName);
+                    registered != m_moduleRegistry.end()
+                    && registered->second.privateNames.contains(node.method)
+                    && m_currentModule != namespaceName) {
+                    throw RuntimeError("cannot access private name `" + node.method
+                                       + "` from " + namespaceName, expr.location);
+                }
                 // Prefer the mangled "Namespace::method" name (e.g. "IO::putLine")
                 // so namespaced builtins can't collide with unrelated plain-name
                 // globals. Falls back to the plain name for namespaces that were
                 // registered without a mangled prefix (e.g. Stream.Sequence).
                 std::string dispatchName = node.method;
                 auto mangled = namespaceName + "::" + node.method;
-                if (m_env->get(mangled)) dispatchName = mangled;
+                if (auto target = m_env->get(mangled)) {
+                    if (node.args.empty() && node.namedArgs.empty() && !node.block
+                        && std::holds_alternative<ModuleValue>(target->data))
+                        return target;
+                    if (std::holds_alternative<RecordValue>(target->data)) {
+                        const auto& recName = std::get<RecordValue>(target->data).typeName;
+                        std::unordered_map<std::string, ValuePtr> fields;
+                        if (node.block) {
+                            auto blockVal = eval(**node.block);
+                            if (auto* mv = std::get_if<MapValue>(&blockVal->data))
+                                for (const auto& [k, v] : mv->entries) {
+                                    if (auto* sv = std::get_if<StringValue>(&k->data))
+                                        fields[sv->value] = v;
+                                    else if (auto* av = std::get_if<AtomValue>(&k->data))
+                                        fields[av->name] = v;
+                                }
+                        }
+                        for (const auto& [name, val] : node.namedArgs)
+                            fields[name] = val ? eval(*val) : Value::none();
+                        auto defIt = m_recordDefs.find(mangled);
+                        if (defIt == m_recordDefs.end()) defIt = m_recordDefs.find(recName);
+                        if (defIt != m_recordDefs.end()) {
+                            for (const auto& field : defIt->second->fields) {
+                                if (fields.count(field.name)) continue;
+                                if (field.defaultValue && *field.defaultValue)
+                                    fields[field.name] = eval(**field.defaultValue);
+                            }
+                        }
+                        return Value::record(recName, std::move(fields));
+                    }
+                    dispatchName = mangled;
+                }
                 return callFunction(dispatchName, std::move(args), std::move(namedArgs), expr.location);
             }
 
@@ -1401,6 +1743,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // user record types) are registered in the environment at
             // declaration time. An unknown name here is a real error.
             auto val = m_env->get(node.name);
+            if (!val && !m_currentModule.empty())
+                val = m_env->get(m_currentModule + "::" + node.name);
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }
@@ -1416,16 +1760,45 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return m_scheduler->blockingReceive(node);
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
-            // `using Module` inside a body: execute the module's compiled
-            // block functions in the current scope so their names become
-            // available as plain identifiers (e.g. `html`, `body` after
-            // `using Html.Language`). Currently a no-op because compiled
-            // block functions are already registered globally by execModule.
-            if (!node.body.empty()) {
+            std::string moduleName;
+            for (size_t i = 0; i < node.module.parts.size(); ++i) {
+                if (i) moduleName += ".";
+                moduleName += node.module.parts[i];
+            }
+            auto it = m_moduleRegistry.find(moduleName);
+            if (it == m_moduleRegistry.end()) {
+                moduleName = ensureModuleLoaded(moduleName, expr.location);
+                it = m_moduleRegistry.find(moduleName);
+                if (it == m_moduleRegistry.end())
+                    throw RuntimeError("Unknown module: " + moduleName, expr.location);
+            }
+            const bool scoped = !node.body.empty();
+            if (scoped) pushEnv();
+            try {
+                for (const auto& requested : node.onlyNames)
+                    if (it->second.privateNames.contains(requested))
+                        throw RuntimeError("cannot import private name `" + requested
+                                           + "` from " + moduleName, expr.location);
+                for (const auto& requested : node.exceptNames)
+                    if (it->second.privateNames.contains(requested))
+                        throw RuntimeError("cannot reference private name `" + requested
+                                           + "` from " + moduleName, expr.location);
+                for (const auto& [name, value] : it->second.exports) {
+                    if (!node.onlyNames.empty() &&
+                        std::find(node.onlyNames.begin(), node.onlyNames.end(), name) == node.onlyNames.end()) continue;
+                    if (std::find(node.exceptNames.begin(), node.exceptNames.end(), name) != node.exceptNames.end()) continue;
+                    defineImported(name, name, moduleName, !node.onlyNames.empty(), "",
+                                   value, expr.location);
+                }
+                if (node.alias) m_env->define(*node.alias, Value::module(moduleName));
                 for (const auto& e : node.body) {
                     if (e) eval(*e);
                 }
+            } catch (...) {
+                if (scoped) popEnv();
+                throw;
             }
+            if (scoped) popEnv();
             return Value::unit();
         }
         else {
@@ -1641,7 +2014,12 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     // `receive` still gives other processes a turn periodically.
     m_scheduler->tickReduction();
 
-    auto val = m_env->get(name);
+    std::string lookupName = name;
+    if (!m_currentModule.empty() && name.find("::") == std::string::npos) {
+        const auto scopedName = m_currentModule + "::" + name;
+        if (m_env->get(scopedName)) lookupName = scopedName;
+    }
+    auto val = m_env->get(lookupName);
     if (!val) val = m_intrinsicEnv->get(name);
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
@@ -1651,7 +2029,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         if (func->native) {
             // Reorder: place named args into correct positions based on param names
             if (!namedArgs.empty()) {
-                auto it = m_functionDefs.find(name);
+                auto it = m_functionDefs.find(lookupName);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
                     const auto& firstClause = it->second[0]->clauses[0];
                     // Build full arg list: place named args by matching
@@ -1947,6 +2325,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerMapBuiltins();
     registerEnvBuiltins();
     registerMathBuiltins();
+    registerConsoleBuiltins();
     registerTestBuiltins();
     registerProcessBuiltins();
 
@@ -1980,11 +2359,13 @@ auto Evaluator::registerBuiltins() -> void {
 
 auto Evaluator::pushEnv() -> void {
     m_env = std::make_shared<Environment>(m_env);
+    m_importScopes.emplace_back();
 }
 
 auto Evaluator::popEnv() -> void {
     if (m_env->parent()) {
         m_env = m_env->parent();
+        m_importScopes.pop_back();
     }
 }
 

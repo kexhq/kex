@@ -17,8 +17,8 @@ make Vec2 do
     return Vec2 { x: this.x + other.x, y: this.y + other.y }
   end
 
-  let to(String) -> String do
-    return "(${this.x}, ${this.y})"
+  let to(String) -> String? do
+    return Just("(${this.x}, ${this.y})")
   end
 end
 
@@ -27,8 +27,8 @@ make Vec3 do
     return Vec3 { x: this.x + other.x, y: this.y + other.y, z: this.z + other.z }
   end
 
-  let to(String) -> String do
-    return "(${this.x}, ${this.y}, ${this.z})"
+  let to(String) -> String? do
+    return Just("(${this.x}, ${this.y}, ${this.z})")
   end
 end
 
@@ -44,11 +44,11 @@ main do
   # Type dispatch
   let a = Vec2 { x: 1.0, y: 2.0 }
   let b = Vec2 { x: 3.0, y: 4.0 }
-  IO.printLine(a.add(b).to(String))
+  IO.printLine(a.add(b).to(String).or(""))
 
   let c = Vec3 { x: 1.0, y: 2.0, z: 3.0 }
   let d = Vec3 { x: 4.0, y: 5.0, z: 6.0 }
-  IO.printLine(c.add(d).to(String))
+  IO.printLine(c.add(d).to(String).or(""))
 
   # @ pattern matching on lists
   let list = [10, 20, 30]

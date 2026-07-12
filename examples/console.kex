@@ -1,0 +1,17 @@
+# Console colors and styles compose as ordinary strings. Run with
+# --no-colors to get the same text without ANSI escape sequences.
+main do
+  IO.printLine(Console.colorize("red", Console.Red))
+  IO.printLine(Console.colorize("green", Console.Green))
+  IO.printLine(Console.colorize("yellow", Console.Yellow))
+  IO.printLine(Console.colorize("blue", Console.Blue))
+  IO.printLine(Console.colorize("magenta", Console.Magenta))
+  IO.printLine(Console.colorize("cyan", Console.Cyan))
+  IO.printLine(Console.colorize("bold", Console.Bold))
+  IO.printLine(Console.colorize("dim", Console.Dim))
+  IO.printLine(Console.colorize("italic", Console.Italic))
+  IO.printLine(Console.colorize("underlined", Console.Underline))
+  IO.printLine(Console.colorize("reversed", Console.Reverse))
+  IO.printLine(Console.colorize("struck through", Console.Strikethrough))
+  IO.printLine(Console.colorize("bold green", Console.Bold + Console.Green))
+end

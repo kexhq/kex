@@ -1,0 +1,19 @@
+# Erlang interop: calling Erlang stdlib directly via Erlang.* namespace
+# kex: run-beam
+
+main do
+  # lists:reverse/1
+  IO.printLine(Erlang.Lists.reverse([1, 2, 3]).to(String).or(""))
+
+  # lists:flatten/1
+  IO.printLine(Erlang.Lists.flatten([[10, 20], [30]]).to(String).or(""))
+
+  # lists:nth/2 (1-based)
+  IO.printLine(Erlang.Lists.nth(2, [10, 20, 30]).to(String).or(""))
+
+  # erlang:abs/1
+  IO.printLine(Erlang.Erlang.abs(-7).to(String).or(""))
+
+  # math:sqrt/1
+  IO.printLine(Erlang.Math.sqrt(25.0).to(String).or(""))
+end

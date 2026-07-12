@@ -95,17 +95,17 @@ end
 ## Supervision
 
 ```kex
-foul let app = Supervisor.start(strategy: :one_for_one) do
+foul let app = Supervisor.start(restart: :only_crashed) do
   worker(Database, args: [config.db_url])
   worker(Cache)
-  supervisor(strategy: :one_for_all) do
+  supervisor(restart: :all) do
     worker(WebServer, args: [config.port])
     worker(WebSocket)
   end
 end
 ```
 
-When a child crashes, the supervisor restarts it based on strategy.
+When a child crashes, the supervisor restarts it based on its restart policy.
 
 ## Receive with Timeout
 

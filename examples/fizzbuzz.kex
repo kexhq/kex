@@ -4,7 +4,7 @@ let fizzBuzz(n: Integer) -> String do
     (0, 0) -> "FizzBuzz"
     (0, _) -> "Fizz"
     (_, 0) -> "Buzz"
-    (_, _) -> n.to(String)
+    (_, _) -> n.to(String).or("")
   end
 end
 

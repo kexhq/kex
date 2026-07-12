@@ -153,7 +153,7 @@ int main() {
         it("uses ranges", []() {
             ReplSession repl;
             assertEqual(repl.eval("(1..5).sum"), std::string("15"));
-            assertEqual(repl.eval("(1..5).to(List)"), std::string("[1, 2, 3, 4, 5]"));
+            assertEqual(repl.eval("(1..5).to(List)"), std::string("Just([1, 2, 3, 4, 5])"));
         });
     });
 

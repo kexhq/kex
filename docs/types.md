@@ -47,7 +47,7 @@ trait Comparable do
 end
 
 trait Describable do
-  let describe = "a ${this.to(String)}"   # default — overridable
+  let describe = "a ${this.to(String).or("")}"   # default — overridable
 end
 
 make Point implement: Comparable do

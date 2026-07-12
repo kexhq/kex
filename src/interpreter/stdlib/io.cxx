@@ -19,6 +19,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // via the empty-RecordValue namespace-dispatch branch in eval()
     // (ast::MethodCall) and gets the mangled "IO::" dispatch.
     m_globalEnv->define("IO", Value::module("IO"));
+    m_globalEnv->define("System", Value::module("System"));
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
     reg("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -75,8 +76,8 @@ auto Evaluator::registerIOBuiltins() -> void {
     m_globalEnv->define("IO::warn",    m_globalEnv->get("IO::printError"));
     m_globalEnv->define("IO::warning", m_globalEnv->get("IO::printError"));
 
-    // IO.exit(code) — terminate with the given numeric exit code.
-    reg("IO::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // System.exit(code) — terminate with the given numeric exit code.
+    reg("System::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
         int code = 0;
         if (!args.empty()) {
             if (auto* i = std::get_if<IntValue>(&args[0]->data)) code = static_cast<int>(i->value);

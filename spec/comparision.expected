@@ -1,6 +1,6 @@
--1
-0
-1
+Just(-1)
+Just(0)
+Just(1)
 Less
 Equal
 Greater

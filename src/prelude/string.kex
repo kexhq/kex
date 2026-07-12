@@ -129,8 +129,8 @@ make String do
   # @return [Y?]
   #
   # @example
-  #   "42".to(Integer)    # => 42
-  #   "3.14".to(Float)    # => 3.14
+  #   "42".to(Integer)    # => Just(42)
+  #   "3.14".to(Float)    # => Just(3.14)
   #   "abc".to(Integer)   # => None
   to :> Y -> Y?
 end

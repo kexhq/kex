@@ -220,9 +220,10 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("IO::printError", {genA()}, Type::unit());
     sig("IO::warn",       {genA()}, Type::unit());
     sig("IO::warning",    {genA()}, Type::unit());
-    sig("IO::exit",       {Type::integer()}, Type::voidType());
-    // assert — test helper (has type signatures; it/describe/assert_equal are
-    // prelude-only and registered separately in ResolvePass::isKnown)
+    sig("System::exit",   {Type::integer()}, Type::voidType());
+    // Testing DSL: describe/it/assert
+    sig("describe",     {Type::string(), Type::func({}, Type::unit())}, Type::unit());
+    sig("it",           {Type::string(), Type::func({}, Type::unit())}, Type::unit());
     sig("assert",       {Type::boolean()}, Type::unit());
     sig("assert",       {Type::boolean(), Type::string()}, Type::unit());
     // die — never returns (diverges), so typed as Never (bottom type)

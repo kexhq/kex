@@ -4,6 +4,7 @@
 #include "db.hxx"
 #include "stdlib_signatures.hxx"
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -18,6 +19,14 @@ public:
     auto run(SemanticDB& db, const std::string& file) -> void;
 
 private:
+    auto resolveModule(const ast::ModuleDef& module) -> void;
+    auto resolveUsing(const ast::TypeName& module,
+                      const std::optional<std::string>& alias,
+                      const std::vector<std::string>& onlyNames,
+                      const std::vector<std::string>& exceptNames,
+                      SourceLocation loc) -> void;
+    auto resolveUsingBlock(const ast::UsingBlock& block) -> void;
+    auto resolveExportDecl(const ast::ExportDecl& decl) -> void;
     auto resolveFunctionDef(const ast::FunctionDef& def) -> void;
     auto resolveMakeFns(const std::vector<std::variant<
             std::unique_ptr<ast::FunctionDef>,
@@ -39,12 +48,16 @@ private:
     auto defineLocal(const std::string& name) -> void;
 
     auto error(SourceLocation loc, const std::string& msg) -> void;
+    auto warning(SourceLocation loc, const std::string& msg) -> void;
 
     SemanticDB* m_db = nullptr;
     FileState* m_state = nullptr;
     SignatureTable m_stdlib;
 
     std::vector<std::unordered_set<std::string>> m_scopes;
+    struct ImportOrigin { std::string module; bool explicitImport = false; };
+    std::vector<std::unordered_map<std::string, ImportOrigin>> m_importScopes;
+    std::string m_currentModule;
 };
 
 } // namespace kex::semantic

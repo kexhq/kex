@@ -14,6 +14,7 @@ enum class TokenType {
     Elif,
     Else,
     End,
+    Export,
     False,
     Final,
     Foul,

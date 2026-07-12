@@ -20,7 +20,7 @@ let fizzBuzzString(n: Int) -> String do
     (Just(f), Just(b)) -> f + b
     (Just(f), None)    -> f
     (None, Just(b))    -> b
-    (None, None)       -> n.to(String)
+    (None, None)       -> n.to(String).or("")
   end
 end
 

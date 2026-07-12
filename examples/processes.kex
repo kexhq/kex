@@ -40,6 +40,55 @@ foul chatLoop(users: [String]) do
   end
 end
 
+# Functional style (no var)
+foul startCounterPure -> Process<CounterMessage> do
+  return spawn do
+    let loop(state: Int) do
+      receive do
+        :increment -> loop(state + 1)
+        :reset -> loop(0)
+        (:get, sender) -> do
+          sender.send(state)
+          loop(state)
+        end
+      end
+    end
+    loop(0)
+  end
+end
+
+# Tasks for simple async
+foul fetchAll(ids: [Int]) -> [Result<User, Error>] do
+  let tasks = ids.map do |id|
+    Task.start { fetchUser(id) }
+  end
+
+  return tasks.map { |t| t.await(timeout: 5000) }
+end
+
+record AppConfig do
+  dbUrl : String
+  port  : Integer
+end
+
+let config = AppConfig { dbUrl: "postgres://localhost/app", port: 8080 }
+
+# Supervision tree
+foul startApp do
+  Supervisor.start(restart: :only_crashed) do
+    worker(Database, args: [config.dbUrl])
+    worker(Cache)
+    supervisor(restart: :all) do
+      worker(WebServer, args: [config.port])
+      worker(WebSocket)
+    end
+  end
+end
+
+# Typed process that only accepts specific messages
+type ChatMessage = (:join, String) | (:leave, String) | (:msg, String, String)
+
+
 foul startChat -> Process<ChatMessage> do
   return spawn do chatLoop([]) end
 end
@@ -74,7 +123,7 @@ main do
   counter.send(Increment)
   counter.send(Get(Process.self))
   receive do
-    n -> IO.printLine("counter = " + n.to(String))
+    n -> IO.printLine("counter = " + n.to(String).or(""))
   end
 
   # --- Chat room ---
@@ -88,11 +137,11 @@ main do
   let t1 = Task.start { slowSquare(6) }
   let t2 = Task.start { slowSquare(7) }
   match t1.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("6^2 = " + v.to(String))
+    Ok(v) -> IO.printLine("6^2 = " + v.to(String).or(""))
     Error(_) -> IO.printLine("6^2 task failed")
   end
   match t2.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("7^2 = " + v.to(String))
+    Ok(v) -> IO.printLine("7^2 = " + v.to(String).or(""))
     Error(_) -> IO.printLine("7^2 task failed")
   end
 
@@ -101,7 +150,7 @@ main do
     [worker { startCounterWorker() }]
   end
   match supResult do
-    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String))
-    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String))
+    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String).or(""))
+    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String).or(""))
   end
 end

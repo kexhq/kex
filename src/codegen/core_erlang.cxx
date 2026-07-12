@@ -177,7 +177,27 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"IO::warning",     {"kex_io", "print_error"}},
         {"IO::readLine",    {"kex_io", "read_line"}},
         {"IO::inspect",     {"kex_io", "inspect"}},
-        {"IO::exit",        {"erlang", "halt"}},
+        {"System::exit",    {"erlang", "halt"}},
+        {"Console::Reset",   {"kex_intrinsic_console", "Reset"}},
+        {"Console::Bold",    {"kex_intrinsic_console", "Bold"}},
+        {"Console::Dim",     {"kex_intrinsic_console", "Dim"}},
+        {"Console::Italic",  {"kex_intrinsic_console", "Italic"}},
+        {"Console::Underline", {"kex_intrinsic_console", "Underline"}},
+        {"Console::Blink",   {"kex_intrinsic_console", "Blink"}},
+        {"Console::Reverse", {"kex_intrinsic_console", "Reverse"}},
+        {"Console::Hidden",  {"kex_intrinsic_console", "Hidden"}},
+        {"Console::Strikethrough", {"kex_intrinsic_console", "Strikethrough"}},
+        {"Console::Red",     {"kex_intrinsic_console", "Red"}},
+        {"Console::Green",   {"kex_intrinsic_console", "Green"}},
+        {"Console::Yellow",  {"kex_intrinsic_console", "Yellow"}},
+        {"Console::Blue",    {"kex_intrinsic_console", "Blue"}},
+        {"Console::Magenta", {"kex_intrinsic_console", "Magenta"}},
+        {"Console::Cyan",    {"kex_intrinsic_console", "Cyan"}},
+        {"Console::White",   {"kex_intrinsic_console", "White"}},
+        {"Console::Gray",    {"kex_intrinsic_console", "Gray"}},
+        {"Console::Purple",  {"kex_intrinsic_console", "Purple"}},
+        {"Console::enabled?", {"kex_intrinsic_console", "enabled"}},
+        {"Console::colorize", {"kex_intrinsic_console", "colorize"}},
         // Math
         {"Math::sqrt",      {"math",   "sqrt"}},
         {"Math::sin",       {"math",   "sin"}},
@@ -911,7 +931,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     "blank?", "present?", "truthy?", "falsy?",
                     "second", "third",
                     "floor", "ceil", "round", "toFloat", "toInteger",
-                    "toString", "rest", "toOptional",
+                    "rest", "toOptional",
                     // Process/concurrency primitives backed by Kex.Intrinsic.Process.
                     "send", "link", "unlink", "monitor", "alive?",
                     "demonitor", "await",
@@ -1044,7 +1064,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 else if (auto* ve = std::get_if<ast::VarExpr>(&node.args[0]->kind))
                     typeName = ve->name;
                 if (typeName == "String")
-                    return "call 'kex_io':'to_string'(" + recv + ")";
+                    return "call 'kex_io':'to_string_optional'(" + recv + ")";
                 // "Integer" is the real Kex type name (see
                 // src/interpreter/stdlib/list.cxx's own `.to` — "Int"
                 // alone is never actually used at the source level); a
@@ -1358,37 +1378,29 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
 
         // --- Record construction ---
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            // Tagged tuple {'TypeName', field1, field2, ...}. Fields MUST be
-            // emitted in the record's DECLARED order (not the order written
-            // at the construction site), and any field omitted at the site
-            // gets its declared default value — the field accessors read
-            // fixed tuple positions, so a short/misordered tuple corrupts
-            // every later access. A real, reproduced bug otherwise:
-            // `Parser { input: x }` (with `pos : Int = 0` defaulted)
-            // emitted a 2-tuple `{'Parser', X}`, and the `pos` accessor's
-            // `element(3, ...)` then crashed with badarg
-            // (examples/json_parser.kex, via spec/json_parser.spec.kex).
-            auto recIt = m_records.find(node.typeName);
-            if (recIt != m_records.end()) {
-                std::string result = "{'" + node.typeName + "'";
-                for (const auto& field : recIt->second->fields) {
-                    const ast::ExprPtr* provided = nullptr;
-                    for (const auto& [name, val] : node.fields)
-                        if (name == field.name) { provided = &val; break; }
-                    if (provided)
-                        result += ", " + emitExpr(*provided);
+            // Tagged tuple {'TypeName', field1, field2, ...} with fields in
+            // declaration order. Omitted fields fall back to their declared
+            // default value (or 'none' if unspecified).
+            std::string result = "{'" + node.typeName + "'";
+            auto it = m_records.find(node.typeName);
+            if (it != m_records.end()) {
+                std::unordered_map<std::string, const ast::ExprPtr*> given;
+                for (const auto& [name, val] : node.fields)
+                    given[name] = &val;
+                for (const auto& field : it->second->fields) {
+                    auto gv = given.find(field.name);
+                    if (gv != given.end())
+                        result += ", " + emitExpr(*gv->second);
                     else if (field.defaultValue)
                         result += ", " + emitExpr(*field.defaultValue);
                     else
                         result += ", 'none'";
                 }
-                return result + "}";
+            } else {
+                // Unknown record type — fall back to as-written order.
+                for (const auto& [name, val] : node.fields)
+                    result += ", " + emitExpr(val);
             }
-            // Unknown record (e.g. from another module) — fall back to the
-            // fields as written.
-            std::string result = "{'" + node.typeName + "'";
-            for (const auto& [name, val] : node.fields)
-                result += ", " + emitExpr(val);
             return result + "}";
         }
 
@@ -2005,12 +2017,10 @@ auto CoreErlangEmitter::emitLoopBodyFrom(const std::vector<ast::ExprPtr>& body, 
                 return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
             } else {
                 auto tmpVar = freshVar("D");
-                auto pat = emitPattern(le->pattern);
                 auto val = emitExpr(le->value);
                 std::string rest = emitLoopBodyFrom(body, start + 1, loopFn, loopArity, mutParams, fallthrough);
                 return "let <" + tmpVar + "> =\n    " + val + "\nin\n"
-                       "case " + tmpVar + " of\n"
-                       "  " + pat + " when 'true' ->\n    " + rest + "\nend";
+                       + bindPatternLets(le->pattern, tmpVar) + rest;
             }
         }
     }
@@ -2273,14 +2283,13 @@ auto CoreErlangEmitter::emitBodyFrom(const std::vector<ast::ExprPtr>& body, int 
                 std::string rest = isLast ? ceVar : emitBodyFrom(body, start + 1);
                 return "let <" + ceVar + "> =\n    " + val + "\nin\n" + rest;
             }
-            // Destructuring
+            // Destructuring: bind the value to a temp, then emit accessor-based
+            // let-bindings that extract each field.
             auto tmpVar = freshVar("D");
-            auto pat    = emitPattern(le->pattern);
             auto val    = emitExpr(le->value);
             std::string rest = isLast ? "'ok'" : emitBodyFrom(body, start + 1);
             return "let <" + tmpVar + "> =\n    " + val + "\nin\n"
-                   "case " + tmpVar + " of\n"
-                   "  " + pat + " when 'true' ->\n    " + rest + "\nend";
+                   + bindPatternLets(le->pattern, tmpVar) + rest;
         }
         std::string tmp = freshVar("T");
         std::string rest = isLast ? tmp : emitBodyFrom(body, start + 1);
@@ -2400,6 +2409,45 @@ auto CoreErlangEmitter::emitBody(const std::vector<ast::ExprPtr>& body) -> std::
 }
 
 // ---------------------------------------------------------------------------
+// Pattern destructuring → let chain
+// ---------------------------------------------------------------------------
+
+auto CoreErlangEmitter::bindPatternLets(const ast::PatternPtr& pat, const std::string& src) -> std::string {
+    if (!pat) return "";
+    return std::visit([&](const auto& p) -> std::string {
+        using PT = std::decay_t<decltype(p)>;
+        std::string lets;
+        if constexpr (std::is_same_v<PT, ast::VarPattern>) {
+            auto v = erlVar(p.name);
+            if (v != src) lets += "let <" + v + "> = " + src + " in\n";
+        } else if constexpr (std::is_same_v<PT, ast::RecordPattern>) {
+            for (const auto& field : p.fields) {
+                // Use direct element() if we know the position, otherwise apply accessor.
+                // Direct element() avoids infinite recursion when a user method has the
+                // same name as the auto-accessor it's trying to use internally.
+                std::string extracted;
+                auto it = m_fieldAccessors.find(field.name);
+                if (it != m_fieldAccessors.end() && !it->second.empty()) {
+                    // All entries at same position → single element call
+                    int pos = it->second[0].second;
+                    extracted = "call 'erlang':'element'(" + std::to_string(pos) + ", " + src + ")";
+                } else {
+                    extracted = "apply '" + field.name + "'/1(" + src + ")";
+                }
+                if (field.pattern) {
+                    auto tmp = freshVar(erlVar(field.name));
+                    lets += "let <" + tmp + "> = " + extracted + " in\n";
+                    lets += bindPatternLets(*field.pattern, tmp);
+                } else {
+                    lets += "let <" + erlVar(field.name) + "> = " + extracted + " in\n";
+                }
+            }
+        }
+        return lets;
+    }, pat->kind);
+}
+
+// ---------------------------------------------------------------------------
 // Function definition
 // ---------------------------------------------------------------------------
 
@@ -2509,9 +2557,6 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
 
     // Helper: generate let-bindings for a single parameter vs its arg variable.
     // Recursively generate let-bindings that destructure a pattern against a source expr.
-    // For a VarPattern: `let <Var> = src in`
-    // For a RecordPattern { age }: `let <Age> = apply 'age'/1(src) in`
-    // For a RecordPattern { address: { city } }: extract address, then city from that
     std::function<std::string(const ast::PatternPtr&, const std::string&)> bindPatternLets;
     bindPatternLets = [&](const ast::PatternPtr& pat, const std::string& src) -> std::string {
         if (!pat) return "";
@@ -2523,13 +2568,9 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
                 if (v != src) lets += "let <" + v + "> = " + src + " in\n";
             } else if constexpr (std::is_same_v<PT, ast::RecordPattern>) {
                 for (const auto& field : p.fields) {
-                    // Use direct element() if we know the position, otherwise apply accessor.
-                    // Direct element() avoids infinite recursion when a user method has the
-                    // same name as the auto-accessor it's trying to use internally.
                     std::string extracted;
                     auto it = m_fieldAccessors.find(field.name);
                     if (it != m_fieldAccessors.end() && !it->second.empty()) {
-                        // All entries at same position → single element call
                         int pos = it->second[0].second;
                         extracted = "call 'erlang':'element'(" + std::to_string(pos) + ", " + src + ")";
                     } else {
@@ -2544,12 +2585,6 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
                     }
                 }
             } else if constexpr (std::is_same_v<PT, ast::RangePattern>) {
-                // Ranges materialize as plain ascending lists (see
-                // RangeExpr's `lists:seq` emission), so a receiver-level
-                // `x.._`/`_..y`/`x..y` pattern isn't structural — it
-                // means "bind x to the first element" / "bind y to the
-                // last element" of that list (spec/range.kex's `make
-                // Range do let first(x.._) = x; let last(_..y) = y end`).
                 if (p.start)
                     if (auto* sv = std::get_if<ast::VarPattern>(&p.start->kind))
                         lets += "let <" + erlVar(sv->name) + "> = call 'erlang':'hd'(" + src + ") in\n";
@@ -2560,6 +2595,7 @@ auto CoreErlangEmitter::emitFunctionGroup(const std::vector<const ast::FunctionD
             return lets;
         }, pat->kind);
     };
+
 
     auto bindParamLets = [&](const ast::Param& param, const std::string& argVar) -> std::string {
         std::string lets;
@@ -2802,6 +2838,7 @@ auto CoreErlangEmitter::emitProgram(const ast::Program& prog,
 
     // Reset field accessor map for this compilation unit.
     m_fieldAccessors.clear();
+    m_records.clear();
     auto& fieldAccessors = m_fieldAccessors; // alias for use in lambdas below
 
     // Extracts a plain record-type name from a `make TARGET do` block's

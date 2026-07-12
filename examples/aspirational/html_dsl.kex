@@ -23,7 +23,7 @@ module Html do
         .reject(&.empty?)
         .join(" ")
 
-      return "<${preamble}>${children.map(&.to(String)).join("")}</${name}>"
+      return Just("<${preamble}>${children.map(&.to(String).or("")).join("")}</${name}>")
     end
   end
 

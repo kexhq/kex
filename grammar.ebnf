@@ -11,6 +11,8 @@
 
 program = top_level_item* ;
 
+standalone_module = FOUL? MODULE type_name NEWLINE top_level_item* ;
+
 top_level_item
   = module_def
   | type_def
@@ -38,7 +40,16 @@ module_item
   | compiled_block
   | visibility_block
   | using_block
+  | export_statement
   ;
+
+using_statement = USING type_name ( COMMA using_opts )? ( DO body END )? ;
+using_opts = using_opt ( COMMA using_opt )* ;
+using_opt = LOWER_IDENT COLON ( UPPER_IDENT | name_list ) ;
+name_list = LBRACKET name_entry ( COMMA name_entry )* RBRACKET ;
+name_entry = LOWER_IDENT | UPPER_IDENT | LPAREN binary_op RPAREN ;
+
+export_statement = EXPORT type_name ( COMMA using_opts )? ;
 
 visibility_block = ( PUBLIC | PRIVATE ) DO module_item* END ;
 

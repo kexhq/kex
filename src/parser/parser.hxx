@@ -35,7 +35,8 @@ private:
 
     // Top-level
     auto parseTopLevelItem() -> ast::TopLevelItem;
-    auto parseModuleDef() -> std::unique_ptr<ast::ModuleDef>;
+    auto parseModuleDef(bool allowStandalone = false,
+                        const std::string& parentModule = "") -> std::unique_ptr<ast::ModuleDef>;
     auto parseTypeDef() -> std::unique_ptr<ast::TypeDef>;
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
@@ -43,6 +44,10 @@ private:
     auto parseFunctionDef(bool isFoul = false) -> std::unique_ptr<ast::FunctionDef>;
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
+    auto parseExportDecl() -> std::unique_ptr<ast::ExportDecl>;
+    auto parseUsingOptions(std::optional<std::string>& alias,
+                           std::vector<std::string>& onlyNames,
+                           std::vector<std::string>& exceptNames) -> void;
     auto parseMainBlock() -> std::unique_ptr<ast::MainBlock>;
     auto parsePragma() -> std::unique_ptr<ast::Pragma>;
     auto parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock>;
@@ -79,6 +84,7 @@ private:
     auto parseMultiplication() -> ast::ExprPtr;
     auto parseUnary() -> ast::ExprPtr;
     auto parsePostfix() -> ast::ExprPtr;
+    auto parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr;
     auto parsePrimary() -> ast::ExprPtr;
     auto parseBody() -> std::vector<ast::ExprPtr>;
 
@@ -118,6 +124,7 @@ private:
     std::string_view m_filename;
     int m_pos = 0;
     bool m_noDoBlocks = false;
+    std::vector<ast::TopLevelItem> m_deferredTopLevelItems;
     bool m_noThenExpr = false; // suppress `then` as ternary inside if-conditions
     std::vector<ParseDiagnostic> m_diagnostics;
 };

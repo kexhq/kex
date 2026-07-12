@@ -1,9 +1,14 @@
+#include "beam/beam_file.hxx"
+#include "beam/collect_metadata.hxx"
+#include "beam/kexi.hxx"
+#include "beam/kexi_registry.hxx"
 #include "codegen/core_erlang.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
 #include "ir/emit_core.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
+#include "module/resolver.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
@@ -38,6 +43,28 @@
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+
+static auto replDefinitionName(const std::string &source) -> std::string {
+  size_t off = 0;
+  if (source.rfind("foul module ", 0) == 0) off = 12;
+  else if (source.rfind("foul ", 0) == 0) off = 5;
+  else if (source.rfind("let ", 0) == 0) off = 4;
+  else if (source.rfind("type ", 0) == 0) off = 5;
+  else if (source.rfind("record ", 0) == 0) off = 7;
+  else if (source.rfind("module ", 0) == 0) off = 7;
+  else if (source.rfind("make ", 0) == 0) off = 5;
+  while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+  if (source.compare(off, 6, "final:") == 0) {
+    off += 6;
+    while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+  }
+  size_t end = off;
+  while (end < source.size() &&
+         (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+          source[end] == '.' || source[end] == '?' || source[end] == '!'))
+    end++;
+  return source.substr(off, end - off);
+}
 
 // Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
 // embedded `'` via the standard close-quote/escaped-literal-quote/reopen
@@ -601,6 +628,83 @@ auto fileExists(const std::string &path) -> bool {
   return probe.good();
 }
 
+namespace {
+
+auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::string> {
+  std::vector<std::string> result;
+  auto addFrom = [&](const kex::ast::TypeName &tn) {
+    std::string name;
+    for (size_t i = 0; i < tn.parts.size(); i++) {
+      if (i) name += ".";
+      name += tn.parts[i];
+    }
+    if (!kex::module::Resolver::isForeignNamespace(name))
+      result.push_back(std::move(name));
+  };
+  auto scanModuleBody = [&](auto &self,
+                            const std::vector<kex::ast::ModuleItem> &body) -> void {
+    for (const auto &item : body) {
+      if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
+        if (*ub) addFrom((*ub)->module);
+      if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+        if (*md) self(self, (*md)->body);
+    }
+  };
+  for (const auto &item : program.items) {
+    if (auto *ub = std::get_if<std::unique_ptr<kex::ast::UsingBlock>>(&item))
+      if (*ub) addFrom((*ub)->module);
+    if (auto *md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+      if (*md) scanModuleBody(scanModuleBody, (*md)->body);
+  }
+  return result;
+}
+
+struct LoadedDep {
+  std::unique_ptr<std::string> source;
+  std::unique_ptr<kex::ast::Program> program;
+};
+
+auto resolveBeamDeps(kex::ast::Program &program,
+                     const std::vector<std::string> &roots)
+    -> std::vector<LoadedDep> {
+  std::vector<LoadedDep> deps;
+  std::unordered_set<std::string> loaded;
+  kex::module::Resolver resolver(roots);
+
+  std::function<void(const kex::ast::Program &)> resolve =
+      [&](const kex::ast::Program &prog) {
+    for (const auto &modName : collectUsingModules(prog)) {
+      auto resolved = resolver.resolve(modName);
+      if (!resolved) continue;
+      if (!loaded.insert(resolved->path).second) continue;
+
+      auto src = std::make_unique<std::string>(readFile(resolved->path));
+      kex::Lexer lexer(std::string(*src), resolved->path);
+      kex::Parser parser(lexer.tokenizeAll(), resolved->path);
+      auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
+      if (parser.diagnostics().empty()) {
+        resolve(*depProg);
+        deps.push_back({std::move(src), std::move(depProg)});
+      }
+    }
+  };
+  resolve(program);
+
+  if (!deps.empty()) {
+    std::vector<kex::ast::TopLevelItem> merged;
+    for (auto &dep : deps)
+      for (auto &item : dep.program->items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.push_back(std::move(item));
+    for (auto &item : program.items)
+      merged.push_back(std::move(item));
+    program.items = std::move(merged);
+  }
+  return deps;
+}
+
+} // namespace
+
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 #ifdef KEX_PRELUDE_DIR
   kex::loadPrelude(db, KEX_PRELUDE_DIR);
@@ -999,6 +1103,7 @@ int main(int argc, char *argv[]) {
       // Escape hatch: route BEAM codegen through the legacy string emitter
       // (src/codegen/core_erlang.cxx) instead of the IR pipeline.
       {"legacy-emitter", no_argument, nullptr, 1002},
+      {"no-prelude", no_argument, nullptr, 1003},
       // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
@@ -1017,6 +1122,7 @@ int main(int argc, char *argv[]) {
 
   bool compileRun = false;
   bool useIr = true;
+  bool skipPrelude = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -1025,6 +1131,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1002:
       useIr = false;
+      break;
+    case 1003:
+      skipPrelude = true;
       break;
     case 1001: {
 #ifdef KEX_PRELUDE_DIR
@@ -1100,6 +1209,12 @@ int main(int argc, char *argv[]) {
       return 1;
     }
   }
+
+#ifndef __EMSCRIPTEN__
+  // The BEAM runtime is a child process, so carry the CLI color choice over
+  // explicitly. Console constants and the spec reporter share this setting.
+  setenv("KEX_COLORS", kex::color::enabled ? "1" : "0", 1);
+#endif
 
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
@@ -1207,6 +1322,17 @@ int main(int argc, char *argv[]) {
     }
     kex::printReplBanner(std::cout, "BEAM");
 
+    kex::semantic::SemanticDB beamReplDb;
+    if (!skipPrelude)
+      loadPrelude(beamReplDb);
+#ifdef HAS_READLINE
+    g_replDb = &beamReplDb;
+    rl_attempted_completion_function = kexCompletion;
+    rl_completion_display_matches_hook = kexDisplayMatches;
+    rl_completer_word_break_characters = (char *)" \t\n\\@$><=;|&{(";
+    rl_completer_quote_characters = (char *)"";
+#endif
+
     // Top-level definitions, tracked by name so redefining a function
     // REPLACES its earlier clauses rather than appending duplicates (a
     // stale first clause would otherwise shadow the new one — the
@@ -1216,7 +1342,8 @@ int main(int argc, char *argv[]) {
     std::string localBinds; // let x = ... — re-emitted inside main do each eval
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
     int iteration = 0;
-    std::vector<std::string> loadedBeamFiles; // paths loaded via /load
+    std::vector<std::string> loadedBeamFiles; // .kex paths loaded via /load
+    kex::beam::KexiRegistry kexiRegistry;
 
     auto topDefsStr = [&]() -> std::string {
       std::string s;
@@ -1300,21 +1427,89 @@ int main(int argc, char *argv[]) {
         continue;
       }
       if (input == "/set" || input.substr(0, 5) == "/set " ||
-          input.substr(0, 7) == "/unset " || input.substr(0, 10) == "/complete ") {
+          input.substr(0, 7) == "/unset ") {
         std::cerr << "  not yet available in the BEAM REPL\n";
+        continue;
+      }
+      if (input.substr(0, 10) == "/complete ") {
+        auto prefix = input.substr(10);
+        auto results = beamReplDb.completionsFor(prefix);
+        if (results.empty())
+          std::cout << "  (no completions for \"" << prefix << "\")\n";
+        else
+          for (const auto& r : results) std::cout << "  " << r << "\n";
         continue;
       }
       if (input.substr(0, 6) == "/load ") {
         std::string filePath = input.substr(6);
         size_t start = filePath.find_first_not_of(" \t");
         if (start != std::string::npos) filePath = filePath.substr(start);
+        size_t end = filePath.find_last_not_of(" \t\r\n");
+        if (end != std::string::npos) filePath = filePath.substr(0, end + 1);
         if (!fileExists(filePath)) {
           std::cerr << "  /load: file not found: " << filePath << "\n";
           continue;
         }
-        // Validate syntax eagerly — a malformed file stored as a
-        // definition would turn every subsequent REPL input into a
-        // parse error.
+
+        // Compiled .beam/.kx.beam: load via KexI registry + hot-load into VM
+        bool isBeam = (filePath.size() > 5 &&
+                       filePath.substr(filePath.size() - 5) == ".beam");
+        if (isBeam) {
+          auto absPath = std::filesystem::weakly_canonical(filePath).string();
+          auto errors = kexiRegistry.loadUnit(absPath);
+          if (!errors.empty()) {
+            for (const auto& err : errors)
+              std::cerr << "  /load: " << err.message << "\n";
+            continue;
+          }
+          auto* unit = kexiRegistry.getUnit(
+              kexiRegistry.lastLoadedEntryAtom());
+          if (!unit) {
+            std::cerr << "  /load: internal error\n";
+            continue;
+          }
+          // Hot-load each module into the running BEAM VM using the
+          // VM's "load" protocol command.
+          bool loadOk = true;
+          for (const auto& mod : unit->modules) {
+            std::string nonce = std::to_string(++iteration);
+            vm.writeLine("load " + nonce + " " + mod.beamAtom +
+                         " " + mod.beamPath);
+            std::string status;
+            vm.readUntilSentinel("KEX_REPL_DONE " + nonce + " ", status);
+            if (status != "ok") {
+              std::cerr << "  /load: failed to hot-load " << mod.beamAtom
+                        << "\n";
+              loadOk = false;
+              break;
+            }
+          }
+          if (!loadOk) continue;
+
+          auto displayExpr = kexiRegistry.generateDisplayRegistration(*unit);
+          if (!displayExpr.empty()) {
+            std::string dn = std::to_string(++iteration);
+            vm.writeLine("exec " + dn + " " + displayExpr);
+            std::string ds;
+            vm.readUntilSentinel("KEX_REPL_DONE " + dn + " ", ds);
+          }
+
+          auto stubs = kexiRegistry.generateCompletionStubs(*unit);
+          if (!stubs.empty()) {
+            try {
+              beamReplDb.updateFile("<kexi:" +
+                  kexiRegistry.lastLoadedEntryAtom() + ">", stubs);
+            } catch (...) {}
+          }
+
+          std::cout << "  loaded " << filePath;
+          if (unit->modules.size() > 1)
+            std::cout << " (" << unit->modules.size() << " modules)";
+          std::cout << "\n";
+          continue;
+        }
+
+        // Source .kex file: validate syntax and register for session build
         try {
           auto src = readFile(filePath);
           kex::Lexer lex(std::move(src), filePath);
@@ -1325,6 +1520,40 @@ int main(int argc, char *argv[]) {
         } catch (const std::exception& e) {
           std::cerr << "  /load parse error: " << e.what() << "\n";
         }
+        continue;
+      }
+      if (input.substr(0, 8) == "/unload ") {
+        std::string modName = input.substr(8);
+        size_t start = modName.find_first_not_of(" \t");
+        if (start != std::string::npos) modName = modName.substr(start);
+        size_t end = modName.find_last_not_of(" \t\r\n");
+        if (end != std::string::npos) modName = modName.substr(0, end + 1);
+
+        std::string entryAtom;
+        if (kexiRegistry.isLoaded(modName))
+          entryAtom = modName;
+        else
+          entryAtom = kexiRegistry.findEntryByShortName(modName);
+
+        if (entryAtom.empty()) {
+          std::cerr << "  /unload: module '" << modName << "' is not loaded\n";
+          continue;
+        }
+
+        auto* unit = kexiRegistry.getUnit(entryAtom);
+        if (unit) {
+          for (const auto& mod : unit->modules) {
+            std::string dn = std::to_string(++iteration);
+            vm.writeLine("exec " + dn + " code:purge('" + mod.beamAtom +
+                         "'), code:delete('" + mod.beamAtom + "')");
+            std::string ds;
+            vm.readUntilSentinel("KEX_REPL_DONE " + dn + " ", ds);
+          }
+        }
+
+        beamReplDb.removeFile("<kexi:" + entryAtom + ">");
+        kexiRegistry.unloadUnit(entryAtom);
+        std::cout << "  unloaded " << modName << "\n";
         continue;
       }
       if (input == "/reload") {
@@ -1417,12 +1646,7 @@ int main(int argc, char *argv[]) {
           kex::Parser parser(std::move(tokens));
           parser.parseProgram(); // throws on syntax error
 
-          size_t off = source.rfind("foul ", 0) == 0 ? 5 : 4;
-          size_t i = off;
-          while (i < source.size() &&
-                 (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
-            i++;
-          std::string fname = source.substr(off, i - off);
+          std::string fname = replDefinitionName(source);
 
           // Replace any prior definition of the same function so a
           // redefinition takes effect (last def wins), rather than
@@ -1438,10 +1662,17 @@ int main(int argc, char *argv[]) {
                     << fname << "\n";
         } else {
           // Expression or local let — compile and run on BEAM.
+          // For local lets, the current binding is evaluated fresh and
+          // stashed in the process dictionary so subsequent evals
+          // retrieve it (avoiding re-evaluation of side-effectful
+          // expressions like Ets.new).
           std::string kexSource;
           if (isLocalLet) {
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" + "  IO.inspect(" + letVarName +
+                        source + "\n" +
+                        "  Erlang.Erlang.put(:kexrepl" + letVarName +
+                        ", " + letVarName + ")\n" +
+                        "  IO.inspect(" + letVarName +
                         ")\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
@@ -1470,8 +1701,10 @@ int main(int argc, char *argv[]) {
               // file changed underneath us, just skip it this round.
             }
           }
+          auto extMods = kexiRegistry.buildExternalModules();
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
-                                             migratedPreludeFns());
+                                             migratedPreludeFns(), "",
+                                             extMods.nameToAtom.empty() ? nullptr : &extMods);
           auto result = kex::ir::emitCore(irMod);
 
           std::string corePath = beamDir + "/" + result.moduleName + ".core";
@@ -1483,8 +1716,9 @@ int main(int argc, char *argv[]) {
           cf << result.source;
           cf.close();
 
-          std::string erlCmd = "erlc +from_core -pa " + beamDir + " -o " +
-                               beamDir + " " + corePath + " 2>&1";
+          std::string erlCmd = "erlc +from_core -W0 -pa " +
+                               beamDir + " -o " + beamDir + " " +
+                               corePath + " 2>&1";
           int erlcRet = std::system(erlCmd.c_str());
           std::filesystem::remove(corePath);
           if (erlcRet != 0) {
@@ -1522,7 +1756,9 @@ int main(int argc, char *argv[]) {
           }
 
           if (isLocalLet)
-            localBinds += "  " + source + "\n";
+            localBinds += "  let " + letVarName +
+                          " = Erlang.Erlang.get(:kexrepl" +
+                          letVarName + ")\n";
         }
       } catch (const std::exception &e) {
         std::cerr << "  " << kex::color::apply(kex::color::red)
@@ -1558,7 +1794,8 @@ int main(int argc, char *argv[]) {
 
     // SemanticDB for REPL: prelude loaded once, updated on each input.
     kex::semantic::SemanticDB replDb;
-    loadPrelude(replDb);
+    if (!skipPrelude)
+      loadPrelude(replDb);
 #ifdef HAS_READLINE
     g_replDb = &replDb;
     rl_attempted_completion_function = kexCompletion;
@@ -1700,8 +1937,16 @@ int main(int argc, char *argv[]) {
           auto src = readFile(filePath);
           kex::Lexer lex(std::move(src), filePath);
           kex::Parser parser(lex.tokenizeAll(), filePath);
-          auto prog = parser.parseProgram();
-          evaluator.execute(prog);
+          // Loaded definitions retain pointers into their parsed AST (function
+          // bodies, make clauses, module members). Keep that Program alive for
+          // the rest of the REPL session, just like definitions entered at the
+          // prompt; a stack-local Program leaves those pointers dangling as
+          // soon as /load returns.
+          auto *prog = new kex::ast::Program(parser.parseProgram());
+          replPrograms.push_back(prog);
+          evaluator.execute(*prog);
+          replAccumSource += readFile(filePath) + "\n";
+          replDb.updateFile("<repl>", replAccumSource);
           std::cout << "  loaded " << filePath << "\n";
         } catch (const std::exception& e) {
           std::cerr << "  /load error: " << e.what() << "\n";
@@ -1883,6 +2128,9 @@ int main(int argc, char *argv[]) {
           replAccumSource += source + "\n";
           replDb.updateFile("<repl>", replAccumSource);
           g_currentMakeTarget.clear(); // block is complete
+          std::cout << kex::color::apply(kex::color::gray) << "=> "
+                    << kex::color::apply(kex::color::reset) << "defined "
+                    << replDefinitionName(source) << "\n";
         } else {
           // Wrap in main for expression evaluation
           auto wrapped = "main do\n" + source + "\nend\n";
@@ -2148,6 +2396,22 @@ int main(int argc, char *argv[]) {
         break;
       }
 
+      // Cross-file dependency resolution: walk `using` statements,
+      // resolve module files, parse them, and merge into the program
+      // so the IR lowering sees all definitions.
+      {
+        namespace fs = std::filesystem;
+        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
+        std::vector<std::string> roots;
+        for (const auto &r : {"lib", "src"}) {
+          auto full = srcDir + "/" + r;
+          if (fs::is_directory(full)) roots.push_back(full);
+        }
+        if (roots.empty()) roots.push_back(srcDir);
+        auto deps = resolveBeamDeps(program, roots);
+        (void)deps;
+      }
+
       // An explicit `main do ... end` is no longer required here —
       // CoreErlangEmitter already synthesizes one from trailing bare
       // top-level expressions when there isn't one (see its
@@ -2172,14 +2436,20 @@ int main(int argc, char *argv[]) {
         program.items.push_back(std::move(item));
 #endif
       kex::codegen::CoreErlangEmitter::EmitResult result;
+      std::vector<kex::codegen::CoreErlangEmitter::EmitResult> moduleResults;
       if (useIr) {
         try {
-          auto irMod = kex::ir::lowerProgram(program, stem,
-                                             migratedPreludeFns(), filepath);
-          auto irRes = kex::ir::emitCore(irMod);
-          result.source = irRes.source;
-          result.moduleName = irRes.moduleName;
-          result.mainArity = irRes.mainArity;
+          auto irModules = kex::ir::lowerModules(program, stem,
+                                                 migratedPreludeFns(), filepath);
+          for (const auto &irMod : irModules) {
+            auto irRes = kex::ir::emitCore(irMod);
+            kex::codegen::CoreErlangEmitter::EmitResult emitted;
+            emitted.source = std::move(irRes.source);
+            emitted.moduleName = std::move(irRes.moduleName);
+            emitted.mainArity = irRes.mainArity;
+            moduleResults.push_back(std::move(emitted));
+          }
+          result = moduleResults.front();
         } catch (const kex::ir::LowerError &e) {
           std::cerr << "error: " << e.what() << "\n";
           if (compileRun && !outputDirExplicit && !tempDir.empty())
@@ -2189,18 +2459,23 @@ int main(int argc, char *argv[]) {
       } else {
         kex::codegen::CoreErlangEmitter emitter;
         result = emitter.emitProgram(program, stem);
+        moduleResults.push_back(result);
       }
 
-      std::string outPath = outputDir + "/" + result.moduleName + ".core";
-      std::ofstream outFile(outPath);
-      if (!outFile) {
-        std::cerr << "error: cannot write " << outPath << "\n";
-        return 1;
+      std::vector<std::string> corePaths;
+      for (const auto &emitted : moduleResults) {
+        std::string path = outputDir + "/" + emitted.moduleName + ".core";
+        std::ofstream outFile(path);
+        if (!outFile) {
+          std::cerr << "error: cannot write " << path << "\n";
+          return 1;
+        }
+        outFile << emitted.source;
+        corePaths.push_back(std::move(path));
       }
-      outFile << result.source;
-      outFile.close();
+      const std::string &outPath = corePaths.front();
       if (mode == "emit-core") {
-        std::cerr << "wrote " << outPath << "\n";
+        for (const auto &path : corePaths) std::cerr << "wrote " << path << "\n";
         return 0;
       }
 
@@ -2256,9 +2531,11 @@ int main(int argc, char *argv[]) {
       }
 #endif
 
-      std::string coreCmd = "erlc +from_core -pa " + outputDir + " -o " +
-                            outputDir + " " + outPath;
-      if (!tempDir.empty()) {
+      int erlcRet = 0;
+      for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
+        std::string coreCmd = "erlc +from_core -pa " + outputDir + " -o " +
+                              outputDir + " " + corePaths[moduleIndex];
+        if (!tempDir.empty()) {
         // Suppress erlc noise in temp-dir (interpreter/-R) mode —
         // was `2>&1` (merging stderr into stdout), the OPPOSITE of
         // what this comment always said it should do. erlc prints
@@ -2271,17 +2548,87 @@ int main(int argc, char *argv[]) {
         // of the running program's own visible output. erlc
         // failures are still caught via the exit-code check below
         // regardless of where its diagnostic text went.
-        coreCmd += " > /dev/null 2>&1";
-      } else {
-        std::cerr << "  erlc  " << result.moduleName << "\n";
+          coreCmd += " > /dev/null 2>&1";
+        } else {
+          std::cerr << "  Compile: " << moduleResults[moduleIndex].moduleName << "\n";
+        }
+        erlcRet = std::system(coreCmd.c_str());
+        if (erlcRet != 0) {
+          std::cerr << "error: erlc failed\n";
+          if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
+          return 1;
+        }
+
+        // Attach KexI chunk to the freshly compiled .beam file.
+        if (!compileRun) {
+          std::string beamPath = outputDir + "/" +
+                                 moduleResults[moduleIndex].moduleName + ".beam";
+          try {
+            kex::beam::CollectOptions copts;
+            copts.moduleAtom = moduleResults[moduleIndex].moduleName;
+            copts.fileStem = stem;
+            copts.noCheck = skipCheck;
+            copts.role = moduleIndex == 0
+                ? kex::beam::KexiModuleRole::Entry
+                : kex::beam::KexiModuleRole::Companion;
+            if (copts.role == kex::beam::KexiModuleRole::Companion) {
+              copts.entryBackPointer = moduleResults[0].moduleName;
+              auto irName = moduleResults[moduleIndex].moduleName;
+              if (irName.rfind("Kex.", 0) == 0)
+                copts.moduleName = irName.substr(4);
+            }
+            auto chunk = kex::beam::collectMetadata(program, copts);
+            if (moduleIndex == 0 && moduleResults.size() > 1) {
+              for (size_t ci = 1; ci < moduleResults.size(); ci++) {
+                kex::beam::KexiCompanion comp;
+                comp.beamAtom = moduleResults[ci].moduleName;
+                comp.relativePath = moduleResults[ci].moduleName + ".beam";
+                chunk.metadata.companions.push_back(std::move(comp));
+              }
+            }
+            chunk.interfaceHash = kex::beam::computeInterfaceHash(chunk);
+            auto payload = kex::beam::serializeKexi(chunk);
+            auto bf = kex::beam::readBeamFile(beamPath);
+            bf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
+            kex::beam::writeBeamFile(bf, beamPath);
+          } catch (const std::exception& e) {
+            std::cerr << "warning: could not attach KexI chunk to "
+                      << beamPath << ": " << e.what() << "\n";
+          }
+        }
       }
-      int erlcRet = std::system(coreCmd.c_str());
-      if (erlcRet != 0) {
-        std::cerr << "error: erlc failed\n";
-        if (!tempDir.empty())
-          std::filesystem::remove_all(tempDir);
-        return 1;
+
+      // Second pass: backfill companion hashes into the entry module's
+      // KexI companion manifest now that all companions have been written.
+      if (!compileRun && moduleResults.size() > 1) {
+        try {
+          std::string entryBeam = outputDir + "/" +
+                                  moduleResults[0].moduleName + ".beam";
+          auto entryBf = kex::beam::readBeamFile(entryBeam);
+          auto* kexiChk = entryBf.findChunk(kex::beam::KEXI_CHUNK_ID);
+          if (kexiChk) {
+            auto entryChunk = kex::beam::deserializeKexi(kexiChk->data);
+            for (auto& comp : entryChunk.metadata.companions) {
+              std::string compBeam = outputDir + "/" + comp.beamAtom + ".beam";
+              auto compBf = kex::beam::readBeamFile(compBeam);
+              auto* compChk = compBf.findChunk(kex::beam::KEXI_CHUNK_ID);
+              if (compChk) {
+                auto compChunk = kex::beam::deserializeKexi(compChk->data);
+                comp.expectedHash = compChunk.interfaceHash;
+              }
+            }
+            entryChunk.interfaceHash =
+                kex::beam::computeInterfaceHash(entryChunk);
+            auto payload = kex::beam::serializeKexi(entryChunk);
+            entryBf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
+            kex::beam::writeBeamFile(entryBf, entryBeam);
+          }
+        } catch (const std::exception& e) {
+          std::cerr << "warning: could not backfill companion hashes: "
+                    << e.what() << "\n";
+        }
       }
+
       // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
       // The internal Erlang module name stays kex_<stem> inside the file.
       std::string internalBeam = outputDir + "/" + result.moduleName + ".beam";
@@ -2355,6 +2702,16 @@ int main(int argc, char *argv[]) {
     if (mode == "run") {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
+      {
+        namespace fs = std::filesystem;
+        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
+        std::vector<std::string> roots;
+        for (const auto &r : {"lib", "src"}) {
+          auto full = srcDir + "/" + r;
+          if (fs::is_directory(full)) roots.push_back(full);
+        }
+        if (!roots.empty()) evaluator.setModuleRoots(std::move(roots));
+      }
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.

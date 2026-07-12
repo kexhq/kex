@@ -11,6 +11,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Elif: return "elif";
         case TokenType::Else: return "else";
         case TokenType::End: return "end";
+        case TokenType::Export: return "export";
         case TokenType::False: return "false";
         case TokenType::Final: return "final";
         case TokenType::Foul: return "foul";

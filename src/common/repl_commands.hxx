@@ -24,6 +24,7 @@ inline auto replCommands() -> const std::vector<ReplCommand> & {
       {"/unset", "", "<opt>", "Disable a feature"},
       {"/complete", "", "<p>", "Show completions for prefix p"},
       {"/load", "", "<file>", "Load a module from file"},
+      {"/unload", "", "<mod>", "Unload a previously loaded module"},
       {"/reload", "", "", "Reload all loaded modules"},
       {"/reset", "", "", "Clear all bindings"},
   };

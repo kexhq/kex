@@ -7,6 +7,6 @@ foul showFactorial(n: Integer) do
 end
 
 main(args) do
-  let max = args.first.or("50").to(Integer)
+  let max = args.first.or("50").to(Integer).or(50)
   (1..max).each { |n| showFactorial(n) }
 end

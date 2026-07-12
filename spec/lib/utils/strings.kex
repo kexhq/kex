@@ -1,0 +1,10 @@
+module Utils.Strings
+
+let shout(s) = s.upperCase + "!"
+
+let whisper(s) = s.lowerCase + "..."
+
+let repeat(s, n) = match n do
+  0 -> ""
+  _ -> s + repeat(s, n - 1)
+end

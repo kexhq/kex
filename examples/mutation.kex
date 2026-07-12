@@ -3,7 +3,7 @@ main do
   list.push!(6)
   list.filter!(&.even?)
   list.map! { |x| x * 10 }
-  IO.printLine(list.to(String))  # list is [20, 40, 60]
+  IO.printLine(list.to(String).or(""))  # list is [20, 40, 60]
 
   # frozen.push!(4)
   # runtime error: Cannot use '!' on immutable binding: frozen

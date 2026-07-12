@@ -1,9 +1,9 @@
 type Comparison = Less | Equal | Greater
 
 make Comparison do
-  let to(@Less, Integer) = -1
-  let to(@Equal, Integer) = 0
-  let to(@Greater, Integer) = 1
+  let to(@Less, Integer) = Just(-1)
+  let to(@Equal, Integer) = Just(0)
+  let to(@Greater, Integer) = Just(1)
 end
 
 let asMatchString(m: Comparison) -> String do

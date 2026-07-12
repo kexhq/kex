@@ -64,33 +64,43 @@ auto Evaluator::registerListBuiltins() -> void {
         if (targetName == "Integer") {
             if (std::holds_alternative<IntValue>(args[0]->data) ||
                 std::holds_alternative<BigIntValue>(args[0]->data))
-                return args[0];
+                return Value::just(args[0]);
             if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-                try { return Value::integer(std::stoll(str->value)); } catch (...) {}
+                try {
+                    size_t parsed = 0;
+                    auto value = std::stoll(str->value, &parsed);
+                    if (parsed == str->value.size()) return Value::just(Value::integer(value));
+                } catch (...) {}
             }
             if (auto* f = std::get_if<FloatValue>(&args[0]->data))
-                return Value::integer(static_cast<int64_t>(f->value));
+                return Value::just(Value::integer(static_cast<int64_t>(f->value)));
             return Value::none();
         }
         if (targetName == "Float") {
             if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-                try { return Value::floating(std::stod(str->value)); } catch (...) {}
+                try {
+                    size_t parsed = 0;
+                    auto value = std::stod(str->value, &parsed);
+                    if (parsed == str->value.size()) return Value::just(Value::floating(value));
+                } catch (...) {}
             }
-            if (auto i = asInteger(args[0])) return Value::floating(i->get_d());
+            if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+                return Value::just(args[0]);
+            if (auto i = asInteger(args[0]))
+                return Value::just(Value::floating(i->get_d()));
             return Value::none();
         }
         if (targetName == "String") {
-            return Value::string(args[0]->toString());
+            return Value::just(Value::string(args[0]->toString()));
         }
         if (targetName == "List") {
             if (auto* range = std::get_if<RangeValue>(&args[0]->data))
-                return Value::list(rangeToList(*range));
-            if (std::holds_alternative<ListValue>(args[0]->data)) return args[0];
+                return Value::just(Value::list(rangeToList(*range)));
+            if (std::holds_alternative<ListValue>(args[0]->data))
+                return Value::just(args[0]);
+            return Value::none();
         }
-        if (auto* range = std::get_if<RangeValue>(&args[0]->data))
-            return Value::list(rangeToList(*range));
-        if (std::holds_alternative<ListValue>(args[0]->data)) return args[0];
-        return Value::string(args[0]->toString());
+        return Value::none();
     });
 
     reg("empty?", [](std::vector<ValuePtr> args) -> ValuePtr {

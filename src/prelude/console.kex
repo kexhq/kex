@@ -1,0 +1,31 @@
+# ANSI terminal styling. Color constants become empty strings when Kex is
+# started with --no-colors, so callers can compose them without branching.
+module Console do
+  # Reset all terminal attributes.
+  # Console.Reset : String
+
+  # Text attributes and the standard foreground palette.
+  # Console.Bold : String
+  # Console.Dim : String
+  # Console.Italic : String
+  # Console.Underline : String
+  # Console.Blink : String
+  # Console.Reverse : String
+  # Console.Hidden : String
+  # Console.Strikethrough : String
+  # Console.Red : String
+  # Console.Green : String
+  # Console.Yellow : String
+  # Console.Blue : String
+  # Console.Magenta : String
+  # Console.Cyan : String
+  # Console.White : String
+  # Console.Gray : String
+  # Console.Purple : String
+
+  # Wrap +text+ in an ANSI style and reset attributes afterwards.
+  colorize : (String, String) -> String
+
+  # Whether terminal styling is enabled for this process.
+  enabled? : () -> Bool
+end

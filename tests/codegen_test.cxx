@@ -56,7 +56,7 @@ auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::str
     }
     assertEqual(compileResult, 0, "erlc should compile IR output");
 
-    auto run = "erl -noshell -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
+    auto run = "erl -noshell -pa build/runtime/beam -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
                ":main()]), halt()'";
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
     assertTrue(pipe != nullptr, "popen should run the BEAM module");
@@ -367,6 +367,14 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
+        it("lowers System.exit to erlang:halt", []() {
+            auto core = emitIr(
+                "foul stop(code) = System.exit(code)\n"
+                "main do 42 end\n",
+                "system_exit");
+            assertTrue(contains(core, "call 'erlang':'halt'"), core);
+        });
+
         it("defers an unknown namespace call until it is executed", []() {
             auto output = runIrOnBeam(
                 "foul unused(value) = Config.parse(value)\n"
@@ -387,6 +395,18 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
+        it("returns Optional from universal conversions on BEAM", []() {
+            assertEqual(runIrOnBeam(
+                "main do \"42\".to(Integer) end\n", "to_optional_success"),
+                std::string("{'Just',42}"));
+            assertEqual(runIrOnBeam(
+                "main do \"42x\".to(Integer) end\n", "to_optional_failure"),
+                std::string("none"));
+            assertEqual(runIrOnBeam(
+                "main do 42.to(String) end\n", "to_string_optional"),
+                std::string("{'Just',<<\"42\">>}"));
+        });
+
         it("resolves qualified module function calls", []() {
             auto output = runIrOnBeam(
                 "module Util do\n"
@@ -397,6 +417,128 @@ int main() {
                 "end\n",
                 "module_function");
             assertEqual(output, std::string("42"));
+        });
+
+        it("maps each Kex module to a separate BEAM module", []() {
+            kex::Lexer lexer(
+                "module Util do\n"
+                "  let double(n) = n * 2\n"
+                "  private do\n"
+                "    let hidden() = 0\n"
+                "  end\n"
+                "end\n"
+                "main do Util.double(21) end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "module_mapping");
+            assertEqual(modules.size(), size_t{2});
+            assertEqual(modules[0].name, std::string("kex_module_mapping"));
+            assertEqual(modules[1].name, std::string("Kex.Util"));
+            assertEqual(modules[1].functions.size(), size_t{2});
+            assertEqual(modules[1].functions[0].name, std::string("double"));
+            assertTrue(modules[1].functions[0].exported);
+            assertEqual(modules[1].functions[1].name, std::string("hidden"));
+            assertFalse(modules[1].functions[1].exported);
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
+        });
+
+        it("top-level using resolves to cross-module call", []() {
+            kex::Lexer lexer(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "using Utils, only: [double]\n"
+                "main do double(10) end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "top_using");
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            assertTrue(contains(globalCore, "call 'Kex.Utils':'double'"), globalCore);
+        });
+
+        it("using inside module body resolves to cross-module call", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module App do\n"
+                "  using Utils, only: [double]\n"
+                "  let compute(x) = double(x) + 1\n"
+                "end\n"
+                "main do App.compute(10) end\n",
+                "using_cross_module");
+            assertEqual(output, std::string("21"));
+        });
+
+        it("resolves a using alias in BEAM codegen", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module App do\n"
+                "  using Utils, as: U\n"
+                "  let compute(x) = U.double(x) + 1\n"
+                "end\n"
+                "main do App.compute(10) end\n",
+                "using_alias_cross_module");
+            assertEqual(output, std::string("21"));
+        });
+
+        it("keeps expression-level using aliases scoped", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "let compute(x) do\n"
+                "  using Utils, as: U do\n"
+                "    U.double(x)\n"
+                "  end\n"
+                "end\n"
+                "main do compute(21) end\n",
+                "using_alias_scoped");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("resolves hierarchical re-exports in BEAM codegen", []() {
+            auto output = runIrOnBeam(
+                "module Math do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module Toolkit do\n"
+                "  export Math, only: [double]\n"
+                "end\n"
+                "main do Toolkit.Math.double(21) end\n",
+                "module_hierarchical_export");
+            assertEqual(output, std::string("42"));
+        });
+
+        it("nested module calls resolve relative to the enclosing module", []() {
+            auto output = runIrOnBeam(
+                "module Http do\n"
+                "  module Router do\n"
+                "    let get() = 41\n"
+                "  end\n"
+                "  let route() = Router.get() + 1\n"
+                "end\n"
+                "main do Http.route() end\n",
+                "nested_module_relative");
+            assertEqual(output, std::string("42"));
+
+            kex::Lexer lexer(
+                "module Http do\n"
+                "  module Router do\n"
+                "    let get() = 41\n"
+                "  end\n"
+                "  let route() = Router.get() + 1\n"
+                "end\n"
+                "main do Http.route() end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "nested_module_relative");
+            assertEqual(modules.size(), size_t{3});
+            assertEqual(modules[1].name, std::string("Kex.Http"));
+            assertEqual(modules[2].name, std::string("Kex.Http.Router"));
         });
 
         it("does not block main on nested declaration-only module items", []() {

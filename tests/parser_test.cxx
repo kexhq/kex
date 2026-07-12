@@ -79,6 +79,42 @@ int main() {
             assertTrue(mod->isFoul);
         });
 
+        it("parses a qualified module name", []() {
+            auto program = parse("module Http.Router do\nend");
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(mod->name, std::string("Http.Router"));
+        });
+
+        it("desugars a standalone file module", []() {
+            auto program = parse(
+                "module Math\n"
+                "let twice(n: Int) = n * 2\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(mod->name, std::string("Math"));
+            assertEqual(mod->body.size(), size_t(1));
+        });
+
+        it("keeps main outside a standalone module", []() {
+            auto program = parse(
+                "module App\n"
+                "let answer() = 42\n"
+                "main do\n"
+                "  App.answer()\n"
+                "end\n");
+            assertEqual(program.items.size(), size_t(2));
+            assertTrue(std::holds_alternative<std::unique_ptr<ast::ModuleDef>>(program.items[0]));
+            assertTrue(std::holds_alternative<std::unique_ptr<ast::MainBlock>>(program.items[1]));
+        });
+
+        it("rejects a standalone module after another statement", []() {
+            assertTrue(parseFails(
+                "let before() = 1\n"
+                "module App\n"
+                "let answer() = 42\n"));
+        });
+
         it("parses module with functions", []() {
             auto program = parse(
                 "module Math do\n"
@@ -98,6 +134,59 @@ int main() {
             );
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->body.size(), size_t(1));
+            auto& nested = std::get<std::unique_ptr<ast::ModuleDef>>(mod->body[0]);
+            assertEqual(nested->name, std::string("A.B"));
+        });
+
+        it("parses using alias and selective imports", []() {
+            auto program = parse(
+                "module App do\n"
+                "  using Http.Router, as: Router, only: [get, Request]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
+            assertTrue(usingBlock->alias.has_value());
+            assertEqual(*usingBlock->alias, std::string("Router"));
+            assertEqual(usingBlock->onlyNames.size(), size_t(2));
+            assertEqual(usingBlock->onlyNames[0], std::string("get"));
+            assertEqual(usingBlock->onlyNames[1], std::string("Request"));
+        });
+
+        it("parses using except with operators", []() {
+            auto program = parse(
+                "module App do\n"
+                "  using Math, except: [(+), (==)]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& usingBlock = std::get<std::unique_ptr<ast::UsingBlock>>(mod->body[0]);
+            assertEqual(usingBlock->exceptNames.size(), size_t(2));
+            assertEqual(usingBlock->exceptNames[0], std::string("+"));
+            assertEqual(usingBlock->exceptNames[1], std::string("=="));
+        });
+
+        it("rejects using only and except together", []() {
+            assertTrue(parseFails(
+                "module App do\n"
+                "  using Math, only: [sqrt], except: [sin]\n"
+                "end\n"
+            ));
+        });
+
+        it("parses export declaration options", []() {
+            auto program = parse(
+                "module App do\n"
+                "  export Http.Methods, as: Methods, only: [get, (+)]\n"
+                "end\n"
+            );
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            auto& exportDecl = std::get<std::unique_ptr<ast::ExportDecl>>(mod->body[0]);
+            assertTrue(exportDecl->alias.has_value());
+            assertEqual(*exportDecl->alias, std::string("Methods"));
+            assertEqual(exportDecl->onlyNames.size(), size_t(2));
+            assertEqual(exportDecl->onlyNames[0], std::string("get"));
+            assertEqual(exportDecl->onlyNames[1], std::string("+"));
         });
     });
 
@@ -536,6 +625,17 @@ int main() {
             auto program = parse("main do\n  let x = list.map(&.name)\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
+        });
+
+        it("desugars a chained shorthand method lambda", []() {
+            auto program = parse(
+                "main do\n"
+                "  let x = (1..10).items.map(&.to(String).or(\"\"))\n"
+                "end\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& map = std::get<ast::MethodCall>(let.value->kind);
+            assertTrue(std::holds_alternative<ast::Lambda>(map.args[0]->kind));
         });
 
         it("parses shorthand function lambda", []() {

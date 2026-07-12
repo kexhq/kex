@@ -119,7 +119,16 @@ auto Parser::parseProgram() -> ast::Program {
 
     while (!atEnd()) {
         try {
-            program.items.push_back(parseTopLevelItem());
+            if ((check(TokenType::Module)
+                 || (check(TokenType::Foul) && peekNext().type == TokenType::Module))
+                && program.items.empty()) {
+                program.items.push_back(parseModuleDef(true));
+            } else {
+                program.items.push_back(parseTopLevelItem());
+            }
+            for (auto& deferred : m_deferredTopLevelItems)
+                program.items.push_back(std::move(deferred));
+            m_deferredTopLevelItems.clear();
         } catch (const ParseError&) {
             // Diagnostic already recorded in m_diagnostics; skip to the next
             // safe top-level keyword and continue parsing.
@@ -191,7 +200,8 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
 
 // ===== Module =====
 
-auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
+auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModule)
+    -> std::unique_ptr<ast::ModuleDef> {
     auto mod = std::make_unique<ast::ModuleDef>();
     mod->location = currentLocation();
 
@@ -200,14 +210,26 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
     }
 
     expect(TokenType::Module, "Expected 'module'");
-    mod->name = expect(TokenType::UpperIdent, "Expected module name").value;
-    expect(TokenType::Do, "Expected 'do' after module name");
+    auto moduleName = parseTypeName();
+    for (size_t i = 0; i < moduleName.parts.size(); ++i) {
+        if (i) mod->name += ".";
+        mod->name += moduleName.parts[i];
+    }
+    if (!parentModule.empty() && mod->name.find('.') == std::string::npos)
+        mod->name = parentModule + "." + mod->name;
+    // A file-level `module Name` without `do` is desugared into the same
+    // ModuleDef used for `module Name do ... end`; it simply runs to EOF.
+    // Keeping one AST form means all later phases remain unaware of the
+    // source-level shorthand.
+    const bool standalone = !match(TokenType::Do);
+    if (standalone && !allowStandalone)
+        error("standalone 'module' must be the first statement in a file");
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
         if (check(TokenType::Module) ||
             (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
-            mod->body.push_back(parseModuleDef());
+            mod->body.push_back(parseModuleDef(false, mod->name));
         } else if (check(TokenType::Type)) {
             mod->body.push_back(parseTypeDef());
         } else if (check(TokenType::Record)) {
@@ -220,8 +242,14 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
             mod->body.push_back(parseCompiledBlock());
         } else if (check(TokenType::Using)) {
             mod->body.push_back(parseUsingBlock());
+        } else if (check(TokenType::Export)) {
+            mod->body.push_back(parseExportDecl());
         } else if (check(TokenType::Public) || check(TokenType::Private)) {
             mod->body.push_back(parseVisibilityBlock());
+        } else if (check(TokenType::Main)) {
+            if (!standalone)
+                error("'main' blocks are not allowed inside block modules");
+            m_deferredTopLevelItems.push_back(parseMainBlock());
         } else if (check(TokenType::Foul)) {
             advance();
             mod->body.push_back(parseFunctionDef(true));
@@ -235,7 +263,9 @@ auto Parser::parseModuleDef() -> std::unique_ptr<ast::ModuleDef> {
         skipNewlines();
     }
 
-    expect(TokenType::End, "Expected 'end' to close module");
+    if (!standalone) {
+        expect(TokenType::End, "Expected 'end' to close module");
+    }
     return mod;
 }
 
@@ -1110,8 +1140,10 @@ auto Parser::parseUnary() -> ast::ExprPtr {
 }
 
 auto Parser::parsePostfix() -> ast::ExprPtr {
-    auto expr = parsePrimary();
+    return parsePostfixTail(parsePrimary());
+}
 
+auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     while (true) {
         // Skip newlines if followed by . (method chaining across lines)
         if (check(TokenType::Newline)) {
@@ -1580,6 +1612,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         advance(); // consume 'using'
         ast::UsingExpr usingExpr;
         usingExpr.module = parseTypeName();
+        if (match(TokenType::Comma)) {
+            parseUsingOptions(usingExpr.alias, usingExpr.onlyNames, usingExpr.exceptNames);
+        }
         if (match(TokenType::Do)) {
             skipNewlines();
             while (!check(TokenType::End) && !atEnd()) {
@@ -2193,6 +2228,35 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
             expr->kind = ast::ShorthandLambda{
                 ast::ShorthandLambda::Kind::Method, name, {}};
         }
+        // A continuation belongs inside the shorthand lambda:
+        // `&.to(String).or("")` desugars to
+        // `{ |__shorthand| __shorthand.to(String).or("") }`.
+        if (check(TokenType::Dot)) {
+            constexpr const char* paramName = "__shorthand";
+            auto receiver = std::make_unique<ast::Expr>();
+            receiver->location = expr->location;
+            receiver->kind = ast::Identifier{paramName};
+
+            auto firstCall = std::make_unique<ast::Expr>();
+            firstCall->location = expr->location;
+            auto shorthand = std::get<ast::ShorthandLambda>(std::move(expr->kind));
+            ast::MethodCall call;
+            call.receiver = std::move(receiver);
+            call.method = std::move(shorthand.name);
+            call.args = std::move(shorthand.args);
+            firstCall->kind = std::move(call);
+
+            auto chained = parsePostfixTail(std::move(firstCall));
+            ast::LambdaParam param;
+            param.name = paramName;
+            std::vector<ast::LambdaParam> params;
+            params.push_back(std::move(param));
+            std::vector<ast::ExprPtr> body;
+            body.push_back(std::move(chained));
+            expr = std::make_unique<ast::Expr>();
+            expr->location = body.front()->location;
+            expr->kind = ast::Lambda{std::move(params), std::move(body)};
+        }
         return expr;
     }
 
@@ -2620,6 +2684,9 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     expect(TokenType::Using, "Expected 'using'");
 
     block->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(block->alias, block->onlyNames, block->exceptNames);
+    }
     skipNewlines();
 
     // using Module do...end (scoped) or using Module (bare import, rest of scope)
@@ -2634,6 +2701,60 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
     // Bare using — no body (applies to enclosing scope)
 
     return block;
+}
+
+auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
+    auto decl = std::make_unique<ast::ExportDecl>();
+    decl->location = currentLocation();
+    expect(TokenType::Export, "Expected 'export'");
+    decl->module = parseTypeName();
+    if (match(TokenType::Comma)) {
+        parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
+    }
+    return decl;
+}
+
+auto Parser::parseUsingOptions(std::optional<std::string>& alias,
+                               std::vector<std::string>& onlyNames,
+                               std::vector<std::string>& exceptNames) -> void {
+    auto parseName = [&]() -> std::string {
+        if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) return advance().value;
+        if (match(TokenType::LParen)) {
+            if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
+                check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::EqEq) ||
+                check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
+                check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+                auto name = std::string(tokenTypeName(advance().type));
+                expect(TokenType::RParen, "Expected ')' after operator");
+                return name;
+            }
+            error("Expected name or operator in using option list");
+        }
+        error("Expected name in using option list");
+    };
+
+    do {
+        const auto key = expect(TokenType::LowerIdent, "Expected using option").value;
+        expect(TokenType::Colon, "Expected ':' after using option");
+        if (key == "as") {
+            if (alias) error("Duplicate 'as' using option");
+            alias = expect(TokenType::UpperIdent, "Expected alias name after 'as:'").value;
+        } else if (key == "only" || key == "except") {
+            auto& names = key == "only" ? onlyNames : exceptNames;
+            if (!names.empty()) error("Duplicate '" + key + "' using option");
+            expect(TokenType::LBracket, "Expected '[' after using option");
+            if (!check(TokenType::RBracket)) {
+                do { names.push_back(parseName()); } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RBracket, "Expected ']' after using option list");
+        } else {
+            error("Unknown using option '" + key + "'");
+        }
+    } while (match(TokenType::Comma));
+
+    if (!onlyNames.empty() && !exceptNames.empty()) {
+        error("'only' and 'except' using options are mutually exclusive");
+    }
 }
 
 auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
@@ -2699,6 +2820,8 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
             block->items.push_back(parseTypeDef());
         } else if (check(TokenType::Record)) {
             block->items.push_back(parseRecordDef());
+        } else if (check(TokenType::Using)) {
+            block->items.push_back(parseUsingBlock());
         } else {
             error("Unexpected token in visibility block: " +
                   std::string(tokenTypeName(peek().type)));

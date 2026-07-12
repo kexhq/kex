@@ -1,0 +1,84 @@
+# Erlang Interop — calling Erlang/OTP libraries from Kex
+#
+# The Erlang.* namespace maps directly to BEAM modules:
+#   Erlang.Lists   → 'lists'
+#   Erlang.Ets     → 'ets'
+#   Erlang.Erlang  → 'erlang'  (the 'erlang' module itself)
+#
+# Convention: capitalize the Erlang module name in Kex source,
+# the compiler lowercases it for the BEAM atom.
+
+# kex: run-beam
+
+main do
+  # --- lists module ---
+  IO.printLine("lists:reverse →")
+  IO.printLine(Erlang.Lists.reverse([1, 2, 3, 4, 5]))
+
+  IO.printLine("lists:flatten →")
+  IO.printLine(Erlang.Lists.flatten([[1, 2], [3, 4], [5]]))
+
+  IO.printLine("lists:nth(3, ...) →")
+  IO.printLine(Erlang.Lists.nth(3, [10, 20, 30, 40]))
+
+  IO.printLine("lists:last →")
+  IO.printLine(Erlang.Lists.last([10, 20, 30]))
+
+  # --- erlang module (BIFs) ---
+  IO.printLine("erlang:abs(-42) →")
+  IO.printLine(Erlang.Erlang.abs(-42))
+
+  # --- math module ---
+  IO.printLine("math:sqrt(144.0) →")
+  IO.printLine(Erlang.Math.sqrt(144.0))
+
+  IO.printLine("math:pow(2, 10) →")
+  IO.printLine(Erlang.Math.pow(2.0, 10.0))
+
+  IO.printLine("math:pi() →")
+  IO.printLine(Erlang.Math.pi())
+
+  # --- string module ---
+  IO.printLine("string:uppercase →")
+  IO.printLine(Erlang.String.uppercase("hello kex"))
+
+  IO.printLine("string:lowercase →")
+  IO.printLine(Erlang.String.lowercase("HELLO KEX"))
+
+  # --- ETS (in-memory key-value tables) ---
+  let tab = Erlang.Ets.new(:users, [:set, :public])
+  Erlang.Ets.insert(tab, (:alice, "Alice", 30))
+  Erlang.Ets.insert(tab, (:bob, "Bob", 25))
+  Erlang.Ets.insert(tab, (:carol, "Carol", 28))
+
+  IO.printLine("ets:lookup(:alice) →")
+  IO.printLine(Erlang.Ets.lookup(tab, :alice))
+
+  IO.printLine("ets:info(size) →")
+  IO.printLine(Erlang.Ets.info(tab, :size))
+
+  Erlang.Ets.delete(tab, :bob)
+  IO.printLine("after delete(:bob), size →")
+  IO.printLine(Erlang.Ets.info(tab, :size))
+
+  Erlang.Ets.delete(tab)
+
+  # --- Mnesia (distributed database) ---
+  Erlang.Mnesia.start()
+
+  Erlang.Mnesia.create_table(:kex_demo, [(:attributes, [:id, :name, :score])])
+
+  Erlang.Mnesia.transaction do
+    Erlang.Mnesia.write((:kex_demo, 1, "Player1", 100))
+    Erlang.Mnesia.write((:kex_demo, 2, "Player2", 200))
+  end
+
+  let (_, result) = Erlang.Mnesia.transaction do
+    Erlang.Mnesia.read((:kex_demo, 1))
+  end
+  IO.printLine("mnesia:read →")
+  IO.printLine(result)
+
+  Erlang.Mnesia.delete_table(:kex_demo)
+  Erlang.Mnesia.stop()
+end

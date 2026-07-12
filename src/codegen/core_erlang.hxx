@@ -116,6 +116,12 @@ private:
     static void collectAssignedExpr(const ast::ExprPtr& e,
                                     std::unordered_set<std::string>& out);
 
+    // Generate let-bindings that destructure a pattern against a source expr.
+    // For a VarPattern: `let <Var> = src in`
+    // For a RecordPattern { age }: `let <Age> = apply 'age'/1(src) in` (or element() if position known)
+    // For a RecordPattern { address: { city } }: extract address, then city from that
+    auto bindPatternLets(const ast::PatternPtr& pat, const std::string& src) -> std::string;
+
     // Helpers
     auto freshVar(const std::string& hint = "V") -> std::string;
     // Wrap s in single quotes if needed for a Core Erlang atom.

@@ -1,0 +1,42 @@
+# Specs for binary_tree.kex, loaded automatically by convention.
+let sampleTree() = BinaryTree.fromList([7, 4, 9, 1, 5, 8, 10])
+
+describe("binary tree") do
+  it("builds an ordered persistent tree") do
+    let tree = sampleTree()
+    assert(tree.inOrder == [1, 4, 5, 7, 8, 9, 10])
+    assert(tree.size == 7)
+    assert(tree.height == 3)
+  end
+
+  it("searches both present and absent values") do
+    let tree = sampleTree()
+    assert(tree.hasValue?(1))
+    assert(tree.hasValue?(10))
+    assert(!tree.hasValue?(6))
+  end
+
+  it("ignores duplicate insertions") do
+    let tree = sampleTree().insert(7)
+    assert(tree.size == 7)
+    assert(tree.inOrder == [1, 4, 5, 7, 8, 9, 10])
+  end
+
+  it("supports all three depth-first traversals") do
+    let tree = sampleTree()
+    assert(tree.preOrder == [7, 4, 1, 5, 9, 8, 10])
+    assert(tree.postOrder == [1, 5, 4, 8, 10, 9, 7])
+  end
+
+  it("maps without mutating the original") do
+    let tree = sampleTree()
+    let doubled = tree.transform({ |n| n * 2 })
+    assert(doubled.inOrder == [2, 8, 10, 14, 16, 18, 20])
+    assert(tree.inOrder == [1, 4, 5, 7, 8, 9, 10])
+  end
+
+  it("folds the recursive structure") do
+    let total = sampleTree().fold(0, { |value, left, right| value + left + right })
+    assert(total == 44)
+  end
+end

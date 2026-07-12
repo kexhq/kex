@@ -37,27 +37,7 @@ auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
             if constexpr (std::is_same_v<T, ast::FunctionDef>) {
                 resolveFunctionDef(*ptr);
             } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
-                for (const auto& mitem : ptr->body) {
-                    std::visit([this](const auto& mptr) {
-                        using MT = std::decay_t<decltype(*mptr)>;
-                        if constexpr (std::is_same_v<MT, ast::FunctionDef>) {
-                            resolveFunctionDef(*mptr);
-                        } else if constexpr (std::is_same_v<MT, ast::MakeDef>) {
-                            resolveMakeFns(mptr->body);
-                        } else if constexpr (std::is_same_v<MT, ast::VisibilityBlock>) {
-                            for (const auto& vitem : mptr->items) {
-                                std::visit([this](const auto& vptr) {
-                                    using VT = std::decay_t<decltype(*vptr)>;
-                                    if constexpr (std::is_same_v<VT, ast::FunctionDef>) {
-                                        resolveFunctionDef(*vptr);
-                                    } else if constexpr (std::is_same_v<VT, ast::MakeDef>) {
-                                        resolveMakeFns(vptr->body);
-                                    }
-                                }, vitem);
-                            }
-                        }
-                    }, mitem);
-                }
+                resolveModule(*ptr);
             } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
                 resolveMakeFns(ptr->body);
             } else if constexpr (std::is_same_v<T, ast::MainBlock>) {
@@ -70,11 +50,193 @@ auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
                     resolveBody(ptr->body);
                     popScope();
                 }
+            } else if constexpr (std::is_same_v<T, ast::UsingBlock>) {
+                resolveUsingBlock(*ptr);
             }
         }, item);
     }
 
     popScope();
+}
+
+auto ResolvePass::resolveModule(const ast::ModuleDef& module) -> void {
+    const auto savedModule = m_currentModule;
+    m_currentModule = module.name;
+    pushScope();
+    for (const auto& item : module.body) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(*node)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>) {
+                resolveFunctionDef(*node);
+            } else if constexpr (std::is_same_v<T, ast::MakeDef>) {
+                resolveMakeFns(node->body);
+            } else if constexpr (std::is_same_v<T, ast::ModuleDef>) {
+                resolveModule(*node);
+            } else if constexpr (std::is_same_v<T, ast::UsingBlock>) {
+                resolveUsingBlock(*node);
+            } else if constexpr (std::is_same_v<T, ast::ExportDecl>) {
+                resolveExportDecl(*node);
+            } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
+                pushScope();
+                for (const auto& visible : node->items) {
+                    std::visit([this](const auto& entry) {
+                        using V = std::decay_t<decltype(*entry)>;
+                        if constexpr (std::is_same_v<V, ast::FunctionDef>)
+                            resolveFunctionDef(*entry);
+                        else if constexpr (std::is_same_v<V, ast::MakeDef>)
+                            resolveMakeFns(entry->body);
+                        else if constexpr (std::is_same_v<V, ast::UsingBlock>)
+                            resolveUsingBlock(*entry);
+                    }, visible);
+                }
+                popScope();
+            }
+        }, item);
+    }
+    popScope();
+    m_currentModule = savedModule;
+}
+
+auto ResolvePass::resolveUsingBlock(const ast::UsingBlock& block) -> void {
+    const bool scoped = !block.body.empty();
+    if (scoped) pushScope();
+    resolveUsing(block.module, block.alias, block.onlyNames, block.exceptNames, block.location);
+    resolveBody(block.body);
+    if (scoped) popScope();
+}
+
+auto ResolvePass::resolveExportDecl(const ast::ExportDecl& decl) -> void {
+    if (!decl.onlyNames.empty() && !decl.exceptNames.empty()) {
+        error(decl.location, "`only:` and `except:` are mutually exclusive in export");
+        return;
+    }
+
+    std::string target;
+    for (size_t i = 0; i < decl.module.parts.size(); ++i) {
+        if (i) target += ".";
+        target += decl.module.parts[i];
+    }
+
+    if (target == m_currentModule) {
+        error(decl.location, "module cannot export itself");
+        return;
+    }
+
+    if (m_db && !m_db->hasModule(target)) {
+        if (auto discovered = m_db->ensureModule(target, m_currentModule))
+            target = *discovered;
+    }
+    if (!m_db || !m_db->hasModule(target)) {
+        error(decl.location, "exported module not found: " + target);
+        return;
+    }
+
+    for (const auto& name : decl.onlyNames) {
+        if (auto* sym = m_db->symbolInModule(target, name)) {
+            if (!sym->isExported)
+                error(decl.location, "cannot export private name `" + name + "` from " + target);
+        } else {
+            error(decl.location, "module " + target + " has no name `" + name + "`");
+        }
+    }
+    for (const auto& name : decl.exceptNames) {
+        if (auto* sym = m_db->symbolInModule(target, name)) {
+            if (!sym->isExported)
+                error(decl.location, "cannot reference private name `" + name + "` in except list");
+        } else {
+            error(decl.location, "module " + target + " has no name `" + name + "`");
+        }
+    }
+
+    auto exports = m_db->exportsFor(target);
+    if (exports.empty() && decl.onlyNames.empty())
+        error(decl.location, "module " + target + " has no public names to export");
+}
+
+auto ResolvePass::resolveUsing(const ast::TypeName& module,
+                               const std::optional<std::string>& alias,
+                               const std::vector<std::string>& onlyNames,
+                               const std::vector<std::string>& exceptNames,
+                               SourceLocation loc) -> void {
+    if (!onlyNames.empty() && !exceptNames.empty()) {
+        error(loc, "`only:` and `except:` are mutually exclusive");
+        return;
+    }
+
+    std::string requested;
+    for (size_t i = 0; i < module.parts.size(); ++i) {
+        if (i) requested += ".";
+        requested += module.parts[i];
+    }
+    std::string resolved = requested;
+    if (m_db && !m_db->hasModule(resolved)) {
+        if (auto discovered = m_db->ensureModule(requested, m_currentModule))
+            resolved = *discovered;
+    }
+    if (m_db && !m_db->hasModule(resolved) && !m_currentModule.empty()) {
+        auto context = m_currentModule;
+        while (!context.empty()) {
+            const auto relative = context + "." + requested;
+            if (m_db->hasModule(relative)) { resolved = relative; break; }
+            const auto dot = context.rfind('.');
+            if (dot == std::string::npos) break;
+            context.resize(dot);
+        }
+    }
+    if (!m_db || !m_db->hasModule(resolved)) {
+        warning(loc, "module not found in source roots: " + requested);
+        return;
+    }
+
+    for (const auto& path : m_db->shadowedModulePaths(resolved))
+        warning(loc, "shadowed module definition for " + resolved + ": " + path);
+
+    // A module that is already being loaded has completed collection, so its
+    // signatures are safe for type references and lazy function calls. Kex
+    // currently has no eager module value initializers; when those arrive,
+    // their value dependency graph (not this import graph) must detect cycles.
+
+    for (const auto& name : onlyNames) {
+        if (auto* symbol = m_db->symbolInModule(resolved, name)) {
+            if (!symbol->isExported)
+                error(loc, "cannot import private name `" + name + "` from " + resolved);
+        } else {
+            error(loc, "module " + resolved + " has no name `" + name + "`");
+        }
+    }
+    for (const auto& name : exceptNames)
+        if (auto* symbol = m_db->symbolInModule(resolved, name); symbol && !symbol->isExported)
+            error(loc, "cannot reference private name `" + name + "` from " + resolved);
+
+    const bool explicitImport = !onlyNames.empty();
+    for (auto* symbol : m_db->exportsFor(resolved)) {
+        if (!onlyNames.empty()
+            && std::find(onlyNames.begin(), onlyNames.end(), symbol->name) == onlyNames.end()) continue;
+        if (std::find(exceptNames.begin(), exceptNames.end(), symbol->name) != exceptNames.end()) continue;
+
+        ImportOrigin* previous = nullptr;
+        for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it)
+            if (auto found = it->find(symbol->name); found != it->end()) {
+                previous = &found->second;
+                break;
+            }
+        if (previous && previous->module != resolved) {
+            if (explicitImport && !previous->explicitImport) {
+                *previous = {resolved, true};
+            } else if (!explicitImport && previous->explicitImport) {
+                continue;
+            } else {
+                error(loc, "ambiguous name `" + symbol->name + "`, imported from both `"
+                           + previous->module + "` and `" + resolved + "`");
+                continue;
+            }
+        } else if (!previous) {
+            m_importScopes.back()[symbol->name] = {resolved, explicitImport};
+        }
+        defineLocal(symbol->name);
+        symbol->references.push_back(loc);
+    }
+    if (alias) defineLocal(*alias);
 }
 
 auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
@@ -320,6 +482,13 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 for (const auto& arg : group)
                     if (arg) resolveExpr(*arg);
         }
+        else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+            const bool scoped = !node.body.empty();
+            if (scoped) pushScope();
+            resolveUsing(node.module, node.alias, node.onlyNames, node.exceptNames, expr.location);
+            resolveBody(node.body);
+            if (scoped) popScope();
+        }
         // Literals, UpperIdentifier, ThisExpr, BreakExpr, NextExpr,
         // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve
     }, expr.kind);
@@ -358,6 +527,15 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
 
 auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void {
     if (!m_db || !m_state) return;
+    // Check if this name was brought in by a `using` import — if so, record
+    // the reference on the original module symbol for go-to-definition.
+    for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
+        if (auto found = it->find(name); found != it->end()) {
+            if (auto* sym = m_db->symbolInModule(found->second.module, name))
+                sym->references.push_back(loc);
+            return;
+        }
+    }
     // Only record references to top-level/module symbols, not local variables
     // (local vars live in m_scopes and have no SymbolInfo entry).
     for (const auto& scope : m_scopes)
@@ -371,16 +549,16 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it) {
         if (it->count(name)) return true;
     }
-    // Current file's collected symbols
+    // Current file's collected symbols. Module members are not globals: an
+    // unqualified reference can only see definitions owned by the same module
+    // (or file-level definitions while resolving file-level code).
     if (m_state) {
         for (const auto& sym : m_state->symbols) {
-            if (sym.name == name) return true;
+            if (sym.name == name && sym.module == m_currentModule) return true;
         }
     }
     // Stdlib function signatures
     if (m_stdlib.lookup(name)) return true;
-    // Prelude and other indexed files (e.g. src/prelude/*.kex loaded into DB)
-    if (m_db && m_db->isGloballyKnown(name)) return true;
     return false;
 }
 
@@ -405,10 +583,14 @@ auto ResolvePass::suggest(const std::string& name) const -> std::string {
 
 auto ResolvePass::pushScope() -> void {
     m_scopes.emplace_back();
+    m_importScopes.emplace_back();
 }
 
 auto ResolvePass::popScope() -> void {
-    if (!m_scopes.empty()) m_scopes.pop_back();
+    if (!m_scopes.empty()) {
+        m_scopes.pop_back();
+        m_importScopes.pop_back();
+    }
 }
 
 auto ResolvePass::defineLocal(const std::string& name) -> void {
@@ -419,6 +601,11 @@ auto ResolvePass::defineLocal(const std::string& name) -> void {
 auto ResolvePass::error(SourceLocation loc, const std::string& msg) -> void {
     if (!m_state) return;
     m_state->diagnostics.push_back(Diagnostic{Diagnostic::Level::Error, loc, msg});
+}
+
+auto ResolvePass::warning(SourceLocation loc, const std::string& msg) -> void {
+    if (!m_state) return;
+    m_state->diagnostics.push_back(Diagnostic{Diagnostic::Level::Warning, loc, msg});
 }
 
 } // namespace kex::semantic

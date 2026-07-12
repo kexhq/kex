@@ -39,7 +39,315 @@ auto runWithArgs(const std::string& source, std::vector<std::string> args) -> Va
     return evaluator.execute(program);
 }
 
+auto runWithModuleRoots(const std::string& source, std::vector<std::string> roots) -> ValuePtr {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    Evaluator evaluator;
+    evaluator.setModuleRoots(std::move(roots));
+    return evaluator.execute(program);
+}
+
 int main() {
+    describe("Interpreter — Modules", []() {
+        it("imports selected module exports with using", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  using Util, only: [twice]\n"
+                "  twice(21)\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("calls a module function through its qualified name", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  Util.twice(21)\n"
+                "end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("discovers and loads an unresolved module from a source root", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "http");
+            {
+                std::ofstream module(root / "http/router.kex");
+                module << "module Http.Router\n"
+                          "let twice(n) = n * 2\n";
+            }
+            auto result = runWithModuleRoots(
+                "main do\n"
+                "  using Http.Router, only: [twice]\n"
+                "  twice(21)\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("resolves a relative using from the enclosing module", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-relative-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "http");
+            {
+                std::ofstream module(root / "http/router.kex");
+                module << "module Http.Router\n"
+                          "let twice(n) = n * 2\n";
+            }
+            auto result = runWithModuleRoots(
+                "module Http do\n"
+                "  using Router, only: [twice]\n"
+                "  let answer() = twice(21)\n"
+                "end\n"
+                "main do\n"
+                "  Http.answer()\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("loads a nested module from its containing module file", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-container-module-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            {
+                std::ofstream module(root / "shop.kex");
+                module << "module Shop do\n"
+                          "  module Cart do\n"
+                          "    let total() = 42\n"
+                          "  end\n"
+                          "end\n";
+            }
+            auto result = runWithModuleRoots(
+                "main do\n"
+                "  using Shop.Cart, only: [total]\n"
+                "  total()\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("allows private module functions only from within their module", []() {
+            auto result = run(
+                "module Secrets do\n"
+                "  private do\n"
+                "    let hidden() = 42\n"
+                "  end\n"
+                "  public do\n"
+                "    let reveal() = hidden()\n"
+                "  end\n"
+                "end\n"
+                "main do\n"
+                "  Secrets.reveal()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+
+            bool rejected = false;
+            try {
+                run(
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  Secrets.hidden()\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("rejects importing a private name explicitly", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Secrets, only: [hidden]\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("private name `hidden`") != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("resolves a filtered forward re-export as a nested namespace", []() {
+            auto result = run(
+                "module App do\n"
+                "  export Http.Methods, as: Methods, only: [get]\n"
+                "end\n"
+                "module Http.Methods do\n"
+                "  let get() = 42\n"
+                "  let post() = 99\n"
+                "end\n"
+                "main do\n"
+                "  App.Methods.get()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("rejects exporting a module's private name", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module App do\n"
+                    "  export Secrets, only: [hidden]\n"
+                    "end\n"
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    let hidden() = 42\n"
+                    "  end\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("cannot export private name `hidden`")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("rejects a module exporting itself", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module App do\n"
+                    "  export App\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("module cannot export itself")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("uses an import alias for qualified access", []() {
+            auto result = run(
+                "module Util do\n"
+                "  let twice(n) = n * 2\n"
+                "end\n"
+                "main do\n"
+                "  using Util, as: U\n"
+                "  U.twice(21)\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("does not leak names from a scoped using block", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module Util do\n"
+                    "  let twice(n) = n * 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using Util do\n"
+                    "    twice(10)\n"
+                    "  end\n"
+                    "  twice(21)\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("Undefined function: twice")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("lets an explicit import override a wildcard import", []() {
+            auto result = run(
+                "module A do\n"
+                "  let value() = 1\n"
+                "end\n"
+                "module B do\n"
+                "  let value() = 2\n"
+                "end\n"
+                "main do\n"
+                "  using A\n"
+                "  using B, only: [value]\n"
+                "  value()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(2));
+        });
+
+        it("rejects ambiguous wildcard imports", []() {
+            bool rejected = false;
+            try {
+                run(
+                    "module A do\n"
+                    "  let value() = 1\n"
+                    "end\n"
+                    "module B do\n"
+                    "  let value() = 2\n"
+                    "end\n"
+                    "main do\n"
+                    "  using A\n"
+                    "  using B\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                rejected = std::string(error.what()).find("ambiguous name `value`")
+                    != std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("keeps imports inside a visibility block positional and scoped", []() {
+            auto inside = run(
+                "module Util do\n"
+                "  let value() = 42\n"
+                "end\n"
+                "module App do\n"
+                "  private do\n"
+                "    using Util, only: [value]\n"
+                "    let inside() = value()\n"
+                "  end\n"
+                "  let reveal() = inside()\n"
+                "end\n"
+                "main do\n"
+                "  App.reveal()\n"
+                "end\n");
+            assertEqual(std::get<IntValue>(inside->data).value, int64_t(42));
+
+            bool outsideRejected = false;
+            try {
+                run(
+                    "module Util do\n"
+                    "  let value() = 42\n"
+                    "end\n"
+                    "module App do\n"
+                    "  private do\n"
+                    "    using Util, only: [value]\n"
+                    "  end\n"
+                    "  let outside() = value()\n"
+                    "end\n"
+                    "main do\n"
+                    "  App.outside()\n"
+                    "end\n");
+            } catch (const RuntimeError& error) {
+                outsideRejected = std::string(error.what()).find("Undefined function: value")
+                    != std::string::npos;
+            }
+            assertTrue(outsideRejected);
+        });
+    });
+
     describe("Interpreter — Literals", []() {
         it("evaluates integers", []() {
             auto result = run("main do\n  42\nend\n");
@@ -1221,8 +1529,20 @@ int main() {
 
         it("converts range to list", []() {
             auto result = run("main do\n  (1..5).to(List)\nend\n");
-            auto& list = std::get<ListValue>(result->data);
+            auto& converted = std::get<VariantValue>(result->data);
+            assertEqual(converted.tag, std::string("Just"));
+            auto& list = std::get<ListValue>(converted.args[0]->data);
             assertEqual(list.elements.size(), size_t(5));
+        });
+
+        it("returns Optional from universal conversions", []() {
+            auto success = run("main do\n  \"42\".to(Integer)\nend\n");
+            auto& just = std::get<VariantValue>(success->data);
+            assertEqual(just.tag, std::string("Just"));
+            assertEqual(std::get<IntValue>(just.args[0]->data).value, int64_t(42));
+
+            auto failure = run("main do\n  \"42x\".to(Integer)\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(failure->data));
         });
 
         it("collects Just results, dropping None", []() {
@@ -1235,6 +1555,18 @@ int main() {
             assertEqual(list.elements.size(), size_t(2));
             assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(20));
             assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(40));
+        });
+
+        it("supports method chains inside shorthand lambdas", []() {
+            auto result = run(
+                "main do\n"
+                "  (1..3).items.map(&.to(String).or(\"\"))\n"
+                "end\n");
+            auto& list = std::get<ListValue>(result->data);
+            assertEqual(std::get<StringValue>(list.elements[0]->data).value,
+                        std::string("1"));
+            assertEqual(std::get<StringValue>(list.elements[2]->data).value,
+                        std::string("3"));
         });
 
         it("collects over a range via Enumerable", []() {
@@ -1388,7 +1720,7 @@ int main() {
                 "    parent.send((:ready, Process.self))\n"
                 "  end\n"
                 "  receive do\n"
-                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String))\n"
+                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1409,7 +1741,7 @@ int main() {
                 "  end\n"
                 "  receive do\n"
                 "    n -> receive do\n"
-                "      m -> IO.printLine((n + m).to(String))\n"
+                "      m -> IO.printLine((n + m).to(String).or(""))\n"
                 "    end\n"
                 "  end\n"
                 "end\n"
@@ -1538,7 +1870,7 @@ int main() {
                 "      :go -> parent.send(:done)\n"
                 "    end\n"
                 "  end\n"
-                "  IO.printLine(\"before: \" + child.alive?().to(String))\n"
+                "  IO.printLine(\"before: \" + child.alive?().to(String).or(""))\n"
                 "  child.send(:go)\n"
                 "  receive do\n"
                 "    :done -> IO.printLine(\"got done\")\n"
@@ -1547,7 +1879,7 @@ int main() {
                 "  # it sent :done and returned in the same reduction, so by\n"
                 "  # the time we've been woken and resumed, it's already run\n"
                 "  # to completion.\n"
-                "  IO.printLine(\"after: \" + child.alive?().to(String))\n"
+                "  IO.printLine(\"after: \" + child.alive?().to(String).or(""))\n"
                 "end\n"
             );
             assertEqual(out, std::string("before: true\ngot done\nafter: false\n"));
@@ -1569,7 +1901,7 @@ int main() {
                 "  child.send(:go)\n"
                 "  receive timeout: 20 do\n"
                 "    _ -> IO.printLine(\"unexpected\")\n"
-                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String))\n"
+                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1583,8 +1915,8 @@ int main() {
                 "main do\n"
                 "  let t = Task.start { 10 + 20 }\n"
                 "  match t.await(timeout: 2000) do\n"
-                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1600,8 +1932,8 @@ int main() {
                 "    end\n"
                 "  }\n"
                 "  match t.await(timeout: 20) do\n"
-                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1616,8 +1948,8 @@ int main() {
                 "  let results = Task.awaitAll([t1, t2])\n"
                 "  results.each { |r|\n"
                 "    match r do\n"
-                "      Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "      Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "    end\n"
                 "  }\n"
                 "end\n"
@@ -1737,7 +2069,7 @@ int main() {
                 "  end\n"
                 "  match result do\n"
                 "    Ok(pid) -> IO.printLine(\"started\")\n"
-                "    Error(reason) -> IO.printLine(\"error: \" + reason.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error: \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1763,7 +2095,7 @@ int main() {
                 "    (:worker_started, pid1) -> do\n"
                 "      pid1.send(:die)\n"
                 "      receive timeout: 500 do\n"
-                "        (:worker_started, pid2) -> IO.printLine((pid1 == pid2).to(String))\n"
+                "        (:worker_started, pid2) -> IO.printLine((pid1 == pid2).to(String).or(""))\n"
                 "      after -> IO.printLine(\"no restart\")\n"
                 "      end\n"
                 "    end\n"
@@ -1779,7 +2111,7 @@ int main() {
                 "  let result = Supervisor.start(restart: :all) do [] end\n"
                 "  match result do\n"
                 "    Ok(_) -> IO.printLine(\"unexpected ok\")\n"
-                "    Error(reason) -> IO.printLine(\"rejected: \" + reason.to(String).contains?(\"only_crashed\").to(String))\n"
+                "    Error(reason) -> IO.printLine(\"rejected: \" + reason.to(String).or("").contains?(\"only_crashed\").to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );

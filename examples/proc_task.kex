@@ -11,11 +11,11 @@ main do
   let r1 = t1.await(timeout: 2000)
   let r2 = t2.await(timeout: 2000)
   match r1 do
-    Ok(v) -> IO.printLine("t1 result: " + v.to(String))
-    Error(reason) -> IO.printLine("t1 error: " + reason.to(String))
+    Ok(v) -> IO.printLine("t1 result: " + v.to(String).or(""))
+    Error(reason) -> IO.printLine("t1 error: " + reason.to(String).or(""))
   end
   match r2 do
-    Ok(v) -> IO.printLine("t2 result: " + v.to(String))
-    Error(reason) -> IO.printLine("t2 error: " + reason.to(String))
+    Ok(v) -> IO.printLine("t2 result: " + v.to(String).or(""))
+    Error(reason) -> IO.printLine("t2 error: " + reason.to(String).or(""))
   end
 end

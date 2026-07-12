@@ -46,6 +46,8 @@ handle(Cmd) ->
             load_module(Nonce, Mod, BeamFile);
         ["eval", Nonce, Mod] ->
             eval_module(Nonce, Mod);
+        ["exec", Nonce | Rest] ->
+            exec_expr(Nonce, string:join(Rest, " "));
         _ ->
             io:format("bad driver command: ~ts~n", [Cmd]),
             halt(1)
@@ -73,6 +75,18 @@ eval_module(Nonce, Mod) ->
     catch
         error:Reason -> report(Nonce, Reason);
         exit:Reason  -> report(Nonce, Reason)
+    end.
+
+exec_expr(Nonce, Expr) ->
+    case catch begin
+        {ok, Tokens, _} = erl_scan:string(Expr ++ "."),
+        {ok, Forms} = erl_parse:parse_exprs(Tokens),
+        {value, _Val, _Bs} = erl_eval:exprs(Forms, erl_eval:new_bindings())
+    end of
+        {value, _, _} -> sentinel(Nonce, ok);
+        Else ->
+            io:format("exec failed: ~p~n", [Else]),
+            sentinel(Nonce, error)
     end.
 
 report(Nonce, Reason) ->

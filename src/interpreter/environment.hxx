@@ -13,6 +13,7 @@ public:
     explicit Environment(std::shared_ptr<Environment> parent = nullptr);
 
     auto define(const std::string& name, ValuePtr value, bool isMutable = false) -> void;
+    auto erase(const std::string& name) -> void;
     auto set(const std::string& name, ValuePtr value) -> bool;
     auto get(const std::string& name) const -> ValuePtr;
     auto has(const std::string& name) const -> bool;
