@@ -652,13 +652,13 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
         } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             std::vector<ValuePtr> elems;
             for (const auto& e : node.elements) elems.push_back(convertExprPtr(e));
-            return Value::variant("List", "Parser.Expression", {
+            return Value::variant("ListLit", "Parser.Expression", {
                 Value::list(std::move(elems))
             });
         } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
             std::vector<ValuePtr> elems;
             for (const auto& e : node.elements) elems.push_back(convertExprPtr(e));
-            return Value::variant("Tuple", "Parser.Expression", {
+            return Value::variant("TupleLit", "Parser.Expression", {
                 Value::list(std::move(elems))
             });
         } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
@@ -722,7 +722,7 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
                 Value::list(std::move(bodyVals))
             });
         } else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
-            return Value::variant("Range", "Parser.Expression", {
+            return Value::variant("RangeLit", "Parser.Expression", {
                 convertExprPtr(node.start),
                 convertExprPtr(node.end)
             });
@@ -764,9 +764,9 @@ auto Evaluator::registerParserBuiltins() -> void {
     }
     for (const auto& tag : {"LitInt", "LitFloat", "LitString", "LitBool", "LitAtom",
                             "LitNone", "Identifier", "BinaryOp", "UnaryOp", "Call",
-                            "MethodCall", "If", "Match", "List", "Tuple", "Block",
+                            "MethodCall", "If", "Match", "ListLit", "TupleLit", "Block",
                             "Lambda", "Let", "Var", "Assign", "Return", "Spread",
-                            "TrailingIf", "While", "Loop", "Range"}) {
+                            "TrailingIf", "While", "Loop", "RangeLit"}) {
         m_variantParent[tag] = "Parser.Expression";
     }
 

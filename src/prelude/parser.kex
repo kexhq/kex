@@ -16,9 +16,6 @@ module Parser do
   # Parses a type expression string into a TypeRef.
   parseType : String -> Result<TypeRef, ParseError>
 
-  # Parses a single expression string into an Expression AST node.
-  parseExpression : String -> Result<Expression, ParseError>
-
   # Structured representation of type expressions.
   type TypeRef
     = NamedType(String, [TypeRef])
@@ -67,8 +64,8 @@ module Parser do
     | MethodCall(Expression, String, [Expression])
     | If(Expression, [Expression], [Expression]?)
     | Match(Expression, [Expression])
-    | List([Expression])
-    | Tuple([Expression])
+    | ListLit([Expression])
+    | TupleLit([Expression])
     | Block([Expression])
     | Lambda([String], [Expression])
     | Let(String, Expression)
@@ -79,5 +76,5 @@ module Parser do
     | TrailingIf(Expression, Expression)
     | While(Expression, [Expression])
     | Loop([Expression])
-    | Range(Expression, Expression)
+    | RangeLit(Expression, Expression)
 end

@@ -266,8 +266,8 @@ auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     if (!def.variants) return;
 
-    // A single bare type-name variant is a transparent type alias, not an ADT,
-    // e.g. `type FilePath = String`. Don't register `String` as a constructor.
+    // Transparent type alias: `type FilePath = String` — single bare TypeName
+    // with no variants to register, skip exhaustiveness tracking entirely.
     if (def.variants->size() == 1) {
         auto* tn = std::get_if<ast::TypeName>(&(*def.variants)[0]->kind);
         if (tn) return;
@@ -348,18 +348,15 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
-                // A single bare type-name variant is a transparent type alias,
-                // e.g. `type FilePath = String`.
+                // Transparent type alias: single bare TypeName — register
+                // immediately, before falling through to the constructor check.
                 if (node->variants->size() == 1) {
                     auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) {
-                        m_typeAliases[node->name] = typeDefToType(*node);
-                        return;
-                    }
+                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
                 }
-                // Otherwise, only register as alias if no variant is constructor-shaped.
+                // Only register as alias if no variant is constructor-shaped.
                 for (const auto& v : *node->variants) {
-                    if (extractConstructorName(v)) return;
+                    if (extractConstructorName(v)) return; // ADT, not an alias
                 }
                 m_typeAliases[node->name] = typeDefToType(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
@@ -375,12 +372,11 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
+                // Transparent type alias: single bare TypeName — register
+                // immediately, before falling through to the constructor check.
                 if (node->variants->size() == 1) {
                     auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) {
-                        m_typeAliases[node->name] = typeDefToType(*node);
-                        return;
-                    }
+                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
                 }
                 for (const auto& v : *node->variants) {
                     if (extractConstructorName(v)) return;

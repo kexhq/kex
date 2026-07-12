@@ -112,10 +112,10 @@ module FS do
     directories : FilePath -> [String]?
 
     # Returns the current working directory path.
-    current : FilePath
+    current : String
 
     # Returns the user's home directory, or +None+ if unavailable.
-    home : FilePath?
+    home : String?
   end
 end
 
@@ -131,11 +131,11 @@ foul module Mock do
   foul module FS do
     # Registers an in-memory file at +path+ with +content+.
     # All File and FileHandle operations on +path+ will use this content.
-    File : (FilePath, String) -> Unit
+    File : (FS.FilePath, String) -> Unit
 
     # Registers an in-memory directory at +path+.
     # Directory.exists? and Directory.list will see it.
-    Directory : FilePath -> Unit
+    Directory : FS.FilePath -> Unit
 
     # Clears all mocked files and directories.
     clear : Unit -> Unit
