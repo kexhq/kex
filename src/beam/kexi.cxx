@@ -1,5 +1,10 @@
 #include "kexi.hxx"
+#include <cstring>
+#ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
+#elif !defined(__EMSCRIPTEN__)
+#include <openssl/sha.h>
+#endif
 
 namespace kex::beam {
 
@@ -380,12 +385,26 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
 
 // ── Public API ───────────────────────────────────────────────────────
 
+namespace {
+void sha256(const uint8_t* data, size_t len, uint8_t out[32]) {
+#ifdef __APPLE__
+    CC_SHA256(data, static_cast<CC_LONG>(len), out);
+#elif defined(__EMSCRIPTEN__)
+    // KexI is not used in the wasm build; zero-fill as stub.
+    (void)data; (void)len;
+    std::memset(out, 0, 32);
+#else
+    SHA256(data, len, out);
+#endif
+}
+} // namespace
+
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128 {
     auto term = chunkToTermWithoutHash(chunk);
     auto bytes = encodeEtf(term);
 
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(bytes.data(), static_cast<CC_LONG>(bytes.size()), digest);
+    uint8_t digest[32];
+    sha256(bytes.data(), bytes.size(), digest);
 
     Hash128 h{};
     for (int i = 0; i < 16; i++) h[i] = digest[i];
@@ -396,8 +415,8 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
     auto hashless = chunkToTermWithoutHash(chunk);
     auto bytes = encodeEtf(hashless);
 
-    uint8_t digest[CC_SHA256_DIGEST_LENGTH];
-    CC_SHA256(bytes.data(), static_cast<CC_LONG>(bytes.size()), digest);
+    uint8_t digest[32];
+    sha256(bytes.data(), bytes.size(), digest);
     Hash128 hash{};
     for (int i = 0; i < 16; i++) hash[i] = digest[i];
 

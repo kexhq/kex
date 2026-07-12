@@ -171,6 +171,12 @@ endif()
 target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 
+# SHA-256 for KexI interface hashing: CommonCrypto on macOS, OpenSSL on Linux
+if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    find_package(OpenSSL REQUIRED)
+    target_link_libraries(kex_lib PUBLIC OpenSSL::Crypto)
+endif()
+
 # Boost.Context backs the native (non-Emscripten) fiber/coroutine primitive
 # used for Kex's process model (see src/interpreter/fiber.cxx). Plain
 # ucontext was tried first and rejected —
