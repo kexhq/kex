@@ -123,6 +123,7 @@ private:
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;
     auto registerMathBuiltins() -> void;
+    auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;
     auto registerProcessBuiltins() -> void;
 

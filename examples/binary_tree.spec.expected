@@ -1,0 +1,9 @@
+binary tree
+  ✓ builds an ordered persistent tree
+  ✓ searches both present and absent values
+  ✓ ignores duplicate insertions
+  ✓ supports all three depth-first traversals
+  ✓ maps without mutating the original
+  ✓ folds the recursive structure
+
+6 passed, 0 failed

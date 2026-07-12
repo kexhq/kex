@@ -1041,6 +1041,10 @@ struct Lowering {
                 auto map = callE("maps", "from_list", 1, one(std::move(lst)));
                 return wrapLets(binds, callE("kex_supervisor", "start_link", 1, one(std::move(map))));
             }
+            if (uid->name == "Console") {
+                if (n.method == "enabled?") return nsCall("kex_intrinsic_console", "enabled");
+                return nsCall("kex_intrinsic_console", n.method.c_str());
+            }
             if (uid->name == "Math") {
                 if (n.method == "sqrt") return nsCall("math", "sqrt");
                 if (n.method == "pow" || n.method == "power") return nsCall("math", "pow");

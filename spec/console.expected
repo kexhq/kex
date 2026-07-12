@@ -1,0 +1,5 @@
+Console
+  ✓ predefines terminal colors
+  ✓ colorizes text without changing its content
+
+2 passed, 0 failed

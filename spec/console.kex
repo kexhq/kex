@@ -1,0 +1,25 @@
+describe("Console") do
+  it("predefines terminal colors") do
+    if Console.enabled?()
+      assert(Console.Red != "")
+      assert(Console.Green != "")
+      assert(Console.Reset != "")
+      assert(Console.Bold != "")
+      assert(Console.Underline != "")
+    else
+      assert(Console.Red == "")
+      assert(Console.Green == "")
+      assert(Console.Reset == "")
+      assert(Console.Bold == "")
+      assert(Console.Underline == "")
+    end
+  end
+
+  it("colorizes text without changing its content") do
+    let styled = Console.colorize("ready", Console.Green)
+    assert(styled.contains?("ready"))
+    if !Console.enabled?()
+      assert(styled == "ready")
+    end
+  end
+end

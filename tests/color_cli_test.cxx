@@ -155,5 +155,34 @@ int main() {
         });
     });
 
+    describe("Color CLI — spec reporter", []() {
+        const std::string source =
+            "it(\"passes\") do\n"
+            "  assert(true)\n"
+            "end\n"
+            "it(\"fails\") do\n"
+            "  assert(false)\n"
+            "end\n";
+
+        it("renders passing ticks green and failing crosses red", [source]() {
+            auto path = writeTempSource(source);
+            auto out = runKex({path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "\x1b[32m\xE2\x9C\x93\x1b[0m passes"),
+                       "passing tick not green: " + out);
+            assertTrue(contains(out, "\x1b[31m\xE2\x9C\x97\x1b[0m fails"),
+                       "failing cross not red: " + out);
+        });
+
+        it("keeps spec output plain with --no-colors", [source]() {
+            auto path = writeTempSource(source);
+            auto out = runKex({"--no-colors", path}, "");
+            std::remove(path.c_str());
+            assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
+            assertTrue(contains(out, "✓ passes"), "missing passing tick: " + out);
+            assertTrue(contains(out, "✗ fails"), "missing failing cross: " + out);
+        });
+    });
+
     return runAll();
 }

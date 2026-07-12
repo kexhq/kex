@@ -1,0 +1,80 @@
+module BinaryTree do
+  type Tree = Empty | Node(Integer, Tree, Tree)
+
+  make Tree do
+    insert :> Integer -> Tree
+    let insert(@Empty, value) = Node(value, Empty, Empty)
+    let insert(@Node(current, left, right), value) do
+      if value < current
+        return Node(current, left.insert(value), right)
+      elif value > current
+        return Node(current, left, right.insert(value))
+      else
+        return Node(current, left, right)
+      end
+    end
+
+    hasValue? :> Integer -> Bool
+    let hasValue?(@Empty, _) = false
+    let hasValue?(@Node(current, left, right), value) do
+      if value == current
+        return true
+      elif value < current
+        return left.hasValue?(value)
+      else
+        return right.hasValue?(value)
+      end
+    end
+
+    size :> Integer
+    let size(@Empty) = 0
+    let size(@Node(_, left, right)) = 1 + left.size + right.size
+
+    height :> Integer
+    let height(@Empty) = 0
+    let height(@Node(_, left, right)) = 1 + [left.height, right.height].max.or(0)
+
+    inOrder :> [Integer]
+    let inOrder(@Empty) -> [Integer] = []
+    let inOrder(@Node(value, left, right)) -> [Integer] = left.inOrder + [value] + right.inOrder
+
+    preOrder :> [Integer]
+    let preOrder(@Empty) -> [Integer] = []
+    let preOrder(@Node(value, left, right)) -> [Integer] = [value] + left.preOrder + right.preOrder
+
+    postOrder :> [Integer]
+    let postOrder(@Empty) -> [Integer] = []
+    let postOrder(@Node(value, left, right)) -> [Integer] = left.postOrder + right.postOrder + [value]
+
+    transform :> (Integer -> Integer) -> Tree
+    let transform(@Empty, _) = Empty
+    let transform(@Node(value, left, right), f) = Node(f(value), left.transform(f), right.transform(f))
+
+    fold :> (X, (Integer, X, X) -> X) -> X
+    let fold(@Empty, emptyValue, _) = emptyValue
+    let fold(@Node(value, left, right), emptyValue, combine) do
+      return combine(value, left.fold(emptyValue, combine), right.fold(emptyValue, combine))
+    end
+  end
+
+  fromList : [Integer] -> Tree
+  let fromList(values) = values.reduce(Empty) { |tree, value| tree.insert(value) }
+end
+
+main do
+  let tree = BinaryTree.fromList([7, 4, 9, 1, 5, 8, 10])
+
+  IO.printLine("in-order: " + tree.inOrder.to(String).or(""))
+  IO.printLine("pre-order: " + tree.preOrder.to(String).or(""))
+  IO.printLine("post-order: " + tree.postOrder.to(String).or(""))
+  IO.printLine("size: " + tree.size.to(String).or(""))
+  IO.printLine("height: " + tree.height.to(String).or(""))
+  IO.printLine("contains 5: " + tree.hasValue?(5).to(String).or(""))
+  IO.printLine("contains 6: " + tree.hasValue?(6).to(String).or(""))
+
+  let doubled = tree.transform({ |n| n * 2 })
+  IO.printLine("doubled: " + doubled.inOrder.to(String).or(""))
+
+  let sum = tree.fold(0, { |value, left, right| value + left + right })
+  IO.printLine("sum: " + sum.to(String).or(""))
+end

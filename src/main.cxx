@@ -1179,6 +1179,12 @@ int main(int argc, char *argv[]) {
     }
   }
 
+#ifndef __EMSCRIPTEN__
+  // The BEAM runtime is a child process, so carry the CLI color choice over
+  // explicitly. Console constants and the spec reporter share this setting.
+  setenv("KEX_COLORS", kex::color::enabled ? "1" : "0", 1);
+#endif
+
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
     loadPrelude(db);

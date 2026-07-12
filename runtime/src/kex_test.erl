@@ -28,10 +28,12 @@ it(Name, Fun) ->
     case run_case(Fun) of
         ok ->
             inc(kex_test_passed),
-            io:format("~s~ts ~ts~n", [Indent, [16#2713], kex_io:to_string(Name)]);
+            io:format("~s~ts~ts~ts ~ts~n", [Indent, kex_intrinsic_console:'Green'(),
+                      [16#2713], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name)]);
         {failed, Msg} ->
             inc(kex_test_failed),
-            io:format("~s~ts ~ts: ~ts~n", [Indent, [16#2717], kex_io:to_string(Name), Msg])
+            io:format("~s~ts~ts~ts ~ts: ~ts~n", [Indent, kex_intrinsic_console:'Red'(),
+                      [16#2717], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name), Msg])
     end,
     'none'.
 
