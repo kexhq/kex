@@ -7,11 +7,12 @@ foul printUsageAndExitWith(message: String) -> Void do
 end
 
 foul numbersFrom(args: [String]) -> [Float] do
+  # Convert all args to Float, ignoring any that can't be converted
   let numbers = args.collect(&.to(Float))
 
   # Check if all arguments were successfully converted to Float, warn the user if not
   if numbers.count != args.count
-    let not_numbers = args.filter { |x| x.to(Float).none? }
+    let not_numbers = args.filter(&.to(Float).none?)
     IO.warning("Warning: These arguments could not be converted to numbers and will be ignored: " + not_numbers.join(", "))
   end
 
