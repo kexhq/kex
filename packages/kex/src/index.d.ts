@@ -44,4 +44,10 @@ export class Kex {
 
   /** Frees this session's underlying interpreter state. Safe to call more than once. */
   destroy(): void;
+
+  /** The REPL banner with version info, matching the native CLI exactly. */
+  banner(): string;
+
+  /** Kex version string (e.g. "0.2.0"). */
+  version(): string;
 }

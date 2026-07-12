@@ -68,8 +68,8 @@ inline auto isReplExit(const std::string &input) -> bool {
 
 inline auto printReplBanner(std::ostream &out, const std::string &backend)
     -> void {
-  out << "\n"
-      << color::apply(color::bold) << color::apply(color::yellow)
+  if (!backend.empty()) out << "\n";
+  out << color::apply(color::bold) << color::apply(color::yellow)
       << "Kex Interactive" << color::apply(color::reset) << " "
       << color::apply(color::yellow) << kVersion << color::apply(color::reset);
   if (!backend.empty())

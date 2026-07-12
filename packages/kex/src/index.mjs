@@ -96,4 +96,14 @@ export class Kex {
     this.#module.ccall("kex_repl_destroy", null, ["number"], [this.#session]);
     this.#destroyed = true;
   }
+
+  /** The REPL banner with version info, matching the native CLI exactly. */
+  banner() {
+    return this.#module.ccall("kex_repl_banner", "string", [], []);
+  }
+
+  /** Kex version string (e.g. "0.2.0"). */
+  version() {
+    return this.#module.ccall("kex_version", "string", [], []);
+  }
 }
