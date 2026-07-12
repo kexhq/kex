@@ -11,41 +11,73 @@ module Parser do
   parse : (String, String) -> Result<Program, ParseError>
 
   # Reads a file and parses it.
-  parseFile : String -> Result<Program, ParseError>
+  parseFile : FS.FilePath -> Result<Program, ParseError>
 
   # Parses a type expression string into a TypeRef.
   parseType : String -> Result<TypeRef, ParseError>
-end
 
-# Structured representation of type expressions.
-type TypeRef
-  = NamedType(String, [TypeRef])
-  | FunctionType([TypeRef], TypeRef)
-  | TupleType([TypeRef])
-  | ListType(TypeRef)
-  | MapType(TypeRef, TypeRef)
-  | UnionType([TypeRef])
-  | NullableType(TypeRef)
-  | TypeVar(String)
-  | AnyType
-  | NoneType
+  # Parses a single expression string into an Expression AST node.
+  parseExpression : String -> Result<Expression, ParseError>
 
-make TypeRef do
-  # Pretty-prints the type reference to a human-readable string.
-  toString :> String
-end
+  # Structured representation of type expressions.
+  type TypeRef
+    = NamedType(String, [TypeRef])
+    | FunctionType([TypeRef], TypeRef)
+    | TupleType([TypeRef])
+    | ListType(TypeRef)
+    | MapType(TypeRef, TypeRef)
+    | UnionType([TypeRef])
+    | NullableType(TypeRef)
+    | TypeVar(String)
+    | AnyType
+    | NoneType
 
-# Structured representation of patterns.
-type PatternRef
-  = BindPattern(String)
-  | LiteralPattern(String)
-  | ConstructorPattern(String, [PatternRef])
-  | TuplePattern([PatternRef])
-  | ListPattern([PatternRef])
-  | WildcardPattern
-  | GuardedPattern(PatternRef, String)
+  make TypeRef do
+    # Pretty-prints the type reference to a human-readable string.
+    toString :> String
+  end
 
-make PatternRef do
-  # Pretty-prints the pattern to a human-readable string.
-  toString :> String
+  # Structured representation of patterns.
+  type PatternRef
+    = BindPattern(String)
+    | LiteralPattern(String)
+    | ConstructorPattern(String, [PatternRef])
+    | TuplePattern([PatternRef])
+    | ListPattern([PatternRef])
+    | WildcardPattern
+    | GuardedPattern(PatternRef, String)
+
+  make PatternRef do
+    # Pretty-prints the pattern to a human-readable string.
+    toString :> String
+  end
+
+  # Structured representation of expression AST nodes.
+  type Expression
+    = LitInt(Int)
+    | LitFloat(Float)
+    | LitString(String)
+    | LitBool(Bool)
+    | LitAtom(Atom)
+    | LitNone
+    | Identifier(String)
+    | BinaryOp(Expression, String, Expression)
+    | UnaryOp(String, Expression)
+    | Call(Expression, [Expression])
+    | MethodCall(Expression, String, [Expression])
+    | If(Expression, [Expression], [Expression]?)
+    | Match(Expression, [Expression])
+    | List([Expression])
+    | Tuple([Expression])
+    | Block([Expression])
+    | Lambda([String], [Expression])
+    | Let(String, Expression)
+    | Var(String, Expression)
+    | Assign(String, Expression)
+    | Return(Expression)
+    | Spread(Expression)
+    | TrailingIf(Expression, Expression)
+    | While(Expression, [Expression])
+    | Loop([Expression])
+    | Range(Expression, Expression)
 end

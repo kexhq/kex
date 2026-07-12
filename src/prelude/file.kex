@@ -1,5 +1,6 @@
 module FS do
   type FileModes = Read | Write | Append | ReadWrite
+  type FilePath = String
 
   foul module File do
     # Opens +path+ in +mode+ and passes a +FileHandle+ to the block.
@@ -10,111 +11,111 @@ module FS do
     #   File.open("data.txt", Read) { |f|
     #     f.readLine
     #   }
-    open : (String, FileModes, (FileHandle -> T)) -> T?
+    open : (FilePath, FileModes, (FileHandle -> T)) -> T?
 
     # Opens +path+ without a block; caller must call +handle.close+.
     # Returns +None+ if the file cannot be opened.
-    open : (String, FileModes) -> FileHandle?
+    open : (FilePath, FileModes) -> FileHandle?
 
     # Reads the entire content of +path+. Returns +None+ on failure.
-    read : String -> String?
+    read : FilePath -> String?
 
     # Writes +content+ to +path+, replacing any existing file.
     # Returns +true+ on success.
-    write : (String, String) -> Bool
+    write : (FilePath, String) -> Bool
 
     # Appends +content+ to +path+, creating the file if needed.
     # Returns +true+ on success.
-    append : (String, String) -> Bool
+    append : (FilePath, String) -> Bool
 
     # Returns +true+ if +path+ is an existing regular file.
-    exists? : String -> Bool
+    exists? : FilePath -> Bool
 
     # Alias for +exists?+ — explicit predicate for "is this a regular file".
-    file? : String -> Bool
+    file? : FilePath -> Bool
 
     # Returns +true+ if +path+ is an existing directory.
-    directory? : String -> Bool
+    directory? : FilePath -> Bool
 
     # Deletes +path+. Returns +true+ if the file was removed.
-    delete : String -> Bool
+    delete : FilePath -> Bool
 
     # Copies +src+ to +dst+, overwriting +dst+ if it exists.
     # Returns +true+ on success.
-    copy : (String, String) -> Bool
+    copy : (FilePath, FilePath) -> Bool
 
     # Renames (moves) +src+ to +dst+. Returns +true+ on success.
-    rename : (String, String) -> Bool
+    rename : (FilePath, FilePath) -> Bool
 
     # Reads all lines of +path+ into a +[String]+.
     # Returns +None+ if the file cannot be opened.
-    lines : String -> [String]?
+    lines : FilePath -> [String]?
 
     # Opens +path+ and returns a lazy +Stream<String>+ of its lines.
     # Returns +None+ if the file cannot be opened.
-    feed : String -> Stream<String>?
+    feed : FilePath -> Stream<String>?
 
     # Returns the file size in bytes, or +None+ if inaccessible.
-    size : String -> Integer?
+    size : FilePath -> Integer?
 
     # Returns the filename component of +path+ (no directory).
     #
     # @example  File.basename("src/main.kex")   # => "main.kex"
-    basename : String -> String
+    basename : FilePath -> String
 
     # Returns the directory component of +path+.
     #
     # @example  File.dirname("src/main.kex")    # => "src"
-    dirname : String -> String
+    dirname : FilePath -> String
 
     # Returns the file extension including the dot, or empty string.
     #
     # @example  File.extension("main.kex")   # => ".kex"
-    extension : String -> String
+    extension : FilePath -> String
 
     # Joins two path components using the OS path separator.
     #
     # @example  File.join("src", "main.kex")   # => "src/main.kex"
-    join : (String, String) -> String
+    join : (FilePath, FilePath) -> String
 
     # Returns the canonical absolute path, or +None+ on failure.
-    absolute : String -> String?
+    absolute : FilePath -> String?
   end
 
   foul module Directory do
     # Returns +true+ if +path+ is an existing directory.
-    exists? : String -> Bool
+    exists? : FilePath -> Bool
 
     # Alias for +exists?+ — explicit predicate for "is this a directory".
-    directory? : String -> Bool
+    directory? : FilePath -> Bool
 
     # Returns +true+ if +path+ is an existing regular file.
-    file? : String -> Bool
+    file? : FilePath -> Bool
 
     # Creates +path+ and any missing parent directories.
     # Returns +true+ on success.
-    create : String -> Bool
+    create : FilePath -> Bool
 
     # Deletes the empty directory at +path+. Returns +true+ on success.
-    delete : String -> Bool
+    delete : FilePath -> Bool
 
     # Recursively deletes +path+ and all its contents. Returns +true+ on success.
-    deleteAll : String -> Bool
+    deleteAll : FilePath -> Bool
 
     # Returns all entry names directly inside +path+, or +None+ if inaccessible.
-    list : String -> [String]?
+    list : FilePath -> [String]?
 
     # Returns only regular file names directly inside +path+, or +None+.
-    files : String -> [String]?
+    files : FilePath -> [String]?
 
     # Returns only subdirectory names directly inside +path+, or +None+.
-    directories : String -> [String]?
+    directories : FilePath -> [String]?
 
     # Returns the current working directory path.
-    current : String
+    current : FilePath
 
     # Returns the user's home directory, or +None+ if unavailable.
-    home : String?
+    home : FilePath?
   end
 end
 
@@ -130,11 +131,11 @@ foul module Mock do
   foul module FS do
     # Registers an in-memory file at +path+ with +content+.
     # All File and FileHandle operations on +path+ will use this content.
-    File : (String, String) -> Unit
+    File : (FilePath, String) -> Unit
 
     # Registers an in-memory directory at +path+.
     # Directory.exists? and Directory.list will see it.
-    Directory : String -> Unit
+    Directory : FilePath -> Unit
 
     # Clears all mocked files and directories.
     clear : Unit -> Unit

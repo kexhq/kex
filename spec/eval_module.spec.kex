@@ -45,25 +45,25 @@ describe("Evaluator.run") do
   end
 end
 
-describe("Evaluator.expression") do
+describe("Evaluator.runExpression") do
   it("evaluates a simple expression") do
-    match Evaluator.expression("1 + 2 + 3") do
+    match Evaluator.runExpression("1 + 2 + 3") do
       Ok(result) -> assert(result == 6)
-      Error(msg) -> assert(false, "Evaluator.expression failed: ${msg}")
+      Error(msg) -> assert(false, "Evaluator.runExpression failed: ${msg}")
     end
   end
 
   it("evaluates a list literal") do
-    match Evaluator.expression("[10, 20, 30]") do
+    match Evaluator.runExpression("[10, 20, 30]") do
       Ok(result) -> assert(result == [10, 20, 30])
-      Error(msg) -> assert(false, "Evaluator.expression failed: ${msg}")
+      Error(msg) -> assert(false, "Evaluator.runExpression failed: ${msg}")
     end
   end
 
   it("evaluates a method chain") do
-    match Evaluator.expression("\"hello world\".split(\" \").length") do
+    match Evaluator.runExpression("\"hello world\".split(\" \").length") do
       Ok(result) -> assert(result == 2)
-      Error(msg) -> assert(false, "Evaluator.expression failed: ${msg}")
+      Error(msg) -> assert(false, "Evaluator.runExpression failed: ${msg}")
     end
   end
 end

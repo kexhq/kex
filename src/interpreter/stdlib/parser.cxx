@@ -53,7 +53,7 @@ static auto extractDocComments(const std::string& source) -> std::unordered_map<
 // --- TypeRef builders ---
 
 static auto makeTypeRef(const std::string& tag, std::vector<ValuePtr> args = {}) -> ValuePtr {
-    return Value::variant(tag, "TypeRef", std::move(args));
+    return Value::variant(tag, "Parser.TypeRef", std::move(args));
 }
 
 static auto typeExprToTypeRef(const ast::TypeExpr& expr) -> ValuePtr {
@@ -114,7 +114,7 @@ static auto typeExprToTypeRef(const ast::TypeExpr& expr) -> ValuePtr {
 // --- PatternRef builders ---
 
 static auto makePatternRef(const std::string& tag, std::vector<ValuePtr> args = {}) -> ValuePtr {
-    return Value::variant(tag, "PatternRef", std::move(args));
+    return Value::variant(tag, "Parser.PatternRef", std::move(args));
 }
 
 static auto patternToPatternRef(const ast::Pattern& pat) -> ValuePtr {
@@ -578,6 +578,168 @@ static auto makeParseError(const std::string& message, std::optional<SourceLocat
     return Value::record("ParseError", std::move(fields));
 }
 
+// --- Expression conversion ---
+
+static auto convertExpr(const ast::Expr& expr) -> ValuePtr;
+static auto convertExprPtr(const ast::ExprPtr& expr) -> ValuePtr {
+    if (!expr) return Value::none();
+    return convertExpr(*expr);
+}
+
+static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
+    return std::visit([&](const auto& node) -> ValuePtr {
+        using T = std::decay_t<decltype(node)>;
+
+        if constexpr (std::is_same_v<T, ast::IntLiteral>) {
+            return Value::variant("LitInt", "Parser.Expression", {Value::integer(std::stoll(node.value))});
+        } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
+            return Value::variant("LitFloat", "Parser.Expression", {Value::floating(std::stod(node.value))});
+        } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            return Value::variant("LitString", "Parser.Expression", {Value::string(node.value)});
+        } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
+            return Value::variant("LitBool", "Parser.Expression", {Value::boolean(node.value)});
+        } else if constexpr (std::is_same_v<T, ast::AtomLiteral>) {
+            return Value::variant("LitAtom", "Parser.Expression", {Value::atom(node.name)});
+        } else if constexpr (std::is_same_v<T, ast::NoneLiteral>) {
+            return Value::variant("LitNone", "Parser.Expression", {});
+        } else if constexpr (std::is_same_v<T, ast::Identifier>) {
+            return Value::variant("Identifier", "Parser.Expression", {Value::string(node.name)});
+        } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
+            return Value::variant("BinaryOp", "Parser.Expression", {
+                convertExprPtr(node.left),
+                Value::string(std::string(tokenTypeName(node.op))),
+                convertExprPtr(node.right)
+            });
+        } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
+            return Value::variant("UnaryOp", "Parser.Expression", {
+                Value::string(std::string(tokenTypeName(node.op))),
+                convertExprPtr(node.operand)
+            });
+        } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
+            auto target = std::make_unique<ast::Expr>();
+            target->location = expr.location;
+            target->kind = ast::Identifier{node.name};
+            std::vector<ValuePtr> args;
+            for (const auto& a : node.args) args.push_back(convertExprPtr(a));
+            return Value::variant("Call", "Parser.Expression", {
+                convertExpr(*target),
+                Value::list(std::move(args))
+            });
+        } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
+            std::vector<ValuePtr> thenBody;
+            for (const auto& e : node.thenBody) thenBody.push_back(convertExprPtr(e));
+            auto thenList = Value::list(std::move(thenBody));
+            ValuePtr elsePart = Value::none();
+            if (node.elseBody) {
+                std::vector<ValuePtr> elseBody;
+                for (const auto& e : *node.elseBody) elseBody.push_back(convertExprPtr(e));
+                elsePart = Value::list(std::move(elseBody));
+            }
+            return Value::variant("If", "Parser.Expression", {
+                convertExprPtr(node.condition),
+                thenList,
+                elsePart
+            });
+        } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
+            std::vector<ValuePtr> arms;
+            for (const auto& c : node.clauses) {
+                arms.push_back(convertExprPtr(c.body));
+            }
+            return Value::variant("Match", "Parser.Expression", {
+                convertExprPtr(node.subject),
+                Value::list(std::move(arms))
+            });
+        } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
+            std::vector<ValuePtr> elems;
+            for (const auto& e : node.elements) elems.push_back(convertExprPtr(e));
+            return Value::variant("List", "Parser.Expression", {
+                Value::list(std::move(elems))
+            });
+        } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
+            std::vector<ValuePtr> elems;
+            for (const auto& e : node.elements) elems.push_back(convertExprPtr(e));
+            return Value::variant("Tuple", "Parser.Expression", {
+                Value::list(std::move(elems))
+            });
+        } else if constexpr (std::is_same_v<T, ast::BlockExpr>) {
+            std::vector<ValuePtr> elems;
+            for (const auto& e : node.body) elems.push_back(convertExprPtr(e));
+            return Value::variant("Block", "Parser.Expression", {
+                Value::list(std::move(elems))
+            });
+        } else if constexpr (std::is_same_v<T, ast::LetExpr>) {
+            std::string name;
+            if (auto* vp = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
+                name = vp->name;
+            }
+            return Value::variant("Let", "Parser.Expression", {
+                Value::string(name),
+                convertExprPtr(node.value)
+            });
+        } else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
+            return Value::variant("Return", "Parser.Expression", {
+                convertExprPtr(node.value)
+            });
+        } else if constexpr (std::is_same_v<T, ast::VarExpr>) {
+            return Value::variant("Var", "Parser.Expression", {
+                Value::string(node.name),
+                convertExprPtr(node.value)
+            });
+        } else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
+            return Value::variant("Assign", "Parser.Expression", {
+                Value::string(node.name),
+                convertExprPtr(node.value)
+            });
+        } else if constexpr (std::is_same_v<T, ast::Lambda>) {
+            std::vector<ValuePtr> paramNames;
+            for (const auto& p : node.params) paramNames.push_back(Value::string(p.name));
+            std::vector<ValuePtr> bodyVals;
+            for (const auto& e : node.body) bodyVals.push_back(convertExprPtr(e));
+            return Value::variant("Lambda", "Parser.Expression", {
+                Value::list(std::move(paramNames)),
+                Value::list(std::move(bodyVals))
+            });
+        } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
+            return Value::variant("Spread", "Parser.Expression", {
+                convertExprPtr(node.inner)
+            });
+        } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
+            return Value::variant("TrailingIf", "Parser.Expression", {
+                convertExprPtr(node.expr),
+                convertExprPtr(node.condition)
+            });
+        } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+            std::vector<ValuePtr> bodyVals;
+            for (const auto& e : node.body) bodyVals.push_back(convertExprPtr(e));
+            return Value::variant("While", "Parser.Expression", {
+                convertExprPtr(node.condition),
+                Value::list(std::move(bodyVals))
+            });
+        } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+            std::vector<ValuePtr> bodyVals;
+            for (const auto& e : node.body) bodyVals.push_back(convertExprPtr(e));
+            return Value::variant("Loop", "Parser.Expression", {
+                Value::list(std::move(bodyVals))
+            });
+        } else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
+            return Value::variant("Range", "Parser.Expression", {
+                convertExprPtr(node.start),
+                convertExprPtr(node.end)
+            });
+        } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            std::vector<ValuePtr> args;
+            for (const auto& a : node.args) args.push_back(convertExprPtr(a));
+            return Value::variant("MethodCall", "Parser.Expression", {
+                convertExprPtr(node.receiver),
+                Value::string(node.method),
+                Value::list(std::move(args))
+            });
+        } else {
+            return Value::variant("LitNone", "Parser.Expression", {});
+        }
+    }, expr.kind);
+}
+
 // --- Registration ---
 
 auto Evaluator::registerParserBuiltins() -> void {
@@ -589,16 +751,23 @@ auto Evaluator::registerParserBuiltins() -> void {
 
     m_globalEnv->define("Parser", Value::module("Parser"));
 
-    // Register TypeRef/PatternRef variant->parent mappings so UFCS dispatch works
+    // Register TypeRef/PatternRef/Expression variant->parent mappings so UFCS dispatch works
     for (const auto& tag : {"NamedType", "FunctionType", "TupleType", "ListType",
                             "MapType", "UnionType", "NullableType", "TypeVar",
                             "AnyType", "NoneType"}) {
-        m_variantParent[tag] = "TypeRef";
+        m_variantParent[tag] = "Parser.TypeRef";
     }
     for (const auto& tag : {"BindPattern", "LiteralPattern", "ConstructorPattern",
                             "TuplePattern", "ListPattern", "WildcardPattern",
                             "GuardedPattern"}) {
-        m_variantParent[tag] = "PatternRef";
+        m_variantParent[tag] = "Parser.PatternRef";
+    }
+    for (const auto& tag : {"LitInt", "LitFloat", "LitString", "LitBool", "LitAtom",
+                            "LitNone", "Identifier", "BinaryOp", "UnaryOp", "Call",
+                            "MethodCall", "If", "Match", "List", "Tuple", "Block",
+                            "Lambda", "Let", "Var", "Assign", "Return", "Spread",
+                            "TrailingIf", "While", "Loop", "Range"}) {
+        m_variantParent[tag] = "Parser.Expression";
     }
 
     // Parser.parse(source) or Parser.parse(source, filename)
@@ -686,13 +855,34 @@ auto Evaluator::registerParserBuiltins() -> void {
         }
     });
 
-    // TypeRef.toString / PatternRef.toString — registered as methods
-    reg("TypeRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // Parser.parseExpression(source)
+    reg("Parser::parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
+        auto* srcVal = std::get_if<StringValue>(&args[0]->data);
+        if (!srcVal) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
+
+        std::string source = srcVal->value;
+        std::string filename = "<expression>";
+
+        try {
+            auto filenamePtr = std::make_shared<std::string>(filename);
+            Lexer lexer(source, *filenamePtr);
+            auto tokens = lexer.tokenizeAll();
+            Parser parser(tokens, *filenamePtr);
+            auto expr = parser.parseExpr();
+            return Value::ok(convertExpr(*expr));
+        } catch (const std::exception& e) {
+            return Value::error(makeParseError(e.what(), std::nullopt, filename));
+        }
+    });
+
+    // Parser.TypeRef.toString / Parser.PatternRef.toString — registered as methods
+    reg("Parser.TypeRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("?");
         return Value::string(typeRefToString(args[0]));
     });
 
-    reg("PatternRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Parser.PatternRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("?");
         auto* var = std::get_if<VariantValue>(&args[0]->data);
         if (!var) return Value::string("?");

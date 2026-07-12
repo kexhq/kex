@@ -8,13 +8,13 @@ module Evaluator do
   run : (String, EvaluatorOptions) -> Result<Any, String>
 
   # Evaluates a single Kex expression.
-  expression : String -> Result<Any, String>
-  expression : (String, EvaluatorOptions) -> Result<Any, String>
-end
+  runExpression : String -> Result<Any, String>
+  runExpression : (String, EvaluatorOptions) -> Result<Any, String>
 
-record EvaluatorOptions do
-  allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]
-  modules : {String: {String: (Any -> Any)}} = {}
-  maxSteps : Int = 1_000_000
-  maxDepth : Int = 256
+  record EvaluatorOptions do
+    allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]
+    modules : {String: {String: (Any -> Any)}} = {}
+    maxSteps : Int = 1_000_000
+    maxDepth : Int = 256
+  end
 end

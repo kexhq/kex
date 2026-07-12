@@ -3149,6 +3149,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
+        // A single bare type-name variant is a transparent type alias, not an ADT,
+        // e.g. `type FilePath = String`. Don't register variant tags for it.
+        if (td.variants->size() == 1) {
+            auto* tn = std::get_if<ast::TypeName>(&(*td.variants)[0]->kind);
+            if (tn) return;
+        }
         for (const auto& v : *td.variants) {
             auto t = Lowering::simpleTypeName(v);
             if (t.empty()) continue;
@@ -3521,14 +3527,21 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                        std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                     if (*td && (*td)->variants) {
-                                        std::vector<std::string> tags;
-                                        for (const auto& v : *(*td)->variants) {
-                                            auto t = Lowering::simpleTypeName(v);
-                                            if (t == "Nothing") t = "none";
-                                            if (!t.empty()) tags.push_back(t);
+                                        // Skip transparent type aliases (single bare TypeName).
+                                        bool isAlias = false;
+                                        if ((*td)->variants->size() == 1) {
+                                            isAlias = std::get_if<ast::TypeName>(&(*(*td)->variants)[0]->kind) != nullptr;
                                         }
-                                        if (!tags.empty())
-                                            L.typeVariantTags[(*td)->name] = std::move(tags);
+                                        if (!isAlias) {
+                                            std::vector<std::string> tags;
+                                            for (const auto& v : *(*td)->variants) {
+                                                auto t = Lowering::simpleTypeName(v);
+                                                if (t == "Nothing") t = "none";
+                                                if (!t.empty()) tags.push_back(t);
+                                            }
+                                            if (!tags.empty())
+                                                L.typeVariantTags[(*td)->name] = std::move(tags);
+                                        }
                                     }
                                 }
                             } else {

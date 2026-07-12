@@ -79,11 +79,11 @@ auto Evaluator::registerEvalBuiltins() -> void {
         return sandboxedEval(srcVal->value, false, maxSteps, maxDepth, allow);
     });
 
-    // Evaluator.expression(source) or Evaluator.expression(source, opts)
-    reg("Evaluator::expression", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::error(Value::string("Evaluator.expression requires a source string"));
+    // Evaluator.runExpression(source) or Evaluator.runExpression(source, opts)
+    reg("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
-        if (!srcVal) return Value::error(Value::string("Evaluator.expression requires a source string"));
+        if (!srcVal) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
 
         int64_t maxSteps = 1000000;
         int64_t maxDepth = 256;
