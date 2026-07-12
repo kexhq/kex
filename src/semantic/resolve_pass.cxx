@@ -74,6 +74,8 @@ auto ResolvePass::resolveModule(const ast::ModuleDef& module) -> void {
                 resolveModule(*node);
             } else if constexpr (std::is_same_v<T, ast::UsingBlock>) {
                 resolveUsingBlock(*node);
+            } else if constexpr (std::is_same_v<T, ast::ExportDecl>) {
+                resolveExportDecl(*node);
             } else if constexpr (std::is_same_v<T, ast::VisibilityBlock>) {
                 pushScope();
                 for (const auto& visible : node->items) {
@@ -103,11 +105,64 @@ auto ResolvePass::resolveUsingBlock(const ast::UsingBlock& block) -> void {
     if (scoped) popScope();
 }
 
+auto ResolvePass::resolveExportDecl(const ast::ExportDecl& decl) -> void {
+    if (!decl.onlyNames.empty() && !decl.exceptNames.empty()) {
+        error(decl.location, "`only:` and `except:` are mutually exclusive in export");
+        return;
+    }
+
+    std::string target;
+    for (size_t i = 0; i < decl.module.parts.size(); ++i) {
+        if (i) target += ".";
+        target += decl.module.parts[i];
+    }
+
+    if (target == m_currentModule) {
+        error(decl.location, "module cannot export itself");
+        return;
+    }
+
+    if (m_db && !m_db->hasModule(target)) {
+        if (auto discovered = m_db->ensureModule(target, m_currentModule))
+            target = *discovered;
+    }
+    if (!m_db || !m_db->hasModule(target)) {
+        error(decl.location, "exported module not found: " + target);
+        return;
+    }
+
+    for (const auto& name : decl.onlyNames) {
+        if (auto* sym = m_db->symbolInModule(target, name)) {
+            if (!sym->isExported)
+                error(decl.location, "cannot export private name `" + name + "` from " + target);
+        } else {
+            error(decl.location, "module " + target + " has no name `" + name + "`");
+        }
+    }
+    for (const auto& name : decl.exceptNames) {
+        if (auto* sym = m_db->symbolInModule(target, name)) {
+            if (!sym->isExported)
+                error(decl.location, "cannot reference private name `" + name + "` in except list");
+        } else {
+            error(decl.location, "module " + target + " has no name `" + name + "`");
+        }
+    }
+
+    auto exports = m_db->exportsFor(target);
+    if (exports.empty() && decl.onlyNames.empty())
+        error(decl.location, "module " + target + " has no public names to export");
+}
+
 auto ResolvePass::resolveUsing(const ast::TypeName& module,
                                const std::optional<std::string>& alias,
                                const std::vector<std::string>& onlyNames,
                                const std::vector<std::string>& exceptNames,
                                SourceLocation loc) -> void {
+    if (!onlyNames.empty() && !exceptNames.empty()) {
+        error(loc, "`only:` and `except:` are mutually exclusive");
+        return;
+    }
+
     std::string requested;
     for (size_t i = 0; i < module.parts.size(); ++i) {
         if (i) requested += ".";
@@ -130,6 +185,13 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
     }
     if (!m_db || !m_db->hasModule(resolved)) {
         warning(loc, "module not found in source roots: " + requested);
+        return;
+    }
+
+    if (m_db->isModuleLoading(resolved, m_state ? m_state->path : "")) {
+        error(loc, "circular dependency: module " + resolved +
+                   " is still being loaded (required by " +
+                   (m_currentModule.empty() ? "top-level" : m_currentModule) + ")");
         return;
     }
 

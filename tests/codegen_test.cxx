@@ -423,6 +423,34 @@ int main() {
             assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
         });
 
+        it("top-level using resolves to cross-module call", []() {
+            kex::Lexer lexer(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "using Utils, only: [double]\n"
+                "main do double(10) end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "top_using");
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+            assertTrue(contains(globalCore, "call 'Kex.Utils':'double'"), globalCore);
+        });
+
+        it("using inside module body resolves to cross-module call", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "module App do\n"
+                "  using Utils, only: [double]\n"
+                "  let compute(x) = double(x) + 1\n"
+                "end\n"
+                "main do App.compute(10) end\n",
+                "using_cross_module");
+            assertEqual(output, std::string("21"));
+        });
+
         it("does not block main on nested declaration-only module items", []() {
             auto output = runIrOnBeam(
                 "module Schema do\n"

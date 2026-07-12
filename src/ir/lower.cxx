@@ -3360,6 +3360,30 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     };
                     lowerModuleBody(*node);
                 }
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                if (!node) return;
+                std::string srcMod;
+                for (size_t i = 0; i < node->module.parts.size(); i++) {
+                    if (i) srcMod += ".";
+                    srcMod += node->module.parts[i];
+                }
+                if (!node->onlyNames.empty()) {
+                    for (const auto& name : node->onlyNames) {
+                        auto key = srcMod + "." + name;
+                        if (auto it = L.moduleFunctions.find(key); it != L.moduleFunctions.end())
+                            L.moduleImports[name] = it->second;
+                    }
+                } else {
+                    for (const auto& [key, val] : L.moduleFunctions)
+                        if (key.rfind(srcMod + ".", 0) == 0) {
+                            auto bare = key.substr(srcMod.size() + 1);
+                            if (bare.find('.') == std::string::npos
+                                && std::find(node->exceptNames.begin(),
+                                             node->exceptNames.end(), bare)
+                                    == node->exceptNames.end())
+                                L.moduleImports[bare] = val;
+                        }
+                }
             } else {
                 throw LowerError(std::string("IR lower: unimplemented top-level item ")
                                  + typeid(T).name());

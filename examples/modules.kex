@@ -1,139 +1,126 @@
-# Modules, visibility, and using
+# Modules: namespacing, selective imports, aliases, privacy, exports
 
 module Math do
-  let pi = 3.14159265358979
-  let e = 2.71828182845905
+  let square(n) = n * n
+  let cube(n) = n * n * n
+  let double(n) = n * 2
 
-  let abs(n: Int) -> Int do
-    return n if n >= 0
-    return -n
-  end
-
-  let clamp(n: Int, low: Int, high: Int) -> Int do
-    return low if n < low
-    return high if n > high
-    return n
-  end
-
-  module Trig do
-    let sin(x: Float) -> Float = BuiltIn.Math.sin(x)
-    let cos(x: Float) -> Float = BuiltIn.Math.cos(x)
-    let tan(x: Float) -> Float = BuiltIn.Math.tan(x)
+  module Constants do
+    let pi = 3.14159
+    let tau = 6.28318
   end
 end
 
-# Visibility
-module Auth do
+module Geometry do
+  using Math, only: [square]
+
+  record Circle do
+    radius : Float = 1.0
+  end
+
+  make Circle do
+    let area = Math.Constants.pi * square(this.radius)
+    let circumference = Math.Constants.tau * this.radius
+  end
+end
+
+module Formatter do
+  using Math, except: [cube]
+
+  let describeCircle(c) do
+    return "Circle(r=${c.radius.to(String)}, area=${c.area.to(String)})"
+  end
+end
+
+# Privacy: internal helpers hidden, public API exposed
+module StringUtils do
   private do
-    let hashPassword(password: String) -> String do
-      return BuiltIn.Crypto.sha256(password)
-    end
-
-    let validateLength(password: String) -> Bool do
-      return password.count >= 8
+    let repeat(s, n) do
+      match n do
+        0 -> ""
+        _ -> s + repeat(s, n - 1)
+      end
     end
   end
 
-  let authenticate(username: String, password: String) -> Result<User, AuthError> do
-    return Error(AuthError(:weak_password)) if !validateLength(password)
-    let hashed = hashPassword(password)
-    return UserStore.findByCredentials(username, hashed)
+  let padLeft(s, width) do
+    let padding = width - s.length
+    match padding > 0 do
+      true -> repeat(" ", padding) + s
+      false -> s
+    end
   end
 
-  let register(username: String, password: String) -> Result<User, AuthError> do
-    return Error(AuthError(:weak_password)) if !validateLength(password)
-    let hashed = hashPassword(password)
-    return UserStore.create(username, hashed)
+  let padRight(s, width) do
+    let padding = width - s.length
+    match padding > 0 do
+      true -> s + repeat(" ", padding)
+      false -> s
+    end
   end
 end
 
-# Using for scoped imports
+# Nested modules
 module App do
-  using Math.Trig do
-    let calculateAngle(x: Float, y: Float) -> Float do
-      return tan(y / x)
-    end
+  module Config do
+    let name -> String = "KexDemo"
+    let version -> String = "0.1.0"
   end
+
+  # Re-export all of Geometry's public names as App.Geometry.*
+  export Geometry
 end
 
-# Foul module
-foul module Logger do
-  type Level = :debug | :info | :warn | :error
-
-  let log(level: Level, msg: String) do
-    let timestamp = Time.now.format("%Y-%m-%d %H:%M:%S")
-    IO.printLine("[${timestamp}] [${level}] ${msg}")
-  end
-
-  let debug(msg: String) = log(:debug, msg)
-  let info(msg: String) = log(:info, msg)
-  let warn(msg: String) = log(:warn, msg)
-  let error(msg: String) = log(:error, msg)
+# Exports: selective re-export and aliased re-export
+module Prelude do
+  let add(a, b) = a + b
+  let sub(a, b) = a - b
+  let mul(a, b) = a * b
 end
 
-# Nested modules with visibility
-module Database do
-  module Connection do
-    record Config do
-      host : String
-      port : Int
-      database : String
-      poolSize : Int = 10
-    end
+module MathKit do
+  export Prelude, only: [add, mul]
+end
 
-    private do
-      let buildUrl(config: Config) -> String do
-        return "postgres://${config.host}:${config.port}/${config.database}"
-      end
-    end
+module Toolkit do
+  export Prelude, except: [sub]
+end
 
-    foul connect(config: Config) -> Result<Pool, DbError> do
-      let url = buildUrl(config)
-      return BuiltIn.Postgres.connect(url, config.poolSize)
-    end
+# Top-level using for convenience
+using Math, only: [square, double]
+
+main do
+  # Qualified access — always works, no using needed
+  IO.printLine(Math.cube(3).to(String))
+  IO.printLine(Math.Constants.pi.to(String))
+
+  # Selective import in a scoped block
+  using Math, only: [double] do
+    IO.printLine(double(21).to(String))
   end
 
-  module Query do
-    record Select do
-      table : String
-      columns : [String] = ["*"]
-      conditions : [String] = []
-      limit : Int? = None
-    end
+  # Alias
+  using Geometry, as: Geo
+  let c = Geo.Circle { radius: 5.0 }
+  IO.printLine(Formatter.describeCircle(c))
 
-    make Select do
-      let where(condition: String) -> Select do
-        return Select {
-          table: this.table,
-          columns: this.columns,
-          conditions: [condition | this.conditions],
-          limit: this.limit
-        }
-      end
+  # Nested module access
+  IO.printLine(App.Config.name + " v" + App.Config.version)
 
-      let limit(n: Int) -> Select do
-        return Select {
-          table: this.table,
-          columns: this.columns,
-          conditions: this.conditions,
-          limit: Just(n)
-        }
-      end
+  # Re-exported access via export
+  let c2 = App.Geometry.Circle { radius: 2.0 }
+  IO.printLine(c2.circumference.to(String))
 
-      let toSql({ table, columns, conditions, limit }) -> String do
-        var sql = "SELECT ${columns.join(", ")} FROM ${table}"
+  # Selective re-exports
+  IO.printLine(MathKit.Prelude.add(10, 5).to(String))
+  IO.printLine(MathKit.Prelude.mul(3, 7).to(String))
+  IO.printLine(Toolkit.Prelude.add(1, 2).to(String))
 
-        if !conditions.empty?
-          sql = sql + " WHERE ${conditions.join(" AND ")}"
-        end
+  # Top-level using (imported above)
+  IO.printLine(square(6).to(String))
+  IO.printLine(double(50).to(String))
 
-        match limit do
-          Just(n) -> sql = sql + " LIMIT ${n}"
-          None -> ()
-        end
-
-        return sql
-      end
-    end
-  end
+  # Private names usable internally
+  IO.printLine(StringUtils.padLeft("hi", 10))
+  IO.printLine(StringUtils.padRight("hi", 10) + "|")
 end

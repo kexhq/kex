@@ -26,6 +26,7 @@ private:
                       const std::vector<std::string>& exceptNames,
                       SourceLocation loc) -> void;
     auto resolveUsingBlock(const ast::UsingBlock& block) -> void;
+    auto resolveExportDecl(const ast::ExportDecl& decl) -> void;
     auto resolveFunctionDef(const ast::FunctionDef& def) -> void;
     auto resolveMakeFns(const std::vector<std::variant<
             std::unique_ptr<ast::FunctionDef>,

@@ -51,8 +51,10 @@ auto SemanticDB::updateFile(const std::string& path, std::string source) -> void
     rebuildModuleExports(path);
 
     // Pass 2: resolve name references, report undefined names
+    m_resolvingFiles.insert(path);
     ResolvePass resolve;
     resolve.run(*this, path);
+    m_resolvingFiles.erase(path);
 }
 
 auto SemanticDB::removeFile(const std::string& path) -> void {
@@ -117,6 +119,20 @@ auto SemanticDB::symbolInModule(const std::string& moduleName,
         for (auto& symbol : state.symbols)
             if (symbol.module == moduleName && symbol.name == name) return &symbol;
     return nullptr;
+}
+
+auto SemanticDB::isModuleLoading(const std::string& moduleName,
+                                 const std::string& fromFile) const -> bool {
+    if (m_loadingModules.count(moduleName)) return true;
+    for (const auto& path : m_resolvingFiles) {
+        if (path == fromFile) continue;
+        auto it = m_files.find(path);
+        if (it == m_files.end()) continue;
+        for (const auto& sym : it->second.symbols)
+            if (sym.kind == SymbolKind::Module && sym.name == moduleName)
+                return true;
+    }
+    return false;
 }
 
 auto SemanticDB::isGloballyKnown(const std::string& name) const -> bool {

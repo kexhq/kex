@@ -131,6 +131,87 @@ int main() {
                 if (diagnostic.level == semantic::Diagnostic::Level::Error) hasError = true;
             assertFalse(hasError);
         });
+
+        it("rejects only: and except: together", []() {
+            semantic::SemanticDB db;
+            db.updateFile("util.kex",
+                "module Util\n"
+                "let a() = 1\n"
+                "let b() = 2\n");
+            db.updateFile("main.kex",
+                "using Util, only: [a], except: [b]\n"
+                "main do\n  a()\nend\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("main.kex"))
+                if (diagnostic.message.find("mutually exclusive") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("validates export target module exists", []() {
+            semantic::SemanticDB db;
+            db.updateFile("app.kex",
+                "module App\n"
+                "export Nonexistent\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
+                if (diagnostic.message.find("exported module not found") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("rejects exporting private names", []() {
+            semantic::SemanticDB db;
+            db.updateFile("secrets.kex",
+                "module Secrets\n"
+                "private do\n"
+                "  let hidden() = 42\n"
+                "end\n"
+                "let visible() = 1\n");
+            db.updateFile("app.kex",
+                "module App\n"
+                "export Secrets, only: [hidden]\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
+                if (diagnostic.message.find("cannot export private name `hidden`") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("rejects self-export", []() {
+            semantic::SemanticDB db;
+            db.updateFile("app.kex",
+                "module App\n"
+                "export App\n");
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor("app.kex"))
+                if (diagnostic.message.find("cannot export itself") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
+
+        it("detects circular module dependency", []() {
+            namespace fs = std::filesystem;
+            const auto root = fs::temp_directory_path() / "kex-cycle-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            {
+                std::ofstream b(root / "b.kex");
+                b << "module B\nusing A\nlet fb() = 2\n";
+            }
+            semantic::SemanticDB db;
+            db.setModuleRoots({root.string()});
+            // Index A first (it uses B which will be discovered on disk)
+            db.updateFile("a.kex",
+                "module A\nusing B\nlet fa() = 1\n");
+            fs::remove_all(root);
+            // B's resolve pass should detect that A is still loading
+            bool found = false;
+            for (const auto& diagnostic : db.diagnosticsFor((root / "b.kex").string()))
+                if (diagnostic.message.find("circular dependency") != std::string::npos)
+                    found = true;
+            assertTrue(found);
+        });
     });
 
     describe("Semantic — Purity", []() {

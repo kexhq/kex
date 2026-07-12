@@ -1,0 +1,24 @@
+# Module imports: top-level using, cross-module calls via using
+# kex: no-check
+
+module Math do
+  let square(n) = n * n
+  let cube(n) = n * n * n
+end
+
+module Formatter do
+  using Math, only: [square]
+
+  let formatSquare(n) do
+    return "square(${n}) = ${square(n)}"
+  end
+end
+
+# Top-level using
+using Math, only: [cube]
+
+main do
+  IO.printLine(Math.square(5).to(String))
+  IO.printLine(cube(3).to(String))
+  IO.printLine(Formatter.formatSquare(4))
+end
