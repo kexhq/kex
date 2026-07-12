@@ -40,6 +40,28 @@
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
 
+static auto replDefinitionName(const std::string &source) -> std::string {
+  size_t off = 0;
+  if (source.rfind("foul module ", 0) == 0) off = 12;
+  else if (source.rfind("foul ", 0) == 0) off = 5;
+  else if (source.rfind("let ", 0) == 0) off = 4;
+  else if (source.rfind("type ", 0) == 0) off = 5;
+  else if (source.rfind("record ", 0) == 0) off = 7;
+  else if (source.rfind("module ", 0) == 0) off = 7;
+  else if (source.rfind("make ", 0) == 0) off = 5;
+  while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+  if (source.compare(off, 6, "final:") == 0) {
+    off += 6;
+    while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
+  }
+  size_t end = off;
+  while (end < source.size() &&
+         (std::isalnum((unsigned char)source[end]) || source[end] == '_' ||
+          source[end] == '.' || source[end] == '?' || source[end] == '!'))
+    end++;
+  return source.substr(off, end - off);
+}
+
 // Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
 // embedded `'` via the standard close-quote/escaped-literal-quote/reopen
 // idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
@@ -1501,12 +1523,7 @@ int main(int argc, char *argv[]) {
           kex::Parser parser(std::move(tokens));
           parser.parseProgram(); // throws on syntax error
 
-          size_t off = source.rfind("foul ", 0) == 0 ? 5 : 4;
-          size_t i = off;
-          while (i < source.size() &&
-                 (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
-            i++;
-          std::string fname = source.substr(off, i - off);
+          std::string fname = replDefinitionName(source);
 
           // Replace any prior definition of the same function so a
           // redefinition takes effect (last def wins), rather than
@@ -1977,6 +1994,9 @@ int main(int argc, char *argv[]) {
           replAccumSource += source + "\n";
           replDb.updateFile("<repl>", replAccumSource);
           g_currentMakeTarget.clear(); // block is complete
+          std::cout << kex::color::apply(kex::color::gray) << "=> "
+                    << kex::color::apply(kex::color::reset) << "defined "
+                    << replDefinitionName(source) << "\n";
         } else {
           // Wrap in main for expression evaluation
           auto wrapped = "main do\n" + source + "\nend\n";

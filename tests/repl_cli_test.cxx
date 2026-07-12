@@ -116,6 +116,14 @@ int main() {
             auto out = runRepl("let x = 5\nx + 3\n");
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
+
+        it("acknowledges native definitions", []() {
+            auto out = runRepl(
+                "let double(n) = n * 2\n"
+                "type Traffic = Red | Go(Integer)\n");
+            assertTrue(out.find("=> defined double") != std::string::npos, out);
+            assertTrue(out.find("=> defined Traffic") != std::string::npos, out);
+        });
     });
 
     describe("REPL CLI — Immutability", []() {
@@ -181,6 +189,46 @@ int main() {
                        != std::string::npos, out);
             assertTrue(out.find("<<\"1\">>") == std::string::npos, out);
             assertTrue(out.find("=> :ok : Atom") == std::string::npos, out);
+        });
+
+        it("renders Optional and Result values as Kex ADTs", []() {
+            auto out = runBeamRepl(
+                "Just(42)\n"
+                "Ok(\"ready\")\n"
+                "Error(\"bad\")\n");
+            assertTrue(out.find("=> Just(42) : Option<Int>")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Ok(\"ready\") : Result<String, ?>")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Error(\"bad\") : Result<?, String>")
+                       != std::string::npos, out);
+            assertTrue(out.find("{'Just',42}") == std::string::npos, out);
+        });
+
+        it("renders tuples, maps, and nullary variants without Erlang syntax", []() {
+            auto out = runBeamRepl(
+                "(1, \"x\")\n"
+                "{ \"x\": 1 }\n"
+                "Less\n");
+            assertTrue(out.find("=> (1, \"x\") : Tuple")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> { \"x\": 1 } : Map")
+                       != std::string::npos, out);
+            assertTrue(out.find("=> Less : Ordering")
+                       != std::string::npos, out);
+            assertTrue(out.find("#{") == std::string::npos, out);
+            assertTrue(out.find("<<\"x\">>") == std::string::npos, out);
+        });
+
+        it("renders custom nullary and payload ADTs with their declared type", []() {
+            auto out = runBeamRepl(
+                "type Traffic = Red | Go(Integer)\n"
+                "Red\n"
+                "Go(3)\n");
+            assertTrue(out.find("=> defined Traffic") != std::string::npos, out);
+            assertTrue(out.find("=> Red : Traffic") != std::string::npos, out);
+            assertTrue(out.find("=> Go(3) : Traffic") != std::string::npos, out);
+            assertTrue(out.find("{'Go',3}") == std::string::npos, out);
         });
     });
 

@@ -1768,14 +1768,14 @@ struct Lowering {
     // Payload arity per ADT variant tag (nullary variants lower to atoms and
     // never need display info).
     std::unordered_map<std::string, int> variantArity;
+    std::unordered_map<std::string, std::string> variantOwner;
 
     // Prepend a kex_io:register_display/2 call carrying this module's record
     // layouts and variant arities — only the compiler knows which tuples are
     // records/variants, and the runtime needs that to render
     // `Name { field: value }` / `Tag(args)` instead of plain tuples.
     auto withDisplayInfo(ExprPtr body) -> ExprPtr {
-        bool anyVariant = std::any_of(variantArity.begin(), variantArity.end(),
-                                      [](const auto& kv){ return kv.second >= 1; });
+        bool anyVariant = !variantArity.empty();
         if (records.empty() && !anyVariant) return std::move(body);
         auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
         auto mapFrom = [&](std::vector<ExprPtr> pairs) {
@@ -1795,9 +1795,10 @@ struct Lowering {
         }
         std::vector<ExprPtr> varPairs;
         for (const auto& [tag, ar] : variantArity) {
-            if (ar < 1) continue;
+            auto metadata = std::make_unique<Expr>();
+            metadata->node = MakeTuple{two(litInt(ar), atomLit(variantOwner[tag]))};
             auto t = std::make_unique<Expr>();
-            t->node = MakeTuple{two(atomLit(tag), litInt(ar))};
+            t->node = MakeTuple{two(atomLit(tag), std::move(metadata))};
             varPairs.push_back(std::move(t));
         }
         return makeLet(fresh("Disp"),
@@ -3092,6 +3093,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 L.variantArity[t] = static_cast<int>(g->args.size());
             else
                 L.variantArity[t] = 0;
+            L.variantOwner[t] = td.name;
         }
     };
     auto preMake = [&](const ast::MakeDef& md) {

@@ -67,9 +67,19 @@ inspect(none) ->
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), none;
 inspect(X) when is_atom(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ":" ++ atom_to_list(X)
-              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n"), X;
+    Name = atom_to_list(X),
+    case Name of
+        [C | _] when C >= $A, C =< $Z ->
+            io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+                      ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+                      ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+                      [Name, nullary_type_name(X)]);
+        _ ->
+            io:format(?GRAY ++ "=> " ++ ?RESET ++ ":~ts"
+                      ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+                      ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [Name])
+    end,
+    X;
 inspect(X) when is_binary(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -92,10 +102,23 @@ inspect({'Just', {'Char', C}} = X) ->
               ++ [C] ++ ")" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n"), X;
-inspect(X) when is_tuple(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p"
+inspect(X) when is_tuple(X), tuple_size(X) >= 1,
+                   (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
+                    element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Tuple" ++ ?RESET ++ "~n", [X]), X;
+              ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+              [inspect_string(X), value_type_name(X)]), X;
+inspect(X) when is_tuple(X) ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+              ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+              [inspect_string(X), value_type_name(X)]), X;
+inspect(X) when is_map(X) ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+              ++ " " ++ ?CYAN ++ "Map" ++ ?RESET ++ "~n",
+              [inspect_string(X)]), X;
 inspect(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p~n", [X]), X.
 
@@ -110,8 +133,48 @@ inspect_string(false) -> ?YELL ++ "false" ++ ?RESET;
 inspect_string(none) -> ?GRAY ++ "None" ++ ?RESET;
 inspect_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
+inspect_string(X) when is_map(X) ->
+    Pairs = [inspect_string(K) ++ ": " ++ inspect_string(V)
+             || {K, V} <- lists:sort(maps:to_list(X))],
+    "{ " ++ lists:flatten(lists:join(", ", Pairs)) ++ " }";
 inspect_string(X) when is_atom(X) -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET;
+inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
+                       (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
+                        element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
+    [Tag | Args] = tuple_to_list(X),
+    atom_to_list(Tag) ++ "(" ++
+        lists:flatten(lists:join(", ", [inspect_string(A) || A <- Args])) ++ ")";
+inspect_string(X) when is_tuple(X) ->
+    Tag = element(1, X),
+    Arity = tuple_size(X) - 1,
+    case variant_metadata(Tag) of
+        {Arity, _Owner} -> inspect_variant_string(X);
+        _ ->
+            "(" ++ lists:flatten(lists:join(", ",
+                [inspect_string(E) || E <- tuple_to_list(X)])) ++ ")"
+    end;
 inspect_string(X) -> unicode:characters_to_list(to_string(X)).
+
+nullary_type_name(X) ->
+    case variant_metadata(X) of
+        {0, Owner} -> atom_to_list(Owner);
+        _ ->
+            case X of
+                'Less' -> "Ordering";
+                'Equal' -> "Ordering";
+                'Greater' -> "Ordering";
+                _ -> "Variant"
+            end
+    end.
+
+variant_metadata(Tag) when is_atom(Tag) ->
+    maps:get(Tag, persistent_term:get(kex_display_variants, #{}), undefined);
+variant_metadata(_) -> undefined.
+
+inspect_variant_string(X) ->
+    [Tag | Args] = tuple_to_list(X),
+    atom_to_list(Tag) ++ "(" ++ lists:flatten(lists:join(", ",
+        [inspect_string(A) || A <- Args])) ++ ")".
 
 list_type_name([]) -> "[?]";
 list_type_name([H | T]) ->
@@ -129,7 +192,17 @@ value_type_name(false) -> "Bool";
 value_type_name({'Char', _}) -> "Char";
 value_type_name(X) when is_list(X) -> list_type_name(X);
 value_type_name(X) when is_map(X) -> "Map";
-value_type_name(X) when is_tuple(X) -> "Tuple";
+value_type_name({'Just', V}) -> "Option<" ++ value_type_name(V) ++ ">";
+value_type_name({'Some', V}) -> "Option<" ++ value_type_name(V) ++ ">";
+value_type_name({'Ok', V}) -> "Result<" ++ value_type_name(V) ++ ", ?>";
+value_type_name({'Error', V}) -> "Result<?, " ++ value_type_name(V) ++ ">";
+value_type_name(X) when is_tuple(X) ->
+    Tag = element(1, X),
+    Arity = tuple_size(X) - 1,
+    case variant_metadata(Tag) of
+        {Arity, Owner} -> atom_to_list(Owner);
+        _ -> "Tuple"
+    end;
 value_type_name(X) when is_atom(X) -> "Atom";
 value_type_name(_) -> "Any".
 
@@ -229,6 +302,7 @@ to_string(X) when is_tuple(X), tuple_size(X) >= 1 ->
         _ ->
             Vars = persistent_term:get(kex_display_variants, #{}),
             case is_atom(Tag) andalso maps:get(Tag, Vars, undefined) of
+                {Arity, _Owner} -> variant_string(X);
                 Arity -> variant_string(X);
                 _ ->
                     Parts = [to_string(E) || E <- tuple_to_list(X)],
