@@ -103,6 +103,10 @@ add_library(kex_lib
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/console.cxx
     src/interpreter/stdlib/test.cxx
+    src/beam/beam_file.cxx
+    src/beam/etf.cxx
+    src/beam/kexi.cxx
+    src/beam/collect_metadata.cxx
 )
 
 target_include_directories(kex_lib PUBLIC src)
@@ -311,6 +315,11 @@ foreach(src IN LISTS PRELUDE_SOURCES)
         VERBATIM
     )
 endforeach()
+
+add_executable(beam_test tests/beam_test.cxx)
+target_link_libraries(beam_test PRIVATE kex_lib)
+target_include_directories(beam_test PRIVATE tests)
+add_test(NAME beam_test COMMAND beam_test)
 
 add_executable(codegen_test tests/codegen_test.cxx)
 target_link_libraries(codegen_test PRIVATE kex_lib)

@@ -1,3 +1,6 @@
+#include "beam/beam_file.hxx"
+#include "beam/collect_metadata.hxx"
+#include "beam/kexi.hxx"
 #include "codegen/core_erlang.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
@@ -1811,8 +1814,16 @@ int main(int argc, char *argv[]) {
           auto src = readFile(filePath);
           kex::Lexer lex(std::move(src), filePath);
           kex::Parser parser(lex.tokenizeAll(), filePath);
-          auto prog = parser.parseProgram();
-          evaluator.execute(prog);
+          // Loaded definitions retain pointers into their parsed AST (function
+          // bodies, make clauses, module members). Keep that Program alive for
+          // the rest of the REPL session, just like definitions entered at the
+          // prompt; a stack-local Program leaves those pointers dangling as
+          // soon as /load returns.
+          auto *prog = new kex::ast::Program(parser.parseProgram());
+          replPrograms.push_back(prog);
+          evaluator.execute(*prog);
+          replAccumSource += readFile(filePath) + "\n";
+          replDb.updateFile("<repl>", replAccumSource);
           std::cout << "  loaded " << filePath << "\n";
         } catch (const std::exception& e) {
           std::cerr << "  /load error: " << e.what() << "\n";
@@ -2423,6 +2434,50 @@ int main(int argc, char *argv[]) {
           std::cerr << "error: erlc failed\n";
           if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
           return 1;
+        }
+
+        // Attach KexI chunk to the freshly compiled .beam file.
+        if (!compileRun) {
+          std::string beamPath = outputDir + "/" +
+                                 moduleResults[moduleIndex].moduleName + ".beam";
+          try {
+            kex::beam::CollectOptions copts;
+            copts.moduleAtom = moduleResults[moduleIndex].moduleName;
+            copts.fileStem = stem;
+            copts.noCheck = skipCheck;
+            copts.role = moduleIndex == 0
+                ? kex::beam::KexiModuleRole::Entry
+                : kex::beam::KexiModuleRole::Companion;
+            if (copts.role == kex::beam::KexiModuleRole::Companion) {
+              copts.entryBackPointer = moduleResults[0].moduleName;
+              // IR names companions "Kex.ModuleName"; the AST module
+              // name is the part after "Kex." (possibly dotted for
+              // nested modules like "Kex.Http.Router" -> "Http.Router").
+              auto irName = moduleResults[moduleIndex].moduleName;
+              if (irName.rfind("Kex.", 0) == 0)
+                copts.moduleName = irName.substr(4);
+            }
+            auto chunk = kex::beam::collectMetadata(program, copts);
+            // For entry modules, build the companion manifest.
+            if (moduleIndex == 0 && moduleResults.size() > 1) {
+              for (size_t ci = 1; ci < moduleResults.size(); ci++) {
+                kex::beam::KexiCompanion comp;
+                comp.beamAtom = moduleResults[ci].moduleName;
+                comp.relativePath = moduleResults[ci].moduleName + ".beam";
+                // Hash will be filled after all companions are written;
+                // for now store a zero hash (first pass).
+                chunk.metadata.companions.push_back(std::move(comp));
+              }
+            }
+            chunk.interfaceHash = kex::beam::computeInterfaceHash(chunk);
+            auto payload = kex::beam::serializeKexi(chunk);
+            auto bf = kex::beam::readBeamFile(beamPath);
+            bf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
+            kex::beam::writeBeamFile(bf, beamPath);
+          } catch (const std::exception& e) {
+            std::cerr << "warning: could not attach KexI chunk to "
+                      << beamPath << ": " << e.what() << "\n";
+          }
         }
       }
       // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
