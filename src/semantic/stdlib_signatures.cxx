@@ -69,6 +69,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("Math::cos", {numberLike()}, Type::float64());
     sig("Math::tan", {numberLike()}, Type::float64());
     sig("Math::log", {numberLike()}, Type::float64());
+    sig("Math::log", {numberLike(), numberLike()}, Type::float64());
     sig("Math::log2", {numberLike()}, Type::float64());
     sig("Math::log10", {numberLike()}, Type::float64());
     sig("Math::pow", {numberLike(), numberLike()}, Type::float64());

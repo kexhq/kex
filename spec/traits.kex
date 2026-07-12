@@ -27,7 +27,7 @@ record Bot do
 end
 
 make Bot, implement: Describable, Scorable do
-  let describe = "Bot#" + @id.to(String)
+  let describe = "Bot#" + @id.to(String).or("")
   let score = 0
   # uses default shout and passing?
 end
