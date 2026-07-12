@@ -26,10 +26,10 @@ auto SemanticDB::updateFile(const std::string& path, std::string source) -> void
     // analyzable for the well-formed portions of the file.
     bool fatalParseError = false;
     {
-        Lexer lexer(std::move(source), path);
+        Lexer lexer(std::move(source), state.path);
         auto tokens = lexer.tokenizeAll();
         bool noTokens = tokens.empty();
-        Parser parser(std::move(tokens), path);
+        Parser parser(std::move(tokens), state.path);
         state.ast = parser.parseProgram();
         for (const auto& pd : parser.diagnostics()) {
             state.diagnostics.push_back(Diagnostic{

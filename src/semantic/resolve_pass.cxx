@@ -527,6 +527,15 @@ auto ResolvePass::resolvePattern(const ast::Pattern& pat) -> void {
 
 auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void {
     if (!m_db || !m_state) return;
+    // Check if this name was brought in by a `using` import — if so, record
+    // the reference on the original module symbol for go-to-definition.
+    for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
+        if (auto found = it->find(name); found != it->end()) {
+            if (auto* sym = m_db->symbolInModule(found->second.module, name))
+                sym->references.push_back(loc);
+            return;
+        }
+    }
     // Only record references to top-level/module symbols, not local variables
     // (local vars live in m_scopes and have no SymbolInfo entry).
     for (const auto& scope : m_scopes)
