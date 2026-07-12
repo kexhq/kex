@@ -212,7 +212,7 @@ static auto typeRefToString(const ValuePtr& ref) -> std::string {
     } else if (var->tag == "ListType") {
         return "[" + typeRefToString(var->args[0]) + "]";
     } else if (var->tag == "MapType") {
-        return "{" + typeRefToString(var->args[0]) + " => " + typeRefToString(var->args[1]) + "}";
+        return "{" + typeRefToString(var->args[0]) + ": " + typeRefToString(var->args[1]) + "}";
     } else if (var->tag == "UnionType") {
         auto* members = std::get_if<ListValue>(&var->args[0]->data);
         std::string result;
@@ -513,6 +513,40 @@ static auto convertTopLevelItem(const ast::TopLevelItem& item, const std::string
             return convertPragma(*node, filename);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
             return convertTypeAnnotation(*node, "");
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+            if (node->synthetic) {
+                // Synthetic wrapper around a top-level `let` binding
+                if (!node->body.empty()) {
+                    if (auto* letExpr = std::get_if<ast::LetExpr>(&node->body[0]->kind)) {
+                        std::string name;
+                        if (auto* varPat = std::get_if<ast::VarPattern>(&letExpr->pattern->kind)) {
+                            name = varPat->name;
+                        }
+                        if (!name.empty()) {
+                            std::unordered_map<std::string, ValuePtr> fields;
+                            fields["name"] = Value::string(name);
+                            auto it = docs.find(node->location.line);
+                            fields["doc"] = (it != docs.end()) ? Value::string(it->second) : Value::none();
+                            fields["type"] = Value::none();
+                            fields["location"] = makeLocation(node->location, filename);
+                            return Value::variant("ConstantDef", "Node", {Value::record("ConstantInfo", std::move(fields))});
+                        }
+                    }
+                }
+                return nullptr;
+            } else {
+                // Explicit main do ... end
+                std::unordered_map<std::string, ValuePtr> fields;
+                auto it = docs.find(node->location.line);
+                fields["doc"] = (it != docs.end()) ? Value::string(it->second) : Value::none();
+                std::vector<ValuePtr> params;
+                for (const auto& p : node->params) {
+                    params.push_back(convertParam(p));
+                }
+                fields["params"] = Value::list(std::move(params));
+                fields["location"] = makeLocation(node->location, filename);
+                return Value::variant("MainDef", "Node", {Value::record("MainInfo", std::move(fields))});
+            }
         } else {
             return nullptr;
         }
@@ -626,8 +660,8 @@ auto Evaluator::registerParserBuiltins() -> void {
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
 
-        // Wrap in a type annotation to get a valid parse
-        std::string source = "x : " + srcVal->value + "\nlet x = 0";
+        // Wrap in a module with a type annotation to get unambiguous parsing
+        std::string source = "module T do\n  x : " + srcVal->value + "\nend";
         std::string filename = "<type>";
 
         try {
@@ -636,10 +670,14 @@ auto Evaluator::registerParserBuiltins() -> void {
             auto tokens = lexer.tokenizeAll();
             Parser parser(tokens, *filenamePtr);
             auto program = parser.parseProgram();
-            // Find the type annotation in the parsed result
+            // Find the type annotation inside the module wrapper
             for (const auto& item : program.items) {
-                if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
-                    return Value::ok(typeExprToTypeRef(*(*ann)->type));
+                if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    for (const auto& mi : (*mod)->body) {
+                        if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&mi)) {
+                            return Value::ok(typeExprToTypeRef(*(*ann)->type));
+                        }
+                    }
                 }
             }
             return Value::error(makeParseError("Failed to parse type expression", std::nullopt, filename));

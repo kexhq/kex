@@ -1,0 +1,69 @@
+# kex: no-check
+
+describe("Eval.run") do
+  it("evaluates a simple program") do
+    match Eval.run("main do\n1 + 2\nend") do
+      Ok(result) -> assert(result == 3)
+      Error(msg) -> assert(false, "Eval.run failed: ${msg}")
+    end
+  end
+
+  it("evaluates string operations") do
+    match Eval.run("main do\n\"hello\".upperCase\nend") do
+      Ok(result) -> assert(result == "HELLO")
+      Error(msg) -> assert(false, "Eval.run failed: ${msg}")
+    end
+  end
+
+  it("evaluates list operations") do
+    match Eval.run("main do\n[1, 2, 3].map { |x| x * 2 }\nend") do
+      Ok(result) -> assert(result == [2, 4, 6])
+      Error(msg) -> assert(false, "Eval.run failed: ${msg}")
+    end
+  end
+
+  it("returns Error on type mismatch") do
+    match Eval.run("main do\n  1 + \"hello\"\nend") do
+      Ok(_) -> assert(false, "should fail")
+      Error(msg) -> assert(msg.contains?("error") || msg.contains?("Error"))
+    end
+  end
+
+  it("returns Error on runtime error") do
+    match Eval.run("main do\nundefinedFunction()\nend") do
+      Ok(_) -> assert(false, "should fail")
+      Error(msg) -> assert(msg.contains?("error") || msg.contains?("Undefined"))
+    end
+  end
+
+  it("isolates from the caller environment") do
+    let myVar = 999
+    match Eval.run("main do\nmyVar\nend") do
+      Ok(_) -> assert(false, "should not see caller's variables")
+      Error(_) -> assert(true)
+    end
+  end
+end
+
+describe("Eval.expr") do
+  it("evaluates a simple expression") do
+    match Eval.expr("1 + 2 + 3") do
+      Ok(result) -> assert(result == 6)
+      Error(msg) -> assert(false, "Eval.expr failed: ${msg}")
+    end
+  end
+
+  it("evaluates a list literal") do
+    match Eval.expr("[10, 20, 30]") do
+      Ok(result) -> assert(result == [10, 20, 30])
+      Error(msg) -> assert(false, "Eval.expr failed: ${msg}")
+    end
+  end
+
+  it("evaluates a method chain") do
+    match Eval.expr("\"hello world\".split(\" \").length") do
+      Ok(result) -> assert(result == 2)
+      Error(msg) -> assert(false, "Eval.expr failed: ${msg}")
+    end
+  end
+end
