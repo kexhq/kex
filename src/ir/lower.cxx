@@ -3149,6 +3149,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
+        // Transparent type alias: single bare TypeName (e.g. `type FilePath = String`)
+        // — skip variant-tag registration entirely.
+        if (td.variants->size() == 1) {
+            auto* tn = std::get_if<ast::TypeName>(&(*td.variants)[0]->kind);
+            if (tn) return;
+        }
         for (const auto& v : *td.variants) {
             auto t = Lowering::simpleTypeName(v);
             if (t.empty()) continue;
@@ -3521,6 +3527,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                        std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                     if (*td && (*td)->variants) {
+                                        // Skip transparent type aliases (single bare TypeName).
+                                        if ((*td)->variants->size() == 1) {
+                                            auto* tn = std::get_if<ast::TypeName>(&(*(*td)->variants)[0]->kind);
+                                            if (tn) goto skipAlias;
+                                        }
                                         std::vector<std::string> tags;
                                         for (const auto& v : *(*td)->variants) {
                                             auto t = Lowering::simpleTypeName(v);
@@ -3531,6 +3542,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                             L.typeVariantTags[(*td)->name] = std::move(tags);
                                     }
                                 }
+                            skipAlias:
                             } else {
                                 flush();
                             }

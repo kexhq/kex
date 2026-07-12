@@ -502,7 +502,15 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     // list. Both kinds get an entry in m_variantParent so `make TypeName
     // do ... end` method dispatch can map the variant tag back to the
     // declaring type.
+    //
+    // Skip transparent type aliases (single bare TypeName, e.g.
+    // `type FilePath = String`) — they declare a name for an existing
+    // type rather than introducing new variant constructors.
     if (def.variants) {
+        if (def.variants->size() == 1) {
+            auto* tn = std::get_if<ast::TypeName>(&(*def.variants)[0]->kind);
+            if (tn) return;
+        }
         for (const auto& variant : *def.variants) {
             if (!variant) continue;
             std::string variantName;
@@ -2328,6 +2336,8 @@ auto Evaluator::registerBuiltins() -> void {
     registerConsoleBuiltins();
     registerTestBuiltins();
     registerProcessBuiltins();
+    registerParserBuiltins();
+    registerEvalBuiltins();
 
     // Kex.Intrinsic.Fun.applyItem(f, item) — auto-splat a pair into a
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)

@@ -1,0 +1,20 @@
+# Sandboxed evaluation of Kex source code at runtime.
+#
+# Creates a fresh, isolated evaluator for each call — the caller's
+# environment is never shared. Returns +Result<Any, String>+.
+module Evaluator do
+  # Evaluates a full Kex program string.
+  run : String -> Result<Any, String>
+  run : (String, EvaluatorOptions) -> Result<Any, String>
+
+  # Evaluates a single Kex expression.
+  runExpression : String -> Result<Any, String>
+  runExpression : (String, EvaluatorOptions) -> Result<Any, String>
+
+  record EvaluatorOptions do
+    allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]
+    modules : {String: {String: (Any -> Any)}} = {}
+    maxSteps : Int = 1_000_000
+    maxDepth : Int = 256
+  end
+end

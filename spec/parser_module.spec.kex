@@ -1,0 +1,238 @@
+# kex: no-check
+
+describe("Parser.parse") do
+  it("parses a function definition") do
+    match Parser.parse("let add(x, y) = x + y") do
+      Ok({ items }) -> do
+        assert(items.length == 1, "expected 1 item")
+        items.each do |item|
+          match item do
+            FunctionDef({ name }) -> assert(name == "add")
+            _ -> assert(false, "expected FunctionDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("parses a record definition") do
+    match Parser.parse("record Point do\n  x : Int\n  y : Int\nend") do
+      Ok({ items }) -> do
+        assert(items.length == 1)
+        items.each do |item|
+          match item do
+            RecordDef({ name, fields }) -> do
+              assert(name == "Point")
+              assert(fields.length == 2)
+            end
+            _ -> assert(false, "expected RecordDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("parses a type definition with variants") do
+    match Parser.parse("type Color = Red | Green | Blue") do
+      Ok({ items }) -> do
+        assert(items.length == 1)
+        items.each do |item|
+          match item do
+            TypeDef({ name, variants }) -> do
+              assert(name == "Color")
+              assert(variants.length == 3)
+            end
+            _ -> assert(false, "expected TypeDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("parses a module definition") do
+    match Parser.parse("module Foo do\n  let bar = 1\nend") do
+      Ok({ items }) -> do
+        assert(items.length == 1)
+        items.each do |item|
+          match item do
+            ModuleDef({ name }) -> assert(name == "Foo")
+            _ -> assert(false, "expected ModuleDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("parses a main block") do
+    match Parser.parse("main do\n  1 + 2\nend") do
+      Ok({ items }) -> do
+        assert(items.length == 1)
+        items.each do |item|
+          match item do
+            MainDef(_) -> assert(true)
+            _ -> assert(false, "expected MainDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("parses top-level let as ConstantDef") do
+    match Parser.parse("let x = 42") do
+      Ok({ items }) -> do
+        assert(items.length == 1)
+        items.each do |item|
+          match item do
+            ConstantDef({ name }) -> assert(name == "x")
+            _ -> assert(false, "expected ConstantDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("returns empty items for unrecoverable syntax") do
+    match Parser.parse("let = =") do
+      Ok({ items }) -> assert(items.length == 0)
+      Error({ message }) -> assert(message.length > 0)
+    end
+  end
+
+  it("accepts an optional filename argument") do
+    match Parser.parse("let f = 1", "test.kex") do
+      Ok({ items }) -> do
+        items.each do |item|
+          match item do
+            ConstantDef({ location }) -> assert(location.file == "test.kex")
+            _ -> assert(false, "expected ConstantDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+end
+
+describe("Parser.parseFile") do
+  it("parses an existing file") do
+    match Parser.parseFile("./examples/records.kex") do
+      Ok({ items }) -> assert(items.length > 0, "should have items")
+      Error(e) -> assert(false, "parseFile failed: ${e.message}")
+    end
+  end
+
+  it("returns Error for missing file") do
+    match Parser.parseFile("./nonexistent_file_xyz.kex") do
+      Ok(_) -> assert(false, "should fail for missing file")
+      Error({ message }) -> assert(message.contains?("not found") || message.contains?("Not found"))
+    end
+  end
+end
+
+describe("Parser.parseType") do
+  it("parses a simple type") do
+    match Parser.parseType("Int") do
+      Ok(ref) -> assert(ref.toString == "Int")
+      Error(_) -> assert(false, "should parse Int")
+    end
+  end
+
+  it("parses a generic type") do
+    match Parser.parseType("Result<Int, String>") do
+      Ok(ref) -> assert(ref.toString == "Result<Int, String>")
+      Error(_) -> assert(false, "should parse generic")
+    end
+  end
+
+  it("parses a function type") do
+    match Parser.parseType("Int -> Bool") do
+      Ok(ref) -> assert(ref.toString == "(Int) -> Bool")
+      Error(_) -> assert(false, "should parse function type")
+    end
+  end
+
+  it("parses a list type") do
+    match Parser.parseType("[String]") do
+      Ok(ref) -> assert(ref.toString == "[String]")
+      Error(_) -> assert(false, "should parse list type")
+    end
+  end
+
+  it("parses a nullable type") do
+    match Parser.parseType("Int?") do
+      Ok(ref) -> assert(ref.toString == "Int?")
+      Error(_) -> assert(false, "should parse nullable type")
+    end
+  end
+end
+
+describe("Doc-comment extraction") do
+  it("extracts single-line doc comments") do
+    let src = "# Adds two numbers.\nlet add(x, y) = x + y"
+    match Parser.parse(src) do
+      Ok({ items }) -> do
+        items.each do |item|
+          match item do
+            FunctionDef({ doc }) -> assert(doc == "Adds two numbers.")
+            _ -> assert(false, "expected FunctionDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("preserves paragraph breaks in multi-line docs") do
+    let src = "# First paragraph.\n#\n# Second paragraph.\nlet foo = 1"
+    match Parser.parse(src) do
+      Ok({ items }) -> do
+        items.each do |item|
+          match item do
+            ConstantDef({ doc }) -> do
+              assert(doc.contains?("First paragraph."))
+              assert(doc.contains?("Second paragraph."))
+            end
+            _ -> assert(false, "expected ConstantDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+
+  it("returns None for undocumented definitions") do
+    match Parser.parse("let bare = 1") do
+      Ok({ items }) -> do
+        items.each do |item|
+          match item do
+            ConstantDef({ doc }) -> assert(doc == None)
+            _ -> assert(false, "expected ConstantDef")
+          end
+        end
+      end
+      Error(_) -> assert(false, "parse should succeed")
+    end
+  end
+end
+
+describe("TypeRef.toString") do
+  it("renders named types") do
+    match Parser.parseType("String") do
+      Ok(ref) -> assert(ref.toString == "String")
+      _ -> assert(false, "parse failed")
+    end
+  end
+
+  it("renders map types") do
+    match Parser.parseType("{String: Int}") do
+      Ok(ref) -> assert(ref.toString == "{String: Int}")
+      _ -> assert(false, "parse failed")
+    end
+  end
+end
