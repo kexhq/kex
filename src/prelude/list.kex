@@ -329,8 +329,8 @@ make [X], implement: Enumerable do
   # @return [Y?]
   #
   # @example
-  #   (1..5).to(List)    # => [1, 2, 3, 4, 5]
-  #   "42".to(Integer)   # => 42
+  #   (1..5).to(List)    # => Just([1, 2, 3, 4, 5])
+  #   "42".to(Integer)   # => Just(42)
   to :> Y -> Y?
 end
 

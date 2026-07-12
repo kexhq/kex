@@ -964,6 +964,8 @@ struct Lowering {
                 if (n.method == "printLine")  return ioCall("print_line");
                 if (n.method == "print")      return ioCall("print");
                 if (n.method == "printError") return ioCall("print_error");
+                if (n.method == "warn")       return ioCall("print_error");
+                if (n.method == "warning")    return ioCall("print_error");
                 if (n.method == "inspect")    return ioCall("inspect");
                 // IO.read is still an aspirational API. Preserve the walker's
                 // lazy failure semantics: an unused function containing it
@@ -972,6 +974,8 @@ struct Lowering {
                     return wrapLets(binds, runtimeError("Undefined function: IO.read"));
                 throw LowerError("IR lower: IO." + n.method + " not yet ported");
             }
+            if (uid->name == "System" && n.method == "exit" && args.size() == 1)
+                return wrapLets(binds, callE("erlang", "halt", 1, std::move(args)));
             if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
             if (uid->name == "Integer" && n.method == "parsePrefix") return nsCall("kex_intrinsic_integer", "integer_parse_prefix");
             if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
@@ -1411,11 +1415,14 @@ struct Lowering {
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;
             if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
-            if (ty == "String") return ret(callE("kex_io","to_string_bin",1,one(rv())));
-            if (ty == "Int" || ty == "Integer") return ret(callE("kex_intrinsic_number","to_integer",1,one(rv())));
-            if (ty == "Float") return ret(callE("kex_intrinsic_number","to_float",1,one(rv())));
+            if (ty == "String")
+                return ret(justOf(callE("kex_io","to_string_bin",1,one(rv()))));
+            if (ty == "Int" || ty == "Integer")
+                return ret(callE("kex_intrinsic_number","to_integer",1,one(rv())));
+            if (ty == "Float")
+                return ret(callE("kex_intrinsic_number","to_float",1,one(rv())));
             // to(List) — ranges (and lists) are already real lists on BEAM.
-            if (ty == "List") return ret(rv());
+            if (ty == "List") return ret(justOf(rv()));
         }
         // none?: an Option is None (Kex None → the 'none' atom).
         if (m == "none?" && n.args.empty() && !localMethods.count("none?"))

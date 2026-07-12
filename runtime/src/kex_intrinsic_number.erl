@@ -163,40 +163,40 @@ number_parse(S) -> number_parse(unicode:characters_to_binary(S)).
 %% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
 %% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
 %% an already-matching type, TRUNCATE (not round) a Float down to Integer,
-%% parse a String, and 'none' on anything else/unparseable.
+%% parse a String, and return {'Just', Value} or 'none'.
 %% Moved from kex_io where type conversion didn't belong.
-to_integer({'Char', C}) -> C;
-to_integer(X) when is_integer(X) -> X;
-to_integer(X) when is_float(X) -> erlang:trunc(X);
+to_integer({'Char', C}) -> {'Just', C};
+to_integer(X) when is_integer(X) -> {'Just', X};
+to_integer(X) when is_float(X) -> {'Just', erlang:trunc(X)};
 to_integer(X) when is_binary(X) ->
     case string:to_integer(X) of
-        {Int, <<>>} -> Int;
+        {Int, <<>>} -> {'Just', Int};
         _ -> 'none'
     end;
 to_integer(X) when is_list(X) ->
     case string:to_integer(X) of
-        {Int, ""} -> Int;
+        {Int, ""} -> {'Just', Int};
         _ -> 'none'
     end;
 to_integer(_) -> 'none'.
 
-to_float(X) when is_float(X) -> X;
-to_float(X) when is_integer(X) -> float(X);
+to_float(X) when is_float(X) -> {'Just', X};
+to_float(X) when is_integer(X) -> {'Just', float(X)};
 to_float(X) when is_binary(X) ->
     case string:to_float(X) of
-        {Flt, <<>>} -> Flt;
+        {Flt, <<>>} -> {'Just', Flt};
         _ ->
             case string:to_integer(X) of
-                {Int, <<>>} -> float(Int);
+                {Int, <<>>} -> {'Just', float(Int)};
                 _ -> 'none'
             end
     end;
 to_float(X) when is_list(X) ->
     case string:to_float(X) of
-        {Flt, ""} -> Flt;
+        {Flt, ""} -> {'Just', Flt};
         _ ->
             case string:to_integer(X) of
-                {Int, ""} -> float(Int);
+                {Int, ""} -> {'Just', float(Int)};
                 _ -> 'none'
             end
     end;

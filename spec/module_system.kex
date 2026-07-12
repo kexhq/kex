@@ -36,7 +36,7 @@ end
 module Direct do
   let run do
     let c = Shapes.Circle { radius: 7.0 }
-    IO.printLine(c.area.to(String))
+    IO.printLine(c.area.to(String).or(""))
   end
 end
 
@@ -46,7 +46,7 @@ module Aliased do
 
   let run do
     let c = S.Circle { radius: 2.0 }
-    IO.printLine(c.radius.to(String))
+    IO.printLine(c.radius.to(String).or(""))
   end
 end
 
@@ -55,7 +55,7 @@ module SelectiveOnly do
   using Outer, only: [double]
 
   let run do
-    IO.printLine(double(21).to(String))
+    IO.printLine(double(21).to(String).or(""))
   end
 end
 
@@ -81,9 +81,9 @@ end
 module ScopedUsing do
   let run do
     using Outer do
-      IO.printLine(double(100).to(String))
+      IO.printLine(double(100).to(String).or(""))
     end
-    IO.printLine(Outer.double(50).to(String))
+    IO.printLine(Outer.double(50).to(String).or(""))
   end
 end
 
@@ -95,10 +95,10 @@ end
 main do
   # Direct module function calls
   IO.printLine(Greet.hello("World"))
-  IO.printLine(Outer.double(5).to(String))
+  IO.printLine(Outer.double(5).to(String).or(""))
 
   # Nested module access
-  IO.printLine(Outer.Inner.triple(5).to(String))
+  IO.printLine(Outer.Inner.triple(5).to(String).or(""))
 
   # Qualified record construction
   Direct.run
@@ -108,8 +108,8 @@ main do
 
   # Inline record construction via module namespace
   let c = Shapes.Circle {}
-  IO.printLine(c.radius.to(String))
-  IO.printLine(c.area.to(String))
+  IO.printLine(c.radius.to(String).or(""))
+  IO.printLine(c.area.to(String).or(""))
 
   # Selective imports
   SelectiveOnly.run

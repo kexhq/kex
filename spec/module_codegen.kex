@@ -25,12 +25,12 @@ end
 using Numbers, except: [increment]
 
 main do
-  IO.printLine(double(10).to(String))
+  IO.printLine(double(10).to(String).or(""))
 
   using Numbers, as: N do
-    IO.printLine(N.increment(40).to(String))
+    IO.printLine(N.increment(40).to(String).or(""))
   end
 
-  IO.printLine(Toolkit.Numbers.double(21).to(String))
-  IO.printLine(Http.routeStatus.to(String))
+  IO.printLine(Toolkit.Numbers.double(21).to(String).or(""))
+  IO.printLine(Http.routeStatus.to(String).or(""))
 end

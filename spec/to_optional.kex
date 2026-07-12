@@ -1,0 +1,11 @@
+# Universal conversion is fallible and always returns Optional.
+
+main do
+  IO.printLine("42".to(Integer))
+  IO.printLine("42x".to(Integer))
+  IO.printLine("3.5".to(Float))
+  IO.printLine(3.9.to(Integer))
+  IO.printLine(42.to(String))
+  IO.printLine(42.to(String).or(""))
+  IO.printLine((1..10).items.map(&.to(String).or("")))
+end

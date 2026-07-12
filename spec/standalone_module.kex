@@ -12,12 +12,12 @@ record Result do
 end
 
 module Helpers do
-  let format(r) = r.label + ": " + r.value.to(String)
+  let format(r) = r.label + ": " + r.value.to(String).or("")
 end
 
 main do
-  IO.printLine(Calc.add(10, 20).to(String))
-  IO.printLine(Calc.mul(6, 7).to(String))
+  IO.printLine(Calc.add(10, 20).to(String).or(""))
+  IO.printLine(Calc.mul(6, 7).to(String).or(""))
 
   let r = Calc.Result { value: 42, label: "answer" }
   IO.printLine(Calc.Helpers.format(r))

@@ -96,8 +96,8 @@ make Vector2D do
   end
 
   # Universal conversion — value.to(TargetType)
-  let to(String) -> String do
-    return "(${@x}, ${@y})"
+  let to(String) -> String? do
+    return Just("(${@x}, ${@y})")
   end
 end
 
@@ -109,27 +109,27 @@ main do
 
   # Direct construction
   let a = Vector2D { x: 3.0, y: 4.0 }
-  IO.printLine("Direct:              ${a.to(String)}")
+  IO.printLine("Direct:              ${a.to(String).or("")}")
 
   # Static constructors — namespaced under the type: Vector2D.Polar(length, angle)
   let polar = Vector2D.Polar(5.0, Math.PI / 4.0)
-  IO.printLine("Polar(5, pi/4): ${polar.to(String)}")
+  IO.printLine("Polar(5, pi/4): ${polar.to(String).or("")}")
 
   let unit30 = Vector2D.Angle(Math.PI / 6.0)
-  IO.printLine("Angle(pi/6):  ${unit30.to(String)}")
+  IO.printLine("Angle(pi/6):  ${unit30.to(String).or("")}")
 
   let unit45 = Vector2D.Angle(Math.PI / 4.0)
-  IO.printLine("Angle(pi/4):  ${unit45.to(String)}")
+  IO.printLine("Angle(pi/4):  ${unit45.to(String).or("")}")
 
   let unit90 = Vector2D.Angle(Math.PI / 2.0)
-  IO.printLine("Angle(pi/2):  ${unit90.to(String)}")
+  IO.printLine("Angle(pi/2):  ${unit90.to(String).or("")}")
 
   # Constants — Zero, UnitX, etc. — also namespaced under the type
   IO.printLine("")
-  IO.printLine("Zero:  ${Vector2D.Zero.to(String)}")
-  IO.printLine("UnitX: ${Vector2D.UnitX.to(String)}")
-  IO.printLine("UnitY: ${Vector2D.UnitY.to(String)}")
-  IO.printLine("One:   ${Vector2D.One.to(String)}")
+  IO.printLine("Zero:  ${Vector2D.Zero.to(String).or("")}")
+  IO.printLine("UnitX: ${Vector2D.UnitX.to(String).or("")}")
+  IO.printLine("UnitY: ${Vector2D.UnitY.to(String).or("")}")
+  IO.printLine("One:   ${Vector2D.One.to(String).or("")}")
 
   IO.printLine("")
   IO.printLine("=== Instance Methods (lowercase) ===")
@@ -138,13 +138,13 @@ main do
   let p = Vector2D { x: 3.0, y: 4.0 }
   let q = Vector2D { x: 1.0, y: 2.0 }
 
-  IO.printLine("p = ${p.to(String)}")
-  IO.printLine("q = ${q.to(String)}")
-  IO.printLine("p.add(q) = ${p.add(q).to(String)}")
-  IO.printLine("p.scale(2) = ${p.scale(2.0).to(String)}")
+  IO.printLine("p = ${p.to(String).or("")}")
+  IO.printLine("q = ${q.to(String).or("")}")
+  IO.printLine("p.add(q) = ${p.add(q).to(String).or("")}")
+  IO.printLine("p.scale(2) = ${p.scale(2.0).to(String).or("")}")
   IO.printLine("p.dot(q) = ${p.dot(q)}")
   IO.printLine("p.length = ${p.length}")
-  IO.printLine("p.normalize = ${p.normalize.to(String)}")
+  IO.printLine("p.normalize = ${p.normalize.to(String).or("")}")
 
   IO.printLine("")
   IO.printLine("=== Polar to Cartesian ===")
@@ -157,18 +157,18 @@ main do
   let v120 = Vector2D.Polar(r, 2.0 * Math.PI / 3.0)
   let v180 = Vector2D.Polar(r, Math.PI)
 
-  IO.printLine("r=3, angle=0:     ${v0.to(String)}")
-  IO.printLine("r=3, angle=60:    ${v60.to(String)}")
-  IO.printLine("r=3, angle=120:   ${v120.to(String)}")
-  IO.printLine("r=3, angle=180:   ${v180.to(String)}")
+  IO.printLine("r=3, angle=0:     ${v0.to(String).or("")}")
+  IO.printLine("r=3, angle=60:    ${v60.to(String).or("")}")
+  IO.printLine("r=3, angle=120:   ${v120.to(String).or("")}")
+  IO.printLine("r=3, angle=180:   ${v180.to(String).or("")}")
 
   IO.printLine("")
   IO.printLine("=== Rotation ===")
   IO.printLine("")
 
   let right = Vector2D.UnitX
-  IO.printLine("UnitX rotated 45 deg: ${right.rotate(Math.PI / 4.0).to(String)}")
-  IO.printLine("UnitX rotated 90 deg: ${right.rotate(Math.PI / 2.0).to(String)}")
+  IO.printLine("UnitX rotated 45 deg: ${right.rotate(Math.PI / 4.0).to(String).or("")}")
+  IO.printLine("UnitX rotated 90 deg: ${right.rotate(Math.PI / 2.0).to(String).or("")}")
 
   IO.printLine("")
   IO.printLine("=== Interpolation ===")
@@ -176,11 +176,11 @@ main do
 
   let start = Vector2D.Zero
   let finish = Vector2D { x: 10.0, y: 5.0 }
-  IO.printLine("lerp(0.0) = ${start.lerp(finish, 0.0).to(String)}")
-  IO.printLine("lerp(0.25) = ${start.lerp(finish, 0.25).to(String)}")
-  IO.printLine("lerp(0.5) = ${start.lerp(finish, 0.5).to(String)}")
-  IO.printLine("lerp(0.75) = ${start.lerp(finish, 0.75).to(String)}")
-  IO.printLine("lerp(1.0) = ${start.lerp(finish, 1.0).to(String)}")
+  IO.printLine("lerp(0.0) = ${start.lerp(finish, 0.0).to(String).or("")}")
+  IO.printLine("lerp(0.25) = ${start.lerp(finish, 0.25).to(String).or("")}")
+  IO.printLine("lerp(0.5) = ${start.lerp(finish, 0.5).to(String).or("")}")
+  IO.printLine("lerp(0.75) = ${start.lerp(finish, 0.75).to(String).or("")}")
+  IO.printLine("lerp(1.0) = ${start.lerp(finish, 1.0).to(String).or("")}")
 
   IO.printLine("")
   IO.printLine("=== Operator Overloading ===")
@@ -189,5 +189,5 @@ main do
   # `+` and `*` are overloaded above, so vectors combine like numbers.
   let velocity = Vector2D { x: 1.0, y: -0.5 }
   let combined = p + velocity * 2.0
-  IO.printLine("next position: ${combined.to(String)}")
+  IO.printLine("next position: ${combined.to(String).or("")}")
 end

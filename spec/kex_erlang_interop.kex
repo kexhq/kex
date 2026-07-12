@@ -21,13 +21,13 @@ end
 main do
   let xs = [5, 3, 1, 4, 2]
 
-  IO.printLine(MyList.double_all(xs).to(String))
-  IO.printLine(MyList.sorted(xs).to(String))
-  IO.printLine(MyList.reversed(xs).to(String))
-  IO.printLine(MyList.sum(xs).to(String))
+  IO.printLine(MyList.double_all(xs).to(String).or(""))
+  IO.printLine(MyList.sorted(xs).to(String).or(""))
+  IO.printLine(MyList.reversed(xs).to(String).or(""))
+  IO.printLine(MyList.sum(xs).to(String).or(""))
 
-  IO.printLine(MyMath.hypotenuse(3.0, 4.0).to(String))
-  IO.printLine(MyMath.clamp(15, 0, 10).to(String))
-  IO.printLine(MyMath.clamp(-5, 0, 10).to(String))
-  IO.printLine(MyMath.clamp(5, 0, 10).to(String))
+  IO.printLine(MyMath.hypotenuse(3.0, 4.0).to(String).or(""))
+  IO.printLine(MyMath.clamp(15, 0, 10).to(String).or(""))
+  IO.printLine(MyMath.clamp(-5, 0, 10).to(String).or(""))
+  IO.printLine(MyMath.clamp(5, 0, 10).to(String).or(""))
 end

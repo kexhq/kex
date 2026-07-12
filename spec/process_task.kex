@@ -8,7 +8,7 @@ end
 main do
   let t = Task.start { double(21) }
   match t.await(timeout: 1000) do
-    Ok(v) -> IO.printLine(v.to(String))
+    Ok(v) -> IO.printLine(v.to(String).or(""))
     Error(_) -> IO.printLine("error")
   end
 end

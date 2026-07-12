@@ -28,7 +28,7 @@ module Formatter do
   using Math, except: [cube]
 
   let describeCircle(c) do
-    return "Circle(r=${c.radius.to(String)}, area=${c.area.to(String)})"
+    return "Circle(r=${c.radius.to(String).or("")}, area=${c.area.to(String).or("")})"
   end
 end
 
@@ -91,12 +91,12 @@ using Math, only: [square, double]
 
 main do
   # Qualified access — always works, no using needed
-  IO.printLine(Math.cube(3).to(String))
-  IO.printLine(Math.Constants.pi.to(String))
+  IO.printLine(Math.cube(3).to(String).or(""))
+  IO.printLine(Math.Constants.pi.to(String).or(""))
 
   # Selective import in a scoped block
   using Math, only: [double] do
-    IO.printLine(double(21).to(String))
+    IO.printLine(double(21).to(String).or(""))
   end
 
   # Alias
@@ -109,16 +109,16 @@ main do
 
   # Re-exported access via export
   let c2 = App.Geometry.Circle { radius: 2.0 }
-  IO.printLine(c2.circumference.to(String))
+  IO.printLine(c2.circumference.to(String).or(""))
 
   # Selective re-exports
-  IO.printLine(MathKit.Prelude.add(10, 5).to(String))
-  IO.printLine(MathKit.Prelude.mul(3, 7).to(String))
-  IO.printLine(Toolkit.Prelude.add(1, 2).to(String))
+  IO.printLine(MathKit.Prelude.add(10, 5).to(String).or(""))
+  IO.printLine(MathKit.Prelude.mul(3, 7).to(String).or(""))
+  IO.printLine(Toolkit.Prelude.add(1, 2).to(String).or(""))
 
   # Top-level using (imported above)
-  IO.printLine(square(6).to(String))
-  IO.printLine(double(50).to(String))
+  IO.printLine(square(6).to(String).or(""))
+  IO.printLine(double(50).to(String).or(""))
 
   # Private names usable internally
   IO.printLine(StringUtils.padLeft("hi", 10))

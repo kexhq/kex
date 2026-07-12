@@ -56,7 +56,7 @@ auto runIrOnBeam(const std::string& source, const std::string& stem) -> std::str
     }
     assertEqual(compileResult, 0, "erlc should compile IR output");
 
-    auto run = "erl -noshell -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
+    auto run = "erl -noshell -pa build/runtime/beam -pa runtime/beam -pa /tmp -eval 'io:format(\"~p~n\", [kex_" + stem +
                ":main()]), halt()'";
     std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(run.c_str(), "r"), pclose);
     assertTrue(pipe != nullptr, "popen should run the BEAM module");
@@ -385,6 +385,18 @@ int main() {
                 "end\n",
                 "unsupported_ufcs");
             assertEqual(output, std::string("42"));
+        });
+
+        it("returns Optional from universal conversions on BEAM", []() {
+            assertEqual(runIrOnBeam(
+                "main do \"42\".to(Integer) end\n", "to_optional_success"),
+                std::string("{'Just',42}"));
+            assertEqual(runIrOnBeam(
+                "main do \"42x\".to(Integer) end\n", "to_optional_failure"),
+                std::string("none"));
+            assertEqual(runIrOnBeam(
+                "main do 42.to(String) end\n", "to_string_optional"),
+                std::string("{'Just',<<\"42\">>}"));
         });
 
         it("resolves qualified module function calls", []() {

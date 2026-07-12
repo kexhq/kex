@@ -16,14 +16,14 @@ end
 
 main do
   IO.printLine(greet("World"))
-  IO.printLine(Math.square(7).to(String))
-  IO.printLine(Math.cube(3).to(String))
+  IO.printLine(Math.square(7).to(String).or(""))
+  IO.printLine(Math.cube(3).to(String).or(""))
 
   let p = Point { x: 10, y: 20 }
-  IO.printLine(p.x.to(String) + ", " + p.y.to(String))
+  IO.printLine(p.x.to(String).or("") + ", " + p.y.to(String).or(""))
 
   let xs = [1, 2, 3, 4, 5]
-  IO.printLine(xs.map { |x| x * 2 }.to(String))
+  IO.printLine(xs.map { |x| x * 2 }.to(String).or(""))
 
   IO.printLine(match 42 do
     0 -> "zero"

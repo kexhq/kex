@@ -31,10 +31,10 @@ main do
   let raw = subtotal(12.5, 4.0)
   let total = Price.standardTotal(12.5, 4.0)
   IO.printLine(Shop.receipt(total))
-  IO.printLine(Shop.Pricing.subtotal(10.0, 3.0).to(String))
+  IO.printLine(Shop.Pricing.subtotal(10.0, 3.0).to(String).or(""))
 
   # This alias exists only inside the block.
   using Pricing, as: P do
-    IO.printLine(P.withTax(raw, 0.10).to(String))
+    IO.printLine(P.withTax(raw, 0.10).to(String).or(""))
   end
 end

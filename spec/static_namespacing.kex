@@ -14,14 +14,14 @@ record Temperature do
 end
 
 make Temperature do
-  let to(String) -> String do
-    return "${@celsius}C"
+  let to(String) -> String? do
+    return Just("${@celsius}C")
   end
 end
 
 main do
-  IO.printLine(Temperature.Fahrenheit(212.0).to(String))
-  IO.printLine(Temperature.Freezing.to(String))
+  IO.printLine(Temperature.Fahrenheit(212.0).to(String).or(""))
+  IO.printLine(Temperature.Freezing.to(String).or(""))
 
   # Bare access is not in scope — this must fail at runtime.
   Fahrenheit(0.0)

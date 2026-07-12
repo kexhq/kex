@@ -13,7 +13,7 @@ main do
 
   # items is the same conversion as to(List) — and to(...) accepts any
   # spelling of the type: List, List<X>, [X].
-  IO.printLine((1..3).items == (1..3).to(List))
-  IO.printLine((1..3).items == (1..3).to(List<Integer>))
-  IO.printLine((1..3).items == (1..3).to([Integer]))
+  IO.printLine((1..3).items == (1..3).to(List).or([]))
+  IO.printLine((1..3).items == (1..3).to(List<Integer>).or([]))
+  IO.printLine((1..3).items == (1..3).to([Integer]).or([]))
 end

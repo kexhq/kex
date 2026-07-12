@@ -103,7 +103,7 @@ module App do
 
     let handleUsers(req: Request) -> Response do
       let users = UserService.getAll()
-      return Response.json(users.to(String))
+      return Response.json(users.to(String).or(""))
     end
 
     let handleCreateUser(req: Request) -> Response do
@@ -111,7 +111,7 @@ module App do
         Just(body) -> do
           let result = UserService.create(body)
           match result do
-            Ok(user) -> Response.json(user.to(String))
+            Ok(user) -> Response.json(user.to(String).or(""))
             Error(e) -> Response { status: 400, body: e.message }
           end
         end

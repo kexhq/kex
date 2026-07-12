@@ -1,0 +1,36 @@
+# Calcuates the average of its args
+
+foul printUsageAndExitWith(message: String) -> Void do
+  IO.printError(message)
+  IO.printError("Usage: kex ./examples/average.kex <number1> <number2> ...")
+  System.exit(1)
+end
+
+foul numbersFrom(args: [String]) -> [Float] do
+  let numbers = args.collect(&.to(Float))
+
+  # Check if all arguments were successfully converted to Float, warn the user if not
+  if numbers.count != args.count
+    let not_numbers = args.filter { |x| x.to(Float).none? }
+    IO.warning("Warning: These arguments could not be converted to numbers and will be ignored: " + not_numbers.join(", "))
+  end
+
+  printUsageAndExitWith("Please provide at least one valid number as an argument.") if numbers.empty?
+
+  return numbers
+end
+
+main(args) do
+  printUsageAndExitWith("No arguments provided!") if args.empty?
+
+  # let numbers = args.collect(&.to(Float))
+  let numbers = numbersFrom(args)
+
+  let sum = numbers.sum
+  let avg = sum / numbers.count
+  if let Just(average) = avg.to(String)
+    IO.printLine("Average: ${average}")
+  else
+    IO.printError("Could not convert average to string")
+  end
+end

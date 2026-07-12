@@ -20,7 +20,7 @@ let minMaxOf(_) = (1, 10)
 
 main(args) do
   let (min, max) = minMaxOf(args)
-  let list = (min..max).to(List)
+  let list = (min..max).to(List).or([])
 
   IO.printLine("list = ${list}")
   match list.head do

@@ -1529,8 +1529,20 @@ int main() {
 
         it("converts range to list", []() {
             auto result = run("main do\n  (1..5).to(List)\nend\n");
-            auto& list = std::get<ListValue>(result->data);
+            auto& converted = std::get<VariantValue>(result->data);
+            assertEqual(converted.tag, std::string("Just"));
+            auto& list = std::get<ListValue>(converted.args[0]->data);
             assertEqual(list.elements.size(), size_t(5));
+        });
+
+        it("returns Optional from universal conversions", []() {
+            auto success = run("main do\n  \"42\".to(Integer)\nend\n");
+            auto& just = std::get<VariantValue>(success->data);
+            assertEqual(just.tag, std::string("Just"));
+            assertEqual(std::get<IntValue>(just.args[0]->data).value, int64_t(42));
+
+            auto failure = run("main do\n  \"42x\".to(Integer)\nend\n");
+            assertTrue(std::holds_alternative<NoneValue>(failure->data));
         });
 
         it("collects Just results, dropping None", []() {
@@ -1696,7 +1708,7 @@ int main() {
                 "    parent.send((:ready, Process.self))\n"
                 "  end\n"
                 "  receive do\n"
-                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String))\n"
+                "    (:ready, childSelf) -> IO.printLine((parent == childSelf).to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1717,7 +1729,7 @@ int main() {
                 "  end\n"
                 "  receive do\n"
                 "    n -> receive do\n"
-                "      m -> IO.printLine((n + m).to(String))\n"
+                "      m -> IO.printLine((n + m).to(String).or(""))\n"
                 "    end\n"
                 "  end\n"
                 "end\n"
@@ -1846,7 +1858,7 @@ int main() {
                 "      :go -> parent.send(:done)\n"
                 "    end\n"
                 "  end\n"
-                "  IO.printLine(\"before: \" + child.alive?().to(String))\n"
+                "  IO.printLine(\"before: \" + child.alive?().to(String).or(""))\n"
                 "  child.send(:go)\n"
                 "  receive do\n"
                 "    :done -> IO.printLine(\"got done\")\n"
@@ -1855,7 +1867,7 @@ int main() {
                 "  # it sent :done and returned in the same reduction, so by\n"
                 "  # the time we've been woken and resumed, it's already run\n"
                 "  # to completion.\n"
-                "  IO.printLine(\"after: \" + child.alive?().to(String))\n"
+                "  IO.printLine(\"after: \" + child.alive?().to(String).or(""))\n"
                 "end\n"
             );
             assertEqual(out, std::string("before: true\ngot done\nafter: false\n"));
@@ -1877,7 +1889,7 @@ int main() {
                 "  child.send(:go)\n"
                 "  receive timeout: 20 do\n"
                 "    _ -> IO.printLine(\"unexpected\")\n"
-                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String))\n"
+                "  after -> IO.printLine(\"parent still alive: \" + Process.self.alive?().to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1891,8 +1903,8 @@ int main() {
                 "main do\n"
                 "  let t = Task.start { 10 + 20 }\n"
                 "  match t.await(timeout: 2000) do\n"
-                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1908,8 +1920,8 @@ int main() {
                 "    end\n"
                 "  }\n"
                 "  match t.await(timeout: 20) do\n"
-                "    Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "    Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "    Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -1924,8 +1936,8 @@ int main() {
                 "  let results = Task.awaitAll([t1, t2])\n"
                 "  results.each { |r|\n"
                 "    match r do\n"
-                "      Ok(v) -> IO.printLine(\"got \" + v.to(String))\n"
-                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String))\n"
+                "      Ok(v) -> IO.printLine(\"got \" + v.to(String).or(""))\n"
+                "      Error(reason) -> IO.printLine(\"error \" + reason.to(String).or(""))\n"
                 "    end\n"
                 "  }\n"
                 "end\n"
@@ -2045,7 +2057,7 @@ int main() {
                 "  end\n"
                 "  match result do\n"
                 "    Ok(pid) -> IO.printLine(\"started\")\n"
-                "    Error(reason) -> IO.printLine(\"error: \" + reason.to(String))\n"
+                "    Error(reason) -> IO.printLine(\"error: \" + reason.to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );
@@ -2071,7 +2083,7 @@ int main() {
                 "    (:worker_started, pid1) -> do\n"
                 "      pid1.send(:die)\n"
                 "      receive timeout: 500 do\n"
-                "        (:worker_started, pid2) -> IO.printLine((pid1 == pid2).to(String))\n"
+                "        (:worker_started, pid2) -> IO.printLine((pid1 == pid2).to(String).or(""))\n"
                 "      after -> IO.printLine(\"no restart\")\n"
                 "      end\n"
                 "    end\n"
@@ -2087,7 +2099,7 @@ int main() {
                 "  let result = Supervisor.start(restart: :all) do [] end\n"
                 "  match result do\n"
                 "    Ok(_) -> IO.printLine(\"unexpected ok\")\n"
-                "    Error(reason) -> IO.printLine(\"rejected: \" + reason.to(String).contains?(\"only_crashed\").to(String))\n"
+                "    Error(reason) -> IO.printLine(\"rejected: \" + reason.to(String).or("").contains?(\"only_crashed\").to(String).or(""))\n"
                 "  end\n"
                 "end\n"
             );

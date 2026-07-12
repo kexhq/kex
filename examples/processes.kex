@@ -123,7 +123,7 @@ main do
   counter.send(Increment)
   counter.send(Get(Process.self))
   receive do
-    n -> IO.printLine("counter = " + n.to(String))
+    n -> IO.printLine("counter = " + n.to(String).or(""))
   end
 
   # --- Chat room ---
@@ -137,11 +137,11 @@ main do
   let t1 = Task.start { slowSquare(6) }
   let t2 = Task.start { slowSquare(7) }
   match t1.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("6^2 = " + v.to(String))
+    Ok(v) -> IO.printLine("6^2 = " + v.to(String).or(""))
     Error(_) -> IO.printLine("6^2 task failed")
   end
   match t2.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("7^2 = " + v.to(String))
+    Ok(v) -> IO.printLine("7^2 = " + v.to(String).or(""))
     Error(_) -> IO.printLine("7^2 task failed")
   end
 
@@ -150,7 +150,7 @@ main do
     [worker { startCounterWorker() }]
   end
   match supResult do
-    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String))
-    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String))
+    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String).or(""))
+    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String).or(""))
   end
 end

@@ -16,9 +16,9 @@ end
 main do
   # Direct qualified access
   let c1 = Geometry.Circle { radius: 3.0 }
-  IO.printLine(Geometry.area(c1).to(String))
+  IO.printLine(Geometry.area(c1).to(String).or(""))
 
   # Re-export path: App.Geometry.Circle
   let c2 = App.Geometry.Circle { radius: 2.0 }
-  IO.printLine(App.Geometry.area(c2).to(String))
+  IO.printLine(App.Geometry.area(c2).to(String).or(""))
 end

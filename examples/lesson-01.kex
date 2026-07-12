@@ -9,5 +9,5 @@ main do
     .map { |n| n * n }          # [4, 16, 36]
     .sum                        # 56
 
-  IO.printLine(result.to(String))
+  IO.printLine(result.to(String).or(""))
 end

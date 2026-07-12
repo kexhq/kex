@@ -84,6 +84,7 @@ private:
     auto parseMultiplication() -> ast::ExprPtr;
     auto parseUnary() -> ast::ExprPtr;
     auto parsePostfix() -> ast::ExprPtr;
+    auto parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr;
     auto parsePrimary() -> ast::ExprPtr;
     auto parseBody() -> std::vector<ast::ExprPtr>;
 

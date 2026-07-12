@@ -1894,7 +1894,7 @@ int main() {
             assertTrue(noErrors(
                 "foul startDynamic -> Process<Any> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg.toString()) end\n"
+                "    receive do msg -> IO.printLine(msg.to(String).or(\"\")) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"
@@ -1937,7 +1937,7 @@ int main() {
         it("inline return type annotation is honoured for non-process types", []() {
             assertTrue(noErrors(
                 "let double -> Integer = 2 * 2\n"
-                "main do IO.printLine(double.toString()) end\n"
+                "main do IO.printLine(double.to(String).or(\"\")) end\n"
             ));
         });
 

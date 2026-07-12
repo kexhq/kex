@@ -18,7 +18,7 @@ end
 using Math, only: [cube]
 
 main do
-  IO.printLine(Math.square(5).to(String))
-  IO.printLine(cube(3).to(String))
+  IO.printLine(Math.square(5).to(String).or(""))
+  IO.printLine(cube(3).to(String).or(""))
   IO.printLine(Formatter.formatSquare(4))
 end

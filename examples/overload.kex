@@ -12,8 +12,8 @@ make Vector2D do
     return Vector2D { x: @x * factor, y: @y * factor }
   end
 
-  let to(String) -> String do
-    return "(${@x}, ${@y})"
+  let to(String) -> String? do
+    return Just("(${@x}, ${@y})")
   end
 end
 
@@ -23,5 +23,5 @@ main do
 
   # Operator sugar resolves through the receiver type:
   let result = unitX * 2.0 + offset
-  IO.printLine(result.to(String))
+  IO.printLine(result.to(String).or(""))
 end

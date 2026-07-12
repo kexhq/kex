@@ -177,7 +177,7 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         {"IO::warning",     {"kex_io", "print_error"}},
         {"IO::readLine",    {"kex_io", "read_line"}},
         {"IO::inspect",     {"kex_io", "inspect"}},
-        {"IO::exit",        {"erlang", "halt"}},
+        {"System::exit",    {"erlang", "halt"}},
         // Math
         {"Math::sqrt",      {"math",   "sqrt"}},
         {"Math::sin",       {"math",   "sin"}},
@@ -911,7 +911,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     "blank?", "present?", "truthy?", "falsy?",
                     "second", "third",
                     "floor", "ceil", "round", "toFloat", "toInteger",
-                    "toString", "rest", "toOptional",
+                    "rest", "toOptional",
                     // Process/concurrency primitives backed by Kex.Intrinsic.Process.
                     "send", "link", "unlink", "monitor", "alive?",
                     "demonitor", "await",
@@ -1044,7 +1044,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 else if (auto* ve = std::get_if<ast::VarExpr>(&node.args[0]->kind))
                     typeName = ve->name;
                 if (typeName == "String")
-                    return "call 'kex_io':'to_string'(" + recv + ")";
+                    return "{'Just', call 'kex_io':'to_string'(" + recv + ")}";
                 // "Integer" is the real Kex type name (see
                 // src/interpreter/stdlib/list.cxx's own `.to` — "Int"
                 // alone is never actually used at the source level); a

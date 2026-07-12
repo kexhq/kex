@@ -39,7 +39,7 @@ main do
   let velocity = Vector2D { x: 1.0, y: -0.5 }
 
   let arrived = position + velocity * 2.0
-  IO.printLine("next position: ${arrived.to(String)}")
+  IO.printLine("next position: ${arrived.to(String).or("")}")
   IO.printLine("arrived? ${arrived.near?(Vector2D { x: 5.0, y: 3.0 })}")
 end
 ```
@@ -118,13 +118,13 @@ make Vector3D do
     return Vector3D { x: @x + other.x, y: @y + other.y, z: @z + other.z }
   end
 
-  let to(String) -> String do
-    return "(${@x}, ${@y}, ${@z})"
+  let to(String) -> String? do
+    return Just("(${@x}, ${@y}, ${@z})")
   end
 end
 
 let unitX = Vector2D { x: 1.0, y: 0.0 }
-let shot = (unitX * 2.0 + Vector2D { x: 0.0, y: 5.0 }).to(String)
+let shot = (unitX * 2.0 + Vector2D { x: 0.0, y: 5.0 }).to(String).or("")
 # "(2.0, 5.0)" — `*` resolves through Vector2D::*, `+` through Vector2D::+
 ```
 
@@ -138,7 +138,7 @@ let fizzBuzz(n: Int) -> String do
     (0, 0) -> "FizzBuzz"
     (0, _) -> "Fizz"
     (_, 0) -> "Buzz"
-    (_, _) -> n.to(String)
+    (_, _) -> n.to(String).or("")
   end
 end
 
@@ -341,13 +341,13 @@ record Temperature do
 end
 
 make Temperature do
-  let to(String) -> String do
-    return "${@celsius}C"
+  let to(String) -> String? do
+    return Just("${@celsius}C")
   end
 end
 
-let boiling = Temperature.Fahrenheit(212.0).to(String)  # "100.0C"
-let zero = Temperature.Freezing.to(String)              # "0.0C"
+let boiling = Temperature.Fahrenheit(212.0).to(String).or("")  # "100.0C"
+let zero = Temperature.Freezing.to(String).or("")              # "0.0C"
 ```
 
 ## Try It

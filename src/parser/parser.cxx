@@ -1140,8 +1140,10 @@ auto Parser::parseUnary() -> ast::ExprPtr {
 }
 
 auto Parser::parsePostfix() -> ast::ExprPtr {
-    auto expr = parsePrimary();
+    return parsePostfixTail(parsePrimary());
+}
 
+auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     while (true) {
         // Skip newlines if followed by . (method chaining across lines)
         if (check(TokenType::Newline)) {
@@ -2225,6 +2227,35 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         } else {
             expr->kind = ast::ShorthandLambda{
                 ast::ShorthandLambda::Kind::Method, name, {}};
+        }
+        // A continuation belongs inside the shorthand lambda:
+        // `&.to(String).or("")` desugars to
+        // `{ |__shorthand| __shorthand.to(String).or("") }`.
+        if (check(TokenType::Dot)) {
+            constexpr const char* paramName = "__shorthand";
+            auto receiver = std::make_unique<ast::Expr>();
+            receiver->location = expr->location;
+            receiver->kind = ast::Identifier{paramName};
+
+            auto firstCall = std::make_unique<ast::Expr>();
+            firstCall->location = expr->location;
+            auto shorthand = std::get<ast::ShorthandLambda>(std::move(expr->kind));
+            ast::MethodCall call;
+            call.receiver = std::move(receiver);
+            call.method = std::move(shorthand.name);
+            call.args = std::move(shorthand.args);
+            firstCall->kind = std::move(call);
+
+            auto chained = parsePostfixTail(std::move(firstCall));
+            ast::LambdaParam param;
+            param.name = paramName;
+            std::vector<ast::LambdaParam> params;
+            params.push_back(std::move(param));
+            std::vector<ast::ExprPtr> body;
+            body.push_back(std::move(chained));
+            expr = std::make_unique<ast::Expr>();
+            expr->location = body.front()->location;
+            expr->kind = ast::Lambda{std::move(params), std::move(body)};
         }
         return expr;
     }
