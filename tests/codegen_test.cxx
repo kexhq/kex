@@ -412,7 +412,7 @@ int main() {
             auto program = parser.parseProgram();
             auto modules = kex::ir::lowerModules(program, "module_mapping");
             assertEqual(modules.size(), size_t{2});
-            assertEqual(modules[0].name, std::string("Kex.Global"));
+            assertEqual(modules[0].name, std::string("kex_module_mapping"));
             assertEqual(modules[1].name, std::string("Kex.Util"));
             assertEqual(modules[1].functions.size(), size_t{2});
             assertEqual(modules[1].functions[0].name, std::string("double"));

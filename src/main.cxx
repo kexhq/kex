@@ -1438,10 +1438,17 @@ int main(int argc, char *argv[]) {
                     << fname << "\n";
         } else {
           // Expression or local let — compile and run on BEAM.
+          // For local lets, the current binding is evaluated fresh and
+          // stashed in the process dictionary so subsequent evals
+          // retrieve it (avoiding re-evaluation of side-effectful
+          // expressions like Ets.new).
           std::string kexSource;
           if (isLocalLet) {
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" + "  IO.inspect(" + letVarName +
+                        source + "\n" +
+                        "  Erlang.Erlang.put(:kexrepl" + letVarName +
+                        ", " + letVarName + ")\n" +
+                        "  IO.inspect(" + letVarName +
                         ")\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
@@ -1483,8 +1490,9 @@ int main(int argc, char *argv[]) {
           cf << result.source;
           cf.close();
 
-          std::string erlCmd = "erlc +from_core -pa " + beamDir + " -o " +
-                               beamDir + " " + corePath + " 2>&1";
+          std::string erlCmd = "erlc +from_core -W0 -pa " +
+                               beamDir + " -o " + beamDir + " " +
+                               corePath + " 2>&1";
           int erlcRet = std::system(erlCmd.c_str());
           std::filesystem::remove(corePath);
           if (erlcRet != 0) {
@@ -1522,7 +1530,9 @@ int main(int argc, char *argv[]) {
           }
 
           if (isLocalLet)
-            localBinds += "  " + source + "\n";
+            localBinds += "  let " + letVarName +
+                          " = Erlang.Erlang.get(:kexrepl" +
+                          letVarName + ")\n";
         }
       } catch (const std::exception &e) {
         std::cerr << "  " << kex::color::apply(kex::color::red)

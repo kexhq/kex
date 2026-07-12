@@ -1224,6 +1224,27 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // Erlang.*/Elixir.*/Gleam.* interop calls are untyped — return Dynamic.
+            {
+                const ast::Expr* r = node.receiver ? &*node.receiver : nullptr;
+                while (r) {
+                    if (auto* mc = std::get_if<ast::MethodCall>(&r->kind))
+                        r = mc->receiver ? &*mc->receiver : nullptr;
+                    else break;
+                }
+                if (r) {
+                    if (auto* uid = std::get_if<ast::UpperIdentifier>(&r->kind)) {
+                        if (uid->name == "Erlang" || uid->name == "Elixir" || uid->name == "Gleam") {
+                            for (const auto& a : node.args)
+                                if (a) inferExpr(*a);
+                            for (const auto& [_, a] : node.namedArgs)
+                                if (a) inferExpr(*a);
+                            if (node.block) inferExpr(**node.block);
+                            return Type::unknown();
+                        }
+                    }
+                }
+            }
             // Namespace call: `Integer.parse(s)` → look up "Integer::parse".
             // The receiver is a bare UpperIdent — don't include it as argTypes[0].
             std::string callName = node.method;

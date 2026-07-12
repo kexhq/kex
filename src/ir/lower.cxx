@@ -789,6 +789,40 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             }
         }
+        // Erlang.*/Elixir.*/Gleam.* interop: direct BEAM module calls.
+        // `Erlang.lists.reverse(xs)` → `call 'lists':'reverse'(xs)`
+        // `Elixir.Phoenix.Router.match(c)` → `call 'Elixir.Phoenix.Router':'match'(c)`
+        // `Gleam.wisp.serve(h)` → `call 'wisp':'serve'(h)`
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) && !path.empty() &&
+                (path[0] == "Erlang" || path[0] == "Elixir" || path[0] == "Gleam")) {
+                std::string mod;
+                if (path[0] == "Elixir") {
+                    for (size_t i = 1; i < path.size(); i++) {
+                        if (i > 1) mod += ".";
+                        mod += path[i];
+                    }
+                    mod = "Elixir." + mod;
+                } else {
+                    // Erlang/Gleam: lowercase all segments
+                    for (size_t i = 1; i < path.size(); i++) {
+                        if (i > 1) mod += ".";
+                        std::string seg = path[i];
+                        for (auto& c : seg) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                        mod += seg;
+                    }
+                }
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                if (n.block) args.push_back(atomize(*n.block, binds));
+                int ar = static_cast<int>(args.size());
+                auto ex = std::make_unique<Expr>();
+                ex->node = Call{mod, n.method, ar, std::move(args), false};
+                return wrapLets(binds, std::move(ex));
+            }
+        }
         // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
         // Mock.FS.clear() — the in-memory test filesystem, mirrored by
         // kex_file's mock registry.
@@ -812,7 +846,8 @@ struct Lowering {
         // mangled name, while this map preserves the source-level qualifier.
         {
             std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && !n.namedArgs.empty())
+            if (modulePath(*n.receiver, path) && !n.namedArgs.empty() &&
+                records.find(n.method) == records.end())
                 throw LowerError("IR lower: named args to module function not yet ported");
             if (!path.empty() || modulePath(*n.receiver, path)) {
                 std::string key;
@@ -829,6 +864,40 @@ struct Lowering {
                     if (n.block) args.push_back(atomize(*n.block, binds));
                     int ar = static_cast<int>(args.size());
                     return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+                }
+                if (auto rit = records.find(n.method); rit != records.end()) {
+                    std::vector<Binding> binds;
+                    const auto& info = rit->second;
+                    std::unordered_map<std::string, const ast::ExprPtr*> provided;
+                    for (const auto& [name, val] : n.namedArgs)
+                        provided[name] = &val;
+                    if (n.block) {
+                        auto extractMap = [&](const ast::MapExpr* map) {
+                            for (const auto& entry : map->entries)
+                                if (auto* atom = std::get_if<ast::AtomLiteral>(&entry.key->kind))
+                                    provided[atom->name] = &entry.value;
+                        };
+                        if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind)) {
+                            if (!lam->body.empty())
+                                if (auto* map = std::get_if<ast::MapExpr>(&lam->body.back()->kind))
+                                    extractMap(map);
+                        } else if (auto* map = std::get_if<ast::MapExpr>(&(*n.block)->kind)) {
+                            extractMap(map);
+                        }
+                    }
+                    std::vector<ExprPtr> fieldArgs;
+                    for (size_t i = 0; i < info.fields.size(); i++) {
+                        auto pit = provided.find(info.fields[i]);
+                        if (pit != provided.end() && *pit->second)
+                            fieldArgs.push_back(lower(*pit->second));
+                        else if (info.defaults[i])
+                            fieldArgs.push_back(lower(*info.defaults[i]));
+                        else
+                            fieldArgs.push_back(lit(LitKind::None, "none"));
+                    }
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{n.method, std::move(fieldArgs)};
+                    return wrapLets(binds, std::move(ex));
                 }
             }
         }
@@ -3559,7 +3628,6 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath) -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath);
-    flat.name = "Kex.Global";
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;

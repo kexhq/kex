@@ -1,0 +1,24 @@
+# Module exports: re-export paths and hierarchical access
+# kex: no-check
+
+module Geometry do
+  record Circle do
+    radius : Float = 1.0
+  end
+
+  let area(c) = 3.14159 * c.radius * c.radius
+end
+
+module App do
+  export Geometry
+end
+
+main do
+  # Direct qualified access
+  let c1 = Geometry.Circle { radius: 3.0 }
+  IO.printLine(Geometry.area(c1).to(String))
+
+  # Re-export path: App.Geometry.Circle
+  let c2 = App.Geometry.Circle { radius: 2.0 }
+  IO.printLine(App.Geometry.area(c2).to(String))
+end
