@@ -232,6 +232,16 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].flatMap { |n| [n, n * 10] }   # => [1, 10, 2, 20, 3, 30]
   flatMap :> (X -> [Y]) -> [Y]
 
+  # Maps each element through +f+ (which returns an +Optional+), keeping and
+  # unwrapping the +Just(y)+ results and dropping +None+. Filter + map fused.
+  #
+  # @param f [X -> Y?]
+  # @return [[Y]]
+  #
+  # @example
+  #   [1, 2, 3, 4].collect { |n| n > 2 then Just(n * 10) else None }   # => [30, 40]
+  collect :> (X -> Y?) -> [Y]
+
   # Returns the first +n+ elements.
   #
   # @param n [Integer]
@@ -316,12 +326,12 @@ make [X], implement: Enumerable do
   # Most commonly used to materialise a +Range+ into a +List+.
   #
   # @param type [Y]
-  # @return [Unknown]
+  # @return [Y?]
   #
   # @example
   #   (1..5).to(List)    # => [1, 2, 3, 4, 5]
   #   "42".to(Integer)   # => 42
-  to :> Y -> Unknown
+  to :> Y -> Y?
 end
 
 make [Number] do

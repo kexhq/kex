@@ -211,7 +211,7 @@ auto typeToString(const TypePtr& type) -> std::string {
             return "T" + std::to_string(t.id);
         }
         else if constexpr (std::is_same_v<T, VoidType>) {
-            return "Void";
+            return "Never";
         }
         else if constexpr (std::is_same_v<T, ConstrainedType>) {
             return t.varName;
@@ -286,7 +286,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             return at.id == bt->id;
         }
         else if constexpr (std::is_same_v<AT, VoidType>) {
-            return true;  // Void == Void
+            return true;  // Never == Never
         }
         else if constexpr (std::is_same_v<AT, ConstrainedType>) {
             return at.varName == bt->varName && at.traitName == bt->traitName;

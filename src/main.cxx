@@ -666,6 +666,34 @@ auto compilePreludeCore(const std::string &dir) -> bool {
 #endif
 
 #ifdef KEX_PRELUDE_DIR
+// Prelude record defs (e.g. ParseError in src/prelude/errorable.kex) aren't
+// in the user's AST, but the BEAM codegen needs their field layout to emit
+// field accessors (e.field -> element(N, e)). Merge just the RecordDef items
+// (metadata-only — no runtime code) into the user program before codegen.
+// Mirrors how the interpreter's Evaluator executes the prelude
+// (evaluator.cxx's preludeProgram).
+auto collectPreludeRecordDefs() -> std::vector<kex::ast::TopLevelItem> {
+  std::vector<kex::ast::TopLevelItem> defs;
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  std::vector<std::string> files;
+  for (const auto& e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
+    if (e.path().extension() == ".kex")
+      files.push_back(e.path().string());
+  std::sort(files.begin(), files.end());
+  for (const auto& f : files) {
+    kex::Lexer lex(readFile(f), f);
+    kex::Parser parser(lex.tokenizeAll(), f);
+    auto prog = parser.parseProgram();
+    for (auto& item : prog.items)
+      if (std::holds_alternative<std::unique_ptr<kex::ast::RecordDef>>(item))
+        defs.push_back(std::move(item));
+  }
+  return defs;
+}
+#endif
+
+#ifdef KEX_PRELUDE_DIR
 // Method names the sealed stdlib prelude provides — make-block methods across
 // src/prelude/*.kex plus trait methods (Enumerable's map/filter/…). A user may
 // ADD new methods to a builtin type but not REDEFINE one of these on it (they
@@ -1188,6 +1216,7 @@ int main(int argc, char *argv[]) {
     std::string localBinds; // let x = ... — re-emitted inside main do each eval
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
     int iteration = 0;
+    std::vector<std::string> loadedBeamFiles; // paths loaded via /load
 
     auto topDefsStr = [&]() -> std::string {
       std::string s;
@@ -1276,11 +1305,33 @@ int main(int argc, char *argv[]) {
         continue;
       }
       if (input.substr(0, 6) == "/load ") {
-        std::cerr << "  /load not yet implemented\n";
+        std::string filePath = input.substr(6);
+        size_t start = filePath.find_first_not_of(" \t");
+        if (start != std::string::npos) filePath = filePath.substr(start);
+        if (!fileExists(filePath)) {
+          std::cerr << "  /load: file not found: " << filePath << "\n";
+          continue;
+        }
+        // Validate syntax eagerly — a malformed file stored as a
+        // definition would turn every subsequent REPL input into a
+        // parse error.
+        try {
+          auto src = readFile(filePath);
+          kex::Lexer lex(std::move(src), filePath);
+          kex::Parser parser(lex.tokenizeAll(), filePath);
+          parser.parseProgram();
+          loadedBeamFiles.push_back(filePath);
+          std::cout << "  loaded " << filePath << "\n";
+        } catch (const std::exception& e) {
+          std::cerr << "  /load parse error: " << e.what() << "\n";
+        }
         continue;
       }
       if (input == "/reload") {
-        std::cerr << "  /reload not yet implemented\n";
+        // Loaded files are re-read on every session build — no explicit
+        // reload needed. /reset clears topDefs + localBinds but keeps
+        // loaded paths; use /reset then /load each file again to refresh.
+        std::cout << "  (loaded files are re-evaluated on each input)\n";
         continue;
       }
 
@@ -1401,6 +1452,24 @@ int main(int argc, char *argv[]) {
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
           auto program = parser.parseProgram();
+          // Merge non-MainBlock items from files loaded via /load so their
+          // definitions (function defs, make blocks, records, types) are
+          // visible to every subsequent REPL input. Re-read on each session
+          // build so the current on-disk version is always used.
+          for (const auto& f : loadedBeamFiles) {
+            try {
+              auto fs = readFile(f);
+              kex::Lexer fl(std::move(fs), f);
+              kex::Parser fp(fl.tokenizeAll(), f);
+              auto fprog = fp.parseProgram();
+              for (auto& item : fprog.items)
+                if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+                  program.items.push_back(std::move(item));
+            } catch (...) {
+              // Syntax errors in a loaded file were caught by /load; if the
+              // file changed underneath us, just skip it this round.
+            }
+          }
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
                                              migratedPreludeFns());
           auto result = kex::ir::emitCore(irMod);
@@ -1621,11 +1690,26 @@ int main(int argc, char *argv[]) {
       }
       if (line.substr(0, 6) == "/load ") {
         auto filePath = line.substr(6);
-        std::cerr << "  /load not yet implemented (file: " << filePath << ")\n";
+        size_t start = filePath.find_first_not_of(" \t");
+        if (start != std::string::npos) filePath = filePath.substr(start);
+        if (!fileExists(filePath)) {
+          std::cerr << "  /load: file not found: " << filePath << "\n";
+          continue;
+        }
+        try {
+          auto src = readFile(filePath);
+          kex::Lexer lex(std::move(src), filePath);
+          kex::Parser parser(lex.tokenizeAll(), filePath);
+          auto prog = parser.parseProgram();
+          evaluator.execute(prog);
+          std::cout << "  loaded " << filePath << "\n";
+        } catch (const std::exception& e) {
+          std::cerr << "  /load error: " << e.what() << "\n";
+        }
         continue;
       }
       if (line == "/reload") {
-        std::cerr << "  /reload not yet implemented\n";
+        std::cerr << "  /reload not yet implemented (use /reset then /load to rebuild)\n";
         continue;
       }
 
@@ -2081,6 +2165,12 @@ int main(int argc, char *argv[]) {
       // the downstream erlc/erl path is identical. A LowerError means
       // the IR path doesn't support that construct — reported cleanly,
       // never falling back (so gaps are visible, not masked).
+#ifdef KEX_PRELUDE_DIR
+      // Prelude record defs (e.g. ParseError) aren't in the user's AST; merge
+      // them so the codegen can emit field accessors for prelude records.
+      for (auto& item : collectPreludeRecordDefs())
+        program.items.push_back(std::move(item));
+#endif
       kex::codegen::CoreErlangEmitter::EmitResult result;
       if (useIr) {
         try {

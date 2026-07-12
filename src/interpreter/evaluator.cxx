@@ -742,8 +742,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         }
                     }
                 }
+            } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
+                if (!matchPattern(*node.pattern, value))
+                    throw RuntimeError("pattern mismatch — expected " + constrPat->name, expr.location);
             } else if (std::get_if<ast::ListPattern>(&node.pattern->kind)) {
-                matchPattern(*node.pattern, value);
+                if (!matchPattern(*node.pattern, value))
+                    throw RuntimeError("pattern mismatch", expr.location);
             }
             return value;
         }

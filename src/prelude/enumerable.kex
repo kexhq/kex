@@ -57,6 +57,19 @@ trait Enumerable do
     acc + Kex.Intrinsic.Fun.applyItem(f, item)
   end
 
+  # Maps each item through +f+ (returning an +Optional+), keeping and unwrapping
+  # the +Just(y)+ results and dropping +None+. Filter + map fused via an
+  # Optional-returning function.
+  let collect(f) do
+    let acc = this.reduce([]) do |a, item|
+      match Kex.Intrinsic.Fun.applyItem(f, item) do
+        Just(y) -> [y | a]
+        None    -> a
+      end
+    end
+    return acc.reverse
+  end
+
   # Counts the items for which +pred+ holds.
   let count(pred) = this.reduce(0) do |acc, item|
     Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc

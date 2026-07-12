@@ -1,0 +1,12 @@
+# Spec: typechecker rejects wrong constructor patterns in let
+#
+# Expected errors (run with ./build/kex --check spec/constructor_mismatch.kex):
+#
+#   cannot match `Ok` — expected Result, got (Integer, String)?
+#   cannot match `Just` — expected Optional, got Result<Integer, ParseError>
+
+main do
+  let Ok((v, r)) = Integer.parsePrefix("42")  # prefix returns Optional, Ok is for Result
+  let Just(x)   = Integer.parse("42")          # parse returns Result, Just is for Optional
+  IO.printLine("should not reach here")
+end

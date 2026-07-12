@@ -78,47 +78,129 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::boolean(i.has_value() && mpz_odd_p(i->get_mpz_t()) != 0);
     });
 
-    // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, String> —
+    // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —
     // namespaced under the primitive type, same convention as Math.sqrt
-    // etc. Built directly as RecordValue{"Ok"/"Error", ...} rather than
-    // calling the registered Ok/Error constructors, since those aren't
-    // wired up for native-to-native calls (only Kex-level calls).
+    // etc. The Error payload is a typed ParseError record {input, position,
+    // value, message, rest} — on a partial match (trailing characters) the
+    // `value` field carries what was parsed so the caller can inspect it
+    // without re-parsing. Complete failure stores Value::none() for value.
+    // Built directly as RecordValue rather than calling the registered
+    // constructors (those aren't wired for native-to-native calls).
+    auto parseError = [](const std::string& input, size_t position,
+                         ValuePtr value,
+                         const std::string& message,
+                         const std::string& rest) -> ValuePtr {
+        return Value::record("ParseError", {
+            {"input",    Value::string(input)},
+            {"position", Value::integer(static_cast<int64_t>(position))},
+            {"value",    value},
+            {"message",  Value::string(message)},
+            {"rest",     Value::string(rest)},
+        });
+    };
+    auto noVal = []() { return Value::none(); };  // no value parsed
+
     m_globalEnv->define("Float", Value::module("Float"));
-    reg("Float::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::error(Value::string("Float.parse expects a String"));
+        if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
+        size_t consumed = 0;
         try {
-            size_t consumed = 0;
             double v = std::stod(s->value, &consumed);
-            if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
+            if (consumed != s->value.size())
+                return Value::error(parseError(s->value, consumed, Value::floating(v),
+                                               "trailing characters after float",
+                                               s->value.substr(consumed)));
             return Value::ok(Value::floating(v));
         } catch (const std::exception&) {
-            return Value::error(Value::string("invalid float: " + s->value));
+            return Value::error(parseError(s->value, consumed, noVal(), "invalid float",
+                                           s->value.substr(consumed)));
+        }
+    });
+
+    // Float.parsePrefix(s) -> Just((Float, String)) | None
+    reg("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        if (!s) return Value::none();
+        size_t consumed = 0;
+        try {
+            double v = std::stod(s->value, &consumed);
+            return Value::just(Value::tuple({Value::floating(v), Value::string(s->value.substr(consumed))}));
+        } catch (const std::exception&) {
+            return Value::none();
         }
     });
 
     m_globalEnv->define("Integer", Value::module("Integer"));
-    reg("Integer::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
-        if (!s) return Value::error(Value::string("Integer.parse expects a String"));
+        if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
+        size_t consumed = 0;
         try {
-            size_t consumed = 0;
             int64_t v = std::stoll(s->value, &consumed);
-            if (consumed != s->value.size()) throw std::invalid_argument("trailing characters");
+            if (consumed != s->value.size())
+                return Value::error(parseError(s->value, consumed, Value::integer(v),
+                                               "trailing characters after integer",
+                                               s->value.substr(consumed)));
             return Value::ok(Value::integer(v));
         } catch (const std::out_of_range&) {
-            // Too big for int64_t doesn't mean invalid — Integer is
-            // arbitrary precision; mpz_class's string constructor throws
-            // std::invalid_argument itself if the string isn't a valid
-            // integer (it requires a full match, not a prefix parse).
+            ValuePtr prefixVal = noVal();
+            if (consumed > 0) {
+                try { prefixVal = integerResult(mpz_class(s->value.substr(0, consumed))); }
+                catch (...) {}
+            }
             try {
                 return Value::ok(integerResult(mpz_class(s->value)));
             } catch (const std::exception&) {
-                return Value::error(Value::string("invalid integer: " + s->value));
+                return Value::error(parseError(s->value, consumed, prefixVal, "invalid integer",
+                                               s->value.substr(consumed)));
             }
         } catch (const std::exception&) {
-            return Value::error(Value::string("invalid integer: " + s->value));
+            return Value::error(parseError(s->value, consumed, noVal(), "invalid integer",
+                                           s->value.substr(consumed)));
         }
+    });
+
+    // Integer.parsePrefix(s) -> Just((Integer, String)) | None
+    reg("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        if (!s) return Value::none();
+        size_t consumed = 0;
+        try {
+            int64_t v = std::stoll(s->value, &consumed);
+            return Value::just(Value::tuple({Value::integer(v), Value::string(s->value.substr(consumed))}));
+        } catch (const std::out_of_range&) {
+            size_t i = 0;
+            if (i < s->value.size() && (s->value[i] == '+' || s->value[i] == '-')) i++;
+            size_t d = i;
+            while (d < s->value.size() && s->value[d] >= '0' && s->value[d] <= '9') d++;
+            if (d == i) return Value::none();
+            try {
+                auto big = mpz_class(s->value.substr(0, d));
+                return Value::just(Value::tuple({integerResult(big), Value::string(s->value.substr(d))}));
+            } catch (const std::exception&) { return Value::none(); }
+        } catch (const std::exception&) { return Value::none(); }
+    });
+
+    m_globalEnv->define("Number", Value::module("Number"));
+    // Number.parse(s) -> Result<Number, ParseError> — tries an Integer full
+    // match first (arbitrary precision), then falls back to Float. "42" -> Int,
+    // "3.14" -> Float, "1e3" -> Float, "abc" -> Error.
+    reg("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+        auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
+        if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
+        size_t consumed = 0;
+        try {
+            int64_t v = std::stoll(s->value, &consumed);
+            if (consumed == s->value.size()) return Value::ok(Value::integer(v));
+        } catch (const std::out_of_range&) {
+            try { return Value::ok(integerResult(mpz_class(s->value))); } catch (...) {}
+        } catch (...) {}
+        try {
+            double v = std::stod(s->value, &consumed);
+            if (consumed == s->value.size()) return Value::ok(Value::floating(v));
+        } catch (...) {}
+        return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
 }
 

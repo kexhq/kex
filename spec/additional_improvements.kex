@@ -1,0 +1,74 @@
+# Spec: parse + parsePrefix — Result-typed API
+#
+# Run: ./build/kex spec/additional_improvements.kex
+
+# ---------------------------------------------------------------
+# parse: Result<T, ParseError> — bare Ok(v) on full match,
+#   Error(ParseError{value, rest, position, message}) on trailing
+# ---------------------------------------------------------------
+
+# full match one-liner
+let Ok(n) = Integer.parse("42")
+assert(n == 42, "parse full match")
+
+# trailing: Error with parsed value + rest
+match Integer.parse("12ab") do
+  Ok(_) -> assert(false, "parse trailing — expected Error")
+  Error(e) -> do
+    assert(e.value == 12,   "parse trailing value")
+    assert(e.rest == "ab",  "parse trailing rest")
+    assert(e.position == 2, "parse trailing position")
+  end
+end
+
+# invalid
+match Integer.parse("abc") do
+  Ok(_) -> assert(false, "parse invalid — unexpected Ok")
+  Error(e) -> do
+    assert(e.position == 0, "parse invalid position")
+    assert(e.rest == "abc", "parse invalid rest")
+    assert(e.value == None, "parse invalid no value")
+  end
+end
+
+# Float
+let Ok(f) = Float.parse("3.14")
+assert(f > 3.13, "Float.parse Ok")
+
+match Float.parse("xyz") do
+  Error(e) -> assert(e.message == "invalid float", "Float.parse invalid")
+  Ok(_) -> assert(false, "Float.parse invalid — unexpected Ok")
+end
+
+# Number.parse — int-first, float fallback
+let Ok(ni) = Number.parse("42")
+assert(ni == 42, "Number.parse int")
+
+let Ok(nf) = Number.parse("3.14")
+assert(nf > 3.13, "Number.parse float")
+
+# ---------------------------------------------------------------
+# parsePrefix: Result<(T, String), ParseError> — Ok((v, rest))
+#   on any partial/full match, Error on complete failure
+# ---------------------------------------------------------------
+
+# one-liner
+# ---- parsePrefix: Optional<(T, String)> — Just((v,r)) | None ----
+
+let Just((val, rest)) = Integer.parsePrefix("123abc")
+assert(val == 123, "parsePrefix val")
+assert(rest == "abc", "parsePrefix rest")
+
+let Just((v, r)) = Integer.parsePrefix("6 USD")
+assert(v == 6, "parsePrefix whitespace val")
+assert(r == " USD", "parsePrefix whitespace rest")
+
+# invalid
+match Integer.parsePrefix("xyz") do
+  Error(e) -> assert(e.message == "invalid integer prefix", "parsePrefix invalid")
+  Ok(_) -> assert(false, "parsePrefix invalid — unexpected Ok")
+end
+
+main do
+  IO.printLine("passed")
+end

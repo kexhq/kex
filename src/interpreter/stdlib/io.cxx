@@ -85,7 +85,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // die(msg) — print msg to stderr and terminate the process.
-    // Typed as String -> Void (never returns).
+    // Typed as String -> Never (never returns).
     reg("die", [](std::vector<ValuePtr> args) -> ValuePtr {
         std::string msg = args.empty() ? "program terminated" : args[0]->toString();
         std::cerr << "fatal: " << msg << "\n";

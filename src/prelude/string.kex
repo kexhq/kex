@@ -126,13 +126,13 @@ make String do
   # Returns +None+ when conversion is not possible.
   #
   # @param type [Y]
-  # @return [Unknown]
+  # @return [Y?]
   #
   # @example
   #   "42".to(Integer)    # => 42
   #   "3.14".to(Float)    # => 3.14
   #   "abc".to(Integer)   # => None
-  to :> Y -> Unknown
+  to :> Y -> Y?
 end
 
 make Char do

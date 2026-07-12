@@ -63,7 +63,7 @@ struct TypeVar {
 struct UnknownType {};
 
 // Bottom type — for expressions that never return (infinite loop, panic, exit).
-// Unifies with any type as a universal subtype: a Void-typed branch is compatible
+// Unifies with any type as a universal subtype: a Never-typed branch is compatible
 // with any other branch type because it never actually produces a value at runtime.
 struct VoidType {};
 

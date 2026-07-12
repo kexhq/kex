@@ -213,7 +213,10 @@ auto CoreErlangEmitter::resolveStdlib(const std::string& kexModule,
         // (they return Ok(v)/Error(reason), matching
         // src/interpreter/stdlib/number.cxx exactly).
         {"Integer::parse",  {"kex_intrinsic_integer", "integer_parse"}},
+        {"Integer::parsePrefix", {"kex_intrinsic_integer", "integer_parse_prefix"}},
         {"Float::parse",    {"kex_intrinsic_number", "float_parse"}},
+        {"Float::parsePrefix",   {"kex_intrinsic_number", "float_parse_prefix"}},
+        {"Number::parse",   {"kex_intrinsic_number", "number_parse"}},
         // String
         {"String::length",  {"erlang", "length"}},
         {"String::toUpper", {"string", "to_upper"}},
@@ -915,8 +918,8 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     // Higher-order functions provided by the Enumerable trait
                     // and per-type make blocks in the prelude.
                     "reduce", "map", "each", "filter", "reject",
-                    "all?", "any?", "find", "flatMap",
-                    "partition", "mapValues", "mapKeys", "times"};
+                     "all?", "any?", "find", "flatMap", "collect",
+                     "partition", "mapValues", "mapKeys", "times"};
                 if (preludeMethods.count(node.method)) {
                     std::string allArgs = recv;
                     for (const auto& a : node.args) allArgs += ", " + emitExpr(a);

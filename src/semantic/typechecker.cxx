@@ -523,9 +523,12 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // `This` inside a make block refers to the implementing type.
             if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && !m_currentMakeType.empty())
                 return Type::named(m_currentMakeType);
-            // `Void` — the bottom/uninhabited type for never-returning functions.
-            if (last == "Void" && node.parts.size() == 1)
+            // `Never` — the bottom/uninhabited type for never-returning functions.
+            // `Void` is an alias for the unit type `()` (Swift-style naming).
+            if (last == "Never" && node.parts.size() == 1)
                 return Type::voidType();
+            if (last == "Void" && node.parts.size() == 1)
+                return Type::unit();
             // `Any` — escape hatch: unifies with everything (unknown message type
             // for Process<Any>, etc.). Treated as UnknownType at the type level.
             if (last == "Any" && node.parts.size() == 1)
@@ -1102,10 +1105,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
                 defineVar(varPat->name, valueType);
             } else if (node.pattern) {
-                // Other destructuring shapes (`let { host, port } = ...`,
-                // `let (a, b) = ...`) don't have a single value type to
-                // propagate per binding — fresh type vars, same fallback
-                // bindPatternVars uses everywhere else.
+                // Reject constructor mismatches early, e.g.
+                //   let Ok(v) = parsePrefix(...)   when parsePrefix returns Optional
+                //   let Just(v) = parse(...)       when parse returns Result
+                if (auto* cp = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
+                    auto resolved = resolve(valueType);
+                    if (std::holds_alternative<UnknownType>(resolved->kind) ||
+                        std::holds_alternative<TypeVar>(resolved->kind))
+                        ; // permissive — can't determine the type at compile time
+                    else if (cp->name == "Just" && !std::holds_alternative<OptionalType>(resolved->kind))
+                        error(node.pattern->location, "cannot match `Just` — expected Optional, got " + typeToString(resolved));
+                    else if (cp->name == "Ok" || cp->name == "Error") {
+                        if (auto* nt = std::get_if<NamedType>(&resolved->kind)) {
+                            if (nt->name != "Result")
+                                error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                        } else {
+                            error(node.pattern->location, "cannot match `" + cp->name + "` — expected Result, got " + typeToString(resolved));
+                        }
+                    }
+                }
                 bindPatternVars(*node.pattern);
             }
             return Type::unit();
@@ -1206,15 +1224,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // Namespace call: `Integer.parse(s)` → look up "Integer::parse".
+            // The receiver is a bare UpperIdent — don't include it as argTypes[0].
+            std::string callName = node.method;
+            bool isNamespaceCall = node.receiver &&
+                std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind);
+            if (isNamespaceCall) {
+                callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
+                           "::" + node.method;
+            }
             std::vector<TypePtr> argTypes;
-            argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
+            if (!isNamespaceCall)
+                argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
             // First pass: infer concrete args; record ShorthandLambda positions.
             std::vector<size_t> slPositions;
             for (size_t i = 0; i < node.args.size(); i++) {
                 if (node.args[i] &&
                     std::holds_alternative<ast::ShorthandLambda>(node.args[i]->kind)) {
                     argTypes.push_back(Type::unknown()); // placeholder
-                    slPositions.push_back(1 + i); // +1 for receiver
+                    slPositions.push_back(isNamespaceCall ? i : 1 + i);
                 } else {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
@@ -1224,11 +1252,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             // Second pass: infer ShorthandLambda args with type hints from sig.
             for (size_t argIdx : slPositions) {
-                auto hints = resolveArgHints(node.method, argTypes, argIdx);
+                auto hints = resolveArgHints(callName, argTypes, argIdx);
                 argTypes[argIdx] = inferBlock(*node.args[argIdx - 1], hints);
             }
             if (node.block) {
-                auto hints = resolveBlockHints(node.method, argTypes);
+                auto hints = resolveBlockHints(callName, argTypes);
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
@@ -1254,7 +1282,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return msgType;
             }
-            return checkCall(node.method, argTypes, expr.location);
+            return checkCall(callName, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             TypePtr elemType = Type::unknown();
@@ -1340,7 +1368,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             auto thenType = inferBody(node.thenBody);
             if (node.letPattern) popScope();
-            TypePtr branchType = resolve(thenType);  // tracks the first concrete non-Void branch
+            TypePtr branchType = resolve(thenType);  // tracks the first concrete non-Never branch
             for (const auto& [cond, body] : node.elifs) {
                 if (cond) inferExpr(*cond);
                 auto elifType = resolve(inferBody(body));
@@ -1756,7 +1784,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
     };
     if (isPermissive(argType) || isPermissive(paramType)) return true;
-    // Void is the bottom type — a Void-typed expression (never returns) is
+    // Never is the bottom type — a Never-typed expression (never returns) is
     // compatible with any expected type.
     if (std::holds_alternative<VoidType>(argType->kind)) return true;
     if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {

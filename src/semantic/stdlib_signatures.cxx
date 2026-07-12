@@ -42,9 +42,15 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("in?", {Type::charT(), Type::named("Range", {Type::charT()})}, Type::boolean());
     sig("times", {integerLike(), Type::func({integerLike()}, Type::unit())}, Type::unit());
     sig("Integer::parse", {Type::string()},
-        Type::named("Result", {Type::integer(), Type::string()}));
+        Type::named("Result", {Type::integer(), Type::named("ParseError")}));
+    sig("Integer::parsePrefix", {Type::string()},
+        Type::optional(Type::tuple({Type::integer(), Type::string()})));
     sig("Float::parse", {Type::string()},
-        Type::named("Result", {Type::float64(), Type::string()}));
+        Type::named("Result", {Type::float64(), Type::named("ParseError")}));
+    sig("Float::parsePrefix", {Type::string()},
+        Type::optional(Type::tuple({Type::float64(), Type::string()})));
+    sig("Number::parse", {Type::string()},
+        Type::named("Result", {numberLike(), Type::named("ParseError")}));
 
     // src/interpreter/stdlib/adt.cxx
     sig("ok?", {resultable()}, Type::boolean());
@@ -113,6 +119,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("product", {Type::list(genA()), Type::func({genA()}, genE())}, genE());
     sig("flatMap", {Type::list(genA()), Type::func({genA()}, Type::list(genE()))}, Type::list(genE()));
     sig("flatMap", {Type::optional(genA()), Type::func({genA()}, Type::optional(genE()))}, Type::optional(genE()));
+    sig("collect", {Type::list(genA()), Type::func({genA()}, Type::optional(genE()))}, Type::list(genE()));
     sig("join",  {Type::list(Type::string()), Type::string()}, Type::string());
     sig("join",  {Type::list(Type::string())}, Type::string());
     sig("join",  {Type::string(), Type::string()}, Type::string());
@@ -125,7 +132,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("indexOf",  {Type::list(genA()), genA()}, Type::optional(Type::integer()));
     sig("zip",   {Type::list(genA()), Type::list(genE())},
                  Type::list(Type::tuple({genA(), genE()})));
-    sig("to",    {genA(), genE()}, Type::unknown());
+    sig("to",    {genA(), genE()}, Type::optional(genE()));
 
     // src/interpreter/stdlib/file.cxx — File module
     sig("File::read",      {Type::string()}, Type::optional(Type::string()));
@@ -217,7 +224,7 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     // prelude-only and registered separately in ResolvePass::isKnown)
     sig("assert",       {Type::boolean()}, Type::unit());
     sig("assert",       {Type::boolean(), Type::string()}, Type::unit());
-    // die — never returns (diverges), so typed as Void (bottom type)
+    // die — never returns (diverges), so typed as Never (bottom type)
     sig("die",          {Type::string()}, Type::voidType());
     // Process primitives — args are opaque; typed permissively
     sig("send",    {genA(), genA()}, Type::unit());
