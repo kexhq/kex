@@ -99,10 +99,12 @@ struct Lowering {
     std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
-    // ADT/variant type → its tag names (e.g. Optional → {"Just","none"}). Used
+    // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
     std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
+    // Nullary variant tags (no payload) — dispatched as atoms, not tuples.
+    std::unordered_set<std::string> nullaryVariantTags;
     // Every variant tag of every ADT (flat), and every record static-block
     // member name. A bare use of a static-only name is out of scope — it
     // lives behind its record (Temperature.Fahrenheit) — so it must be a
@@ -1099,6 +1101,11 @@ struct Lowering {
                 if (n.method == "cbrt") return nsCall("kex_intrinsic_math", "cbrt");
                 if (n.method == "exp") return nsCall("math", "exp");
                 if (n.method == "log2") return nsCall("math", "log2");
+                if (n.method == "asin") return nsCall("math", "asin");
+                if (n.method == "acos") return nsCall("math", "acos");
+                if (n.method == "sinh") return nsCall("math", "sinh");
+                if (n.method == "cosh") return nsCall("math", "cosh");
+                if (n.method == "tanh") return nsCall("math", "tanh");
             }
             if (uid->name == "File") {
                 // File.open(path) do |handle| … end → kex_file:open(Path, Fun).
@@ -1289,8 +1296,16 @@ struct Lowering {
         }
         // Prelude stdlib functions → kex_prelude module.
         // Not in a guard (cross-module calls are illegal in Core Erlang guards).
+        // Methods that have explicit inline lowerings below must not be
+        // short-circuited to kex_prelude — they need the intrinsic path.
+        static const std::unordered_set<std::string> inlinedMethods = {
+            "second", "third", "even?", "odd?", "modulo", "rest",
+            "none?", "some?", "ok?", "error?", "or", "first",
+            "count", "length", "size", "to", "push", "contains?",
+            "indexOf", "empty?", "in?", "alive?", "abs", "sqrt",
+        };
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
-            && !localMethods.count(m)) {
+            && !localMethods.count(m) && !inlinedMethods.count(m)) {
             std::vector<ExprPtr> pargs;
             pargs.push_back(rv());
             for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
@@ -1313,6 +1328,11 @@ struct Lowering {
                                      two(rv(), std::move(fnV))));
                 }
             }
+        }
+        // n.times { |i| block } → kex_intrinsic_integer:times(n, fun).
+        if (m == "times" && n.block && n.args.empty()) {
+            auto fn = atomize_ir(lower(*n.block), rb);
+            return ret(callE("kex_intrinsic_integer", "times", 2, two(rv(), std::move(fn))));
         }
         // HOF prelude functions (take a block/function argument).
         static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "collect", "count", "partition", "times", "sort"};
@@ -1341,6 +1361,18 @@ struct Lowering {
             auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
         };
 
+        if ((m == "second" || m == "third") && n.args.empty()) {
+            int idx = (m == "second") ? 1 : 2;
+            auto tmp = fresh("_nth");
+            auto letE = std::make_unique<Expr>();
+            letE->node = Let{tmp, callE("kex_intrinsic_list","list_get",2,two(rv(), litInt(idx))),
+                matchBool(
+                    intrin(Op::Eq, two(var(tmp), lit(LitKind::None, "none"))),
+                    lit(LitKind::None, "none"),
+                    justOf(var(tmp)))};
+            return ret(std::move(letE));
+        }
+
         // No-/one-arg builtins with a single runtime call (receiver first).
         struct One { const char* method; const char* mod; const char* fn; int nargs; };
         static const One calls[] = {
@@ -1353,7 +1385,7 @@ struct Lowering {
             {"writeLine","kex_file","handle_write_line",1},
             {"eof?","kex_file","handle_eof?",0},
             {"uniq","lists","usort",0}, {"unique","lists","usort",0},
-            {"abs","erlang","abs",0},
+            {"abs","erlang","abs",0}, {"sqrt","math","sqrt",0},
             // x.inspect returns the pretty-printed representation; IO.inspect
             // is the separate diagnostic form handled above.
             {"inspect","kex_io","inspect_value",0},
@@ -1476,6 +1508,10 @@ struct Lowering {
                     callE("erlang","length",1,one(rv())))));
         if (m == "first" && n.args.empty() && !localMethods.count("first"))
             return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(rv())))));
+        if (m == "rest" && n.args.empty()) {
+            auto empty = std::make_unique<Expr>(); empty->node = MakeList{{}, std::nullopt};
+            return ret(onEmpty(std::move(empty), callE("erlang","tl",1,one(rv()))));
+        }
         // .to(Type) numeric/string conversion (unless a user `to` method).
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;
@@ -1489,7 +1525,7 @@ struct Lowering {
             // to(List) — ranges (and lists) are already real lists on BEAM.
             if (ty == "List") return ret(justOf(rv()));
         }
-        // none?: an Option is None (Kex None → the 'none' atom).
+        // none?: an Option is None (Kex None → the 'None' atom).
         if (m == "none?" && n.args.empty() && !localMethods.count("none?"))
             return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
         // get(key, default): list → list_get/3; map → maps:get/3.
@@ -1504,7 +1540,9 @@ struct Lowering {
         if (m == "empty?" && n.args.empty() && !localMethods.count("empty?"))
             return ret(matchBool(callE("erlang","is_map",1,one(rv())),
                 intrin(Op::Eq, two(callE("maps","size",1,one(rv())), litInt(0))),
-                intrin(Op::Eq, two(rv(), [&]{ auto e=std::make_unique<Expr>(); e->node=MakeList{{},std::nullopt}; return e; }()))));
+                matchBool(callE("erlang","is_binary",1,one(rv())),
+                    intrin(Op::Eq, two(callE("erlang","byte_size",1,one(rv())), litInt(0))),
+                    intrin(Op::Eq, two(rv(), [&]{ auto e=std::make_unique<Expr>(); e->node=MakeList{{},std::nullopt}; return e; }())))));
         // .or(default): unwrap Just/Some/Ok, else the default.
         if (m == "or" && n.args.size() == 1) {
             auto dflt = arg0();
@@ -2950,8 +2988,8 @@ struct Lowering {
             if (vt != typeVariantTags.end() && !vt->second.empty()) {
                 for (const auto& tag : vt->second) {
                     MatchClause mc;
-                    // Nullary variant (lowercase → atom, e.g. 'none').
-                    if (!tag.empty() && std::islower(static_cast<unsigned char>(tag[0]))) {
+                    // Nullary variant (no payload) → bare atom on BEAM.
+                    if (nullaryVariantTags.count(tag)) {
                         auto pat = std::make_unique<Pattern>();
                         pat->kind = PatKind::Lit;
                         pat->litKind = LitKind::Atom;
@@ -3410,9 +3448,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         std::vector<std::string> tags;
                         for (const auto& v : *node->variants) {
                             auto t = Lowering::simpleTypeName(v);
-                            // Kex Nothing → Erlang atom 'none'.
-                            if (t == "Nothing") t = "none";
-                            if (!t.empty()) tags.push_back(t);
+                            if (!t.empty()) {
+                                tags.push_back(t);
+                                if (std::holds_alternative<ast::TypeName>(v->kind))
+                                    L.nullaryVariantTags.insert(t);
+                            }
                         }
                         if (!tags.empty() && tags.size() >= 2)
                             L.typeVariantTags[node->name] = std::move(tags);
@@ -3535,8 +3575,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                         std::vector<std::string> tags;
                                         for (const auto& v : *(*td)->variants) {
                                             auto t = Lowering::simpleTypeName(v);
-                                            if (t == "Nothing") t = "none";
-                                            if (!t.empty()) tags.push_back(t);
+                                            if (!t.empty()) {
+                                                tags.push_back(t);
+                                                if (std::holds_alternative<ast::TypeName>(v->kind))
+                                                    L.nullaryVariantTags.insert(t);
+                                            }
                                         }
                                         if (!tags.empty())
                                             L.typeVariantTags[(*td)->name] = std::move(tags);

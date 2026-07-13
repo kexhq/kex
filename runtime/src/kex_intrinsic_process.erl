@@ -22,7 +22,7 @@
 
 %% task.await(timeout) — await a task's result. The timeout is in milliseconds;
 %% defaults to 'infinity' in Core Erlang's receive-after construct. Returns
-%% {'Just', Value} on the normal 'kex_result' message, or 'none' on timeout.
+%% {'Just', Value} on the normal 'kex_result' message, or 'None' on timeout.
 'await'(Task, Timeout) -> kex_task:await(Task, Timeout).
 
 %% ref.demonitor() — stop monitoring. The receiver is the reference returned

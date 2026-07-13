@@ -326,8 +326,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
             auto variant = std::make_unique<ast::TypeExpr>();
             variant->location = currentLocation();
 
-            if (check(TokenType::UpperIdent)) {
-                auto name = parseTypeName();
+            if (check(TokenType::UpperIdent) || check(TokenType::None)) {
+                auto name = check(TokenType::None)
+                    ? (advance(), ast::TypeName{{"None"}})
+                    : parseTypeName();
                 // Constructor with args: Variant(Type1, Type2)
                 if (match(TokenType::LParen)) {
                     std::vector<ast::TypeExprPtr> args;

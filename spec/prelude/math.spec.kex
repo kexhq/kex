@@ -1,0 +1,124 @@
+# kex: no-check
+
+describe("Math — constants") do
+  it("PI is approximately 3.14159") do
+    assert(Math.PI > 3.14)
+    assert(Math.PI < 3.15)
+  end
+
+  it("E is approximately 2.71828") do
+    assert(Math.E > 2.71)
+    assert(Math.E < 2.72)
+  end
+end
+
+describe("Math — roots") do
+  it("sqrt returns the square root") do
+    assert(Math.sqrt(9.0) == 3.0)
+    assert(Math.sqrt(0.0) == 0.0)
+    assert(Math.sqrt(1.0) == 1.0)
+  end
+
+  it("cbrt returns the cube root") do
+    assert(Math.cbrt(27.0) == 3.0)
+    assert(Math.cbrt(8.0) == 2.0)
+  end
+end
+
+describe("Math — trigonometry") do
+  it("sin of 0 is 0") do
+    assert(Math.sin(0.0) == 0.0)
+  end
+
+  it("cos of 0 is 1") do
+    assert(Math.cos(0.0) == 1.0)
+  end
+
+  it("sin of PI/2 is approximately 1") do
+    let v = Math.sin(Math.PI / 2.0)
+    assert(v > 0.999)
+    assert(v < 1.001)
+  end
+
+  it("tan of 0 is 0") do
+    assert(Math.tan(0.0) == 0.0)
+  end
+end
+
+describe("Math — inverse trigonometry") do
+  it("asin of 0 is 0") do
+    assert(Math.asin(0.0) == 0.0)
+  end
+
+  it("acos of 1 is 0") do
+    assert(Math.acos(1.0) == 0.0)
+  end
+
+  it("atan of 0 is 0") do
+    assert(Math.atan(0.0) == 0.0)
+  end
+
+  it("atan2 returns the correct angle") do
+    let v = Math.atan2(1.0, 1.0)
+    assert(v > 0.78)
+    assert(v < 0.79)
+  end
+end
+
+describe("Math — logarithms") do
+  it("log of E is 1") do
+    let v = Math.log(Math.E)
+    assert(v > 0.999)
+    assert(v < 1.001)
+  end
+
+  it("log with base 2") do
+    assert(Math.log(8.0, 2.0) == 3.0)
+  end
+
+  it("log2 of 8 is 3") do
+    assert(Math.log2(8.0) == 3.0)
+  end
+
+  it("log10 of 1000 is 3") do
+    assert(Math.log10(1000.0) == 3.0)
+  end
+end
+
+describe("Math — exp and pow") do
+  it("exp(0) is 1") do
+    assert(Math.exp(0.0) == 1.0)
+  end
+
+  it("exp(1) is approximately E") do
+    let v = Math.exp(1.0)
+    assert(v > 2.71)
+    assert(v < 2.72)
+  end
+
+  it("pow raises to a power") do
+    assert(Math.pow(2.0, 10.0) == 1024.0)
+    assert(Math.pow(3.0, 0.0) == 1.0)
+  end
+end
+
+describe("Math — hypot") do
+  it("hypot computes Euclidean distance") do
+    assert(Math.hypot(3.0, 4.0) == 5.0)
+    assert(Math.hypot(0.0, 0.0) == 0.0)
+  end
+end
+
+describe("Math — hyperbolic") do
+  it("sinh of 0 is 0") do
+    assert(Math.sinh(0.0) == 0.0)
+  end
+
+  it("cosh of 0 is 1") do
+    assert(Math.cosh(0.0) == 1.0)
+  end
+
+  it("tanh of 0 is 0") do
+    assert(Math.tanh(0.0) == 0.0)
+  end
+end

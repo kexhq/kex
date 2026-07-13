@@ -16,7 +16,6 @@ namespace kex::interpreter {
 struct Value;
 using ValuePtr = std::shared_ptr<Value>;
 
-struct NoneValue {};  // Kex `None` — the empty Optional
 struct UnitValue {};  // Kex `()` — void return from IO/effectful operations
 struct IntValue { int64_t value; };
 // The arbitrary-precision case of `Integer` — only ever constructed once a
@@ -102,7 +101,6 @@ struct LambdaValue {
 
 struct Value {
     std::variant<
-        NoneValue,
         UnitValue,
         IntValue,
         BigIntValue,
@@ -154,6 +152,7 @@ struct Value {
     static auto tuple(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields) -> ValuePtr;
 
+    auto isNone() const -> bool;
     auto isTrue() const -> bool;
     auto toString() const -> std::string;
     auto toRepr() const -> std::string;

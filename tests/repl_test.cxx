@@ -51,7 +51,7 @@ public:
                 auto* program = new kex::ast::Program(parser.parseProgram());
                 m_programs.push_back(program);
                 auto result = m_evaluator.execute(*program);
-                if (result && !std::holds_alternative<NoneValue>(result->data)) {
+                if (result && !result->isNone()) {
                     return result->toRepr();
                 }
                 return "";

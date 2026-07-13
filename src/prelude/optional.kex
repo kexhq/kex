@@ -1,6 +1,6 @@
 # +X?+ is shorthand for +Optional<X>+.
 # +Just(x)+ wraps a value; +None+ represents absence.
-type Optional<X> = Just(X) | Nothing
+type Optional<X> = Just(X) | None
 
 # +Result<X, E>+ represents a computation that either succeeded with +Ok(x)+
 # or failed with +Error(e)+.

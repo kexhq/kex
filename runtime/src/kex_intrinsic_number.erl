@@ -98,7 +98,7 @@ float_parse(S) when is_binary(S) ->
                 {Int, Rest} when is_integer(Int) ->
                     {'Error', parse_error(S, byte_size(S) - byte_size(Rest), float(Int),
                                           <<"trailing characters after float">>, Rest)};
-                _ -> {'Error', parse_error(S, 0, none, <<"invalid float">>, S)}
+                _ -> {'Error', parse_error(S, 0, 'None', <<"invalid float">>, S)}
             end
     end;
 float_parse(S) ->
@@ -117,7 +117,7 @@ float_parse(S) ->
                                           length(S) - length(Rest), float(Int),
                                           <<"trailing characters after float">>,
                                           unicode:characters_to_binary(Rest))};
-                _ -> {'Error', parse_error(unicode:characters_to_binary(S), 0, none,
+                _ -> {'Error', parse_error(unicode:characters_to_binary(S), 0, 'None',
                                            <<"invalid float">>,
                                            unicode:characters_to_binary(S))}
             end
@@ -131,7 +131,7 @@ float_parse_prefix(S) when is_binary(S) ->
         _ ->
             case string:to_integer(S) of
                 {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
-                _ -> none
+                _ -> 'None'
             end
     end;
 float_parse_prefix(S) ->
@@ -140,7 +140,7 @@ float_parse_prefix(S) ->
         _ ->
             case string:to_integer(S) of
                 {Int, Rest} when is_integer(Int) -> {'Just', {float(Int), Rest}};
-                _ -> none
+                _ -> 'None'
             end
     end.
 
@@ -154,7 +154,7 @@ number_parse(S) when is_binary(S) ->
         _ ->
             case float_parse(S) of
                 {'Ok', _} = Ok -> Ok;
-                {'Error', _} -> {'Error', parse_error(S, 0, none,
+                {'Error', _} -> {'Error', parse_error(S, 0, 'None',
                                                        <<"invalid number">>, S)}
             end
     end;
@@ -163,7 +163,7 @@ number_parse(S) -> number_parse(unicode:characters_to_binary(S)).
 %% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
 %% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
 %% an already-matching type, TRUNCATE (not round) a Float down to Integer,
-%% parse a String, and return {'Just', Value} or 'none'.
+%% parse a String, and return {'Just', Value} or 'None'.
 %% Moved from kex_io where type conversion didn't belong.
 to_integer({'Char', C}) -> {'Just', C};
 to_integer(X) when is_integer(X) -> {'Just', X};
@@ -171,14 +171,14 @@ to_integer(X) when is_float(X) -> {'Just', erlang:trunc(X)};
 to_integer(X) when is_binary(X) ->
     case string:to_integer(X) of
         {Int, <<>>} -> {'Just', Int};
-        _ -> 'none'
+        _ -> 'None'
     end;
 to_integer(X) when is_list(X) ->
     case string:to_integer(X) of
         {Int, ""} -> {'Just', Int};
-        _ -> 'none'
+        _ -> 'None'
     end;
-to_integer(_) -> 'none'.
+to_integer(_) -> 'None'.
 
 to_float(X) when is_float(X) -> {'Just', X};
 to_float(X) when is_integer(X) -> {'Just', float(X)};
@@ -188,7 +188,7 @@ to_float(X) when is_binary(X) ->
         _ ->
             case string:to_integer(X) of
                 {Int, <<>>} -> {'Just', float(Int)};
-                _ -> 'none'
+                _ -> 'None'
             end
     end;
 to_float(X) when is_list(X) ->
@@ -197,7 +197,7 @@ to_float(X) when is_list(X) ->
         _ ->
             case string:to_integer(X) of
                 {Int, ""} -> {'Just', float(Int)};
-                _ -> 'none'
+                _ -> 'None'
             end
     end;
-to_float(_) -> 'none'.
+to_float(_) -> 'None'.

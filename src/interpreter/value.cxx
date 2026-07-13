@@ -6,7 +6,12 @@
 namespace kex::interpreter {
 
 auto Value::none() -> ValuePtr {
-    return std::make_shared<Value>(Value{NoneValue{}});
+    return std::make_shared<Value>(Value{VariantValue{"None", "Optional", {}, {"X"}, {}}});
+}
+
+auto Value::isNone() const -> bool {
+    auto* v = std::get_if<VariantValue>(&data);
+    return v && v->tag == "None" && v->args.empty();
 }
 
 auto Value::unit() -> ValuePtr {
@@ -112,10 +117,10 @@ auto Value::record(std::string type, std::unordered_map<std::string, ValuePtr> f
 }
 
 auto Value::isTrue() const -> bool {
+    if (isNone()) return false;
     return std::visit([](const auto& v) -> bool {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, BoolValue>) return v.value;
-        if constexpr (std::is_same_v<T, NoneValue>) return false;
         if constexpr (std::is_same_v<T, UnitValue>) return false;
         return true;
     }, data);
@@ -124,8 +129,7 @@ auto Value::isTrue() const -> bool {
 auto Value::toString() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, NoneValue>) return "None";
-        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
+        if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return std::to_string(v.value);
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) {
@@ -328,8 +332,7 @@ auto Value::toRepr() const -> std::string {
 auto Value::typeName() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, NoneValue>) return "None";
-        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
+        if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return "Int";
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
@@ -429,8 +432,7 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         auto* bv = std::get_if<AT>(&b->data);
         if (!bv) return false;
 
-        if constexpr (std::is_same_v<AT, NoneValue>) return true;
-        else if constexpr (std::is_same_v<AT, IntValue>) return av.value == bv->value;
+        if constexpr (std::is_same_v<AT, IntValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, FloatValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, StringValue>) return av.value == bv->value;
         else if constexpr (std::is_same_v<AT, CharValue>) return av.value == bv->value;
@@ -506,9 +508,7 @@ auto Value::inspect() const -> std::string {
     std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
         return std::visit([&](const auto& node) -> std::string {
             using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, NoneValue>)
-                return std::string(c(gray)) + "None" + c(reset);
-            else if constexpr (std::is_same_v<T, UnitValue>)
+            if constexpr (std::is_same_v<T, UnitValue>)
                 return std::string(c(gray)) + "()" + c(reset);
             else if constexpr (std::is_same_v<T, IntValue>)
                 return std::string(c(yellow)) + std::to_string(node.value) + c(reset);

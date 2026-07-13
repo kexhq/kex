@@ -6,9 +6,7 @@ namespace kex::interpreter {
 // Just(x), Ok(x), Error(e) are used throughout examples/docs without a
 // local `type Option<A> = Just(A) | None` / `type Result<A,E> = Ok(A) |
 // Error(E)` declaration, i.e. they're meant to be prelude builtins, not
-// user-declared. (None/Nothing need no registration — bare NoneValue
-// already works, and zero-arg variants work via the UpperIdentifier
-// atom fallback.) A user `type Result<A,E> = Ok(A) | Error(E)` etc. that
+// user-declared. A user `type Result<A,E> = Ok(A) | Error(E)` etc. that
 // re-declares these is harmless — execTopLevel's TypeDef handling just
 // redefines them identically.
 auto Evaluator::registerAdtConstructors() -> void {
@@ -63,13 +61,11 @@ auto Evaluator::registerAdtConstructors() -> void {
     regResultPredicate("ok?", "Ok");
     regResultPredicate("error?", "Error");
 
-    // `none?` checks bare NoneValue, not a "None" record — see the comment
-    // above regCtor1 for why None needs no constructor of its own.
     auto regOptionPredicate = [this](const std::string& name, bool wantJust) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, [name, wantJust](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.empty()) throw std::runtime_error(name + " expects an Optional, got no argument");
-            if (std::holds_alternative<NoneValue>(args[0]->data)) return Value::boolean(!wantJust);
+            if (args[0]->isNone()) return Value::boolean(!wantJust);
             auto* var = std::get_if<VariantValue>(&args[0]->data);
             if (!var || var->tag != "Just") {
                 throw std::runtime_error(name + " expects an Optional (Just/None), got " + args[0]->typeName());
@@ -95,7 +91,7 @@ auto Evaluator::registerAdtConstructors() -> void {
             }
             const auto& receiver = args[0];
             const auto& fallback = args[1];
-            if (std::holds_alternative<NoneValue>(receiver->data)) return fallback;
+            if (receiver->isNone()) return fallback;
             if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
                 if (var->tag == "Ok" || var->tag == "Just") {
                     return var->args.empty() ? Value::none() : var->args[0];

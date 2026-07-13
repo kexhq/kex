@@ -23,7 +23,7 @@ integer_parse(S) when is_binary(S) ->
         {Int, Rest} when is_integer(Int) ->
             {'Error', parse_error(S, byte_size(S) - byte_size(Rest), Int,
                                   <<"trailing characters after integer">>, Rest)};
-        _ -> {'Error', parse_error(S, 0, none, <<"invalid integer">>, S)}
+        _ -> {'Error', parse_error(S, 0, 'None', <<"invalid integer">>, S)}
     end;
 integer_parse(S) ->
     case string:to_integer(S) of
@@ -33,7 +33,7 @@ integer_parse(S) ->
                                   length(S) - length(Rest), Int,
                                   <<"trailing characters after integer">>,
                                   unicode:characters_to_binary(Rest))};
-        _ -> {'Error', parse_error(unicode:characters_to_binary(S), 0, none,
+        _ -> {'Error', parse_error(unicode:characters_to_binary(S), 0, 'None',
                                    <<"invalid integer">>,
                                    unicode:characters_to_binary(S))}
     end.
@@ -44,10 +44,10 @@ integer_parse(S) ->
 integer_parse_prefix(S) when is_binary(S) ->
     case string:to_integer(S) of
         {Int, Rest} when is_integer(Int) -> {'Just', {Int, Rest}};
-        _ -> none
+        _ -> 'None'
     end;
 integer_parse_prefix(S) ->
     case string:to_integer(S) of
         {Int, Rest} when is_integer(Int) -> {'Just', {Int, Rest}};
-        _ -> none
+        _ -> 'None'
     end.

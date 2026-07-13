@@ -1,0 +1,230 @@
+# kex: no-check
+
+describe("Integer — predicates") do
+  it("even? returns true for even numbers") do
+    assert(0.even?)
+    assert(2.even?)
+    assert(4.even?)
+    assert(!1.even?)
+    assert(!3.even?)
+  end
+
+  it("odd? returns true for odd numbers") do
+    assert(1.odd?)
+    assert(3.odd?)
+    assert(!0.odd?)
+    assert(!2.odd?)
+  end
+end
+
+describe("Integer — abs") do
+  it("abs returns the absolute value") do
+    assert(5.abs == 5)
+    assert((-5).abs == 5)
+    assert(0.abs == 0)
+  end
+end
+
+describe("Integer — sqrt") do
+  it("sqrt returns the square root as a Float") do
+    assert(16.sqrt == 4.0)
+    assert(0.sqrt == 0.0)
+    assert(1.sqrt == 1.0)
+  end
+end
+
+describe("Integer — modulo") do
+  it("modulo returns the remainder") do
+    assert(7.modulo(3) == 1)
+    assert(10.modulo(5) == 0)
+    assert(1.modulo(2) == 1)
+  end
+end
+
+describe("Integer — in?") do
+  it("in? checks membership in a range") do
+    assert(5.in?(1..10))
+    assert(1.in?(1..10))
+    assert(10.in?(1..10))
+    assert(!11.in?(1..10))
+    assert(!0.in?(1..10))
+  end
+end
+
+describe("Integer — times") do
+  it("times calls the block n times") do
+    var total = 0
+    3.times { |i| total = total + i }
+    assert(total == 3)
+  end
+
+  it("0.times does not call the block") do
+    var called = false
+    0.times { |_| called = true }
+    assert(!called)
+  end
+end
+
+describe("Integer — to") do
+  it("to(Float) converts an integer") do
+    assert(42.to(Float) == Just(42.0))
+  end
+
+  it("to(String) converts an integer") do
+    assert(42.to(String) == Just("42"))
+  end
+end
+
+describe("Float — abs") do
+  it("abs returns the absolute value") do
+    assert((-3.14).abs == 3.14)
+    assert(3.14.abs == 3.14)
+    assert(0.0.abs == 0.0)
+  end
+end
+
+describe("Float — sqrt") do
+  it("sqrt returns the square root") do
+    assert(25.0.sqrt == 5.0)
+    assert(0.0.sqrt == 0.0)
+  end
+end
+
+describe("Float — to") do
+  it("to(Integer) converts a float") do
+    assert(3.9.to(Integer) == Just(3))
+  end
+
+  it("to(String) converts a float") do
+    assert(3.14.to(String) == Just("3.14"))
+  end
+end
+
+describe("Integer.parse and Float.parse") do
+  it("Integer.parse succeeds on valid input") do
+    assert(Integer.parse("42").ok?)
+    assert(Integer.parse("42").or(0) == 42)
+  end
+
+  it("Integer.parse fails on non-numeric input") do
+    assert(Integer.parse("abc").error?)
+  end
+
+  it("Float.parse succeeds on valid input") do
+    assert(Float.parse("3.14").ok?)
+    assert(Float.parse("3.14").or(0.0) == 3.14)
+  end
+
+  it("Float.parse fails on non-numeric input") do
+    assert(Float.parse("xyz").error?)
+  end
+
+  it("Integer.parsePrefix parses leading integer") do
+    match Integer.parsePrefix("42abc") do
+      Just((n, rest)) -> do
+        assert(n == 42)
+        assert(rest == "abc")
+      end
+      None -> assert(false, "expected Just")
+    end
+  end
+
+  it("Integer.parsePrefix returns None when no digits") do
+    assert(Integer.parsePrefix("abc") == None)
+  end
+end
+
+describe("Integer — floor, ceil, round") do
+  it("floor is identity on integers") do
+    assert(5.floor == 5)
+    assert((-3).floor == -3)
+    assert(0.floor == 0)
+  end
+
+  it("ceil is identity on integers") do
+    assert(5.ceil == 5)
+    assert((-3).ceil == -3)
+  end
+
+  it("round is identity on integers") do
+    assert(5.round == 5)
+    assert((-3).round == -3)
+  end
+end
+
+describe("Integer — toFloat and toString") do
+  it("toFloat converts to a float") do
+    assert(42.toFloat == 42.0)
+    assert(0.toFloat == 0.0)
+  end
+
+  it("toString converts to a string") do
+    assert(42.toString == "42")
+    assert(0.toString == "0")
+    assert((-7).toString == "-7")
+  end
+end
+
+describe("Integer — negative modulo") do
+  it("modulo with negative dividend yields positive result") do
+    assert((-7).modulo(3) == 2)
+    assert((-1).modulo(5) == 4)
+  end
+end
+
+describe("Float — floor, ceil, round") do
+  it("floor returns greatest integer <= self") do
+    assert(3.7.floor == 3)
+    assert(3.0.floor == 3)
+    assert((-1.5).floor == -2)
+  end
+
+  it("ceil returns smallest integer >= self") do
+    assert(3.2.ceil == 4)
+    assert(3.0.ceil == 3)
+    assert((-1.5).ceil == -1)
+  end
+
+  it("round rounds to nearest integer") do
+    assert(3.7.round == 4)
+    assert(3.2.round == 3)
+    assert((-1.5).round == -2)
+  end
+end
+
+describe("Float — toInteger and toString") do
+  it("toInteger truncates toward zero") do
+    assert(3.9.toInteger == 3)
+    assert((-3.9).toInteger == -3)
+    assert(0.0.toInteger == 0)
+  end
+
+  it("toString converts to a string") do
+    assert(3.14.toString == "3.14")
+    assert(0.0.toString == "0.0")
+  end
+end
+
+describe("Float — in?") do
+  it("in? checks membership in a float range") do
+    assert(1.5.in?(1.0..2.0))
+    assert(1.0.in?(1.0..2.0))
+    assert(!(2.5.in?(1.0..2.0)))
+  end
+end
+
+describe("Float.parsePrefix") do
+  it("Float.parsePrefix parses leading float") do
+    match Float.parsePrefix("3.14abc") do
+      Just((f, rest)) -> do
+        assert(f == 3.14)
+        assert(rest == "abc")
+      end
+      None -> assert(false, "expected Just")
+    end
+  end
+
+  it("Float.parsePrefix returns None when no digits") do
+    assert(Float.parsePrefix("abc") == None)
+  end
+end

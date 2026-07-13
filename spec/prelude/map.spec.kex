@@ -1,0 +1,264 @@
+# kex: no-check
+
+describe("Map — get") do
+  it("get returns Just for existing keys") do
+    let m = { name: "Alice", age: 32 }
+    assert(m.get(:name) == Just("Alice"))
+    assert(m.get(:age) == Just(32))
+  end
+
+  it("get returns None for missing keys") do
+    let m = { a: 1 }
+    assert(m.get(:missing) == None)
+  end
+
+  it("get with default returns the value for existing keys") do
+    let m = { x: 10 }
+    assert(m.get(:x, 0) == 10)
+  end
+
+  it("get with default returns the default for missing keys") do
+    let m = { x: 10 }
+    assert(m.get(:missing, 0) == 0)
+  end
+end
+
+describe("Map — put and delete") do
+  it("put adds a new key") do
+    let m = {}
+    let m2 = m.put(:x, 1)
+    assert(m2.get(:x) == Just(1))
+    assert(m.get(:x) == None)
+  end
+
+  it("put overwrites an existing key") do
+    let m = { x: 1 }
+    let m2 = m.put(:x, 99)
+    assert(m2.get(:x) == Just(99))
+  end
+
+  it("delete removes a key") do
+    let m = { a: 1, b: 2 }
+    let m2 = m.delete(:a)
+    assert(m2.get(:a) == None)
+    assert(m2.get(:b) == Just(2))
+  end
+
+  it("delete is a no-op for missing keys") do
+    let m = { a: 1 }
+    let m2 = m.delete(:missing)
+    assert(m2.get(:a) == Just(1))
+  end
+end
+
+describe("Map — has? and empty?") do
+  it("has? returns true for existing keys") do
+    assert({ a: 1, b: 2 }.has?(:a))
+    assert({ a: 1, b: 2 }.has?(:b))
+  end
+
+  it("has? returns false for missing keys") do
+    assert(!({ a: 1 }.has?(:z)))
+    assert(!({}.has?(:anything)))
+  end
+
+  it("empty? returns true for empty map") do
+    assert({}.empty?)
+  end
+
+  it("empty? returns false for non-empty map") do
+    assert(!({ a: 1 }.empty?))
+  end
+end
+
+describe("Map — count") do
+  it("count returns the number of entries") do
+    assert({}.count == 0)
+    assert({ a: 1 }.count == 1)
+    assert({ a: 1, b: 2, c: 3 }.count == 3)
+  end
+
+  it("count with predicate counts matching entries") do
+    assert({ a: 1, b: 2, c: 3 }.count { |k, v| v > 1 } == 2)
+    assert({ a: 1, b: 2 }.count { |k, v| v > 10 } == 0)
+  end
+end
+
+describe("Map — keys, values, entries") do
+  it("keys returns all keys") do
+    let ks = { a: 1, b: 2 }.keys
+    assert(ks.count == 2)
+    assert(ks.contains?(:a))
+    assert(ks.contains?(:b))
+  end
+
+  it("values returns all values") do
+    let vs = { a: 1, b: 2 }.values
+    assert(vs.count == 2)
+    assert(vs.contains?(1))
+    assert(vs.contains?(2))
+  end
+
+  it("entries returns key-value pairs") do
+    let es = { a: 1, b: 2 }.entries
+    assert(es.count == 2)
+    assert(es.contains?((:a, 1)))
+    assert(es.contains?((:b, 2)))
+  end
+
+  it("keys is empty for empty map") do
+    assert({}.keys == [])
+  end
+
+  it("values is empty for empty map") do
+    assert({}.values == [])
+  end
+end
+
+describe("Map — mapValues and mapKeys") do
+  it("mapValues transforms all values") do
+    let m = { a: 1, b: 2 }.mapValues { |v| v * 10 }
+    assert(m.get(:a) == Just(10))
+    assert(m.get(:b) == Just(20))
+  end
+
+  it("mapKeys transforms all keys") do
+    let m = { a: 1, b: 2 }.mapKeys { |k| "${k}x" }
+    assert(m.get(:ax) == Just(1))
+    assert(m.get(:bx) == Just(2))
+  end
+
+  it("mapValues on empty map returns empty map") do
+    assert({}.mapValues { |v| v }.empty?)
+  end
+end
+
+describe("Map — filter and reject") do
+  it("filter keeps matching entries") do
+    let m = { a: 1, b: 2, c: 3 }.filter { |k, v| v > 1 }
+    assert(!m.has?(:a))
+    assert(m.has?(:b))
+    assert(m.has?(:c))
+  end
+
+  it("reject removes matching entries") do
+    let m = { a: 1, b: 2, c: 3 }.reject { |k, v| v > 1 }
+    assert(m.has?(:a))
+    assert(!m.has?(:b))
+    assert(!m.has?(:c))
+  end
+
+  it("filter returns empty when nothing matches") do
+    let m = { a: 1 }.filter { |k, v| v > 99 }
+    assert(m.empty?)
+  end
+end
+
+describe("Map — merge") do
+  it("merge combines two maps") do
+    let m = { a: 1, b: 2 }.merge({ c: 3 })
+    assert(m.get(:a) == Just(1))
+    assert(m.get(:c) == Just(3))
+  end
+
+  it("merge with conflict uses other's value") do
+    let m = { a: 1, b: 2 }.merge({ b: 99, c: 3 })
+    assert(m.get(:b) == Just(99))
+    assert(m.get(:a) == Just(1))
+    assert(m.get(:c) == Just(3))
+  end
+
+  it("merge with empty map is identity") do
+    let m = { a: 1 }
+    assert(m.merge({}).get(:a) == Just(1))
+    assert({}.merge(m).get(:a) == Just(1))
+  end
+end
+
+describe("Map — any? and all?") do
+  it("any? returns true if at least one entry matches") do
+    assert({ a: 1, b: 2 }.any? { |k, v| v > 1 })
+    assert(!({ a: 1, b: 2 }.any? { |k, v| v > 10 }))
+  end
+
+  it("all? returns true if every entry matches") do
+    assert({ a: 1, b: 2 }.all? { |k, v| v > 0 })
+    assert(!({ a: 1, b: 2 }.all? { |k, v| v > 1 }))
+  end
+
+  it("any? returns false for empty map") do
+    assert(!({}.any? { |k, v| true }))
+  end
+
+  it("all? returns true for empty map") do
+    assert({}.all? { |k, v| false })
+  end
+end
+
+describe("Map — find") do
+  it("find returns Just of the first matching entry") do
+    let result = { a: 1, b: 2, c: 3 }.find { |k, v| v > 1 }
+    assert(result.some?)
+  end
+
+  it("find returns None when nothing matches") do
+    assert({ a: 1 }.find { |k, v| v > 99 } == None)
+  end
+
+  it("find returns None for empty map") do
+    assert({}.find { |k, v| true } == None)
+  end
+end
+
+describe("Map — map (Enumerable)") do
+  it("map transforms entries into a list") do
+    let result = { a: 1, b: 2 }.map { |k, v| v * 10 }
+    assert(result.count == 2)
+    assert(result.contains?(10))
+    assert(result.contains?(20))
+  end
+end
+
+describe("Map — each (Enumerable)") do
+  it("each visits every entry") do
+    var total = 0
+    { a: 1, b: 2, c: 3 }.each { |k, v| total = total + v }
+    assert(total == 6)
+  end
+end
+
+describe("Map — reduce (Enumerable)") do
+  it("reduce folds over entries") do
+    let total = { a: 1, b: 2, c: 3 }.reduce(0) { |acc, k, v| acc + v }
+    assert(total == 6)
+  end
+end
+
+describe("Map — Blankable") do
+  it("empty map is blank") do
+    assert({}.blank?)
+    assert(!({}.present?))
+  end
+
+  it("non-empty map is not blank") do
+    assert(!({ a: 1 }.blank?))
+    assert({ a: 1 }.present?)
+  end
+end
+
+describe("Map — put! (mutation syntax)") do
+  it("put! rebinds the receiver variable") do
+    var m = {}
+    m.put!(:x, 1)
+    m.put!(:y, 2)
+    assert(m.get(:x) == Just(1))
+    assert(m.get(:y) == Just(2))
+  end
+
+  it("delete! rebinds the receiver variable") do
+    var m = { a: 1, b: 2 }
+    m.delete!(:a)
+    assert(m.get(:a) == None)
+    assert(m.get(:b) == Just(2))
+  end
+end

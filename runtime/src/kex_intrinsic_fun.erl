@@ -11,7 +11,7 @@
 %% or_else/2 — `.or(default)` is universal: Just/Ok unwrap, None/Error give
 %% the default, and any other value returns itself (matching the walker).
 or_else({'Just', X}, _) -> X;
-or_else('none', D) -> D;
+or_else('None', D) -> D;
 or_else({'Ok', X}, _) -> X;
 or_else({'Error', _}, D) -> D;
 or_else(V, _) -> V.
@@ -51,19 +51,19 @@ reject2(M, F) when is_map(M) ->
 reject2(L, F) -> [I || I <- as_list(L), not applyItem(F, I)].
 
 %% find2 — first matching pair as Just({K, V}) (map) / Just(Item) (list),
-%% else 'none'.
+%% else 'None'.
 find2(M, F) when is_map(M) ->
-    maps:fold(fun(K, V, none) ->
+    maps:fold(fun(K, V, 'None') ->
                       case F(K, V) of
                           true -> {'Just', {K, V}};
-                          false -> none
+                          false -> 'None'
                       end;
                  (_K, _V, Acc) -> Acc
-              end, none, M);
+              end, 'None', M);
 find2(L, F) ->
     case lists:search(fun(I) -> applyItem(F, I) end, as_list(L)) of
         {value, I} -> {'Just', I};
-        false -> none
+        false -> 'None'
     end.
 
 as_list(L) -> kex_intrinsic_list:as_list(L).

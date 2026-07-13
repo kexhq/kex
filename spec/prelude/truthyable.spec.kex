@@ -1,0 +1,65 @@
+# kex: no-check
+
+describe("Truthyable — Integer") do
+  it("all integers are truthy") do
+    assert(0.truthy?)
+    assert(1.truthy?)
+    assert((-1).truthy?)
+    assert(!0.falsy?)
+  end
+end
+
+describe("Truthyable — Float") do
+  it("normal floats are truthy") do
+    assert(0.0.truthy?)
+    assert(1.5.truthy?)
+    assert(!0.0.falsy?)
+  end
+end
+
+describe("Truthyable — String") do
+  it("all strings are truthy") do
+    assert("".truthy?)
+    assert("hello".truthy?)
+    assert(!"hello".falsy?)
+  end
+end
+
+describe("Truthyable — Optional") do
+  it("Just is truthy") do
+    assert(Just(42).truthy?)
+    assert(!Just(42).falsy?)
+  end
+
+  it("None is falsy") do
+    assert(!None.truthy?)
+    assert(None.falsy?)
+  end
+end
+
+describe("Truthyable — List") do
+  it("all lists are truthy (even empty)") do
+    assert([].truthy?)
+    assert([1, 2].truthy?)
+    assert(!([].falsy?))
+  end
+end
+
+describe("Truthyable — Map") do
+  it("all maps are truthy (even empty)") do
+    assert({}.truthy?)
+    assert({ a: 1 }.truthy?)
+  end
+end
+
+describe("Truthyable — Bool") do
+  it("true is truthy") do
+    assert(true.truthy?)
+    assert(!true.falsy?)
+  end
+
+  it("false is falsy") do
+    assert(!false.truthy?)
+    assert(false.falsy?)
+  end
+end

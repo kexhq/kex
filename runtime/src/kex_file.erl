@@ -51,13 +51,13 @@ exists(Path) ->
 'directory?'(Path) ->
     mocked_dir(Path) orelse filelib:is_dir(pth(Path)).
 
-%% File.lines(path) → [String] | 'none'
+%% File.lines(path) → [String] | 'None'
 lines(Path) ->
     case mock_content(Path) of
         undefined ->
             case file:read_file(pth(Path)) of
                 {ok, Bin} -> split_lines(Bin);
-                _ -> none
+                _ -> 'None'
             end;
         C -> split_lines(C)
     end.
@@ -70,13 +70,13 @@ split_lines(Bin) ->
         _           -> Lines
     end.
 
-%% File.read(path) → String | 'none'
+%% File.read(path) → String | 'None'
 read(Path) ->
     case mock_content(Path) of
         undefined ->
             case file:read_file(pth(Path)) of
                 {ok, Bin} -> Bin;
-                _         -> none
+                _         -> 'None'
             end;
         C -> C
     end.
@@ -108,13 +108,13 @@ append(Path, Content) ->
             true
     end.
 
-%% File.size(path) → Int | 'none'
+%% File.size(path) → Int | 'None'
 size(Path) ->
     case mock_content(Path) of
         undefined ->
             case file:read_file_info(pth(Path)) of
                 {ok, Info} -> element(2, Info);  %% #file_info.size is index 2
-                _          -> none
+                _          -> 'None'
             end;
         C -> byte_size(C)
     end.
@@ -146,17 +146,17 @@ rename(From, To) ->
         _  -> false
     end.
 
-%% File.feed(path) → [String] | 'none' — lazy-stream placeholder; returns the
+%% File.feed(path) → [String] | 'None' — lazy-stream placeholder; returns the
 %% same eager list as lines/1.
 feed(Path) -> lines(Path).
 
 %% File.open(path) do |handle| … end — the handle IS the path (every
 %% path-based op works on it directly). Returns the block's result, or
-%% 'none' when the file doesn't exist.
+%% 'None' when the file doesn't exist.
 open(Path, Fun) ->
     case exists(Path) of
         true  -> Fun(pth(Path));
-        false -> none
+        false -> 'None'
     end.
 
 %% File.open(path, Mode) do |f| … end — a real io-device handle
@@ -167,7 +167,7 @@ open(Path, Mode, Fun) ->
             try Fun({'FileHandle', Dev, pth(Path)})
             after file:close(Dev)
             end;
-        _ -> none
+        _ -> 'None'
     end.
 
 mode_flags('Read')      -> [read, binary];
@@ -177,19 +177,19 @@ mode_flags('ReadWrite') -> [read, write, binary];
 mode_flags(_)           -> [read, binary].
 
 %% ── FileHandle methods (receiver-first UFCS) ────────────────────────────
-%% readLine → String? (newline stripped, 'none' at EOF) — matches the
+%% readLine → String? (newline stripped, 'None' at EOF) — matches the
 %% walker's std::getline semantics.
 handle_read_line({'FileHandle', Dev, _}) ->
     case file:read_line(Dev) of
         {ok, Line} -> string:trim(Line, trailing, "\n");
-        _          -> none
+        _          -> 'None'
     end;
-handle_read_line(_) -> none.
+handle_read_line(_) -> 'None'.
 
 %% read → the remaining content as a String.
 handle_read({'FileHandle', Dev, _}) ->
     read_rest(Dev, <<>>);
-handle_read(_) -> none.
+handle_read(_) -> 'None'.
 
 read_rest(Dev, Acc) ->
     case file:read(Dev, 65536) of
@@ -237,7 +237,7 @@ dir_current() ->
 
 dir_home() ->
     case os:getenv("HOME") of
-        false -> none;
+        false -> 'None';
         Home  -> to_bin(Home)
     end.
 
@@ -262,7 +262,7 @@ dir_delete_all(P) ->
         _  -> false
     end.
 
-%% list/files/directories → Just([String]) | 'none'. Mocked directories list
+%% list/files/directories → Just([String]) | 'None'. Mocked directories list
 %% their registered direct children.
 dir_list(P) ->
     case mocked_dir(P) of
@@ -272,7 +272,7 @@ dir_list(P) ->
         false ->
             case file:list_dir(pth(P)) of
                 {ok, Names} -> {'Just', lists:sort([to_bin(N) || N <- Names])};
-                _           -> none
+                _           -> 'None'
             end
     end.
 
@@ -285,7 +285,7 @@ dir_files(P) ->
                 {ok, Names} ->
                     {'Just', lists:sort([to_bin(N) || N <- Names,
                         filelib:is_regular(filename:join(Dir, N))])};
-                _ -> none
+                _ -> 'None'
             end
     end.
 
@@ -298,7 +298,7 @@ dir_directories(P) ->
                 {ok, Names} ->
                     {'Just', lists:sort([to_bin(N) || N <- Names,
                         filelib:is_dir(filename:join(Dir, N))])};
-                _ -> none
+                _ -> 'None'
             end
     end.
 

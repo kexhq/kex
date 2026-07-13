@@ -1,0 +1,50 @@
+# kex: no-check
+
+describe("Monoid — Integer") do
+  it("identity is 0") do
+    let x = 42
+    assert(x.combine(0) == x)
+    assert(0.combine(x) == x)
+  end
+
+  it("combine is addition") do
+    assert(3.combine(4) == 7)
+  end
+end
+
+describe("Group — Integer") do
+  it("inverse negates") do
+    assert(5.inverse == -5)
+    assert((-3).inverse == 3)
+    assert(0.inverse == 0)
+  end
+
+  it("combine with inverse yields identity") do
+    let x = 7
+    assert(x.combine(x.inverse) == 0)
+  end
+end
+
+describe("Monoid — String") do
+  it("identity is empty string") do
+    let s = "hello"
+    assert(s.combine("") == s)
+    assert("".combine(s) == s)
+  end
+
+  it("combine is concatenation") do
+    assert("hello".combine(" world") == "hello world")
+  end
+end
+
+describe("Monoid — List") do
+  it("identity is empty list") do
+    let xs = [1, 2, 3]
+    assert(xs.combine([]) == xs)
+    assert([].combine(xs) == xs)
+  end
+
+  it("combine is concatenation") do
+    assert([1, 2].combine([3, 4]) == [1, 2, 3, 4])
+  end
+end

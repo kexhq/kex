@@ -1,0 +1,34 @@
+# kex: no-check
+
+describe("Char — predicates") do
+  it("digit? returns true for digits") do
+    assert('0'.digit?)
+    assert('5'.digit?)
+    assert('9'.digit?)
+    assert(!'a'.digit?)
+    assert(!' '.digit?)
+  end
+
+  it("alpha? returns true for letters") do
+    assert('a'.alpha?)
+    assert('Z'.alpha?)
+    assert(!'3'.alpha?)
+    assert(!' '.alpha?)
+  end
+
+  it("space? returns true for whitespace") do
+    assert(' '.space?)
+    assert(!('a'.space?))
+    assert(!('1'.space?))
+  end
+end
+
+describe("Char — in?") do
+  it("in? checks membership in a char range") do
+    assert('b'.in?('a'..'z'))
+    assert('a'.in?('a'..'z'))
+    assert('z'.in?('a'..'z'))
+    assert(!('B'.in?('a'..'z')))
+    assert(!('0'.in?('a'..'z')))
+  end
+end

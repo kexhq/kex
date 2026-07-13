@@ -376,7 +376,7 @@ int main() {
 
         it("evaluates None", []() {
             auto result = run("main do\n  None\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
     });
 
@@ -853,7 +853,7 @@ int main() {
                 "  f(true)\n"
                 "end\n"
             );
-            assertTrue(std::holds_alternative<NoneValue>(guarded->data));
+            assertTrue(guarded->isNone());
 
             auto notGuarded = run(
                 "let f(skip: Bool) -> String do\n"
@@ -985,7 +985,7 @@ int main() {
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
             auto result = run("main do\n  IO.getLine()\nend\n");
             std::cin.rdbuf(prevCin);
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
 
         it("IO.get reads a single character from stdin", []() {
@@ -1001,7 +1001,7 @@ int main() {
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
             auto result = run("main do\n  IO.get()\nend\n");
             std::cin.rdbuf(prevCin);
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
     });
 
@@ -1055,7 +1055,7 @@ int main() {
 
         it("reading a nonexistent file returns None", []() {
             auto result = run("main do\n  File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
 
         it("deleting a nonexistent file returns false", []() {
@@ -1097,7 +1097,7 @@ int main() {
 
         it("feed on a nonexistent file returns None", []() {
             auto result = run("main do\n  File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
     });
 
@@ -1258,7 +1258,7 @@ int main() {
         it("ENV.get returns None for an unset variable", []() {
             unsetenv("KEX_TEST_ENV_VAR_UNSET");
             auto result = run("main do\n  ENV.get(\"KEX_TEST_ENV_VAR_UNSET\")\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
 
         it("ENV.get with a default returns the default when unset", []() {
@@ -1292,7 +1292,7 @@ int main() {
 
         it("get returns None when missing and no default given", []() {
             auto result = run("main do\n  { \"a\": 1 }.get(\"b\")\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
 
         it("get(name, default) returns the default when missing (regression)", []() {
@@ -1372,7 +1372,7 @@ int main() {
 
         it("returns None out of range", []() {
             auto result = run("main do\n  \"hi\".at(5)\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(result->data));
+            assertTrue(result->isNone());
         });
 
         it("Char is its own type, not a 1-char String", []() {
@@ -1542,7 +1542,7 @@ int main() {
             assertEqual(std::get<IntValue>(just.args[0]->data).value, int64_t(42));
 
             auto failure = run("main do\n  \"42x\".to(Integer)\nend\n");
-            assertTrue(std::holds_alternative<NoneValue>(failure->data));
+            assertTrue(failure->isNone());
         });
 
         it("collects Just results, dropping None", []() {

@@ -4,6 +4,7 @@
 #include "environment.hxx"
 #include "scheduler.hxx"
 #include "value.hxx"
+#include <deque>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -179,6 +180,10 @@ private:
     std::unordered_set<std::string> m_sealedMethods;
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
+
+    bool m_mockIO = false;
+    std::string m_mockIOOutput;
+    std::deque<std::string> m_mockIOInputLines;
 
     // describe/it/assert (registerTestBuiltins) — nesting depth for
     // indentation, and pass/fail counters for the summary line printed

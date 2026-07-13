@@ -1089,7 +1089,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
             if (node.op == TokenType::QuestionQuestion) {
                 auto left = node.left ? eval(*node.left) : Value::none();
-                if (left && !std::holds_alternative<NoneValue>(left->data)) return left;
+                if (left && !left->isNone()) return left;
                 return node.right ? eval(*node.right) : Value::none();
             }
             auto left = node.left ? eval(*node.left) : Value::none();
@@ -2105,7 +2105,7 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
     auto savedEnv = m_env;
     try {
         auto result = func->native({});
-        if (result && !std::holds_alternative<NoneValue>(result->data)) {
+        if (result && !result->isNone()) {
             return result;
         }
     } catch (...) {
@@ -2159,7 +2159,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 return bv && !bv->value;
             }
             if (pat.literal.type == TokenType::None) {
-                return std::holds_alternative<NoneValue>(value->data);
+                return value->isNone();
             }
             if (pat.literal.type == TokenType::Atom) {
                 auto* av = std::get_if<AtomValue>(&value->data);
@@ -2230,7 +2230,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
             // Match None
-            if (pat.name == "None") return std::holds_alternative<NoneValue>(value->data);
+            if (pat.name == "None") return value->isNone();
 
             if (pat.args.empty()) {
                 // Match zero-arg variant constructors (Nothing, Less, Fizz, ...)

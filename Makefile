@@ -1,4 +1,4 @@
-.PHONY: build test spec test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build test spec spec-prelude test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -67,7 +67,7 @@ web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
 	@python3 -m http.server 8743
 
-test-all: test spec
+test-all: test spec spec-prelude
 
 SHELL := /bin/bash
 
@@ -103,6 +103,49 @@ spec: build
 	echo ""; \
 	echo "  $$passed passing, $$failed failing"; \
 	[ $$failed -eq 0 ]
+
+spec-prelude: build
+	@echo "Running prelude spec suite..."
+	@failed=0; passed=0; \
+	for f in spec/prelude/*.kex; do \
+		output=$$($(KEX) --no-check --no-colors "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); \
+		failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; \
+	echo "  $$passed passed, $$failed failed"; \
+	[ $$failed -eq 0 ]
+
+spec-prelude-beam: build
+	@echo "Running prelude spec suite through BEAM (-R)..."
+	@failed=0; passed=0; \
+	for f in spec/prelude/*.kex; do \
+		output=$$(timeout 8 $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); \
+		failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; \
+	echo "  $$passed passed, $$failed failed"
 
 # Runs the whole spec suite through -R (BEAM) instead of the per-file tag
 # system `spec` uses, and diffs against the SAME .expected golden files —

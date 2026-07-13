@@ -1,0 +1,51 @@
+# kex: no-check
+
+describe("Range — items") do
+  it("integer range produces a list of integers") do
+    assert((1..5).items == [1, 2, 3, 4, 5])
+    assert((0..0).items == [0])
+  end
+
+  it("char range produces a list of characters") do
+    assert(('a'..'e').items == ['a', 'b', 'c', 'd', 'e'])
+  end
+end
+
+describe("Range — Enumerable via reduce") do
+  it("map works on ranges") do
+    assert((1..4).map { |x| x * 2 } == [2, 4, 6, 8])
+  end
+
+  it("filter works on ranges") do
+    assert((1..10).filter { |x| x.even? } == [2, 4, 6, 8, 10])
+  end
+
+  it("any? works on ranges") do
+    assert((1..5).any? { |x| x == 3 })
+    assert(!((1..5).any? { |x| x == 9 }))
+  end
+
+  it("all? works on ranges") do
+    assert((1..5).all? { |x| x > 0 })
+    assert(!((1..5).all? { |x| x > 3 }))
+  end
+
+  it("reduce works on ranges") do
+    assert((1..5).reduce(0) { |acc, x| acc + x } == 15)
+  end
+
+  it("each works on ranges") do
+    var total = 0
+    (1..5).each { |x| total = total + x }
+    assert(total == 15)
+  end
+
+  it("flatMap works on ranges") do
+    assert((1..3).flatMap { |n| [n, n * 10] } == [1, 10, 2, 20, 3, 30])
+  end
+
+  it("collect works on ranges") do
+    let result = (1..5).collect { |n| n.even? then Just(n) else None }
+    assert(result == [2, 4])
+  end
+end

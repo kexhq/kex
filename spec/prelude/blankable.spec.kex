@@ -1,0 +1,82 @@
+# kex: no-check
+
+describe("Blankable — Integer") do
+  it("integers are never blank") do
+    assert(!0.blank?)
+    assert(!1.blank?)
+    assert(!(-1).blank?)
+    assert(0.present?)
+  end
+end
+
+describe("Blankable — Float") do
+  it("normal floats are not blank") do
+    assert(!0.0.blank?)
+    assert(!1.5.blank?)
+    assert(1.5.present?)
+  end
+end
+
+describe("Blankable — String") do
+  it("empty string is blank") do
+    assert("".blank?)
+  end
+
+  it("whitespace-only string is blank") do
+    assert("   ".blank?)
+    assert("\t\t\n".blank?)
+  end
+
+  it("non-empty string is not blank") do
+    assert(!"hello".blank?)
+    assert("hello".present?)
+  end
+end
+
+describe("Blankable — Optional") do
+  it("Just is not blank") do
+    assert(!Just(42).blank?)
+    assert(Just(42).present?)
+  end
+
+  it("None is blank") do
+    assert(None.blank?)
+    assert(!None.present?)
+  end
+end
+
+describe("Blankable — List") do
+  it("empty list is blank") do
+    assert([].blank?)
+    assert(!([].present?))
+  end
+
+  it("non-empty list is not blank") do
+    assert(!([1].blank?))
+    assert([1].present?)
+  end
+end
+
+describe("Blankable — Map") do
+  it("empty map is blank") do
+    assert({}.blank?)
+    assert(!({}.present?))
+  end
+
+  it("non-empty map is not blank") do
+    assert(!({ a: 1 }.blank?))
+    assert({ a: 1 }.present?)
+  end
+end
+
+describe("Blankable — Bool") do
+  it("true is not blank") do
+    assert(!true.blank?)
+    assert(true.present?)
+  end
+
+  it("false is blank") do
+    assert(false.blank?)
+    assert(!false.present?)
+  end
+end

@@ -1,0 +1,185 @@
+# kex: no-check
+
+describe("Mock.IO — lifecycle") do
+  it("start activates mock mode") do
+    Mock.IO.start()
+    IO.printLine("hidden from terminal")
+    let out = Mock.IO.output()
+    assert(out == "hidden from terminal\n")
+    Mock.IO.stop()
+  end
+
+  it("stop deactivates mock mode and clears") do
+    Mock.IO.start()
+    IO.printLine("something")
+    Mock.IO.stop()
+    Mock.IO.start()
+    assert(Mock.IO.output() == "")
+    Mock.IO.stop()
+  end
+
+  it("clear resets output and input without stopping") do
+    Mock.IO.start()
+    IO.printLine("first")
+    Mock.IO.clear()
+    IO.printLine("second")
+    assert(Mock.IO.output() == "second\n")
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.printLine (mocked)") do
+  it("captures a single line") do
+    Mock.IO.start()
+    IO.printLine("hello")
+    assert(Mock.IO.output() == "hello\n")
+    Mock.IO.stop()
+  end
+
+  it("captures multiple calls") do
+    Mock.IO.start()
+    IO.printLine("one")
+    IO.printLine("two")
+    IO.printLine("three")
+    assert(Mock.IO.output() == "one\ntwo\nthree\n")
+    Mock.IO.stop()
+  end
+
+  it("captures integer and float output") do
+    Mock.IO.start()
+    IO.printLine(42)
+    IO.printLine(3.14)
+    assert(Mock.IO.output() == "42\n3.14\n")
+    Mock.IO.stop()
+  end
+
+  it("captures boolean output") do
+    Mock.IO.start()
+    IO.printLine(true)
+    IO.printLine(false)
+    assert(Mock.IO.output() == "true\nfalse\n")
+    Mock.IO.stop()
+  end
+
+  it("captures list output") do
+    Mock.IO.start()
+    IO.printLine([1, 2, 3])
+    assert(Mock.IO.output() == "[1, 2, 3]\n")
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.print (mocked)") do
+  it("captures without trailing newline") do
+    Mock.IO.start()
+    IO.print("hello")
+    IO.print(" world")
+    assert(Mock.IO.output() == "hello world")
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.printError (mocked)") do
+  it("captures error output in the same buffer") do
+    Mock.IO.start()
+    IO.printError("oops")
+    assert(Mock.IO.output() == "oops\n")
+    Mock.IO.stop()
+  end
+
+  it("IO.warn is an alias for printError") do
+    Mock.IO.start()
+    IO.warn("warning message")
+    assert(Mock.IO.output() == "warning message\n")
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.getLine (mocked)") do
+  it("returns staged input lines in order") do
+    Mock.IO.start()
+    Mock.IO.input("first", "second", "third")
+    assert(IO.getLine() == "first")
+    assert(IO.getLine() == "second")
+    assert(IO.getLine() == "third")
+    Mock.IO.stop()
+  end
+
+  it("returns None when input is exhausted") do
+    Mock.IO.start()
+    Mock.IO.input("only")
+    IO.getLine()
+    let result = IO.getLine()
+    assert(result == None)
+    Mock.IO.stop()
+  end
+
+  it("input can be staged incrementally") do
+    Mock.IO.start()
+    Mock.IO.input("a")
+    Mock.IO.input("b")
+    assert(IO.getLine() == "a")
+    assert(IO.getLine() == "b")
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.get (mocked)") do
+  it("reads one character at a time from staged input") do
+    Mock.IO.start()
+    Mock.IO.input("hi")
+    assert(IO.get() == "h")
+    assert(IO.get() == "i")
+    Mock.IO.stop()
+  end
+
+  it("returns None when all input is consumed") do
+    Mock.IO.start()
+    let result = IO.get()
+    assert(result == None)
+    Mock.IO.stop()
+  end
+end
+
+describe("IO.inspect (mocked)") do
+  it("captures inspect output and returns the value") do
+    Mock.IO.start()
+    let val = IO.inspect(42)
+    assert(val == 42)
+    let out = Mock.IO.output()
+    assert(out.contains?("42"))
+    Mock.IO.stop()
+  end
+end
+
+describe("IO — mixed read and write (mocked)") do
+  it("simulates an interactive prompt") do
+    Mock.IO.start()
+    Mock.IO.input("Alice")
+    IO.print("Name: ")
+    let name = IO.getLine()
+    IO.printLine("Hello, ${name}!")
+    assert(Mock.IO.output() == "Name: Hello, Alice!\n")
+    Mock.IO.stop()
+  end
+
+  it("simulates reading multiple inputs and computing") do
+    Mock.IO.start()
+    Mock.IO.input("3", "4")
+    let a = IO.getLine().to(Integer).or(0)
+    let b = IO.getLine().to(Integer).or(0)
+    IO.printLine(a + b)
+    assert(Mock.IO.output() == "7\n")
+    Mock.IO.stop()
+  end
+
+  it("output survives clear of input only") do
+    Mock.IO.start()
+    IO.printLine("keep this")
+    Mock.IO.input("extra")
+    IO.getLine()
+    let out = Mock.IO.output()
+    assert(out.contains?("keep this"))
+    Mock.IO.stop()
+  end
+end

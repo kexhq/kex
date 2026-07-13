@@ -1,0 +1,160 @@
+# kex: no-check
+
+describe("String — length and emptiness") do
+  it("count returns the number of characters") do
+    assert("hello".count == 5)
+    assert("".count == 0)
+    assert("kex lang".count == 8)
+  end
+
+  it("empty? is true only for the empty string") do
+    assert("".empty?)
+    assert(!"hello".empty?)
+    assert(!" ".empty?)
+  end
+end
+
+describe("String — indexing") do
+  it("at returns the character for valid indices") do
+    assert("hello".at(0) == 'h')
+    assert("hello".at(4) == 'o')
+  end
+
+  it("at returns None for out-of-range indices") do
+    assert("hello".at(5) == None)
+    assert("hello".at(-1) == None)
+    assert("".at(0) == None)
+  end
+end
+
+describe("String — chars") do
+  it("chars returns a list of characters") do
+    assert("hi".chars == ['h', 'i'])
+    assert("".chars == [])
+    assert("a".chars == ['a'])
+  end
+end
+
+describe("String — split") do
+  it("split with separator splits on every occurrence") do
+    assert("a,b,c".split(",") == ["a", "b", "c"])
+    assert("hello world".split(" ") == ["hello", "world"])
+  end
+
+  it("split preserves empty segments") do
+    assert("a,,b".split(",") == ["a", "", "b"])
+  end
+
+  it("split with no argument splits into characters") do
+    assert("hi".split == ["h", "i"])
+    assert("abc".split == ["a", "b", "c"])
+    assert("".split == [])
+  end
+end
+
+describe("String — join without separator") do
+  it("join without separator concatenates directly") do
+    assert(["a", "b", "c"].join == "abc")
+  end
+
+  it("join empty list returns empty string") do
+    assert([].join == "")
+  end
+end
+
+describe("String — trim") do
+  it("trim removes leading and trailing whitespace") do
+    assert("  hello  ".trim == "hello")
+    assert("hello".trim == "hello")
+    assert("  ".trim == "")
+  end
+end
+
+describe("String — case conversion") do
+  it("upperCase converts all characters to upper case") do
+    assert("hello".upperCase == "HELLO")
+    assert("Hello World".upperCase == "HELLO WORLD")
+    assert("".upperCase == "")
+  end
+
+  it("lowerCase converts all characters to lower case") do
+    assert("HELLO".lowerCase == "hello")
+    assert("Hello World".lowerCase == "hello world")
+    assert("".lowerCase == "")
+  end
+end
+
+describe("String — reverse") do
+  it("reverse reverses the string") do
+    assert("hello".reverse == "olleh")
+    assert("a".reverse == "a")
+    assert("".reverse == "")
+    assert("abcde".reverse == "edcba")
+  end
+end
+
+describe("String — searching") do
+  it("contains? finds a substring") do
+    assert("hello world".contains?("world"))
+    assert("hello world".contains?("hello"))
+    assert(!"hello world".contains?("xyz"))
+    assert("hello".contains?(""))
+  end
+
+  it("startsWith? checks the prefix") do
+    assert("hello".startsWith?("hel"))
+    assert("hello".startsWith?("hello"))
+    assert(!"hello".startsWith?("llo"))
+    assert("hello".startsWith?(""))
+  end
+
+  it("endsWith? checks the suffix") do
+    assert("hello".endsWith?("llo"))
+    assert("hello".endsWith?("hello"))
+    assert(!"hello".endsWith?("hel"))
+    assert("hello".endsWith?(""))
+  end
+end
+
+describe("String — conversion") do
+  it("to(Integer) parses a numeric string") do
+    assert("42".to(Integer) == Just(42))
+    assert("-7".to(Integer) == Just(-7))
+  end
+
+  it("to(Integer) returns None for non-numeric strings") do
+    assert("abc".to(Integer) == None)
+  end
+
+  it("to(Float) parses a float string") do
+    assert("3.14".to(Float) == Just(3.14))
+  end
+
+  it("to(Float) returns None for non-numeric strings") do
+    assert("xyz".to(Float) == None)
+  end
+end
+
+describe("String — second and third") do
+  it("second returns the second character") do
+    assert("abc".second == Just('b'))
+    assert("a".second == None)
+    assert("".second == None)
+  end
+
+  it("third returns the third character") do
+    assert("abc".third == Just('c'))
+    assert("ab".third == None)
+  end
+end
+
+describe("String — join from list") do
+  it("join concatenates string lists with separator") do
+    assert(["hello", "world"].join(", ") == "hello, world")
+    assert(["a", "b", "c"].join("-") == "a-b-c")
+  end
+
+  it("join single element") do
+    assert(["only"].join(", ") == "only")
+  end
+end

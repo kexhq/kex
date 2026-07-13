@@ -722,7 +722,7 @@ auto Evaluator::registerListBuiltins() -> void {
         std::vector<ValuePtr> result;
         for (const auto& elem : elems) {
             auto mapped = fn->native({elem});
-            if (std::holds_alternative<NoneValue>(mapped->data)) continue;
+            if (mapped->isNone()) continue;
             if (auto* var = std::get_if<VariantValue>(&mapped->data)) {
                 if (var->tag == "Just") {
                     if (!var->args.empty()) result.push_back(var->args[0]);

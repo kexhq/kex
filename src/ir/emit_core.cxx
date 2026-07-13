@@ -116,7 +116,7 @@ struct Emitter {
                 std::to_string(static_cast<int>(static_cast<unsigned char>(l.text[0]))) + "}";
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
-            case LitKind::None:   return "'none'";
+            case LitKind::None:   return "'None'";
             case LitKind::Atom:   return "'" + l.text + "'";
         }
         return "'undefined'";

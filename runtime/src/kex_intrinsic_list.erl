@@ -37,8 +37,13 @@ sort(L, Fun) -> lists:sort(Fun, as_list(L)).
 uniq(L)    -> lists:usort(as_list(L)).
 flatten(L) -> lists:flatten(as_list(L)).
 take(L, N) -> lists:sublist(as_list(L), N).
-drop(L, N) -> lists:nthtail(N, as_list(L)).
-zip(L, R)  -> lists:zip(as_list(L), as_list(R)).
+drop(L, N) ->
+    L2 = as_list(L),
+    lists:nthtail(min(N, erlang:length(L2)), L2).
+zip(L, R)  -> zip_short(as_list(L), as_list(R)).
+zip_short([], _) -> [];
+zip_short(_, []) -> [];
+zip_short([A|As], [B|Bs]) -> [{A, B} | zip_short(As, Bs)].
 push(L, X) -> as_list(L) ++ [X].
 sum(L)     -> lists:sum(as_list(L)).
 product(L) -> list_product(as_list(L)).
@@ -63,20 +68,20 @@ member(Elem, Container) -> lists:member(Elem, Container).
 %% Backing for the prelude's `first`/`last` (pattern-based impls hit the
 %% one-element-pattern semantics; a direct primitive is simpler and O(1)/O(n)).
 first(B) when is_binary(B) -> first(as_list(B));
-first([])      -> 'none';
+first([])      -> 'None';
 first([X | _]) -> {'Just', X}.
 last(B) when is_binary(B) -> last(as_list(B));
-last([])       -> 'none';
+last([])       -> 'None';
 last(L)        -> {'Just', lists:last(L)}.
 
 %% min/1, max/1 — the smallest/largest element wrapped in Just, or None for [].
 %% lists:min/max crash on the empty list, so guard here (the prelude's old
 %% recursive impl was non-tail and returned this same Just/None form).
 min(B) when is_binary(B) -> min(as_list(B));
-min([]) -> 'none';
+min([]) -> 'None';
 min(L)  -> {'Just', lists:min(L)}.
 max(B) when is_binary(B) -> max(as_list(B));
-max([]) -> 'none';
+max([]) -> 'None';
 max(L)  -> {'Just', lists:max(L)}.
 
 %% length/1 — element count, backing List.count (was a non-tail `1 + xs.count`
@@ -99,7 +104,7 @@ untag_one(E) -> E.
 %% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
 %% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's
 %% 2-arg form.
-list_get(List, Idx) -> list_get(List, Idx, 'none').
+list_get(List, Idx) -> list_get(List, Idx, 'None').
 list_get(Bin, Idx, Default) when is_binary(Bin) ->
     list_get(as_list(Bin), Idx, Default);
 list_get(List, Idx, _Default) when is_integer(Idx), Idx >= 0, Idx < erlang:length(List) ->
@@ -109,7 +114,7 @@ list_get(_List, _Idx, Default) ->
 
 %% list.indexOf(value) -> Just(index) | None (0-based). No lists:indexOf/2 BIF.
 index_of(Value, List) -> index_of(Value, List, 0).
-index_of(_Value, [], _I) -> 'none';
+index_of(_Value, [], _I) -> 'None';
 index_of(Value, [Value | _], I) -> {'Just', I};
 index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 
@@ -125,7 +130,7 @@ product_by(L, F) ->
 minBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A < B end).
 maxBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A > B end).
 
-extreme_by([], _F, _Wins) -> 'none';
+extreme_by([], _F, _Wins) -> 'None';
 extreme_by([H | T], F, Wins) ->
     Seed = {H, kex_intrinsic_fun:applyItem(F, H)},
     {Best, _} = lists:foldl(fun(I, {B, BK}) ->

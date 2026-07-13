@@ -33,8 +33,8 @@ print_error(X) ->
 %% IO.readLine — read a line from stdin, returns a String (UTF-8 binary).
 read_line() ->
     case io:get_line("") of
-        eof -> none;
-        {error, _} -> none;
+        eof -> 'None';
+        {error, _} -> 'None';
         Line -> unicode:characters_to_binary(string:trim(Line, trailing, "\n"))
     end.
 
@@ -64,10 +64,10 @@ inspect(false) ->
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), false;
 inspect('Kex.Unit') ->
     'Kex.Unit';
-inspect(none) ->
+inspect('None') ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), none;
+              ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), 'None';
 inspect(X) when is_atom(X) ->
     Name = atom_to_list(X),
     case Name of
@@ -132,7 +132,7 @@ inspect_string(X) when is_binary(X) ->
 inspect_string(X) when is_integer(X) -> ?YELL ++ integer_to_list(X) ++ ?RESET;
 inspect_string(true) -> ?YELL ++ "true" ++ ?RESET;
 inspect_string(false) -> ?YELL ++ "false" ++ ?RESET;
-inspect_string(none) -> ?GRAY ++ "None" ++ ?RESET;
+inspect_string('None') -> ?GRAY ++ "None" ++ ?RESET;
 inspect_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", [inspect_string(E) || E <- X])) ++ "]";
 inspect_string(X) when is_map(X) ->
@@ -250,7 +250,7 @@ to_string(X) when is_list(X) ->
 % needs its own clause before the general is_atom one below. A real,
 % reproduced bug otherwise: IO.printLine(None) printed "none" under BEAM
 % but "None" under the tree-walker.
-to_string('none')               -> "None";
+to_string('None')               -> "None";
 to_string('true')               -> "true";
 to_string('false')              -> "false";
 % A Kex `:atom` literal (always lowercase-first — see the lexer) prints

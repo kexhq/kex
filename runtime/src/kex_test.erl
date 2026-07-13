@@ -20,7 +20,7 @@ describe(Name, Fun) ->
     after
         put(kex_test_depth, Depth)
     end,
-    'none'.
+    'None'.
 
 it(Name, Fun) ->
     Depth = get_depth(),
@@ -35,7 +35,7 @@ it(Name, Fun) ->
             io:format("~s~ts~ts~ts ~ts: ~ts~n", [Indent, kex_intrinsic_console:'Red'(),
                       [16#2717], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name), Msg])
     end,
-    'none'.
+    'None'.
 
 %% Only assert's own erlang:error(String) reason is reproduced verbatim
 %% (matching the tree-walker's e.what() for a failed assertion exactly);
@@ -89,6 +89,6 @@ assert(Cond, Msg) ->
 %% only false/none/'ok' (Kex's Unit) are falsy — everything else (0, "",
 %% [], any record/variant) is truthy.
 is_truthy(false) -> false;
-is_truthy('none') -> false;
+is_truthy('None') -> false;
 is_truthy('ok') -> false;
 is_truthy(_) -> true.

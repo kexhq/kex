@@ -1,0 +1,327 @@
+# kex: no-check
+
+describe("List — first, last, rest") do
+  it("first returns Just of the first element") do
+    assert([1, 2, 3].first == Just(1))
+    assert(["a"].first == Just("a"))
+  end
+
+  it("first returns None for an empty list") do
+    assert([].first == None)
+  end
+
+  it("last returns Just of the last element") do
+    assert([1, 2, 3].last == Just(3))
+    assert([42].last == Just(42))
+  end
+
+  it("last returns None for an empty list") do
+    assert([].last == None)
+  end
+
+  it("rest returns all but the first element") do
+    assert([1, 2, 3].rest == [2, 3])
+    assert([1].rest == [])
+    assert([].rest == [])
+  end
+end
+
+describe("List — count and empty?") do
+  it("count returns the number of elements") do
+    assert([1, 2, 3].count == 3)
+    assert([].count == 0)
+    assert([42].count == 1)
+  end
+
+  it("empty? is true only for an empty list") do
+    assert([].empty?)
+    assert(![1].empty?)
+    assert(![1, 2, 3].empty?)
+  end
+end
+
+describe("List — at") do
+  it("at returns the element for valid indices") do
+    assert([10, 20, 30].at(0) == 10)
+    assert([10, 20, 30].at(2) == 30)
+  end
+
+  it("at returns None for out-of-range indices") do
+    assert([10, 20, 30].at(3) == None)
+    assert([].at(0) == None)
+  end
+end
+
+describe("List — contains? and indexOf") do
+  it("contains? returns true if the element is present") do
+    assert([1, 2, 3].contains?(2))
+    assert(!([1, 2, 3].contains?(9)))
+    assert(!([].contains?(1)))
+  end
+
+  it("indexOf returns Just of the index") do
+    assert([10, 20, 30].indexOf(20) == Just(1))
+    assert([10, 20, 30].indexOf(10) == Just(0))
+  end
+
+  it("indexOf returns None if not found") do
+    assert([10, 20, 30].indexOf(99) == None)
+  end
+end
+
+describe("List — map, filter, reject") do
+  it("map transforms each element") do
+    assert([1, 2, 3].map { |x| x * 2 } == [2, 4, 6])
+    assert([].map { |x| x * 2 } == [])
+  end
+
+  it("filter keeps matching elements") do
+    assert([1, 2, 3, 4].filter { |x| x.even? } == [2, 4])
+    assert([1, 3, 5].filter { |x| x.even? } == [])
+  end
+
+  it("reject removes matching elements") do
+    assert([1, 2, 3, 4].reject { |x| x.even? } == [1, 3])
+  end
+end
+
+describe("List — reduce") do
+  it("reduce folds from the left") do
+    assert([1, 2, 3].reduce(0) { |acc, x| acc + x } == 6)
+    assert([1, 2, 3].reduce(1) { |acc, x| acc * x } == 6)
+  end
+
+  it("reduce with empty list returns the accumulator") do
+    assert([].reduce(42) { |acc, x| acc + x } == 42)
+  end
+end
+
+describe("List — each") do
+  it("each visits every element") do
+    var total = 0
+    [1, 2, 3].each { |x| total = total + x }
+    assert(total == 6)
+  end
+end
+
+describe("List — find, any?, all?") do
+  it("find returns Just of the first matching element") do
+    assert([1, 2, 3].find { |x| x > 1 } == Just(2))
+    assert([1, 2, 3].find { |x| x > 9 } == None)
+  end
+
+  it("any? returns true if at least one matches") do
+    assert([1, 2, 3].any? { |x| x > 2 })
+    assert(!([1, 2, 3].any? { |x| x > 9 }))
+  end
+
+  it("all? returns true if all match") do
+    assert([1, 2, 3].all? { |x| x > 0 })
+    assert(!([1, 2, 3].all? { |x| x > 1 }))
+  end
+
+  it("all? is true for an empty list") do
+    assert([].all? { |x| false })
+  end
+end
+
+describe("List — flatMap and collect") do
+  it("flatMap maps and flattens one level") do
+    assert([1, 2, 3].flatMap { |n| [n, n * 10] } == [1, 10, 2, 20, 3, 30])
+    assert([].flatMap { |n| [n] } == [])
+  end
+
+  it("collect keeps and unwraps Just results") do
+    let result = [1, 2, 3, 4].collect { |n| n > 2 then Just(n * 10) else None }
+    assert(result == [30, 40])
+  end
+
+  it("collect on empty list returns empty") do
+    assert([].collect { |n| Just(n) } == [])
+  end
+end
+
+describe("List — take and drop") do
+  it("take returns the first n elements") do
+    assert([1, 2, 3, 4, 5].take(3) == [1, 2, 3])
+    assert([1, 2].take(5) == [1, 2])
+    assert([].take(3) == [])
+  end
+
+  it("drop removes the first n elements") do
+    assert([1, 2, 3, 4, 5].drop(2) == [3, 4, 5])
+    assert([1, 2].drop(5) == [])
+    assert([].drop(3) == [])
+  end
+end
+
+describe("List — push, reverse, uniq") do
+  it("push appends to the end") do
+    assert([1, 2].push(3) == [1, 2, 3])
+    assert([].push(1) == [1])
+  end
+
+  it("reverse reverses the list") do
+    assert([1, 2, 3].reverse == [3, 2, 1])
+    assert([].reverse == [])
+    assert([1].reverse == [1])
+  end
+
+  it("uniq removes duplicates") do
+    assert([1, 2, 3, 2, 1].uniq == [1, 2, 3])
+    assert([].uniq == [])
+    assert([1].uniq == [1])
+  end
+end
+
+describe("List — zip") do
+  it("zip pairs elements") do
+    assert([1, 2, 3].zip(["a", "b", "c"]) == [(1, "a"), (2, "b"), (3, "c")])
+  end
+
+  it("zip stops at the shorter list") do
+    assert([1, 2].zip(["a", "b", "c"]) == [(1, "a"), (2, "b")])
+    assert([1, 2, 3].zip(["a"]) == [(1, "a")])
+  end
+end
+
+describe("List — flatten") do
+  it("flatten merges one level of nesting") do
+    assert([[1, 2], [3, 4]].flatten == [1, 2, 3, 4])
+    assert([[1], [], [2, 3]].flatten == [1, 2, 3])
+    assert([].flatten == [])
+  end
+end
+
+describe("List — sort") do
+  it("sort returns elements in ascending order") do
+    assert([3, 1, 2].sort == [1, 2, 3])
+    assert([].sort == [])
+    assert([1].sort == [1])
+  end
+
+  it("sort with comparator uses custom order") do
+    assert([3, 1, 2].sort { |a, b| a > b } == [3, 2, 1])
+  end
+end
+
+describe("List — partition") do
+  it("partition splits by predicate") do
+    let (evens, odds) = [1, 2, 3, 4].partition { |n| n.even? }
+    assert(evens == [2, 4])
+    assert(odds == [1, 3])
+  end
+
+  it("partition on empty list returns two empties") do
+    let (a, b) = [].partition { |n| true }
+    assert(a == [])
+    assert(b == [])
+  end
+end
+
+describe("List — count with predicate") do
+  it("count with predicate counts matching elements") do
+    assert([1, 2, 3, 4].count { |x| x.even? } == 2)
+    assert([1, 2, 3, 4].count { |x| x > 10 } == 0)
+    assert([].count { |x| true } == 0)
+  end
+end
+
+describe("List — min and max") do
+  it("min returns Just of the smallest element") do
+    assert([3, 1, 2].min == Just(1))
+    assert([42].min == Just(42))
+  end
+
+  it("min returns None for an empty list") do
+    assert([].min == None)
+  end
+
+  it("max returns Just of the largest element") do
+    assert([3, 1, 2].max == Just(3))
+    assert([42].max == Just(42))
+  end
+
+  it("max returns None for an empty list") do
+    assert([].max == None)
+  end
+
+  it("min with block returns element with smallest key") do
+    assert(["hey", "hi", "hello"].min { |s| s.count } == Just("hi"))
+  end
+
+  it("max with block returns element with largest key") do
+    assert(["hey", "hi", "hello"].max { |s| s.count } == Just("hello"))
+  end
+end
+
+describe("List — second and third") do
+  it("second returns Just of the second element") do
+    assert([1, 2, 3].second == Just(2))
+    assert(["a", "b"].second == Just("b"))
+  end
+
+  it("second returns None for short lists") do
+    assert([1].second == None)
+    assert([].second == None)
+  end
+
+  it("third returns Just of the third element") do
+    assert([1, 2, 3].third == Just(3))
+    assert(["a", "b", "c", "d"].third == Just("c"))
+  end
+
+  it("third returns None for short lists") do
+    assert([1, 2].third == None)
+    assert([1].third == None)
+    assert([].third == None)
+  end
+end
+
+describe("List — join") do
+  it("join with separator concatenates elements") do
+    assert(["hello", "world", "kex"].join(", ") == "hello, world, kex")
+    assert(["a", "b", "c"].join("-") == "a-b-c")
+  end
+
+  it("join without separator concatenates directly") do
+    assert(["a", "b", "c"].join == "abc")
+    assert(["hello"].join == "hello")
+  end
+
+  it("join on empty list returns empty string") do
+    assert([].join(", ") == "")
+    assert([].join == "")
+  end
+
+  it("join on single element returns that element") do
+    assert(["only"].join(", ") == "only")
+  end
+
+  it("join works with char lists") do
+    assert(['h', 'i'].join == "hi")
+    assert(['a', 'b', 'c'].join("-") == "a-b-c")
+  end
+end
+
+describe("List — sum and product") do
+  it("sum adds all elements") do
+    assert([1, 2, 3].sum == 6)
+    assert([].sum == 0)
+    assert([1.5, 2.5].sum == 4.0)
+  end
+
+  it("sum with block maps then sums") do
+    assert(["hello", "hi", "kex"].sum { |s| s.count } == 10)
+  end
+
+  it("product multiplies all elements") do
+    assert([1, 2, 3, 4].product == 24)
+    assert([].product == 1)
+    assert([2.0, 3.0].product == 6.0)
+  end
+
+  it("product with block maps then multiplies") do
+    assert([1, 2, 3, 4].product { |n| n * 2 } == 384)
+  end
+end

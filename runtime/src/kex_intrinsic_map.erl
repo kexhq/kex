@@ -30,7 +30,7 @@ delete(M, K) -> maps:remove(K, M).
 'get'(M, K) ->
     case maps:find(K, M) of
         {ok, V} -> {'Just', V};
-        error   -> 'none'
+        error   -> 'None'
     end.
 
 %% getWithDefault/3 — lookup with fallback, returning the raw value.
