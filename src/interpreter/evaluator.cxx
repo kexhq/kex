@@ -2340,6 +2340,8 @@ auto Evaluator::registerBuiltins() -> void {
     registerProcessBuiltins();
     registerParserBuiltins();
     registerEvalBuiltins();
+    registerHttpBuiltins();
+    registerWebBuiltins();
 
     // Kex.Intrinsic.Fun.applyItem(f, item) — auto-splat a pair into a
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)

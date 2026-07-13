@@ -1,0 +1,38 @@
+# A small web application using the Web.Server API.
+#
+# Run:
+#   kex -R examples/web_server.kex
+#
+# Try it:
+#   curl http://localhost:8080/
+#   curl http://localhost:8080/hello?name=Kex
+#   curl -X POST --data 'echo this' http://localhost:8080/echo
+
+# kex: run-beam
+
+let home(request: Web.Request) -> Web.Response do
+  let page = "<h1>Hello from Kex!</h1><p>Try <a href=\"/hello?name=Kex\">/hello?name=Kex</a>.</p>"
+  return Web.Response.html(page)
+end
+
+let hello(request: Web.Request) -> Web.Response do
+  let name = request.query.get("name", "world")
+  return Web.Response.text("Hello, ${name}!\n")
+end
+
+let echo(request: Web.Request) -> Web.Response do
+  return Web.Response.text(request.body)
+end
+
+main do
+  let server = Web.Server.new(8080)
+    .get("/", &home)
+    .get("/hello", &hello)
+    .post("/echo", &echo)
+
+  IO.printLine("Web.Server listening on http://localhost:8080")
+  if let Error(reason) = server.start()
+    IO.printLine("Server stopped: ${reason}")
+    return 1
+  end
+end

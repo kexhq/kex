@@ -66,6 +66,8 @@ int main() {
         it("mutating.kex", []() { assertTrue(parseFile("examples/mutating.kex")); });
         it("pattern_matching.kex", []() { assertTrue(parseFile("examples/pattern_matching.kex")); });
         it("real_world.kex", []() { assertTrue(parseFile("examples/real_world.kex")); });
+        // BEAM-only: Web.Server is backed by Erlang/OTP sockets.
+        it("web_server.kex", []() { assertTrue(parseFile("examples/web_server.kex")); });
         it("records.kex", []() { assertTrue(parseFile("examples/records.kex")); });
         it("streams.kex", []() { assertTrue(parseFile("examples/streams.kex")); });
         it("testing.kex", []() { assertTrue(parseFile("examples/testing.kex")); });

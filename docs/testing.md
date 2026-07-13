@@ -2,7 +2,11 @@
 
 ## Standard Library Framework
 
-Testing is a library, not a language feature. `describe`/`it`/`assert` are real, implemented as global stdlib functions (`registerTestBuiltins` in `src/interpreter/stdlib/test.cxx`) — the rest of this doc (`before`, `Mock.*`, `using Test`, the `kex test` subcommand) is still aspirational; see "Not Yet Implemented" below.
+Testing is a library, not a language feature. `describe`, `it`, `before`, and
+`after` are global stdlib functions; focused assertions live in `Assert`. Hooks are scoped to their
+`describe`: setup runs outer-to-inner in declaration order, while teardown always
+runs inner-to-outer in reverse declaration order. `Mock.FS` and `Mock.Http` are
+also implemented; `using Test` and the `kex test` subcommand remain aspirational.
 
 ## Syntax
 
@@ -26,7 +30,9 @@ Calls must be parenthesized — `describe("name") do`, not `describe "name" do` 
 
 - `describe(name) do ... end` — purely organizational: prints a header and runs its block. Can nest.
 - `it(name) do ... end` — runs a test case. Any exception escaping the block — a failed `assert`, or an ordinary bug in the code under test — marks it failed and prints the message, without aborting the rest of the suite.
+- `before { ... }` / `after { ... }` — per-test setup and guaranteed cleanup; `:each` is the optional default scope, while `before(:all)` / `after(:all)` run once per group.
 - `assert(value)` / `assert(value, message)` — throws if `value` is falsy (caught by the enclosing `it`; outside of `it`, it's just an ordinary uncaught error).
+- `Assert.equal`, `Assert.notEqual`, `Assert.truthy`, `Assert.falsy`, `Assert.some`, `Assert.none`, `Assert.ok`, and `Assert.error` — focused assertions with clearer failures.
 
 A summary line (`N passed, M failed`) prints once, at the end of the program, only if at least one `it` ran.
 
@@ -36,13 +42,11 @@ A summary line (`N passed, M failed`) prints once, at the end of the program, on
 
 ## Not Yet Implemented
 
-- `before` — setup run before each test in a group
-- `Mock.*` — mock implementations of foul modules (`Mock.File.expect(...)`, etc.)
 - `using Test` / `using` blocks in general — currently a no-op everywhere in the interpreter
 - `kex test` — a dedicated CLI subcommand for running specs (today, specs are just run like any other `.kex` file: `kex spec/foo.spec.kex`)
 
 ```kex
-# Aspirational — none of this works yet:
+# Aspirational dedicated import and richer expectation API:
 using Test
 
 describe MyServer do

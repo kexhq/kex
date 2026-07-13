@@ -1,0 +1,56 @@
+describe("Web.Server configuration") do
+  it("creates a server on the requested port") do
+    let server = Web.Server.new(9090)
+    assert(server.port == 9090)
+    assert(server.routes.empty?)
+  end
+
+  it("mounts routes in declaration order") do
+    let handler = { |request| Web.Response.text(request.path) }
+    let server = Web.Server.new(9090)
+      .get("/", handler)
+      .post("/items", handler)
+      .mount("/health", handler)
+
+    let [first, second, third] = server.routes
+    assert(server.routes.count == 3)
+    assert(first.method == "GET")
+    assert(first.path == "/")
+    assert(second.method == "POST")
+    assert(third.method == "*")
+  end
+
+  it("supports all route helpers") do
+    let handler = { |_| Web.Response.text("ok") }
+    let server = Web.Server.new(9090)
+      .put("/resource", handler)
+      .patch("/resource", handler)
+      .delete("/resource", handler)
+
+    assert(server.routes.map { |route| route.method } == ["PUT", "PATCH", "DELETE"])
+  end
+end
+
+describe("Web.Response helpers") do
+  it("builds text responses") do
+    let response = Web.Response.textWithStatus("created", 201)
+    assert(response.status == 201)
+    assert(response.body == "created")
+    assert(response.headers.get("Content-Type") == Just("text/plain; charset=utf-8"))
+  end
+
+  it("builds HTML and JSON responses") do
+    let html = Web.Response.html("<h1>Hello</h1>")
+    let json = Web.Response.json("{\"ok\":true}")
+    assert(html.headers.get("Content-Type") == Just("text/html; charset=utf-8"))
+    assert(json.headers.get("Content-Type") == Just("application/json"))
+  end
+
+  it("builds redirects and not-found responses") do
+    let redirect = Web.Response.redirect("/new")
+    let missing = Web.Response.notFound
+    assert(redirect.status == 302)
+    assert(redirect.headers.get("Location") == Just("/new"))
+    assert(missing.status == 404)
+  end
+end

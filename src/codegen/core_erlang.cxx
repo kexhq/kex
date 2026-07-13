@@ -710,6 +710,14 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "let <" + fnVar + "> =\n    " + fun + " in\n"
                        "call 'kex_test':'" + node.name + "'(" + nameArg + ", " + fnVar + ")";
             }
+            if ((node.name == "before" || node.name == "after") &&
+                node.args.size() <= 1 && node.block) {
+                auto fnVar = freshVar(node.name == "before" ? "Before" : "After");
+                auto fun = emitExpr(*node.block);
+                auto prefix = node.args.empty() ? "" : emitExpr(node.args[0]) + ", ";
+                return "let <" + fnVar + "> =\n    " + fun + " in\n"
+                       "call 'kex_test':'" + node.name + "'(" + prefix + fnVar + ")";
+            }
             // Check if it's a namespaced call like IO.printLine
             auto dot = node.name.find('.');
             if (dot != std::string::npos) {

@@ -179,7 +179,8 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     // `:>` (implicit-This signature) is deliberately NOT accepted here —
     // it only makes sense inside `make T do ... end`, where T is known to
     // be the implicit first param's type. At top level there's no such T.
-    if (check(TokenType::LowerIdent) && peekNext().type == TokenType::Colon) {
+    if ((check(TokenType::LowerIdent) || check(TokenType::After)) &&
+        peekNext().type == TokenType::Colon) {
         return parseTypeAnnotation();
     }
     if (check(TokenType::LowerIdent) && peekNext().type == TokenType::TypeAnnotation) {
@@ -497,7 +498,7 @@ auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
         // Field names can be keywords (e.g. 'end', 'type')
         if (check(TokenType::LowerIdent) || check(TokenType::End) ||
             check(TokenType::Type) || check(TokenType::Match) ||
-            check(TokenType::Loop)) {
+            check(TokenType::Loop) || check(TokenType::Timeout)) {
             field.name = advance().value;
         } else {
             error("Expected field name");
@@ -789,7 +790,10 @@ auto Parser::parseParam() -> ast::Param {
 
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     auto ann = std::make_unique<ast::TypeAnnotation>();
-    ann->name = expect(TokenType::LowerIdent, "Expected name").value;
+    if (check(TokenType::LowerIdent) || check(TokenType::After))
+        ann->name = advance().value;
+    else
+        error("Expected name");
 
     if (match(TokenType::TypeAnnotation)) {
         ann->implicitThis = true;
@@ -1420,7 +1424,14 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             if (!check(TokenType::RBrace)) {
                 do {
                     skipNewlines();
-                    auto fieldName = expect(TokenType::LowerIdent, "Expected field name").value;
+                    std::string fieldName;
+                    if (check(TokenType::LowerIdent) || check(TokenType::End) ||
+                        check(TokenType::Type) || check(TokenType::Match) ||
+                        check(TokenType::Loop) || check(TokenType::Timeout)) {
+                        fieldName = advance().value;
+                    } else {
+                        error("Expected field name");
+                    }
                     expect(TokenType::Colon, "Expected ':' after field name");
                     auto value = parseExpr();
                     fields.push_back({fieldName, std::move(value)});
@@ -1465,6 +1476,30 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         }
 
         expr->kind = ast::UpperIdentifier{name};
+        return expr;
+    }
+
+    // `after` is a receive-clause keyword there, but a normal testing DSL
+    // function everywhere else (`after do ... end`).
+    if (check(TokenType::After)) {
+        auto name = advance().value;
+        std::vector<ast::ExprPtr> args;
+        if (match(TokenType::LParen)) {
+            if (!check(TokenType::RParen)) {
+                do { args.push_back(parseExpr()); } while (match(TokenType::Comma));
+            }
+            expect(TokenType::RParen, "Expected ')' after after arguments");
+        }
+        if (check(TokenType::LBrace) || (check(TokenType::Do) && !m_noDoBlocks)) {
+            auto block = parsePrimary();
+            expr->kind = ast::FunctionCall{name, std::move(args), {}, std::move(block)};
+            return expr;
+        }
+        if (!args.empty()) {
+            expr->kind = ast::FunctionCall{name, std::move(args), {}, std::nullopt};
+            return expr;
+        }
+        expr->kind = ast::Identifier{name};
         return expr;
     }
 
@@ -2908,6 +2943,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::If:
         case TokenType::Match:
         case TokenType::Receive:
+        case TokenType::After:
         case TokenType::Loop:
         case TokenType::Let:
         case TokenType::Var:

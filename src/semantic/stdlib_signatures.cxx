@@ -164,6 +164,30 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     sig("Directory::files",     {Type::string()}, Type::optional(Type::list(Type::string())));
     sig("Directory::directories",      {Type::string()}, Type::optional(Type::list(Type::string())));
 
+    // src/prelude/web_server.kex — Web.Server and Web.Response. The nested
+    // namespace receiver (`Web.Server`) is inferred as Unknown by the surface
+    // checker, then checkCall's namespace heuristic drops it and applies these
+    // signatures. Instance methods retain Server as their first UFCS argument.
+    auto webRequest = Type::named("Request");
+    auto webResponse = Type::named("Response");
+    auto webServer = Type::named("Server");
+    auto webHandler = Type::func({webRequest}, webResponse);
+    sig("new",      {Type::integer()}, webServer);
+    sig("mount",    {webServer, Type::string(), webHandler}, webServer);
+    sig("get",      {webServer, Type::string(), webHandler}, webServer);
+    sig("post",     {webServer, Type::string(), webHandler}, webServer);
+    sig("put",      {webServer, Type::string(), webHandler}, webServer);
+    sig("patch",    {webServer, Type::string(), webHandler}, webServer);
+    sig("delete",   {webServer, Type::string(), webHandler}, webServer);
+    sig("start",    {webServer},
+        Type::named("Result", {Type::unit(), Type::string()}));
+    sig("text",     {Type::string()}, webResponse);
+    sig("textWithStatus", {Type::string(), Type::integer()}, webResponse);
+    sig("html",     {Type::string()}, webResponse);
+    sig("json",     {Type::string()}, webResponse);
+    sig("redirect", {Type::string()}, webResponse);
+    sig("notFound", {}, webResponse);
+
     // src/interpreter/stdlib/string.cxx, list.cxx, map.cxx
     sig("digit?",  {Type::charT()}, Type::boolean());
     sig("alpha?",  {Type::charT()}, Type::boolean());
@@ -224,6 +248,10 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     // Testing DSL: describe/it/assert
     sig("describe",     {Type::string(), Type::func({}, Type::unit())}, Type::unit());
     sig("it",           {Type::string(), Type::func({}, Type::unit())}, Type::unit());
+    sig("before",       {Type::func({}, Type::unit())}, Type::unit());
+    sig("before",       {Type::atom(), Type::func({}, Type::unit())}, Type::unit());
+    sig("after",        {Type::func({}, Type::unit())}, Type::unit());
+    sig("after",        {Type::atom(), Type::func({}, Type::unit())}, Type::unit());
     sig("assert",       {Type::boolean()}, Type::unit());
     sig("assert",       {Type::boolean(), Type::string()}, Type::unit());
     // die — never returns (diverges), so typed as Never (bottom type)

@@ -14,6 +14,85 @@ describe("assert") do
   end
 end
 
+describe("assertion helpers") do
+  it("compares values") do
+    Assert.equal(1 + 1, 2)
+    Assert.equal("kex", "kex")
+    Assert.notEqual(1, 2)
+  end
+
+  it("checks truthiness") do
+    Assert.truthy(true)
+    Assert.falsy(false)
+  end
+
+  it("checks optional variants") do
+    Assert.some(Just(42))
+    Assert.none(None)
+  end
+
+  it("checks result variants") do
+    Assert.ok(Ok(42))
+    Assert.error(Error("boom"))
+  end
+end
+
+describe("before and after hooks") do
+  before do
+    Assert.none(File.read("body-artifact"))
+    Mock.FS.File("outer-hook", "outer")
+  end
+  after(:each) { Mock.FS.clear() }
+
+  describe("nested hooks") do
+    before(:each) do
+      Assert.equal(File.read("outer-hook").or(""), "outer")
+      Mock.FS.File("inner-hook", "inner")
+    end
+
+    it("runs setup from outer to inner") do
+      Assert.equal(File.read("inner-hook").or(""), "inner")
+      Mock.FS.File("body-artifact", "temporary")
+    end
+
+    it("runs teardown before the next test") do
+      Assert.none(File.read("body-artifact"))
+    end
+  end
+end
+
+describe("all hooks") do
+  before(:all) do
+    Mock.FS.clear()
+    Mock.FS.File("all-hook", "once")
+  end
+  after(:all) { Mock.FS.clear() }
+
+  before { Assert.equal(File.read("all-hook").or(""), "once") }
+
+  it("keeps all setup for the first test") do
+    Assert.equal(File.read("all-hook").or(""), "once")
+  end
+
+  it("keeps all setup for later tests") do
+    Assert.equal(File.read("all-hook").or(""), "once")
+  end
+end
+
+describe("teardown after failure") do
+  before { Assert.none(File.read("all-hook")) }
+  after { Mock.FS.clear() }
+
+  it("fails intentionally") do
+    Mock.FS.File("failed-test-artifact", "temporary")
+    assert(false, "intentional hook failure test")
+  end
+
+  it("still ran teardown") do
+    Assert.none(File.read("failed-test-artifact"))
+  end
+end
+
 describe("a group with one passing and one failing test") do
   it("passes") do
     assert(1 + 1 == 2)
