@@ -633,6 +633,66 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        // Supervisor child helpers are syntax-level builders because their
+        // blocks become zero-arity start functions rather than ordinary
+        // trailing function arguments.
+        if (n.name == "worker" && !knownFns.count("worker")) {
+            std::vector<Binding> binds;
+            ExprPtr startFn;
+            if (n.block && n.args.empty() && n.namedArgs.empty()) {
+                startFn = atomize(*n.block, binds);
+            } else if (!n.args.empty()) {
+                auto* module = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
+                if (module) {
+                    std::string beamModule = "kex_";
+                    for (char c : module->name)
+                        beamModule += static_cast<char>(
+                            std::tolower(static_cast<unsigned char>(c)));
+                    std::vector<ExprPtr> startArgs;
+                    for (const auto& [name, value] : n.namedArgs) {
+                        if (name != "args") continue;
+                        if (auto* list = std::get_if<ast::ListExpr>(&value->kind))
+                            for (const auto& item : list->elements)
+                                startArgs.push_back(lower(item));
+                    }
+                    Lambda start;
+                    start.body = callE(beamModule, "start",
+                        static_cast<int>(startArgs.size()), std::move(startArgs));
+                    auto fn = std::make_unique<Expr>();
+                    fn->node = std::move(start);
+                    startFn = atomize_ir(std::move(fn), binds);
+                }
+            }
+            if (startFn)
+                return wrapLets(binds, callE("kex_supervisor", "worker", 1,
+                                             one(std::move(startFn))));
+        }
+        if (n.name == "supervisor" && n.block && !knownFns.count("supervisor")) {
+            std::vector<Binding> binds;
+            ExprPtr strategy = lit(LitKind::Atom, "only_crashed");
+            for (const auto& [name, value] : n.namedArgs)
+                if (name == "strategy" || name == "restart")
+                    strategy = lower(value);
+            ExprPtr children;
+            if (auto* lambda = std::get_if<ast::Lambda>(&(*n.block)->kind))
+                children = lowerBody(lambda->body);
+            else
+                children = lower(*n.block);
+            auto pair = [&](const char* key, ExprPtr value) {
+                auto tuple = std::make_unique<Expr>();
+                tuple->node = MakeTuple{two(lit(LitKind::Atom, key),
+                                            std::move(value))};
+                return tuple;
+            };
+            std::vector<ExprPtr> pairs;
+            pairs.push_back(pair("strategy", atomize_ir(std::move(strategy), binds)));
+            pairs.push_back(pair("children", atomize_ir(std::move(children), binds)));
+            auto list = std::make_unique<Expr>();
+            list->node = MakeList{std::move(pairs), std::nullopt};
+            auto spec = callE("maps", "from_list", 1, one(std::move(list)));
+            return wrapLets(binds, callE("kex_supervisor", "start_link", 1,
+                                         one(std::move(spec))));
+        }
         // Named args → reorder into the callee's positional slots by param
         // name; then positional args (and a trailing block) fill remaining
         // slots in order, leftovers default to None. Mirrors the string
@@ -689,12 +749,6 @@ struct Lowering {
             auto arity = static_cast<int>(args.size());
             return wrapLets(binds, callE("kex_test", n.name, arity, std::move(args)));
         }
-        // worker { block } → kex_supervisor:worker(fun() -> block end), unless
-        // the program defines its own `worker`.
-        if (n.name == "worker" && n.block && !knownFns.count("worker")) {
-            auto fn = atomize(*n.block, binds);
-            return wrapLets(binds, callE("kex_supervisor", "worker", 1, one(std::move(fn))));
-        }
         // assert(cond[, msg]) — a plain global builtin, not a local function.
         if (n.name == "assert" && !n.args.empty() && !n.block) {
             std::vector<ExprPtr> as;
@@ -706,6 +760,17 @@ struct Lowering {
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
         // A trailing do-block is passed as the function's last argument.
         if (n.block) args.push_back(atomize(*n.block, binds));
+        if (n.name == "self" && args.empty() && !knownFns.count("self"))
+            return callE("erlang", "self", 0, {});
+        if (n.name == "send" && args.size() == 2 && !knownFns.count("send")) {
+            auto message = std::make_unique<Expr>();
+            message->node = MakeTuple{three(lit(LitKind::Atom, "kex_msg"),
+                                            std::move(args[1]),
+                                            callE("erlang", "self", 0, {}))};
+            return wrapLets(binds, callE("erlang", "send", 2,
+                                         two(std::move(args[0]),
+                                             std::move(message))));
+        }
         auto ex = std::make_unique<Expr>();
         int arity = static_cast<int>(args.size());
         // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)
@@ -744,9 +809,8 @@ struct Lowering {
         return wrapLets(binds, std::move(ex));
     }
 
-    // Minimal UFCS/stdlib resolution for the walking skeleton. Only the
-    // handful of forms an early target program needs; everything else errors
-    // (to be widened as constructs are ported from core_erlang.cxx).
+    // Receiver-call and stdlib compatibility resolution. Unknown forms fail
+    // explicitly rather than silently emitting a nonexistent function.
     // Set while lowering a mutating `!` call's VALUE (the rebind itself is
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
@@ -950,9 +1014,6 @@ struct Lowering {
         // the enclosing module path so nested modules can refer to siblings.
         {
             std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && !n.namedArgs.empty() &&
-                records.find(n.method) == records.end())
-                throw LowerError("IR lower: named args to module function not yet ported");
             if (!path.empty() || modulePath(*n.receiver, path)) {
                 auto pathToString = [&](const std::vector<std::string>& p) {
                     std::string out;
@@ -982,6 +1043,8 @@ struct Lowering {
                 for (const auto& candidate : candidates) {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
                     if (preludeFns.count(candidate + "." + n.method)) {
+                        if (!n.namedArgs.empty())
+                            throw LowerError("IR lower: named args to module function not yet ported");
                         std::vector<Binding> binds;
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -996,6 +1059,8 @@ struct Lowering {
                     }
                     auto it = moduleFunctions.find(candidate + "." + n.method);
                     if (it != moduleFunctions.end()) {
+                        if (!n.namedArgs.empty())
+                            throw LowerError("IR lower: named args to module function not yet ported");
                         std::vector<Binding> binds;
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -1011,6 +1076,8 @@ struct Lowering {
                         auto qualKey = candidate + "." + n.method;
                         auto eit = externalModules->exportToBeamFn.find(qualKey);
                         if (eit != externalModules->exportToBeamFn.end()) {
+                            if (!n.namedArgs.empty())
+                                throw LowerError("IR lower: named args to module function not yet ported");
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
                                 std::vector<Binding> binds;
@@ -1151,7 +1218,7 @@ struct Lowering {
             if (uid->name == "Supervisor" && n.method == "start" && n.block) {
                 ExprPtr strat = lit(LitKind::Atom, "only_crashed");
                 for (const auto& [k, v] : n.namedArgs)
-                    if (k == "restart") strat = lower(v);
+                    if (k == "restart" || k == "strategy") strat = lower(v);
                 ExprPtr children;
                 if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind))
                     children = lowerBody(lam->body);
@@ -1651,9 +1718,17 @@ struct Lowering {
         if (m == "get" && n.args.size() == 2 && !localMethods.count("get")) {
             auto kRef = snap(atomize_ir(lower(n.args[0]), rb));
             auto dRef = snap(atomize_ir(lower(n.args[1]), rb));
-            return ret(matchBool(callE("erlang","is_list",1,one(rv())),
+            auto collectionGet = matchBool(callE("erlang","is_list",1,one(rv())),
                 callE("kex_intrinsic_list","list_get",3,three(rv(), kRef.get(), dRef.get())),
-                callE("maps","get",3,three(kRef.get(), rv(), dRef.get()))));
+                callE("maps","get",3,three(kRef.get(), rv(), dRef.get())));
+            // Web.Server.get(path, handler) has the same name and arity as
+            // collection get(key, default). Until receiver ownership is
+            // carried in typed IR, record/ADT tuple receivers must continue
+            // through the prelude dispatcher.
+            return ret(matchBool(callE("erlang", "is_tuple", 1, one(rv())),
+                callE("kex_prelude", "get", 3,
+                      three(rv(), kRef.get(), dRef.get())),
+                std::move(collectionGet)));
         }
         // empty?: works for both maps and lists (size 0 / []).
         if (m == "empty?" && n.args.empty() && !localMethods.count("empty?"))
@@ -1900,7 +1975,7 @@ struct Lowering {
     // "text ${expr} more" → a ++ chain of literal segments and to_string'd
     // sub-expressions. The `${...}` sub-expressions are raw text in the AST,
     // so they're re-lexed/parsed here and lowered like any other expression
-    // (matching CoreErlangEmitter::emitInterpolatedString).
+    // This keeps interpolation evaluation order explicit in IR.
     auto lowerInterpolatedString(const std::string& raw) -> ExprPtr {
         std::vector<ExprPtr> parts;
         size_t pos = 0;

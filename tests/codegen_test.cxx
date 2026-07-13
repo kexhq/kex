@@ -1,5 +1,4 @@
 #include "test.hxx"
-#include "../src/codegen/core_erlang.hxx"
 #include "../src/ir/emit_core.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
@@ -16,14 +15,13 @@ using namespace test;
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Parse Kex source and emit Core Erlang text.
+// Parse Kex source and emit Core Erlang text through the production IR path.
 auto emit(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
-    kex::codegen::CoreErlangEmitter emitter;
-    return emitter.emitProgram(program, stem).source;
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
 }
 
 // Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
@@ -78,7 +76,7 @@ auto contains(const std::string& haystack, const std::string& needle) -> bool {
 // ---------------------------------------------------------------------------
 
 int main() {
-    describe("CoreErlangEmitter — module structure", []() {
+    describe("IR Core Erlang emitter — module structure", []() {
         it("emits module header with correct name", []() {
             auto out = emit("main do\n  42\nend\n", "hello");
             assertTrue(contains(out, "module 'kex_hello'"), out);
@@ -109,7 +107,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — literals", []() {
+    describe("IR Core Erlang emitter — literals", []() {
         it("emits integer literal", []() {
             auto out = emit("main do\n  42\nend\n");
             assertTrue(contains(out, "42"), out);
@@ -120,9 +118,9 @@ int main() {
             assertTrue(contains(out, "3.14"), out);
         });
 
-        it("emits string literal as quoted charlist", []() {
+        it("emits string literals as UTF-8 binaries", []() {
             auto out = emit("main do\n  \"hello\"\nend\n");
-            assertTrue(contains(out, "\"hello\""), out);
+            assertTrue(contains(out, "#<104>"), out);
         });
 
         it("emits true as atom 'true'", []() {
@@ -135,9 +133,9 @@ int main() {
             assertTrue(contains(out, "'false'"), out);
         });
 
-        it("emits none as atom 'none'", []() {
+        it("emits None as the canonical variant atom", []() {
             auto out = emit("main do\n  None\nend\n");
-            assertTrue(contains(out, "'none'"), out);
+            assertTrue(contains(out, "'None'"), out);
         });
 
         it("emits atom literal", []() {
@@ -180,7 +178,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — binary operators", []() {
+    describe("IR Core Erlang emitter — binary operators", []() {
          it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
             // + dispatches through kex_intrinsic_number:add/2 which handles both number
@@ -204,9 +202,9 @@ int main() {
             assertTrue(contains(out, "call 'kex_intrinsic_number':'divide'"), out);
         });
 
-        it("emits equality via erlang:'=:='", []() {
+        it("emits polymorphic equality through the number intrinsic", []() {
             auto out = emit("main do\n  1 == 1\nend\n");
-            assertTrue(contains(out, "call 'erlang':'=:='"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'eq'"), out);
         });
 
         it("emits less-than via erlang:'<'", []() {
@@ -225,7 +223,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — stdlib dispatch", []() {
+    describe("IR Core Erlang emitter — stdlib dispatch", []() {
         it("IO.printLine dispatches to kex_io:print_line", []() {
             auto out = emit("main do\n  IO.printLine(\"hi\")\nend\n");
             assertTrue(contains(out, "call 'kex_io':'print_line'"), out);
@@ -242,7 +240,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — let bindings", []() {
+    describe("IR Core Erlang emitter — let bindings", []() {
         it("let binding becomes Core Erlang let <X> = ... in", []() {
             auto out = emit("main do\n  let x = 1\n  x\nend\n");
             assertTrue(contains(out, "let <X>"), out);
@@ -259,7 +257,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — if expressions", []() {
+    describe("IR Core Erlang emitter — if expressions", []() {
         it("if/else becomes a case on true/false atoms", []() {
             auto out = emit("main do\n  if true\n    1\n  else\n    2\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
@@ -561,16 +559,16 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — function definitions", []() {
+    describe("IR Core Erlang emitter — function definitions", []() {
         it("single-clause function emits fun with correct arity", []() {
             auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
             assertTrue(contains(out, "'double'/1"), out);
-            assertTrue(contains(out, "fun (_Arg0)"), out);
+            assertTrue(contains(out, "fun (N)"), out);
         });
 
-        it("function body emits param binding then expression", []() {
+        it("function body uses its normalized parameter directly", []() {
             auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
-            assertTrue(contains(out, "let <N> = _Arg0"), out);
+            assertTrue(contains(out, "call 'erlang':'*'(N, 2)"), out);
         });
 
         it("zero-arity function emits fun ()", []() {
@@ -579,7 +577,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — tuples and lists", []() {
+    describe("IR Core Erlang emitter — tuples and lists", []() {
         it("tuple literal emits {...}", []() {
             auto out = emit("main do\n  (1, 2, 3)\nend\n");
             assertTrue(contains(out, "{1, 2, 3}"), out);
@@ -596,17 +594,17 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — match expressions", []() {
+    describe("IR Core Erlang emitter — match expressions", []() {
         it("match emits case with when 'true' guards", []() {
             auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "when 'true'"), out);
         });
 
-        it("tuple subject becomes multi-value case with angle brackets", []() {
+        it("tuple subject remains a tuple in the case expression", []() {
             auto out = emit("main do\n  match (1, 2) do\n    (1, 2) -> true\n    (_, _) -> false\n  end\nend\n");
-            assertTrue(contains(out, "case <"), out);
-            assertTrue(contains(out, "<1, 2>"), out);
+            assertTrue(contains(out, "case {1, 2}"), out);
+            assertTrue(contains(out, "{1, 2} when"), out);
         });
 
         it("no semicolons between match clauses", []() {
@@ -621,33 +619,33 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — string interpolation", []() {
-        it("plain string emits as quoted charlist", []() {
+    describe("IR Core Erlang emitter — string interpolation", []() {
+        it("plain string emits as a UTF-8 binary", []() {
             auto out = emit("main do\n  \"hello\"\nend\n");
-            assertTrue(contains(out, "\"hello\""), out);
+            assertTrue(contains(out, "#<104>"), out);
         });
 
         it("interpolated string uses kex_io:to_string for embedded expr", []() {
             auto out = emit("main do\n  let n = 42\n  \"value: ${n}\"\nend\n");
             assertTrue(contains(out, "kex_io':'to_string'"), out);
-            assertTrue(contains(out, "\"value: \""), out);
+            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
 
-        it("interpolated string concatenates with erlang:'++'", []() {
+        it("interpolated string assembles through Unicode conversion", []() {
             auto out = emit("main do\n  let n = 42\n  \"${n}!\"\nend\n");
-            assertTrue(contains(out, "erlang':'++"), out);
+            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
     });
 
-    describe("CoreErlangEmitter — UFCS method dispatch", []() {
-        it("modulo routes to kex_prelude", []() {
+    describe("IR Core Erlang emitter — receiver-function dispatch", []() {
+        it("modulo routes to its integer intrinsic", []() {
             auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
-            assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_integer':'modulo'"), out);
         });
 
-        it("even? routes to kex_prelude", []() {
+        it("even? uses guard-compatible remainder lowering", []() {
             auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
-            assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
+            assertTrue(contains(out, "call 'erlang':'rem'"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
@@ -665,14 +663,14 @@ int main() {
             assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 
-        it("push routes to kex_prelude", []() {
+        it("push lowers to list append", []() {
             auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
-            assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
+            assertTrue(contains(out, "call 'erlang':'++'"), out);
         });
 
     });
 
-    describe("CoreErlangEmitter — process primitives", []() {
+    describe("IR Core Erlang emitter — process primitives", []() {
         it("spawn emits erlang:spawn with a 0-arity fun", []() {
             auto out = emit(
                 "# kex: no-check\n"
@@ -713,7 +711,7 @@ int main() {
             assertTrue(contains(out, "after 1000"), out);
         });
 
-        it("pid.send(msg) routes to kex_prelude", []() {
+        it("pid.send(msg) lowers to erlang:send", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
@@ -721,7 +719,7 @@ int main() {
                 "end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
+            assertTrue(contains(out, "call 'erlang':'send'"), out);
         });
 
         it("send(pid, msg) free function emits erlang:send", []() {
@@ -744,22 +742,22 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'self'()"), out);
         });
 
-        it("pid.link() routes to kex_prelude", []() {
+        it("pid.link() lowers to erlang:link", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go(pid) do pid.link() end\n"
                 "main do go(self()) end\n"
             );
-            assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
+            assertTrue(contains(out, "call 'erlang':'link'"), out);
         });
 
-        it("pid.alive?() routes to kex_prelude", []() {
+        it("pid.alive?() lowers to erlang:is_process_alive", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul check(pid) do pid.alive?() end\n"
                 "main do check(self()) end\n"
             );
-            assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
+            assertTrue(contains(out, "call 'erlang':'is_process_alive'"), out);
         });
 
         it("Task.start { block } emits kex_task:start/1", []() {
@@ -773,7 +771,7 @@ int main() {
             assertTrue(contains(out, "call 'kex_task':'start'"), out);
         });
 
-        it("task.await() routes to kex_prelude with infinity", []() {
+        it("task.await() routes to the task runtime with infinity", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -782,10 +780,10 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
+            assertTrue(contains(out, "call 'kex_task':'await'(T, 'infinity')"), out);
         });
 
-        it("task.await(timeout: N) routes to kex_prelude with timeout", []() {
+        it("task.await(timeout: N) routes to the task runtime", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -794,7 +792,7 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
+            assertTrue(contains(out, "call 'kex_task':'await'(T, 5000)"), out);
         });
 
         it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {
@@ -847,7 +845,7 @@ int main() {
                 "end\n"
             );
             assertTrue(contains(out, "call 'kex_database':'start'"), out);
-            assertTrue(contains(out, "\"postgres://localhost\""), out);
+            assertTrue(contains(out, "#<112>"), out);
         });
 
         it("supervisor(strategy:) do block end as free fn emits nested start_link", []() {
@@ -884,7 +882,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — end-to-end compilation", []() {
+    describe("IR Core Erlang emitter — end-to-end compilation", []() {
         // These tests require erlc on PATH. Skip gracefully if not available.
         auto erlcAvailable = []() -> bool {
             return std::system("erlc -help > /dev/null 2>&1") == 0 ||

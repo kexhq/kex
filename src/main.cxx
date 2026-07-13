@@ -2,7 +2,6 @@
 #include "beam/collect_metadata.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
-#include "codegen/core_erlang.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
 #include "ir/emit_core.hxx"
@@ -1169,9 +1168,7 @@ auto printUsage(const char *progName) -> void {
          ".)\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
-      << "  --no-colors       Disable ANSI color output\n"
-      << "  --legacy-emitter  Use the legacy string-based Core Erlang "
-         "emitter\n";
+      << "  --no-colors       Disable ANSI color output\n";
 }
 
 auto printVersion() -> void {
@@ -1196,12 +1193,6 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
-      // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
-      // backend; --ir is kept as a no-op for compatibility.
-      {"ir", no_argument, nullptr, 1000},
-      // Escape hatch: route BEAM codegen through the legacy string emitter
-      // (src/codegen/core_erlang.cxx) instead of the IR pipeline.
-      {"legacy-emitter", no_argument, nullptr, 1002},
       {"no-prelude", no_argument, nullptr, 1003},
       // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
@@ -1220,17 +1211,10 @@ int main(int argc, char *argv[]) {
   int opt;
 
   bool compileRun = false;
-  bool useIr = true;
   bool skipPrelude = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
-    case 1000:
-      useIr = true; // already the default; kept for compatibility
-      break;
-    case 1002:
-      useIr = false;
-      break;
     case 1003:
       skipPrelude = true;
       break;
@@ -2511,54 +2495,28 @@ int main(int argc, char *argv[]) {
         (void)deps;
       }
 
-      // An explicit `main do ... end` is no longer required here —
-      // CoreErlangEmitter already synthesizes one from trailing bare
-      // top-level expressions when there isn't one (see its
-      // `bareExprs` handling), matching the tree-walker's own
-      // implicit-top-level-execution behavior exactly. This used to
-      // hard-require an explicit main block and reject anything else
-      // outright, which was stricter than the emitter itself actually
-      // needs — a real, reproduced case: spec/comparision.kex is
-      // pure top-level `type`/`make`/`let` declarations plus bare
-      // `comps.each { ... }` calls with no `main` block at all, and
-      // runs identically under both backends once this guard is gone.
-      // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
-      // backend; `--legacy-emitter` opts back into the string emitter.
-      // Both produce the same {source, moduleName, mainArity} shape, so
-      // the downstream erlc/erl path is identical. A LowerError means
-      // the IR path doesn't support that construct — reported cleanly,
-      // never falling back (so gaps are visible, not masked).
+      // An explicit `main do ... end` is not required: IR lowering
+      // synthesizes one from trailing bare top-level expressions, matching
+      // the tree-walker's implicit top-level execution behavior.
 #ifdef KEX_PRELUDE_DIR
       // Prelude record defs (e.g. ParseError) aren't in the user's AST; merge
       // them so the codegen can emit field accessors for prelude records.
       for (auto& item : collectPreludeRecordDefs())
         program.items.push_back(std::move(item));
 #endif
-      kex::codegen::CoreErlangEmitter::EmitResult result;
-      std::vector<kex::codegen::CoreErlangEmitter::EmitResult> moduleResults;
-      if (useIr) {
-        try {
-          auto irModules = kex::ir::lowerModules(program, stem,
-                                                 migratedPreludeFns(), filepath);
-          for (const auto &irMod : irModules) {
-            auto irRes = kex::ir::emitCore(irMod);
-            kex::codegen::CoreErlangEmitter::EmitResult emitted;
-            emitted.source = std::move(irRes.source);
-            emitted.moduleName = std::move(irRes.moduleName);
-            emitted.mainArity = irRes.mainArity;
-            moduleResults.push_back(std::move(emitted));
-          }
-          result = moduleResults.front();
-        } catch (const kex::ir::LowerError &e) {
-          std::cerr << "error: " << e.what() << "\n";
-          if (compileRun && !outputDirExplicit && !tempDir.empty())
-            std::filesystem::remove_all(tempDir);
-          return 1;
-        }
-      } else {
-        kex::codegen::CoreErlangEmitter emitter;
-        result = emitter.emitProgram(program, stem);
-        moduleResults.push_back(result);
+      kex::ir::EmitResult result;
+      std::vector<kex::ir::EmitResult> moduleResults;
+      try {
+        auto irModules = kex::ir::lowerModules(program, stem,
+                                               migratedPreludeFns(), filepath);
+        for (const auto &irMod : irModules)
+          moduleResults.push_back(kex::ir::emitCore(irMod));
+        result = moduleResults.front();
+      } catch (const kex::ir::LowerError &e) {
+        std::cerr << "error: " << e.what() << "\n";
+        if (compileRun && !outputDirExplicit && !tempDir.empty())
+          std::filesystem::remove_all(tempDir);
+        return 1;
       }
 
       std::vector<std::string> corePaths;

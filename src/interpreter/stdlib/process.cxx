@@ -112,7 +112,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // docs/concurrency.md; call .await(timeout: N) per-task first via
     // Task.awaitAll([...]) is not a thing — this is the simple sequential
     // form). Returns a list of Ok/Error results, same shape as `await`.
-    // Matches the Kex-facing name in the BEAM backend (core_erlang.cxx) —
+    // Matches the Kex-facing name in the BEAM backend —
     // both dispatch to the same surface syntax, camelCase like every other
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
