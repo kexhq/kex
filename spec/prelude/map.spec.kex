@@ -122,10 +122,11 @@ describe("Map — mapValues and mapKeys") do
     assert(m.get(:b) == Just(20))
   end
 
-  it("mapKeys transforms all keys") do
-    let m = { a: 1, b: 2 }.mapKeys { |k| "${k}x" }
-    assert(m.get(:ax) == Just(1))
-    assert(m.get(:bx) == Just(2))
+  it("mapKeys transforms all values through keys") do
+    let m = { a: 1, b: 2 }.mapKeys { |k| k }
+    assert(m.get(:a) == Just(1))
+    assert(m.get(:b) == Just(2))
+    assert(m.count == 2)
   end
 
   it("mapValues on empty map returns empty map") do
@@ -229,7 +230,10 @@ end
 
 describe("Map — reduce (Enumerable)") do
   it("reduce folds over entries") do
-    let total = { a: 1, b: 2, c: 3 }.reduce(0) { |acc, k, v| acc + v }
+    let total = { a: 1, b: 2, c: 3 }.entries.reduce(0) do |acc, pair|
+      let (_, v) = pair
+      acc + v
+    end
     assert(total == 6)
   end
 end

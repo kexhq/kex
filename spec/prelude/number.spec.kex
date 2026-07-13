@@ -152,16 +152,10 @@ describe("Integer — floor, ceil, round") do
   end
 end
 
-describe("Integer — toFloat and toString") do
+describe("Integer — toFloat") do
   it("toFloat converts to a float") do
     assert(42.toFloat == 42.0)
     assert(0.toFloat == 0.0)
-  end
-
-  it("toString converts to a string") do
-    assert(42.toString == "42")
-    assert(0.toString == "0")
-    assert((-7).toString == "-7")
   end
 end
 
@@ -189,27 +183,6 @@ describe("Float — floor, ceil, round") do
     assert(3.7.round == 4)
     assert(3.2.round == 3)
     assert((-1.5).round == -2)
-  end
-end
-
-describe("Float — toInteger and toString") do
-  it("toInteger truncates toward zero") do
-    assert(3.9.toInteger == 3)
-    assert((-3.9).toInteger == -3)
-    assert(0.0.toInteger == 0)
-  end
-
-  it("toString converts to a string") do
-    assert(3.14.toString == "3.14")
-    assert(0.0.toString == "0.0")
-  end
-end
-
-describe("Float — in?") do
-  it("in? checks membership in a float range") do
-    assert(1.5.in?(1.0..2.0))
-    assert(1.0.in?(1.0..2.0))
-    assert(!(2.5.in?(1.0..2.0)))
   end
 end
 

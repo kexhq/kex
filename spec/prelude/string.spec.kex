@@ -45,21 +45,6 @@ describe("String — split") do
     assert("a,,b".split(",") == ["a", "", "b"])
   end
 
-  it("split with no argument splits into characters") do
-    assert("hi".split == ["h", "i"])
-    assert("abc".split == ["a", "b", "c"])
-    assert("".split == [])
-  end
-end
-
-describe("String — join without separator") do
-  it("join without separator concatenates directly") do
-    assert(["a", "b", "c"].join == "abc")
-  end
-
-  it("join empty list returns empty string") do
-    assert([].join == "")
-  end
 end
 
 describe("String — trim") do

@@ -401,7 +401,7 @@ int main() {
                 std::string("{'Just',42}"));
             assertEqual(runIrOnBeam(
                 "main do \"42x\".to(Integer) end\n", "to_optional_failure"),
-                std::string("none"));
+                std::string("'None'"));
             assertEqual(runIrOnBeam(
                 "main do 42.to(String) end\n", "to_string_optional"),
                 std::string("{'Just',<<\"42\">>}"));

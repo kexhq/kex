@@ -1285,6 +1285,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 receiverType = "Integer";
             } else if (std::holds_alternative<FloatValue>(receiver->data)) {
                 receiverType = "Float";
+            } else if (std::holds_alternative<BoolValue>(receiver->data)) {
+                receiverType = "Bool";
             } else if (std::holds_alternative<StringValue>(receiver->data)) {
                 receiverType = "String";
             } else if (std::holds_alternative<RangeValue>(receiver->data)) {

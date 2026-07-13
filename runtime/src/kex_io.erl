@@ -64,6 +64,8 @@ inspect(false) ->
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), false;
 inspect('Kex.Unit') ->
     'Kex.Unit';
+inspect(ok) ->
+    ok;
 inspect('None') ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET

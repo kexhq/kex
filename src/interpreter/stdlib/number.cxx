@@ -18,7 +18,11 @@ auto Evaluator::registerNumberBuiltins() -> void {
         if (args.size() < 2) return Value::integer(0);
         auto a = asInteger(args[0]);
         auto b = asInteger(args[1]);
-        if (a && b && *b != 0) return integerResult(*a % *b);
+        if (a && b && *b != 0) {
+            mpz_class result;
+            mpz_mod(result.get_mpz_t(), a->get_mpz_t(), b->get_mpz_t());
+            return integerResult(result);
+        }
         return Value::integer(0);
     });
 
@@ -76,6 +80,39 @@ auto Evaluator::registerNumberBuiltins() -> void {
         if (args.empty()) return Value::boolean(false);
         auto i = asInteger(args[0]);
         return Value::boolean(i.has_value() && mpz_odd_p(i->get_mpz_t()) != 0);
+    });
+
+    reg("floor", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto i = asInteger(args[0])) return integerResult(*i);
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(std::floor(f->value)));
+        return Value::integer(0);
+    });
+
+    reg("ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto i = asInteger(args[0])) return integerResult(*i);
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(std::ceil(f->value)));
+        return Value::integer(0);
+    });
+
+    reg("round", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto i = asInteger(args[0])) return integerResult(*i);
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(std::round(f->value)));
+        return Value::integer(0);
+    });
+
+    reg("toFloat", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::floating(0.0);
+        if (auto* i = std::get_if<IntValue>(&args[0]->data))
+            return Value::floating(static_cast<double>(i->value));
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::floating(f->value);
+        return Value::floating(0.0);
     });
 
     // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —

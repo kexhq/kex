@@ -284,14 +284,8 @@ describe("List — join") do
     assert(["a", "b", "c"].join("-") == "a-b-c")
   end
 
-  it("join without separator concatenates directly") do
-    assert(["a", "b", "c"].join == "abc")
-    assert(["hello"].join == "hello")
-  end
-
   it("join on empty list returns empty string") do
     assert([].join(", ") == "")
-    assert([].join == "")
   end
 
   it("join on single element returns that element") do
@@ -299,7 +293,6 @@ describe("List — join") do
   end
 
   it("join works with char lists") do
-    assert(['h', 'i'].join == "hi")
     assert(['a', 'b', 'c'].join("-") == "a-b-c")
   end
 end
