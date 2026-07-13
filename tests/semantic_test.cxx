@@ -539,6 +539,26 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("does not treat capitalized static values as namespaces", []() {
+            assertTrue(noErrors(
+                "record Temperature do\n"
+                "  celsius : Float\n"
+                "  static do\n"
+                "    let Fahrenheit(value: Float) -> Temperature =\n"
+                "      Temperature { celsius: value }\n"
+                "    let Freezing = Temperature { celsius: 0.0 }\n"
+                "  end\n"
+                "end\n"
+                "make Temperature do\n"
+                "  let to(String) -> String? = Just(\"temperature\")\n"
+                "end\n"
+                "main do\n"
+                "  Temperature.Fahrenheit(212.0).to(String)\n"
+                "  Temperature.Freezing.to(String)\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Semantic — Purity (Edge Cases)", []() {

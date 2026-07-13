@@ -1269,17 +1269,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // namespace, not a UFCS receiver value, so don't include it as
             // argTypes[0].
             std::string callName = node.method;
-            auto isNamespaceReceiver = [&](const auto& self, const ast::Expr& receiver) -> bool {
-                if (std::holds_alternative<ast::UpperIdentifier>(receiver.kind)) return true;
-                if (auto* mc = std::get_if<ast::MethodCall>(&receiver.kind)) {
-                    return !mc->method.empty() &&
-                           std::isupper(static_cast<unsigned char>(mc->method.front())) &&
-                           mc->receiver && self(self, *mc->receiver);
-                }
-                return false;
+            // Only a direct uppercase receiver is unambiguously a namespace.
+            // For a qualified chain (`Web.Response.text`) infer `Web.Response`
+            // as an Unknown receiver and let checkCall's existing namespace
+            // heuristic drop it when the target arity requires that. This also
+            // preserves value chains through static constructors/constants,
+            // such as `Temperature.Fahrenheit(212).to(String)` and
+            // `Temperature.Freezing.to(String)`.
+            auto isNamespaceReceiver = [](const ast::Expr& receiver) {
+                return std::holds_alternative<ast::UpperIdentifier>(receiver.kind);
             };
             bool isNamespaceCall = node.receiver &&
-                isNamespaceReceiver(isNamespaceReceiver, *node.receiver);
+                isNamespaceReceiver(*node.receiver);
             if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
