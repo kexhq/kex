@@ -248,6 +248,10 @@ auto SignatureTable::withStdlib() -> SignatureTable {
     // Testing DSL: describe/it/assert
     sig("describe",     {Type::string(), Type::func({}, Type::unit())}, Type::unit());
     sig("it",           {Type::string(), Type::func({}, Type::unit())}, Type::unit());
+    sig("before",       {Type::func({}, Type::unit())}, Type::unit());
+    sig("before",       {Type::atom(), Type::func({}, Type::unit())}, Type::unit());
+    sig("after",        {Type::func({}, Type::unit())}, Type::unit());
+    sig("after",        {Type::atom(), Type::func({}, Type::unit())}, Type::unit());
     sig("assert",       {Type::boolean()}, Type::unit());
     sig("assert",       {Type::boolean(), Type::string()}, Type::unit());
     // die — never returns (diverges), so typed as Never (bottom type)

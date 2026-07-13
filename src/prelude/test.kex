@@ -1,5 +1,5 @@
-# Kex ships a minimal RSpec-style testing DSL: +describe+, +it+, and
-# +assert+. These are always in scope — no import needed.
+# Kex ships a minimal RSpec-style testing DSL: +describe+, +it+, +before+,
+# +after+, and assertion helpers. These are always in scope — no import needed.
 #
 # A test file typically looks like:
 #
@@ -51,6 +51,16 @@ describe : (String, Block<Unit>) -> Unit
 #   end
 it : (String, Block<Unit>) -> Unit
 
+# Registers setup for the current group. +before { ... }+ and
+# +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
+# once before the group's tests, following RSpec's scope convention.
+before : Block<Unit> -> Unit
+
+# Registers cleanup for the current group. +after { ... }+ defaults to +:each+;
+# +after(:all) { ... }+ runs once when the group finishes. Cleanup is
+# unconditional, and inner per-test hooks run before outer hooks.
+after : Block<Unit> -> Unit
+
 # Throws a runtime error if +value+ is falsy, failing the enclosing +it+.
 # The optional +message+ is included in the failure output.
 #
@@ -62,3 +72,17 @@ it : (String, Block<Unit>) -> Unit
 #   assert(42 == 42)
 #   assert("hello".count == 5, "count should be 5")
 assert : Bool -> Bool
+
+# Focused assertions are ordinary Kex stdlib functions layered on the primitive
+# +assert+, so adding another helper does not require compiler or runtime work.
+module Assert do
+  let equal(actual, expected) = assert(actual == expected, "expected ${expected}, got ${actual}")
+  let notEqual(actual, expected) = assert(actual != expected, "expected values to differ, both were ${actual}")
+
+  let truthy(value) = assert(value, "expected a truthy value")
+  let falsy(value) = assert(!value, "expected a falsy value")
+  let some(value) = assert(value.some?, "expected Just, got ${value}")
+  let none(value) = assert(value.none?, "expected None, got ${value}")
+  let ok(value) = assert(value.ok?, "expected Ok, got ${value}")
+  let error(value) = assert(value.error?, "expected Error, got ${value}")
+end

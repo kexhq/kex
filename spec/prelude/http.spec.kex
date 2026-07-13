@@ -1,6 +1,8 @@
 describe("Http.get — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response") do
-    Mock.Http.start()
     Mock.Http.respond(200, "{\"ok\":true}", { "Content-Type": "application/json" })
     let result = Http.get("https://example.com/api")
     match result do
@@ -10,18 +12,14 @@ describe("Http.get — mocked") do
       end
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 
   it("returns Error when no responses are staged") do
-    Mock.Http.start()
     let result = Http.get("https://example.com")
     assert(result.error?)
-    Mock.Http.stop()
   end
 
   it("queues multiple responses in order") do
-    Mock.Http.start()
     Mock.Http.respond(200, "first")
     Mock.Http.respond(404, "not found")
     let r1 = Http.get("https://a.com")
@@ -37,11 +35,9 @@ describe("Http.get — mocked") do
       end
       Error(_) -> assert(false, "expected Ok for r2")
     end
-    Mock.Http.stop()
   end
 
   it("accepts request options") do
-    Mock.Http.start()
     Mock.Http.respond(200, "configured")
     let opts = HttpOptions {
       headers: { "Authorization": "Bearer token" },
@@ -52,23 +48,22 @@ describe("Http.get — mocked") do
       Ok(resp) -> assert(resp.body == "configured")
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.post — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for POST") do
-    Mock.Http.start()
     Mock.Http.respond(201, "created")
     let result = Http.post("https://example.com/items", "{\"name\":\"test\"}")
     match result do
       Ok(resp) -> assert(resp.status == 201)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
   it("accepts request options") do
-    Mock.Http.start()
     Mock.Http.respond(202, "accepted")
     let opts = HttpOptions {
       headers: { "Content-Type": "application/json" },
@@ -79,13 +74,14 @@ describe("Http.post — mocked") do
       Ok(resp) -> assert(resp.status == 202)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.put — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for PUT") do
-    Mock.Http.start()
     Mock.Http.respond(200, "updated")
     let result = Http.put("https://example.com/items/1", "{\"name\":\"new\"}")
     match result do
@@ -95,89 +91,93 @@ describe("Http.put — mocked") do
       end
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.patch — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for PATCH") do
-    Mock.Http.start()
     Mock.Http.respond(200, "patched")
     let result = Http.patch("https://example.com/items/1", "{\"field\":\"val\"}")
     match result do
       Ok(resp) -> assert(resp.body == "patched")
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.delete — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for DELETE") do
-    Mock.Http.start()
     Mock.Http.respond(204, "")
     let result = Http.delete("https://example.com/items/1")
     match result do
       Ok(resp) -> assert(resp.status == 204)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.head — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for HEAD") do
-    Mock.Http.start()
     Mock.Http.respond(200, "", { "Content-Length": "42" })
     let result = Http.head("https://example.com")
     match result do
       Ok(resp) -> assert(resp.status == 200)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Http.options — mocked") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("returns the staged response for OPTIONS") do
-    Mock.Http.start()
     Mock.Http.respond(200, "", { "Allow": "GET, POST" })
     let result = Http.options("https://example.com")
     match result do
       Ok(resp) -> assert(resp.status == 200)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Mock.Http — headers") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("respond with custom headers stores them") do
-    Mock.Http.start()
     Mock.Http.respond(200, "body", { "X-Custom": "hello" })
     let result = Http.get("https://example.com")
     match result do
       Ok(resp) -> assert(resp.headers.get("X-Custom") == Just("hello"))
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 
   it("respond without headers defaults to empty map") do
-    Mock.Http.start()
     Mock.Http.respond(200, "body")
     let result = Http.get("https://example.com")
     match result do
       Ok(resp) -> assert(resp.headers.empty?)
       Error(_) -> assert(false, "expected Ok")
     end
-    Mock.Http.stop()
   end
 end
 
 describe("Mock.Http — error details") do
+  before { Mock.Http.start() }
+  after { Mock.Http.stop() }
+
   it("error has kind and message when queue is empty") do
-    Mock.Http.start()
     let result = Http.get("https://example.com")
     match result do
       Ok(_) -> assert(false, "expected Error")
@@ -186,6 +186,5 @@ describe("Mock.Http — error details") do
         assert(e.message == "no responses staged")
       end
     end
-    Mock.Http.stop()
   end
 end

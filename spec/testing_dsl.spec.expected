@@ -1,6 +1,21 @@
 assert
   ✓ passes silently on a truthy value
   ✓ supports a custom failure message
+assertion helpers
+  ✓ compares values
+  ✓ checks truthiness
+  ✓ checks optional variants
+  ✓ checks result variants
+before and after hooks
+  nested hooks
+    ✓ runs setup from outer to inner
+    ✓ runs teardown before the next test
+all hooks
+  ✓ keeps all setup for the first test
+  ✓ keeps all setup for later tests
+teardown after failure
+  ✗ fails intentionally: assertion failed: intentional hook failure test
+  ✓ still ran teardown
 a group with one passing and one failing test
   ✓ passes
   ✗ fails: assertion failed: math is broken
@@ -8,6 +23,6 @@ nesting
   indents one level per describe
     ✓ still runs
 it survives more than just failed asserts
-  ✗ catches an ordinary runtime error too, not just assert failures: spec/testing_dsl.spec.kex:37:12: runtime error: Undefined variable: doesNotExist
+  ✗ catches an ordinary runtime error too, not just assert failures: spec/testing_dsl.spec.kex:116:12: runtime error: Undefined variable: doesNotExist
   ✓ still runs after the previous test errored
 Internal error: assertion failed: assert outside of it propagates as an uncaught error

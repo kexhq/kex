@@ -34,141 +34,130 @@ describe("File — path functions") do
 end
 
 describe("File — read and write (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("read returns the mocked content") do
-    Mock.FS.clear()
     Mock.FS.File("greet.txt", "hello")
     assert(File.read("greet.txt").or("") == "hello")
-    Mock.FS.clear()
   end
 
   it("read returns None for an unmocked path") do
-    Mock.FS.clear()
     let result = File.read("/no/such/path/kex_test_xyz.txt")
     assert(result == None)
   end
 
   it("write updates mocked content") do
-    Mock.FS.clear()
     Mock.FS.File("data.txt", "old")
     File.write("data.txt", "new")
     assert(File.read("data.txt").or("") == "new")
-    Mock.FS.clear()
   end
 
   it("append adds to mocked content") do
-    Mock.FS.clear()
     Mock.FS.File("log.txt", "a")
     File.append("log.txt", "b")
     assert(File.read("log.txt").or("") == "ab")
-    Mock.FS.clear()
   end
 end
 
 describe("File — exists?, delete (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("exists? is true for a mocked file") do
-    Mock.FS.clear()
     Mock.FS.File("present.txt", "x")
     assert(File.exists?("present.txt"))
-    Mock.FS.clear()
   end
 
   it("exists? is false for an unmocked path") do
-    Mock.FS.clear()
     assert(!File.exists?("/no/such/kex_test_xyz.txt"))
   end
 
   it("delete removes a mocked file") do
-    Mock.FS.clear()
     Mock.FS.File("temp.txt", "bye")
     assert(File.exists?("temp.txt"))
     assert(File.delete("temp.txt"))
     assert(!File.exists?("temp.txt"))
-    Mock.FS.clear()
   end
 
   it("delete returns false for a non-existent unmocked path") do
-    Mock.FS.clear()
     assert(!File.delete("/no/such/kex_test_xyz.txt"))
   end
 end
 
 describe("File — copy and rename (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("copy duplicates a mocked file") do
-    Mock.FS.clear()
     Mock.FS.File("src.txt", "content")
     File.copy("src.txt", "dst.txt")
     assert(File.read("dst.txt").or("") == "content")
     assert(File.exists?("src.txt"), "original should still exist after copy")
-    Mock.FS.clear()
   end
 
   it("rename moves a mocked file") do
-    Mock.FS.clear()
     Mock.FS.File("before.txt", "data")
     File.rename("before.txt", "after.txt")
     assert(File.exists?("after.txt"), "new name should exist")
     assert(!File.exists?("before.txt"), "old name should be gone")
-    Mock.FS.clear()
   end
 end
 
 describe("File — lines and feed (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("lines splits content into a list") do
-    Mock.FS.clear()
     Mock.FS.File("words.txt", "one\ntwo\nthree")
     let ls = File.lines("words.txt").or([])
     assert(ls.count == 3)
     assert(ls.at(0).or("") == "one")
     assert(ls.at(2).or("") == "three")
-    Mock.FS.clear()
   end
 
   it("lines returns None for an unmocked path") do
-    Mock.FS.clear()
     assert(File.lines("/no/such/kex_test_xyz.txt") == None)
   end
 
   it("feed produces a stream of lines") do
-    Mock.FS.clear()
     Mock.FS.File("nums.txt", "1\n2\n3")
     let s = File.feed("nums.txt").or(Stream.Sequence(from: 0) { |_| "" })
     assert(s.take(3).count == 3)
-    Mock.FS.clear()
   end
 
   it("feed returns None for an unmocked path") do
-    Mock.FS.clear()
     assert(File.feed("/no/such/kex_test_xyz.txt") == None)
   end
 end
 
 describe("File — size (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("size returns byte count for a mocked file") do
-    Mock.FS.clear()
     Mock.FS.File("sized.txt", "hello")
     assert(File.size("sized.txt").or(-1) == 5)
-    Mock.FS.clear()
   end
 
   it("size returns None for an unmocked path") do
-    Mock.FS.clear()
     assert(File.size("/no/such/kex_test_xyz.txt") == None)
   end
 end
 
 describe("File.open — resource block (mocked)") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("block receives a handle and returns the block result") do
-    Mock.FS.clear()
     Mock.FS.File("lines.txt", "first\nsecond")
     let line = File.open("lines.txt", Read) do |f|
       f.readLine
     end
     assert(line.or("") == "first")
-    Mock.FS.clear()
   end
 
   it("returns None when the path is not mocked or does not exist") do
-    Mock.FS.clear()
     let result = File.open("/no/such/kex_test_xyz.txt", Read) do |f|
       f.readLine
     end
@@ -176,41 +165,36 @@ describe("File.open — resource block (mocked)") do
   end
 
   it("handle.eof? is false before end and true after all content is read") do
-    Mock.FS.clear()
     Mock.FS.File("eof.txt", "line")
     File.open("eof.txt", Read) do |f|
       assert(!f.eof?)
       f.read
       assert(f.eof?)
     end
-    Mock.FS.clear()
   end
 end
 
 describe("Directory — mocked") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("exists? is true for a mocked directory") do
-    Mock.FS.clear()
     Mock.FS.Directory("mydir")
     assert(Directory.exists?("mydir"))
-    Mock.FS.clear()
   end
 
   it("exists? is false for an unmocked path") do
-    Mock.FS.clear()
     assert(!Directory.exists?("no_such_dir_kex_xyz"))
   end
 
   it("delete removes a mocked directory") do
-    Mock.FS.clear()
     Mock.FS.Directory("gone")
     assert(Directory.exists?("gone"))
     Directory.delete("gone")
     assert(!Directory.exists?("gone"))
-    Mock.FS.clear()
   end
 
   it("files returns mocked file names directly inside the directory") do
-    Mock.FS.clear()
     Mock.FS.Directory("proj")
     Mock.FS.File("proj/a.kex", "")
     Mock.FS.File("proj/b.kex", "")
@@ -218,27 +202,22 @@ describe("Directory — mocked") do
     assert(fs.count == 2)
     assert(fs.contains?("a.kex"))
     assert(fs.contains?("b.kex"))
-    Mock.FS.clear()
   end
 
   it("directories returns mocked subdirectory names") do
-    Mock.FS.clear()
     Mock.FS.Directory("root")
     Mock.FS.Directory("root/child")
     let ds = Directory.directories("root").or([])
     assert(ds.contains?("child"))
-    Mock.FS.clear()
   end
 
   it("list returns both files and subdirectories") do
-    Mock.FS.clear()
     Mock.FS.Directory("top")
     Mock.FS.File("top/readme.txt", "")
     Mock.FS.Directory("top/sub")
     let entries = Directory.list("top").or([])
     assert(entries.contains?("readme.txt"))
     assert(entries.contains?("sub"))
-    Mock.FS.clear()
   end
 end
 
@@ -259,6 +238,9 @@ describe("Directory — real filesystem") do
 end
 
 describe("Mock.FS — lifecycle") do
+  before { Mock.FS.clear() }
+  after { Mock.FS.clear() }
+
   it("clear removes all mocked files") do
     Mock.FS.File("a.txt", "x")
     Mock.FS.File("b.txt", "y")

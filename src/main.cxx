@@ -714,7 +714,8 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 // Stdlib functions in the Kex prelude — UFCS calls to these route to the
 // shared `kex_prelude` BEAM module instead of the emitter's inline ladder.
 static const std::unordered_set<std::string> &migratedPreludeFns() {
-  static const std::unordered_set<std::string> fns = {
+  static const std::unordered_set<std::string> fns = [] {
+    std::unordered_set<std::string> names = {
       "reverse",     "sort",      "uniq",      "flatten", "take",
       "drop",        "zip",       "push",      "sum",     "product",
       "indexOf",     "at",        "min",       "max",     "count",
@@ -730,6 +731,32 @@ static const std::unordered_set<std::string> &migratedPreludeFns() {
       "chars",       "items",     "send",      "link",    "unlink",
       "monitor",     "alive?",    "demonitor", "await",
       "mount",       "get",       "post",      "patch", "start"};
+#ifdef KEX_PRELUDE_DIR
+    // Explicit prelude module calls are safe to discover generically: their
+    // BEAM names are deterministic (`Assert.equal` -> `Assert__equal`). This
+    // lets stdlib modules grow without adding another compiler dispatch case.
+    std::error_code ec;
+    for (const auto &entry : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec)) {
+      if (entry.path().extension() != ".kex") continue;
+      kex::Lexer lexer(readFile(entry.path().string()), entry.path().string());
+      kex::Parser parser(lexer.tokenizeAll(), entry.path().string());
+      auto program = parser.parseProgram();
+      std::function<void(const kex::ast::ModuleDef &)> collect;
+      collect = [&](const kex::ast::ModuleDef &module) {
+        for (const auto &item : module.body) {
+          if (const auto *fn = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item))
+            names.insert(module.name + "." + (*fn)->name);
+          else if (const auto *child = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+            collect(**child);
+        }
+      };
+      for (const auto &item : program.items)
+        if (const auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+          collect(**module);
+    }
+#endif
+    return names;
+  }();
   return fns;
 }
 

@@ -196,6 +196,12 @@ private:
     int m_testDepth = 0;
     int m_testsPassed = 0;
     int m_testsFailed = 0;
+    struct TestHookScope {
+        std::vector<ValuePtr> before;
+        std::vector<ValuePtr> after;
+        std::vector<ValuePtr> afterAll;
+    };
+    std::vector<TestHookScope> m_testHookScopes;
 };
 
 } // namespace kex::interpreter

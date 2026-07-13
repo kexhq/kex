@@ -63,6 +63,19 @@ int main() {
             auto& func = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
             assertTrue(func->isFoul);
         });
+
+        it("parses before and after test hooks", []() {
+            auto program = parse(
+                "describe(\"hooks\") do\n"
+                "  before { setup() }\n"
+                "  after(:all) { cleanup() }\n"
+                "end\n");
+            assertEqual(program.items.size(), size_t(1));
+        });
+
+        it("allows after as a top-level annotation name", []() {
+            assertTrue(!parseFails("after : Block<Unit> -> Unit\n"));
+        });
     });
 
     describe("Parser — Modules", []() {

@@ -679,6 +679,16 @@ struct Lowering {
             auto fn = atomize(*n.block, binds);
             return wrapLets(binds, callE("kex_test", n.name, 2, two(std::move(name), std::move(fn))));
         }
+        // before/after hooks register a 0-arg block in the current describe;
+        // an optional :each/:all atom selects its scope.
+        if ((n.name == "before" || n.name == "after") && n.block && n.args.size() <= 1) {
+            std::vector<ExprPtr> args;
+            for (const auto& arg : n.args) args.push_back(atomize(arg, binds));
+            auto fn = atomize(*n.block, binds);
+            args.push_back(std::move(fn));
+            auto arity = static_cast<int>(args.size());
+            return wrapLets(binds, callE("kex_test", n.name, arity, std::move(args)));
+        }
         // worker { block } → kex_supervisor:worker(fun() -> block end), unless
         // the program defines its own `worker`.
         if (n.name == "worker" && n.block && !knownFns.count("worker")) {
@@ -923,6 +933,19 @@ struct Lowering {
                 std::unordered_set<std::string> tried;
                 for (const auto& candidate : candidates) {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
+                    if (preludeFns.count(candidate + "." + n.method)) {
+                        std::vector<Binding> binds;
+                        std::vector<ExprPtr> args;
+                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                        if (n.block) args.push_back(atomize(*n.block, binds));
+                        std::string emitted;
+                        for (char c : candidate)
+                            emitted += c == '.' ? "__" : std::string(1, c);
+                        emitted += "__" + n.method;
+                        auto arity = static_cast<int>(args.size());
+                        return wrapLets(binds,
+                            callE("kex_prelude", emitted, arity, std::move(args)));
+                    }
                     auto it = moduleFunctions.find(candidate + "." + n.method);
                     if (it != moduleFunctions.end()) {
                         std::vector<Binding> binds;
