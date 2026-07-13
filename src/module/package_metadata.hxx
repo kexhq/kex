@@ -5,8 +5,8 @@
 
 namespace kex::module {
 
-// Backend-independent package policy. Authoring syntax and installed-file
-// encoding are deliberately separate from this semantic model.
+// Backend-independent package policy. Its source representation belongs to
+// package.kex; compiled copies use the existing entry-module interface.
 struct PackageMetadata {
     std::string id;
     std::vector<std::string> unitIds;

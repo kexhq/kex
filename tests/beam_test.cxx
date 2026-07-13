@@ -298,6 +298,26 @@ int main() {
                             "expected hash should match");
         });
 
+        test::it("round-trips entry package policy", []() {
+            KexiChunk chunk;
+            chunk.metadata.unitId = "stdlib-artifact";
+            chunk.metadata.sourceModule = "Core";
+            chunk.metadata.moduleAtom = "kex_stdlib";
+            chunk.metadata.package.id = "kex/stdlib";
+            chunk.metadata.package.unitIds = {"stdlib-artifact"};
+            chunk.metadata.package.automaticImports = {"Core"};
+            chunk.metadata.package.receiverProviders = {"Core", "Collections"};
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            test::assertEqual(decoded.metadata.package.id,
+                              std::string("kex/stdlib"));
+            test::assertEqual(decoded.metadata.package.unitIds.size(), size_t(1));
+            test::assertEqual(decoded.metadata.package.automaticImports[0],
+                              std::string("Core"));
+            test::assertEqual(decoded.metadata.package.receiverProviders.size(),
+                              size_t(2));
+        });
+
         test::it("hash is stable across identical payloads", []() {
             KexiChunk c1, c2;
             c1.metadata.moduleAtom = "kex_test";
@@ -566,6 +586,9 @@ int main() {
             test::assertTrue(
                 registry.findMethodsForReceiver("doubled", "Integer").empty(),
                 "loaded modules are not implicit receiver providers");
+            test::assertTrue(
+                registry.buildExternalModules().receiverFunctions.empty(),
+                "IR receiver routing is not populated implicitly");
 
             kex::module::PackageMetadata package;
             package.id = "example/numbers";
@@ -577,6 +600,12 @@ int main() {
             auto matches = registry.findMethodsForReceiver("doubled", "Integer");
             test::assertEqual(matches.size(), size_t(1));
             test::assertEqual(matches[0].first, std::string("kex_fixture"));
+            auto external = registry.buildExternalModules();
+            test::assertEqual(external.receiverFunctions["doubled"].size(),
+                              size_t(1));
+            test::assertEqual(
+                external.receiverFunctions["doubled"][0].moduleAtom,
+                std::string("kex_fixture"));
 
             auto competing = package;
             competing.id = "example/competing";
@@ -584,6 +613,42 @@ int main() {
             test::assertEqual(conflict.size(), size_t(1));
             test::assertTrue(conflict[0].message.find("already owned") !=
                              std::string::npos);
+
+            fs::remove_all(root);
+        });
+
+        test::it("loads package policy from an entry module", []() {
+            namespace fs = std::filesystem;
+            auto root = fs::temp_directory_path() / "kex-embedded-package-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            auto beamPath = (root / "stdlib.kx.beam").string();
+
+            KexiChunk chunk;
+            chunk.metadata.unitId = "stdlib-artifact";
+            chunk.metadata.sourceModule = "Core";
+            chunk.metadata.moduleAtom = "kex_stdlib";
+            chunk.metadata.package.id = "kex/stdlib";
+            chunk.metadata.package.unitIds = {"stdlib-artifact"};
+            chunk.metadata.package.automaticImports = {"Core"};
+            chunk.metadata.package.receiverProviders = {"Core"};
+            KexiMethod identity;
+            identity.name = "identity";
+            identity.beamFunction = "identity";
+            identity.receiverType = kexiPrimitive("Integer");
+            identity.returnType = kexiPrimitive("Integer");
+            chunk.typeInterface.methods.push_back(std::move(identity));
+
+            BeamFile beam;
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
+            writeBeamFile(beam, beamPath);
+
+            KexiRegistry registry;
+            test::assertTrue(registry.loadUnit(beamPath).empty());
+            test::assertEqual(registry.automaticImportModules().size(), size_t(1));
+            test::assertEqual(
+                registry.findMethodsForReceiver("identity", "Integer").size(),
+                size_t(1));
 
             fs::remove_all(root);
         });

@@ -2,6 +2,7 @@
 // KexI chunk: combined type interface + structural metadata for one Kex
 // module, stored as a custom BEAM chunk in ETF format. See docs/kexm-plan.md.
 #include "etf.hxx"
+#include "../module/package_metadata.hxx"
 #include <array>
 #include <string>
 #include <vector>
@@ -143,6 +144,9 @@ struct KexiStructuralMetadata {
     std::vector<KexiADT> adts;
     std::vector<KexiMethodOwnership> methodOwnership;
     std::vector<std::string> publicExports;
+    // Present only on a package entry module. An empty id means that this
+    // compilation unit does not carry package policy.
+    kex::module::PackageMetadata package;
 };
 
 // ── KexI chunk (both sections) ───────────────────────────────────────

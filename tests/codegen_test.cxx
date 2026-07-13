@@ -33,6 +33,16 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
 }
 
+auto emitWithExternal(const std::string& source,
+                      const kex::ir::ExternalModules& external,
+                      const std::string& stem = "external") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, {}, "", &external)).source;
+}
+
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
 // sources below deliberately avoid prelude calls, so this unit path stays
 // independent of main.cxx's prelude-loading bootstrap.
@@ -638,6 +648,27 @@ int main() {
     });
 
     describe("IR Core Erlang emitter — receiver-function dispatch", []() {
+        it("does not treat an external module export as a receiver function", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Numbers"] = "kex_numbers";
+            external.exportToBeamFn["Numbers.doubled"] = "doubled";
+            external.exportArity["Numbers.doubled"] = 1;
+
+            auto out = emitWithExternal(
+                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("routes only declared external receiver functions", []() {
+            kex::ir::ExternalModules external;
+            external.receiverFunctions["doubled"].push_back(
+                {"kex_numbers", "doubled", 1});
+
+            auto out = emitWithExternal(
+                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
         it("modulo routes to its integer intrinsic", []() {
             auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
             assertTrue(contains(out, "call 'kex_intrinsic_integer':'modulo'"), out);

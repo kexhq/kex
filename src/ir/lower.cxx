@@ -1439,29 +1439,33 @@ struct Lowering {
             && !localMethods.count(m))
             return ret(callE("kex_intrinsic_fun", "or_else", 2,
                              two(rv(), atomize_ir(lower(n.args[0]), rb))));
-        // External loaded module methods take priority over prelude for UFCS.
+        // External receiver functions take priority over prelude for UFCS.
+        // The registry includes only package-declared provider modules here;
+        // ordinary module exports never become receiver functions implicitly.
         if (!m_inGuard && externalModules && n.namedArgs.empty()
             && !localMethods.count(m)) {
-            for (const auto& [qualKey, beamFn] : externalModules->exportToBeamFn) {
-                auto dot = qualKey.rfind('.');
-                if (dot != std::string::npos && qualKey.substr(dot + 1) == m) {
-                    auto modName = qualKey.substr(0, dot);
-                    auto ait = externalModules->nameToAtom.find(modName);
-                    if (ait != externalModules->nameToAtom.end()) {
-                        auto arit = externalModules->exportArity.find(qualKey);
-                        int expectedArity = arit != externalModules->exportArity.end()
-                            ? arit->second : -1;
-                        int blockExtra = n.block ? 1 : 0;
-                        int actualArity = static_cast<int>(n.args.size()) + 1 + blockExtra;
-                        if (expectedArity == -1 || expectedArity == actualArity) {
-                            std::vector<ExprPtr> pargs;
-                            pargs.push_back(rv());
-                            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-                            if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
-                            return ret(callE(ait->second, beamFn,
-                                static_cast<int>(pargs.size()), std::move(pargs)));
-                        }
-                    }
+            auto found = externalModules->receiverFunctions.find(m);
+            if (found != externalModules->receiverFunctions.end()) {
+                int actualArity = static_cast<int>(n.args.size()) + 1 +
+                                  (n.block ? 1 : 0);
+                const ExternalModules::ReceiverFunction* match = nullptr;
+                for (const auto& candidate : found->second) {
+                    if (candidate.beamArity != actualArity) continue;
+                    if (match)
+                        return ret(runtimeError(
+                            "Ambiguous receiver function: " + m + "/" +
+                            std::to_string(actualArity)));
+                    match = &candidate;
+                }
+                if (match) {
+                    std::vector<ExprPtr> pargs;
+                    pargs.push_back(rv());
+                    for (const auto& a : n.args)
+                        pargs.push_back(atomize_ir(lower(a), rb));
+                    if (n.block)
+                        pargs.push_back(atomize_ir(lower(*n.block), rb));
+                    return ret(callE(match->moduleAtom, match->beamFunction,
+                                     actualArity, std::move(pargs)));
                 }
             }
         }

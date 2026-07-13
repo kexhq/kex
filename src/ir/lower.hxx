@@ -28,9 +28,18 @@ struct LowerError : std::runtime_error {
 // modules loaded via /load. Each module's exports/methods are in externalExports
 // keyed by "ModuleName.functionName".
 struct ExternalModules {
+    struct ReceiverFunction {
+        std::string moduleAtom;
+        std::string beamFunction;
+        int beamArity = 0;
+    };
+
     std::unordered_map<std::string, std::string> nameToAtom;
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
+    // Receiver functions are separate from ordinary module exports and are
+    // populated only from package-declared provider modules.
+    std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
 };
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,

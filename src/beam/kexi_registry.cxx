@@ -1,6 +1,7 @@
 #include "kexi_registry.hxx"
 #include "beam_file.hxx"
 #include <filesystem>
+#include <optional>
 #include <unordered_set>
 
 namespace kex::beam {
@@ -123,6 +124,13 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             return errors;
         }
 
+        if (!compChunk.metadata.package.id.empty()) {
+            errors.push_back({
+                "companion '" + comp.beamAtom +
+                "' carries package policy; only an entry module may declare it"});
+            return errors;
+        }
+
         if (compChunk.version >= 2 && compChunk.metadata.sourceModule.empty()) {
             errors.push_back({
                 "companion '" + comp.beamAtom +
@@ -153,9 +161,27 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
     unit.modules.push_back(std::move(entryMod));
 
     auto key = unit.entryBeamAtom;
-    m_units.erase(key);
-    m_lastLoaded = key;
+    auto package = unit.modules.back().chunk.metadata.package;
+
+    // Make the complete candidate unit visible to package validation. Preserve
+    // the previous unit until its replacement and embedded policy both pass.
+    std::optional<LoadedUnit> previous;
+    if (auto existing = m_units.find(key); existing != m_units.end()) {
+        previous.emplace(std::move(existing->second));
+        m_units.erase(existing);
+    }
     m_units.emplace(key, std::move(unit));
+
+    if (!package.id.empty()) {
+        auto packageErrors = declarePackage(package);
+        if (!packageErrors.empty()) {
+            m_units.erase(key);
+            if (previous) m_units.emplace(key, std::move(*previous));
+            return packageErrors;
+        }
+    }
+
+    m_lastLoaded = key;
 
     return errors;
 }
@@ -334,11 +360,25 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
             }
-            for (const auto& method : mod.chunk.typeInterface.methods) {
-                auto qualKey = shortName + "." + method.name;
-                if (ext.exportToBeamFn.find(qualKey) == ext.exportToBeamFn.end()) {
-                    ext.exportToBeamFn[qualKey] = method.beamFunction;
-                    ext.exportArity[qualKey] = method.beamArity;
+        }
+    }
+
+    for (const auto& [_, package] : m_packages) {
+        std::unordered_set<std::string> units(package.unitIds.begin(),
+                                              package.unitIds.end());
+        std::unordered_set<std::string> providers(package.receiverProviders.begin(),
+                                                  package.receiverProviders.end());
+        for (const auto& [__, unit] : m_units) {
+            for (const auto& mod : unit.modules) {
+                if (!units.count(mod.chunk.metadata.unitId) ||
+                    !providers.count(mod.chunk.metadata.sourceModule))
+                    continue;
+                for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
+                    ext.receiverFunctions[receiverFn.name].push_back({
+                        mod.beamAtom,
+                        receiverFn.beamFunction,
+                        receiverFn.beamArity,
+                    });
                 }
             }
         }

@@ -341,6 +341,41 @@ auto termToMethodOwnership(const TermPtr& term) -> KexiMethodOwnership {
     return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
 }
 
+auto stringsToTerm(const std::vector<std::string>& values) -> TermPtr {
+    std::vector<TermPtr> terms;
+    terms.reserve(values.size());
+    for (const auto& value : values) terms.push_back(Term::binary(value));
+    return Term::list(std::move(terms));
+}
+
+auto termToStrings(const TermPtr& term) -> std::vector<std::string> {
+    std::vector<std::string> values;
+    for (const auto& value : term->asList())
+        values.push_back(value->asBinaryStr());
+    return values;
+}
+
+auto packageToTerm(const kex::module::PackageMetadata& package) -> TermPtr {
+    return Term::map({
+        {Term::atom("id"), Term::binary(package.id)},
+        {Term::atom("unit_ids"), stringsToTerm(package.unitIds)},
+        {Term::atom("automatic_imports"), stringsToTerm(package.automaticImports)},
+        {Term::atom("receiver_providers"), stringsToTerm(package.receiverProviders)},
+    });
+}
+
+auto termToPackage(const TermPtr& term) -> kex::module::PackageMetadata {
+    kex::module::PackageMetadata package;
+    if (auto id = term->mapGet("id")) package.id = id->asBinaryStr();
+    if (auto units = term->mapGet("unit_ids"))
+        package.unitIds = termToStrings(units);
+    if (auto imports = term->mapGet("automatic_imports"))
+        package.automaticImports = termToStrings(imports);
+    if (auto providers = term->mapGet("receiver_providers"))
+        package.receiverProviders = termToStrings(providers);
+    return package;
+}
+
 // Build the full KexI ETF term WITHOUT the hash field, for hashing.
 auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     // Type interface
@@ -384,6 +419,9 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
                              Term::binary(chunk.metadata.unitId));
         entries.emplace_back(Term::atom("source_module"),
                              Term::binary(chunk.metadata.sourceModule));
+        if (!chunk.metadata.package.id.empty())
+            entries.emplace_back(Term::atom("package"),
+                                 packageToTerm(chunk.metadata.package));
     }
 
     return Term::tuple({
@@ -501,6 +539,8 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     if (auto pe = sm->mapGet("public_exports"))
         for (const auto& e : pe->asList())
             chunk.metadata.publicExports.push_back(e->asBinaryStr());
+    if (auto package = sm->mapGet("package"))
+        chunk.metadata.package = termToPackage(package);
 
     // v1 compatibility: ownership was implicit in the entry back-pointer and
     // the Kex.<Module> BEAM naming convention.
