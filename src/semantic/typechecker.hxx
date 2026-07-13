@@ -2,6 +2,7 @@
 
 #include "../ast/ast.hxx"
 #include "stdlib_signatures.hxx"
+#include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "traits.hxx"
 #include "types.hxx"
@@ -16,6 +17,9 @@ struct Diagnostic;
 
 class TypeChecker {
 public:
+    explicit TypeChecker(const ImportedInterfaces* importedInterfaces = nullptr)
+        : m_importedInterfaces(importedInterfaces) {}
+
     auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics) -> void;
 
     // Query the inferred type of any expression node after check() has run.
@@ -133,6 +137,7 @@ private:
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     SignatureTable m_stdlib = SignatureTable::withStdlib();
+    const ImportedInterfaces* m_importedInterfaces = nullptr;
 
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
@@ -175,9 +180,9 @@ private:
     // rather than replace, building the overload set incrementally.
     std::set<std::string> m_checkedFunctions;
     bool m_inMakeBlock = false;
-    // The record type name being defined by the current `make X do` block,
-    // so `this` and `@field` expressions resolve to `NamedType("X")`.
-    std::string m_currentMakeType;
+    // The complete receiver type of the current `make X do` block, used for
+    // `this`, `This`, and receiver-aware body inference.
+    TypePtr m_currentMakeType;
 
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;

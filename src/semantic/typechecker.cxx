@@ -541,8 +541,8 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             if (node.parts.empty()) return Type::unknown();
             const std::string& last = node.parts.back();
             // `This` inside a make block refers to the implementing type.
-            if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && !m_currentMakeType.empty())
-                return Type::named(m_currentMakeType);
+            if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && m_currentMakeType)
+                return m_currentMakeType;
             // `Never` — the bottom/uninhabited type for never-returning functions.
             // `Void` is an alias for the unit type `()` (Swift-style naming).
             if (last == "Never" && node.parts.size() == 1)
@@ -817,14 +817,13 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     bool wasInMakeBlock = m_inMakeBlock;
     auto prevMakeType = m_currentMakeType;
     m_inMakeBlock = true;
-    // Resolve the make-block's target type name for @field / `this` typing.
+    // Preserve the complete receiver type. This keeps primitive targets
+    // canonical (Bool is PrimitiveType::Bool), retains Map/List structure,
+    // and carries generic arguments for ADT/record receiver functions.
+    m_currentMakeType.reset();
     if (def.target) {
-        if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind)) {
-            if (tn->parts.size() == 1) m_currentMakeType = tn->parts[0];
-        } else if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind)) {
-            // e.g. `make Map<K, V> do` or `make Option<A> do`
-            if (gt->name.parts.size() == 1) m_currentMakeType = gt->name.parts[0];
-        }
+        std::unordered_map<std::string, TypePtr> genericVars;
+        m_currentMakeType = resolveTypeExpr(*def.target, genericVars);
     }
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
@@ -1254,17 +1253,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            // Erlang.*/Elixir.*/Gleam.* interop calls are untyped — return Dynamic.
+            // Backend interop and the private intrinsic ABI are untyped until
+            // the intrinsic declaration interface supplies their signatures.
+            // Never resolve these against same-named public stdlib functions.
             {
                 const ast::Expr* r = node.receiver ? &*node.receiver : nullptr;
+                bool intrinsicSegment = false;
                 while (r) {
-                    if (auto* mc = std::get_if<ast::MethodCall>(&r->kind))
+                    if (auto* mc = std::get_if<ast::MethodCall>(&r->kind)) {
+                        intrinsicSegment = intrinsicSegment || mc->method == "Intrinsic";
                         r = mc->receiver ? &*mc->receiver : nullptr;
-                    else break;
+                    } else break;
                 }
                 if (r) {
                     if (auto* uid = std::get_if<ast::UpperIdentifier>(&r->kind)) {
-                        if (uid->name == "Erlang" || uid->name == "Elixir" || uid->name == "Gleam") {
+                        if (uid->name == "Erlang" || uid->name == "Elixir" ||
+                            uid->name == "Gleam" ||
+                            (uid->name == "Kex" && intrinsicSegment)) {
                             for (const auto& a : node.args)
                                 if (a) inferExpr(*a);
                             for (const auto& [_, a] : node.namedArgs)
@@ -1290,9 +1295,29 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto isNamespaceReceiver = [](const ast::Expr& receiver) {
                 return std::holds_alternative<ast::UpperIdentifier>(receiver.kind);
             };
+            std::function<std::optional<std::string>(const ast::Expr&)>
+                importedModulePath;
+            importedModulePath = [&](const ast::Expr& receiver)
+                -> std::optional<std::string> {
+                if (auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+                    return root->name;
+                auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
+                if (!segment || !segment->receiver || !segment->args.empty() ||
+                    !segment->namedArgs.empty() || segment->block)
+                    return std::nullopt;
+                auto parent = importedModulePath(*segment->receiver);
+                return parent ? std::optional<std::string>{*parent + "." + segment->method}
+                              : std::nullopt;
+            };
+            auto importedPath = node.receiver
+                ? importedModulePath(*node.receiver) : std::nullopt;
+            bool isImportedNamespace = importedPath && m_importedInterfaces &&
+                m_importedInterfaces->modules.count(*importedPath) > 0;
             bool isNamespaceCall = node.receiver &&
-                isNamespaceReceiver(*node.receiver);
-            if (isNamespaceCall &&
+                (isNamespaceReceiver(*node.receiver) || isImportedNamespace);
+            if (isImportedNamespace) {
+                callName = *importedPath + "::" + node.method;
+            } else if (isNamespaceCall &&
                 std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
                            "::" + node.method;
@@ -1654,7 +1679,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::ThisExpr>) {
             // Inside a make block, `this` / `@field` has the record type.
-            if (!m_currentMakeType.empty()) return Type::named(m_currentMakeType);
+            if (m_currentMakeType) return m_currentMakeType;
             return Type::unknown();
         }
         else {
@@ -1980,11 +2005,78 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     auto userIt = m_userSignatures.find(name);
     bool hasUser = (userIt != m_userSignatures.end());
 
-    // When both stdlib and user define the same name, merge so user-defined
-    // overloads (e.g. user's 3-param `worker`) are visible alongside stdlib ones.
+    std::vector<const ImportedFunction*> importedFunctions;
+    if (m_importedInterfaces) {
+        if (auto separator = name.find("::"); separator != std::string::npos) {
+            auto moduleName = name.substr(0, separator);
+            auto functionName = name.substr(separator + 2);
+            if (auto module = m_importedInterfaces->modules.find(moduleName);
+                module != m_importedInterfaces->modules.end())
+                if (auto functions = module->second.exports.find(functionName);
+                    functions != module->second.exports.end())
+                    for (const auto& function : functions->second)
+                        importedFunctions.push_back(&function);
+        } else if (isMethodCall) {
+            if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
+                functions != m_importedInterfaces->receiverFunctions.end())
+                for (const auto& function : functions->second)
+                    importedFunctions.push_back(&function);
+        } else {
+            for (const auto& [_, module] : m_importedInterfaces->modules) {
+                if (!module.automaticImport) continue;
+                if (auto functions = module.exports.find(name);
+                    functions != module.exports.end())
+                    for (const auto& function : functions->second)
+                        importedFunctions.push_back(&function);
+            }
+        }
+    }
+
+    auto sameParams = [](const Signature& left, const Signature& right) {
+        if (left.params.size() != right.params.size()) return false;
+        for (size_t i = 0; i < left.params.size(); i++)
+            if (!typesEqual(left.params[i], right.params[i])) return false;
+        return true;
+    };
+    auto matchesActual = [&](const Signature& signature) {
+        if (signature.params.size() != argTypes.size()) return false;
+        for (size_t i = 0; i < signature.params.size(); i++)
+            if (!argMatchesParam(argTypes[i], signature.params[i])) return false;
+        return true;
+    };
+    for (size_t i = 0; i < importedFunctions.size(); i++)
+        for (size_t j = i + 1; j < importedFunctions.size(); j++) {
+            const auto& left = *importedFunctions[i];
+            const auto& right = *importedFunctions[j];
+            if (left.backendModule != right.backendModule &&
+                matchesActual(left.signature) && matchesActual(right.signature) &&
+                sameParams(left.signature, right.signature)) {
+                error(loc, "ambiguous imported " +
+                    std::string(isMethodCall && name.find("::") == std::string::npos
+                        ? "receiver function '" : "function '") + name +
+                    "' is provided by both '" + left.backendModule + "' and '" +
+                    right.backendModule + "'");
+                return Type::unknown();
+            }
+        }
+
+    std::vector<Signature> importedSigs;
+    for (const auto* function : importedFunctions)
+        importedSigs.push_back(function->signature);
+
+    // Keep imported, stdlib, and local overloads visible to the same typed
+    // selection path. Imported candidates retain ownership in the registry;
+    // only their signatures participate here.
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;
-    if (stdlibSigs && hasUser) {
+    if (!importedSigs.empty()) {
+        merged = importedSigs;
+        if (stdlibSigs)
+            merged.insert(merged.end(), stdlibSigs->begin(), stdlibSigs->end());
+        if (hasUser)
+            merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
+        sigs = &merged;
+    } else if (stdlibSigs && hasUser) {
         merged = *stdlibSigs;
         for (const auto& s : userIt->second) merged.push_back(s);
         sigs = &merged;
@@ -2089,13 +2181,29 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     if (!argTypes.empty() &&
         (std::holds_alternative<UnknownType>(argTypes[0]->kind) ||
          std::holds_alternative<TypeVar>(argTypes[0]->kind))) {
-        bool anyFullArityMatch = false;
-        bool anyDroppedArityMatch = false;
+        bool anyFullMatch = false;
+        bool anyDroppedMatch = false;
         for (const auto& sig : *sigs) {
-            if (sig.params.size() == argTypes.size()) anyFullArityMatch = true;
-            if (sig.params.size() == argTypes.size() - 1) anyDroppedArityMatch = true;
+            if (sig.params.size() == argTypes.size()) {
+                bool matches = true;
+                for (size_t i = 0; i < sig.params.size(); i++)
+                    if (!argMatchesParam(argTypes[i], sig.params[i])) {
+                        matches = false;
+                        break;
+                    }
+                anyFullMatch = anyFullMatch || matches;
+            }
+            if (sig.params.size() == argTypes.size() - 1) {
+                bool matches = true;
+                for (size_t i = 0; i < sig.params.size(); i++)
+                    if (!argMatchesParam(argTypes[i + 1], sig.params[i])) {
+                        matches = false;
+                        break;
+                    }
+                anyDroppedMatch = anyDroppedMatch || matches;
+            }
         }
-        if (!anyFullArityMatch && anyDroppedArityMatch) {
+        if (!anyFullMatch && anyDroppedMatch) {
             return checkCall(name, {argTypes.begin() + 1, argTypes.end()}, loc);
         }
     }

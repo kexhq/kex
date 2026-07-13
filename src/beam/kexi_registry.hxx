@@ -5,6 +5,7 @@
 #include "kexi.hxx"
 #include "../ir/lower.hxx"
 #include "../module/package_metadata.hxx"
+#include "../semantic/imported_interfaces.hxx"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -65,6 +66,9 @@ public:
     auto generateLoadErlang(const LoadedUnit& unit) const -> std::string;
 
     auto buildExternalModules() const -> kex::ir::ExternalModules;
+
+    auto buildSemanticInterfaces() const
+        -> kex::semantic::ImportedInterfaces;
 
     auto generateDisplayRegistration(const LoadedUnit& unit) const -> std::string;
 

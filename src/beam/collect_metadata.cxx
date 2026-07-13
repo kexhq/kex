@@ -166,90 +166,78 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
     iface.exports.push_back(std::move(exp));
 }
 
+auto receiverFunctionFromDef(
+    const kex::ast::FunctionDef& fd,
+    KexiTypePtr receiverType,
+    const kex::semantic::Analyzer* analysis) -> KexiMethod {
+    KexiMethod method;
+    method.name = fd.name;
+    method.receiverType = std::move(receiverType);
+    method.isFoul = fd.isFoul;
+    method.beamArity = methodBeamArity(fd);
+    if (analysis) {
+        if (const auto* signatures = analysis->functionSignatures(&fd);
+            signatures && !signatures->empty()) {
+            const auto& signature = signatures->front();
+            for (const auto& param : signature.params)
+                method.paramTypes.push_back(convertSemanticType(param));
+            method.returnType = convertSemanticType(signature.result);
+            method.isFoul = signature.isFoul || fd.isFoul;
+        }
+    }
+    if (!method.returnType && !fd.clauses.empty()) {
+        for (const auto& param : fd.clauses[0].params)
+            method.paramTypes.push_back(param.type && *param.type
+                ? convertTypeExpr(*param.type) : kexiUnknown());
+        method.returnType = fd.clauses[0].returnAnnotation &&
+                            *fd.clauses[0].returnAnnotation
+            ? convertTypeExpr(*fd.clauses[0].returnAnnotation)
+            : kexiUnknown();
+    }
+    method.beamFunction = fd.name;
+    return method;
+}
+
+void addReceiverFunction(const kex::ast::FunctionDef& fd,
+                         KexiTypePtr receiverType,
+                         KexiTypeInterface& iface,
+                         KexiStructuralMetadata& meta,
+                         const kex::semantic::Analyzer* analysis) {
+    auto method = receiverFunctionFromDef(fd, std::move(receiverType), analysis);
+    meta.methodOwnership.push_back({method.name, method.beamFunction});
+    iface.methods.push_back(std::move(method));
+}
+
 void collectFromMakeDef(const kex::ast::MakeDef& md,
                         KexiTypeInterface& iface,
                         KexiStructuralMetadata& meta,
                         const kex::semantic::Analyzer* analysis) {
     auto receiverType = convertTypeExpr(md.target);
-
     for (const auto& item : md.body) {
-        if (auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
-            if (!*fd) continue;
-            KexiMethod method;
-            method.name = (*fd)->name;
-            method.receiverType = receiverType;
-            method.isFoul = (*fd)->isFoul;
-            if (analysis) {
-                if (const auto* signatures = analysis->functionSignatures(fd->get());
-                    signatures && !signatures->empty()) {
-                    const auto& signature = signatures->front();
-                    method.beamArity = methodBeamArity(**fd);
-                    for (const auto& param : signature.params)
-                        method.paramTypes.push_back(convertSemanticType(param));
-                    method.returnType = convertSemanticType(signature.result);
-                    method.isFoul = signature.isFoul || (*fd)->isFoul;
-                }
-            }
-            if (!method.returnType && !(*fd)->clauses.empty()) {
-                method.beamArity = methodBeamArity(**fd);
-                for (const auto& p : (*fd)->clauses[0].params) {
-                    if (p.type && *p.type)
-                        method.paramTypes.push_back(convertTypeExpr(*p.type));
-                    else
-                        method.paramTypes.push_back(kexiUnknown());
-                }
-                if ((*fd)->clauses[0].returnAnnotation && *(*fd)->clauses[0].returnAnnotation)
-                    method.returnType = convertTypeExpr(*(*fd)->clauses[0].returnAnnotation);
-                else
-                    method.returnType = kexiUnknown();
-            }
-            // BEAM function name: the lowered name for make methods
-            method.beamFunction = (*fd)->name;
-
-            KexiMethodOwnership mo;
-            mo.methodName = (*fd)->name;
-            mo.beamFunction = method.beamFunction;
-            meta.methodOwnership.push_back(std::move(mo));
-            iface.methods.push_back(std::move(method));
-        } else if (auto* vb = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&item)) {
-            if (!*vb || !(*vb)->isPublic) continue;
-            for (const auto& vi : (*vb)->items) {
-                if (auto* vfd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi)) {
-                    if (!*vfd) continue;
-                    KexiMethod method;
-                    method.name = (*vfd)->name;
-                    method.receiverType = receiverType;
-                    method.isFoul = (*vfd)->isFoul;
-                    if (analysis) {
-                        if (const auto* signatures = analysis->functionSignatures(vfd->get());
-                            signatures && !signatures->empty()) {
-                            const auto& signature = signatures->front();
-                            method.beamArity = methodBeamArity(**vfd);
-                            for (const auto& param : signature.params)
-                                method.paramTypes.push_back(convertSemanticType(param));
-                            method.returnType = convertSemanticType(signature.result);
-                            method.isFoul = signature.isFoul || (*vfd)->isFoul;
-                        }
-                    }
-                    if (!method.returnType && !(*vfd)->clauses.empty()) {
-                        method.beamArity = methodBeamArity(**vfd);
-                        for (const auto& p : (*vfd)->clauses[0].params) {
-                            if (p.type && *p.type)
-                                method.paramTypes.push_back(convertTypeExpr(*p.type));
-                            else
-                                method.paramTypes.push_back(kexiUnknown());
-                        }
-                        if ((*vfd)->clauses[0].returnAnnotation && *(*vfd)->clauses[0].returnAnnotation)
-                            method.returnType = convertTypeExpr(*(*vfd)->clauses[0].returnAnnotation);
-                        else
-                            method.returnType = kexiUnknown();
-                    }
-                    method.beamFunction = (*vfd)->name;
-                    iface.methods.push_back(std::move(method));
-                }
-            }
+        if (auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+            fd && *fd) {
+            addReceiverFunction(**fd, receiverType, iface, meta, analysis);
+        } else if (auto* visibility =
+                       std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&item);
+                   visibility && *visibility && (*visibility)->isPublic) {
+            for (const auto& visible : (*visibility)->items)
+                if (auto* fd =
+                        std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&visible);
+                    fd && *fd)
+                    addReceiverFunction(**fd, receiverType, iface, meta, analysis);
         }
     }
+}
+
+void collectFromTraitDef(const kex::ast::TraitDef& trait,
+                         KexiTypeInterface& iface,
+                         KexiStructuralMetadata& meta,
+                         const kex::semantic::Analyzer* analysis) {
+    auto receiverType = kexiConstrained("T", trait.name);
+    for (const auto& item : trait.body)
+        if (auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+            fd && *fd)
+            addReceiverFunction(**fd, receiverType, iface, meta, analysis);
 }
 
 void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
@@ -321,6 +309,8 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
                 collectFromMakeDef(*ptr, iface, meta, analysis);
+            } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
+                collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -342,6 +332,8 @@ void collectFromTopLevel(const kex::ast::Program& program,
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
                 collectFromMakeDef(*ptr, iface, meta, analysis);
+            } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
+                collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -349,6 +341,53 @@ void collectFromTopLevel(const kex::ast::Program& program,
             }
         }, item);
     }
+}
+
+void collectFlattenedModuleBody(
+    const std::vector<kex::ast::ModuleItem>& body,
+    const std::string& modulePath,
+    KexiTypeInterface& iface,
+    KexiStructuralMetadata& meta,
+    const kex::semantic::Analyzer* analysis) {
+    std::string emittedPrefix;
+    for (char c : modulePath)
+        emittedPrefix += c == '.' ? "__" : std::string(1, c);
+    for (const auto& item : body) {
+        std::visit([&](const auto& ptr) {
+            if (!ptr) return;
+            using T = std::decay_t<decltype(*ptr)>;
+            if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
+                collectFromFunctionDef(*ptr, iface, analysis);
+                auto& exp = iface.exports.back();
+                exp.name = modulePath + "." + ptr->name;
+                exp.beamFunction = emittedPrefix + "__" + ptr->name;
+                meta.publicExports.push_back(exp.name);
+            } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
+                collectFromMakeDef(*ptr, iface, meta, analysis);
+            } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
+                collectFromTraitDef(*ptr, iface, meta, analysis);
+            } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
+                collectFromTypeDef(*ptr, iface, meta);
+            } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
+                collectFromRecordDef(*ptr, iface, meta);
+            } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
+                collectFlattenedModuleBody(ptr->body, ptr->name, iface, meta,
+                                           analysis);
+            }
+        }, item);
+    }
+}
+
+void collectFlattenedProgram(const kex::ast::Program& program,
+                             KexiTypeInterface& iface,
+                             KexiStructuralMetadata& meta,
+                             const kex::semantic::Analyzer* analysis) {
+    collectFromTopLevel(program, iface, meta, analysis);
+    for (const auto& item : program.items)
+        if (auto* module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+            module && *module)
+            collectFlattenedModuleBody((*module)->body, (*module)->name,
+                                       iface, meta, analysis);
 }
 
 // Find a ModuleDef by name and collect from its body.
@@ -385,7 +424,10 @@ auto collectMetadata(const kex::ast::Program& program,
     chunk.metadata.entryBackPointer = opts.entryBackPointer;
 
     if (!opts.noCheck) {
-        if (!opts.moduleName.empty())
+        if (opts.flattenModules)
+            collectFlattenedProgram(program, chunk.typeInterface, chunk.metadata,
+                                    opts.analysis);
+        else if (!opts.moduleName.empty())
             findAndCollectModule(program, opts.moduleName,
                                  chunk.typeInterface, chunk.metadata,
                                  opts.analysis);

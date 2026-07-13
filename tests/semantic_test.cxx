@@ -43,6 +43,22 @@ auto noErrors(const std::string& source) -> bool {
     return true;
 }
 
+auto hasErrorWithInterfaces(
+    const std::string& source,
+    const semantic::ImportedInterfaces& interfaces,
+    const std::string& containing) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    semantic::Analyzer analyzer(&interfaces);
+    analyzer.analyze(program);
+    for (const auto& diagnostic : analyzer.diagnostics())
+        if (diagnostic.level == semantic::Diagnostic::Level::Error &&
+            diagnostic.message.find(containing) != std::string::npos)
+            return true;
+    return false;
+}
+
 int main() {
     describe("SemanticDB — Modules", []() {
         it("resolves selectively imported names across indexed files", []() {
@@ -559,6 +575,64 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("does not resolve private intrinsic calls as public overloads", []() {
+            assertTrue(noErrors(
+                "module Routes do\n"
+                "  let delete(server: Server, path: String, handler: Handler) -> Server = server\n"
+                "end\n"
+                "make Map<K, V> do\n"
+                "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"
+                "  let count = Kex.Intrinsic.Map.count(this)\n"
+                "end\n"
+                "make List<A> do\n"
+                "  let join(sep) = Kex.Intrinsic.List.join(this, sep)\n"
+                "end\n"
+            ));
+        });
+
+        it("checks qualified exports from imported interfaces", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface numbers;
+            numbers.sourceModule = "Numbers";
+            numbers.backendModule = "kex_numbers";
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            numbers.exports["doubled"].push_back(std::move(doubled));
+            interfaces.modules["Numbers"] = std::move(numbers);
+            assertTrue(hasErrorWithInterfaces(
+                "main do Numbers.doubled(\"wrong\") end\n", interfaces,
+                "doubled"));
+        });
+
+        it("checks only package-approved imported receiver functions", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
+            assertTrue(hasErrorWithInterfaces(
+                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+        });
+
+        it("rejects ambiguous imported receiver ownership", []() {
+            semantic::ImportedInterfaces interfaces;
+            for (const auto& backend : {"kex_first", "kex_second"}) {
+                semantic::ImportedFunction doubled;
+                doubled.sourceName = "doubled";
+                doubled.backendModule = backend;
+                doubled.signature = {"doubled", {semantic::Type::integer()},
+                                     semantic::Type::integer()};
+                interfaces.receiverFunctions["doubled"].push_back(
+                    std::move(doubled));
+            }
+            assertTrue(hasErrorWithInterfaces(
+                "main do 2.doubled end\n", interfaces,
+                "ambiguous imported receiver function"));
+        });
     });
 
     describe("Semantic — Purity (Edge Cases)", []() {
@@ -749,6 +823,14 @@ int main() {
 
         it("accepts ! on Bool", []() {
             assertTrue(noErrors("main do\n  let x = !true\nend\n"));
+        });
+
+        it("keeps primitive make receivers canonical", []() {
+            assertTrue(noErrors(
+                "make Bool do\n"
+                "  let inverted = !this\n"
+                "end\n"
+            ));
         });
     });
 
@@ -1014,6 +1096,7 @@ int main() {
         it("satisfies Resultable/Optionable via the prelude ADT bridge", [traits]() {
             assertTrue(traits.satisfies(Type::named("Ok"), "Resultable"));
             assertTrue(traits.satisfies(Type::named("Error"), "Resultable"));
+            assertTrue(traits.satisfies(Type::named("Optional"), "Optionable"));
             assertTrue(traits.satisfies(Type::named("Just"), "Optionable"));
             assertFalse(traits.satisfies(Type::named("Ok"), "Optionable"));
         });

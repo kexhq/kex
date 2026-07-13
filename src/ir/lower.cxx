@@ -1474,10 +1474,8 @@ struct Lowering {
         // Methods that have explicit inline lowerings below must not be
         // short-circuited to kex_prelude — they need the intrinsic path.
         static const std::unordered_set<std::string> inlinedMethods = {
-            "second", "third", "even?", "odd?", "modulo", "rest",
-            "none?", "some?", "ok?", "error?", "or", "first",
-            "count", "length", "size", "to", "push", "contains?",
-            "indexOf", "empty?", "in?", "alive?", "abs", "sqrt", "get",
+            "or",
+            "length", "size", "to", "get",
         };
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
             && !localMethods.count(m) && !inlinedMethods.count(m)) {
@@ -3008,6 +3006,17 @@ struct Lowering {
     }
 
     // ---- Records ----------------------------------------------------------
+    void collectRecordLayout(const std::string& name,
+                             const std::vector<std::string>& fields) {
+        RecordInfo info;
+        for (int i = 0; i < static_cast<int>(fields.size()); i++) {
+            info.fields.push_back(fields[i]);
+            info.defaults.push_back(nullptr);
+            fieldAccessors[fields[i]].push_back({name, i + 2});
+        }
+        records[name] = std::move(info);
+    }
+
     void collectRecord(const ast::RecordDef& rec) {
         RecordInfo info;
         for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
@@ -3309,7 +3318,9 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
-                  const ExternalModules* externals) -> Module {
+                  const ExternalModules* externals,
+                  const std::vector<ExternalRecordLayout>* externalRecords)
+    -> Module {
     Lowering L;
     L.preludeFns = preludeFns;
     L.sourceFile = sourcePath;
@@ -3380,6 +3391,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     staticMethodNames.insert(sf->name);
                 }
     };
+    if (externalRecords)
+        for (const auto& record : *externalRecords) {
+            L.collectRecordLayout(record.name, record.fields);
+            L.knownTypes.insert(record.name);
+        }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
         if (!fd.clauses.empty()) {
@@ -3773,24 +3789,25 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                     if (*td && (*td)->variants) {
                                         // Skip transparent type aliases (single bare TypeName).
-                                        if ((*td)->variants->size() == 1) {
-                                            auto* tn = std::get_if<ast::TypeName>(&(*(*td)->variants)[0]->kind);
-                                            if (tn) goto skipAlias;
-                                        }
-                                        std::vector<std::string> tags;
-                                        for (const auto& v : *(*td)->variants) {
-                                            auto t = Lowering::simpleTypeName(v);
-                                            if (!t.empty()) {
-                                                tags.push_back(t);
-                                                if (std::holds_alternative<ast::TypeName>(v->kind))
-                                                    L.nullaryVariantTags.insert(t);
+                                        bool transparentAlias =
+                                            (*td)->variants->size() == 1 &&
+                                            std::holds_alternative<ast::TypeName>(
+                                                (*(*td)->variants)[0]->kind);
+                                        if (!transparentAlias) {
+                                            std::vector<std::string> tags;
+                                            for (const auto& v : *(*td)->variants) {
+                                                auto t = Lowering::simpleTypeName(v);
+                                                if (!t.empty()) {
+                                                    tags.push_back(t);
+                                                    if (std::holds_alternative<ast::TypeName>(v->kind))
+                                                        L.nullaryVariantTags.insert(t);
+                                                }
                                             }
+                                            if (!tags.empty())
+                                                L.typeVariantTags[(*td)->name] = std::move(tags);
                                         }
-                                        if (!tags.empty())
-                                            L.typeVariantTags[(*td)->name] = std::move(tags);
                                     }
                                 }
-                            skipAlias:
                             } else {
                                 flush();
                             }
@@ -4000,8 +4017,11 @@ auto rewriteModuleCalls(ExprPtr& expr,
 
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
-                  const std::string& sourcePath) -> std::vector<Module> {
-    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath);
+                  const std::string& sourcePath,
+                  const std::vector<ExternalRecordLayout>* externalRecords)
+    -> std::vector<Module> {
+    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath, nullptr,
+                             externalRecords);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;

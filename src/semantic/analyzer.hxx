@@ -17,6 +17,9 @@ struct Diagnostic {
 
 class Analyzer {
 public:
+    explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
+        : m_checker(importedInterfaces) {}
+
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
 

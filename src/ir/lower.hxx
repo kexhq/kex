@@ -42,16 +42,25 @@ struct ExternalModules {
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
 };
 
+struct ExternalRecordLayout {
+    std::string name;
+    std::vector<std::string> fields;
+};
+
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns = {},
                   const std::string& sourcePath = "",
-                  const ExternalModules* externals = nullptr) -> Module;
+                  const ExternalModules* externals = nullptr,
+                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr)
+    -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
 // result is the file-local Kex.Global module; every explicit Kex module is a
 // separate `Kex.<Name>` module.
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns = {},
-                  const std::string& sourcePath = "") -> std::vector<Module>;
+                  const std::string& sourcePath = "",
+                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr)
+    -> std::vector<Module>;
 
 } // namespace kex::ir

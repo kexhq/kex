@@ -53,6 +53,17 @@ auto emitWithPrelude(const std::string& source,
         kex::ir::lowerProgram(program, stem, receiverFunctions)).source;
 }
 
+auto emitWithExternalRecords(
+    const std::string& source,
+    const std::vector<kex::ir::ExternalRecordLayout>& records,
+    const std::string& stem = "external_records") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, {}, "", nullptr, &records)).source;
+}
+
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
 // sources below deliberately avoid prelude calls, so this unit path stays
 // independent of main.cxx's prelude-loading bootstrap.
@@ -363,6 +374,22 @@ int main() {
                 "end\n",
                 "record_pattern");
             assertEqual(output, std::string("true"));
+        });
+
+        it("lowers record layouts supplied by compiled interfaces", []() {
+            std::vector<kex::ir::ExternalRecordLayout> records = {
+                {"Response", {"status", "body"}},
+            };
+            auto output = emitWithExternalRecords(
+                "main do\n"
+                "  let response = Response { status: 200, body: \"ok\" }\n"
+                "  response.body\n"
+                "end\n",
+                records);
+            assertTrue(contains(output, "'Response'"),
+                       "external record tag should be lowered");
+            assertTrue(contains(output, "call 'erlang':'element'("),
+                       "external record field should use its compiled layout");
         });
 
         it("defers unknown free-function errors until the function is called", []() {
@@ -684,6 +711,87 @@ int main() {
                 "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n",
                 {"transform"});
             assertTrue(contains(out, "call 'kex_prelude':'transform'"), out);
+        });
+
+        it("routes migrated list receiver functions through their Kex declarations", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"first", "xs.first"},
+                {"second", "xs.second"},
+                {"third", "xs.third"},
+                {"rest", "xs.rest"},
+                {"push", "xs.push(4)"},
+                {"indexOf", "xs.indexOf(2)"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  let xs = [1,2,3]\n  ") +
+                              item.expression + "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes migrated numeric receiver functions through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"even?", "value.even?"},
+                {"odd?", "value.odd?"},
+                {"modulo", "value.modulo(2)"},
+                {"abs", "value.abs"},
+                {"sqrt", "value.sqrt"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  let value = 4\n  ") +
+                              item.expression + "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes Optional and Result predicates through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"none?", "None.none?"},
+                {"some?", "Just(1).some?"},
+                {"ok?", "Ok(1).ok?"},
+                {"error?", "Error(:failed).error?"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  ") + item.expression +
+                              "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes migrated collection and process predicates through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"contains?", "[1,2,3].contains?(2)"},
+                {"empty?", "[].empty?"},
+                {"in?", "2.in?([1,2,3])"},
+                {"alive?", "self().alive?"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  ") + item.expression +
+                              "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes zero-argument count through Kex", []() {
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].count\nend\n", {"count"});
+            assertTrue(contains(out, "call 'kex_prelude':'count'"), out);
         });
 
         it("modulo routes to its integer intrinsic", []() {

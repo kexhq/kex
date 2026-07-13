@@ -17,6 +17,9 @@ struct CollectOptions {
     KexiModuleRole role = KexiModuleRole::Entry;
     std::string entryBackPointer;
     std::string moduleName; // if set, collect from this ModuleDef body instead of top-level
+    // Used when several source modules are intentionally emitted as one BEAM
+    // module, such as the current prelude bootstrap artifact.
+    bool flattenModules = false;
     const kex::semantic::Analyzer* analysis = nullptr;
 };
 

@@ -199,9 +199,9 @@ find_path(READLINE_INCLUDE readline/readline.h HINTS /opt/homebrew/opt/readline/
 # ── Erlang runtime beams ────────────────────────────────────────────────
 # Pre-compile runtime/src/*.erl into the build tree so that BEAM runs don't
 # pay an erlc spawn (~0.15s per module) on every invocation. The absolute
-# output path is compiled into the binary via KEX_RUNTIME_BEAM_DIR; main.cxx
-# uses it directly as a -pa path, falling back to per-run compilation only
-# when the pre-built beams are missing (e.g. running outside the build tree).
+# output path is compiled into the development binary via KEX_RUNTIME_BEAM_DIR.
+# Missing artifacts are diagnosed; user operations never compile runtime
+# source implicitly.
 find_program(ERLC_EXECUTABLE erlc)
 set(KEX_RUNTIME_BEAM_DIR "${CMAKE_BINARY_DIR}/runtime/beam")
 file(GLOB KEX_RUNTIME_ERL CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/*.erl")
@@ -223,7 +223,7 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     add_custom_target(kex_runtime_beams DEPENDS ${KEX_RUNTIME_BEAMS})
     set(KEX_HAS_RUNTIME_BEAMS TRUE)
 else()
-    message(STATUS "Runtime beams: skipped (erlc not found); BEAM runs will compile on demand")
+    message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
 add_executable(kex src/main.cxx)

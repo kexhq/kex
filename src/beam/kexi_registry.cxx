@@ -17,6 +17,100 @@ auto typeNameStr(const KexiTypePtr& t) -> std::string {
     }
 }
 
+auto semanticType(const KexiTypePtr& type) -> kex::semantic::TypePtr {
+    using kex::semantic::Type;
+    if (!type) return Type::unknown();
+    auto convertAll = [](const std::vector<KexiTypePtr>& types) {
+        std::vector<kex::semantic::TypePtr> converted;
+        for (const auto& item : types) converted.push_back(semanticType(item));
+        return converted;
+    };
+    switch (type->kind) {
+    case KexiType::Primitive:
+        if (type->name == "Integer") return Type::integer();
+        if (type->name == "Int") return Type::int64();
+        if (type->name == "Byte" || type->name == "UInt8") return Type::uint8();
+        if (type->name == "Int8") return Type::int8();
+        if (type->name == "Int16") return Type::int16();
+        if (type->name == "Int32") return Type::int32();
+        if (type->name == "Int64") return Type::int64();
+        if (type->name == "UInt16") return Type::uint16();
+        if (type->name == "UInt32") return Type::uint32();
+        if (type->name == "UInt64") return Type::uint64();
+        if (type->name == "Char") return Type::charT();
+        if (type->name == "String") return Type::string();
+        if (type->name == "Bool") return Type::boolean();
+        if (type->name == "Atom") return Type::atom();
+        if (type->name == "Unit") return Type::unit();
+        if (type->name == "Number") return Type::constrained("Number", "Number");
+        if (type->name == "Float") return Type::constrained("Float", "Float");
+        if (type->name == "Float32") return Type::float32();
+        if (type->name == "Float64") return Type::float64();
+        return Type::named(type->name);
+    case KexiType::Named:
+        return Type::named(type->name, convertAll(type->typeArgs));
+    case KexiType::Func:
+        return Type::func(convertAll(type->typeArgs), semanticType(type->result));
+    case KexiType::Tuple:
+        return Type::tuple(convertAll(type->typeArgs));
+    case KexiType::List:
+        return Type::list(type->typeArgs.empty()
+            ? Type::unknown() : semanticType(type->typeArgs[0]));
+    case KexiType::Map:
+        return Type::map(type->typeArgs.size() > 0
+                             ? semanticType(type->typeArgs[0]) : Type::unknown(),
+                         type->typeArgs.size() > 1
+                             ? semanticType(type->typeArgs[1]) : Type::unknown());
+    case KexiType::Optional:
+        return Type::optional(type->typeArgs.empty()
+            ? Type::unknown() : semanticType(type->typeArgs[0]));
+    case KexiType::Union:
+        return std::make_shared<kex::semantic::Type>(
+            kex::semantic::Type{kex::semantic::UnionType{convertAll(type->typeArgs)}});
+    case KexiType::Constrained:
+        return Type::constrained(type->name, type->traitName);
+    case KexiType::Never:
+        return Type::voidType();
+    case KexiType::Unknown:
+        return Type::unknown();
+    }
+    return Type::unknown();
+}
+
+auto importedFunction(const KexiExport& exported,
+                      const std::string& backendModule)
+    -> kex::semantic::ImportedFunction {
+    kex::semantic::ImportedFunction result;
+    result.sourceName = exported.name;
+    result.backendFunction = exported.beamFunction;
+    result.backendModule = backendModule;
+    result.backendArity = exported.beamArity;
+    std::vector<kex::semantic::TypePtr> params;
+    for (const auto& param : exported.paramTypes)
+        params.push_back(semanticType(param));
+    result.signature = {exported.name, std::move(params),
+                        semanticType(exported.returnType), exported.isFoul};
+    return result;
+}
+
+auto importedReceiverFunction(const KexiMethod& receiver,
+                              const std::string& backendModule)
+    -> kex::semantic::ImportedFunction {
+    kex::semantic::ImportedFunction result;
+    result.sourceName = receiver.name;
+    result.backendFunction = receiver.beamFunction;
+    result.backendModule = backendModule;
+    result.backendArity = receiver.beamArity;
+    std::vector<kex::semantic::TypePtr> params = {
+        semanticType(receiver.receiverType),
+    };
+    for (const auto& param : receiver.paramTypes)
+        params.push_back(semanticType(param));
+    result.signature = {receiver.name, std::move(params),
+                        semanticType(receiver.returnType), receiver.isFoul};
+    return result;
+}
+
 } // namespace
 
 auto KexiRegistry::loadUnit(const std::string& beamPath)
@@ -384,6 +478,45 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
         }
     }
     return ext;
+}
+
+auto KexiRegistry::buildSemanticInterfaces() const
+    -> kex::semantic::ImportedInterfaces {
+    kex::semantic::ImportedInterfaces interfaces;
+    std::unordered_set<std::string> automaticModules;
+    for (const auto& [_, package] : m_packages)
+        automaticModules.insert(package.automaticImports.begin(),
+                                package.automaticImports.end());
+
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules) {
+            const auto& sourceModule = module.chunk.metadata.sourceModule;
+            if (sourceModule.empty()) continue;
+            auto& imported = interfaces.modules[sourceModule];
+            imported.sourceModule = sourceModule;
+            imported.backendModule = module.beamAtom;
+            imported.automaticImport = automaticModules.count(sourceModule) > 0;
+            for (const auto& exported : module.chunk.typeInterface.exports)
+                imported.exports[exported.name].push_back(
+                    importedFunction(exported, module.beamAtom));
+        }
+
+    for (const auto& [_, package] : m_packages) {
+        std::unordered_set<std::string> units(package.unitIds.begin(),
+                                              package.unitIds.end());
+        std::unordered_set<std::string> providers(package.receiverProviders.begin(),
+                                                  package.receiverProviders.end());
+        for (const auto& [__, unit] : m_units)
+            for (const auto& module : unit.modules) {
+                if (!units.count(module.chunk.metadata.unitId) ||
+                    !providers.count(module.chunk.metadata.sourceModule))
+                    continue;
+                for (const auto& receiver : module.chunk.typeInterface.methods)
+                    interfaces.receiverFunctions[receiver.name].push_back(
+                        importedReceiverFunction(receiver, module.beamAtom));
+            }
+    }
+    return interfaces;
 }
 
 auto KexiRegistry::findEntryByShortName(const std::string& shortName) const

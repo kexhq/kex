@@ -425,6 +425,34 @@ int main() {
     });
 
     test::describe("KexI analyzed interfaces", []() {
+        test::it("collects flattened nested-module metadata", []() {
+            kex::Lexer lexer(
+                "module Web do\n"
+                "  module Types do\n"
+                "    let build(path: String) = path\n"
+                "    record Request do\n"
+                "      path: String\n"
+                "    end\n"
+                "  end\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            CollectOptions options;
+            options.moduleAtom = "kex_flattened";
+            options.flattenModules = true;
+            auto chunk = collectMetadata(program, options);
+            test::assertEqual(chunk.metadata.records.size(), size_t(1));
+            test::assertEqual(chunk.metadata.records[0].name,
+                              std::string("Request"));
+            test::assertEqual(chunk.metadata.records[0].fields[0].name,
+                              std::string("path"));
+            test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.exports[0].name,
+                              std::string("Web.Types.build"));
+            test::assertEqual(chunk.typeInterface.exports[0].beamFunction,
+                              std::string("Web__Types__build"));
+        });
+
         test::it("uses inferred function results instead of syntax-only unknowns", []() {
             kex::Lexer lexer(
                 "let double(n: Integer) = n * 2\n"
@@ -535,6 +563,33 @@ int main() {
             test::assertEqual(chunk.metadata.methodOwnership[0].beamFunction,
                               std::string("doubled"));
         });
+
+        test::it("collects trait default receiver functions", []() {
+            kex::Lexer lexer(
+                "trait Enumerable do\n"
+                "  let map(f) = ()\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+
+            CollectOptions options;
+            options.moduleAtom = "kex_trait_defaults";
+            options.flattenModules = true;
+            auto chunk = collectMetadata(program, options);
+
+            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
+            const auto& method = chunk.typeInterface.methods[0];
+            test::assertEqual(method.name, std::string("map"));
+            test::assertEqual(method.beamFunction, std::string("map"));
+            test::assertEqual(method.beamArity, 2);
+            test::assertTrue(method.receiverType->kind == KexiType::Constrained);
+            test::assertEqual(method.receiverType->name, std::string("T"));
+            test::assertEqual(method.receiverType->traitName,
+                              std::string("Enumerable"));
+            test::assertEqual(chunk.metadata.methodOwnership.size(), size_t(1));
+            test::assertEqual(chunk.metadata.methodOwnership[0].methodName,
+                              std::string("map"));
+        });
     });
 
     test::describe("package interface policy", []() {
@@ -576,6 +631,18 @@ int main() {
             doubled.receiverType = kexiPrimitive("Integer");
             doubled.returnType = kexiPrimitive("Integer");
             chunk.typeInterface.methods.push_back(std::move(doubled));
+            KexiExport answer;
+            answer.name = "answer";
+            answer.beamFunction = "answer";
+            answer.returnType = kexiPrimitive("Integer");
+            chunk.typeInterface.exports.push_back(std::move(answer));
+            KexiExport narrow;
+            narrow.name = "narrow";
+            narrow.beamFunction = "narrow";
+            narrow.paramTypes = {kexiPrimitive("Int32")};
+            narrow.returnType = kexiPrimitive("Float");
+            narrow.beamArity = 1;
+            chunk.typeInterface.exports.push_back(std::move(narrow));
 
             BeamFile beam;
             beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
@@ -589,6 +656,9 @@ int main() {
             test::assertTrue(
                 registry.buildExternalModules().receiverFunctions.empty(),
                 "IR receiver routing is not populated implicitly");
+            test::assertTrue(
+                registry.buildSemanticInterfaces().receiverFunctions.empty(),
+                "semantic receiver lookup is not populated implicitly");
 
             kex::module::PackageMetadata package;
             package.id = "example/numbers";
@@ -606,6 +676,31 @@ int main() {
             test::assertEqual(
                 external.receiverFunctions["doubled"][0].moduleAtom,
                 std::string("kex_fixture"));
+            auto semantic = registry.buildSemanticInterfaces();
+            test::assertTrue(semantic.modules.count("Numbers") > 0);
+            test::assertTrue(semantic.modules["Numbers"].automaticImport);
+            test::assertEqual(semantic.modules["Numbers"].backendModule,
+                              std::string("kex_fixture"));
+            test::assertEqual(
+                semantic.modules["Numbers"].exports["answer"].size(), size_t(1));
+            const auto& narrowSignature =
+                semantic.modules["Numbers"].exports["narrow"][0].signature;
+            test::assertEqual(
+                kex::semantic::typeToString(narrowSignature.params[0]),
+                std::string("Int32"));
+            test::assertTrue(std::holds_alternative<
+                kex::semantic::ConstrainedType>(narrowSignature.result->kind));
+            test::assertEqual(semantic.receiverFunctions["doubled"].size(),
+                              size_t(1));
+            const auto& receiver = semantic.receiverFunctions["doubled"][0];
+            test::assertEqual(receiver.backendModule,
+                              std::string("kex_fixture"));
+            test::assertEqual(receiver.signature.params.size(), size_t(1));
+            test::assertTrue(std::holds_alternative<
+                kex::semantic::PrimitiveType>(receiver.signature.params[0]->kind));
+            test::assertEqual(
+                kex::semantic::typeToString(receiver.signature.result),
+                std::string("Integer"));
 
             auto competing = package;
             competing.id = "example/competing";
