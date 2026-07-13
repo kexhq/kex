@@ -4,6 +4,7 @@
 // emitted Core Erlang text.
 #include "kexi.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/analyzer.hxx"
 #include <string>
 
 namespace kex::beam {
@@ -15,6 +16,7 @@ struct CollectOptions {
     KexiModuleRole role = KexiModuleRole::Entry;
     std::string entryBackPointer;
     std::string moduleName; // if set, collect from this ModuleDef body instead of top-level
+    const kex::semantic::Analyzer* analysis = nullptr;
 };
 
 auto collectMetadata(const kex::ast::Program& program,

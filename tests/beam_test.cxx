@@ -1,7 +1,11 @@
 #include "test.hxx"
 #include "../src/beam/beam_file.hxx"
+#include "../src/beam/collect_metadata.hxx"
 #include "../src/beam/etf.hxx"
 #include "../src/beam/kexi.hxx"
+#include "../src/lexer/lexer.hxx"
+#include "../src/parser/parser.hxx"
+#include "../src/semantic/analyzer.hxx"
 
 using namespace kex::beam;
 
@@ -362,6 +366,108 @@ int main() {
             test::assertTrue(rt->kind == KexiType::Optional);
             test::assertTrue(rt->typeArgs[0]->kind == KexiType::List);
             test::assertTrue(rt->typeArgs[0]->typeArgs[0]->kind == KexiType::Map);
+        });
+    });
+
+    test::describe("KexI analyzed interfaces", []() {
+        test::it("uses inferred function results instead of syntax-only unknowns", []() {
+            kex::Lexer lexer(
+                "let double(n: Integer) = n * 2\n"
+                "let answer() = 42\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            kex::semantic::Analyzer analyzer;
+            test::assertTrue(analyzer.analyze(program),
+                             "fixture should pass semantic analysis");
+
+            CollectOptions options;
+            options.moduleAtom = "kex_inferred";
+            options.analysis = &analyzer;
+            auto chunk = collectMetadata(program, options);
+            test::assertEqual(chunk.typeInterface.exports.size(), size_t(2));
+
+            const auto& doubleExport = chunk.typeInterface.exports[0];
+            test::assertEqual(doubleExport.name, std::string("double"));
+            test::assertEqual(doubleExport.paramTypes.size(), size_t(1));
+            test::assertTrue(doubleExport.paramTypes[0]->kind == KexiType::Primitive);
+            test::assertEqual(doubleExport.paramTypes[0]->name,
+                              std::string("Integer"));
+            test::assertTrue(doubleExport.returnType->kind == KexiType::Primitive);
+            test::assertEqual(doubleExport.returnType->name,
+                              std::string("Integer"));
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            test::assertEqual(decoded.typeInterface.exports[0].returnType->name,
+                              std::string("Integer"));
+            test::assertEqual(decoded.typeInterface.exports[1].returnType->name,
+                              std::string("Integer"));
+        });
+
+        test::it("falls back to annotations when analysis is unavailable", []() {
+            kex::Lexer lexer("let identity(value: String) -> String = value\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            CollectOptions options;
+            options.moduleAtom = "kex_syntax_fallback";
+            auto chunk = collectMetadata(program, options);
+            test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.exports[0].paramTypes[0]->name,
+                              std::string("String"));
+            test::assertEqual(chunk.typeInterface.exports[0].returnType->name,
+                              std::string("String"));
+        });
+
+        test::it("keeps same-named module exports attached to their declarations", []() {
+            kex::Lexer lexer(
+                "module Numbers do\n"
+                "  let value() = 42\n"
+                "end\n"
+                "module Flags do\n"
+                "  let value() = true\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            kex::semantic::Analyzer analyzer;
+            test::assertTrue(analyzer.analyze(program),
+                             "fixture should pass semantic analysis");
+
+            CollectOptions numberOptions;
+            numberOptions.moduleAtom = "kex_numbers";
+            numberOptions.moduleName = "Numbers";
+            numberOptions.analysis = &analyzer;
+            auto numbers = collectMetadata(program, numberOptions);
+            test::assertEqual(numbers.typeInterface.exports[0].returnType->name,
+                              std::string("Integer"));
+
+            CollectOptions flagOptions;
+            flagOptions.moduleAtom = "kex_flags";
+            flagOptions.moduleName = "Flags";
+            flagOptions.analysis = &analyzer;
+            auto flags = collectMetadata(program, flagOptions);
+            test::assertEqual(flags.typeInterface.exports[0].returnType->name,
+                              std::string("Bool"));
+        });
+
+        test::it("uses analyzed receiver-function results", []() {
+            kex::Lexer lexer(
+                "make Integer do\n"
+                "  let doubled = this * 2\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            kex::semantic::Analyzer analyzer;
+            test::assertTrue(analyzer.analyze(program),
+                             "fixture should pass semantic analysis");
+
+            CollectOptions options;
+            options.moduleAtom = "kex_integer_extension";
+            options.analysis = &analyzer;
+            auto chunk = collectMetadata(program, options);
+            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.methods[0].name,
+                              std::string("doubled"));
+            test::assertEqual(chunk.typeInterface.methods[0].returnType->name,
+                              std::string("Integer"));
         });
     });
 

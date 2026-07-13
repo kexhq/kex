@@ -1015,7 +1015,8 @@ auto sealViolations(const kex::ast::Program &program,
 // error ("unbound variable 'UndefinedFunctionCall' in main/0") instead of
 // this backend-agnostic diagnostic. Returns false if there were any errors.
 auto runSemanticCheck(const kex::ast::Program &program,
-                      const std::string &filepath) -> bool {
+                      const std::string &filepath,
+                      kex::semantic::Analyzer *retainedAnalyzer = nullptr) -> bool {
   auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
     bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
     std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
@@ -1041,7 +1042,8 @@ auto runSemanticCheck(const kex::ast::Program &program,
   }
 
   // Pass 3+: existing Analyzer (purity, type checking)
-  kex::semantic::Analyzer analyzer;
+  kex::semantic::Analyzer localAnalyzer;
+  auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
@@ -2398,6 +2400,7 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+    std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
     if (mode == "compile" && !skipCheck) {
       // Same pre-execution check `run` mode does — see
       // runSemanticCheck's doc comment for why this matters: without
@@ -2405,7 +2408,8 @@ int main(int argc, char *argv[]) {
       // Not applied to emit-core (a debug/inspection dump — you may
       // want to see the emitted Core Erlang for code that doesn't
       // type-check yet).
-      if (!runSemanticCheck(program, filepath)) {
+      compileAnalysis = std::make_unique<kex::semantic::Analyzer>();
+      if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
         // -R (run-beam) sets mode == "compile" internally too (see
         // compileRun above) — say "before running" there, matching
         // the tree-walker's identical message for the same failure,
@@ -2625,6 +2629,7 @@ int main(int argc, char *argv[]) {
             copts.moduleAtom = moduleResults[moduleIndex].moduleName;
             copts.fileStem = stem;
             copts.noCheck = skipCheck;
+            copts.analysis = compileAnalysis.get();
             copts.role = moduleIndex == 0
                 ? kex::beam::KexiModuleRole::Entry
                 : kex::beam::KexiModuleRole::Companion;

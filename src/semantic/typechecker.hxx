@@ -22,6 +22,8 @@ public:
     // Returns nullptr for nodes not visited (e.g. unreachable code).
     auto typeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    auto functionSignatures(const ast::FunctionDef* function) const
+        -> const std::vector<Signature>*;
 
 private:
     // Top-level
@@ -163,6 +165,11 @@ private:
     // today, just not yet improved; that's call-graph SCC ordering,
     // phase 5b, not attempted here).
     std::unordered_map<std::string, std::vector<Signature>> m_userSignatures;
+    // Checked interface attached to its exact syntax declaration. Unlike the
+    // call-resolution table above, this preserves ownership when separate
+    // modules or overload declarations reuse the same unqualified name.
+    std::unordered_map<const ast::FunctionDef*, std::vector<Signature>>
+        m_functionSignatures;
     // Names whose provisional pre-registration has been replaced by the first
     // real checkFunctionDef call. Subsequent calls for the same name append
     // rather than replace, building the overload set incrementally.

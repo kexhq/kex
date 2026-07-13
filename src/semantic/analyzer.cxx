@@ -80,6 +80,11 @@ auto Analyzer::typeMap() const -> const std::unordered_map<const ast::Expr*, Typ
     return m_checker.typeMap();
 }
 
+auto Analyzer::functionSignatures(const ast::FunctionDef* function) const
+    -> const std::vector<Signature>* {
+    return m_checker.functionSignatures(function);
+}
+
 auto Analyzer::analyzeTopLevel(const ast::TopLevelItem& item) -> void {
     std::visit([this](const auto& node) {
         using T = std::decay_t<decltype(node)>;

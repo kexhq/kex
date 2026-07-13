@@ -63,6 +63,61 @@ auto convertTypeExpr(const kex::ast::TypeExprPtr& te) -> KexiTypePtr {
     }, te->kind);
 }
 
+auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
+    if (!type) return kexiUnknown();
+    return std::visit([](const auto& node) -> KexiTypePtr {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, kex::semantic::PrimitiveType>) {
+            switch (node.kind) {
+                case kex::semantic::PrimitiveType::Integer: return kexiPrimitive("Integer");
+                case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
+                case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
+                case kex::semantic::PrimitiveType::Atom: return kexiPrimitive("Atom");
+                case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Unit");
+            }
+        } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
+            return kexiPrimitive(std::string(node.isSigned ? "Int" : "UInt") +
+                                 std::to_string(node.bits));
+        } else if constexpr (std::is_same_v<T, kex::semantic::SizedFloatType>) {
+            return kexiPrimitive("Float" + std::to_string(node.bits));
+        } else if constexpr (std::is_same_v<T, kex::semantic::NamedType>) {
+            std::vector<KexiTypePtr> args;
+            for (const auto& arg : node.typeArgs)
+                args.push_back(convertSemanticType(arg));
+            return kexiNamed(node.name, std::move(args));
+        } else if constexpr (std::is_same_v<T, kex::semantic::FuncType>) {
+            std::vector<KexiTypePtr> params;
+            for (const auto& param : node.params)
+                params.push_back(convertSemanticType(param));
+            return kexiFunc(std::move(params), convertSemanticType(node.result));
+        } else if constexpr (std::is_same_v<T, kex::semantic::TupleType>) {
+            std::vector<KexiTypePtr> elements;
+            for (const auto& element : node.elements)
+                elements.push_back(convertSemanticType(element));
+            return kexiTuple(std::move(elements));
+        } else if constexpr (std::is_same_v<T, kex::semantic::ListType>) {
+            return kexiList(convertSemanticType(node.element));
+        } else if constexpr (std::is_same_v<T, kex::semantic::MapType>) {
+            return kexiMap(convertSemanticType(node.key),
+                           convertSemanticType(node.value));
+        } else if constexpr (std::is_same_v<T, kex::semantic::OptionalType>) {
+            return kexiOptional(convertSemanticType(node.inner));
+        } else if constexpr (std::is_same_v<T, kex::semantic::UnionType>) {
+            std::vector<KexiTypePtr> members;
+            for (const auto& member : node.members)
+                members.push_back(convertSemanticType(member));
+            return kexiUnion(std::move(members));
+        } else if constexpr (std::is_same_v<T, kex::semantic::VoidType>) {
+            return kexiNever();
+        } else if constexpr (std::is_same_v<T, kex::semantic::ConstrainedType>) {
+            return kexiConstrained(node.varName, node.traitName);
+        }
+        // Unresolved inference variables and Dynamic/Unknown remain unknown
+        // at the package boundary; compiler-local IDs must not enter hashes.
+        return kexiUnknown();
+    }, type->kind);
+}
+
 auto methodBeamArity(const kex::ast::FunctionDef& fd) -> int {
     if (fd.clauses.empty()) return 1;
     const auto& params = fd.clauses[0].params;
@@ -102,11 +157,23 @@ auto makeTargetString(const kex::ast::TypeExprPtr& t) -> std::string {
 
 void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
                             KexiTypeInterface& iface,
-                            const std::string& /*modulePrefix*/) {
+                            const std::string& /*modulePrefix*/,
+                            const kex::semantic::Analyzer* analysis) {
     KexiExport exp;
     exp.name = fd.name;
     exp.isFoul = fd.isFoul;
-    if (!fd.clauses.empty()) {
+    if (analysis) {
+        if (const auto* signatures = analysis->functionSignatures(&fd);
+            signatures && !signatures->empty()) {
+            const auto& signature = signatures->front();
+            exp.beamArity = static_cast<int>(signature.params.size());
+            for (const auto& param : signature.params)
+                exp.paramTypes.push_back(convertSemanticType(param));
+            exp.returnType = convertSemanticType(signature.result);
+            exp.isFoul = signature.isFoul || fd.isFoul;
+        }
+    }
+    if (!exp.returnType && !fd.clauses.empty()) {
         exp.beamArity = static_cast<int>(fd.clauses[0].params.size());
         for (const auto& p : fd.clauses[0].params) {
             if (p.type && *p.type)
@@ -125,7 +192,8 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
 void collectFromMakeDef(const kex::ast::MakeDef& md,
                         KexiTypeInterface& iface,
                         KexiStructuralMetadata& meta,
-                        const std::string& modulePrefix) {
+                        const std::string& modulePrefix,
+                        const kex::semantic::Analyzer* analysis) {
     auto targetName = makeTargetString(md.target);
     auto receiverType = convertTypeExpr(md.target);
 
@@ -136,7 +204,18 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
             method.name = (*fd)->name;
             method.receiverType = receiverType;
             method.isFoul = (*fd)->isFoul;
-            if (!(*fd)->clauses.empty()) {
+            if (analysis) {
+                if (const auto* signatures = analysis->functionSignatures(fd->get());
+                    signatures && !signatures->empty()) {
+                    const auto& signature = signatures->front();
+                    method.beamArity = methodBeamArity(**fd);
+                    for (const auto& param : signature.params)
+                        method.paramTypes.push_back(convertSemanticType(param));
+                    method.returnType = convertSemanticType(signature.result);
+                    method.isFoul = signature.isFoul || (*fd)->isFoul;
+                }
+            }
+            if (!method.returnType && !(*fd)->clauses.empty()) {
                 method.beamArity = methodBeamArity(**fd);
                 for (const auto& p : (*fd)->clauses[0].params) {
                     if (p.type && *p.type)
@@ -168,7 +247,18 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                     method.name = (*vfd)->name;
                     method.receiverType = receiverType;
                     method.isFoul = (*vfd)->isFoul;
-                    if (!(*vfd)->clauses.empty()) {
+                    if (analysis) {
+                        if (const auto* signatures = analysis->functionSignatures(vfd->get());
+                            signatures && !signatures->empty()) {
+                            const auto& signature = signatures->front();
+                            method.beamArity = methodBeamArity(**vfd);
+                            for (const auto& param : signature.params)
+                                method.paramTypes.push_back(convertSemanticType(param));
+                            method.returnType = convertSemanticType(signature.result);
+                            method.isFoul = signature.isFoul || (*vfd)->isFoul;
+                        }
+                    }
+                    if (!method.returnType && !(*vfd)->clauses.empty()) {
                         method.beamArity = methodBeamArity(**vfd);
                         for (const auto& p : (*vfd)->clauses[0].params) {
                             if (p.type && *p.type)
@@ -250,16 +340,17 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
 void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                            KexiTypeInterface& iface,
                            KexiStructuralMetadata& meta,
-                           const std::string& modulePrefix) {
+                           const std::string& modulePrefix,
+                           const kex::semantic::Analyzer* analysis) {
     for (const auto& item : body) {
         std::visit([&](const auto& ptr) {
             if (!ptr) return;
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
-                collectFromFunctionDef(*ptr, iface, modulePrefix);
+                collectFromFunctionDef(*ptr, iface, modulePrefix, analysis);
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, modulePrefix);
+                collectFromMakeDef(*ptr, iface, meta, modulePrefix, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -272,15 +363,16 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
 void collectFromTopLevel(const kex::ast::Program& program,
                          KexiTypeInterface& iface,
                          KexiStructuralMetadata& meta,
-                         const std::string& modulePrefix) {
+                         const std::string& modulePrefix,
+                         const kex::semantic::Analyzer* analysis) {
     for (const auto& item : program.items) {
         std::visit([&](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
-                collectFromFunctionDef(*ptr, iface, modulePrefix);
+                collectFromFunctionDef(*ptr, iface, modulePrefix, analysis);
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, modulePrefix);
+                collectFromMakeDef(*ptr, iface, meta, modulePrefix, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -294,11 +386,12 @@ void collectFromTopLevel(const kex::ast::Program& program,
 auto findAndCollectModule(const kex::ast::Program& program,
                           const std::string& moduleName,
                           KexiTypeInterface& iface,
-                          KexiStructuralMetadata& meta) -> bool {
+                          KexiStructuralMetadata& meta,
+                          const kex::semantic::Analyzer* analysis) -> bool {
     for (const auto& item : program.items) {
         if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
             if (*md && (*md)->name == moduleName) {
-                collectFromModuleBody((*md)->body, iface, meta, "");
+                collectFromModuleBody((*md)->body, iface, meta, "", analysis);
                 meta.isFoul = (*md)->isFoul;
                 return true;
             }
@@ -320,9 +413,11 @@ auto collectMetadata(const kex::ast::Program& program,
     if (!opts.noCheck) {
         if (!opts.moduleName.empty())
             findAndCollectModule(program, opts.moduleName,
-                                 chunk.typeInterface, chunk.metadata);
+                                 chunk.typeInterface, chunk.metadata,
+                                 opts.analysis);
         else
-            collectFromTopLevel(program, chunk.typeInterface, chunk.metadata, "");
+            collectFromTopLevel(program, chunk.typeInterface, chunk.metadata,
+                                "", opts.analysis);
     } else {
         // --no-check: structural metadata only, type interface stays empty.
         for (const auto& item : program.items) {

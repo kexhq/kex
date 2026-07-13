@@ -28,6 +28,7 @@ auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<st
 auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
+    m_functionSignatures.clear();
     m_scopeStack.clear();
     pushScope();
 
@@ -780,6 +781,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         signatures.push_back(Signature{def.name, std::move(paramTypes), resultType});
     }
 
+    // Preserve the checked declaration interface before the signatures are
+    // moved into the unqualified call-resolution table below.
+    m_functionSignatures[&def] = signatures;
+
     // make-block methods have an implicit `this` receiver, not a regular
     // param — checkCall's UFCS desugaring (receiver as argument 0) would
     // mis-count their arity, so they're checked (body inference still
@@ -1085,6 +1090,12 @@ auto TypeChecker::typeOf(const ast::Expr* expr) const -> TypePtr {
 
 auto TypeChecker::typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>& {
     return m_typeMap;
+}
+
+auto TypeChecker::functionSignatures(const ast::FunctionDef* function) const
+    -> const std::vector<Signature>* {
+    auto it = m_functionSignatures.find(function);
+    return it == m_functionSignatures.end() ? nullptr : &it->second;
 }
 
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
