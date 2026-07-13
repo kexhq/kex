@@ -31,11 +31,8 @@ main do
     .post("/echo", &echo)
 
   IO.printLine("Web.Server listening on http://localhost:8080")
-  match server.start() do
-    Ok(_) -> 0
-    Error(reason) -> do
-      IO.printLine("server stopped: ${reason}")
-      1
-    end
+  if let Error(reason) = server.start()
+    IO.printLine("Server stopped: ${reason}")
+    return 1
   end
 end
