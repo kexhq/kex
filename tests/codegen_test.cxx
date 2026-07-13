@@ -488,6 +488,39 @@ int main() {
             assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
         });
 
+        it("passes compiled interfaces through split-module lowering", []() {
+            kex::Lexer lexer("main do Web.Response.text(\"ok\") end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
+            external.exportToBeamFn["Web.Response.text"] = "text";
+            external.exportArity["Web.Response.text"] = 1;
+
+            auto modules = kex::ir::lowerModules(
+                program, "external_split", {}, "", nullptr, &external);
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+
+            assertTrue(contains(
+                globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
+        });
+
+        it("routes companion calls to file-global functions through the entry", []() {
+            kex::Lexer lexer(
+                "let normalize(n) = n + 1\n"
+                "module Util do\n"
+                "  let adjusted(n) = normalize(n)\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "global_helper");
+            assertEqual(modules.size(), size_t{2});
+            auto companionCore = kex::ir::emitCore(modules[1]).source;
+            assertTrue(contains(
+                companionCore, "call 'kex_global_helper':'normalize'"),
+                companionCore);
+        });
+
         it("top-level using resolves to cross-module call", []() {
             kex::Lexer lexer(
                 "module Utils do\n"
@@ -694,6 +727,19 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("routes a qualified module call through its compiled interface", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
+            external.exportToBeamFn["Web.Response.text"] = "text";
+            external.exportArity["Web.Response.text"] = 1;
+
+            auto out = emitWithExternal(
+                "main do Web.Response.text(\"ok\") end\n", external);
+            assertTrue(contains(out, "call 'Kex.Web.Response':'text'"), out);
+            assertFalse(contains(out, "call 'kex_prelude':'Web__Response__text'"),
+                        out);
         });
 
         it("routes only declared external receiver functions", []() {

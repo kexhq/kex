@@ -20,8 +20,10 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].second   # => Just(2)
   #   [1].second         # => None
   second :> X?
-  let second(@[_, x | _]) = Just(x)
-  let second(@_) = None
+  let second = match Kex.Intrinsic.List.at(this, 1) do
+    None -> None
+    x -> Just(x)
+  end
 
   # Returns the third element wrapped in +Just+, or +None+ if the list has
   # fewer than three elements.
@@ -32,8 +34,10 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].third   # => Just(3)
   #   [1, 2].third      # => None
   third :> X?
-  let third(@[_, _, x | _]) = Just(x)
-  let third(@_) = None
+  let third = match Kex.Intrinsic.List.at(this, 2) do
+    None -> None
+    x -> Just(x)
+  end
 
   # Returns all elements after the first. Returns +[]+ for an empty or
   # single-element list.

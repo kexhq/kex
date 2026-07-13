@@ -795,6 +795,17 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
 // Read the native stdlib routing contract from the artifact itself. Falling
 // back only when no artifact is available preserves the wasm build without
 // hiding a malformed native interface.
+auto loadPrebuiltPreludeUnit(const std::string &runtimeDir)
+    -> kex::beam::KexiRegistry {
+  kex::beam::KexiRegistry registry;
+  auto path = (std::filesystem::path{runtimeDir} / "kex_prelude.beam").string();
+  auto errors = registry.loadUnit(path);
+  if (!errors.empty())
+    throw std::runtime_error("invalid prebuilt standard library: " +
+                             errors.front().message);
+  return registry;
+}
+
 auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
   static const PreludeInterfaceNames names = [] {
     auto runtimeDir = prebuiltRuntimeBeamDir();
@@ -802,21 +813,41 @@ auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
     auto path = std::filesystem::path{runtimeDir} / "kex_prelude.beam";
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) return sourcePreludeInterfaceNames();
-    auto beam = kex::beam::readBeamFile(path.string());
-    auto *payload = beam.findChunk(kex::beam::KEXI_CHUNK_ID);
-    if (!payload)
-      throw std::runtime_error("prebuilt standard library has no KexI interface");
-    auto interface = kex::beam::deserializeKexi(payload->data);
+    auto registry = loadPrebuiltPreludeUnit(runtimeDir);
     PreludeInterfaceNames result;
-    for (const auto &exported : interface.typeInterface.exports)
-      result.routedFunctions.insert(exported.name);
-    for (const auto &receiver : interface.typeInterface.methods) {
-      result.routedFunctions.insert(receiver.name);
-      result.receiverFunctions.insert(receiver.name);
+    for (const auto *module : registry.allLoadedModules()) {
+      for (const auto &receiver : module->chunk.typeInterface.methods) {
+        result.routedFunctions.insert(receiver.name);
+        result.receiverFunctions.insert(receiver.name);
+      }
     }
     return result;
   }();
   return names;
+}
+
+auto preludeExternalModules() -> const kex::ir::ExternalModules & {
+  static const auto modules = [] {
+    auto runtimeDir = prebuiltRuntimeBeamDir();
+    if (runtimeDir.empty()) return kex::ir::ExternalModules{};
+    return loadPrebuiltPreludeUnit(runtimeDir).buildExternalModules();
+  }();
+  return modules;
+}
+
+auto mergeExternalModules(const kex::ir::ExternalModules &base,
+                          const kex::ir::ExternalModules &overrides)
+    -> kex::ir::ExternalModules {
+  auto result = base;
+  for (const auto &[name, atom] : overrides.nameToAtom)
+    result.nameToAtom[name] = atom;
+  for (const auto &[name, function] : overrides.exportToBeamFn)
+    result.exportToBeamFn[name] = function;
+  for (const auto &[name, arity] : overrides.exportArity)
+    result.exportArity[name] = arity;
+  for (const auto &[name, functions] : overrides.receiverFunctions)
+    result.receiverFunctions[name] = functions;
+  return result;
 }
 
 // Stdlib functions in the Kex prelude — calls to these route to the shared
@@ -826,12 +857,16 @@ auto migratedPreludeFns() -> const std::unordered_set<std::string> & {
 }
 
 #ifdef KEX_PRELUDE_DIR
-// Parse+merge the Kex prelude (src/prelude/*.kex, MainBlocks dropped) into one
-// Program and lower it to the shared `kex_prelude` module's Core Erlang,
-// written to <dir>/kex_prelude.core. Returns false (with a message) if the
-// prelude can't be lowered yet.
+struct PreludeBuildModule {
+  kex::ir::EmitResult emitted;
+  kex::beam::KexiChunk interface;
+};
+
+// Build the stdlib entry plus ordinary Kex module companions. The entry keeps
+// flattened compatibility code temporarily, but its public KexI contains only
+// top-level declarations; module exports belong to companion interfaces.
 auto compilePreludeCore(const std::string &dir,
-                        kex::beam::KexiChunk *interface = nullptr) -> bool {
+                        std::vector<PreludeBuildModule> *builtModules) -> bool {
   namespace fs = std::filesystem;
   kex::ast::Program merged;
   std::error_code ec;
@@ -856,20 +891,44 @@ auto compilePreludeCore(const std::string &dir,
           std::cerr << "error: prelude interface: " << diag.message << "\n";
       return false;
     }
-    auto mod = kex::ir::lowerProgram(merged, "prelude");
-    auto res = kex::ir::emitCore(mod);
-    std::ofstream out(dir + "/kex_prelude.core");
-    if (!out)
-      return false;
-    out << res.source;
-    if (interface) {
+    std::vector<kex::ir::Module> modules;
+    modules.push_back(kex::ir::lowerProgram(merged, "prelude"));
+    auto splitModules = kex::ir::lowerModules(
+        merged, "prelude", sourcePreludeInterfaceNames().receiverFunctions);
+    for (size_t i = 1; i < splitModules.size(); i++)
+      modules.push_back(std::move(splitModules[i]));
+
+    builtModules->clear();
+    for (size_t i = 0; i < modules.size(); i++) {
+      PreludeBuildModule built;
+      built.emitted = kex::ir::emitCore(modules[i]);
+      std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
+      if (!out) return false;
+      out << built.emitted.source;
+
       kex::beam::CollectOptions options;
       options.unitId = "kex_prelude";
-      options.moduleAtom = "kex_prelude";
-      options.moduleName = "Prelude";
-      options.flattenModules = true;
+      options.moduleAtom = built.emitted.moduleName;
       options.analysis = &analyzer;
-      *interface = kex::beam::collectMetadata(merged, options);
+      if (i == 0) {
+        options.moduleName = "Prelude";
+        options.collectTopLevel = true;
+        options.role = kex::beam::KexiModuleRole::Entry;
+      } else {
+        options.role = kex::beam::KexiModuleRole::Companion;
+        options.entryBackPointer = "kex_prelude";
+        options.moduleName = built.emitted.moduleName.rfind("Kex.", 0) == 0
+            ? built.emitted.moduleName.substr(4) : built.emitted.moduleName;
+      }
+      built.interface = kex::beam::collectMetadata(merged, options);
+      builtModules->push_back(std::move(built));
+    }
+    for (size_t i = 1; i < builtModules->size(); i++) {
+      kex::beam::KexiCompanion companion;
+      companion.beamAtom = (*builtModules)[i].emitted.moduleName;
+      companion.relativePath = companion.beamAtom + ".beam";
+      (*builtModules)[0].interface.metadata.companions.push_back(
+          std::move(companion));
     }
   } catch (const kex::ir::LowerError &e) {
     std::cerr << "error: prelude: " << e.what() << "\n";
@@ -885,19 +944,15 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   std::vector<kex::ir::ExternalRecordLayout> layouts;
   auto runtimeDir = prebuiltRuntimeBeamDir();
   if (runtimeDir.empty()) return layouts;
-  auto beam = kex::beam::readBeamFile(
-      (std::filesystem::path{runtimeDir} / "kex_prelude.beam").string());
-  auto *payload = beam.findChunk(kex::beam::KEXI_CHUNK_ID);
-  if (!payload)
-    throw std::runtime_error("prebuilt standard library has no KexI interface");
-  auto interface = kex::beam::deserializeKexi(payload->data);
-  for (const auto &record : interface.metadata.records) {
-    kex::ir::ExternalRecordLayout layout;
-    layout.name = record.name;
-    for (const auto &field : record.fields)
-      layout.fields.push_back(field.name);
-    layouts.push_back(std::move(layout));
-  }
+  auto registry = loadPrebuiltPreludeUnit(runtimeDir);
+  for (const auto *module : registry.allLoadedModules())
+    for (const auto &record : module->chunk.metadata.records) {
+      kex::ir::ExternalRecordLayout layout;
+      layout.name = record.name;
+      for (const auto &field : record.fields)
+        layout.fields.push_back(field.name);
+      layouts.push_back(std::move(layout));
+    }
   return layouts;
 }
 
@@ -1162,20 +1217,34 @@ int main(int argc, char *argv[]) {
     case 1001: {
 #ifdef KEX_PRELUDE_DIR
       std::string dir = optarg;
-      kex::beam::KexiChunk interface;
-      if (!compilePreludeCore(dir, &interface))
-        return 1;
-      std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir + " " +
-                        dir + "/kex_prelude.core";
-      if (std::system(cmd.c_str()) != 0)
+      std::vector<PreludeBuildModule> modules;
+      if (!compilePreludeCore(dir, &modules))
         return 1;
       try {
-        auto beamPath = dir + "/kex_prelude.beam";
-        interface.interfaceHash = kex::beam::computeInterfaceHash(interface);
-        auto beam = kex::beam::readBeamFile(beamPath);
-        beam.setChunk(kex::beam::KEXI_CHUNK_ID,
-                      kex::beam::serializeKexi(interface));
-        kex::beam::writeBeamFile(beam, beamPath);
+        for (const auto &module : modules) {
+          std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir +
+                            " " + dir + "/" + module.emitted.moduleName +
+                            ".core";
+          if (std::system(cmd.c_str()) != 0) return 1;
+        }
+
+        for (size_t i = 1; i < modules.size(); i++)
+          modules[i].interface.interfaceHash =
+              kex::beam::computeInterfaceHash(modules[i].interface);
+        for (auto &companion : modules[0].interface.metadata.companions)
+          for (size_t i = 1; i < modules.size(); i++)
+            if (modules[i].emitted.moduleName == companion.beamAtom)
+              companion.expectedHash = modules[i].interface.interfaceHash;
+        modules[0].interface.interfaceHash =
+            kex::beam::computeInterfaceHash(modules[0].interface);
+
+        for (auto &module : modules) {
+          auto beamPath = dir + "/" + module.emitted.moduleName + ".beam";
+          auto beam = kex::beam::readBeamFile(beamPath);
+          beam.setChunk(kex::beam::KEXI_CHUNK_ID,
+                        kex::beam::serializeKexi(module.interface));
+          kex::beam::writeBeamFile(beam, beamPath);
+        }
       } catch (const std::exception &e) {
         std::cerr << "error: could not attach stdlib interface: " << e.what()
                   << "\n";
@@ -1727,7 +1796,8 @@ int main(int argc, char *argv[]) {
               // file changed underneath us, just skip it this round.
             }
           }
-          auto extMods = kexiRegistry.buildExternalModules();
+          auto extMods = mergeExternalModules(
+              preludeExternalModules(), kexiRegistry.buildExternalModules());
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
                                              migratedPreludeFns(), "",
                                              extMods.nameToAtom.empty() ? nullptr : &extMods);
@@ -2237,9 +2307,13 @@ int main(int argc, char *argv[]) {
         "Result -> halt() "
         "catch _:Reason:_ -> io:format(standard_error, \"Internal error: "
         "runtime error: ~p~n\", [Reason]), halt(1) end";
-    std::string runCmd = "erl -noshell -pa " + absBeamDir;
+    // Erlang prepends each -pa directory, so add the toolchain first and the
+    // compiled unit last. A source module intentionally shadows a stdlib
+    // module with the same public name (for example a user-defined `Math`).
+    std::string runCmd = "erl -noshell";
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
+    runCmd += " -pa " + absBeamDir;
     // shellSingleQuote (see its own comment) wraps the whole -eval
     // text as one shell argument, so quote characters embedded in it
     // (e.g. around a module name with a literal '.' in its stem)
@@ -2456,7 +2530,8 @@ int main(int argc, char *argv[]) {
       try {
         auto irModules = kex::ir::lowerModules(program, stem,
                                                migratedPreludeFns(), filepath,
-                                               &preludeRecordLayouts);
+                                               &preludeRecordLayouts,
+                                               &preludeExternalModules());
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
         result = moduleResults.front();

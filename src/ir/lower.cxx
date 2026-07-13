@@ -910,23 +910,6 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             }
         }
-        // Namespaced constructors/helpers implemented by the merged Kex
-        // prelude. Block modules inside src/prelude are flattened there using
-        // `__` separators, so Web.Server.new and Web.Response.text route to
-        // those exported functions rather than companion modules.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && path.size() == 2 &&
-                path[0] == "Web" && (path[1] == "Server" || path[1] == "Response")) {
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-                std::string fn = "Web__" + path[1] + "__" + n.method;
-                return wrapLets(binds, callE("kex_prelude", fn,
-                    static_cast<int>(args.size()), std::move(args)));
-            }
-        }
         // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
         // Mock.FS.clear() — the in-memory test filesystem, mirrored by
         // kex_file's mock registry.
@@ -1535,18 +1518,6 @@ struct Lowering {
             std::vector<ExprPtr> a; a.push_back(std::move(v));
             auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
         };
-
-        if ((m == "second" || m == "third") && n.args.empty()) {
-            int idx = (m == "second") ? 1 : 2;
-            auto tmp = fresh("_nth");
-            auto letE = std::make_unique<Expr>();
-            letE->node = Let{tmp, callE("kex_intrinsic_list","list_get",2,two(rv(), litInt(idx))),
-                matchBool(
-                    intrin(Op::Eq, two(var(tmp), lit(LitKind::None, "none"))),
-                    lit(LitKind::None, "none"),
-                    justOf(var(tmp)))};
-            return ret(std::move(letE));
-        }
 
         // No-/one-arg builtins with a single runtime call (receiver first).
         struct One { const char* method; const char* mod; const char* fn; int nargs; };
@@ -4018,9 +3989,10 @@ auto rewriteModuleCalls(ExprPtr& expr,
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
-                  const std::vector<ExternalRecordLayout>* externalRecords)
+                  const std::vector<ExternalRecordLayout>* externalRecords,
+                  const ExternalModules* externals)
     -> std::vector<Module> {
-    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath, nullptr,
+    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath, externals,
                              externalRecords);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
@@ -4096,6 +4068,10 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         fn.exported = def.exported;
         moduleBuckets[def.path].push_back(std::move(fn));
     }
+    std::unordered_map<std::string, std::pair<std::string, std::string>>
+        globalTargets;
+    for (const auto& fn : globalFunctions)
+        globalTargets[fn.name] = {flat.name, fn.name};
     flat.functions = std::move(globalFunctions);
 
     result.push_back(std::move(flat));
@@ -4107,12 +4083,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         result.push_back(std::move(module));
     }
 
-    for (auto& module : result)
+    for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
+        auto& module = result[moduleIndex];
         for (auto& fn : module.functions)
             for (auto& clause : fn.clauses) {
                 if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
                 rewriteModuleCalls(clause.body, targets);
+                if (moduleIndex > 0) {
+                    if (clause.guard)
+                        rewriteModuleCalls(*clause.guard, globalTargets);
+                    rewriteModuleCalls(clause.body, globalTargets);
+                }
             }
+    }
     return result;
 }
 

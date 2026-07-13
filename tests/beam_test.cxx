@@ -453,6 +453,46 @@ int main() {
                               std::string("Web__Types__build"));
         });
 
+        test::it("collects a nested module companion by qualified name", []() {
+            kex::Lexer lexer(
+                "module Web do\n"
+                "  module Response do\n"
+                "    let text(body: String) = body\n"
+                "  end\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            CollectOptions options;
+            options.moduleAtom = "Kex.Web.Response";
+            options.moduleName = "Web.Response";
+            options.role = KexiModuleRole::Companion;
+            options.entryBackPointer = "kex_prelude";
+            auto chunk = collectMetadata(program, options);
+            test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.exports[0].name,
+                              std::string("text"));
+            test::assertEqual(chunk.metadata.sourceModule,
+                              std::string("Web.Response"));
+        });
+
+        test::it("labels an entry while collecting top-level declarations", []() {
+            kex::Lexer lexer("let visible(x: Int): Int = x\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            CollectOptions options;
+            options.moduleAtom = "entry";
+            options.moduleName = "Public.Entry";
+            options.collectTopLevel = true;
+
+            auto chunk = collectMetadata(program, options);
+
+            test::assertEqual(chunk.metadata.sourceModule,
+                              std::string("Public.Entry"));
+            test::assertEqual(chunk.typeInterface.exports.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.exports[0].name,
+                              std::string("visible"));
+        });
+
         test::it("uses inferred function results instead of syntax-only unknowns", []() {
             kex::Lexer lexer(
                 "let double(n: Integer) = n * 2\n"

@@ -390,21 +390,46 @@ void collectFlattenedProgram(const kex::ast::Program& program,
                                        iface, meta, analysis);
 }
 
-// Find a ModuleDef by name and collect from its body.
+auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
+                              const std::string& moduleName,
+                              KexiTypeInterface& iface,
+                              KexiStructuralMetadata& meta,
+                              const kex::semantic::Analyzer* analysis) -> bool {
+    for (const auto& item : body)
+        if (auto* module =
+                std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+            module && *module) {
+            if ((*module)->name == moduleName) {
+                collectFromModuleBody((*module)->body, iface, meta, analysis);
+                meta.isFoul = (*module)->isFoul;
+                return true;
+            }
+            if (findAndCollectModuleBody((*module)->body, moduleName, iface,
+                                         meta, analysis))
+                return true;
+        }
+    return false;
+}
+
+// Find a top-level or nested ModuleDef by its qualified source name.
 auto findAndCollectModule(const kex::ast::Program& program,
                           const std::string& moduleName,
                           KexiTypeInterface& iface,
                           KexiStructuralMetadata& meta,
                           const kex::semantic::Analyzer* analysis) -> bool {
-    for (const auto& item : program.items) {
-        if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
-            if (*md && (*md)->name == moduleName) {
-                collectFromModuleBody((*md)->body, iface, meta, analysis);
-                meta.isFoul = (*md)->isFoul;
+    for (const auto& item : program.items)
+        if (auto* module =
+                std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
+            module && *module) {
+            if ((*module)->name == moduleName) {
+                collectFromModuleBody((*module)->body, iface, meta, analysis);
+                meta.isFoul = (*module)->isFoul;
                 return true;
             }
+            if (findAndCollectModuleBody((*module)->body, moduleName, iface,
+                                         meta, analysis))
+                return true;
         }
-    }
     return false;
 }
 
@@ -427,7 +452,7 @@ auto collectMetadata(const kex::ast::Program& program,
         if (opts.flattenModules)
             collectFlattenedProgram(program, chunk.typeInterface, chunk.metadata,
                                     opts.analysis);
-        else if (!opts.moduleName.empty())
+        else if (!opts.collectTopLevel && !opts.moduleName.empty())
             findAndCollectModule(program, opts.moduleName,
                                  chunk.typeInterface, chunk.metadata,
                                  opts.analysis);
