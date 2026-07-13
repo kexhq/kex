@@ -152,13 +152,6 @@ describe("Integer — floor, ceil, round") do
   end
 end
 
-describe("Integer — toFloat") do
-  it("toFloat converts to a float") do
-    assert(42.toFloat == 42.0)
-    assert(0.toFloat == 0.0)
-  end
-end
-
 describe("Integer — negative modulo") do
   it("modulo with negative dividend yields positive result") do
     assert((-7).modulo(3) == 2)

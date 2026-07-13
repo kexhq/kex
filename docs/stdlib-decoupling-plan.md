@@ -76,13 +76,13 @@ particular stdlib ADTs and records must not.
 
 ### Standard library package
 
-Public modules, functions, extension methods, traits, ADTs, records,
+Public modules, functions, receiver extension functions, traits, ADTs, records,
 documentation, and type signatures live in Kex. The stdlib uses the same
 resolver, analyzer, KexI interface model, and module lowering as user packages.
 
-Automatic imports and extension-method providers are declared in package
+Automatic imports and receiver-function providers are declared in package
 metadata. They are not inferred from filenames or maintained as compiler name
-sets. Typed method resolution handles ownership and ambiguity.
+sets. Typed receiver-call resolution handles ownership and ambiguity.
 
 The installed distribution contains:
 
@@ -148,7 +148,7 @@ diagnostic rather than silently compiling the stdlib during every user run.
 
 ### 1. Baseline and contract inventory
 
-- Inventory every in-scope public function, type, extension method, automatic
+- Inventory every in-scope public function, type, receiver extension function, automatic
   import, mock, effect, error behavior, and backend discrepancy.
 - Classify operations as language implementation, Kex stdlib, private
   intrinsic, or explicitly deferred.
@@ -175,7 +175,7 @@ diagnostic rather than silently compiling the stdlib during every user run.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.
-- Represent exports, methods, receiver types, generics, traits, records, ADTs,
+- Represent exports, receiver functions, receiver types, generics, traits, records, ADTs,
   layouts, visibility, emitted ownership, and backend availability without
   stdlib-specific structures.
 - Version KexI additions compatibly and treat absent required information
@@ -189,8 +189,8 @@ diagnostic rather than silently compiling the stdlib during every user run.
 
 - Split the merged prelude into ordinary modules with explicit public/private
   exports and a declared dependency graph.
-- Represent extension methods through KexI ownership and declared automatic
-  providers, never a global method-name fallback.
+- Represent receiver extension functions through KexI ownership and declared
+  automatic providers, never a global function-name fallback.
 - Build and install validated cached BEAMs once through the artifact model
   above.
 - Load source through the ordinary resolver for the interpreter and cached
@@ -203,12 +203,12 @@ diagnostic rather than silently compiling the stdlib during every user run.
 
 ### 5. Make call resolution interface-driven
 
-- Resolve module calls and UFCS methods during semantic analysis using receiver
+- Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.
 - Carry the resolved module, emitted function, arity, and receiver substitution
   into typed IR.
 - Lower resolved calls generically. Remove searches and special sets for
-  migrated methods, HOFs, Web routes, Mock modules, and record helpers.
+  migrated receiver functions, HOFs, Web routes, Mock modules, and record helpers.
 - Diagnose ambiguous ownership, unknown receivers, unavailable modules, and
   private intrinsic access before lowering.
 
@@ -237,7 +237,7 @@ For every domain:
 5. Delete replaced C++ public builtins, semantic entries, ordinary IR cases,
    Erlang wrappers, compatibility aliases, and obsolete tests in the same
    slice.
-6. If a method still has a temporary guard lowering, record that sole remaining
+6. If a receiver function still has a temporary guard lowering, record that sole remaining
    reference in the guard workstream and prevent it from serving ordinary
    calls.
 
@@ -265,7 +265,7 @@ blocking the package migration.
 
 - Compute effects transitively across the call graph, including recursive
   strongly connected components and imported interfaces.
-- Extend KexI exports and methods with versioned effect summaries. An absent or
+- Extend KexI exports and receiver functions with versioned effect summaries. An absent or
   unknown effect is conservatively foul in a guard.
 - Permit any proven non-foul expression or function call in a Kex guard.
 - Reject direct and transitive foul calls during semantic analysis.
@@ -309,7 +309,7 @@ pure calls.
 ## Automated architecture tests
 
 - Compile a temporary stdlib package fixture containing a previously unknown
-  module function and extension method; both backends must use it without any
+  module function and receiver extension function; both backends must use it without any
   compiler registration.
 - Compile a fixture adding a new private intrinsic through the declared ABI;
   semantic and IR sources must not change to recognize its name.

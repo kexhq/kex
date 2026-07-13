@@ -2,8 +2,8 @@
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
 -export([abs/1, sqrt/1, add/2, divide/2, eq/2, neq/2,
-          floor/1, ceil/1, round/1, toFloat/1, toInteger/1,
-          'toString'/1, float_parse/1, float_parse_prefix/1, number_parse/1,
+          floor/1, ceil/1, round/1, toInteger/1,
+          float_parse/1, float_parse_prefix/1, number_parse/1,
           to_integer/1, to_float/1]).
 
 abs(N)  -> erlang:abs(N).
@@ -68,15 +68,8 @@ floor(N)      -> erlang:floor(N).
 ceil(N)       -> erlang:ceil(N).
 round(N)      -> erlang:round(N).       %% works on both int and float
 
-%% toFloat/1 — convert integer to float (no-op on floats).
-toFloat(N)    -> erlang:float(N).
-
 %% toInteger/1 — truncate toward zero (no-op on integers).
 toInteger(N)  -> erlang:trunc(N).
-
-%% toString/1 — convert number to string, matching Kex's display formatting
-%% (6 decimal places for floats, matching kex_io:to_string / interpreter).
-'toString'(N) -> unicode:characters_to_binary(kex_io:to_string(N)).
 
 %% ParseError is the tagged tuple {'ParseError', Input, Position, Value, Message, Rest}
 %% (record lowered by src/ir/lower.cxx). Matches src/interpreter/stdlib/number.cxx.

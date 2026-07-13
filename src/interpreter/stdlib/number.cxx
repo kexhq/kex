@@ -106,15 +106,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("toFloat", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::floating(0.0);
-        if (auto* i = std::get_if<IntValue>(&args[0]->data))
-            return Value::floating(static_cast<double>(i->value));
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
-            return Value::floating(f->value);
-        return Value::floating(0.0);
-    });
-
     // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —
     // namespaced under the primitive type, same convention as Math.sqrt
     // etc. The Error payload is a typed ParseError record {input, position,

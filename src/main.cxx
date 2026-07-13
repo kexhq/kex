@@ -727,32 +727,77 @@ static const std::unordered_set<std::string> &migratedPreludeFns() {
       "error?",      "first",     "last",      "empty?",  "or",
       "in?",         "blank?",    "present?",  "truthy?", "falsy?",
       "second",      "third",     "floor",     "ceil",    "round",
-      "toFloat",     "toInteger", "toString",  "rest",    "toOptional",
+      "toInteger",   "rest",      "toOptional",
       "chars",       "items",     "send",      "link",    "unlink",
       "monitor",     "alive?",    "demonitor", "await",
       "start"};
 #ifdef KEX_PRELUDE_DIR
-    // Explicit prelude module calls are safe to discover generically: their
-    // BEAM names are deterministic (`Assert.equal` -> `Assert__equal`). This
-    // lets stdlib modules grow without adding another compiler dispatch case.
+    // Discover both module functions and receiver-constrained extension
+    // functions from Kex source. `value.foo(arg)` is UFCS for the resolved
+    // `foo(value, arg)` extension; it is not an object-method dispatch. Keeping
+    // this transitional routing source-driven prevents every new prelude
+    // extension from requiring another compiler name entry while the stdlib is
+    // moved to normal KexI ownership.
     std::error_code ec;
     for (const auto &entry : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec)) {
       if (entry.path().extension() != ".kex") continue;
       kex::Lexer lexer(readFile(entry.path().string()), entry.path().string());
       kex::Parser parser(lexer.tokenizeAll(), entry.path().string());
       auto program = parser.parseProgram();
+      auto collectMake = [&](const kex::ast::MakeDef &make) {
+        for (const auto &item : make.body) {
+          if (const auto *fn =
+                  std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
+            if (*fn) names.insert((*fn)->name);
+          } else if (const auto *visibility =
+                         std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(
+                             &item)) {
+            if (!*visibility) continue;
+            for (const auto &visible : (*visibility)->items)
+              if (const auto *fn =
+                      std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
+                          &visible); fn && *fn)
+                names.insert((*fn)->name);
+          }
+        }
+      };
+      auto collectTrait = [&](const kex::ast::TraitDef &trait) {
+        for (const auto &item : trait.body)
+          if (const auto *fn =
+                  std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+              fn && *fn)
+            names.insert((*fn)->name);
+      };
       std::function<void(const kex::ast::ModuleDef &)> collect;
       collect = [&](const kex::ast::ModuleDef &module) {
         for (const auto &item : module.body) {
-          if (const auto *fn = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item))
-            names.insert(module.name + "." + (*fn)->name);
-          else if (const auto *child = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+          if (const auto *fn =
+                  std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
+            if (*fn) names.insert(module.name + "." + (*fn)->name);
+          } else if (const auto *make =
+                         std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
+            if (*make) collectMake(**make);
+          } else if (const auto *trait =
+                         std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
+            if (*trait) collectTrait(**trait);
+          } else if (const auto *child =
+                         std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
             collect(**child);
+          }
         }
       };
-      for (const auto &item : program.items)
-        if (const auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
+      for (const auto &item : program.items) {
+        if (const auto *make =
+                std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
+          if (*make) collectMake(**make);
+        } else if (const auto *trait =
+                       std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
+          if (*trait) collectTrait(**trait);
+        } else if (const auto *module =
+                       std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
           collect(**module);
+        }
+      }
     }
 #endif
     return names;

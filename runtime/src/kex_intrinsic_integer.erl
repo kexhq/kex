@@ -4,7 +4,9 @@
 -module(kex_intrinsic_integer).
 -export([modulo/2, times/2, integer_parse/1, integer_parse_prefix/1]).
 
-modulo(A, B) -> A rem B.
+%% Mathematical modulo: the result has the divisor's sign, matching the Kex
+%% interpreter rather than Erlang's dividend-signed rem/2.
+modulo(A, B) -> ((A rem B) + B) rem B.
 %% n.times { |i| block(i) } — call block with 0..n-1.
 times(N, Fun) -> lists:foreach(Fun, lists:seq(0, N - 1)).
 

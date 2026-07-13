@@ -1517,7 +1517,8 @@ struct Lowering {
             }
 
         if (m == "modulo" && n.args.size() == 1)
-            return ret(callE("erlang","rem",2,two(rv(), arg0())));
+            return ret(callE("kex_intrinsic_integer", "modulo", 2,
+                             two(rv(), arg0())));
         if (m == "even?" && n.args.empty())
             return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
         if (m == "odd?" && n.args.empty())

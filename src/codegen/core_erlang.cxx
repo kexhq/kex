@@ -920,7 +920,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return node.args.empty() ? "" : emitExpr(node.args[0]);
             };
 
-            // Stdlib methods migrated to the Kex prelude — route to the shared
+            // Stdlib receiver functions migrated to the Kex prelude — route to the shared
             // kex_prelude BEAM module instead of the hardcoded ladder, same as
             // the --ir path does. Gated on !m_inGuard (cross-module calls are
             // illegal inside Core Erlang guards). Excludes methods where the
@@ -938,7 +938,7 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                     "first", "last", "empty?", "or", "in?",
                     "blank?", "present?", "truthy?", "falsy?",
                     "second", "third",
-                    "floor", "ceil", "round", "toFloat", "toInteger",
+                    "floor", "ceil", "round", "toInteger",
                     "rest", "toOptional",
                     // Process/concurrency primitives backed by Kex.Intrinsic.Process.
                     "send", "link", "unlink", "monitor", "alive?",
@@ -968,9 +968,9 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
             if (node.method == "exit" && node.args.size() == 1)
                 return "call 'erlang':'exit'(" + recv + ", " + firstArg() + ")";
 
-            // Integer/Float methods
+            // Integer/Float receiver functions
             if (node.method == "modulo" && node.args.size() == 1)
-                return "call 'erlang':'rem'(" + recv + ", " + firstArg() + ")";
+                return "call 'kex_intrinsic_integer':'modulo'(" + recv + ", " + firstArg() + ")";
             if (node.method == "even?")
                 return "call 'erlang':'=:='(call 'erlang':'rem'(" + recv + ", 2), 0)";
             if (node.method == "odd?")
@@ -985,12 +985,8 @@ auto CoreErlangEmitter::emitExpr(const ast::ExprPtr& expr) -> std::string {
                 return "call 'erlang':'ceil'(" + recv + ")";
             if (node.method == "round")
                 return "call 'erlang':'round'(" + recv + ")";
-            if (node.method == "toFloat")
-                return "call 'erlang':'float'(" + recv + ")";
             if (node.method == "toInteger")
                 return "call 'erlang':'trunc'(" + recv + ")";
-            // toString is routed through kex_prelude; kex_io:to_string is not
-            // a guard BIF.
 
             // count in guard context uses erlang:length (guard-safe); in
             // non-guard context it routes through kex_prelude.
