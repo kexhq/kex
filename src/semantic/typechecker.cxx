@@ -1264,12 +1264,24 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     }
                 }
             }
-            // Namespace call: `Integer.parse(s)` → look up "Integer::parse".
-            // The receiver is a bare UpperIdent — don't include it as argTypes[0].
+            // Namespace call: `Integer.parse(s)` or `Web.Response.text(s)`.
+            // A chain made entirely of uppercase segments is a qualified
+            // namespace, not a UFCS receiver value, so don't include it as
+            // argTypes[0].
             std::string callName = node.method;
+            auto isNamespaceReceiver = [&](const auto& self, const ast::Expr& receiver) -> bool {
+                if (std::holds_alternative<ast::UpperIdentifier>(receiver.kind)) return true;
+                if (auto* mc = std::get_if<ast::MethodCall>(&receiver.kind)) {
+                    return !mc->method.empty() &&
+                           std::isupper(static_cast<unsigned char>(mc->method.front())) &&
+                           mc->receiver && self(self, *mc->receiver);
+                }
+                return false;
+            };
             bool isNamespaceCall = node.receiver &&
-                std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind);
-            if (isNamespaceCall) {
+                isNamespaceReceiver(isNamespaceReceiver, *node.receiver);
+            if (isNamespaceCall &&
+                std::holds_alternative<ast::UpperIdentifier>(node.receiver->kind)) {
                 callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
                            "::" + node.method;
             }

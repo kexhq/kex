@@ -728,7 +728,8 @@ static const std::unordered_set<std::string> &migratedPreludeFns() {
       "second",      "third",     "floor",     "ceil",    "round",
       "toFloat",     "toInteger", "toString",  "rest",    "toOptional",
       "chars",       "items",     "send",      "link",    "unlink",
-      "monitor",     "alive?",    "demonitor", "await"};
+      "monitor",     "alive?",    "demonitor", "await",
+      "mount",       "get",       "post",      "patch", "start"};
   return fns;
 }
 
@@ -785,13 +786,39 @@ auto collectPreludeRecordDefs() -> std::vector<kex::ast::TopLevelItem> {
     if (e.path().extension() == ".kex")
       files.push_back(e.path().string());
   std::sort(files.begin(), files.end());
+
+  std::function<void(std::vector<kex::ast::ModuleItem>&)> extractFromModule;
+  extractFromModule = [&](std::vector<kex::ast::ModuleItem>& body) {
+    for (auto& item : body) {
+      if (auto* rd = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item)) {
+        if (*rd) {
+          auto copy = std::make_unique<kex::ast::RecordDef>();
+          copy->name = (*rd)->name;
+          copy->location = (*rd)->location;
+          for (const auto& f : (*rd)->fields) {
+            kex::ast::RecordField rf;
+            rf.name = f.name;
+            copy->fields.push_back(std::move(rf));
+          }
+          defs.push_back(std::move(copy));
+        }
+      } else if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
+        if (*md) extractFromModule((*md)->body);
+      }
+    }
+  };
+
   for (const auto& f : files) {
     kex::Lexer lex(readFile(f), f);
     kex::Parser parser(lex.tokenizeAll(), f);
     auto prog = parser.parseProgram();
-    for (auto& item : prog.items)
-      if (std::holds_alternative<std::unique_ptr<kex::ast::RecordDef>>(item))
+    for (auto& item : prog.items) {
+      if (std::holds_alternative<std::unique_ptr<kex::ast::RecordDef>>(item)) {
         defs.push_back(std::move(item));
+      } else if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
+        if (*md) extractFromModule((*md)->body);
+      }
+    }
   }
   return defs;
 }

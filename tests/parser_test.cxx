@@ -190,6 +190,25 @@ int main() {
         });
     });
 
+    describe("Parser — Records", []() {
+        it("allows timeout as a field name", []() {
+            auto program = parse(
+                "record HttpOptions do\n"
+                "  timeout : Integer = 30000\n"
+                "end\n");
+            assertTrue(firstItemIs<std::unique_ptr<ast::RecordDef>>(program));
+            auto& record =
+                std::get<std::unique_ptr<ast::RecordDef>>(program.items[0]);
+            assertEqual(record->fields.size(), size_t(1));
+            assertEqual(record->fields[0].name, std::string("timeout"));
+            assertTrue(record->fields[0].defaultValue.has_value());
+        });
+
+        it("allows timeout in record construction", []() {
+            assertTrue(!parseFails("let opts = HttpOptions { timeout: 5000 }"));
+        });
+    });
+
     describe("Parser — Types", []() {
         it("parses simple type declaration", []() {
             auto program = parse("type Integer");

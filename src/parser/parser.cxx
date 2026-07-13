@@ -497,7 +497,7 @@ auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
         // Field names can be keywords (e.g. 'end', 'type')
         if (check(TokenType::LowerIdent) || check(TokenType::End) ||
             check(TokenType::Type) || check(TokenType::Match) ||
-            check(TokenType::Loop)) {
+            check(TokenType::Loop) || check(TokenType::Timeout)) {
             field.name = advance().value;
         } else {
             error("Expected field name");
@@ -1420,7 +1420,14 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             if (!check(TokenType::RBrace)) {
                 do {
                     skipNewlines();
-                    auto fieldName = expect(TokenType::LowerIdent, "Expected field name").value;
+                    std::string fieldName;
+                    if (check(TokenType::LowerIdent) || check(TokenType::End) ||
+                        check(TokenType::Type) || check(TokenType::Match) ||
+                        check(TokenType::Loop) || check(TokenType::Timeout)) {
+                        fieldName = advance().value;
+                    } else {
+                        error("Expected field name");
+                    }
                     expect(TokenType::Colon, "Expected ':' after field name");
                     auto value = parseExpr();
                     fields.push_back({fieldName, std::move(value)});

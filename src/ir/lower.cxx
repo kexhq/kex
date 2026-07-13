@@ -836,6 +836,23 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             }
         }
+        // Namespaced constructors/helpers implemented by the merged Kex
+        // prelude. Block modules inside src/prelude are flattened there using
+        // `__` separators, so Web.Server.new and Web.Response.text route to
+        // those exported functions rather than companion modules.
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) && path.size() == 2 &&
+                path[0] == "Web" && (path[1] == "Server" || path[1] == "Response")) {
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                if (n.block) args.push_back(atomize(*n.block, binds));
+                std::string fn = "Web__" + path[1] + "__" + n.method;
+                return wrapLets(binds, callE("kex_prelude", fn,
+                    static_cast<int>(args.size()), std::move(args)));
+            }
+        }
         // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
         // Mock.FS.clear() — the in-memory test filesystem, mirrored by
         // kex_file's mock registry.
@@ -852,6 +869,22 @@ struct Lowering {
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
+            }
+        }
+        // Mock.Http.start() / Mock.Http.respond(...) / Mock.Http.stop()
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) &&
+                path.size() == 2 && path[0] == "Mock" && path[1] == "Http") {
+                const char* fn = n.method == "start" ? "mock_start"
+                               : n.method == "respond" ? "mock_respond"
+                               : n.method == "stop" ? "mock_stop" : nullptr;
+                if (!fn) throw LowerError("IR lower: Mock.Http." + n.method + " not supported");
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
+                int ar = static_cast<int>(args.size());
+                return wrapLets(binds, callE("kex_http", fn, ar, std::move(args)));
             }
         }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
@@ -1107,6 +1140,16 @@ struct Lowering {
                 if (n.method == "cosh") return nsCall("math", "cosh");
                 if (n.method == "tanh") return nsCall("math", "tanh");
             }
+            if (uid->name == "Http") {
+                if (n.method == "get") return nsCall("kex_http", "get");
+                if (n.method == "post") return nsCall("kex_http", "post");
+                if (n.method == "put") return nsCall("kex_http", "put");
+                if (n.method == "patch") return nsCall("kex_http", "patch");
+                if (n.method == "delete") return nsCall("kex_http", "delete");
+                if (n.method == "head") return nsCall("kex_http", "head");
+                if (n.method == "options") return nsCall("kex_http", "options");
+                throw LowerError("IR lower: Http." + n.method + " not yet ported");
+            }
             if (uid->name == "File") {
                 // File.open(path) do |handle| … end → kex_file:open(Path, Fun).
                 // The handle on BEAM is the path itself (kex_file ops are
@@ -1304,6 +1347,20 @@ struct Lowering {
             "count", "length", "size", "to", "push", "contains?",
             "indexOf", "empty?", "in?", "alive?", "abs", "sqrt",
         };
+        // Web.Server route declarations accept their handler as a trailing
+        // block (`server.get("/") do |request| ... end`). They are ordinary
+        // prelude methods whose block is the final function argument.
+        static const std::unordered_set<std::string> webRouteMethods = {
+            "mount", "get", "post", "put", "patch", "delete"
+        };
+        if (!m_inGuard && webRouteMethods.count(m) && n.block &&
+            n.args.size() == 1 && n.namedArgs.empty() && !localMethods.count(m)) {
+            std::vector<ExprPtr> pargs;
+            pargs.push_back(rv());
+            pargs.push_back(atomize_ir(lower(n.args[0]), rb));
+            pargs.push_back(atomize_ir(lower(*n.block), rb));
+            return ret(callE("kex_prelude", m, 3, std::move(pargs)));
+        }
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
             && !localMethods.count(m) && !inlinedMethods.count(m)) {
             std::vector<ExprPtr> pargs;

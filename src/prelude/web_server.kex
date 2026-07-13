@@ -1,0 +1,125 @@
+# A small, WEBrick-style web server API. Configuration is immutable: mounting
+# a route returns an updated server, and `start` hands that configuration to
+# the BEAM runtime.
+
+module Web do
+record Request do
+  method      : String
+  path        : String
+  queryString : String
+  query       : Map<String, String>
+  headers     : Map<String, String>
+  body        : String
+end
+
+record Response do
+  status  : Integer = 200
+  headers : Map<String, String> = {}
+  body    : String = ""
+end
+
+module Response do
+  let text(body: String) -> Response do
+    return Response {
+      status: 200,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: body
+    }
+  end
+
+  let textWithStatus(body: String, status: Integer) -> Response do
+    return Response {
+      status: status,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: body
+    }
+  end
+
+  let html(body: String) -> Response do
+    return Response {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+      body: body
+    }
+  end
+
+  let json(body: String) -> Response do
+    return Response {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+      body: body
+    }
+  end
+
+  let redirect(location: String) -> Response do
+    return Response {
+      status: 302,
+      headers: { "Location": location },
+      body: ""
+    }
+  end
+
+  let notFound -> Response do
+    return Response {
+      status: 404,
+      headers: { "Content-Type": "text/plain; charset=utf-8" },
+      body: "Not Found\n"
+    }
+  end
+end
+
+type Handler = Request -> Response
+
+record Route do
+  method  : String
+  path    : String
+  handler : Handler
+end
+
+record Server do
+  port   : Integer
+  routes : [Route] = []
+end
+
+module Server do
+  let new(port: Integer) -> Server do
+    return Server { port: port }
+  end
+end
+
+make Server do
+  let mount(path: String, handler: Handler) -> Server do
+    let route = Route { method: "*", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  let get(path: String, handler: Handler) -> Server do
+    let route = Route { method: "GET", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  let post(path: String, handler: Handler) -> Server do
+    let route = Route { method: "POST", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  let put(path: String, handler: Handler) -> Server do
+    let route = Route { method: "PUT", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  let patch(path: String, handler: Handler) -> Server do
+    let route = Route { method: "PATCH", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  let delete(path: String, handler: Handler) -> Server do
+    let route = Route { method: "DELETE", path: path, handler: handler }
+    return Server { port: @port, routes: @routes + [route] }
+  end
+
+  foul start() -> Result<Unit, String> do
+    return Kex.Intrinsic.Web.serve(this)
+  end
+end
+end

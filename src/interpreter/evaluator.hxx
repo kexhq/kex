@@ -129,6 +129,8 @@ private:
     auto registerProcessBuiltins() -> void;
     auto registerParserBuiltins() -> void;
     auto registerEvalBuiltins() -> void;
+    auto registerHttpBuiltins() -> void;
+    auto registerWebBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;
@@ -184,6 +186,9 @@ private:
     bool m_mockIO = false;
     std::string m_mockIOOutput;
     std::deque<std::string> m_mockIOInputLines;
+
+    bool m_mockHttp = false;
+    std::deque<ValuePtr> m_mockHttpResponses;
 
     // describe/it/assert (registerTestBuiltins) — nesting depth for
     // indentation, and pass/fail counters for the summary line printed
