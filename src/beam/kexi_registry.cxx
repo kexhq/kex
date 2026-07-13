@@ -172,6 +172,52 @@ auto KexiRegistry::allLoadedModules() const -> std::vector<const LoadedModule*> 
     return result;
 }
 
+auto KexiRegistry::declarePackage(const kex::module::PackageMetadata& package)
+    -> std::vector<LoadError> {
+    std::vector<kex::module::PackageModuleIdentity> available;
+    for (const auto& [_, unit] : m_units)
+        for (const auto& mod : unit.modules)
+            available.push_back({mod.chunk.metadata.unitId,
+                                 mod.chunk.metadata.sourceModule});
+
+    auto validation = kex::module::validatePackageMetadata(package, available);
+    std::vector<LoadError> errors;
+    for (auto& error : validation)
+        errors.push_back({std::move(error.message)});
+    for (const auto& [existingId, existing] : m_packages) {
+        if (existingId == package.id) continue;
+        std::unordered_set<std::string> existingUnits(existing.unitIds.begin(),
+                                                      existing.unitIds.end());
+        for (const auto& unitId : package.unitIds)
+            if (existingUnits.count(unitId))
+                errors.push_back({"compiled unit '" + unitId +
+                                  "' is already owned by package '" +
+                                  existingId + "'"});
+    }
+    if (errors.empty())
+        m_packages[package.id] = package;
+    return errors;
+}
+
+auto KexiRegistry::automaticImportModules() const
+    -> std::vector<const LoadedModule*> {
+    std::vector<const LoadedModule*> result;
+    std::unordered_set<const LoadedModule*> seen;
+    for (const auto& [_, package] : m_packages) {
+        std::unordered_set<std::string> units(package.unitIds.begin(),
+                                              package.unitIds.end());
+        std::unordered_set<std::string> imports(package.automaticImports.begin(),
+                                                package.automaticImports.end());
+        for (const auto& [__, unit] : m_units)
+            for (const auto& mod : unit.modules)
+                if (units.count(mod.chunk.metadata.unitId) &&
+                    imports.count(mod.chunk.metadata.sourceModule) &&
+                    seen.insert(&mod).second)
+                    result.push_back(&mod);
+    }
+    return result;
+}
+
 auto KexiRegistry::findExport(const std::string& moduleAtom,
                               const std::string& name) const
     -> const KexiExport* {
@@ -189,12 +235,22 @@ auto KexiRegistry::findMethodsForReceiver(
     const std::string& receiverTypeName) const
     -> std::vector<std::pair<std::string, const KexiMethod*>> {
     std::vector<std::pair<std::string, const KexiMethod*>> results;
-    for (const auto& [_, unit] : m_units)
-        for (const auto& mod : unit.modules)
-            for (const auto& method : mod.chunk.typeInterface.methods)
-                if (method.name == methodName &&
-                    typeNameStr(method.receiverType) == receiverTypeName)
-                    results.emplace_back(mod.beamAtom, &method);
+    for (const auto& [_, package] : m_packages) {
+        std::unordered_set<std::string> units(package.unitIds.begin(),
+                                              package.unitIds.end());
+        std::unordered_set<std::string> providers(package.receiverProviders.begin(),
+                                                  package.receiverProviders.end());
+        for (const auto& [__, unit] : m_units)
+            for (const auto& mod : unit.modules) {
+                if (!units.count(mod.chunk.metadata.unitId) ||
+                    !providers.count(mod.chunk.metadata.sourceModule))
+                    continue;
+                for (const auto& method : mod.chunk.typeInterface.methods)
+                    if (method.name == methodName &&
+                        typeNameStr(method.receiverType) == receiverTypeName)
+                        results.emplace_back(mod.beamAtom, &method);
+            }
+    }
     return results;
 }
 
@@ -235,7 +291,19 @@ auto KexiRegistry::getUnit(const std::string& entryAtom) const
 }
 
 void KexiRegistry::unloadUnit(const std::string& entryAtom) {
-    m_units.erase(entryAtom);
+    auto it = m_units.find(entryAtom);
+    if (it == m_units.end()) return;
+    std::unordered_set<std::string> removedIds;
+    for (const auto& mod : it->second.modules)
+        removedIds.insert(mod.chunk.metadata.unitId);
+    m_units.erase(it);
+    for (auto package = m_packages.begin(); package != m_packages.end(); ) {
+        bool referencesRemoved = false;
+        for (const auto& unitId : package->second.unitIds)
+            if (removedIds.count(unitId)) { referencesRemoved = true; break; }
+        if (referencesRemoved) package = m_packages.erase(package);
+        else ++package;
+    }
 }
 
 auto KexiRegistry::generateLoadErlang(const LoadedUnit& unit) const

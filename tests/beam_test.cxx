@@ -3,9 +3,11 @@
 #include "../src/beam/collect_metadata.hxx"
 #include "../src/beam/etf.hxx"
 #include "../src/beam/kexi.hxx"
+#include "../src/beam/kexi_registry.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
+#include <filesystem>
 
 using namespace kex::beam;
 
@@ -512,6 +514,78 @@ int main() {
                               std::string("Integer"));
             test::assertEqual(chunk.metadata.methodOwnership[0].beamFunction,
                               std::string("doubled"));
+        });
+    });
+
+    test::describe("package interface policy", []() {
+        test::it("validates package-owned automatic modules", []() {
+            kex::module::PackageMetadata package;
+            package.id = "example/stdlib";
+            package.unitIds = {"stdlib-artifact"};
+            package.automaticImports = {"Core"};
+            package.receiverProviders = {"Collections"};
+            std::vector<kex::module::PackageModuleIdentity> available = {
+                {"stdlib-artifact", "Core"},
+                {"stdlib-artifact", "Collections"},
+                {"application-artifact", "Application"},
+            };
+            test::assertTrue(
+                kex::module::validatePackageMetadata(package, available).empty());
+
+            package.receiverProviders.push_back("Application");
+            auto errors = kex::module::validatePackageMetadata(package, available);
+            test::assertEqual(errors.size(), size_t(1));
+            test::assertTrue(errors[0].message.find("unit it does not own") !=
+                             std::string::npos);
+        });
+
+        test::it("only searches declared receiver-function providers", []() {
+            namespace fs = std::filesystem;
+            auto root = fs::temp_directory_path() / "kex-package-policy-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            auto beamPath = (root / "fixture.kx.beam").string();
+
+            KexiChunk chunk;
+            chunk.metadata.unitId = "fixture-artifact";
+            chunk.metadata.sourceModule = "Numbers";
+            chunk.metadata.moduleAtom = "kex_fixture";
+            KexiMethod doubled;
+            doubled.name = "doubled";
+            doubled.beamFunction = "doubled";
+            doubled.receiverType = kexiPrimitive("Integer");
+            doubled.returnType = kexiPrimitive("Integer");
+            chunk.typeInterface.methods.push_back(std::move(doubled));
+
+            BeamFile beam;
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
+            writeBeamFile(beam, beamPath);
+
+            KexiRegistry registry;
+            test::assertTrue(registry.loadUnit(beamPath).empty());
+            test::assertTrue(
+                registry.findMethodsForReceiver("doubled", "Integer").empty(),
+                "loaded modules are not implicit receiver providers");
+
+            kex::module::PackageMetadata package;
+            package.id = "example/numbers";
+            package.unitIds = {"fixture-artifact"};
+            package.automaticImports = {"Numbers"};
+            package.receiverProviders = {"Numbers"};
+            test::assertTrue(registry.declarePackage(package).empty());
+            test::assertEqual(registry.automaticImportModules().size(), size_t(1));
+            auto matches = registry.findMethodsForReceiver("doubled", "Integer");
+            test::assertEqual(matches.size(), size_t(1));
+            test::assertEqual(matches[0].first, std::string("kex_fixture"));
+
+            auto competing = package;
+            competing.id = "example/competing";
+            auto conflict = registry.declarePackage(competing);
+            test::assertEqual(conflict.size(), size_t(1));
+            test::assertTrue(conflict[0].message.find("already owned") !=
+                             std::string::npos);
+
+            fs::remove_all(root);
         });
     });
 
