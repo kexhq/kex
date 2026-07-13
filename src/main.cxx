@@ -730,7 +730,7 @@ static const std::unordered_set<std::string> &migratedPreludeFns() {
       "toFloat",     "toInteger", "toString",  "rest",    "toOptional",
       "chars",       "items",     "send",      "link",    "unlink",
       "monitor",     "alive?",    "demonitor", "await",
-      "mount",       "get",       "post",      "patch", "start"};
+      "start"};
 #ifdef KEX_PRELUDE_DIR
     // Explicit prelude module calls are safe to discover generically: their
     // BEAM names are deterministic (`Assert.equal` -> `Assert__equal`). This
