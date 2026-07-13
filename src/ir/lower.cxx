@@ -897,6 +897,54 @@ struct Lowering {
                 return wrapLets(binds, callE("kex_http", fn, ar, std::move(args)));
             }
         }
+        // Mock.IO keeps its buffers in the executing BEAM process, mirroring
+        // the interpreter's per-evaluator mock state.
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) && path.size() == 2 &&
+                path[0] == "Mock" && path[1] == "IO") {
+                std::vector<Binding> binds;
+                if (n.method == "input") {
+                    std::vector<ExprPtr> lines;
+                    for (const auto& a : n.args)
+                        lines.push_back(atomize(a, binds));
+                    auto list = std::make_unique<Expr>();
+                    list->node = MakeList{std::move(lines), std::nullopt};
+                    return wrapLets(binds, callE("kex_io", "mock_input", 1,
+                                                 one(std::move(list))));
+                }
+                const char* fn = n.method == "start" ? "mock_start"
+                               : n.method == "output" ? "mock_output"
+                               : n.method == "clear" ? "mock_clear"
+                               : n.method == "stop" ? "mock_stop" : nullptr;
+                if (!fn || !n.args.empty() || !n.namedArgs.empty() || n.block)
+                    throw LowerError("IR lower: Mock.IO." + n.method + " not supported");
+                return callE("kex_io", fn, 0, {});
+            }
+        }
+        // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
+        // are intrinsic constructors until uppercase function declarations are
+        // expressible in Kex. Handle them before ordinary module resolution,
+        // which intentionally requires interface-known parameter names.
+        {
+            std::vector<std::string> path;
+            if (modulePath(*n.receiver, path) && path.size() == 1 &&
+                path[0] == "Stream" &&
+                (n.method == "Sequence" || n.method == "Iterate") && n.block) {
+                std::vector<Binding> binds;
+                ExprPtr seed;
+                if (n.namedArgs.size() == 1 && n.namedArgs[0].first == "from")
+                    seed = atomize(n.namedArgs[0].second, binds);
+                else if (n.namedArgs.empty() && n.args.size() == 1)
+                    seed = atomize(n.args[0], binds);
+                if (!seed)
+                    throw LowerError("IR lower: Stream." + n.method +
+                                     " expects one seed argument");
+                auto fn = atomize(*n.block, binds);
+                return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
+                                             two(std::move(seed), std::move(fn))));
+            }
+        }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
         // Resolve first against the explicit receiver path, then relative to
         // the enclosing module path so nested modules can refer to siblings.
@@ -1054,8 +1102,14 @@ struct Lowering {
                     ex->node = Call{"kex_io", fn, ar, std::move(args), false};
                     return wrapLets(binds, std::move(ex));
                 };
-                if (n.method == "printLine")  return ioCall("print_line");
-                if (n.method == "print")      return ioCall("print");
+                if (n.method == "getLine" && args.empty())
+                    return callE("kex_io", "read_line", 0, {});
+                if (n.method == "get" && args.empty())
+                    return callE("kex_io", "read_char", 0, {});
+                if (n.method == "printLine" || n.method == "putLine")
+                    return ioCall("print_line");
+                if (n.method == "print" || n.method == "put")
+                    return ioCall("print");
                 if (n.method == "printError") return ioCall("print_error");
                 if (n.method == "warn")       return ioCall("print_error");
                 if (n.method == "warning")    return ioCall("print_error");
@@ -1074,22 +1128,6 @@ struct Lowering {
             if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
             if (uid->name == "Float" && n.method == "parsePrefix")   return nsCall("kex_intrinsic_number", "float_parse_prefix");
             if (uid->name == "Number" && n.method == "parse")  return nsCall("kex_intrinsic_number", "number_parse");
-            // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
-            // → kex_intrinsic_stream:make(Seed, Fun) — same lazy stream the
-            // bare Sequence(from:) form builds.
-            if (uid->name == "Stream" &&
-                (n.method == "Sequence" || n.method == "Iterate") && n.block) {
-                ExprPtr seed;
-                if (n.namedArgs.size() == 1 && n.namedArgs[0].first == "from")
-                    seed = atomize(n.namedArgs[0].second, binds);
-                else if (!args.empty())
-                    seed = std::move(args[0]);
-                if (seed) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
-                                                 two(std::move(seed), std::move(fn))));
-                }
-            }
             if (uid->name == "Process") {
                 if (n.method == "self" && args.empty()) return callE("erlang", "self", 0, {});
                 if (n.method == "exit" && args.size() == 2)
@@ -1368,7 +1406,7 @@ struct Lowering {
             "second", "third", "even?", "odd?", "modulo", "rest",
             "none?", "some?", "ok?", "error?", "or", "first",
             "count", "length", "size", "to", "push", "contains?",
-            "indexOf", "empty?", "in?", "alive?", "abs", "sqrt",
+            "indexOf", "empty?", "in?", "alive?", "abs", "sqrt", "get",
         };
         // Web.Server route declarations accept their handler as a trailing
         // block (`server.get("/") do |request| ... end`). They are ordinary
@@ -2354,6 +2392,7 @@ struct Lowering {
         if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
             auto val = lower(ve->value);
             std::string nv = fresh(ve->name); subst[ve->name] = nv;
+            immutableBindings.erase(ve->name);
             return makeLet(nv, std::move(val), cont());
         }
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
@@ -2587,6 +2626,7 @@ struct Lowering {
             auto val = lower(ve->value);
             std::string ssa = subst.count(ve->name) ? fresh(ve->name) : ve->name;
             subst[ve->name] = ssa;
+            immutableBindings.erase(ve->name);
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
             return makeLet(ssa, std::move(val), std::move(rest));
         }
@@ -2619,12 +2659,14 @@ struct Lowering {
             }
         }
         // A closure captures the walker's mutable bindings by reference, but
-        // BEAM closures only capture values. For a list `each` callback that
-        // reassigns an outer variable, lower it to lists:foldl and use the fold
-        // accumulator as the callback's explicit mutable state. Once the
-        // callback completes, rebind that state in the enclosing SSA scope.
+        // BEAM closures only capture values. For finite iteration receiver
+        // functions (`each` and `times`) whose callback reassigns an outer
+        // variable, lower the iteration to lists:foldl and use the accumulator
+        // as explicit mutable state. Once the callback completes, rebind that
+        // state in the enclosing SSA scope.
         if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
-            mc && mc->method == "each" && mc->receiver && mc->args.empty()
+            mc && (mc->method == "each" || mc->method == "times") &&
+            mc->receiver && mc->args.empty()
             && mc->namedArgs.empty() && mc->block) {
             auto* lam = std::get_if<ast::Lambda>(&(*mc->block)->kind);
             std::unordered_set<std::string> muts;
@@ -2632,7 +2674,11 @@ struct Lowering {
             std::vector<std::string> mutVars;
             for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
             std::sort(mutVars.begin(), mutVars.end());
-            if (lam && (lam->params.size() == 1 || lam->params.size() == 2) && !mutVars.empty()) {
+            bool supportedArity = lam &&
+                ((mc->method == "times" && lam->params.size() == 1) ||
+                 (mc->method == "each" &&
+                  (lam->params.size() == 1 || lam->params.size() == 2)));
+            if (supportedArity && !mutVars.empty()) {
                 std::vector<Binding> binds;
                 auto receiver = atomize_ir(lower(mc->receiver), binds);
                 auto snap = subst;
@@ -2682,8 +2728,18 @@ struct Lowering {
                 foldExpr->node = std::move(fold);
                 auto foldFn = atomize_ir(std::move(foldExpr), binds);
                 auto initial = atomize_ir(stateExpr(mutVars), binds);
+                ExprPtr items;
+                if (mc->method == "times") {
+                    auto last = intrin(Op::Sub,
+                        two(std::move(receiver), litInt(1)));
+                    items = callE("lists", "seq", 2,
+                                  two(litInt(0), std::move(last)));
+                } else {
+                    items = callE("kex_intrinsic_fun", "items", 1,
+                                  one(std::move(receiver)));
+                }
                 auto result = wrapLets(binds, callE("lists", "foldl", 3,
-                    three(std::move(foldFn), std::move(initial), std::move(receiver))));
+                    three(std::move(foldFn), std::move(initial), std::move(items))));
 
                 if (mutVars.size() == 1) {
                     std::string nv = fresh(mutVars[0]);
@@ -2715,6 +2771,7 @@ struct Lowering {
                 std::unordered_set<std::string> muts;
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
+                for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
                 for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
                 std::sort(mutVars.begin(), mutVars.end());
                 if (!mutVars.empty()) {

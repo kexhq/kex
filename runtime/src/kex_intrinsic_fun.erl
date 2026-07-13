@@ -6,7 +6,7 @@
 -module(kex_intrinsic_fun).
 -export([applyItem/2,
          each2/2, filter2/2, map2/2, count2/2, any2/2, all2/2, reject2/2,
-         find2/2, or_else/2]).
+         find2/2, or_else/2, items/1]).
 
 %% or_else/2 — `.or(default)` is universal: Just/Ok unwrap, None/Error give
 %% the default, and any other value returns itself (matching the walker).
@@ -67,3 +67,9 @@ find2(L, F) ->
     end.
 
 as_list(L) -> kex_intrinsic_list:as_list(L).
+
+%% Normalize an Enumerable receiver to the item representation used by Kex
+%% callbacks. Maps yield {Key, Value} pairs; lists and strings retain the same
+%% coercion used by the HOF helpers above.
+items(M) when is_map(M) -> maps:to_list(M);
+items(L) -> as_list(L).
