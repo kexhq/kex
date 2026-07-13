@@ -714,22 +714,7 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 // shared `kex_prelude` BEAM module instead of the emitter's inline ladder.
 static const std::unordered_set<std::string> &migratedPreludeFns() {
   static const std::unordered_set<std::string> fns = [] {
-    std::unordered_set<std::string> names = {
-      "reverse",     "sort",      "uniq",      "flatten", "take",
-      "drop",        "zip",       "push",      "sum",     "product",
-      "indexOf",     "at",        "min",       "max",     "count",
-      "join",        "upperCase", "lowerCase", "trim",    "split",
-      "startsWith?", "endsWith?", "digit?",    "alpha?",  "space?",
-      "modulo",      "even?",     "odd?",      "keys",    "values",
-      "entries",     "merge",     "has?",      "put",     "delete",
-      "abs",         "sqrt",      "none?",     "some?",   "ok?",
-      "error?",      "first",     "last",      "empty?",  "or",
-      "in?",         "blank?",    "present?",  "truthy?", "falsy?",
-      "second",      "third",     "floor",     "ceil",    "round",
-      "toInteger",   "rest",      "toOptional",
-      "chars",       "items",     "send",      "link",    "unlink",
-      "monitor",     "alive?",    "demonitor", "await",
-      "start"};
+    std::unordered_set<std::string> names;
 #ifdef KEX_PRELUDE_DIR
     // Discover both module functions and receiver-constrained extension
     // functions from Kex source. `value.foo(arg)` is UFCS for the resolved

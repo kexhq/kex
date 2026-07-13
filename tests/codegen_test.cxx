@@ -43,6 +43,16 @@ auto emitWithExternal(const std::string& source,
         kex::ir::lowerProgram(program, stem, {}, "", &external)).source;
 }
 
+auto emitWithPrelude(const std::string& source,
+                     const std::unordered_set<std::string>& receiverFunctions,
+                     const std::string& stem = "prelude_receiver") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, receiverFunctions)).source;
+}
+
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
 // sources below deliberately avoid prelude calls, so this unit path stays
 // independent of main.cxx's prelude-loading bootstrap.
@@ -669,6 +679,13 @@ int main() {
             assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
         });
 
+        it("routes a declared block receiver function without a compiler name", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n",
+                {"transform"});
+            assertTrue(contains(out, "call 'kex_prelude':'transform'"), out);
+        });
+
         it("modulo routes to its integer intrinsic", []() {
             auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
             assertTrue(contains(out, "call 'kex_intrinsic_integer':'modulo'"), out);
@@ -680,17 +697,21 @@ int main() {
         });
 
         it("each binds lambda and calls lists:foreach", []() {
-            auto out = emit("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n",
+                {"each"});
             assertTrue(contains(out, "call 'kex_prelude':'each'"), out);
         });
 
         it("map routes to kex_prelude", []() {
-            auto out = emit("main do\n  [1,2,3].map { |x| x }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].map { |x| x }\nend\n", {"map"});
             assertTrue(contains(out, "call 'kex_prelude':'map'"), out);
         });
 
         it("filter routes to kex_prelude", []() {
-            auto out = emit("main do\n  [1,2,3].filter { |x| true }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].filter { |x| true }\nend\n", {"filter"});
             assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 

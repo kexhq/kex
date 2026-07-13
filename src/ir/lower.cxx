@@ -1479,20 +1479,6 @@ struct Lowering {
             "count", "length", "size", "to", "push", "contains?",
             "indexOf", "empty?", "in?", "alive?", "abs", "sqrt", "get",
         };
-        // Web.Server route declarations accept their handler as a trailing
-        // block (`server.get("/") do |request| ... end`). They are ordinary
-        // prelude methods whose block is the final function argument.
-        static const std::unordered_set<std::string> webRouteMethods = {
-            "mount", "get", "post", "put", "patch", "delete"
-        };
-        if (!m_inGuard && webRouteMethods.count(m) && n.block &&
-            n.args.size() == 1 && n.namedArgs.empty() && !localMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            pargs.push_back(atomize_ir(lower(n.args[0]), rb));
-            pargs.push_back(atomize_ir(lower(*n.block), rb));
-            return ret(callE("kex_prelude", m, 3, std::move(pargs)));
-        }
         if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
             && !localMethods.count(m) && !inlinedMethods.count(m)) {
             std::vector<ExprPtr> pargs;
@@ -1523,9 +1509,11 @@ struct Lowering {
             auto fn = atomize_ir(lower(*n.block), rb);
             return ret(callE("kex_intrinsic_integer", "times", 2, two(rv(), std::move(fn))));
         }
-        // HOF prelude functions (take a block/function argument).
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "collect", "count", "partition", "times", "sort"};
-        if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
+        // Any remaining prelude receiver function may accept a trailing block.
+        // Its Kex declaration supplies the name; lowering only appends the
+        // block as the final argument. Runtime-special block shapes above keep
+        // their dedicated intrinsic path.
+        if (!m_inGuard && n.block && preludeFns.count(m) && n.namedArgs.empty()
             && !localMethods.count(m)) {
             std::vector<ExprPtr> pargs;
             pargs.push_back(rv());
