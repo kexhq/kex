@@ -115,6 +115,21 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             return errors;
         }
 
+        if (compChunk.metadata.unitId != entryChunk.metadata.unitId ||
+            compChunk.metadata.entryBackPointer != entryChunk.metadata.moduleAtom) {
+            errors.push_back({
+                "companion ownership mismatch: '" + comp.beamAtom +
+                "' does not belong to unit '" + entryChunk.metadata.unitId + "'"});
+            return errors;
+        }
+
+        if (compChunk.version >= 2 && compChunk.metadata.sourceModule.empty()) {
+            errors.push_back({
+                "companion '" + comp.beamAtom +
+                "' has no source module identity"});
+            return errors;
+        }
+
         if (compChunk.interfaceHash != comp.expectedHash) {
             errors.push_back({
                 "companion '" + comp.beamAtom +
@@ -241,25 +256,20 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
     kex::ir::ExternalModules ext;
     for (const auto& [_, unit] : m_units) {
         for (const auto& mod : unit.modules) {
-            // Derive the short Kex name from the BEAM atom.
-            // "Kex.BinaryTree" → "BinaryTree", "kex_foo" → skip (entry)
-            std::string shortName;
-            if (mod.beamAtom.rfind("Kex.", 0) == 0)
-                shortName = mod.beamAtom.substr(4);
-            else
-                continue; // entry modules don't have Kex-syntax names
+            const auto& shortName = mod.chunk.metadata.sourceModule;
+            if (shortName.empty()) continue;
 
             ext.nameToAtom[shortName] = mod.beamAtom;
 
             for (const auto& exp : mod.chunk.typeInterface.exports) {
                 auto qualKey = shortName + "." + exp.name;
-                ext.exportToBeamFn[qualKey] = exp.name;
+                ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
             }
             for (const auto& method : mod.chunk.typeInterface.methods) {
                 auto qualKey = shortName + "." + method.name;
                 if (ext.exportToBeamFn.find(qualKey) == ext.exportToBeamFn.end()) {
-                    ext.exportToBeamFn[qualKey] = method.name;
+                    ext.exportToBeamFn[qualKey] = method.beamFunction;
                     ext.exportArity[qualKey] = method.beamArity;
                 }
             }
@@ -268,18 +278,11 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
     return ext;
 }
 
-auto KexiRegistry::shortKexName(const std::string& beamAtom) const -> std::string {
-    if (beamAtom.rfind("Kex.", 0) == 0)
-        return beamAtom.substr(4);
-    return "";
-}
-
 auto KexiRegistry::findEntryByShortName(const std::string& shortName) const
     -> std::string {
-    std::string qualAtom = "Kex." + shortName;
     for (const auto& [entryAtom, unit] : m_units)
         for (const auto& mod : unit.modules)
-            if (mod.beamAtom == qualAtom || shortKexName(mod.beamAtom) == shortName)
+            if (mod.chunk.metadata.sourceModule == shortName)
                 return entryAtom;
     return "";
 }
@@ -290,7 +293,7 @@ auto KexiRegistry::generateDisplayRegistration(const LoadedUnit& unit) const
     std::string variants;
 
     for (const auto& mod : unit.modules) {
-        auto sn = shortKexName(mod.beamAtom);
+        const auto& sn = mod.chunk.metadata.sourceModule;
         if (sn.empty()) continue;
 
         for (const auto& rec : mod.chunk.metadata.records) {
@@ -323,7 +326,7 @@ auto KexiRegistry::generateCompletionStubs(const LoadedUnit& unit) const
     std::string stubs;
 
     for (const auto& mod : unit.modules) {
-        auto sn = shortKexName(mod.beamAtom);
+        const auto& sn = mod.chunk.metadata.sourceModule;
         if (sn.empty()) continue;
 
         stubs += "module " + sn + " do\n";

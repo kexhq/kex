@@ -9,7 +9,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 1;
+static constexpr int KEXI_SCHEMA_VERSION = 2;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -55,6 +55,7 @@ auto kexiUnknown() -> KexiTypePtr;
 
 struct KexiExport {
     std::string name;
+    std::string beamFunction; // emitted function name; v1 defaults to name
     int beamArity = 0;
     bool isFoul = false;
     std::vector<KexiTypePtr> paramTypes;
@@ -128,6 +129,11 @@ struct KexiMethodOwnership {
 };
 
 struct KexiStructuralMetadata {
+    // Durable ownership within a compiled package/unit. `unitId` identifies
+    // the artifact group; `sourceModule` is the Kex-facing qualified module;
+    // `moduleAtom` is its backend identity.
+    std::string unitId;
+    std::string sourceModule;
     std::string moduleAtom;
     bool isFoul = false;
     KexiModuleRole role = KexiModuleRole::Entry;

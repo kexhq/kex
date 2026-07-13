@@ -182,16 +182,20 @@ auto termToHash(const TermPtr& term) -> Hash128 {
     return h;
 }
 
-auto exportToTerm(const KexiExport& exp) -> TermPtr {
+auto exportToTerm(const KexiExport& exp, int version) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : exp.paramTypes) params.push_back(typeToTerm(p));
-    return Term::tuple({
+    std::vector<TermPtr> fields = {
         Term::binary(exp.name),
         Term::integer(exp.beamArity),
         exp.isFoul ? Term::atom("true") : Term::atom("false"),
         Term::list(std::move(params)),
         typeToTerm(exp.returnType),
-    });
+    };
+    if (version >= 2)
+        fields.push_back(Term::binary(
+            exp.beamFunction.empty() ? exp.name : exp.beamFunction));
+    return Term::tuple(std::move(fields));
 }
 
 auto termToExport(const TermPtr& term) -> KexiExport {
@@ -203,6 +207,7 @@ auto termToExport(const TermPtr& term) -> KexiExport {
     for (const auto& p : t[3]->asList())
         e.paramTypes.push_back(termToType(p));
     e.returnType = termToType(t[4]);
+    e.beamFunction = t.size() >= 6 ? t[5]->asBinaryStr() : e.name;
     return e;
 }
 
@@ -340,7 +345,8 @@ auto termToMethodOwnership(const TermPtr& term) -> KexiMethodOwnership {
 auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     // Type interface
     std::vector<TermPtr> exports, constants, types, methods;
-    for (const auto& e : chunk.typeInterface.exports) exports.push_back(exportToTerm(e));
+    for (const auto& e : chunk.typeInterface.exports)
+        exports.push_back(exportToTerm(e, chunk.version));
     for (const auto& c : chunk.typeInterface.constants) constants.push_back(constantToTerm(c));
     for (const auto& t : chunk.typeInterface.types) types.push_back(typeExportToTerm(t));
     for (const auto& m : chunk.typeInterface.methods) methods.push_back(methodToTerm(m));
@@ -372,6 +378,13 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         {Term::atom("method_ownership"), Term::list(std::move(ownership))},
         {Term::atom("public_exports"), Term::list(std::move(pubExports))},
     });
+    if (chunk.version >= 2) {
+        auto& entries = std::get<Term::Map>(structural->value).pairs;
+        entries.emplace_back(Term::atom("unit_id"),
+                             Term::binary(chunk.metadata.unitId));
+        entries.emplace_back(Term::atom("source_module"),
+                             Term::binary(chunk.metadata.sourceModule));
+    }
 
     return Term::tuple({
         Term::atom("kexi"),
@@ -464,6 +477,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     // Structural metadata (top[4])
     auto sm = top[4];
     if (auto m = sm->mapGet("module")) chunk.metadata.moduleAtom = m->asBinaryStr();
+    if (auto u = sm->mapGet("unit_id")) chunk.metadata.unitId = u->asBinaryStr();
+    if (auto s = sm->mapGet("source_module"))
+        chunk.metadata.sourceModule = s->asBinaryStr();
     if (auto f = sm->mapGet("foul")) chunk.metadata.isFoul = f->isAtom("true");
     if (auto r = sm->mapGet("role"))
         chunk.metadata.role = r->isAtom("companion") ? KexiModuleRole::Companion
@@ -485,6 +501,17 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     if (auto pe = sm->mapGet("public_exports"))
         for (const auto& e : pe->asList())
             chunk.metadata.publicExports.push_back(e->asBinaryStr());
+
+    // v1 compatibility: ownership was implicit in the entry back-pointer and
+    // the Kex.<Module> BEAM naming convention.
+    if (chunk.metadata.unitId.empty()) {
+        chunk.metadata.unitId = chunk.metadata.role == KexiModuleRole::Companion
+            ? chunk.metadata.entryBackPointer : chunk.metadata.moduleAtom;
+    }
+    if (chunk.metadata.sourceModule.empty() &&
+        chunk.metadata.moduleAtom.rfind("Kex.", 0) == 0) {
+        chunk.metadata.sourceModule = chunk.metadata.moduleAtom.substr(4);
+    }
 
     return chunk;
 }

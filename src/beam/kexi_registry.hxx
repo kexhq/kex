@@ -64,8 +64,6 @@ public:
 
     auto generateCompletionStubs(const LoadedUnit& unit) const -> std::string;
 
-    auto shortKexName(const std::string& beamAtom) const -> std::string;
-
     auto findEntryByShortName(const std::string& shortName) const -> std::string;
 
 private:

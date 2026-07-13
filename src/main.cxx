@@ -2626,6 +2626,7 @@ int main(int argc, char *argv[]) {
                                  moduleResults[moduleIndex].moduleName + ".beam";
           try {
             kex::beam::CollectOptions copts;
+            copts.unitId = moduleResults[0].moduleName;
             copts.moduleAtom = moduleResults[moduleIndex].moduleName;
             copts.fileStem = stem;
             copts.noCheck = skipCheck;

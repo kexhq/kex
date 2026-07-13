@@ -167,6 +167,8 @@ int main() {
     test::describe("KexI serialization", []() {
         test::it("round-trips empty chunk", []() {
             KexiChunk chunk;
+            chunk.metadata.unitId = "example/test";
+            chunk.metadata.sourceModule = "Test";
             chunk.metadata.moduleAtom = "kex_test";
             chunk.metadata.role = KexiModuleRole::Entry;
             chunk.interfaceHash = computeInterfaceHash(chunk);
@@ -175,6 +177,8 @@ int main() {
             auto decoded = deserializeKexi(bytes);
 
             test::assertEqual(decoded.version, KEXI_SCHEMA_VERSION);
+            test::assertEqual(decoded.metadata.unitId, std::string("example/test"));
+            test::assertEqual(decoded.metadata.sourceModule, std::string("Test"));
             test::assertEqual(decoded.metadata.moduleAtom, std::string("kex_test"));
             test::assertTrue(decoded.typeInterface.exports.empty());
             test::assertTrue(decoded.metadata.companions.empty());
@@ -185,6 +189,7 @@ int main() {
             chunk.metadata.moduleAtom = "kex_test";
             KexiExport exp;
             exp.name = "greet";
+            exp.beamFunction = "greet_impl";
             exp.beamArity = 1;
             exp.isFoul = false;
             exp.paramTypes = {kexiPrimitive("String")};
@@ -197,6 +202,8 @@ int main() {
 
             test::assertEqual(decoded.typeInterface.exports.size(), size_t(1));
             test::assertEqual(decoded.typeInterface.exports[0].name, std::string("greet"));
+            test::assertEqual(decoded.typeInterface.exports[0].beamFunction,
+                              std::string("greet_impl"));
             test::assertEqual(decoded.typeInterface.exports[0].beamArity, 1);
             test::assertEqual(decoded.typeInterface.exports[0].paramTypes[0]->name,
                               std::string("String"));
@@ -230,6 +237,8 @@ int main() {
 
         test::it("round-trips companion with back-pointer", []() {
             KexiChunk chunk;
+            chunk.metadata.unitId = "example/binary-tree";
+            chunk.metadata.sourceModule = "BinaryTree";
             chunk.metadata.moduleAtom = "Kex.BinaryTree";
             chunk.metadata.role = KexiModuleRole::Companion;
             chunk.metadata.entryBackPointer = "kex_binary_tree";
@@ -239,8 +248,32 @@ int main() {
             auto decoded = deserializeKexi(bytes);
 
             test::assertTrue(decoded.metadata.role == KexiModuleRole::Companion);
+            test::assertEqual(decoded.metadata.unitId,
+                              std::string("example/binary-tree"));
+            test::assertEqual(decoded.metadata.sourceModule,
+                              std::string("BinaryTree"));
             test::assertEqual(decoded.metadata.entryBackPointer,
                               std::string("kex_binary_tree"));
+        });
+
+        test::it("reads version 1 ownership conservatively", []() {
+            KexiChunk chunk;
+            chunk.version = 1;
+            chunk.metadata.moduleAtom = "Kex.Legacy";
+            chunk.metadata.role = KexiModuleRole::Companion;
+            chunk.metadata.entryBackPointer = "kex_legacy";
+            KexiExport exp;
+            exp.name = "run";
+            exp.beamFunction = "ignored_in_v1";
+            exp.returnType = kexiPrimitive("Unit");
+            chunk.typeInterface.exports.push_back(std::move(exp));
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            test::assertEqual(decoded.version, 1);
+            test::assertEqual(decoded.metadata.unitId, std::string("kex_legacy"));
+            test::assertEqual(decoded.metadata.sourceModule, std::string("Legacy"));
+            test::assertEqual(decoded.typeInterface.exports[0].beamFunction,
+                              std::string("run"));
         });
 
         test::it("round-trips entry with companion manifest", []() {
@@ -432,10 +465,17 @@ int main() {
                              "fixture should pass semantic analysis");
 
             CollectOptions numberOptions;
+            numberOptions.unitId = "fixture/modules";
             numberOptions.moduleAtom = "kex_numbers";
             numberOptions.moduleName = "Numbers";
             numberOptions.analysis = &analyzer;
             auto numbers = collectMetadata(program, numberOptions);
+            test::assertEqual(numbers.metadata.unitId,
+                              std::string("fixture/modules"));
+            test::assertEqual(numbers.metadata.sourceModule,
+                              std::string("Numbers"));
+            test::assertEqual(numbers.typeInterface.exports[0].beamFunction,
+                              std::string("value"));
             test::assertEqual(numbers.typeInterface.exports[0].returnType->name,
                               std::string("Integer"));
 
@@ -466,8 +506,12 @@ int main() {
             test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
             test::assertEqual(chunk.typeInterface.methods[0].name,
                               std::string("doubled"));
+            test::assertEqual(chunk.typeInterface.methods[0].beamFunction,
+                              std::string("doubled"));
             test::assertEqual(chunk.typeInterface.methods[0].returnType->name,
                               std::string("Integer"));
+            test::assertEqual(chunk.metadata.methodOwnership[0].beamFunction,
+                              std::string("doubled"));
         });
     });
 
@@ -483,8 +527,11 @@ int main() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "test_mod";
             chunk.metadata.role = KexiModuleRole::Entry;
-            chunk.typeInterface.exports.push_back(
-                {"hello", 0, false, {}, kexiPrimitive("String")});
+            KexiExport hello;
+            hello.name = "hello";
+            hello.beamFunction = "hello";
+            hello.returnType = kexiPrimitive("String");
+            chunk.typeInterface.exports.push_back(std::move(hello));
             chunk.interfaceHash = computeInterfaceHash(chunk);
             auto payload = serializeKexi(chunk);
 

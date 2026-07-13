@@ -10,6 +10,7 @@
 namespace kex::beam {
 
 struct CollectOptions {
+    std::string unitId;
     std::string moduleAtom;
     std::string fileStem;
     bool noCheck = false;

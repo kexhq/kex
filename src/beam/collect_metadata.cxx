@@ -132,35 +132,12 @@ auto methodBeamArity(const kex::ast::FunctionDef& fd) -> int {
         : static_cast<int>(params.size()) + 1;
 }
 
-auto makeTargetString(const kex::ast::TypeExprPtr& t) -> std::string {
-    if (!t) return "";
-    if (auto* tn = std::get_if<kex::ast::TypeName>(&t->kind)) {
-        std::string name;
-        for (size_t i = 0; i < tn->parts.size(); i++) {
-            if (i) name += ".";
-            name += tn->parts[i];
-        }
-        return name;
-    }
-    if (auto* g = std::get_if<kex::ast::GenericType>(&t->kind)) {
-        std::string name;
-        for (size_t i = 0; i < g->name.parts.size(); i++) {
-            if (i) name += ".";
-            name += g->name.parts[i];
-        }
-        return name;
-    }
-    if (std::holds_alternative<kex::ast::ListType>(t->kind)) return "List";
-    if (std::holds_alternative<kex::ast::MapType>(t->kind)) return "Map";
-    return "";
-}
-
 void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
                             KexiTypeInterface& iface,
-                            const std::string& /*modulePrefix*/,
                             const kex::semantic::Analyzer* analysis) {
     KexiExport exp;
     exp.name = fd.name;
+    exp.beamFunction = fd.name;
     exp.isFoul = fd.isFoul;
     if (analysis) {
         if (const auto* signatures = analysis->functionSignatures(&fd);
@@ -192,9 +169,7 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
 void collectFromMakeDef(const kex::ast::MakeDef& md,
                         KexiTypeInterface& iface,
                         KexiStructuralMetadata& meta,
-                        const std::string& modulePrefix,
                         const kex::semantic::Analyzer* analysis) {
-    auto targetName = makeTargetString(md.target);
     auto receiverType = convertTypeExpr(md.target);
 
     for (const auto& item : md.body) {
@@ -229,15 +204,13 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                     method.returnType = kexiUnknown();
             }
             // BEAM function name: the lowered name for make methods
-            method.beamFunction = modulePrefix.empty()
-                ? targetName + "." + (*fd)->name
-                : modulePrefix + "." + targetName + "." + (*fd)->name;
-            iface.methods.push_back(std::move(method));
+            method.beamFunction = (*fd)->name;
 
             KexiMethodOwnership mo;
             mo.methodName = (*fd)->name;
             mo.beamFunction = method.beamFunction;
             meta.methodOwnership.push_back(std::move(mo));
+            iface.methods.push_back(std::move(method));
         } else if (auto* vb = std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(&item)) {
             if (!*vb || !(*vb)->isPublic) continue;
             for (const auto& vi : (*vb)->items) {
@@ -271,9 +244,7 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
                         else
                             method.returnType = kexiUnknown();
                     }
-                    method.beamFunction = modulePrefix.empty()
-                        ? targetName + "." + (*vfd)->name
-                        : modulePrefix + "." + targetName + "." + (*vfd)->name;
+                    method.beamFunction = (*vfd)->name;
                     iface.methods.push_back(std::move(method));
                 }
             }
@@ -340,17 +311,16 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
 void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                            KexiTypeInterface& iface,
                            KexiStructuralMetadata& meta,
-                           const std::string& modulePrefix,
                            const kex::semantic::Analyzer* analysis) {
     for (const auto& item : body) {
         std::visit([&](const auto& ptr) {
             if (!ptr) return;
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
-                collectFromFunctionDef(*ptr, iface, modulePrefix, analysis);
+                collectFromFunctionDef(*ptr, iface, analysis);
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, modulePrefix, analysis);
+                collectFromMakeDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -363,16 +333,15 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
 void collectFromTopLevel(const kex::ast::Program& program,
                          KexiTypeInterface& iface,
                          KexiStructuralMetadata& meta,
-                         const std::string& modulePrefix,
                          const kex::semantic::Analyzer* analysis) {
     for (const auto& item : program.items) {
         std::visit([&](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;
             if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
-                collectFromFunctionDef(*ptr, iface, modulePrefix, analysis);
+                collectFromFunctionDef(*ptr, iface, analysis);
                 meta.publicExports.push_back(ptr->name);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, modulePrefix, analysis);
+                collectFromMakeDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
@@ -391,7 +360,7 @@ auto findAndCollectModule(const kex::ast::Program& program,
     for (const auto& item : program.items) {
         if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
             if (*md && (*md)->name == moduleName) {
-                collectFromModuleBody((*md)->body, iface, meta, "", analysis);
+                collectFromModuleBody((*md)->body, iface, meta, analysis);
                 meta.isFoul = (*md)->isFoul;
                 return true;
             }
@@ -406,6 +375,11 @@ auto collectMetadata(const kex::ast::Program& program,
                      const CollectOptions& opts) -> KexiChunk {
     KexiChunk chunk;
     chunk.version = KEXI_SCHEMA_VERSION;
+    chunk.metadata.unitId = !opts.unitId.empty()
+        ? opts.unitId
+        : (opts.role == KexiModuleRole::Companion
+               ? opts.entryBackPointer : opts.moduleAtom);
+    chunk.metadata.sourceModule = opts.moduleName;
     chunk.metadata.moduleAtom = opts.moduleAtom;
     chunk.metadata.role = opts.role;
     chunk.metadata.entryBackPointer = opts.entryBackPointer;
@@ -417,7 +391,7 @@ auto collectMetadata(const kex::ast::Program& program,
                                  opts.analysis);
         else
             collectFromTopLevel(program, chunk.typeInterface, chunk.metadata,
-                                "", opts.analysis);
+                                opts.analysis);
     } else {
         // --no-check: structural metadata only, type interface stays empty.
         for (const auto& item : program.items) {
