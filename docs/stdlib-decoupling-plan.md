@@ -84,17 +84,32 @@ Automatic imports and receiver-function providers are declared in package
 metadata. They are not inferred from filenames or maintained as compiler name
 sets. Typed receiver-call resolution handles ownership and ambiguity.
 
-The installed distribution contains:
+The installed distribution is an OTP-style `.ez` application archive containing:
 
-- authoritative `.kex` sources for the interpreter and inspection;
-- cached BEAM modules, each containing the existing embedded KexI chunk;
-- package metadata describing modules, dependencies, automatic providers,
-  backend availability, a full source digest, compiler artifact version, and
-  private runtime ABI version.
+- authoritative `.kex` sources for the interpreter and inspection under the
+  application source tree;
+- `ebin/*.beam`, each containing its existing embedded KexI chunk;
+- the generated OTP `.app` application resource in `ebin`.
+
+Package policy, dependency identities, automatic providers, backend
+availability, source digest, compiler artifact version, and private runtime ABI
+are compiled into the entry module's versioned KexI structural metadata. They
+are not a parallel sidecar format.
+
+This migration introduces no Kex-specific object file, interface file,
+metadata binary, helper executable, or additional external runtime dependency.
+Installed compiled content is ordinary BEAM code inside the standard `.ez`
+container.
 
 KexI remains embedded interface metadata, not a new file or executable format.
 The interpreter executes source and may cache parsed/analyzed ASTs in memory by
 source digest. A persistent interpreter executable cache is a separate design.
+
+Package installation is data movement only: verify the `.ez` hash, place the
+archive in the immutable cache, and expose its application `ebin` path. There
+are no preinstall, install, postinstall, build-on-install, activation, or other
+lifecycle hooks. `package.kex` is parsed as declarative data and is never
+evaluated as a Kex program.
 
 ### Private intrinsic ABI
 
@@ -158,20 +173,30 @@ diagnostic rather than silently compiling the stdlib during every user run.
   renames, behavior changes, and compatibility policy. Stop before its breaking
   portions until it is approved.
 
-### 2. Prove and retire the legacy BEAM emitter
+### 2. Retire the legacy BEAM emitter — completed
 
-- Inventory constructs and tests that still use the legacy emitter or differ
-  under IR.
-- Port missing constructs to typed IR and convert useful emitter tests into
-  backend-independent IR or behavioral tests.
-- Run every in-scope BEAM spec, example, module, REPL, process, Web, and
-  compilation scenario exclusively through IR in CI.
-- Require zero fallback paths and zero known gaps for supported constructs.
-- Only then delete the string emitter, its stdlib dispatch ladder,
-  backend-selection code, `--legacy-emitter`, the obsolete `--ir` switch, and
-  emitter-only fixtures.
+The string emitter, its dispatch ladder, backend-selection code,
+`--legacy-emitter`, obsolete `--ir` switch, and emitter-only fixtures have been
+removed. Useful structural and behavioral tests now exercise the production IR
+pipeline. CI runs the supported BEAM surface exclusively through IR.
 
 ### 3. Generate interfaces from analyzed semantics
+
+Progress: checked top-level, module, and receiver-function signatures now flow
+directly from semantic analysis into KexI, including inferred return types.
+Signatures are attached to their exact syntax declaration, so same-named
+functions in separate modules and overload declarations cannot be confused by
+the checker's unqualified call-resolution table. Unchecked compilation keeps
+the syntax-based fallback. A stable manifest-supplied package identity is still
+required before interfaces can drive package imports and call resolution.
+
+KexI v2 now carries the first ownership layer explicitly: compilation-unit
+identity, Kex-facing source module identity, backend module identity, and
+emitted export names. The compiled-interface registry consumes these fields
+instead of deriving them from `Kex.*` naming conventions. Version 1 artifacts
+remain readable through conservative compatibility defaults. A future package
+manifest can supply a stable package identity through the same unit field;
+the standalone compiler currently uses the entry artifact identity.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.
@@ -187,12 +212,32 @@ diagnostic rather than silently compiling the stdlib during every user run.
 
 ### 4. Turn the prelude into the installed stdlib package
 
+Progress: the backend-independent package policy model now separates stable
+package identity from compiled-unit identity. A package explicitly owns one or
+more unit IDs and declares its automatic-import modules and receiver-function
+provider modules. Declarations are validated against loaded source-module
+identities; duplicates, missing modules, foreign units, and ambiguous ownership
+are rejected. The compiled-interface registry searches receiver functions only
+inside declared providers, so loading a module no longer enrolls it in a global
+name-based extension pool. The source declaration belongs to `package.kex`;
+the compiled copy will live in the entry module's versioned KexI structural
+metadata. Entry-module KexI now serializes that policy directly, and the
+compiled-interface registry validates and registers it when loading the unit.
+No additional installed metadata file is required.
+
+The prelude build now embeds `kex.stdlib` package policy in the entry module's
+KexI structural metadata, declaring `"Prelude"` as the receiver-function
+provider. The compiled-interface registry picks this up at load time, so
+`buildExternalModules` and `buildSemanticInterfaces` populate receiver
+functions through the standard package-declared path rather than a global
+name-based fallback.
+
 - Split the merged prelude into ordinary modules with explicit public/private
   exports and a declared dependency graph.
 - Represent receiver extension functions through KexI ownership and declared
   automatic providers, never a global function-name fallback.
-- Build and install validated cached BEAMs once through the artifact model
-  above.
+- Build and validate cached BEAMs once through the artifact model above, then
+  assemble the application as one `.ez` archive.
 - Load source through the ordinary resolver for the interpreter and cached
   modules/interfaces through the compiled-module path for BEAM.
 - Resolve installation and development package roots from toolchain
@@ -202,6 +247,26 @@ diagnostic rather than silently compiling the stdlib during every user run.
   `migratedPreludeFns`, and per-run prelude compilation fallbacks.
 
 ### 5. Make call resolution interface-driven
+
+Progress: the registry-to-IR snapshot now keeps ordinary module exports
+separate from receiver functions. Only receiver functions owned by a
+package-declared provider module are exposed to receiver-call lowering;
+loading an ordinary export with the same name no longer grants it receiver
+semantics. Arity filtering and deterministic ambiguity rejection happen at
+this transitional boundary.
+
+Semantic analysis now resolves prelude receiver function calls through the
+imported interface and records their backend routing in `resolvedCalls`.
+The lowerer consumes resolved targets before reaching the `preludeFns`
+fallback, so calls that the typechecker covers go through a generic
+interface-driven path with no hardcoded function names. KexI method
+`paramTypes` now exclude the receiver (stored separately in `receiverType`),
+fixing a double-receiver arity mismatch. Trait-constrained receiver types
+in imported signatures widen to Unknown for type checking until the trait
+conformance system is fully wired to the static checker. The stdlib
+signature table still shadows imported sigs at matching arities to preserve
+hand-tuned overload diagnostics; removing it requires KexI signatures to
+reach parity with the stdlib table.
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

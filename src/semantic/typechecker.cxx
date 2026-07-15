@@ -2100,12 +2100,29 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     for (const auto* function : importedFunctions)
         importedSigs.push_back(function->signature);
 
-    // Keep imported, stdlib, and local overloads visible to the same typed
-    // selection path. Imported candidates retain ownership in the registry;
-    // only their signatures participate here.
+    // When stdlib has receiver-function signatures at the same arity as an
+    // imported candidate, the stdlib overloads are the authority for type
+    // checking (they carry hand-tuned trait matching the KexI signatures
+    // don't yet reproduce). Imported candidates are only used for backend
+    // resolution routing in that case. When no stdlib signature shares an
+    // arity with any import, the names are a coincidence and imports drive
+    // both checking and resolution.
+    bool importedShadowedByStdlib = false;
+    if (isMethodCall && name.find("::") == std::string::npos &&
+        !importedSigs.empty() && stdlibSigs) {
+        for (const auto& imported : importedSigs) {
+            for (const auto& stdlib : *stdlibSigs)
+                if (imported.params.size() == stdlib.params.size()) {
+                    importedShadowedByStdlib = true;
+                    break;
+                }
+            if (importedShadowedByStdlib) break;
+        }
+    }
+
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;
-    if (!importedSigs.empty()) {
+    if (!importedSigs.empty() && !importedShadowedByStdlib) {
         merged = importedSigs;
         if (stdlibSigs)
             merged.insert(merged.end(), stdlibSigs->begin(), stdlibSigs->end());
@@ -2333,15 +2350,28 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
-        if (methodCall && sigs == &merged) {
-            auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
-            if (selected < importedFunctions.size()) {
-                const auto& imported = *importedFunctions[selected];
+        if (methodCall && !importedFunctions.empty()) {
+            bool isReceiver = name.find("::") == std::string::npos;
+            const ImportedFunction* resolved = nullptr;
+            if (sigs == &merged) {
+                auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
+                if (selected < importedFunctions.size())
+                    resolved = importedFunctions[selected];
+            }
+            if (!resolved) {
+                int matchedArity = static_cast<int>(matched.params.size());
+                for (const auto* candidate : importedFunctions) {
+                    if (candidate->backendArity == matchedArity) {
+                        resolved = candidate; break;
+                    }
+                }
+            }
+            if (resolved) {
                 m_resolvedCalls[methodCall] = {
-                    imported.backendModule,
-                    imported.backendFunction,
-                    imported.backendArity,
-                    name.find("::") == std::string::npos,
+                    resolved->backendModule,
+                    resolved->backendFunction,
+                    resolved->backendArity,
+                    isReceiver,
                 };
             }
         }

@@ -175,20 +175,33 @@ auto receiverFunctionFromDef(
     method.receiverType = std::move(receiverType);
     method.isFoul = fd.isFoul;
     method.beamArity = methodBeamArity(fd);
+    // When the first clause uses a receiver pattern (@-pattern), the
+    // semantic signature includes the receiver as param[0].  Skip it
+    // since receiverType is stored separately.
+    bool hasReceiverParam = !fd.clauses.empty() && !fd.clauses[0].params.empty() && [&]{
+        const auto& p0 = fd.clauses[0].params[0];
+        return !p0.name && p0.pattern &&
+            (std::holds_alternative<kex::ast::ThisPattern>((*p0.pattern)->kind) ||
+             std::holds_alternative<kex::ast::RecordPattern>((*p0.pattern)->kind) ||
+             std::holds_alternative<kex::ast::RangePattern>((*p0.pattern)->kind));
+    }();
+    size_t skipParams = hasReceiverParam ? 1 : 0;
+
     if (analysis) {
         if (const auto* signatures = analysis->functionSignatures(&fd);
             signatures && !signatures->empty()) {
             const auto& signature = signatures->front();
-            for (const auto& param : signature.params)
-                method.paramTypes.push_back(convertSemanticType(param));
+            for (size_t i = skipParams; i < signature.params.size(); i++)
+                method.paramTypes.push_back(convertSemanticType(signature.params[i]));
             method.returnType = convertSemanticType(signature.result);
             method.isFoul = signature.isFoul || fd.isFoul;
         }
     }
     if (!method.returnType && !fd.clauses.empty()) {
-        for (const auto& param : fd.clauses[0].params)
-            method.paramTypes.push_back(param.type && *param.type
-                ? convertTypeExpr(*param.type) : kexiUnknown());
+        auto& params = fd.clauses[0].params;
+        for (size_t i = skipParams; i < params.size(); i++)
+            method.paramTypes.push_back(params[i].type && *params[i].type
+                ? convertTypeExpr(*params[i].type) : kexiUnknown());
         method.returnType = fd.clauses[0].returnAnnotation &&
                             *fd.clauses[0].returnAnnotation
             ? convertTypeExpr(*fd.clauses[0].returnAnnotation)

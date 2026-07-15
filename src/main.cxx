@@ -936,6 +936,9 @@ auto compilePreludeCore(const std::string &dir,
         options.role = kex::beam::KexiModuleRole::Entry;
         options.analysis = &analyzer;
         built.interface = kex::beam::collectMetadata(merged, options);
+        built.interface.metadata.package.id = "kex.stdlib";
+        built.interface.metadata.package.unitIds = {"kex_prelude"};
+        built.interface.metadata.package.receiverProviders = {"Prelude"};
       } else {
         kex::beam::CollectOptions options;
         options.unitId = "kex_prelude";

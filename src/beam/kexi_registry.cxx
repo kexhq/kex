@@ -101,8 +101,15 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.backendFunction = receiver.beamFunction;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
+    // Trait-constrained receiver types (e.g. Enumerable, Truthyable) widen
+    // to Unknown for type checking since the typechecker doesn't yet track
+    // all trait conformances statically. The backend routing (beamModule +
+    // beamFunction) is still precise.
+    auto receiverSemType = semanticType(receiver.receiverType);
+    if (std::holds_alternative<kex::semantic::ConstrainedType>(receiverSemType->kind))
+        receiverSemType = kex::semantic::Type::unknown();
     std::vector<kex::semantic::TypePtr> params = {
-        semanticType(receiver.receiverType),
+        std::move(receiverSemType),
     };
     for (const auto& param : receiver.paramTypes)
         params.push_back(semanticType(param));
@@ -468,11 +475,17 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                     !providers.count(mod.chunk.metadata.sourceModule))
                     continue;
                 for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
-                    ext.receiverFunctions[receiverFn.name].push_back({
-                        mod.beamAtom,
-                        receiverFn.beamFunction,
-                        receiverFn.beamArity,
-                    });
+                    auto& vec = ext.receiverFunctions[receiverFn.name];
+                    bool duplicate = false;
+                    for (const auto& existing : vec)
+                        if (existing.moduleAtom == mod.beamAtom &&
+                            existing.beamFunction == receiverFn.beamFunction &&
+                            existing.beamArity == receiverFn.beamArity) {
+                            duplicate = true; break;
+                        }
+                    if (!duplicate)
+                        vec.push_back({mod.beamAtom, receiverFn.beamFunction,
+                                       receiverFn.beamArity});
                 }
             }
         }
