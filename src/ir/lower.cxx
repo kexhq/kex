@@ -70,9 +70,6 @@ struct Lowering {
     // Top-level `let name = expr` bindings become 0-arity functions; a bare
     // reference to one compiles to `apply 'name'/0()`, not a variable.
     std::unordered_set<std::string> topLevelConstants;
-    // Stdlib functions provided by the shared kex_prelude module; a UFCS call
-    // to one that isn't a local method routes to `kex_prelude:<fn>`.
-    std::unordered_set<std::string> preludeFns;
     // Top-level zero-parameter functions (e.g. `foul name do ... end`). A bare
     // reference to one (no parens) is a call `apply 'name'/0()`, not a var.
     std::unordered_set<std::string> zeroArgFns;
@@ -1033,21 +1030,6 @@ struct Lowering {
                 std::unordered_set<std::string> tried;
                 for (const auto& candidate : candidates) {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
-                    if (preludeFns.count(candidate + "." + n.method)) {
-                        if (!n.namedArgs.empty())
-                            throw LowerError("IR lower: named args to module function not yet ported");
-                        std::vector<Binding> binds;
-                        std::vector<ExprPtr> args;
-                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                        if (n.block) args.push_back(atomize(*n.block, binds));
-                        std::string emitted;
-                        for (char c : candidate)
-                            emitted += c == '.' ? "__" : std::string(1, c);
-                        emitted += "__" + n.method;
-                        auto arity = static_cast<int>(args.size());
-                        return wrapLets(binds,
-                            callE("kex_prelude", emitted, arity, std::move(args)));
-                    }
                     auto it = moduleFunctions.find(candidate + "." + n.method);
                     if (it != moduleFunctions.end()) {
                         if (!n.namedArgs.empty())
@@ -1460,58 +1442,6 @@ struct Lowering {
                 }
             }
         }
-        // Prelude stdlib functions → kex_prelude module.
-        // Not in a guard (cross-module calls are illegal in Core Erlang guards).
-        // Methods that have explicit inline lowerings below must not be
-        // short-circuited to kex_prelude — they need the intrinsic path.
-        static const std::unordered_set<std::string> inlinedMethods = {
-            "or",
-            "length", "size", "to", "get",
-        };
-        if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
-            && !localMethods.count(m) && !inlinedMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-            return ret(callE("kex_prelude", m, static_cast<int>(n.args.size()) + 1, std::move(pargs)));
-        }
-        // `{ |k, v| }` two-param blocks iterate PAIRS: the receiver is a Map
-        // or a list of pairs (`m.entries.map { |k, v| … }`), which only the
-        // runtime can tell apart — kex_intrinsic_fun's *2 helpers dispatch
-        // on is_map. This must intercept before the kex_prelude routing
-        // below, whose dispatchers send a Map to the reduce-based List
-        // defaults (which can't iterate a map). reduce/sort also take
-        // 2-param blocks but are NOT pair iteration — hof2Name excludes them.
-        if (!m_inGuard && n.block && n.args.empty() && n.namedArgs.empty()
-            && !localMethods.count(m)) {
-            auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind);
-            if (lam && lam->params.size() == 2) {
-                if (const char* fn2 = hof2Name(m)) {
-                    auto fnV = atomize_ir(lower(*n.block), rb);
-                    return ret(callE("kex_intrinsic_fun", fn2, 2,
-                                     two(rv(), std::move(fnV))));
-                }
-            }
-        }
-        // n.times { |i| block } → kex_intrinsic_integer:times(n, fun).
-        if (m == "times" && n.block && n.args.empty()) {
-            auto fn = atomize_ir(lower(*n.block), rb);
-            return ret(callE("kex_intrinsic_integer", "times", 2, two(rv(), std::move(fn))));
-        }
-        // Any remaining prelude receiver function may accept a trailing block.
-        // Its Kex declaration supplies the name; lowering only appends the
-        // block as the final argument. Runtime-special block shapes above keep
-        // their dedicated intrinsic path.
-        if (!m_inGuard && n.block && preludeFns.count(m) && n.namedArgs.empty()
-            && !localMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-            if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
-            int ar = static_cast<int>(pargs.size());
-            return ret(callE("kex_prelude", m, ar, std::move(pargs)));
-        }
-
         // `case rv of [] -> empty; _ -> nonEmpty end` (Just/None-on-empty).
         auto onEmpty = [&](ExprPtr empty, ExprPtr nonEmpty) -> ExprPtr {
             Match mm; mm.subjects.push_back(rv());
@@ -1898,18 +1828,6 @@ struct Lowering {
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.method, arity, std::move(args), false};
             return ret(wrapLets(binds, std::move(ex)));
-        }
-        // Prelude stdlib function → the shared kex_prelude BEAM module
-        // (`x.reverse` → `kex_prelude:reverse(x)`). The typed impl lives in the
-        // Kex prelude; this is just the cross-module dispatch. A user-defined
-        // method of the same name shadows it (localMethods is checked above).
-        if (preludeFns.count(n.method) && !n.block && n.namedArgs.empty()) {
-            std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            args.push_back(rv());
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            int arity = static_cast<int>(n.args.size()) + 1;
-            return ret(wrapLets(binds, callE("kex_prelude", n.method, arity, std::move(args))));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
         return ret(runtimeError("Undefined method: " + n.method));
@@ -3295,7 +3213,6 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 } // namespace
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
                   const ExternalModules* externals,
                   const std::vector<ExternalRecordLayout>* externalRecords,
@@ -3303,7 +3220,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                       semantic::ResolvedCallTarget>* resolvedCalls)
     -> Module {
     Lowering L;
-    L.preludeFns = preludeFns;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
@@ -3998,14 +3914,13 @@ auto rewriteModuleCalls(ExprPtr& expr,
 } // namespace
 
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
                   const std::vector<ExternalRecordLayout>* externalRecords,
                   const ExternalModules* externals,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls)
     -> std::vector<Module> {
-    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath, externals,
+    auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
                              externalRecords, resolvedCalls);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };

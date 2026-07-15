@@ -257,7 +257,7 @@ this transitional boundary.
 
 Semantic analysis now resolves prelude receiver function calls through the
 imported interface and records their backend routing in `resolvedCalls`.
-The lowerer consumes resolved targets before reaching the `preludeFns`
+The lowerer consumes resolved targets before reaching any hardcoded
 fallback, so calls that the typechecker covers go through a generic
 interface-driven path with no hardcoded function names. KexI method
 `paramTypes` now exclude the receiver (stored separately in `receiverType`),
@@ -267,6 +267,30 @@ conformance system is fully wired to the static checker. The stdlib
 signature table still shadows imported sigs at matching arities to preserve
 hand-tuned overload diagnostics; removing it requires KexI signatures to
 reach parity with the stdlib table.
+
+The `preludeFns` parameter and all four of its routing blocks in
+`lowerMethodCall` have been removed from the lowering API. The
+`resolvedCalls` path (which carries full backend routing from semantic
+analysis) handles all checked calls. The `externalModules->receiverFunctions`
+path (which checks arity) and the `externalModules->exportToBeamFn` path
+handle the same calls as fallbacks in unchecked (`--no-check`) mode. Codegen
+tests now exercise the `externalModules` path directly. The
+`migratedPreludeFns()` function and the `routedFunctions` member of the
+prelude interface cache have been deleted as dead code.
+
+The block/HOF inline lowering section (`each`, `map`, `filter`, `reduce`,
+`find`, `mapValues`, `mapKeys`, `reject`, `flatMap`, `count` with blocks)
+and the `hof2Name` 2-param dispatch remain required for prelude
+self-compilation. The prelude compiles as a single merged unit, so all its
+receiver functions appear in `localMethods`, which gates the
+`externalModules->receiverFunctions` path. Internal prelude calls like
+`this.reduce(0) { ... }` inside Enumerable trait methods therefore fall
+through to the inline lowering. Removing this section requires splitting
+the prelude into separately-compiled modules (Step 4) so that cross-module
+receiver calls go through external interfaces rather than local dispatch.
+The no-block inline table (`calls[]`) and declaration-only namespace
+dispatches (IO, Math, Process, Http, File, etc.) are similarly blocked on
+Step 4/6 providing actual Kex implementations.
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

@@ -714,7 +714,6 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
 auto prebuiltRuntimeBeamDir() -> std::string;
 
 struct PreludeInterfaceNames {
-  std::unordered_set<std::string> routedFunctions;
   std::unordered_set<std::string> receiverFunctions;
 };
 
@@ -730,7 +729,6 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
     kex::Parser parser(lexer.tokenizeAll(), entry.path().string());
     auto program = parser.parseProgram();
     auto addReceiver = [&](const kex::ast::FunctionDef &fn) {
-      names.routedFunctions.insert(fn.name);
       names.receiverFunctions.insert(fn.name);
     };
     auto collectMake = [&](const kex::ast::MakeDef &make) {
@@ -760,11 +758,8 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
     std::function<void(const kex::ast::ModuleDef &)> collect;
     collect = [&](const kex::ast::ModuleDef &module) {
       for (const auto &item : module.body) {
-        if (const auto *fn =
-                std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
-          if (*fn) names.routedFunctions.insert(module.name + "." + (*fn)->name);
-        } else if (const auto *make =
-                       std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
+        if (const auto *make =
+                std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
           if (*make) collectMake(**make);
         } else if (const auto *trait =
                        std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
@@ -816,10 +811,8 @@ auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
     auto registry = loadPrebuiltPreludeUnit(runtimeDir);
     PreludeInterfaceNames result;
     for (const auto *module : registry.allLoadedModules()) {
-      for (const auto &receiver : module->chunk.typeInterface.methods) {
-        result.routedFunctions.insert(receiver.name);
+      for (const auto &receiver : module->chunk.typeInterface.methods)
         result.receiverFunctions.insert(receiver.name);
-      }
     }
     return result;
   }();
@@ -860,12 +853,6 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
   return result;
 }
 
-// Stdlib functions in the Kex prelude — calls to these route to the shared
-// `kex_prelude` BEAM module instead of the emitter's inline ladder.
-auto migratedPreludeFns() -> const std::unordered_set<std::string> & {
-  return preludeInterfaceNames().routedFunctions;
-}
-
 #ifdef KEX_PRELUDE_DIR
 struct PreludeBuildModule {
   kex::ir::EmitResult emitted;
@@ -902,20 +889,9 @@ auto compilePreludeCore(const std::string &dir,
       return false;
     }
 
-    kex::beam::CollectOptions routingOptions;
-    routingOptions.unitId = "kex_prelude";
-    routingOptions.moduleAtom = "kex_prelude";
-    routingOptions.flattenModules = true;
-    routingOptions.analysis = &analyzer;
-    auto routingInterface = kex::beam::collectMetadata(merged, routingOptions);
-    std::unordered_set<std::string> receiverFunctions;
-    for (const auto &receiver : routingInterface.typeInterface.methods)
-      receiverFunctions.insert(receiver.name);
-
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgram(merged, "prelude"));
-    auto splitModules = kex::ir::lowerModules(
-        merged, "prelude", receiverFunctions);
+    auto splitModules = kex::ir::lowerModules(merged, "prelude");
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 
@@ -1827,9 +1803,13 @@ int main(int argc, char *argv[]) {
           }
           auto extMods = mergeExternalModules(
               preludeExternalModules(), kexiRegistry.buildExternalModules());
+          kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
+          replAnalyzer.analyze(program);
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
-                                             migratedPreludeFns(), "",
-                                             extMods.nameToAtom.empty() ? nullptr : &extMods);
+                                             "",
+                                             extMods.nameToAtom.empty() ? nullptr : &extMods,
+                                             nullptr,
+                                             &replAnalyzer.resolvedCalls());
           auto result = kex::ir::emitCore(irMod);
 
           std::string corePath = beamDir + "/" + result.moduleName + ".core";
@@ -2559,7 +2539,7 @@ int main(int argc, char *argv[]) {
       std::vector<kex::ir::EmitResult> moduleResults;
       try {
         auto irModules = kex::ir::lowerModules(program, stem,
-                                               migratedPreludeFns(), filepath,
+                                               filepath,
                                                &preludeRecordLayouts,
                                                &preludeExternalModules(),
                                                compileAnalysis

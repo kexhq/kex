@@ -41,7 +41,7 @@ auto emitWithExternal(const std::string& source,
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, {}, "", &external)).source;
+        kex::ir::lowerProgram(program, stem, "", &external)).source;
 }
 
 auto emitWithResolvedCalls(
@@ -54,7 +54,7 @@ auto emitWithResolvedCalls(
     kex::semantic::Analyzer analyzer(&interfaces);
     assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
     return kex::ir::emitCore(kex::ir::lowerProgram(
-        program, stem, {}, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
+        program, stem, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
 }
 
 auto emitWithPrelude(const std::string& source,
@@ -63,8 +63,13 @@ auto emitWithPrelude(const std::string& source,
     kex::Lexer lexer(source);
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
+    kex::ir::ExternalModules ext;
+    for (const auto& name : receiverFunctions)
+        for (int arity = 1; arity <= 4; arity++)
+            ext.receiverFunctions[name].push_back(
+                {"kex_prelude", name, arity});
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, receiverFunctions)).source;
+        kex::ir::lowerProgram(program, stem, "", &ext)).source;
 }
 
 auto emitWithExternalRecords(
@@ -75,7 +80,7 @@ auto emitWithExternalRecords(
     kex::Parser parser(lexer.tokenizeAll());
     auto program = parser.parseProgram();
     return kex::ir::emitCore(
-        kex::ir::lowerProgram(program, stem, {}, "", nullptr, &records)).source;
+        kex::ir::lowerProgram(program, stem, "", nullptr, &records)).source;
 }
 
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
@@ -512,7 +517,7 @@ int main() {
             external.exportArity["Web.Response.text"] = 1;
 
             auto modules = kex::ir::lowerModules(
-                program, "external_split", {}, "", nullptr, &external);
+                program, "external_split", "", nullptr, &external);
             auto globalCore = kex::ir::emitCore(modules[0]).source;
 
             assertTrue(contains(
