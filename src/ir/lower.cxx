@@ -99,6 +99,9 @@ struct Lowering {
     std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
+    // Exact imported call ownership selected by semantic analysis.
+    const std::unordered_map<const ast::MethodCall*,
+        semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -852,6 +855,27 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
+        if (resolvedCalls) {
+            auto resolved = resolvedCalls->find(&n);
+            if (resolved != resolvedCalls->end()) {
+                if (!n.namedArgs.empty())
+                    throw LowerError(
+                        "IR lower: named args to imported function not yet ported");
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                if (resolved->second.passesReceiver)
+                    args.push_back(atomize(n.receiver, binds));
+                for (const auto& arg : n.args)
+                    args.push_back(atomize(arg, binds));
+                if (n.block) args.push_back(atomize(*n.block, binds));
+                return wrapLets(
+                    binds,
+                    callE(resolved->second.backendModule,
+                          resolved->second.backendFunction,
+                          resolved->second.backendArity,
+                          std::move(args)));
+            }
+        }
         // A call into the `Kex.Intrinsic.<Category>` runtime module, e.g.
         // `Kex.Intrinsic.List.reverse(x)`. Compile to a plain cross-module call
         // `call 'kex_intrinsic_list':'reverse'(x)` — the emitter knows NOTHING
@@ -926,22 +950,6 @@ struct Lowering {
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
-            }
-        }
-        // Mock.Http.start() / Mock.Http.respond(...) / Mock.Http.stop()
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) &&
-                path.size() == 2 && path[0] == "Mock" && path[1] == "Http") {
-                const char* fn = n.method == "start" ? "mock_start"
-                               : n.method == "respond" ? "mock_respond"
-                               : n.method == "stop" ? "mock_stop" : nullptr;
-                if (!fn) throw LowerError("IR lower: Mock.Http." + n.method + " not supported");
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                int ar = static_cast<int>(args.size());
-                return wrapLets(binds, callE("kex_http", fn, ar, std::move(args)));
             }
         }
         // Mock.IO keeps its buffers in the executing BEAM process, mirroring
@@ -3290,12 +3298,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
                   const ExternalModules* externals,
-                  const std::vector<ExternalRecordLayout>* externalRecords)
+                  const std::vector<ExternalRecordLayout>* externalRecords,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls)
     -> Module {
     Lowering L;
     L.preludeFns = preludeFns;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
+    L.resolvedCalls = resolvedCalls;
     Module mod;
     mod.name = "kex_" + fileStem;
 
@@ -3990,10 +4001,12 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
                   const std::vector<ExternalRecordLayout>* externalRecords,
-                  const ExternalModules* externals)
+                  const ExternalModules* externals,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls)
     -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath, externals,
-                             externalRecords);
+                             externalRecords, resolvedCalls);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;

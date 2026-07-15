@@ -459,7 +459,7 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
     // the trait name so `make X, implement: Trait` can inherit them.
     for (const auto& item : def.body) {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            execFunctionDef(**fn, def.name);
+            execFunctionDef(**fn, def.name, true);
         }
     }
 }
@@ -561,17 +561,19 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
     }
 }
 
-auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope) -> void {
+auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
+                                    const std::string& typeScope,
+                                    bool hasImplicitReceiver) -> void {
     std::unordered_set<std::string> importsBefore;
     const auto prefix = typeScope.empty() ? std::string{} : typeScope + "::";
     for (const auto& [name, _] : m_moduleImportOrigins)
         if (!prefix.empty() && name.rfind(prefix, 0) == 0) importsBefore.insert(name);
 
     for (const auto& item : block.items) {
-        std::visit([this, &typeScope](const auto& node) {
+        std::visit([this, &typeScope, hasImplicitReceiver](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeScope);
+                execFunctionDef(*node, typeScope, hasImplicitReceiver);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
@@ -596,7 +598,9 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std
     }
 }
 
-auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& typeScope) -> void {
+auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
+                                const std::string& typeScope,
+                                bool hasImplicitReceiver) -> void {
     // Collect clauses: if there's already a function with this name, merge
     auto existing = m_env->get(def.name);
     std::vector<const ast::FunctionClause*> allClauses;
@@ -645,10 +649,10 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
     // vector from the map — avoids a dangling pointer when unordered_map
     // rehashes after a new key is inserted for a different function.
     auto funcValue = std::make_shared<Value>();
-    // A name containing "::" was registered with a type scope → it's a UFCS
-    // method and the first arg is always the receiver ("this").
-    bool isMethod = regName.find("::") != std::string::npos;
-    const std::string moduleScope = m_moduleRegistry.contains(typeScope) ? typeScope : "";
+    const std::string moduleScope = hasImplicitReceiver ? "" : typeScope;
+    // Module functions are namespaced but have no implicit receiver. Only
+    // functions scoped to a make/record type use the UFCS receiver slot.
+    bool isMethod = hasImplicitReceiver;
     std::vector<std::pair<std::string, ValuePtr>> capturedImports;
     if (!moduleScope.empty()) {
         const auto prefix = moduleScope + "::";
@@ -709,7 +713,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                     // the extra arg is the receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
-                } else if (args.size() > clause.params.size()) {
+                } else if (isMethod && args.size() > clause.params.size()) {
                     // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
@@ -850,9 +854,9 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
         std::visit([this, &typeName](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeName);
+                execFunctionDef(*node, typeName, true);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                execVisibilityBlock(*node, typeName);
+                execVisibilityBlock(*node, typeName, true);
             }
         }, item);
     }
@@ -866,7 +870,7 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
                 if (!traitFn) continue;
                 if (traitFn->clauses.empty() || traitFn->clauses[0].body.empty()) continue;
                 if (ownMethods.count({traitFn->name, arityOf(traitFn)})) continue;
-                execFunctionDef(*traitFn, typeName);
+                execFunctionDef(*traitFn, typeName, true);
             }
         }
     }

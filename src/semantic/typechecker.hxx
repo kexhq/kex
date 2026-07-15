@@ -9,6 +9,7 @@
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::semantic {
@@ -28,6 +29,8 @@ public:
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
+    auto resolvedCalls() const
+        -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
 
 private:
     // Top-level
@@ -117,7 +120,8 @@ private:
     // param, so the "receiver is argument 0" UFCS desugaring used here
     // would mis-count arity for them (see checkMakeDef).
     auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                   SourceLocation loc, bool isMethodCall = false) -> TypePtr;
+                   SourceLocation loc, bool isMethodCall = false,
+                   const ast::MethodCall* methodCall = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
 
@@ -138,6 +142,10 @@ private:
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     SignatureTable m_stdlib = SignatureTable::withStdlib();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
+    std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    // Source module identities declared by the current compilation unit.
+    // Local modules take precedence over package interfaces with the same name.
+    std::unordered_set<std::string> m_localModules;
 
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;

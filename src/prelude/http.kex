@@ -39,5 +39,21 @@ foul module Mock do
     respond : (Integer, String) -> Unit
     respond : (Integer, String, Map<String, String>) -> Unit
     stop    : Unit -> Unit
+
+    foul start() -> Unit do
+      return Kex.Intrinsic.Http.mockStart()
+    end
+
+    foul respond(status: Integer, body: String) -> Unit do
+      return Kex.Intrinsic.Http.mockRespond(status, body)
+    end
+
+    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Unit do
+      return Kex.Intrinsic.Http.mockRespond(status, body, headers)
+    end
+
+    foul stop() -> Unit do
+      return Kex.Intrinsic.Http.mockStop()
+    end
   end
 end

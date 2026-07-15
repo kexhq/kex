@@ -607,6 +607,35 @@ int main() {
                 "doubled"));
         });
 
+        it("lets a local module shadow an imported module target", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface numbers;
+            numbers.sourceModule = "Numbers";
+            numbers.backendModule = "Kex.Stdlib.Numbers";
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.backendModule = "Kex.Stdlib.Numbers";
+            doubled.backendFunction = "stdlib_doubled";
+            doubled.backendArity = 1;
+            doubled.signature = {
+                "doubled", {semantic::Type::integer()}, semantic::Type::integer()};
+            numbers.exports["doubled"].push_back(std::move(doubled));
+            interfaces.modules["Numbers"] = std::move(numbers);
+
+            Lexer lexer(
+                "module Numbers do\n"
+                "  let doubled(n: Integer) = n * 2\n"
+                "end\n"
+                "main do Numbers.doubled(21) end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+
+            assertTrue(analyzer.analyze(program));
+            assertTrue(analyzer.resolvedCalls().empty(),
+                       "local module call must not retain imported ownership");
+        });
+
         it("checks only package-approved imported receiver functions", []() {
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedFunction doubled;
@@ -616,6 +645,43 @@ int main() {
             interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
             assertTrue(hasErrorWithInterfaces(
                 "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+        });
+
+        it("retains the exact imported receiver target selected by type", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction integerTarget;
+            integerTarget.sourceName = "describe";
+            integerTarget.backendModule = "Kex.Numbers";
+            integerTarget.backendFunction = "describe_integer";
+            integerTarget.backendArity = 1;
+            integerTarget.signature = {
+                "describe", {semantic::Type::integer()}, semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(integerTarget));
+
+            semantic::ImportedFunction stringTarget;
+            stringTarget.sourceName = "describe";
+            stringTarget.backendModule = "Kex.Strings";
+            stringTarget.backendFunction = "describe_string";
+            stringTarget.backendArity = 1;
+            stringTarget.signature = {
+                "describe", {semantic::Type::string()}, semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(stringTarget));
+
+            Lexer lexer("main do 42.describe end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+
+            assertTrue(analyzer.analyze(program));
+            assertEqual(analyzer.resolvedCalls().size(), size_t(1));
+            const auto& target = analyzer.resolvedCalls().begin()->second;
+            assertEqual(target.backendModule, std::string("Kex.Numbers"));
+            assertEqual(target.backendFunction,
+                        std::string("describe_integer"));
+            assertEqual(target.backendArity, 1);
+            assertTrue(target.passesReceiver);
         });
 
         it("rejects ambiguous imported receiver ownership", []() {

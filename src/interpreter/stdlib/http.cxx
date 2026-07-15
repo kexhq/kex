@@ -45,13 +45,13 @@ auto Evaluator::registerHttpBuiltins() -> void {
     // ModuleValue installed by the prelude declaration.
     m_globalEnv->define("Mock::Http", Value::module("Mock.Http"));
 
-    reg("Mock.Http::start", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockHttp = true;
         m_mockHttpResponses.clear();
         return Value::unit();
-    });
+    };
 
-    reg("Mock.Http::respond", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    auto mockRespond = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto status = args[0];
         auto body = args[1];
@@ -70,13 +70,22 @@ auto Evaluator::registerHttpBuiltins() -> void {
         });
         m_mockHttpResponses.push_back(resp);
         return Value::unit();
-    });
+    };
 
-    reg("Mock.Http::stop", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockStop = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockHttp = false;
         m_mockHttpResponses.clear();
         return Value::unit();
-    });
+    };
+
+    // Public compatibility bindings remain while the Kex prelude owns the
+    // public functions. The private names are what Kex.Intrinsic.Http calls.
+    reg("Mock.Http::start", mockStart);
+    reg("Mock.Http::respond", mockRespond);
+    reg("Mock.Http::stop", mockStop);
+    reg("mockStart", std::move(mockStart));
+    reg("mockRespond", std::move(mockRespond));
+    reg("mockStop", std::move(mockStop));
 }
 
 } // namespace kex::interpreter

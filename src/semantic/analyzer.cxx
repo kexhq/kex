@@ -85,6 +85,11 @@ auto Analyzer::functionSignatures(const ast::FunctionDef* function) const
     return m_checker.functionSignatures(function);
 }
 
+auto Analyzer::resolvedCalls() const
+    -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>& {
+    return m_checker.resolvedCalls();
+}
+
 auto Analyzer::analyzeTopLevel(const ast::TopLevelItem& item) -> void {
     std::visit([this](const auto& node) {
         using T = std::decay_t<decltype(node)>;

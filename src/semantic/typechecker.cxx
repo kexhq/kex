@@ -29,8 +29,31 @@ auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
     m_functionSignatures.clear();
+    m_resolvedCalls.clear();
+    m_localModules.clear();
     m_scopeStack.clear();
     pushScope();
+
+    std::function<void(const ast::ModuleDef&)> collectLocalModule =
+        [&](const ast::ModuleDef& mod) {
+            m_localModules.insert(mod.name);
+            for (const auto& item : mod.body) {
+                std::visit([&](const auto& node) {
+                    using T = std::decay_t<decltype(node)>;
+                    if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                        if (node) collectLocalModule(*node);
+                    }
+                }, item);
+            }
+        };
+    for (const auto& item : program.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectLocalModule(*node);
+            }
+        }, item);
+    }
 
     // Built-in prelude ADTs (see src/interpreter/stdlib/adt.cxx) — Just/
     // None and Ok/Error are bare constructors, not declared via a user
@@ -1097,6 +1120,11 @@ auto TypeChecker::functionSignatures(const ast::FunctionDef* function) const
     return it == m_functionSignatures.end() ? nullptr : &it->second;
 }
 
+auto TypeChecker::resolvedCalls() const
+    -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>& {
+    return m_resolvedCalls;
+}
+
 auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
     auto result = std::visit([this, &expr](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
@@ -1371,7 +1399,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return msgType;
             }
-            return checkCall(callName, argTypes, expr.location, /*isMethodCall=*/true);
+            return checkCall(callName, argTypes, expr.location,
+                             /*isMethodCall=*/true, &node);
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             TypePtr elemType = Type::unknown();
@@ -2000,17 +2029,19 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 }
 
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                            SourceLocation loc, bool isMethodCall) -> TypePtr {
+                            SourceLocation loc, bool isMethodCall,
+                            const ast::MethodCall* methodCall) -> TypePtr {
     const std::vector<Signature>* stdlibSigs = m_stdlib.lookup(name);
     auto userIt = m_userSignatures.find(name);
     bool hasUser = (userIt != m_userSignatures.end());
 
     std::vector<const ImportedFunction*> importedFunctions;
+    std::string qualifiedModule;
     if (m_importedInterfaces) {
         if (auto separator = name.find("::"); separator != std::string::npos) {
-            auto moduleName = name.substr(0, separator);
+            qualifiedModule = name.substr(0, separator);
             auto functionName = name.substr(separator + 2);
-            if (auto module = m_importedInterfaces->modules.find(moduleName);
+            if (auto module = m_importedInterfaces->modules.find(qualifiedModule);
                 module != m_importedInterfaces->modules.end())
                 if (auto functions = module->second.exports.find(functionName);
                     functions != module->second.exports.end())
@@ -2031,6 +2062,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             }
         }
     }
+    // A module declared in the current compilation unit shadows a package
+    // module with the same source identity. This matches runtime code-path
+    // precedence and prevents imported ownership from hijacking local calls.
+    if (!qualifiedModule.empty() && m_localModules.contains(qualifiedModule))
+        importedFunctions.clear();
 
     auto sameParams = [](const Signature& left, const Signature& right) {
         if (left.params.size() != right.params.size()) return false;
@@ -2297,6 +2333,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
+        if (methodCall && sigs == &merged) {
+            auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
+            if (selected < importedFunctions.size()) {
+                const auto& imported = *importedFunctions[selected];
+                m_resolvedCalls[methodCall] = {
+                    imported.backendModule,
+                    imported.backendFunction,
+                    imported.backendArity,
+                    name.find("::") == std::string::npos,
+                };
+            }
+        }
         // Propagate the param types back to any TypeVar arguments so that
         // unannotated params are constrained by the functions they're passed
         // into (e.g. `let f(s) = s.split(",")` constrains `s` to String).

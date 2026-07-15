@@ -453,6 +453,31 @@ int main() {
                               std::string("Web__Types__build"));
         });
 
+        test::it("collects nested receiver functions for unit routing", []() {
+            kex::Lexer lexer(
+                "module Web do\n"
+                "  record Server do\n"
+                "    port: Integer\n"
+                "  end\n"
+                "  make Server do\n"
+                "    let start = this\n"
+                "  end\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            CollectOptions options;
+            options.moduleAtom = "kex_flattened";
+            options.flattenModules = true;
+
+            auto chunk = collectMetadata(program, options);
+
+            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.methods[0].name,
+                              std::string("start"));
+            test::assertEqual(chunk.typeInterface.methods[0].beamFunction,
+                              std::string("start"));
+        });
+
         test::it("collects a nested module companion by qualified name", []() {
             kex::Lexer lexer(
                 "module Web do\n"

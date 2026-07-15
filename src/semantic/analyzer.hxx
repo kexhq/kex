@@ -28,6 +28,8 @@ public:
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
+    auto resolvedCalls() const
+        -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
 
 private:
     // Top-level declarations

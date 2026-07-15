@@ -3,6 +3,7 @@
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
+#include "../src/semantic/analyzer.hxx"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -41,6 +42,19 @@ auto emitWithExternal(const std::string& source,
     auto program = parser.parseProgram();
     return kex::ir::emitCore(
         kex::ir::lowerProgram(program, stem, {}, "", &external)).source;
+}
+
+auto emitWithResolvedCalls(
+    const std::string& source,
+    const kex::semantic::ImportedInterfaces& interfaces,
+    const std::string& stem = "resolved_calls") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    kex::semantic::Analyzer analyzer(&interfaces);
+    assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
+    return kex::ir::emitCore(kex::ir::lowerProgram(
+        program, stem, {}, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
 }
 
 auto emitWithPrelude(const std::string& source,
@@ -750,6 +764,61 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("lowers the exact receiver target selected by semantic type", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedFunction integerTarget;
+            integerTarget.sourceName = "describe";
+            integerTarget.backendModule = "Kex.Numbers";
+            integerTarget.backendFunction = "describe_integer";
+            integerTarget.backendArity = 1;
+            integerTarget.signature = {
+                "describe", {kex::semantic::Type::integer()},
+                kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(integerTarget));
+
+            kex::semantic::ImportedFunction stringTarget;
+            stringTarget.sourceName = "describe";
+            stringTarget.backendModule = "Kex.Strings";
+            stringTarget.backendFunction = "describe_string";
+            stringTarget.backendArity = 1;
+            stringTarget.signature = {
+                "describe", {kex::semantic::Type::string()},
+                kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(stringTarget));
+
+            auto out = emitWithResolvedCalls("main do 42.describe end\n", interfaces);
+
+            assertTrue(contains(
+                out, "call 'Kex.Numbers':'describe_integer'(42)"), out);
+            assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
+        });
+
+        it("lowers an imported namespace target without a receiver argument", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedModuleInterface response;
+            response.sourceModule = "Web.Response";
+            response.backendModule = "Kex.Web.Response";
+            kex::semantic::ImportedFunction text;
+            text.sourceName = "text";
+            text.backendModule = "Kex.Web.Response";
+            text.backendFunction = "make_text";
+            text.backendArity = 1;
+            text.signature = {
+                "text", {kex::semantic::Type::string()},
+                kex::semantic::Type::named("Response")};
+            response.exports["text"].push_back(std::move(text));
+            interfaces.modules["Web.Response"] = std::move(response);
+
+            auto out = emitWithResolvedCalls(
+                "main do Web.Response.text(\"ok\") end\n", interfaces);
+
+            assertTrue(contains(
+                out, "call 'Kex.Web.Response':'make_text'("), out);
+            assertFalse(contains(out, "'make_text'('Web.Response'"), out);
         });
 
         it("routes a declared block receiver function without a compiler name", []() {

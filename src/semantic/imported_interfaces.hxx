@@ -22,6 +22,15 @@ struct ImportedModuleInterface {
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 
+// Exact backend ownership selected by semantic analysis for an imported call.
+// The AST remains backend-neutral; lowering consumes this side table.
+struct ResolvedCallTarget {
+    std::string backendModule;
+    std::string backendFunction;
+    int backendArity = 0;
+    bool passesReceiver = false;
+};
+
 // Backend-neutral checked interface snapshot. Ordinary module exports retain
 // their owner; receiver functions are populated separately and only after
 // package policy has approved their provider module.

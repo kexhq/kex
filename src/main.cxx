@@ -835,6 +835,16 @@ auto preludeExternalModules() -> const kex::ir::ExternalModules & {
   return modules;
 }
 
+auto preludeSemanticInterfaces()
+    -> const kex::semantic::ImportedInterfaces & {
+  static const auto interfaces = [] {
+    auto runtimeDir = prebuiltRuntimeBeamDir();
+    if (runtimeDir.empty()) return kex::semantic::ImportedInterfaces{};
+    return loadPrebuiltPreludeUnit(runtimeDir).buildSemanticInterfaces();
+  }();
+  return interfaces;
+}
+
 auto mergeExternalModules(const kex::ir::ExternalModules &base,
                           const kex::ir::ExternalModules &overrides)
     -> kex::ir::ExternalModules {
@@ -863,8 +873,8 @@ struct PreludeBuildModule {
 };
 
 // Build the stdlib entry plus ordinary Kex module companions. The entry keeps
-// flattened compatibility code temporarily, but its public KexI contains only
-// top-level declarations; module exports belong to companion interfaces.
+// receiver compatibility code until typed receiver ownership is carried into
+// IR; public module calls already use companion interfaces.
 auto compilePreludeCore(const std::string &dir,
                         std::vector<PreludeBuildModule> *builtModules) -> bool {
   namespace fs = std::filesystem;
@@ -891,10 +901,21 @@ auto compilePreludeCore(const std::string &dir,
           std::cerr << "error: prelude interface: " << diag.message << "\n";
       return false;
     }
+
+    kex::beam::CollectOptions routingOptions;
+    routingOptions.unitId = "kex_prelude";
+    routingOptions.moduleAtom = "kex_prelude";
+    routingOptions.flattenModules = true;
+    routingOptions.analysis = &analyzer;
+    auto routingInterface = kex::beam::collectMetadata(merged, routingOptions);
+    std::unordered_set<std::string> receiverFunctions;
+    for (const auto &receiver : routingInterface.typeInterface.methods)
+      receiverFunctions.insert(receiver.name);
+
     std::vector<kex::ir::Module> modules;
     modules.push_back(kex::ir::lowerProgram(merged, "prelude"));
     auto splitModules = kex::ir::lowerModules(
-        merged, "prelude", sourcePreludeInterfaceNames().receiverFunctions);
+        merged, "prelude", receiverFunctions);
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 
@@ -906,21 +927,26 @@ auto compilePreludeCore(const std::string &dir,
       if (!out) return false;
       out << built.emitted.source;
 
-      kex::beam::CollectOptions options;
-      options.unitId = "kex_prelude";
-      options.moduleAtom = built.emitted.moduleName;
-      options.analysis = &analyzer;
       if (i == 0) {
+        kex::beam::CollectOptions options;
+        options.unitId = "kex_prelude";
+        options.moduleAtom = built.emitted.moduleName;
         options.moduleName = "Prelude";
         options.collectTopLevel = true;
         options.role = kex::beam::KexiModuleRole::Entry;
+        options.analysis = &analyzer;
+        built.interface = kex::beam::collectMetadata(merged, options);
       } else {
+        kex::beam::CollectOptions options;
+        options.unitId = "kex_prelude";
+        options.moduleAtom = built.emitted.moduleName;
+        options.analysis = &analyzer;
         options.role = kex::beam::KexiModuleRole::Companion;
         options.entryBackPointer = "kex_prelude";
         options.moduleName = built.emitted.moduleName.rfind("Kex.", 0) == 0
             ? built.emitted.moduleName.substr(4) : built.emitted.moduleName;
+        built.interface = kex::beam::collectMetadata(merged, options);
       }
-      built.interface = kex::beam::collectMetadata(merged, options);
       builtModules->push_back(std::move(built));
     }
     for (size_t i = 1; i < builtModules->size(); i++) {
@@ -2419,7 +2445,8 @@ int main(int argc, char *argv[]) {
       // Not applied to emit-core (a debug/inspection dump — you may
       // want to see the emitted Core Erlang for code that doesn't
       // type-check yet).
-      compileAnalysis = std::make_unique<kex::semantic::Analyzer>();
+      compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
+          &preludeSemanticInterfaces());
       if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
         // -R (run-beam) sets mode == "compile" internally too (see
         // compileRun above) — say "before running" there, matching
@@ -2531,7 +2558,10 @@ int main(int argc, char *argv[]) {
         auto irModules = kex::ir::lowerModules(program, stem,
                                                migratedPreludeFns(), filepath,
                                                &preludeRecordLayouts,
-                                               &preludeExternalModules());
+                                               &preludeExternalModules(),
+                                               compileAnalysis
+                                                   ? &compileAnalysis->resolvedCalls()
+                                                   : nullptr);
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
         result = moduleResults.front();

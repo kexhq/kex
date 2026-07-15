@@ -7,6 +7,7 @@
 // than silently generating invalid Core Erlang.
 #include "ir.hxx"
 #include "../ast/ast.hxx"
+#include "../semantic/imported_interfaces.hxx"
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -51,7 +52,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns = {},
                   const std::string& sourcePath = "",
                   const ExternalModules* externals = nullptr,
-                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr)
+                  const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -61,7 +64,9 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_set<std::string>& preludeFns = {},
                   const std::string& sourcePath = "",
                   const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
-                  const ExternalModules* externals = nullptr)
+                  const ExternalModules* externals = nullptr,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr)
     -> std::vector<Module>;
 
 } // namespace kex::ir

@@ -75,6 +75,17 @@ int main() {
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
+        it("does not treat an extra module overload argument as a receiver", []() {
+            auto result = run(
+                "module Replies do\n"
+                "  let build(a, b) = a + b\n"
+                "  let build(a, b, c) = a + b + c\n"
+                "end\n"
+                "main do Replies.build(10, 20, 12) end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
         it("discovers and loads an unresolved module from a source root", []() {
             namespace fs = std::filesystem;
             const auto root = fs::temp_directory_path() / "kex-module-load-test";

@@ -68,13 +68,17 @@ private:
     // Top-level
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
     auto execModule(const ast::ModuleDef& mod) -> void;
-    auto execFunctionDef(const ast::FunctionDef& def, const std::string& typeScope = "") -> void;
+    auto execFunctionDef(const ast::FunctionDef& def,
+                         const std::string& typeScope = "",
+                         bool hasImplicitReceiver = false) -> void;
     auto execMakeDef(const ast::MakeDef& def) -> void;
     auto execTypeDef(const ast::TypeDef& def) -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
     auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
-    auto execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope = "") -> void;
+    auto execVisibilityBlock(const ast::VisibilityBlock& block,
+                             const std::string& typeScope = "",
+                             bool hasImplicitReceiver = false) -> void;
     auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
