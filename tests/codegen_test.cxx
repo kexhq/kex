@@ -914,14 +914,16 @@ int main() {
             assertTrue(contains(out, "call 'kex_prelude':'count'"), out);
         });
 
-        it("modulo routes to its integer intrinsic", []() {
-            auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
-            assertTrue(contains(out, "call 'kex_intrinsic_integer':'modulo'"), out);
+        it("modulo routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = 5\n  x.modulo(3)\nend\n", {"modulo"});
+            assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
         });
 
-        it("even? uses guard-compatible remainder lowering", []() {
-            auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
-            assertTrue(contains(out, "call 'erlang':'rem'"), out);
+        it("even? routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = 4\n  x.even?\nend\n", {"even?"});
+            assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
@@ -943,9 +945,10 @@ int main() {
             assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 
-        it("push lowers to list append", []() {
-            auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
-            assertTrue(contains(out, "call 'erlang':'++'"), out);
+        it("push routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let xs = [1]\n  xs.push(2)\nend\n", {"push"});
+            assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
         });
 
     });
@@ -1031,13 +1034,13 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'link'"), out);
         });
 
-        it("pid.alive?() lowers to erlang:is_process_alive", []() {
-            auto out = emit(
+        it("pid.alive?() routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul check(pid) do pid.alive?() end\n"
-                "main do check(self()) end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'is_process_alive'"), out);
+                "main do check(self()) end\n",
+                {"alive?"});
+            assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
         });
 
         it("Task.start { block } emits kex_task:start/1", []() {

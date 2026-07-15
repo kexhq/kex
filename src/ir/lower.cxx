@@ -1449,88 +1449,64 @@ struct Lowering {
             auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
         };
 
-        // No-/one-arg builtins with a single runtime call (receiver first).
+        // Non-prelude builtins with a single runtime call (receiver first).
+        // Prelude receiver functions are handled by external dispatch above;
+        // these are methods on types that lack prelude make-block definitions.
         struct One { const char* method; const char* mod; const char* fn; int nargs; };
         static const One calls[] = {
-            {"product","kex_intrinsic_list","list_product",0}, {"sum","lists","sum",0},
-            {"sort","lists","sort",0},
             // handle.feed — the File.open block handle is the path on BEAM.
             {"feed","kex_file","feed",0},
             // FileHandle methods (File.open(path, Mode) block handles).
             {"readLine","kex_file","handle_read_line",0},
             {"writeLine","kex_file","handle_write_line",1},
             {"eof?","kex_file","handle_eof?",0},
-            {"uniq","lists","usort",0}, {"unique","lists","usort",0},
-            {"abs","erlang","abs",0}, {"sqrt","math","sqrt",0},
-            // x.inspect returns the pretty-printed representation; IO.inspect
-            // is the separate diagnostic form handled above.
-            {"inspect","kex_io","inspect_value",0},
-            // kex_intrinsic_string handles both String binaries and bare
-            // Char codepoints (string:uppercase alone rejects integers).
-            {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
-            {"lowerCase","kex_intrinsic_string","lowerCase",0}, {"downcase","kex_intrinsic_string","lowerCase",0},
-            {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},
-            // digit?/alpha?/space? — guard-inlined form below is the guard fallback.
         };
-        // Char predicates in a guard must inline as guard-safe range checks
-        // (a `kex_io:is_*` call is an illegal guard expression).
-        // Guards can't contain `case`, so use the strict erlang and/or BIFs
-        // (guard-safe) rather than the short-circuit Op::And/Or (which emit a
-        // case).
-        if (m_inGuard && n.args.empty() && !n.block) {
-            auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
-            auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
-            // A Char is {'Char', Codepoint} — compare its element(2, _)
-            // (guard-safe; the receiver is always a Char where these fire).
-            auto code = [&]{ return callE("erlang","element",2,two(litInt(2), rv())); };
-            auto between = [&](long lo, long hi) {
-                return gand(intrin(Op::Gte, two(code(), litInt(lo))),
-                            intrin(Op::Lte, two(code(), litInt(hi))));
-            };
-            if (m == "digit?") return ret(between('0', '9'));
-            if (m == "alpha?") return ret(gor(between('A','Z'), between('a','z')));
-            if (m == "space?") {
-                ExprPtr chk;
-                for (int c : {' ', '\t', '\n', '\r'}) {
-                    auto eq = intrin(Op::Eq, two(code(), litInt(c)));
-                    chk = chk ? gor(std::move(chk), std::move(eq)) : std::move(eq);
+        // Guard-safe inline lowerings. External dispatch is skipped in
+        // guards (!m_inGuard), so prelude receiver functions that appear in
+        // when-clauses need BIF-based fallbacks here.
+        if (m_inGuard && !n.block) {
+            if (n.args.empty()) {
+                auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
+                auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
+                auto code = [&]{ return callE("erlang","element",2,two(litInt(2), rv())); };
+                auto between = [&](long lo, long hi) {
+                    return gand(intrin(Op::Gte, two(code(), litInt(lo))),
+                                intrin(Op::Lte, two(code(), litInt(hi))));
+                };
+                if (m == "digit?") return ret(between('0', '9'));
+                if (m == "alpha?") return ret(gor(between('A','Z'), between('a','z')));
+                if (m == "space?") {
+                    ExprPtr chk;
+                    for (int c : {' ', '\t', '\n', '\r'}) {
+                        auto eq = intrin(Op::Eq, two(code(), litInt(c)));
+                        chk = chk ? gor(std::move(chk), std::move(eq)) : std::move(eq);
+                    }
+                    return ret(std::move(chk));
                 }
-                return ret(std::move(chk));
+                if (m == "even?")
+                    return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
+                if (m == "odd?")
+                    return ret(intrin(Op::Neq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
+                if (m == "ok?")
+                    return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Ok"))));
+                if (m == "error?")
+                    return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Error"))));
+                if (m == "none?")
+                    return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
+                if (m == "abs") return ret(callE("erlang","abs",1,one(rv())));
+                if (m == "alive?") return ret(callE("erlang","is_process_alive",1,one(rv())));
             }
+            if (m == "in?" && n.args.size() == 1)
+                return ret(callE("lists","member",2,two(rv(), arg0())));
         }
         for (const auto& b : calls)
             if (m == b.method && (int)n.args.size() == b.nargs && !n.block) {
                 std::vector<ExprPtr> a;
-                // lists:* entries also serve String receivers ([Char] IS
-                // String) — coerce a binary to its codepoint list first.
-                bool coerce = std::string(b.mod) == "lists" ||
-                              std::string(b.fn) == "list_product";
-                a.push_back(coerce
-                    ? callE("kex_intrinsic_list", "as_list", 1, one(rv()))
-                    : rv());
+                a.push_back(rv());
                 if (b.nargs == 1) a.push_back(arg0());
                 return ret(callE(b.mod, b.fn, b.nargs + 1, std::move(a)));
             }
 
-        if (m == "modulo" && n.args.size() == 1)
-            return ret(callE("kex_intrinsic_integer", "modulo", 2,
-                             two(rv(), arg0())));
-        if (m == "even?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-        if (m == "odd?" && n.args.empty())
-            return ret(intrin(Op::Neq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-        if (m == "ok?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Ok"))));
-        if (m == "error?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Error"))));
-        if (m == "push" && n.args.size() == 1) {
-            auto lst = std::make_unique<Expr>();
-            lst->node = MakeList{one(arg0()), std::nullopt};
-            return ret(callE("erlang","++",2,two(rv(), std::move(lst))));
-        }
-        // in? guard fallback (lists:member is guard-safe on OTP≥21).
-        if (m_inGuard && m == "in?" && n.args.size() == 1)
-            return ret(callE("lists","member",2,two(rv(), arg0())));
         // pid.send(m) → erlang:send(Pid, {'kex_msg', M, self()}). Every Kex
         // message is wrapped with the sender pid for `receive |sender|`.
         if (m == "send" && n.args.size() == 1) {
@@ -1556,26 +1532,6 @@ struct Lowering {
             return ret(callE("kex_task", "await", 2,
                 two(rv(), atomize_ir(std::move(timeout), rb))));
         }
-        // contains?: a String (binary) needle means substring search
-        // (string:find handles binary and charlist receivers alike); a
-        // scalar needle means element membership (lists:member).
-        if (m == "contains?" && n.args.size() == 1) {
-            auto needleRef = snap(atomize_ir(lower(n.args[0]), rb));
-            auto substr = intrin(Op::Neq, two(
-                callE("string","find",2,two(rv(), needleRef.get())),
-                lit(LitKind::Atom, "nomatch")));
-            auto substr2 = intrin(Op::Neq, two(
-                callE("string","find",2,two(rv(), needleRef.get())),
-                lit(LitKind::Atom, "nomatch")));
-            auto member = callE("lists","member",2,two(needleRef.get(), rv()));
-            return ret(matchBool(callE("erlang","is_binary",1,one(needleRef.get())),
-                std::move(substr),
-                matchBool(callE("erlang","is_list",1,one(needleRef.get())),
-                    std::move(substr2), std::move(member))));
-        }
-        if (m == "indexOf" && n.args.size() == 1)
-            return ret(callE("kex_intrinsic_list","index_of",2,two(arg0(), rv())));
-        if (m == "alive?"  && n.args.empty()) return ret(callE("erlang","is_process_alive",1,one(rv())));
         if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block
             && !localMethods.count(m))
             return ret(matchBool(callE("erlang","is_map",1,one(rv())),
@@ -1585,10 +1541,6 @@ struct Lowering {
                     callE("erlang","length",1,one(rv())))));
         if (m == "first" && n.args.empty() && !localMethods.count("first"))
             return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(rv())))));
-        if (m == "rest" && n.args.empty()) {
-            auto empty = std::make_unique<Expr>(); empty->node = MakeList{{}, std::nullopt};
-            return ret(onEmpty(std::move(empty), callE("erlang","tl",1,one(rv()))));
-        }
         // .to(Type) numeric/string conversion (unless a user `to` method).
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;
