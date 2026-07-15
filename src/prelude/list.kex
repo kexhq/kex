@@ -171,6 +171,16 @@ make [X], implement: Enumerable do
   reduce :> (Acc, (Acc, X -> Acc)) -> Acc
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
+  let map(f) = Kex.Intrinsic.List.map(this, f)
+  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+  let each(f) = Kex.Intrinsic.List.each(this, f)
+  let find(pred) = Kex.Intrinsic.List.find(this, pred)
+  let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
+  let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
+  let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
+  let any?(pred) = Kex.Intrinsic.List.any?(this, pred)
+  let count(pred) = Kex.Intrinsic.List.count(this, pred)
+
   # Returns the element at position +i+ (0-based) wrapped in +Just+,
   # or +None+ if the index is out of range.
   #

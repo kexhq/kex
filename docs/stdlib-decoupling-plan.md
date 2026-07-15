@@ -301,16 +301,44 @@ The `preferExternalReceivers` flag in the lowerer bypasses the
 `localMethods` gate during prelude self-compilation, routing internal
 receiver calls through `kex_prelude:method/N` self-calls instead of inline
 lowerings. This eliminates `lists:foreach`, `lists:map`, `lists:filter`,
-and `lists:foldl` from `kex_prelude.core` entirely. The block/HOF inline
-lowering section (`each`, `map`, `filter`, `reduce`, `find`, `mapValues`,
-`mapKeys`, `reject`, `flatMap`, `count` with blocks) and the `hof2Name`
-2-param dispatch have been removed — they were dead code because
-`resolvedCalls` (checked mode) and `receiverFunctions` (unchecked mode)
-both resolve before the section, and prelude self-compilation now uses
-external dispatch.
-The no-block inline table (`calls[]`) and declaration-only namespace
-dispatches (IO, Math, Process, Http, File, etc.) are similarly blocked on
-Step 4/6 providing actual Kex implementations.
+and `lists:foldl` from `kex_prelude.core` entirely.
+
+Removed inline lowerings:
+- Block/HOF section (`each`, `map`, `filter`, `reduce`, `find`, `mapValues`,
+  `mapKeys`, `reject`, `flatMap`, `count` with blocks) and `hof2Name`
+- `calls[]` prelude entries (`product`, `sum`, `sort`, `uniq`, `abs`, `sqrt`,
+  `inspect`, `upperCase`, `lowerCase`, `trim`, `at`)
+- Standalone prelude lowerings: `modulo`, `push`, `contains?`, `indexOf`,
+  `rest`, `even?`/`odd?` (non-guard), `ok?`/`error?` (non-guard), `alive?`
+  (non-guard), `.or` (match-based)
+- Dead safety nets: `count`/`length`/`size`, `first`, `none?`, `get` (1-arg
+  and 2-arg), `empty?` (all had `!localMethods` guards, unreachable with
+  external dispatch)
+
+Remaining inline lowerings that cannot be removed yet:
+- `.or()` hardcoded (`kex_intrinsic_fun:or_else`) — universal semantics
+  for non-Optional/non-Result receivers that the prelude's typed `or/2`
+  doesn't cover
+- Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`,
+  `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`) — external dispatch
+  is skipped in guards, so BIF-based lowerings are required
+- File handle methods (`feed`, `readLine`, `writeLine`, `eof?`) — not
+  prelude receiver functions
+- Process methods (`send`, `link`/`unlink`, `await`) — not prelude
+  receiver functions
+- `.to(Type)` — not a prelude receiver function; argument is a type name,
+  not a value
+
+HOF performance intrinsics: after removing the inline block/HOF lowerings,
+List HOFs (`map`, `filter`, `each`, `find`, `flatMap`, `reject`, `all?`,
+`any?`, `count`) fell back to the Enumerable trait's `reduce`-based
+defaults. Fixed by adding BIF-backed intrinsics in
+`runtime/src/kex_intrinsic_list.erl` and direct overrides in
+`src/prelude/list.kex`'s List make block, bypassing the trait path
+entirely for lists.
+
+Declaration-only namespace dispatches (IO, Math, Process, Http, File,
+etc.) are blocked on Step 6 providing actual Kex implementations.
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

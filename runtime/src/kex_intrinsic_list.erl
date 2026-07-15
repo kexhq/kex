@@ -9,6 +9,8 @@
          sum/1, product/1, indexOf/2, at/2, foldLeft/3, min/1, max/1, length/1,
          first/1, last/1,
          join/1, join/2, partition/2, member/2, as_list/1,
+         map/2, filter/2, each/2, find/2, flatMap/2, reject/2,
+         'all?'/2, 'any?'/2, count/2,
          sum_by/2, product_by/2, minBy/2, maxBy/2,
          %% Lower-level list ops used directly by the emitters (moved here from
          %% kex_io, where list operations didn't belong).
@@ -120,6 +122,22 @@ index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 
 %% list.product — no lists:product/1 BIF.
 list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
+
+%% HOF intrinsics — BIF-backed versions that override the Enumerable trait's
+%% reduce-based defaults. Handle String (binary) receivers via as_list/1.
+map(L, Fun)    -> lists:map(Fun, as_list(L)).
+filter(L, Fun) -> lists:filter(Fun, as_list(L)).
+each(L, Fun)   -> lists:foreach(Fun, as_list(L)), 'None'.
+flatMap(L, Fun) -> lists:flatmap(Fun, as_list(L)).
+reject(L, Fun) -> lists:filter(fun(X) -> not Fun(X) end, as_list(L)).
+'all?'(L, Fun)  -> lists:all(Fun, as_list(L)).
+'any?'(L, Fun)  -> lists:any(Fun, as_list(L)).
+find(L, Fun)   ->
+    case lists:search(Fun, as_list(L)) of
+        {value, V} -> {'Just', V};
+        false      -> 'None'
+    end.
+count(L, Fun)  -> erlang:length(lists:filter(Fun, as_list(L))).
 
 %% *_by/2 — the block forms of the aggregations: `.sum { |x| key }` maps then
 %% sums; `.max { |x| key }` returns Just(elem) with the greatest key (None
