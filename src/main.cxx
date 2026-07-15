@@ -889,9 +889,18 @@ auto compilePreludeCore(const std::string &dir,
       return false;
     }
 
+    kex::ir::ExternalModules selfExt;
+    auto selfNames = sourcePreludeInterfaceNames();
+    for (const auto& name : selfNames.receiverFunctions)
+      for (int arity = 1; arity <= 4; arity++)
+        selfExt.receiverFunctions[name].push_back(
+            {"kex_prelude", name, arity});
+
     std::vector<kex::ir::Module> modules;
-    modules.push_back(kex::ir::lowerProgram(merged, "prelude"));
-    auto splitModules = kex::ir::lowerModules(merged, "prelude");
+    modules.push_back(kex::ir::lowerProgram(
+        merged, "prelude", "", &selfExt, nullptr, nullptr, true));
+    auto splitModules = kex::ir::lowerModules(
+        merged, "prelude", "", nullptr, &selfExt, nullptr, true);
     for (size_t i = 1; i < splitModules.size(); i++)
       modules.push_back(std::move(splitModules[i]));
 

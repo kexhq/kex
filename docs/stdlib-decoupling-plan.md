@@ -232,6 +232,25 @@ provider. The compiled-interface registry picks this up at load time, so
 functions through the standard package-declared path rather than a global
 name-based fallback.
 
+The prelude source dependency graph has been verified as a DAG with no
+cycles, enabling tiered compilation:
+
+- Tier 0 (no deps): algebra, console, errorable, io, math, optional,
+  process, range, stream, system, test
+- Tier 1 (Tier 0 only): blankable, env, http, number, parser, string,
+  truthyable, web\_server
+- Tier 2: enumerable (optional, range, stream); evaluator (optional,
+  stream); file (stream)
+- Tier 3: list (enumerable, optional, range); map (blankable, enumerable)
+
+Splitting the merged prelude into separately-compiled tiers is the key
+prerequisite for removing the remaining inline lowering section in
+`lowerMethodCall` (Step 5). Currently all prelude receiver functions land
+in `localMethods` because the prelude compiles as one unit, which gates
+the `externalModules->receiverFunctions` path. Once tiers compile
+separately, cross-tier receiver calls go through imported interfaces and
+the inline lowerings become dead code.
+
 - Split the merged prelude into ordinary modules with explicit public/private
   exports and a declared dependency graph.
 - Represent receiver extension functions through KexI ownership and declared
@@ -278,16 +297,17 @@ tests now exercise the `externalModules` path directly. The
 `migratedPreludeFns()` function and the `routedFunctions` member of the
 prelude interface cache have been deleted as dead code.
 
-The block/HOF inline lowering section (`each`, `map`, `filter`, `reduce`,
-`find`, `mapValues`, `mapKeys`, `reject`, `flatMap`, `count` with blocks)
-and the `hof2Name` 2-param dispatch remain required for prelude
-self-compilation. The prelude compiles as a single merged unit, so all its
-receiver functions appear in `localMethods`, which gates the
-`externalModules->receiverFunctions` path. Internal prelude calls like
-`this.reduce(0) { ... }` inside Enumerable trait methods therefore fall
-through to the inline lowering. Removing this section requires splitting
-the prelude into separately-compiled modules (Step 4) so that cross-module
-receiver calls go through external interfaces rather than local dispatch.
+The `preferExternalReceivers` flag in the lowerer bypasses the
+`localMethods` gate during prelude self-compilation, routing internal
+receiver calls through `kex_prelude:method/N` self-calls instead of inline
+lowerings. This eliminates `lists:foreach`, `lists:map`, `lists:filter`,
+and `lists:foldl` from `kex_prelude.core` entirely. The block/HOF inline
+lowering section (`each`, `map`, `filter`, `reduce`, `find`, `mapValues`,
+`mapKeys`, `reject`, `flatMap`, `count` with blocks) and the `hof2Name`
+2-param dispatch have been removed — they were dead code because
+`resolvedCalls` (checked mode) and `receiverFunctions` (unchecked mode)
+both resolve before the section, and prelude self-compilation now uses
+external dispatch.
 The no-block inline table (`calls[]`) and declaration-only namespace
 dispatches (IO, Math, Process, Http, File, etc.) are similarly blocked on
 Step 4/6 providing actual Kex implementations.

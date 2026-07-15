@@ -96,6 +96,11 @@ struct Lowering {
     std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
+    // When true, external receiver functions take priority over localMethods.
+    // Set during prelude self-compilation so internal receiver calls route
+    // through the module's own type-dispatching wrappers instead of the
+    // inline block/HOF lowerings.
+    bool preferExternalReceivers = false;
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
@@ -235,19 +240,6 @@ struct Lowering {
         return var(name);
     }
 
-    // The kex_intrinsic_fun `*2` helper backing a pair-iterating HOF (a
-    // 2-param `{ |k, v| }` block), or nullptr for methods whose 2-param
-    // block means something else (reduce's (acc, x), sort's comparator).
-    static auto hof2Name(const std::string& m) -> const char* {
-        static const std::unordered_map<std::string, const char*> hof2 = {
-            {"each","each2"}, {"filter","filter2"}, {"select","filter2"},
-            {"map","map2"}, {"count","count2"},
-            {"any?","any2"}, {"some?","any2"}, {"all?","all2"},
-            {"reject","reject2"}, {"find","find2"},
-        };
-        auto it = hof2.find(m);
-        return it != hof2.end() ? it->second : nullptr;
-    }
 
     auto opOf(TokenType t) -> Op {
         switch (t) {
@@ -1416,7 +1408,7 @@ struct Lowering {
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
         if (!m_inGuard && externalModules && n.namedArgs.empty()
-            && !localMethods.count(m)) {
+            && (!localMethods.count(m) || preferExternalReceivers)) {
             auto found = externalModules->receiverFunctions.find(m);
             if (found != externalModules->receiverFunctions.end()) {
                 int actualArity = static_cast<int>(n.args.size()) + 1 +
@@ -1671,142 +1663,6 @@ struct Lowering {
             return ret(matchBool(callE("erlang","is_list",1,one(rv())),
                 callE("kex_intrinsic_list","list_get",2,two(rv(), idxRef.get())),
                 std::move(innerE)));
-        }
-
-        // Block/higher-order list methods. The block lowers to a Lambda,
-        // which — being non-atomic — atomize() naturally let-binds (Core
-        // Erlang requires funs to be bound before being passed as call args).
-        const ast::ExprPtr* blk = n.block ? &*n.block
-                                : (!n.args.empty() ? &n.args.back() : nullptr);
-        if (blk) {
-            std::vector<Binding> binds;
-            auto fn = atomize(*blk, binds);
-            auto fnVar = [&]() -> ExprPtr {
-                if (auto* v = std::get_if<Var>(&fn->node)) return var(v->name);
-                if (auto* l = std::get_if<Lit>(&fn->node)) { auto e = std::make_unique<Expr>(); e->node = *l; return e; }
-                return clone(fn, "fnVar");
-            };
-            // rb binds the receiver (outer), binds the block fn (inner).
-            auto build = [&](ExprPtr call) { return wrapLets(rb, wrapLets(binds, std::move(call))); };
-            // A 2-parameter block (|k, v|) iterates pairs — but the receiver
-            // may be a Map OR a list of pairs (`m.entries.map { |k, v| … }`),
-            // which only the runtime can tell apart. kex_intrinsic_fun's *2
-            // helpers dispatch on is_map and auto-splat tuples for lists.
-            bool mapForm = false;
-            if (auto* lam = std::get_if<ast::Lambda>(&(*blk)->kind))
-                mapForm = lam->params.size() == 2;
-            if (mapForm) {
-                if (const char* fn2 = hof2Name(m))
-                    return build(callE("kex_intrinsic_fun", fn2, 2,
-                                       two(rv(), std::move(fn))));
-            }
-            // Aggregations with a key block: `.sum { |x| k }` maps then sums,
-            // `.max { |x| k }` picks the element with the greatest key.
-            {
-                static const std::unordered_map<std::string, const char*> aggBy = {
-                    {"sum","sum_by"}, {"product","product_by"},
-                    {"min","minBy"}, {"max","maxBy"},
-                };
-                if (auto it = aggBy.find(m); it != aggBy.end())
-                    return build(callE("kex_intrinsic_list", it->second, 2,
-                                       two(rv(), std::move(fn))));
-            }
-            // List HOFs also serve String receivers ([Char] IS String):
-            // as_list coerces a binary to its codepoint list, everything
-            // else passes through.
-            auto rvList = [&]{ return callE("kex_intrinsic_list", "as_list", 1, one(rv())); };
-            if (m == "each")
-                return build(callE("lists", "foreach", 2, two(std::move(fn), rvList())));
-            if (m == "map")
-                return build(callE("lists", "map", 2, two(std::move(fn), rvList())));
-            if (m == "filter" || m == "select")
-                return build(callE("lists", "filter", 2, two(std::move(fn), rvList())));
-            if (m == "all?")
-                return build(callE("lists", "all", 2, two(std::move(fn), rvList())));
-            if (m == "any?" || m == "some?")
-                return build(callE("lists", "any", 2, two(std::move(fn), rvList())));
-            if (m == "flatMap" || m == "flat_map")
-                return build(callE("lists", "flatmap", 2, two(std::move(fn), rvList())));
-            // reject { pred } → keep elements where pred is false.
-            if (m == "reject") {
-                std::string nx = fresh("Nx");
-                Lambda neg; neg.params = {nx};
-                neg.body = intrin(Op::Not, one(callE_indirect(fnVar(), one(var(nx)))));
-                auto negFn = std::make_unique<Expr>(); negFn->node = std::move(neg);
-                auto negV = atomize_ir(std::move(negFn), binds);
-                return build(callE("lists", "filter", 2, two(std::move(negV), rvList())));
-            }
-            // Block arity of the original `{ ... }` (−1 if not a Lambda).
-            auto blockArity = [&](const ast::ExprPtr* b) -> int {
-                if (b) if (auto* lam = std::get_if<ast::Lambda>(&(*b)->kind))
-                    return static_cast<int>(lam->params.size());
-                return -1;
-            };
-            // mapValues { |v| } / { |k,v| } → maps:map(fun(K,V)->NewV, m).
-            if (m == "mapValues") {
-                ExprPtr mapper;
-                if (blockArity(blk) == 2) mapper = std::move(fn);
-                else {
-                    std::string kk = fresh("K"), vv = fresh("V");
-                    Lambda w; w.params = {kk, vv};
-                    w.body = callE_indirect(std::move(fn), one(var(vv)));
-                    auto wf = std::make_unique<Expr>(); wf->node = std::move(w);
-                    mapper = atomize_ir(std::move(wf), binds);
-                }
-                return build(callE("maps", "map", 2, two(std::move(mapper), rv())));
-            }
-            // mapKeys { |k| } → maps:fold(fun(K,V,A)->put(fn(K),V,A), #{}, m).
-            if (m == "mapKeys") {
-                std::string kk = fresh("K"), vv = fresh("V"), acc = fresh("Acc");
-                Lambda fold; fold.params = {kk, vv, acc};
-                fold.body = callE("maps", "put", 3, three(
-                    callE_indirect(std::move(fn), one(var(kk))), var(vv), var(acc)));
-                auto ff = std::make_unique<Expr>(); ff->node = std::move(fold);
-                auto foldV = atomize_ir(std::move(ff), binds);
-                return build(callE("maps", "fold", 3, three(std::move(foldV),
-                    callE("maps", "new", 0, {}), rv())));
-            }
-            // find { pred } → Just(x) for the first match, else None. Built on
-            // lists:search/2 which returns {value, X} | false.
-            if (m == "find") {
-                std::string found = fresh("Found");
-                Match mm;
-                mm.subjects.push_back(callE("lists", "search", 2, two(std::move(fn), rvList())));
-                MatchClause hit;
-                auto tp = std::make_unique<Pattern>(); tp->kind = PatKind::Tuple;
-                auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Lit;
-                vp->litKind = LitKind::Atom; vp->litText = "value";
-                auto xp = std::make_unique<Pattern>(); xp->kind = PatKind::Var; xp->name = found;
-                tp->args.push_back(std::move(vp)); tp->args.push_back(std::move(xp));
-                hit.patterns.push_back(std::move(tp));
-                hit.body = justOf(var(found));
-                MatchClause miss;
-                auto fp = std::make_unique<Pattern>(); fp->kind = PatKind::Lit;
-                fp->litKind = LitKind::Bool; fp->litBool = false;
-                miss.patterns.push_back(std::move(fp));
-                miss.body = lit(LitKind::None, "none");
-                mm.clauses.push_back(std::move(hit)); mm.clauses.push_back(std::move(miss));
-                auto e = std::make_unique<Expr>(); e->node = std::move(mm);
-                return build(std::move(e));
-            }
-            if (m == "count") // count matching a predicate
-                return build(callE("erlang", "length", 1,
-                    one(callE("lists", "filter", 2, two(std::move(fn), rvList())))));
-            // reduce(seed) { |acc, x| } / reduce(seed, fn) → lists:foldl(
-            // fun(x,acc)->fn(acc,x), seed, recv). The fn is either a trailing
-            // block or the 2nd positional arg (e.g. a curried `~(+)`).
-            if ((m == "reduce" || m == "inject") &&
-                ((n.block && n.args.size() == 1) || (!n.block && n.args.size() == 2))) {
-                auto seed = atomize(n.args[0], binds);
-                // Kex block is (acc, elem); Erlang foldl passes (elem, acc) → swap.
-                Lambda swap;
-                swap.params = {"_e", "_a"};
-                swap.body = callE_indirect(fnVar(), two(var("_a"), var("_e")));
-                auto swapFn = std::make_unique<Expr>(); swapFn->node = std::move(swap);
-                auto swapVar = atomize_ir(std::move(swapFn), binds);
-                return build(callE("lists", "foldl", 3,
-                    three(std::move(swapVar), std::move(seed), rvList())));
-            }
         }
 
         // Generic UFCS fallback: a field access or a make-block method are
@@ -3217,12 +3073,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const ExternalModules* externals,
                   const std::vector<ExternalRecordLayout>* externalRecords,
                   const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls)
+                      semantic::ResolvedCallTarget>* resolvedCalls,
+                  bool preferExternalReceivers)
     -> Module {
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
+    L.preferExternalReceivers = preferExternalReceivers;
     Module mod;
     mod.name = "kex_" + fileStem;
 
@@ -3918,10 +3776,12 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::vector<ExternalRecordLayout>* externalRecords,
                   const ExternalModules* externals,
                   const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls)
+                      semantic::ResolvedCallTarget>* resolvedCalls,
+                  bool preferExternalReceivers)
     -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
-                             externalRecords, resolvedCalls);
+                             externalRecords, resolvedCalls,
+                             preferExternalReceivers);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;

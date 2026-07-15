@@ -48,7 +48,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const ExternalModules* externals = nullptr,
                   const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
                   const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr)
+                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
+                  bool preferExternalReceivers = false)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -59,7 +60,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
                   const ExternalModules* externals = nullptr,
                   const std::unordered_map<const ast::MethodCall*,
-                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr)
+                      semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
+                  bool preferExternalReceivers = false)
     -> std::vector<Module>;
 
 } // namespace kex::ir
