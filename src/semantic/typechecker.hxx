@@ -187,6 +187,7 @@ private:
     // real checkFunctionDef call. Subsequent calls for the same name append
     // rather than replace, building the overload set incrementally.
     std::set<std::string> m_checkedFunctions;
+    std::unordered_map<std::string, std::set<size_t>> m_annotationArities;
     bool m_inMakeBlock = false;
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.

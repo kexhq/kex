@@ -445,6 +445,7 @@ auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> voi
             // Declared annotation wins — stored first so checkFunctionDef
             // can find it and verify the body against the declared type.
             m_annotationDeclared.insert((*ann)->name);
+            m_annotationArities[(*ann)->name].insert(sig->params.size());
             auto& sigs = m_userSignatures[(*ann)->name];
             // Insert declared sig at front, replacing any same-arity inferred
             // one that was somehow already there (shouldn't happen in pre-pass
@@ -770,6 +771,19 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
             if (param.pattern) {
                 bindPatternVars(**param.pattern);
+            }
+        }
+        if (declared && declared->params.size() != clause.params.size()) {
+            bool hasMatchingAnnotation = false;
+            auto it = m_annotationArities.find(def.name);
+            if (it != m_annotationArities.end()) {
+                hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
+            }
+            if (!hasMatchingAnnotation && m_diagnostics) {
+                m_diagnostics->push_back({Diagnostic::Level::Warning, def.location,
+                    "type annotation for '" + def.name + "' declares " +
+                    std::to_string(declared->params.size()) + " parameter(s) but definition has " +
+                    std::to_string(clause.params.size())});
             }
         }
         auto bodyType = inferBody(clause.body);

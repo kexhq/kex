@@ -1,0 +1,8 @@
+# A tuple-style type annotation (A, B) -> C declares 1 parameter (a tuple),
+# not 2. The typechecker warns when this mismatches the definition's arity.
+add : (Integer, Integer) -> Integer
+let add(a, b) = a + b
+
+main do
+  IO.printLine(add(1, 2))
+end
