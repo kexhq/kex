@@ -328,12 +328,12 @@ make [X], implement: Enumerable do
   # +comp+ should return +true+ when its first argument should come before
   # its second.
   #
-  # @param comp [(X, X) -> Bool]
+  # @param comp [X -> X -> Bool]
   # @return [[X]]
   #
   # @example
   #   [3, 1, 2].sort { |a, b| a > b }   # => [3, 2, 1]
-  sort :> ((X, X) -> Bool) -> [X]
+  sort :> (X -> X -> Bool) -> [X]
   let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
   # Converts the collection to another representation.

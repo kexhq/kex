@@ -34,7 +34,7 @@
 #       end
 #     end
 #   end
-describe : (String, Block<Unit>) -> Unit
+describe : String -> Block<Unit> -> Unit
 
 # Defines a single test case. The block is run and any exception thrown
 # inside it (typically a failed +assert+) marks the test failed without
@@ -49,7 +49,7 @@ describe : (String, Block<Unit>) -> Unit
 #     assert(2.even?)
 #     assert(!3.even?)
 #   end
-it : (String, Block<Unit>) -> Unit
+it : String -> Block<Unit> -> Unit
 
 # Registers setup for the current group. +before { ... }+ and
 # +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
