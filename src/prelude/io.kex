@@ -7,6 +7,7 @@ foul module IO do
   #   IO.printLine("x = ", 42)   # prints: x = 42
   printLine : String -> Unit
   let printLine(msg) = Kex.Intrinsic.IO.printLine(msg)
+  let printLine = Kex.Intrinsic.IO.printLine("")
 
   # Writes each argument to stdout without a trailing newline.
   #
@@ -15,14 +16,17 @@ foul module IO do
   #   IO.print("world")   # stdout: hello world
   print : String -> Unit
   let print(msg) = Kex.Intrinsic.IO.print(msg)
+  let print = Kex.Intrinsic.IO.print("")
 
   # Alias for +printLine+.
   putLine : String -> Unit
   let putLine(msg) = Kex.Intrinsic.IO.putLine(msg)
+  let putLine = Kex.Intrinsic.IO.putLine("")
 
   # Alias for +print+.
   put : String -> Unit
   let put(msg) = Kex.Intrinsic.IO.put(msg)
+  let put = Kex.Intrinsic.IO.put("")
 
   # Pretty-prints a colored inspect representation of +val+ to stderr.
   # Returns +val+ unchanged so it can be inserted into any pipeline.
@@ -49,6 +53,7 @@ foul module IO do
   # @example  IO.printError("config file not found")
   printError : String -> Unit
   let printError(msg) = Kex.Intrinsic.IO.printError(msg)
+  let printError = Kex.Intrinsic.IO.printError("")
 
   # Alias for +printError+ — use when signalling a non-fatal condition.
   warn : String -> Unit

@@ -344,8 +344,13 @@ aliases. Case-insensitive aliases (`pi`/`PI`, `power`/`pow`) removed —
 names are strictly case-sensitive. Constants `PI` and `E` are literal
 floats in Kex source. The `flattenModules` flag is now set during prelude
 metadata collection so module function exports appear in the KexI chunk.
-The hardcoded Math dispatch in `lower.cxx` remains as a fallback until the
-prebuilt BEAM path is the default.
+Hardcoded namespace dispatch removed from `lower.cxx` for all decoupled
+modules (IO, System, Math, Console, Process, Task, Http, File, Directory,
+Integer, Float, Number). Namespace calls now route through companion
+module exports via `externalModules->exportToBeamFn`. The `nsCall` lambda
+is deleted. Codegen tests updated to verify companion module routing
+(`Kex.IO:printLine` etc.) instead of direct runtime calls
+(`kex_io:print_line`). Only Supervisor and ENV retain hardcoded dispatch.
 
 Native-wins guard in the interpreter: `execModule` now skips prelude
 `let` definitions when a native builtin already exists for that
@@ -372,18 +377,19 @@ Namespace modules with prelude implementations:
 - **Task**: `start` and `awaitAll` calling `Kex.Intrinsic.Task.*`;
   `kex_intrinsic_task.erl` wraps `kex_task`; interpreter natives win
 
-Namespace modules still declaration-only:
 - **File/Directory**: top-level `foul module File` and `foul module Directory`
   added alongside `module FS` declaration block; `kex_intrinsic_file.erl` and
   `kex_intrinsic_directory.erl` wrap `kex_file`; interpreter natives win
-- **Supervisor**: `start` needs named-arg destructuring and map
-  construction at the IR level — too complex for a simple intrinsic call
-- **ENV**: not a module — the lowerer constructs `kex_io:env_map()` and
-  inlines map operations with Just/None wrapping
 - **Integer/Float/Number**: `module Integer`, `module Float`, `module Number`
   blocks added to `number.kex` with parse/parsePrefix functions calling
   `Kex.Intrinsic.*`; `kex_intrinsic_float.erl` created; camelCase aliases
   added to existing BEAM modules; interpreter natives win via guard
+
+Namespace modules that remain hardcoded (cannot be simple intrinsic calls):
+- **Supervisor**: `start` needs named-arg destructuring and map
+  construction at the IR level
+- **ENV**: not a module — the lowerer constructs `kex_io:env_map()` and
+  inlines map operations with Just/None wrapping
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

@@ -8,11 +8,11 @@ foul module Process do
   let self = Kex.Intrinsic.Process.self
 
   # Sends an exit signal with +reason+ to +pid+.
-  exit : (Pid, X) -> Unit
+  exit : Pid -> X -> Unit
   let exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
   # Registers +pid+ under the given atom +name+.
-  register : (Pid, Atom) -> Unit
+  register : Pid -> Atom -> Unit
   let register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
 
   # Returns the Pid registered under +name+, or None.

@@ -143,7 +143,7 @@ module Math do
   #   Math.log(Math.E)     # => 1.0
   #   Math.log(8.0, 2.0)   # => 3.0
   log : Number -> Float
-  log : (Number, Number) -> Float
+  log : Number -> Number -> Float
   let log(x) = Kex.Intrinsic.Math.log(x)
   let log(x, base) = Kex.Intrinsic.Math.log(x, base)
 

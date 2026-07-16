@@ -21,10 +21,10 @@ module Console do
   let Purple = Kex.Intrinsic.Console.Purple
 
   # Wrap +text+ in an ANSI style and reset attributes afterwards.
-  colorize : (String, String) -> String
+  colorize : String -> String -> String
   let colorize(text, color) = Kex.Intrinsic.Console.colorize(text, color)
 
   # Whether terminal styling is enabled for this process.
-  enabled? : () -> Bool
+  enabled? : Bool
   let enabled? = Kex.Intrinsic.Console.enabled?
 end

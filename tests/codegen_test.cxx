@@ -16,13 +16,44 @@ using namespace test;
 // Helpers
 // ---------------------------------------------------------------------------
 
+// Minimal external modules covering the most commonly used namespace modules.
+auto stdlibExternal() -> kex::ir::ExternalModules {
+    kex::ir::ExternalModules ext;
+    auto addExport = [&](const char* mod, const char* beamMod,
+                         const char* fn, const char* beamFn, int arity) {
+        ext.nameToAtom[mod] = beamMod;
+        std::string key = std::string(mod) + "." + fn;
+        ext.exportToBeamFn[key] = beamFn;
+        ext.exportArity[key] = arity;
+    };
+    addExport("IO", "Kex.IO", "printLine", "printLine", 1);
+    addExport("IO", "Kex.IO", "print", "print", 1);
+    addExport("IO", "Kex.IO", "putLine", "putLine", 1);
+    addExport("IO", "Kex.IO", "put", "put", 1);
+    addExport("IO", "Kex.IO", "inspect", "inspect", 1);
+    addExport("IO", "Kex.IO", "getLine", "getLine", 0);
+    addExport("IO", "Kex.IO", "get", "get", 0);
+    addExport("IO", "Kex.IO", "printError", "printError", 1);
+    addExport("IO", "Kex.IO", "warn", "warn", 1);
+    addExport("IO", "Kex.IO", "warning", "warning", 1);
+    addExport("Process", "Kex.Process", "self", "self", 0);
+    addExport("Process", "Kex.Process", "exit", "exit", 2);
+    addExport("Process", "Kex.Process", "register", "register", 2);
+    addExport("Process", "Kex.Process", "whereis", "whereis", 1);
+    addExport("System", "Kex.System", "exit", "exit", 1);
+    addExport("Task", "Kex.Task", "start", "start", 1);
+    addExport("Task", "Kex.Task", "awaitAll", "awaitAll", 1);
+    return ext;
+}
+
 // Parse Kex source and emit Core Erlang text through the production IR path.
 auto emit(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
+    auto ext = stdlibExternal();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
 }
 
 // Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
@@ -31,7 +62,8 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
+    auto ext = stdlibExternal();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
 }
 
 auto emitWithExternal(const std::string& source,
@@ -274,19 +306,19 @@ int main() {
     });
 
     describe("IR Core Erlang emitter — stdlib dispatch", []() {
-        it("IO.printLine dispatches to kex_io:print_line", []() {
+        it("IO.printLine dispatches through companion module", []() {
             auto out = emit("main do\n  IO.printLine(\"hi\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print_line'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'printLine'"), out);
         });
 
-        it("IO.print dispatches to kex_io:print", []() {
+        it("IO.print dispatches through companion module", []() {
             auto out = emit("main do\n  IO.print(\"hi\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'print'"), out);
         });
 
-        it("IO.printError dispatches to kex_io:print_error", []() {
+        it("IO.printError dispatches through companion module", []() {
             auto out = emit("main do\n  IO.printError(\"bad\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print_error'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'printError'"), out);
         });
     });
 
@@ -431,12 +463,12 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
-        it("lowers System.exit to erlang:halt", []() {
+        it("lowers System.exit through companion module", []() {
             auto core = emitIr(
                 "foul stop(code) = System.exit(code)\n"
                 "main do 42 end\n",
                 "system_exit");
-            assertTrue(contains(core, "call 'erlang':'halt'"), core);
+            assertTrue(contains(core, "call 'Kex.System':'exit'"), core);
         });
 
         it("defers an unknown namespace call until it is executed", []() {
@@ -1043,7 +1075,7 @@ int main() {
             assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
         });
 
-        it("Task.start { block } emits kex_task:start/1", []() {
+        it("Task.start { block } emits through companion module", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -1051,7 +1083,7 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'start'"), out);
+            assertTrue(contains(out, "call 'Kex.Task':'start'"), out);
         });
 
         it("task.await() routes to the task runtime with infinity", []() {
@@ -1152,16 +1184,21 @@ int main() {
             assertTrue(count >= 2, "expected at least 2 start_link calls (outer + nested)");
         });
 
-        it("Process.self without parens emits erlang:self()", []() {
-            auto out = emit(
+        it("Process.self without parens emits call through companion module", []() {
+            kex::ir::ExternalModules ext;
+            ext.nameToAtom["Process"] = "Kex.Process";
+            ext.exportToBeamFn["Process.self"] = "self";
+            ext.exportArity["Process.self"] = 0;
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let me = Process.self\n"
                 "  me\n"
                 "end\n"
-                "main do go() end\n"
+                "main do go() end\n",
+                ext
             );
-            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+            assertTrue(contains(out, "call 'Kex.Process':'self'()"), out);
         });
     });
 

@@ -211,9 +211,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     m_globalEnv->define("Number", Value::module("Number"));
-    // Number.parse(s) -> Result<Number, ParseError> — tries an Integer full
-    // match first (arbitrary precision), then falls back to Float. "42" -> Int,
-    // "3.14" -> Float, "1e3" -> Float, "abc" -> Error.
     reg("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
