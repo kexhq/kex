@@ -365,15 +365,25 @@ Namespace modules with prelude implementations:
   `whereis` calling `Kex.Intrinsic.Process.*`; `Process::self` native wins
   on interpreter
 
+- **Http**: all 7 HTTP methods (get/post/put/patch/delete/head/options)
+  with 1- and 2-arity overloads calling `Kex.Intrinsic.Http.*`;
+  `kex_intrinsic_http.erl` wraps `kex_http`; interpreter natives win
+
+- **Task**: `start` and `awaitAll` calling `Kex.Intrinsic.Task.*`;
+  `kex_intrinsic_task.erl` wraps `kex_task`; interpreter natives win
+
 Namespace modules still declaration-only:
-- **Task**: `start` needs block→lambda lowering, `awaitAll` needs special
-  list handling — can't express as simple intrinsic calls
-- **Supervisor**: `start` needs named args and complex map construction
-- **File/Directory**: large surface area, some methods need block handling
-- **Http**: already routes to `kex_http`
-- **ENV**: special case (map value, not a module)
-- **Integer/Float/Number**: parse functions exist only as comments in
-  `number.kex`, no module block to add implementations to
+- **File/Directory**: top-level `foul module File` and `foul module Directory`
+  added alongside `module FS` declaration block; `kex_intrinsic_file.erl` and
+  `kex_intrinsic_directory.erl` wrap `kex_file`; interpreter natives win
+- **Supervisor**: `start` needs named-arg destructuring and map
+  construction at the IR level — too complex for a simple intrinsic call
+- **ENV**: not a module — the lowerer constructs `kex_io:env_map()` and
+  inlines map operations with Just/None wrapping
+- **Integer/Float/Number**: `module Integer`, `module Float`, `module Number`
+  blocks added to `number.kex` with parse/parsePrefix functions calling
+  `Kex.Intrinsic.*`; `kex_intrinsic_float.erl` created; camelCase aliases
+  added to existing BEAM modules; interpreter natives win via guard
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

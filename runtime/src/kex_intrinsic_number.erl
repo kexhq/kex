@@ -4,7 +4,7 @@
 -export([abs/1, sqrt/1, add/2, divide/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
           float_parse/1, float_parse_prefix/1, number_parse/1,
-          to_integer/1, to_float/1]).
+          parse/1, to_integer/1, to_float/1]).
 
 abs(N)  -> erlang:abs(N).
 sqrt(N) -> math:sqrt(N).
@@ -152,6 +152,8 @@ number_parse(S) when is_binary(S) ->
             end
     end;
 number_parse(S) -> number_parse(unicode:characters_to_binary(S)).
+
+parse(S) -> number_parse(S).
 
 %% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
 %% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for

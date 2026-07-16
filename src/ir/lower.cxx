@@ -1282,7 +1282,9 @@ struct Lowering {
             if (uid->name == "Directory") {
                 if (n.method == "current") return nsCall("kex_file", "dir_current");
                 if (n.method == "home") return nsCall("kex_file", "dir_home");
-                if (n.method == "exists?" || n.method == "directory?")
+                if (n.method == "exists?")
+                    return nsCall("kex_file", "dir_exists?");
+                if (n.method == "directory?")
                     return nsCall("kex_file", "dir_exists?");
                 if (n.method == "file?") return nsCall("kex_file", "dir_file?");
                 if (n.method == "create") return nsCall("kex_file", "dir_create");

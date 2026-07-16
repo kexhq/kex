@@ -42,6 +42,16 @@ make Pid do
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
 
+foul module Task do
+  # Spawns a new process that runs +f+ and returns a Task handle.
+  start : Block<X> -> Task
+  let start(f) = Kex.Intrinsic.Task.start(f)
+
+  # Awaits all tasks in +tasks+, returning their results.
+  awaitAll : [Task] -> [X]
+  let awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
+end
+
 make Task do
   # Waits for the task's result indefinitely.
   await :> X

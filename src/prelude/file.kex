@@ -119,6 +119,100 @@ module FS do
   end
 end
 
+foul module File do
+  open : (String, FS.FileModes) -> FileHandle?
+  let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
+
+  open : (String, FS.FileModes, (FileHandle -> X)) -> X?
+  let open(path, mode, block) = Kex.Intrinsic.File.open(path, mode, block)
+
+  read : String -> String?
+  let read(path) = Kex.Intrinsic.File.read(path)
+
+  write : (String, String) -> Bool
+  let write(path, content) = Kex.Intrinsic.File.write(path, content)
+
+  append : (String, String) -> Bool
+  let append(path, content) = Kex.Intrinsic.File.append(path, content)
+
+  exists? : String -> Bool
+  let exists?(path) = Kex.Intrinsic.File.exists?(path)
+
+  file? : String -> Bool
+  let file?(path) = Kex.Intrinsic.File.file?(path)
+
+  directory? : String -> Bool
+  let directory?(path) = Kex.Intrinsic.File.directory?(path)
+
+  delete : String -> Bool
+  let delete(path) = Kex.Intrinsic.File.delete(path)
+
+  copy : (String, String) -> Bool
+  let copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
+
+  rename : (String, String) -> Bool
+  let rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
+
+  lines : String -> [String]?
+  let lines(path) = Kex.Intrinsic.File.lines(path)
+
+  feed : String -> Stream<String>?
+  let feed(path) = Kex.Intrinsic.File.feed(path)
+
+  size : String -> Integer?
+  let size(path) = Kex.Intrinsic.File.size(path)
+
+  basename : String -> String
+  let basename(path) = Kex.Intrinsic.File.basename(path)
+
+  dirname : String -> String
+  let dirname(path) = Kex.Intrinsic.File.dirname(path)
+
+  extension : String -> String
+  let extension(path) = Kex.Intrinsic.File.extension(path)
+
+  join : (String, String) -> String
+  let join(a, b) = Kex.Intrinsic.File.join(a, b)
+
+  absolute : String -> String?
+  let absolute(path) = Kex.Intrinsic.File.absolute(path)
+end
+
+foul module Directory do
+  exists? : String -> Bool
+  let exists?(path) = Kex.Intrinsic.Directory.exists?(path)
+
+  directory? : String -> Bool
+  let directory?(path) = Kex.Intrinsic.Directory.directory?(path)
+
+  file? : String -> Bool
+  let file?(path) = Kex.Intrinsic.Directory.file?(path)
+
+  create : String -> Bool
+  let create(path) = Kex.Intrinsic.Directory.create(path)
+
+  delete : String -> Bool
+  let delete(path) = Kex.Intrinsic.Directory.delete(path)
+
+  deleteAll : String -> Bool
+  let deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
+
+  list : String -> [String]?
+  let list(path) = Kex.Intrinsic.Directory.list(path)
+
+  files : String -> [String]?
+  let files(path) = Kex.Intrinsic.Directory.files(path)
+
+  directories : String -> [String]?
+  let directories(path) = Kex.Intrinsic.Directory.directories(path)
+
+  current : String
+  let current = Kex.Intrinsic.Directory.current
+
+  home : String?
+  let home = Kex.Intrinsic.Directory.home
+end
+
 # Mocking support for tests — substitute in-memory files and directories
 # for real filesystem access without touching disk.
 #
