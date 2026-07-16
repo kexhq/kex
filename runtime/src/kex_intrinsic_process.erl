@@ -3,7 +3,8 @@
 %% Receiver is the first argument.
 -module(kex_intrinsic_process).
 -export(['send'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
-          'demonitor'/1]).
+          'demonitor'/1,
+          self/0, exit/2, register/2, whereis/1]).
 
 %% pid.send(msg) — send a Kex-formatted message.
 'send'(Pid, Msg) -> erlang:send(Pid, {'kex_msg', Msg, erlang:self()}).
@@ -28,3 +29,15 @@
 %% ref.demonitor() — stop monitoring. The receiver is the reference returned
 %% by pid.monitor(). Returns 'true'.
 'demonitor'(Ref) -> erlang:demonitor(Ref).
+
+%% Process.self() — current process identifier.
+self() -> erlang:self().
+
+%% Process.exit(pid, reason) — send an exit signal.
+exit(Pid, Reason) -> erlang:exit(Pid, Reason).
+
+%% Process.register(pid, name) — register a process under an atom name.
+register(Pid, Name) -> erlang:register(Name, Pid).
+
+%% Process.whereis(name) — look up a registered process by name.
+whereis(Name) -> erlang:whereis(Name).

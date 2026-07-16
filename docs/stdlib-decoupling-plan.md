@@ -347,15 +347,33 @@ metadata collection so module function exports appear in the KexI chunk.
 The hardcoded Math dispatch in `lower.cxx` remains as a fallback until the
 prebuilt BEAM path is the default.
 
-Namespace modules blocked on interpreter parity: IO, System, Console,
-Process, File, Directory, Task, Supervisor, Http, ENV cannot have prelude
-`let` implementations yet because the interpreter's `execModule` evaluates
-them at prelude load time and the Kex.Intrinsic.* calls either don't exist
-on the interpreter or have arity mismatches (IO is variadic natively).
-Unblocking requires either: (a) a `compiled do...end` gate that skips
-evaluation on the interpreter, or (b) adding matching bare-name intrinsics
-to every interpreter stdlib module. Math worked because its native
-functions are exact arity matches.
+Native-wins guard in the interpreter: `execModule` now skips prelude
+`let` definitions when a native builtin already exists for that
+`Module::function` key in `m_intrinsicEnv`. This lets the prelude carry
+Kex.Intrinsic.* implementations for BEAM without overwriting the
+interpreter's native builtins (which may be variadic or capture evaluator
+state).
+
+Namespace modules with prelude implementations:
+- **Math**: fully decoupled (see above)
+- **IO**: `let` implementations calling `Kex.Intrinsic.IO.*`;
+  `kex_intrinsic_io.erl` wraps `kex_io`; interpreter natives win
+- **System**: `let exit(code)` calling `Kex.Intrinsic.IO.exit`
+- **Console**: all color constants and functions as `let` definitions
+  calling `Kex.Intrinsic.Console.*`; interpreter natives win
+- **Process**: `module Process` added with `self`, `exit`, `register`,
+  `whereis` calling `Kex.Intrinsic.Process.*`; `Process::self` native wins
+  on interpreter
+
+Namespace modules still declaration-only:
+- **Task**: `start` needs block→lambda lowering, `awaitAll` needs special
+  list handling — can't express as simple intrinsic calls
+- **Supervisor**: `start` needs named args and complex map construction
+- **File/Directory**: large surface area, some methods need block handling
+- **Http**: already routes to `kex_http`
+- **ENV**: special case (map value, not a module)
+- **Integer/Float/Number**: parse functions exist only as comments in
+  `number.kex`, no module block to add implementations to
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

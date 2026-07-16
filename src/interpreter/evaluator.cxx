@@ -389,7 +389,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
         std::visit([this, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, mod.name);
+                auto nativeName = mod.name + "::" + node->name;
+                if (!m_intrinsicEnv->get(nativeName))
+                    execFunctionDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {

@@ -5,4 +5,5 @@ foul module System do
   #
   # @example  System.exit(1)
   exit : Integer -> Void
+  let exit(code) = Kex.Intrinsic.System.exit(code)
 end

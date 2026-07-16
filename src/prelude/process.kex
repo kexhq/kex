@@ -2,6 +2,24 @@
 # the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
 # spawned process with an awaitable result.
 
+foul module Process do
+  # Returns the calling process's Pid.
+  self : Pid
+  let self = Kex.Intrinsic.Process.self
+
+  # Sends an exit signal with +reason+ to +pid+.
+  exit : (Pid, X) -> Unit
+  let exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
+
+  # Registers +pid+ under the given atom +name+.
+  register : (Pid, Atom) -> Unit
+  let register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
+
+  # Returns the Pid registered under +name+, or None.
+  whereis : Atom -> Pid?
+  let whereis(name) = Kex.Intrinsic.Process.whereis(name)
+end
+
 make Pid do
   # Sends +msg+ to the process, wrapped in the standard Kex message format.
   send :> X -> Unit
