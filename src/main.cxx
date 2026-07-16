@@ -918,6 +918,7 @@ auto compilePreludeCore(const std::string &dir,
         options.moduleAtom = built.emitted.moduleName;
         options.moduleName = "Prelude";
         options.collectTopLevel = true;
+        options.flattenModules = true;
         options.role = kex::beam::KexiModuleRole::Entry;
         options.analysis = &analyzer;
         built.interface = kex::beam::collectMetadata(merged, options);

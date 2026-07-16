@@ -1210,7 +1210,7 @@ struct Lowering {
             }
             if (uid->name == "Math") {
                 if (n.method == "sqrt") return nsCall("math", "sqrt");
-                if (n.method == "pow" || n.method == "power") return nsCall("math", "pow");
+                if (n.method == "pow") return nsCall("math", "pow");
                 if (n.method == "sin") return nsCall("math", "sin");
                 if (n.method == "cos") return nsCall("math", "cos");
                 if (n.method == "tan") return nsCall("math", "tan");
@@ -1218,8 +1218,8 @@ struct Lowering {
                 if (n.method == "abs") return nsCall("erlang", "abs");
                 if (n.method == "floor") return nsCall("erlang", "floor");
                 if (n.method == "ceil") return nsCall("erlang", "ceil");
-                if (n.method == "PI" || n.method == "pi") return nsCall("math", "pi");
-                if (n.method == "E" || n.method == "e") return nsCall("kex_intrinsic_math", "e");
+                if (n.method == "PI") return nsCall("math", "pi");
+                if (n.method == "E") return nsCall("kex_intrinsic_math", "e");
                 if (n.method == "atan2") return nsCall("math", "atan2");
                 if (n.method == "atan") return nsCall("math", "atan");
                 if (n.method == "log10") return nsCall("math", "log10");
@@ -1434,16 +1434,6 @@ struct Lowering {
                 }
             }
         }
-        // `case rv of [] -> empty; _ -> nonEmpty end` (Just/None-on-empty).
-        auto onEmpty = [&](ExprPtr empty, ExprPtr nonEmpty) -> ExprPtr {
-            Match mm; mm.subjects.push_back(rv());
-            MatchClause e; auto ep = std::make_unique<Pattern>();
-            ep->kind = PatKind::List; e.patterns.push_back(std::move(ep)); e.body = std::move(empty);
-            MatchClause ne; auto np = std::make_unique<Pattern>();
-            np->kind = PatKind::Wild; ne.patterns.push_back(std::move(np)); ne.body = std::move(nonEmpty);
-            mm.clauses.push_back(std::move(e)); mm.clauses.push_back(std::move(ne));
-            auto x = std::make_unique<Expr>(); x->node = std::move(mm); return x;
-        };
         auto justOf = [&](ExprPtr v) {
             std::vector<ExprPtr> a; a.push_back(std::move(v));
             auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
@@ -1532,15 +1522,6 @@ struct Lowering {
             return ret(callE("kex_task", "await", 2,
                 two(rv(), atomize_ir(std::move(timeout), rb))));
         }
-        if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block
-            && !localMethods.count(m))
-            return ret(matchBool(callE("erlang","is_map",1,one(rv())),
-                callE("maps","size",1,one(rv())),
-                matchBool(callE("erlang","is_binary",1,one(rv())),
-                    callE("string","length",1,one(rv())),
-                    callE("erlang","length",1,one(rv())))));
-        if (m == "first" && n.args.empty() && !localMethods.count("first"))
-            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(rv())))));
         // .to(Type) numeric/string conversion (unless a user `to` method).
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
             std::string ty;
@@ -1554,69 +1535,6 @@ struct Lowering {
             // to(List) — ranges (and lists) are already real lists on BEAM.
             if (ty == "List") return ret(justOf(rv()));
         }
-        // none?: an Option is None (Kex None → the 'None' atom).
-        if (m == "none?" && n.args.empty() && !localMethods.count("none?"))
-            return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
-        // get(key, default): list → list_get/3; map → maps:get/3.
-        if (m == "get" && n.args.size() == 2 && !localMethods.count("get")) {
-            auto kRef = snap(atomize_ir(lower(n.args[0]), rb));
-            auto dRef = snap(atomize_ir(lower(n.args[1]), rb));
-            auto collectionGet = matchBool(callE("erlang","is_list",1,one(rv())),
-                callE("kex_intrinsic_list","list_get",3,three(rv(), kRef.get(), dRef.get())),
-                callE("maps","get",3,three(kRef.get(), rv(), dRef.get())));
-            // Web.Server.get(path, handler) has the same name and arity as
-            // collection get(key, default). Until receiver ownership is
-            // carried in typed IR, record/ADT tuple receivers must continue
-            // through the prelude dispatcher.
-            return ret(matchBool(callE("erlang", "is_tuple", 1, one(rv())),
-                callE("kex_prelude", "get", 3,
-                      three(rv(), kRef.get(), dRef.get())),
-                std::move(collectionGet)));
-        }
-        // empty?: works for both maps and lists (size 0 / []).
-        if (m == "empty?" && n.args.empty() && !localMethods.count("empty?"))
-            return ret(matchBool(callE("erlang","is_map",1,one(rv())),
-                intrin(Op::Eq, two(callE("maps","size",1,one(rv())), litInt(0))),
-                matchBool(callE("erlang","is_binary",1,one(rv())),
-                    intrin(Op::Eq, two(callE("erlang","byte_size",1,one(rv())), litInt(0))),
-                    intrin(Op::Eq, two(rv(), [&]{ auto e=std::make_unique<Expr>(); e->node=MakeList{{},std::nullopt}; return e; }())))));
-        // .or(default): unwrap Just/Some/Ok, else the default.
-        if (m == "or" && n.args.size() == 1) {
-            auto dflt = arg0();
-            Match mm; mm.subjects.push_back(rv());
-            auto ctorPat = [&](const char* tag) {
-                auto p = std::make_unique<Pattern>(); p->kind = PatKind::Construct; p->tag = tag;
-                auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = "_v";
-                p->args.push_back(std::move(vp)); return p;
-            };
-            for (const char* tag : {"Just", "Some", "Ok"}) {
-                MatchClause c; c.patterns.push_back(ctorPat(tag)); c.body = var("_v");
-                mm.clauses.push_back(std::move(c));
-            }
-            MatchClause d; auto wp = std::make_unique<Pattern>(); wp->kind = PatKind::Wild;
-            d.patterns.push_back(std::move(wp)); d.body = std::move(dflt);
-            mm.clauses.push_back(std::move(d));
-            auto x = std::make_unique<Expr>(); x->node = std::move(mm);
-            return ret(std::move(x));
-        }
-        // list[i] / list.get(i): list → raw elem-or-none; map → Just/None.
-        if (m == "get" && n.args.size() == 1 && !localMethods.count("get")) {
-            auto idxRef = snap(atomize_ir(lower(n.args[0]), rb));
-            Match inner; inner.subjects.push_back(callE("maps","find",2,two(idxRef.get(), rv())));
-            MatchClause ok; auto okp = std::make_unique<Pattern>(); okp->kind = PatKind::Tuple;
-            auto okt = std::make_unique<Pattern>(); okt->kind = PatKind::Lit; okt->litKind = LitKind::Atom; okt->litText = "ok";
-            auto okv = std::make_unique<Pattern>(); okv->kind = PatKind::Var; okv->name = "_gv";
-            okp->args.push_back(std::move(okt)); okp->args.push_back(std::move(okv));
-            ok.patterns.push_back(std::move(okp)); ok.body = justOf(var("_gv"));
-            MatchClause er; auto erp = std::make_unique<Pattern>(); erp->kind = PatKind::Lit; erp->litKind = LitKind::Atom; erp->litText = "error";
-            er.patterns.push_back(std::move(erp)); er.body = lit(LitKind::None, "none");
-            inner.clauses.push_back(std::move(ok)); inner.clauses.push_back(std::move(er));
-            auto innerE = std::make_unique<Expr>(); innerE->node = std::move(inner);
-            return ret(matchBool(callE("erlang","is_list",1,one(rv())),
-                callE("kex_intrinsic_list","list_get",2,two(rv(), idxRef.get())),
-                std::move(innerE)));
-        }
-
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so
         // `x.foo(a, b)` → `apply 'foo'/3(x, a, b)`. This is exactly how the

@@ -337,8 +337,25 @@ defaults. Fixed by adding BIF-backed intrinsics in
 `src/prelude/list.kex`'s List make block, bypassing the trait path
 entirely for lists.
 
-Declaration-only namespace dispatches (IO, Math, Process, Http, File,
-etc.) are blocked on Step 6 providing actual Kex implementations.
+Math module fully decoupled: prelude `module Math` now has `let`
+implementations that call `Kex.Intrinsic.Math.*`; `kex_intrinsic_math.erl`
+has all BIF wrappers; interpreter `math.cxx` has bare-name intrinsic
+aliases. Case-insensitive aliases (`pi`/`PI`, `power`/`pow`) removed —
+names are strictly case-sensitive. Constants `PI` and `E` are literal
+floats in Kex source. The `flattenModules` flag is now set during prelude
+metadata collection so module function exports appear in the KexI chunk.
+The hardcoded Math dispatch in `lower.cxx` remains as a fallback until the
+prebuilt BEAM path is the default.
+
+Namespace modules blocked on interpreter parity: IO, System, Console,
+Process, File, Directory, Task, Supervisor, Http, ENV cannot have prelude
+`let` implementations yet because the interpreter's `execModule` evaluates
+them at prelude load time and the Kex.Intrinsic.* calls either don't exist
+on the interpreter or have arity mismatches (IO is variadic natively).
+Unblocking requires either: (a) a `compiled do...end` gate that skips
+evaluation on the interpreter, or (b) adding matching bare-name intrinsics
+to every interpreter stdlib module. Math worked because its native
+functions are exact arity matches.
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.
