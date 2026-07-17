@@ -941,31 +941,7 @@ struct Lowering {
                 return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
             }
         }
-        // Mock.IO keeps its buffers in the executing BEAM process, mirroring
-        // the interpreter's per-evaluator mock state.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && path.size() == 2 &&
-                path[0] == "Mock" && path[1] == "IO") {
-                std::vector<Binding> binds;
-                if (n.method == "input") {
-                    std::vector<ExprPtr> lines;
-                    for (const auto& a : n.args)
-                        lines.push_back(atomize(a, binds));
-                    auto list = std::make_unique<Expr>();
-                    list->node = MakeList{std::move(lines), std::nullopt};
-                    return wrapLets(binds, callE("kex_io", "mock_input", 1,
-                                                 one(std::move(list))));
-                }
-                const char* fn = n.method == "start" ? "mock_start"
-                               : n.method == "output" ? "mock_output"
-                               : n.method == "clear" ? "mock_clear"
-                               : n.method == "stop" ? "mock_stop" : nullptr;
-                if (!fn || !n.args.empty() || !n.namedArgs.empty() || n.block)
-                    throw LowerError("IR lower: Mock.IO." + n.method + " not supported");
-                return callE("kex_io", fn, 0, {});
-            }
-        }
+        // Mock.IO — dispatched via Kex.Mock.IO companion module (see http.kex)
         // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
         // are intrinsic constructors until uppercase function declarations are
         // expressible in Kex. Handle them before ordinary module resolution,

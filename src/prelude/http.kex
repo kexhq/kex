@@ -53,7 +53,15 @@ end
 
 # Deterministic HTTP responses for tests. Responses are consumed in FIFO order;
 # an empty queue makes the next request return Error(HttpError).
+# All Mock.* sub-modules live in a single `module Mock` block to avoid
+# duplicate top-level `Mock` modules when prelude files are merged.
 foul module Mock do
+  foul module FS do
+    File : FS.FilePath -> String -> Unit
+    Directory : FS.FilePath -> Unit
+    clear : Unit -> Unit
+  end
+
   foul module Http do
     start   : Unit -> Unit
     respond : Integer -> String -> Unit
@@ -74,6 +82,28 @@ foul module Mock do
 
     foul stop() -> Unit do
       return Kex.Intrinsic.Http.mockStop()
+    end
+  end
+
+  foul module IO do
+    foul start() -> Unit do
+      return Kex.Intrinsic.IO.ioMockStart()
+    end
+
+    foul stop() -> Unit do
+      return Kex.Intrinsic.IO.ioMockStop()
+    end
+
+    foul output() -> String do
+      return Kex.Intrinsic.IO.ioMockOutput()
+    end
+
+    foul clear() -> Unit do
+      return Kex.Intrinsic.IO.ioMockClear()
+    end
+
+    foul input(lines) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput(lines)
     end
   end
 end

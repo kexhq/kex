@@ -390,7 +390,14 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 auto nativeName = mod.name + "::" + node->name;
-                if (!m_intrinsicEnv->get(nativeName))
+                bool hasNative = m_intrinsicEnv->get(nativeName) != nullptr;
+                if (!hasNative && nativeName.find('.') != std::string::npos) {
+                    std::string alt;
+                    for (char c : mod.name)
+                        alt += (c == '.') ? "::" : std::string(1, c);
+                    hasNative = m_intrinsicEnv->get(alt + "::" + node->name) != nullptr;
+                }
+                if (!hasNative)
                     execFunctionDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node);
@@ -1214,6 +1221,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // registered without a mangled prefix (e.g. Stream.Sequence).
                 std::string dispatchName = node.method;
                 auto mangled = namespaceName + "::" + node.method;
+                if (namespaceName.find('.') != std::string::npos && !m_env->get(mangled)) {
+                    std::string alt;
+                    for (char c : namespaceName)
+                        alt += (c == '.') ? "::" : std::string(1, c);
+                    mangled = alt + "::" + node.method;
+                }
                 if (auto target = m_env->get(mangled)) {
                     if (node.args.empty() && node.namedArgs.empty() && !node.block
                         && std::holds_alternative<ModuleValue>(target->data))

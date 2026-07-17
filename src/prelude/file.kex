@@ -213,25 +213,5 @@ foul module Directory do
   let home = Kex.Intrinsic.Directory.home
 end
 
-# Mocking support for tests — substitute in-memory files and directories
-# for real filesystem access without touching disk.
-#
-# @example
-#   Mock.FS.File("config.txt", "debug=true\n")
-#   Mock.FS.Directory("logs")
-#   # ... run code under test ...
-#   Mock.FS.clear()
-foul module Mock do
-  foul module FS do
-    # Registers an in-memory file at +path+ with +content+.
-    # All File and FileHandle operations on +path+ will use this content.
-    File : FS.FilePath -> String -> Unit
-
-    # Registers an in-memory directory at +path+.
-    # Directory.exists? and Directory.list will see it.
-    Directory : FS.FilePath -> Unit
-
-    # Clears all mocked files and directories.
-    clear : Unit -> Unit
-  end
-end
+# Mock.FS declarations are in http.kex alongside Mock.Http and Mock.IO
+# to avoid duplicate `module Mock` blocks in the merged prelude.

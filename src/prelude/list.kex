@@ -20,10 +20,6 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].second   # => Just(2)
   #   [1].second         # => None
   second :> X?
-  let second = match Kex.Intrinsic.List.at(this, 1) do
-    None -> None
-    x -> Just(x)
-  end
 
   # Returns the third element wrapped in +Just+, or +None+ if the list has
   # fewer than three elements.
@@ -34,10 +30,6 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].third   # => Just(3)
   #   [1, 2].third      # => None
   third :> X?
-  let third = match Kex.Intrinsic.List.at(this, 2) do
-    None -> None
-    x -> Just(x)
-  end
 
   # Returns all elements after the first. Returns +[]+ for an empty or
   # single-element list.
@@ -162,20 +154,19 @@ make [X], implement: Enumerable do
   # element via +f+.
   #
   # @param acc [Acc]   initial accumulator value
-  # @param f   [Acc, X -> Acc]
+  # @param f   [Acc -> X -> Acc]
   # @return [Acc]
   #
   # @example
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
-  reduce :> (Acc, (Acc, X -> Acc)) -> Acc
+  reduce :> Acc -> (Acc -> X -> Acc) -> Acc
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
   let map(f) = Kex.Intrinsic.List.map(this, f)
   let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
   let each(f) = Kex.Intrinsic.List.each(this, f)
-  let find(pred) = Kex.Intrinsic.List.find(this, pred)
-  let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
+  # find/flatMap — native builtins handle Optional wrapping / string flattening
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
   let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
   let any?(pred) = Kex.Intrinsic.List.any?(this, pred)

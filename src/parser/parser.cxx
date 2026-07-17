@@ -256,7 +256,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
             mod->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
             mod->body.push_back(parseFunctionDef());
-        } else if (check(TokenType::LowerIdent)) {
+        } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) {
             mod->body.push_back(parseTypeAnnotation());
         } else {
             error("Unexpected token in module body: " + std::string(tokenTypeName(peek().type)));
@@ -790,7 +790,7 @@ auto Parser::parseParam() -> ast::Param {
 
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     auto ann = std::make_unique<ast::TypeAnnotation>();
-    if (check(TokenType::LowerIdent) || check(TokenType::After))
+    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) || check(TokenType::After))
         ann->name = advance().value;
     else
         error("Expected name");

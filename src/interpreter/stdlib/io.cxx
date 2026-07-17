@@ -150,36 +150,51 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::module("Mock::IO");
     });
 
-    reg("Mock::IO::start", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockIO = true;
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();
         return Value::unit();
-    });
+    };
 
-    reg("Mock::IO::input", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        for (const auto& a : args) {
-            m_mockIOInputLines.push_back(a->toString());
+    auto mockInput = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() == 1 && std::holds_alternative<ListValue>(args[0]->data)) {
+            for (const auto& elem : std::get<ListValue>(args[0]->data).elements)
+                m_mockIOInputLines.push_back(elem->toString());
+        } else {
+            for (const auto& a : args)
+                m_mockIOInputLines.push_back(a->toString());
         }
         return Value::unit();
-    });
+    };
 
-    reg("Mock::IO::output", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockOutput = [this](std::vector<ValuePtr>) -> ValuePtr {
         return Value::string(m_mockIOOutput);
-    });
+    };
 
-    reg("Mock::IO::clear", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockClear = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();
         return Value::unit();
-    });
+    };
 
-    reg("Mock::IO::stop", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockStop = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockIO = false;
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();
         return Value::unit();
-    });
+    };
+
+    reg("Mock::IO::start", mockStart);
+    reg("Mock::IO::input", mockInput);
+    reg("Mock::IO::output", mockOutput);
+    reg("Mock::IO::clear", mockClear);
+    reg("Mock::IO::stop", mockStop);
+    reg("ioMockStart", std::move(mockStart));
+    reg("ioMockInput", std::move(mockInput));
+    reg("ioMockOutput", std::move(mockOutput));
+    reg("ioMockClear", std::move(mockClear));
+    reg("ioMockStop", std::move(mockStop));
 }
 
 } // namespace kex::interpreter

@@ -385,6 +385,18 @@ Namespace modules with prelude implementations:
   `Kex.Intrinsic.*`; `kex_intrinsic_float.erl` created; camelCase aliases
   added to existing BEAM modules; interpreter natives win via guard
 
+Mock decoupling status:
+- **Mock.IO**: fully decoupled — prelude foul functions in http.kex's
+  consolidated `module Mock` block dispatch through `Kex.Intrinsic.IO.*`;
+  companion `Kex.Mock.IO` module generated; hardcoded lowerer dispatch
+  removed; interpreter natives win via `.`→`::` fallback in native-wins
+  guard
+- **Mock.Http**: fully decoupled — companion `Kex.Mock.Http` generated
+  from prelude foul functions; hardcoded dispatch was already removed
+- **Mock.FS**: still hardcoded — `File`/`Directory` are uppercase
+  constructor-style calls that cannot be plain `let` definitions; `clear`
+  could be migrated but the module is kept together
+
 Namespace modules that remain hardcoded (cannot be simple intrinsic calls):
 - **Supervisor**: `start` needs named-arg destructuring and map
   construction at the IR level
