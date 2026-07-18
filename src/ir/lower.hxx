@@ -33,6 +33,7 @@ struct ExternalModules {
     std::unordered_map<std::string, std::string> nameToAtom;
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
+    std::unordered_map<std::string, std::vector<std::string>> exportParamNames;
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;

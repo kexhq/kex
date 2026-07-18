@@ -10,7 +10,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 2;
+static constexpr int KEXI_SCHEMA_VERSION = 3;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -60,6 +60,7 @@ struct KexiExport {
     int beamArity = 0;
     bool isFoul = false;
     std::vector<KexiTypePtr> paramTypes;
+    std::vector<std::string> paramNames;
     KexiTypePtr returnType;
 };
 

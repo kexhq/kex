@@ -20,43 +20,19 @@ auto Evaluator::registerStreamBuiltins() -> void {
         m_globalEnv->define(name, val);
     };
 
-    // Stream.Sequence(from: start, step_fn) — creates infinite stream
-    reg("Sequence", [](std::vector<ValuePtr> args) -> ValuePtr {
+    auto streamMake = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
-        // Find start value and step function regardless of order
-        ValuePtr startVal;
+        ValuePtr seed;
         const FunctionValue* stepFn = nullptr;
         for (const auto& arg : args) {
-            if (std::get_if<FunctionValue>(&arg->data)) {
+            if (std::get_if<FunctionValue>(&arg->data))
                 stepFn = std::get_if<FunctionValue>(&arg->data);
-            } else if (!startVal) {
-                startVal = arg;
-            }
+            else if (!seed)
+                seed = arg;
         }
-        if (!startVal || !stepFn) return Value::none();
-        if (!stepFn || !stepFn->native) return Value::none();
+        if (!seed || !stepFn || !stepFn->native) return Value::none();
 
-        auto start = startVal;
         auto step = stepFn->native;
-        auto stream = std::make_shared<Value>();
-        stream->data = StreamValue{[start, step](int64_t index) -> ValuePtr {
-            auto current = start;
-            for (int64_t i = 0; i < index; i++) {
-                current = step({current});
-            }
-            return current;
-        }, 0};
-        return stream;
-    });
-
-    // Stream.Iterate(seed, fn) — like Generate but explicit naming
-    reg("Iterate", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::none();
-        auto seed = args[0];
-        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
-        if (!fn || !fn->native) return Value::none();
-
-        auto step = fn->native;
         auto stream = std::make_shared<Value>();
         stream->data = StreamValue{[seed, step](int64_t index) -> ValuePtr {
             auto current = seed;
@@ -66,7 +42,11 @@ auto Evaluator::registerStreamBuiltins() -> void {
             return current;
         }, 0};
         return stream;
-    });
+    };
+
+    reg("generate", streamMake);
+    reg("Sequence", streamMake);
+    reg("Iterate", streamMake);
 
     // Update take to handle streams
     auto origTake = m_globalEnv->get("take");

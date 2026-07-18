@@ -163,6 +163,9 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
         else
             exp.returnType = kexiUnknown();
     }
+    if (!fd.clauses.empty())
+        for (const auto& p : fd.clauses[0].params)
+            exp.paramNames.push_back(p.name ? *p.name : "");
     iface.exports.push_back(std::move(exp));
 }
 

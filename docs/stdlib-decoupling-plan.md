@@ -393,9 +393,19 @@ Mock decoupling status:
   guard
 - **Mock.Http**: fully decoupled — companion `Kex.Mock.Http` generated
   from prelude foul functions; hardcoded dispatch was already removed
-- **Mock.FS**: still hardcoded — `File`/`Directory` are uppercase
-  constructor-style calls that cannot be plain `let` definitions; `clear`
-  could be migrated but the module is kept together
+- **Mock.FS**: still hardcoded — `File`/`Directory` are sub-module
+  constructors, not plain functions; `clear` could be migrated alone
+  but the module is kept together
+
+Stream decoupling status:
+- **Interpreter**: fully decoupled — prelude `let Sequence(from, step)` and
+  `let Iterate(seed, step)` in stream.kex dispatch through
+  `Kex.Intrinsic.Stream.generate()`; native `streamMake` uses type-sniffing
+  for argument order flexibility
+- **BEAM**: fully decoupled — KexI v3 carries param names in
+  `ExternalModules.exportParamNames`; the lowerer resolves named args for
+  external module functions (method-call, bare-call, and bare-name-fallback
+  paths); hardcoded Stream dispatch removed
 
 Namespace modules that remain hardcoded (cannot be simple intrinsic calls):
 - **Supervisor**: `start` needs named-arg destructuring and map

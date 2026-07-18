@@ -690,17 +690,53 @@ struct Lowering {
         // slots in order, leftovers default to None. Mirrors the string
         // emitter / Evaluator::callFunction (spec/optional_parens_do.kex).
         if (!n.namedArgs.empty()) {
-            // Sequence(from: Seed) { |x| next } → an infinite lazy stream
-            // ({'Stream', Thunk} — see runtime/src/kex_intrinsic_stream.erl).
-            if (n.name == "Sequence" && n.block && n.namedArgs.size() == 1 &&
-                n.namedArgs[0].first == "from" && !knownFns.count("Sequence")) {
-                std::vector<Binding> binds;
-                auto seed = atomize(n.namedArgs[0].second, binds);
-                auto fn = atomize(*n.block, binds);
-                return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
-                                             two(std::move(seed), std::move(fn))));
-            }
             auto it = fnParamNames.find(n.name);
+            std::string emittedName = n.name;
+            if (it == fnParamNames.end()) {
+                for (const auto& [key, val] : moduleFunctions) {
+                    auto dot = key.rfind('.');
+                    if (dot != std::string::npos && key.substr(dot + 1) == n.name) {
+                        auto pit = fnParamNames.find(key);
+                        if (pit != fnParamNames.end()) {
+                            it = pit;
+                            emittedName = val;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (it == fnParamNames.end() && externalModules) {
+                for (const auto& [qualKey, pnames] : externalModules->exportParamNames) {
+                    auto dot = qualKey.rfind('.');
+                    if (dot != std::string::npos && qualKey.substr(dot + 1) == n.name) {
+                        auto eit = externalModules->exportToBeamFn.find(qualKey);
+                        if (eit != externalModules->exportToBeamFn.end()) {
+                            auto modName = qualKey.substr(0, dot);
+                            auto ait = externalModules->nameToAtom.find(modName);
+                            if (ait != externalModules->nameToAtom.end()) {
+                                std::vector<Binding> binds;
+                                std::vector<ExprPtr> slots(pnames.size());
+                                for (const auto& [an, av] : n.namedArgs)
+                                    for (size_t i = 0; i < pnames.size(); i++)
+                                        if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                                std::vector<ExprPtr> positional;
+                                for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                                if (n.block) positional.push_back(atomize(*n.block, binds));
+                                size_t next = 0;
+                                for (auto& p : positional) {
+                                    while (next < slots.size() && slots[next]) next++;
+                                    if (next >= slots.size()) break;
+                                    slots[next] = std::move(p);
+                                }
+                                for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                                int ar = static_cast<int>(slots.size());
+                                return wrapLets(binds,
+                                    callE(ait->second, eit->second, ar, std::move(slots)));
+                            }
+                        }
+                    }
+                }
+            }
             if (it == fnParamNames.end())
                 throw LowerError("IR lower: named args to unknown function " + n.name);
             const auto& pnames = it->second;
@@ -721,7 +757,7 @@ struct Lowering {
             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
             auto ex = std::make_unique<Expr>();
             int ar = (int)slots.size();
-            ex->node = Call{"", n.name, ar, std::move(slots), false};
+            ex->node = Call{"", emittedName, ar, std::move(slots), false};
             return wrapLets(binds, std::move(ex));
         }
         std::vector<Binding> binds;
@@ -925,7 +961,8 @@ struct Lowering {
         }
         // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
         // Mock.FS.clear() — the in-memory test filesystem, mirrored by
-        // kex_file's mock registry.
+        // kex_file's mock registry. File/Directory are sub-module constructors,
+        // not plain functions, so they stay hardcoded here.
         {
             std::vector<std::string> path;
             if (modulePath(*n.receiver, path) &&
@@ -939,30 +976,6 @@ struct Lowering {
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
-            }
-        }
-        // Mock.IO — dispatched via Kex.Mock.IO companion module (see http.kex)
-        // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
-        // are intrinsic constructors until uppercase function declarations are
-        // expressible in Kex. Handle them before ordinary module resolution,
-        // which intentionally requires interface-known parameter names.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && path.size() == 1 &&
-                path[0] == "Stream" &&
-                (n.method == "Sequence" || n.method == "Iterate") && n.block) {
-                std::vector<Binding> binds;
-                ExprPtr seed;
-                if (n.namedArgs.size() == 1 && n.namedArgs[0].first == "from")
-                    seed = atomize(n.namedArgs[0].second, binds);
-                else if (n.namedArgs.empty() && n.args.size() == 1)
-                    seed = atomize(n.args[0], binds);
-                if (!seed)
-                    throw LowerError("IR lower: Stream." + n.method +
-                                     " expects one seed argument");
-                auto fn = atomize(*n.block, binds);
-                return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
-                                             two(std::move(seed), std::move(fn))));
             }
         }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
@@ -998,11 +1011,32 @@ struct Lowering {
                 std::unordered_set<std::string> tried;
                 for (const auto& candidate : candidates) {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
-                    auto it = moduleFunctions.find(candidate + "." + n.method);
+                    auto qualKey = candidate + "." + n.method;
+                    auto it = moduleFunctions.find(qualKey);
                     if (it != moduleFunctions.end()) {
-                        if (!n.namedArgs.empty())
-                            throw LowerError("IR lower: named args to module function not yet ported");
                         std::vector<Binding> binds;
+                        if (!n.namedArgs.empty()) {
+                            auto pit = fnParamNames.find(qualKey);
+                            if (pit == fnParamNames.end())
+                                throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
+                            const auto& pnames = pit->second;
+                            std::vector<ExprPtr> slots(pnames.size());
+                            for (const auto& [an, av] : n.namedArgs)
+                                for (size_t i = 0; i < pnames.size(); i++)
+                                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                            std::vector<ExprPtr> positional;
+                            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                            if (n.block) positional.push_back(atomize(*n.block, binds));
+                            size_t next = 0;
+                            for (auto& p : positional) {
+                                while (next < slots.size() && slots[next]) next++;
+                                if (next >= slots.size()) break;
+                                slots[next] = std::move(p);
+                            }
+                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            int ar = static_cast<int>(slots.size());
+                            return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                        }
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
@@ -1017,11 +1051,32 @@ struct Lowering {
                         auto qualKey = candidate + "." + n.method;
                         auto eit = externalModules->exportToBeamFn.find(qualKey);
                         if (eit != externalModules->exportToBeamFn.end()) {
-                            if (!n.namedArgs.empty())
-                                throw LowerError("IR lower: named args to module function not yet ported");
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
                                 std::vector<Binding> binds;
+                                if (!n.namedArgs.empty()) {
+                                    auto pit = externalModules->exportParamNames.find(qualKey);
+                                    if (pit == externalModules->exportParamNames.end())
+                                        throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+                                    const auto& pnames = pit->second;
+                                    std::vector<ExprPtr> slots(pnames.size());
+                                    for (const auto& [an, av] : n.namedArgs)
+                                        for (size_t i = 0; i < pnames.size(); i++)
+                                            if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                                    std::vector<ExprPtr> positional;
+                                    for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                                    size_t next = 0;
+                                    for (auto& p : positional) {
+                                        while (next < slots.size() && slots[next]) next++;
+                                        if (next >= slots.size()) break;
+                                        slots[next] = std::move(p);
+                                    }
+                                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                                    int ar = static_cast<int>(slots.size());
+                                    return wrapLets(binds,
+                                        callE(ait->second, eit->second, ar, std::move(slots)));
+                                }
                                 std::vector<ExprPtr> args;
                                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                                 if (n.block) args.push_back(atomize(*n.block, binds));
@@ -1071,12 +1126,33 @@ struct Lowering {
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
         if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
             std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
             if (auto it = moduleFunctions.find(uid->name + "." + n.method);
                 it != moduleFunctions.end()) {
-                if (!n.namedArgs.empty())
-                    throw LowerError("IR lower: named args to module function not yet ported");
+                auto qualKey = uid->name + "." + n.method;
+                if (!n.namedArgs.empty()) {
+                    auto pit = fnParamNames.find(qualKey);
+                    if (pit == fnParamNames.end())
+                        throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
+                    const auto& pnames = pit->second;
+                    std::vector<ExprPtr> slots(pnames.size());
+                    for (const auto& [an, av] : n.namedArgs)
+                        for (size_t i = 0; i < pnames.size(); i++)
+                            if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                    std::vector<ExprPtr> positional;
+                    for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                    size_t next = 0;
+                    for (auto& p : positional) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next] = std::move(p);
+                    }
+                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                    int ar = static_cast<int>(slots.size());
+                    return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                }
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("", it->second, ar, std::move(args)));
@@ -1087,6 +1163,31 @@ struct Lowering {
                 if (eit != externalModules->exportToBeamFn.end()) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
+                        if (!n.namedArgs.empty()) {
+                            auto pit = externalModules->exportParamNames.find(qualKey);
+                            if (pit == externalModules->exportParamNames.end())
+                                throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+                            const auto& pnames = pit->second;
+                            std::vector<ExprPtr> slots(pnames.size());
+                            for (const auto& [an, av] : n.namedArgs)
+                                for (size_t i = 0; i < pnames.size(); i++)
+                                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                            std::vector<ExprPtr> positional;
+                            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                            if (n.block) positional.push_back(atomize(*n.block, binds));
+                            size_t next = 0;
+                            for (auto& p : positional) {
+                                while (next < slots.size() && slots[next]) next++;
+                                if (next >= slots.size()) break;
+                                slots[next] = std::move(p);
+                            }
+                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            int ar = static_cast<int>(slots.size());
+                            return wrapLets(binds,
+                                callE(ait->second, eit->second, ar, std::move(slots)));
+                        }
+                        std::vector<ExprPtr> args;
+                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
                         int ar = static_cast<int>(args.size());
                         return wrapLets(binds,
@@ -1094,6 +1195,8 @@ struct Lowering {
                     }
                 }
             }
+            std::vector<ExprPtr> args;
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
             // Supervisor.start(restart: strat) do children end →
             // kex_supervisor:start_link(#{strategy => strat, children => Kids}).
             if (uid->name == "Supervisor" && n.method == "start" && n.block) {
@@ -2923,6 +3026,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             const std::string emitted = mangledPrefix + "__" + fd->name;
             definedFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
+            if (!fd->clauses.empty()) {
+                std::vector<std::string> pnames;
+                for (const auto& p : fd->clauses[0].params)
+                    pnames.push_back(p.name ? *p.name : "");
+                L.fnParamNames[path + "." + fd->name] = std::move(pnames);
+            }
         };
         for (const auto& item : module.body) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))

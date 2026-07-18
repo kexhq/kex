@@ -460,6 +460,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 auto qualKey = shortName + "." + exp.name;
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
+                if (!exp.paramNames.empty())
+                    ext.exportParamNames[qualKey] = exp.paramNames;
             }
         }
     }

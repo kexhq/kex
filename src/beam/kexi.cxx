@@ -195,6 +195,11 @@ auto exportToTerm(const KexiExport& exp, int version) -> TermPtr {
     if (version >= 2)
         fields.push_back(Term::binary(
             exp.beamFunction.empty() ? exp.name : exp.beamFunction));
+    if (version >= 3) {
+        std::vector<TermPtr> names;
+        for (const auto& n : exp.paramNames) names.push_back(Term::binary(n));
+        fields.push_back(Term::list(std::move(names)));
+    }
     return Term::tuple(std::move(fields));
 }
 
@@ -208,6 +213,9 @@ auto termToExport(const TermPtr& term) -> KexiExport {
         e.paramTypes.push_back(termToType(p));
     e.returnType = termToType(t[4]);
     e.beamFunction = t.size() >= 6 ? t[5]->asBinaryStr() : e.name;
+    if (t.size() >= 7)
+        for (const auto& n : t[6]->asList())
+            e.paramNames.push_back(n->asBinaryStr());
     return e;
 }
 

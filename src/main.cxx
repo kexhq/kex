@@ -848,6 +848,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportToBeamFn[name] = function;
   for (const auto &[name, arity] : overrides.exportArity)
     result.exportArity[name] = arity;
+  for (const auto &[name, names] : overrides.exportParamNames)
+    result.exportParamNames[name] = names;
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
   return result;
