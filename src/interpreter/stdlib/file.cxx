@@ -37,9 +37,6 @@ auto Evaluator::registerFileBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    m_globalEnv->define("File", Value::module("File"));
-    m_globalEnv->define("FileHandle", Value::module("FileHandle"));
-
     // File.open(path, mode) -> FileHandle  (raises on failure)
     // File.open(path, mode, block) -> T?  (None if file doesn't exist)
     reg("File::open", [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -495,8 +492,6 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    m_globalEnv->define("Directory", Value::module("Directory"));
-
     // Directory.exists?(path) -> Bool  /  Directory.dir?(path) -> Bool
     auto dirExistsFn = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
@@ -682,11 +677,6 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 }
 
 auto Evaluator::registerMockBuiltins() -> void {
-    m_globalEnv->define("Mock", Value::module("Mock"));
-
-    // Namespace shell only; Mock.FS's public operations are loaded from Kex.
-    m_globalEnv->define("Mock::FS", Value::module("Mock.FS"));
-
     // Mock.FS.File(path, content) -> Unit  — register an in-memory file
     auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();

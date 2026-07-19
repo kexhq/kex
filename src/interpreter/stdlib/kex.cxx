@@ -3,9 +3,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerKexBuiltins() -> void {
-    m_globalEnv->define("Kex", Value::module("Kex"));
-    m_globalEnv->define("Kex::Feature", Value::module("Kex.Feature"));
-
     auto makeVariant = [](const std::string& tag) -> ValuePtr {
         auto v = std::make_shared<Value>();
         v->data = VariantValue{tag, "", {}};

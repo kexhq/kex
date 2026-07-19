@@ -3,8 +3,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerHttpBuiltins() -> void {
-    m_globalEnv->define("Http", Value::module("Http"));
-
     auto httpError = [](const std::string& kind, const std::string& message) -> ValuePtr {
         auto kindVal = std::make_shared<Value>();
         kindVal->data = VariantValue{kind, "NetworkError", {}};
@@ -32,14 +30,6 @@ auto Evaluator::registerHttpBuiltins() -> void {
              "Http::delete", "Http::head", "Http::options"}) {
         defineIntrinsic(name, httpRequest);
     }
-
-    if (!m_globalEnv->has("Mock"))
-        m_globalEnv->define("Mock", Value::module("Mock"));
-
-    // Nested modules use a dotted canonical name ("Mock.Http") and `::`
-    // only before the member. Keep the native bindings aligned with the
-    // ModuleValue installed by the prelude declaration.
-    m_globalEnv->define("Mock::Http", Value::module("Mock.Http"));
 
     auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockHttp = true;

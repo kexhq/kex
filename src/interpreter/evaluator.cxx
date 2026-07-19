@@ -2393,8 +2393,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
 
 auto Evaluator::registerBuiltins() -> void {
     // Orchestrator only — each domain is implemented in its own file under
-    // src/interpreter/stdlib/. Order matters: registerStreamBuiltins()
-    // wraps the plain-list `take` registered by registerListBuiltins().
+    // src/interpreter/stdlib/. Collection domains run after List because they
+    // reuse selected qualified List implementations.
     registerAdtConstructors();
     registerIOBuiltins();
     registerFileBuiltins();

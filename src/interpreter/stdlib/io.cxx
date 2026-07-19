@@ -12,7 +12,6 @@ auto Evaluator::registerIOBuiltins() -> void {
     };
 
     m_globalEnv->define("IO", Value::module("IO"));
-    m_globalEnv->define("System", Value::module("System"));
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
     reg("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -150,14 +149,6 @@ auto Evaluator::registerIOBuiltins() -> void {
     //   Mock.IO.output()             — return captured output as a String
     //   Mock.IO.clear()              — reset output buffer + input queue
     //   Mock.IO.stop()               — deactivate mock mode and clear
-
-    // Mock namespace is defined in file.cxx; make sure it exists.
-    if (!m_globalEnv->has("Mock"))
-        m_globalEnv->define("Mock", Value::module("Mock"));
-
-    reg("Mock::IO", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::module("Mock::IO");
-    });
 
     auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockIO = true;

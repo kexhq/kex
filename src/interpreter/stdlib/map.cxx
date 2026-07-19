@@ -33,27 +33,7 @@ auto Evaluator::registerMapBuiltins() -> void {
     m_globalEnv->define("Map", Value::module("Map"));
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
-    // Wraps an existing builtin so the map logic only fires for MapValue
-    // receivers; all other types fall through to the previous registration.
-    auto wrap = [this](const std::string& name, NativeFunc mapFn) {
-        auto prev = m_globalEnv->get(name);
-        auto fn = [prev, mapFn = std::move(mapFn)](std::vector<ValuePtr> args) -> ValuePtr {
-            if (!args.empty() && std::holds_alternative<MapValue>(args[0]->data))
-                return mapFn(args);
-            if (prev) {
-                if (auto* fv = std::get_if<FunctionValue>(&prev->data); fv && fv->native)
-                    return fv->native(args);
-            }
-            return Value::none();
-        };
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        defineIntrinsic("Map::" + name, std::move(fn));
     };
 
     // get(map, key) -> V? (Just(value) / None)
@@ -160,8 +140,7 @@ auto Evaluator::registerMapBuiltins() -> void {
     // mapValues, mapKeys) are provided by the Kex prelude (Enumerable trait
     // + Map overrides in src/prelude/map.kex) built on entries/fromEntries/
     // reduce — no native versions needed. `count` stays below: the prelude
-    // calls it as Kex.Intrinsic.Map.count, and the intrinsic env snapshot
-    // resolves by bare function name, so the map-aware chain must exist.
+    // calls it as Kex.Intrinsic.Map.count.
 
     // merge(map, other) -> Map<K, V>  — other's values win on conflict
     reg("merge", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -184,7 +163,7 @@ auto Evaluator::registerMapBuiltins() -> void {
     });
 
     // count(map, fn(k, v) -> Bool) -> Int
-    wrap("count", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("count", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) {
             if (args.empty()) return Value::integer(0);
             auto* map = std::get_if<MapValue>(&args[0]->data);
@@ -238,15 +217,6 @@ auto Evaluator::registerMapBuiltins() -> void {
         return result;
     });
 
-    // Private Map primitive identities. Prelude wrappers own the public API;
-    // the category-qualified entries keep intrinsic dispatch independent of
-    // overlapping bare names such as get/count/delete.
-    for (const char* name : {
-             "count", "delete", "entries", "fromEntries", "get",
-             "getWithDefault", "has?", "keys", "merge", "put", "values"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("Map::" + std::string(name), value);
-    }
 }
 
 } // namespace kex::interpreter

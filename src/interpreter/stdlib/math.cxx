@@ -23,11 +23,6 @@ auto Evaluator::registerMathBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    // Namespace placeholder so `Math.sqrt(...)` resolves via the
-    // empty-RecordValue namespace-dispatch branch in eval() (ast::MethodCall)
-    // and gets the mangled "Math::" dispatch — see io.cxx for the same setup.
-    m_globalEnv->define("Math", Value::module("Math"));
-
     reg("Math::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         return Value::floating(std::sqrt(args.empty() ? 0.0 : toDouble(args[0])));
     });

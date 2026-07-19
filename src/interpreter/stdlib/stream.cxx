@@ -1,5 +1,4 @@
 #include "../evaluator.hxx"
-#include <algorithm>
 
 namespace kex::interpreter {
 
@@ -10,14 +9,6 @@ namespace kex::interpreter {
 // in Evaluator::registerBuiltins()).
 //
 auto Evaluator::registerStreamBuiltins() -> void {
-    m_globalEnv->define("Stream", Value::module("Stream"));
-
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     auto streamMake = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         ValuePtr seed;
@@ -42,13 +33,10 @@ auto Evaluator::registerStreamBuiltins() -> void {
         return stream;
     };
 
-    reg("generate", streamMake);
+    defineIntrinsic("Stream::generate", streamMake);
 
-    // Update take to handle streams
-    auto origTake = m_globalEnv->get("take");
-    reg("take", [origTake](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream::take", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        // Stream.take(n)
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* n = std::get_if<IntValue>(&args[1]->data);
             if (!n) return Value::list({});
@@ -58,15 +46,11 @@ auto Evaluator::registerStreamBuiltins() -> void {
             }
             return Value::list(std::move(result));
         }
-        // List.take(n) — delegate to original
-        if (auto* fn = std::get_if<FunctionValue>(&origTake->data)) {
-            return fn->native(std::move(args));
-        }
         return Value::list({});
     });
 
     // Stream.drop(n) — returns a new stream with offset
-    reg("drop", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Stream::drop", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         if (auto* stream = std::get_if<StreamValue>(&args[0]->data)) {
             auto* n = std::get_if<IntValue>(&args[1]->data);
@@ -75,25 +59,9 @@ auto Evaluator::registerStreamBuiltins() -> void {
             newStream->data = StreamValue{stream->generator, stream->offset + n->value};
             return newStream;
         }
-        auto* n = std::get_if<IntValue>(&args[1]->data);
-        if (!n) return Value::list({});
-        // String.drop — treat as char sequence
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            auto skip = std::min(static_cast<size_t>(n->value), str->value.size());
-            return Value::string(str->value.substr(skip));
-        }
-        // List.drop
-        auto* list = std::get_if<ListValue>(&args[0]->data);
-        if (!list) return Value::list({});
-        auto skip = std::min(static_cast<size_t>(n->value), list->elements.size());
-        std::vector<ValuePtr> result(list->elements.begin() + skip, list->elements.end());
-        return Value::list(std::move(result));
+        return Value::list({});
     });
 
-    for (const char* name : {"generate", "take", "drop"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("Stream::" + std::string(name), value);
-    }
     // Stream map/filter share the lazy implementation registered by the List
     // runtime domain, but retain distinct private ABI identities.
     for (const char* name : {"map", "filter"}) {

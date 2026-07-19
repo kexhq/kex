@@ -267,6 +267,9 @@ source-owned receiver implementations, List's optimized `find` and `flatMap`
 paths now have qualified private identities and explicit Kex wrappers, and
 `collect` uses the shared Enumerable source implementation. Their transitional
 bare aliases have all been removed.
+Map primitives likewise register directly under private `Map::*` identities;
+the runtime no longer builds those entries by overriding shared bare List and
+String functions and copying the resulting wrappers.
 Char now owns `upperCase` and `lowerCase` Kex methods that reuse the qualified
 String intrinsic ABI while preserving Char results. This removes the last bare
 String case-conversion aliases, including their former use by shorthand mapping
@@ -321,6 +324,19 @@ installed-stdlib/package phase.
 Intrinsic registration now rejects identities without a category separator,
 making the removal of the bare compatibility bridge an enforced invariant
 rather than a convention.
+Fully source-owned namespace domains no longer pre-install native `ModuleValue`
+shells. Math, Console, Kex, HTTP, File, Directory, System, Mock, and Stream
+namespace paths are published only by ordinary prelude module loading; their private
+registrations contain functions, not public namespace state. IO and
+Process/Task retain native shells solely for their documented public-native
+compatibility operations.
+FileHandle likewise relies on receiver-type method dispatch rather than a
+native namespace placeholder, and Mock.IO's nested module identity comes from
+the source declaration instead of a native function returning `ModuleValue`.
+The remaining native `ModuleValue` entries are intentional: primitive type
+tokens used as runtime values (`Integer`, `List`, `String`, and peers), deferred
+Parser/Evaluator, and IO/process/supervisor namespaces that still own explicit
+walker compatibility behavior.
 IO/System, HTTP, Process/Task, and numeric parsing now explicitly publish their
 dual public/intrinsic identities as well. Their unrelated public helpers are no
 longer implicitly treated as intrinsic capabilities by domain registration.
@@ -601,7 +617,9 @@ Stream decoupling status:
 - **Interpreter**: fully decoupled — prelude `let Sequence(from, step)` and
   `let Iterate(seed, step)` in stream.kex dispatch through
   `Kex.Intrinsic.Stream.generate()`; native `streamMake` uses type-sniffing
-  for argument order flexibility
+  for argument order flexibility. The runtime registers `generate`, `take`,
+  and `drop` directly under private `Stream::*` identities, while the public
+  `Stream` namespace is created exclusively by the source module
 - **BEAM**: fully decoupled — KexI v3 carries param names in
   `ExternalModules.exportParamNames`; the lowerer resolves named args for
   external module functions (method-call, bare-call, and bare-name-fallback

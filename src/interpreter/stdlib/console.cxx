@@ -8,8 +8,6 @@ auto Evaluator::registerConsoleBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    m_globalEnv->define("Console", Value::module("Console"));
-
     const auto constant = [&](const char* name, const char* ansi) {
         reg(std::string("Console::") + name, [ansi](std::vector<ValuePtr>) {
             return Value::string(color::apply(ansi));
