@@ -245,6 +245,27 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::unit();
     });
 
+    // Public FileHandle spellings are Kex methods; these aliases keep their
+    // primitive ABI independent from the older internal IO-style names.
+    for (const auto& [publicName, primitiveName] :
+         std::initializer_list<std::pair<const char*, const char*>>{
+             {"readLine", "getLine"}, {"writeLine", "printLine"},
+             {"read", "read"}, {"write", "write"},
+             {"eof?", "atEnd?"}, {"close", "close"}}) {
+        if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
+            defineIntrinsic("FileHandle::" + std::string(publicName), value);
+    }
+    defineIntrinsic("FileHandle::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* handle = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!handle) return Value::none();
+        auto feed = m_intrinsicEnv->get("File::feed");
+        auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
+        return function && function->native
+            ? function->native({Value::string(handle->path)})
+            : Value::none();
+    });
+
     // File.read(path) -> String?
     reg("File::read", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
@@ -675,29 +696,36 @@ auto Evaluator::registerMockBuiltins() -> void {
     });
 
     // Mock.FS.File(path, content) -> Unit  — register an in-memory file
-    reg("Mock::FS::File", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
         m_mockFiles[pathStr->value] = args[1]->toString();
         return Value::unit();
-    });
+    };
 
     // Mock.FS.Directory(path) -> Unit  — register an in-memory directory
-    reg("Mock::FS::Directory", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    auto mockDirectory = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
         m_mockDirs.insert(pathStr->value);
         return Value::unit();
-    });
+    };
 
     // Mock.FS.clear() -> Unit  — reset all FS mocks
-    reg("Mock::FS::clear", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockClear = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockFiles.clear();
         m_mockDirs.clear();
         return Value::unit();
-    });
+    };
+
+    reg("Mock::FS::File", mockFile);
+    reg("Mock::FS::Directory", mockDirectory);
+    reg("Mock::FS::clear", mockClear);
+    defineIntrinsic("FS::file", std::move(mockFile));
+    defineIntrinsic("FS::directory", std::move(mockDirectory));
+    defineIntrinsic("FS::clear", std::move(mockClear));
 }
 
 } // namespace kex::interpreter

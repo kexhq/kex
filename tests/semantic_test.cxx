@@ -694,6 +694,7 @@ int main() {
             integerTarget.backendModule = "Kex.Numbers";
             integerTarget.backendFunction = "describe_integer";
             integerTarget.backendArity = 1;
+            integerTarget.paramNames = {};
             integerTarget.signature = {
                 "describe", {semantic::Type::integer()}, semantic::Type::string()};
             interfaces.receiverFunctions["describe"].push_back(
@@ -722,6 +723,7 @@ int main() {
                         std::string("describe_integer"));
             assertEqual(target.backendArity, 1);
             assertTrue(target.passesReceiver);
+            assertTrue(target.paramNames.empty());
         });
 
         it("rejects ambiguous imported receiver ownership", []() {

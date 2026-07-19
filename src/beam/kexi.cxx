@@ -246,10 +246,10 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     return te;
 }
 
-auto methodToTerm(const KexiMethod& m) -> TermPtr {
+auto methodToTerm(const KexiMethod& m, int version) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : m.paramTypes) params.push_back(typeToTerm(p));
-    return Term::tuple({
+    std::vector<TermPtr> fields = {
         Term::binary(m.name),
         typeToTerm(m.receiverType),
         Term::integer(m.beamArity),
@@ -258,7 +258,13 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
         typeToTerm(m.returnType),
         Term::binary(m.beamFunction),
         m.typeOnly ? Term::atom("true") : Term::atom("false"),
-    });
+    };
+    if (version >= 5) {
+        std::vector<TermPtr> names;
+        for (const auto& n : m.paramNames) names.push_back(Term::binary(n));
+        fields.push_back(Term::list(std::move(names)));
+    }
+    return Term::tuple(std::move(fields));
 }
 
 auto termToMethod(const TermPtr& term) -> KexiMethod {
@@ -273,6 +279,9 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
     m.returnType = termToType(t[5]);
     m.beamFunction = t[6]->asBinaryStr();
     m.typeOnly = t.size() >= 8 && t[7]->isAtom("true");
+    if (t.size() >= 9)
+        for (const auto& n : t[8]->asList())
+            m.paramNames.push_back(n->asBinaryStr());
     return m;
 }
 
@@ -428,7 +437,8 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         exports.push_back(exportToTerm(e, chunk.version));
     for (const auto& c : chunk.typeInterface.constants) constants.push_back(constantToTerm(c));
     for (const auto& t : chunk.typeInterface.types) types.push_back(typeExportToTerm(t));
-    for (const auto& m : chunk.typeInterface.methods) methods.push_back(methodToTerm(m));
+    for (const auto& m : chunk.typeInterface.methods)
+        methods.push_back(methodToTerm(m, chunk.version));
 
     auto typeIface = Term::map({
         {Term::atom("exports"), Term::list(std::move(exports))},

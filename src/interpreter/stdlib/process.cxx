@@ -22,10 +22,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
-    // pid.send(msg) — UFCS, so `send` is registered plain-named (receiver
-    // becomes args[0]), not namespaced, matching how list/string methods
-    // are registered.
-    reg("send", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    // Private receiver primitives. The public methods are defined by
+    // process.kex and call these category-qualified identities.
+    defineIntrinsic("Process::send", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -38,14 +37,14 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the receiver's spawner) to the receiver pid. Passive bookkeeping
     // only — see Scheduler::link's doc comment for why this deliberately
     // doesn't carry BEAM's signal-propagation semantics.
-    reg("link", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::link", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
         p->scheduler->link(p->pid);
         return Value::unit();
     });
-    reg("unlink", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::unlink", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::unit();
@@ -56,7 +55,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // pid.alive?() — true until that process's fiber has finished (whether
     // by a normal return or an uncaught exception caught by its own
     // fiber's outer handler — see Scheduler::spawn/runToCompletion).
-    reg("alive?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Process::alive?", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(false);
         auto* p = std::get_if<ProcessValue>(&args[0]->data);
         if (!p) return Value::boolean(false);
@@ -74,10 +73,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::task(pid, m_scheduler.get());
     });
 
-    // task.await(timeout: N) — UFCS plain-named like send/link/alive?.
-    // Named args without a matching m_functionDefs entry (true for every
-    // native builtin) are appended positionally by callFunction, so
-    // `timeout:`'s value simply lands at args[1] here. Returns
+    // Walker-only public fallback: awaiting yields the scheduler while the
+    // evaluator's environment stack is active, so a Kex wrapper cannot safely
+    // own this call until evaluator environments are process-local. Returns
     // Ok(result)/Error(reason) — Error(:timeout) specifically on timeout,
     // matching docs/concurrency.md's documented `Result<T, TaskError>`
     // shape (TaskError isn't a distinct type here, just whatever reason
@@ -107,12 +105,11 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::error(tup->elements[1]);
     });
 
-    // Private intrinsic identities used by the Kex-owned Pid and Task
-    // receiver methods. The public surface is registered from process.kex.
-    for (const char* name : {"send", "link", "unlink", "alive?", "await"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("Process::" + std::string(name), value);
-    }
+    // The source declaration still calls the qualified identity (used by
+    // direct intrinsic calls and kept ABI-aligned with BEAM), while ordinary
+    // walker receiver dispatch intentionally selects the bare fallback above.
+    if (auto value = m_globalEnv->get("await"))
+        defineIntrinsic("Process::await", value);
 
     // Task.awaitAll([tasks]) — awaits each task in order, no timeout
     // (matches Task::start's counterpart having no bulk-timeout variant in

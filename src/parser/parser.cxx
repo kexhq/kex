@@ -769,7 +769,7 @@ auto Parser::parseParam() -> ast::Param {
     }
 
     // name: Type = default  or  name = default  or  just name
-    if (check(TokenType::LowerIdent)) {
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
         auto& nameToken = advance();
         param.name = nameToken.value;
 
@@ -1529,8 +1529,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Lower ident (variable or function call)
-    if (check(TokenType::LowerIdent)) {
+    // Lower ident (variable or function call). `timeout` is a keyword only in
+    // the receive-clause position; elsewhere it remains a valid source name.
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
         auto name = advance().value;
 
         // Function call with parens
@@ -2935,6 +2936,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::None:
         case TokenType::Atom:
         case TokenType::LowerIdent:
+        case TokenType::Timeout:
         case TokenType::UpperIdent:
         case TokenType::This:
         case TokenType::LParen:

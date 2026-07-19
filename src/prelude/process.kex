@@ -60,7 +60,7 @@ make Task do
   # Waits for the task's result, with a timeout in milliseconds.
   # Returns +None+ on timeout.
   await :> Integer -> X
-  let await(ms) = Kex.Intrinsic.Process.await(this, ms)
+  let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
 
 make Reference do

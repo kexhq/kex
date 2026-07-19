@@ -10,7 +10,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 4;
+static constexpr int KEXI_SCHEMA_VERSION = 5;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -82,6 +82,8 @@ struct KexiMethod {
     bool isFoul = false;
     bool typeOnly = false; // annotation-only, no BEAM implementation
     std::vector<KexiTypePtr> paramTypes;
+    // Source parameter names excluding the receiver (KexI v5+).
+    std::vector<std::string> paramNames;
     KexiTypePtr returnType;
     std::string beamFunction; // emitted BEAM function name
 };

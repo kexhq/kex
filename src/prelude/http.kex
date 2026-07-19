@@ -62,6 +62,18 @@ foul module Mock do
     File : FS.FilePath -> String -> Unit
     Directory : FS.FilePath -> Unit
     clear : Unit -> Unit
+
+    foul File(path: FS.FilePath, content: String) -> Unit do
+      return Kex.Intrinsic.FS.file(path, content)
+    end
+
+    foul Directory(path: FS.FilePath) -> Unit do
+      return Kex.Intrinsic.FS.directory(path)
+    end
+
+    foul clear() -> Unit do
+      return Kex.Intrinsic.FS.clear()
+    end
   end
 
   foul module Http do

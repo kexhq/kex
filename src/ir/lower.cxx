@@ -883,16 +883,46 @@ struct Lowering {
         if (resolvedCalls) {
             auto resolved = resolvedCalls->find(&n);
             if (resolved != resolvedCalls->end()) {
-                if (!n.namedArgs.empty())
-                    throw LowerError(
-                        "IR lower: named args to imported function not yet ported");
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
                     args.push_back(atomize(n.receiver, binds));
-                for (const auto& arg : n.args)
-                    args.push_back(atomize(arg, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
+                if (!n.namedArgs.empty()) {
+                    const auto& pnames = resolved->second.paramNames;
+                    auto expected = static_cast<size_t>(
+                        resolved->second.backendArity -
+                        (resolved->second.passesReceiver ? 1 : 0));
+                    if (pnames.size() != expected)
+                        throw LowerError(
+                            "IR lower: named args to imported function with unknown params: " +
+                            resolved->second.backendFunction);
+                    std::vector<ExprPtr> slots(pnames.size());
+                    for (const auto& [name, value] : n.namedArgs) {
+                        auto it = std::find(pnames.begin(), pnames.end(), name);
+                        if (it == pnames.end())
+                            throw LowerError("IR lower: unknown named arg " + name +
+                                             " for " + resolved->second.backendFunction);
+                        slots[static_cast<size_t>(it - pnames.begin())] =
+                            atomize(value, binds);
+                    }
+                    std::vector<ExprPtr> positional;
+                    for (const auto& arg : n.args)
+                        positional.push_back(atomize(arg, binds));
+                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                    size_t next = 0;
+                    for (auto& value : positional) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next++] = std::move(value);
+                    }
+                    for (auto& slot : slots)
+                        if (!slot) slot = lit(LitKind::None, "none");
+                    for (auto& slot : slots) args.push_back(std::move(slot));
+                } else {
+                    for (const auto& arg : n.args)
+                        args.push_back(atomize(arg, binds));
+                    if (n.block) args.push_back(atomize(*n.block, binds));
+                }
                 return wrapLets(
                     binds,
                     callE(resolved->second.backendModule,
@@ -957,25 +987,6 @@ struct Lowering {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Call{mod, n.method, ar, std::move(args), false};
                 return wrapLets(binds, std::move(ex));
-            }
-        }
-        // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
-        // Mock.FS.clear() — the in-memory test filesystem, mirrored by
-        // kex_file's mock registry. File/Directory are sub-module constructors,
-        // not plain functions, so they stay hardcoded here.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) &&
-                path.size() == 2 && path[0] == "Mock" && path[1] == "FS") {
-                const char* fn = n.method == "File" ? "mock_file"
-                               : n.method == "Directory" ? "mock_dir"
-                               : n.method == "clear" ? "mock_clear" : nullptr;
-                if (!fn) throw LowerError("IR lower: Mock.FS." + n.method + " not supported");
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                int ar = static_cast<int>(args.size());
-                return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
             }
         }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
@@ -1305,11 +1316,11 @@ struct Lowering {
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
-        if (!m_inGuard && externalModules && n.namedArgs.empty()
+        if (!m_inGuard && externalModules
             && (!localMethods.count(m) || preferExternalReceivers)) {
             auto found = externalModules->receiverFunctions.find(m);
             if (found != externalModules->receiverFunctions.end()) {
-                int actualArity = static_cast<int>(n.args.size()) + 1 +
+                int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
                 for (const auto& candidate : found->second) {
@@ -1323,10 +1334,41 @@ struct Lowering {
                 if (match) {
                     std::vector<ExprPtr> pargs;
                     pargs.push_back(rv());
-                    for (const auto& a : n.args)
-                        pargs.push_back(atomize_ir(lower(a), rb));
-                    if (n.block)
-                        pargs.push_back(atomize_ir(lower(*n.block), rb));
+                    if (!n.namedArgs.empty()) {
+                        auto expected = static_cast<size_t>(actualArity - 1);
+                        if (match->paramNames.size() != expected)
+                            throw LowerError(
+                                "IR lower: named args to receiver function with unknown params: " + m);
+                        std::vector<ExprPtr> slots(match->paramNames.size());
+                        for (const auto& [name, value] : n.namedArgs) {
+                            auto it = std::find(match->paramNames.begin(),
+                                                match->paramNames.end(), name);
+                            if (it == match->paramNames.end())
+                                throw LowerError("IR lower: unknown named arg " + name +
+                                                 " for receiver function " + m);
+                            slots[static_cast<size_t>(it - match->paramNames.begin())] =
+                                atomize_ir(lower(value), rb);
+                        }
+                        std::vector<ExprPtr> positional;
+                        for (const auto& a : n.args)
+                            positional.push_back(atomize_ir(lower(a), rb));
+                        if (n.block)
+                            positional.push_back(atomize_ir(lower(*n.block), rb));
+                        size_t next = 0;
+                        for (auto& value : positional) {
+                            while (next < slots.size() && slots[next]) next++;
+                            if (next >= slots.size()) break;
+                            slots[next++] = std::move(value);
+                        }
+                        for (auto& slot : slots)
+                            if (!slot) slot = lit(LitKind::None, "none");
+                        for (auto& slot : slots) pargs.push_back(std::move(slot));
+                    } else {
+                        for (const auto& a : n.args)
+                            pargs.push_back(atomize_ir(lower(a), rb));
+                        if (n.block)
+                            pargs.push_back(atomize_ir(lower(*n.block), rb));
+                    }
                     return ret(callE(match->moduleAtom, match->beamFunction,
                                      actualArity, std::move(pargs)));
                 }
@@ -1337,24 +1379,6 @@ struct Lowering {
             auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
         };
 
-        // Non-prelude builtins with a single runtime call (receiver first).
-        // Prelude receiver functions are handled by external dispatch above;
-        // these are methods on types that lack prelude make-block definitions.
-        struct One { const char* method; const char* mod; const char* fn; int nargs; };
-        static const One calls[] = {
-            // handle.feed — the File.open block handle is the path on BEAM.
-            {"feed","kex_file","feed",0},
-            // FileHandle text I/O (mirrors IO).
-            {"getLine","kex_file","handle_getLine",0},
-            {"get","kex_file","handle_get",0},
-            {"printLine","kex_file","handle_printLine",1},
-            {"print","kex_file","handle_print",1},
-            // FileHandle binary/raw I/O.
-            {"read","kex_file","handle_read",0},
-            {"write","kex_file","handle_write",1},
-            // FileHandle lifecycle.
-            {"atEnd?","kex_file","handle_atEnd?",0},
-        };
         // Guard-safe inline lowerings. External dispatch is skipped in
         // guards (!m_inGuard), so prelude receiver functions that appear in
         // when-clauses need BIF-based fallbacks here.
@@ -1392,39 +1416,6 @@ struct Lowering {
             }
             if (m == "in?" && n.args.size() == 1)
                 return ret(callE("lists","member",2,two(rv(), arg0())));
-        }
-        for (const auto& b : calls)
-            if (m == b.method && (int)n.args.size() == b.nargs && !n.block) {
-                std::vector<ExprPtr> a;
-                a.push_back(rv());
-                if (b.nargs == 1) a.push_back(arg0());
-                return ret(callE(b.mod, b.fn, b.nargs + 1, std::move(a)));
-            }
-
-        // pid.send(m) → erlang:send(Pid, {'kex_msg', M, self()}). Every Kex
-        // message is wrapped with the sender pid for `receive |sender|`.
-        if (m == "send" && n.args.size() == 1) {
-            auto tup = std::make_unique<Expr>();
-            tup->node = MakeTuple{[&]{
-                std::vector<ExprPtr> t;
-                t.push_back(lit(LitKind::Atom, "kex_msg"));
-                t.push_back(arg0());
-                t.push_back(callE("erlang", "self", 0, {}));
-                return t;
-            }()};
-            return ret(callE("erlang", "send", 2, two(rv(), std::move(tup))));
-        }
-        if ((m == "link" || m == "unlink") && n.args.empty())
-            return ret(callE("erlang", m, 1, one(rv())));
-        // task.await(timeout: T) / task.await(T) → kex_task:await/2.
-        if (m == "await") {
-            ExprPtr timeout;
-            for (const auto& [k, v] : n.namedArgs)
-                if (k == "timeout") timeout = lower(v);
-            if (!n.args.empty()) timeout = arg0();
-            if (!timeout) timeout = lit(LitKind::Atom, "infinity");
-            return ret(callE("kex_task", "await", 2,
-                two(rv(), atomize_ir(std::move(timeout), rb))));
         }
         // .to(Type) numeric/string conversion (unless a user `to` method).
         if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {

@@ -43,6 +43,9 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     addExport("System", "Kex.System", "exit", "exit", 1);
     addExport("Task", "Kex.Task", "start", "start", 1);
     addExport("Task", "Kex.Task", "awaitAll", "awaitAll", 1);
+    addExport("Mock.FS", "Kex.Mock.FS", "File", "File", 2);
+    addExport("Mock.FS", "Kex.Mock.FS", "Directory", "Directory", 1);
+    addExport("Mock.FS", "Kex.Mock.FS", "clear", "clear", 0);
     return ext;
 }
 
@@ -319,6 +322,31 @@ int main() {
         it("IO.printError dispatches through companion module", []() {
             auto out = emit("main do\n  IO.printError(\"bad\")\nend\n");
             assertTrue(contains(out, "call 'Kex.IO':'printError'"), out);
+        });
+
+        it("Mock.FS dispatches through its companion module", []() {
+            auto out = emit(
+                "main do\n"
+                "  Mock.FS.File(\"a.txt\", \"hello\")\n"
+                "  Mock.FS.Directory(\"cache\")\n"
+                "  Mock.FS.clear()\n"
+                "end\n");
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'File'"), out);
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'Directory'"), out);
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'clear'"), out);
+            assertFalse(contains(out, "call 'kex_file':'mock_"), out);
+        });
+
+        it("FS primitives use the generic intrinsic module", []() {
+            auto out = emit(
+                "main do\n"
+                "  Kex.Intrinsic.FS.file(\"a.txt\", \"hello\")\n"
+                "  Kex.Intrinsic.FS.directory(\"cache\")\n"
+                "  Kex.Intrinsic.FS.clear()\n"
+                "end\n");
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'file'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'directory'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'clear'"), out);
         });
     });
 
@@ -860,6 +888,26 @@ int main() {
             assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
         });
 
+        it("orders named args for the receiver target selected by semantics", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedFunction scaled;
+            scaled.sourceName = "scaled";
+            scaled.backendModule = "Kex.Numbers";
+            scaled.backendFunction = "scaled";
+            scaled.backendArity = 2;
+            scaled.paramNames = {"factor"};
+            scaled.signature = {
+                "scaled",
+                {kex::semantic::Type::integer(), kex::semantic::Type::integer()},
+                kex::semantic::Type::integer()};
+            interfaces.receiverFunctions["scaled"].push_back(std::move(scaled));
+
+            auto out = emitWithResolvedCalls(
+                "main do 7.scaled(factor: 6) end\n", interfaces);
+
+            assertTrue(contains(out, "call 'Kex.Numbers':'scaled'(7, 6)"), out);
+        });
+
         it("lowers an imported namespace target without a receiver argument", []() {
             kex::semantic::ImportedInterfaces interfaces;
             kex::semantic::ImportedModuleInterface response;
@@ -1052,15 +1100,15 @@ int main() {
             assertTrue(contains(out, "after 1000"), out);
         });
 
-        it("pid.send(msg) lowers to erlang:send", []() {
-            auto out = emit(
+        it("pid.send(msg) routes through the source receiver method", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
                 "  pid.send(:ping)\n"
                 "end\n"
-                "main do go(self()) end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'send'"), out);
+                "main do go(self()) end\n",
+                {"send"});
+            assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
         });
 
         it("send(pid, msg) free function emits erlang:send", []() {
@@ -1083,13 +1131,17 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'self'()"), out);
         });
 
-        it("pid.link() lowers to erlang:link", []() {
-            auto out = emit(
+        it("pid link operations route through source receiver methods", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
-                "foul go(pid) do pid.link() end\n"
-                "main do go(self()) end\n"
-            );
-            assertTrue(contains(out, "call 'erlang':'link'"), out);
+                "foul go(pid) do\n"
+                "  pid.link()\n"
+                "  pid.unlink()\n"
+                "end\n"
+                "main do go(self()) end\n",
+                {"link", "unlink"});
+            assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'unlink'"), out);
         });
 
         it("pid.alive?() routes through kex_prelude", []() {
@@ -1112,28 +1164,53 @@ int main() {
             assertTrue(contains(out, "call 'Kex.Task':'start'"), out);
         });
 
-        it("task.await() routes to the task runtime with infinity", []() {
-            auto out = emit(
+        it("emits source-owned Task.await receiver overloads", []() {
+            const std::string source =
+                "# kex: no-check\n"
+                "make Task do\n"
+                "  let await = Kex.Intrinsic.Process.await(this, :infinity)\n"
+                "  let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)\n"
+                "end\n"
+                "main do 0 end\n";
+            auto out = emit(source);
+            assertTrue(contains(out, "'await'/1 ="), out);
+            assertTrue(contains(out, "'await'/2 ="), out);
+        });
+
+        it("task.await() routes through the source-owned receiver", []() {
+            kex::ir::ExternalModules ext;
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 1, {}});
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 2, {"timeout"}});
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let t = Task.start { 42 }\n"
                 "  t.await()\n"
                 "end\n"
-                "main do go() end\n"
-            );
-            assertTrue(contains(out, "call 'kex_task':'await'(T, 'infinity')"), out);
+                "main do go() end\n",
+                ext);
+            assertTrue(contains(out, "call 'kex_prelude':'await'(T)"), out);
+            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
-        it("task.await(timeout: N) routes to the task runtime", []() {
-            auto out = emit(
+        it("task.await(timeout: N) orders the named receiver argument", []() {
+            kex::ir::ExternalModules ext;
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 1, {}});
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 2, {"timeout"}});
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let t = Task.start { 42 }\n"
                 "  t.await(timeout: 5000)\n"
                 "end\n"
-                "main do go() end\n"
-            );
-            assertTrue(contains(out, "call 'kex_task':'await'(T, 5000)"), out);
+                "main do go() end\n",
+                ext);
+            assertTrue(contains(out, "call 'kex_prelude':'await'(T, 5000)"), out);
+            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
         it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {

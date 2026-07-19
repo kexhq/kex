@@ -231,6 +231,11 @@ auto receiverFunctionFromDef(
             ? convertTypeExpr(*fd.clauses[0].returnAnnotation)
             : kexiUnknown();
     }
+    if (!fd.clauses.empty()) {
+        const auto& params = fd.clauses[0].params;
+        for (size_t i = skipParams; i < params.size(); i++)
+            method.paramNames.push_back(params[i].name ? *params[i].name : "");
+    }
     method.beamFunction = fd.name;
     return method;
 }

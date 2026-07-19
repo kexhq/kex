@@ -1,6 +1,6 @@
 module FS do
-  type FileModes = Read | Write | Append | ReadWrite
   type FilePath = String
+  type FileModes = Read | Write | Append | ReadWrite
 
   foul module File do
     open : FilePath -> FileModes -> FileHandle
@@ -189,6 +189,45 @@ foul module Directory do
 
   home : String?
   let home = Kex.Intrinsic.Directory.home
+end
+
+make FileHandle do
+  # Compatibility names matching IO-style handle operations.
+  getLine :> String?
+  let getLine = Kex.Intrinsic.FileHandle.getLine(this)
+
+  get :> String?
+  let get = Kex.Intrinsic.FileHandle.get(this)
+
+  printLine :> String -> Bool
+  let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
+
+  print :> String -> Bool
+  let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
+
+  readLine :> String?
+  let readLine = Kex.Intrinsic.FileHandle.readLine(this)
+
+  writeLine :> String -> Bool
+  let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
+
+  read :> String?
+  let read = Kex.Intrinsic.FileHandle.read(this)
+
+  write :> String -> Bool
+  let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
+
+  eof? :> Bool
+  let eof? = Kex.Intrinsic.FileHandle.eof?(this)
+
+  atEnd? :> Bool
+  let atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
+
+  feed :> Stream<String>?
+  let feed = Kex.Intrinsic.FileHandle.feed(this)
+
+  close :> Unit
+  let close = Kex.Intrinsic.FileHandle.close(this)
 end
 
 # Mock.FS declarations are in http.kex alongside Mock.Http and Mock.IO

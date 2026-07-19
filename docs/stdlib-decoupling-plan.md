@@ -276,12 +276,14 @@ and `Http::mock*` intrinsic identities. Their public `Mock.IO` and `Mock.Http`
 bindings remain intact, while the transitional bare control functions are gone.
 Kex feature probes now use qualified `Kex::featureHas?` and
 `Kex::featureList` intrinsic identities. The walker also classifies native Pid
-values for source method resolution; `send`, `link`, `unlink`, and `alive?` now
-enter the runtime only through qualified `Process::*` identities, with their
-bare native aliases removed. Task `await` retains its isolated bare fallback
-because it yields the scheduler while the walker's evaluator environment is
-active; routing it through a Kex wrapper requires process-local evaluator
-environments first.
+values for source method resolution; `send`, `link`, `unlink`, and `alive?`
+now enter the runtime only through qualified `Process::*` identities, with
+their bare native aliases removed. The `timeout` keyword is accepted as a
+parameter/value name outside receive-clause syntax, so both source-owned Task
+overloads survive parsing and own BEAM dispatch. The walker retains its
+isolated bare `await` fallback: awaiting yields the scheduler while a shared
+evaluator environment frame is active, so routing that backend through the Kex
+wrapper still requires process-local evaluator environments.
 The Enumerable callback adapter is now registered solely as the qualified
 `Fun::applyItem` intrinsic. No public or prelude code depended on its former
 bare registry name.
@@ -457,7 +459,8 @@ Removed inline lowerings:
   `inspect`, `upperCase`, `lowerCase`, `trim`, `at`)
 - Standalone prelude lowerings: `modulo`, `push`, `contains?`, `indexOf`,
   `rest`, `even?`/`odd?` (non-guard), `ok?`/`error?` (non-guard), `alive?`
-  (non-guard), `.or` (match-based)
+  (non-guard), Task `await` (including named `timeout:` calls), `.or`
+  (match-based)
 - Dead safety nets: `count`/`length`/`size`, `first`, `none?`, `get` (1-arg
   and 2-arg), `empty?` (all had `!localMethods` guards, unreachable with
   external dispatch)
@@ -469,12 +472,14 @@ Remaining inline lowerings that cannot be removed yet:
 - Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`,
   `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`) — external dispatch
   is skipped in guards, so BIF-based lowerings are required
-- File handle methods (`feed`, `readLine`, `writeLine`, `eof?`) — not
-  prelude receiver functions
-- Process methods (`send`, `link`/`unlink`, `await`) — not prelude
-  receiver functions
 - `.to(Type)` — not a prelude receiver function; argument is a type name,
   not a value
+
+Compiled receiver interfaces now retain source parameter names (KexI v5),
+excluding the receiver itself. Both registry-driven and semantically resolved
+receiver calls reorder named arguments through that metadata. Consequently
+Task `await` and Pid `send`, `link`, and `unlink` all route through their source
+receiver methods and no longer have ordinary-call lowerings.
 
 HOF performance intrinsics: after removing the inline block/HOF lowerings,
 List HOFs (`map`, `filter`, `each`, `find`, `flatMap`, `reject`, `all?`,
@@ -527,7 +532,8 @@ Namespace modules with prelude implementations:
   with 1- and 2-arity overloads calling `Kex.Intrinsic.Http.*`;
   `kex_intrinsic_http.erl` wraps `kex_http`; interpreter natives win
 
-- **Task**: `start` and `awaitAll` calling `Kex.Intrinsic.Task.*`;
+- **Task**: `start` and `awaitAll` call `Kex.Intrinsic.Task.*`; both receiver
+  `await` overloads are source-owned, including named `timeout:` dispatch;
   `kex_intrinsic_task.erl` wraps `kex_task`; interpreter natives win
 
 - **File/Directory**: top-level `foul module File` and `foul module Directory`
@@ -546,9 +552,16 @@ Mock decoupling status:
   guard
 - **Mock.Http**: fully decoupled — companion `Kex.Mock.Http` generated
   from prelude foul functions; hardcoded dispatch was already removed
-- **Mock.FS**: still hardcoded — `File`/`Directory` are sub-module
-  constructors, not plain functions; `clear` could be migrated alone
-  but the module is kept together
+- **Mock.FS**: fully decoupled — source `File`, `Directory`, and `clear`
+  functions dispatch through `Kex.Intrinsic.FS.*`; the interpreter registers
+  private FS primitives and BEAM uses `kex_intrinsic_fs`, so the dedicated
+  lowerer dispatch block has been removed
+
+The direct `spec/fs.spec.kex` contract now passes all 36 cases on both the
+walker and BEAM. FileHandle's documented `readLine`, `writeLine`, `read`,
+`write`, `eof?`, and `close` methods are source-owned and backed by a qualified
+private intrinsic module. BEAM mock copy/rename, mocked-directory deletion,
+and mocked `File.open` now share the walker's in-memory behavior.
 
 Stream decoupling status:
 - **Interpreter**: fully decoupled — prelude `let Sequence(from, step)` and

@@ -22,6 +22,7 @@
 mock_file(Path, Content) ->
     P = pth(Path),
     put({kex_mock_file, P}, kex_io:to_string_bin(Content)),
+    put({kex_mock_pos, P}, 0),
     put(kex_mock_files, lists:usort([P | plist(kex_mock_files)])),
     ok.
 
@@ -31,6 +32,7 @@ mock_dir(Path) ->
 
 mock_clear() ->
     [erase({kex_mock_file, P}) || P <- plist(kex_mock_files)],
+    [erase({kex_mock_pos, P}) || P <- plist(kex_mock_files)],
     erase(kex_mock_files),
     erase(kex_mock_dirs),
     ok.
@@ -137,15 +139,25 @@ delete(Path) ->
 
 %% File.copy / File.rename → true | false
 copy(From, To) ->
-    case file:copy(pth(From), pth(To)) of
-        {ok, _} -> true;
-        _       -> false
+    case mock_content(From) of
+        undefined ->
+            case file:copy(pth(From), pth(To)) of
+                {ok, _} -> true;
+                _       -> false
+            end;
+        Content -> mock_file(To, Content), true
     end.
 
 rename(From, To) ->
-    case file:rename(pth(From), pth(To)) of
-        ok -> true;
-        _  -> false
+    case mock_content(From) of
+        undefined ->
+            case file:rename(pth(From), pth(To)) of
+                ok -> true;
+                _  -> false
+            end;
+        Content ->
+            mock_file(To, Content),
+            delete(From)
     end.
 
 %% File.feed(path) → [String] | 'None' — lazy-stream placeholder; returns the
@@ -154,20 +166,28 @@ feed(Path) -> lines(Path).
 
 %% File.open(path, mode) -> FileHandle (crashes on failure)
 open(Path, Mode) ->
-    case file:open(pth(Path), mode_flags(Mode)) of
-        {ok, Dev} -> {'FileHandle', Dev, pth(Path)};
-        {error, Reason} ->
-            error({file_open_error, pth(Path), Reason})
+    case mock_content(Path) of
+        undefined ->
+            case file:open(pth(Path), mode_flags(Mode)) of
+                {ok, Dev} -> {'FileHandle', Dev, pth(Path)};
+                {error, Reason} ->
+                    error({file_open_error, pth(Path), Reason})
+            end;
+        _ -> {'MockFileHandle', pth(Path)}
     end.
 
 %% File.open(path, mode, block) -> T? (None if can't open)
 open(Path, Mode, Fun) ->
-    case file:open(pth(Path), mode_flags(Mode)) of
-        {ok, Dev} ->
-            try Fun({'FileHandle', Dev, pth(Path)})
-            after file:close(Dev)
+    case mock_content(Path) of
+        undefined ->
+            case file:open(pth(Path), mode_flags(Mode)) of
+                {ok, Dev} ->
+                    try Fun({'FileHandle', Dev, pth(Path)})
+                    after file:close(Dev)
+                    end;
+                _ -> 'None'
             end;
-        _ -> 'None'
+        _ -> Fun({'MockFileHandle', pth(Path)})
     end.
 
 mode_flags('Read')      -> [read, binary];
@@ -185,6 +205,7 @@ handle_getLine({'FileHandle', Dev, _}) ->
         {ok, Line} -> string:trim(Line, trailing, "\n");
         _          -> 'None'
     end;
+handle_getLine({'MockFileHandle', Path}) -> mock_read_line(Path);
 handle_getLine(_) -> 'None'.
 
 %% get → String? (single character, 'None' at EOF).
@@ -210,6 +231,7 @@ handle_print(_, _) -> false.
 %% read → String? (remaining content).
 handle_read({'FileHandle', Dev, _}) ->
     read_rest(Dev, <<>>);
+handle_read({'MockFileHandle', Path}) -> mock_read_rest(Path);
 handle_read(_) -> 'None'.
 
 read_rest(Dev, Acc) ->
@@ -232,13 +254,46 @@ handle_write(_, _) -> false.
     {ok, End} = file:position(Dev, eof),
     {ok, _} = file:position(Dev, {bof, Pos}),
     Pos >= End;
+'handle_atEnd?'({'MockFileHandle', Path}) ->
+    mock_pos(Path) >= byte_size(mock_content(Path));
 'handle_atEnd?'(_) -> true.
 
 %% close → Unit.
 handle_close({'FileHandle', Dev, _}) ->
     file:close(Dev),
     ok;
+handle_close({'MockFileHandle', _}) -> ok;
 handle_close(_) -> ok.
+
+mock_pos(Path) ->
+    case get({kex_mock_pos, pth(Path)}) of undefined -> 0; Pos -> Pos end.
+
+set_mock_pos(Path, Pos) -> put({kex_mock_pos, pth(Path)}, Pos).
+
+mock_read_line(Path) ->
+    Content = mock_content(Path),
+    Pos = mock_pos(Path),
+    Size = byte_size(Content),
+    case Pos >= Size of
+        true -> 'None';
+        false ->
+            Rest = binary:part(Content, Pos, Size - Pos),
+            case binary:match(Rest, <<"\n">>) of
+                {At, 1} ->
+                    set_mock_pos(Path, Pos + At + 1),
+                    binary:part(Rest, 0, At);
+                nomatch ->
+                    set_mock_pos(Path, Size),
+                    Rest
+            end
+    end.
+
+mock_read_rest(Path) ->
+    Content = mock_content(Path),
+    Pos = mock_pos(Path),
+    Size = byte_size(Content),
+    set_mock_pos(Path, Size),
+    binary:part(Content, Pos, Size - Pos).
 
 %% ── Path utilities ──────────────────────────────────────────────────────
 basename(P)  -> to_bin(filename:basename(pth(P))).
@@ -273,9 +328,16 @@ dir_create(P) ->
     end.
 
 dir_delete(P) ->
-    case file:del_dir(pth(P)) of
-        ok -> true;
-        _  -> false
+    Path = pth(P),
+    case mocked_dir(Path) of
+        true ->
+            put(kex_mock_dirs, lists:delete(Path, plist(kex_mock_dirs))),
+            true;
+        false ->
+            case file:del_dir(Path) of
+                ok -> true;
+                _  -> false
+            end
     end.
 
 dir_delete_all(P) ->

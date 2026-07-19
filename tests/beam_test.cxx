@@ -234,6 +234,27 @@ int main() {
             test::assertEqual(e.paramNames[1], std::string("step"));
         });
 
+        test::it("round-trips receiver param names (KexI v5)", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "Kex.Prelude";
+            KexiMethod method;
+            method.name = "await";
+            method.beamFunction = "await";
+            method.beamArity = 2;
+            method.receiverType = kexiNamed("Task");
+            method.paramTypes = {kexiPrimitive("Integer")};
+            method.paramNames = {"timeout"};
+            method.returnType = kexiUnknown();
+            chunk.typeInterface.methods.push_back(std::move(method));
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+
+            test::assertEqual(decoded.typeInterface.methods.size(), size_t(1));
+            const auto& m = decoded.typeInterface.methods[0];
+            test::assertEqual(m.paramNames.size(), size_t(1));
+            test::assertEqual(m.paramNames[0], std::string("timeout"));
+        });
+
         test::it("round-trips ADTs with constructors", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "Kex.BinaryTree";
@@ -752,6 +773,15 @@ int main() {
             doubled.receiverType = kexiPrimitive("Integer");
             doubled.returnType = kexiPrimitive("Integer");
             chunk.typeInterface.methods.push_back(std::move(doubled));
+            KexiMethod scaled;
+            scaled.name = "scaled";
+            scaled.beamFunction = "scaled";
+            scaled.beamArity = 2;
+            scaled.receiverType = kexiPrimitive("Integer");
+            scaled.paramTypes = {kexiPrimitive("Integer")};
+            scaled.paramNames = {"factor"};
+            scaled.returnType = kexiPrimitive("Integer");
+            chunk.typeInterface.methods.push_back(std::move(scaled));
             KexiExport answer;
             answer.name = "answer";
             answer.beamFunction = "answer";
@@ -797,6 +827,9 @@ int main() {
             test::assertEqual(
                 external.receiverFunctions["doubled"][0].moduleAtom,
                 std::string("kex_fixture"));
+            test::assertEqual(
+                external.receiverFunctions["scaled"][0].paramNames[0],
+                std::string("factor"));
             auto semantic = registry.buildSemanticInterfaces();
             test::assertTrue(semantic.modules.count("Numbers") > 0);
             test::assertTrue(semantic.modules["Numbers"].automaticImport);
@@ -822,6 +855,9 @@ int main() {
             test::assertEqual(
                 kex::semantic::typeToString(receiver.signature.result),
                 std::string("Integer"));
+            test::assertEqual(
+                semantic.receiverFunctions["scaled"][0].paramNames[0],
+                std::string("factor"));
 
             auto competing = package;
             competing.id = "example/competing";

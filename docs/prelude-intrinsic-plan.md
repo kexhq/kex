@@ -153,7 +153,7 @@ the Enumerable default to return a Map (à la Ruby) — it enumerates sorted
 (`maps:from_list`). All green: the IR backend 92/106 zero violations, `ctest` 10/10,
 `make spec` 106/106, walker == the IR backend on all map HOFs.
 
-`reduce` itself is now intrinsic-backed (`Kex.Intrinsic.List.foldl` →
+`reduce` itself is now intrinsic-backed (`Kex.Intrinsic.List.foldLeft` →
 `lists:foldl`), the first discard of an illustrative pure-Kex impl. Every
 Enumerable HOF routes through it, so this is iterative on both backends (the
 old `1 + xs.count`-style recursion was non-tail on the walker → C++ stack risk
@@ -182,9 +182,11 @@ HOFs dispatch by `is_list`/`is_map`. Existing record/variant dispatch
 ### Receiver functions (UFCS methods)
 
 - **List** (`kex_intrinsic_list`): reverse, sort, uniq, flatten, take, drop, zip,
-  push, sum, product, indexOf, at, foldl (backs Enumerable.reduce), min, max,
-  length (backs List.count), join/1,2, map, filter, each, find, flatMap, reject,
-  all?, any?, count (with block), as_list
+  push, sum, product, indexOf, at, foldLeft (backs Enumerable.reduce), min, max
+  (Just/None-wrapped, None-on-empty), length (backs List.count), join/1,2
+  (backs [String|Char].join), map, filter, each, find, flatMap, reject, all?,
+  any?, count (with block), as_list. The former `list_get`, `index_of`, and
+  `list_product` helpers moved here from `kex_io` as well.
 - **Map** (`kex_intrinsic_map`): keys, values, entries, merge, has?, put, delete,
   size (backs Map.count), fromEntries, mapValues, mapKeys
 - **String** (`kex_intrinsic_string`): upperCase, lowerCase, trim, split/1,2,

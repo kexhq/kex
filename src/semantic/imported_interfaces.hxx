@@ -12,6 +12,8 @@ struct ImportedFunction {
     std::string backendFunction;
     std::string backendModule;
     int backendArity = 0;
+    // Source parameter names excluding the receiver for receiver functions.
+    std::vector<std::string> paramNames;
     Signature signature;
 };
 
@@ -29,6 +31,9 @@ struct ResolvedCallTarget {
     std::string backendFunction;
     int backendArity = 0;
     bool passesReceiver = false;
+    // Source parameter names excluding the receiver when passesReceiver is
+    // true; otherwise names all function parameters.
+    std::vector<std::string> paramNames;
 };
 
 struct ImportedTraitConformance {

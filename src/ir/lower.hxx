@@ -28,6 +28,9 @@ struct ExternalModules {
         std::string moduleAtom;
         std::string beamFunction;
         int beamArity = 0;
+        // Source parameter names excluding the receiver. Used to order named
+        // arguments before lowering to the positional BEAM call convention.
+        std::vector<std::string> paramNames;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;
