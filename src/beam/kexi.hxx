@@ -10,7 +10,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 5;
+static constexpr int KEXI_SCHEMA_VERSION = 6;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -175,6 +175,10 @@ struct KexiStructuralMetadata {
 struct KexiChunk {
     int version = KEXI_SCHEMA_VERSION;
     Hash128 interfaceHash{};
+    // Digest of the complete BEAM container with its KexI chunk removed.
+    // Separate from interfaceHash so implementation-only changes do not
+    // masquerade as public contract changes.
+    Hash128 artifactHash{};
     KexiTypeInterface typeInterface;
     KexiStructuralMetadata metadata;
 };
@@ -185,5 +189,8 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t>;
 auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk;
 
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128;
+
+struct BeamFile;
+auto computeArtifactHash(const BeamFile& beam) -> Hash128;
 
 } // namespace kex::beam

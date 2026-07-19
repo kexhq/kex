@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(kex LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -191,8 +193,7 @@ find_path(READLINE_INCLUDE readline/readline.h HINTS /opt/homebrew/opt/readline/
 
 # ── Erlang runtime beams ────────────────────────────────────────────────
 # Pre-compile runtime/src/*.erl into the build tree so that BEAM runs don't
-# pay an erlc spawn (~0.15s per module) on every invocation. The absolute
-# output path is compiled into the development binary via KEX_RUNTIME_BEAM_DIR.
+# pay an erlc spawn (~0.15s per module) on every invocation.
 # Missing artifacts are diagnosed; user operations never compile runtime
 # source implicitly.
 find_program(ERLC_EXECUTABLE erlc)
@@ -221,19 +222,23 @@ endif()
 
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
-target_compile_definitions(kex PRIVATE
-    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
-)
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
 endif()
 
-# ── Shared Kex prelude beam ──────────────────────────────────────────────
-# The stdlib is written in Kex (src/prelude/*.kex) and compiled once into a
-# shared kex_prelude.beam, placed alongside the runtime beams so BEAM runs put
-# it on the -pa path and lazy-load it on first use. Built by the freshly-built
-# kex binary (Kex → Core Erlang → beam), so it depends on `kex` and the runtime
-# intrinsic beams it calls (kex_intrinsic_*).
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    install(TARGETS kex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY src/prelude/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/prelude
+        FILES_MATCHING PATTERN "*.kex")
+endif()
+
+# ── Kex stdlib artifact unit ─────────────────────────────────────────────
+# The stdlib is written in Kex (src/prelude/*.kex) and compiled into a
+# kex_prelude.beam entry plus Kex.* companion modules. They are placed beside
+# the runtime beams so BEAM runs put the unit on the -pa path and lazy-load it
+# on first use. Built by the freshly-built kex binary (Kex → Core Erlang →
+# beam), so it depends on `kex` and the intrinsic beams it calls.
 if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
     file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
@@ -245,6 +250,11 @@ if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         VERBATIM
     )
     add_custom_target(kex_prelude_beam ALL DEPENDS ${KEX_PRELUDE_BEAM})
+    # --build-prelude also emits Kex.* companion modules whose filenames are
+    # discovered only at build time, so install the complete beam directory.
+    install(DIRECTORY "${KEX_RUNTIME_BEAM_DIR}/"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/runtime
+        FILES_MATCHING PATTERN "*.beam")
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # NODERAWFS maps every fs call straight through to Node's real host
@@ -379,6 +389,25 @@ target_include_directories(repl_cli_test PRIVATE tests)
 target_compile_definitions(repl_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(repl_cli_test kex)
 add_test(NAME repl_cli_test COMMAND repl_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_test(NAME installed_layout_test
+    COMMAND ${CMAKE_COMMAND}
+        -DKEX_BUILD_DIR=${CMAKE_BINARY_DIR}
+        -DKEX_INSTALL_TEST_PREFIX=${CMAKE_BINARY_DIR}/test-install
+        -P ${CMAKE_SOURCE_DIR}/tests/installed_layout_test.cmake)
+
+add_test(NAME stdlib_decoupling_audit
+    COMMAND ${CMAKE_COMMAND}
+        -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/tests/stdlib_decoupling_audit.cmake)
+
+if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    add_test(NAME prelude_artifact_test
+        COMMAND ${CMAKE_COMMAND}
+            -DKEX_BINARY=$<TARGET_FILE:kex>
+            -DKEX_ARTIFACT_TEST_DIR=${CMAKE_BINARY_DIR}/test-prelude-artifacts
+            -P ${CMAKE_SOURCE_DIR}/tests/prelude_artifact_test.cmake)
+endif()
 
 # Verifies ANSI coloring is consistent across the REPL, IO.inspect, and error
 # diagnostics by driving the real `kex` binary. colorizeMessage() and the

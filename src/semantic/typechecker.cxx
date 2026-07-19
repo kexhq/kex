@@ -129,8 +129,8 @@ auto TypeChecker::check(const ast::Program& program,
         }
 
         // Collect direct call-dependencies for each FunctionDef.
-        // Only user-defined function names are tracked (stdlib is always
-        // checked before any user function, so it never needs ordering).
+        // Only user-defined function names are tracked; imported package
+        // functions are outside this compilation unit and need no ordering.
         std::function<void(const ast::Expr&, std::set<std::string>&)> collectCalls =
             [&](const ast::Expr& e, std::set<std::string>& out) {
             std::visit([&](const auto& n) {
@@ -2025,7 +2025,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         }
         // Curried arg: `(A) -> (B) -> C` matches `(A, B) -> C`.
         // Haskell-style annotations write multi-arg callbacks as `B -> A -> B`;
-        // the stdlib signatures use multi-param FuncType.
+        // compiled package interfaces use multi-param FuncType.
         if (argFn->params.size() == 1 && paramFn->params.size() > 1) {
             if (auto* inner = std::get_if<FuncType>(&argFn->result->kind)) {
                 if (inner->params.size() == paramFn->params.size() - 1) {
@@ -2232,7 +2232,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // it can leak through as a literal NamedType("This") from a `param :
     // This` annotation inside a `make` block. A call involving it can't be
     // meaningfully checked against any signature here — reporting a
-    // mismatch against the wrong (stdlib or unrelated) candidate would be
+    // mismatch against the wrong (imported or unrelated) candidate would be
     // actively misleading, so bail out rather than guess.
     for (const auto& argType : argTypes) {
         if (auto* named = std::get_if<NamedType>(&argType->kind); named && named->name == "This") {
@@ -2241,7 +2241,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
 
     // Trait-bounded receiver: `item.describe()` where `item: Describable`.
-    // The trait method takes priority over any stdlib overload of the same name.
+    // The trait method takes priority over imported overloads of the same name.
     if (!argTypes.empty()) {
         auto receiver = resolve(argTypes[0]);
         if (auto* ct = std::get_if<ConstrainedType>(&receiver->kind)) {
@@ -2292,7 +2292,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // Name collision guard: a make-block method isn't registered here at
     // all (see checkFunctionDef), so `this.modulo(...)` inside a
     // user-defined `make CustomType do let modulo(...) ... end` would
-    // otherwise get checked against the *stdlib* `modulo`'s signature
+    // otherwise get checked against an imported `modulo` signature
     // purely because the names match — a different, unrelated function.
     // Applies to any receiver type (NamedType or primitive) — if no
     // overload's first param can accept the receiver, this is a

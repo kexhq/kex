@@ -203,6 +203,13 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
         return errors;
     }
 
+    if (entryChunk.version >= 6 &&
+        computeArtifactHash(bf) != entryChunk.artifactHash) {
+        errors.push_back({
+            "entry implementation digest mismatch — rebuild the compiled unit"});
+        return errors;
+    }
+
     if (entryChunk.metadata.role == KexiModuleRole::Companion) {
         errors.push_back({
             "this is a companion module of '" +
@@ -258,6 +265,14 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             errors.push_back({
                 "companion " + comp.beamAtom +
                 " has corrupt KexI chunk: " + e.what()});
+            return errors;
+        }
+
+        if (compChunk.version >= 6 &&
+            computeArtifactHash(compBf) != compChunk.artifactHash) {
+            errors.push_back({
+                "companion '" + comp.beamAtom +
+                "' implementation digest mismatch — rebuild the compiled unit"});
             return errors;
         }
 

@@ -223,7 +223,7 @@ auto typeToString(const TypePtr& type) -> std::string {
 }
 
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
-// PrimitiveType{Unit} (from Type::unit() in stdlib signatures) represent
+// PrimitiveType{Unit} (from Type::unit() in compiled signatures) represent
 // the same concept. Normalize both to Unit before comparing.
 static auto isUnit(const TypePtr& t) -> bool {
     if (!t) return false;

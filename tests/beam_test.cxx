@@ -402,6 +402,20 @@ int main() {
             test::assertTrue(h1 != h2, "hashes should differ for different content");
         });
 
+        test::it("keeps implementation digest separate from interface hash", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "kex_test";
+            auto interfaceHash = computeInterfaceHash(chunk);
+            chunk.artifactHash = {1, 2, 3, 4, 5, 6, 7, 8,
+                                  9, 10, 11, 12, 13, 14, 15, 16};
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            test::assertTrue(decoded.artifactHash == chunk.artifactHash,
+                             "artifact digest should round-trip");
+            test::assertTrue(computeInterfaceHash(chunk) == interfaceHash,
+                             "artifact digest must not affect interface hash");
+        });
+
         test::it("rejects unsupported schema version", []() {
             KexiChunk chunk;
             chunk.version = 999;
@@ -796,6 +810,8 @@ int main() {
             chunk.typeInterface.exports.push_back(std::move(narrow));
 
             BeamFile beam;
+            beam.setChunk("Code", {1, 2, 3, 4});
+            chunk.artifactHash = computeArtifactHash(beam);
             beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
             writeBeamFile(beam, beamPath);
 
@@ -892,6 +908,8 @@ int main() {
             chunk.typeInterface.methods.push_back(std::move(identity));
 
             BeamFile beam;
+            beam.setChunk("Code", {1, 2, 3, 4});
+            chunk.artifactHash = computeArtifactHash(beam);
             beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
             writeBeamFile(beam, beamPath);
 
@@ -901,6 +919,43 @@ int main() {
             test::assertEqual(
                 registry.findMethodsForReceiver("identity", "Integer").size(),
                 size_t(1));
+
+            fs::remove_all(root);
+        });
+
+        test::it("rejects an implementation change with an unchanged interface", []() {
+            namespace fs = std::filesystem;
+            auto root = fs::temp_directory_path() / "kex-artifact-hash-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            auto beamPath = (root / "fixture.kx.beam").string();
+
+            KexiChunk chunk;
+            chunk.metadata.unitId = "fixture-artifact";
+            chunk.metadata.sourceModule = "Fixture";
+            chunk.metadata.moduleAtom = "kex_fixture";
+            BeamFile beam;
+            beam.setChunk("Code", {1, 2, 3, 4});
+            chunk.artifactHash = computeArtifactHash(beam);
+            const auto interfaceHash = computeInterfaceHash(chunk);
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
+            writeBeamFile(beam, beamPath);
+
+            auto changed = readBeamFile(beamPath);
+            changed.findChunk("Code")->data[0] = 9;
+            writeBeamFile(changed, beamPath);
+
+            KexiRegistry registry;
+            auto errors = registry.loadUnit(beamPath);
+            test::assertEqual(errors.size(), size_t(1));
+            test::assertTrue(
+                errors[0].message.find("implementation digest mismatch") !=
+                    std::string::npos,
+                errors[0].message);
+            auto embedded = deserializeKexi(
+                changed.findChunk(KEXI_CHUNK_ID)->data);
+            test::assertTrue(embedded.interfaceHash == interfaceHash,
+                             "implementation change must preserve interface hash");
 
             fs::remove_all(root);
         });

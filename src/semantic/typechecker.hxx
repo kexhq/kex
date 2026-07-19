@@ -119,7 +119,7 @@ private:
 
     // Call checking (FunctionCall and MethodCall, the latter desugared to
     // the same path with the receiver prepended as the first argument).
-    // Resolves `name` against the stdlib table, then the user-defined
+    // Resolves `name` against imported package interfaces and the user-defined
     // top-level/module-level function table (m_userSignatures) — not
     // make-block methods, whose implicit `this` receiver isn't a regular
     // param, so the "receiver is argument 0" UFCS desugaring used here

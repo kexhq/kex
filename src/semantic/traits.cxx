@@ -64,7 +64,7 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
 
     // A ConstrainedType("T", "Integer") satisfies "Integer" and (by extension) "Number";
     // likewise "Float" satisfies "Number". This comes up when a constrained hint type
-    // (e.g., from a stdlib sig's integerLike() placeholder) is passed as an arg against
+    // (e.g., from an imported signature's Integer constraint) is passed as an arg against
     // another constrained param — both are constrained the same way and are compatible.
     if (auto* ct = std::get_if<ConstrainedType>(&type->kind)) {
         if (ct->traitName == traitName) return true;

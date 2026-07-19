@@ -7,8 +7,10 @@
 // instead of "Ok(x)") shipped unnoticed. This suite pipes input into the
 // real binary and asserts on its real stdout.
 #include "test.hxx"
+#include "../src/common/prelude_loader.hxx"
 #include <array>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <unistd.h>
 
@@ -29,6 +31,19 @@ auto stripAnsi(const std::string& s) -> std::string {
         }
     }
     return out;
+}
+
+auto runCommand(const std::string& command) -> std::string {
+    std::string result;
+    FILE* pipe = popen(command.c_str(), "r");
+    if (pipe) {
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+            result.append(buf.data(), n);
+        pclose(pipe);
+    }
+    return stripAnsi(result);
 }
 
 auto runRepl(const std::string& input) -> std::string {
@@ -106,6 +121,44 @@ auto runBeamFile(const std::string& source, const std::string& argument) -> std:
 } // namespace
 
 int main() {
+    describe("CLI — installed stdlib discovery", []() {
+        it("loads interpreter and BEAM stdlib from executable-relative share directories", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_installed_cli_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto binDir = root / "bin";
+            const auto preludeDir = root / "share/kex/prelude";
+            const auto runtimeDir = root / "share/kex/runtime";
+            fs::create_directories(binDir);
+            fs::create_directories(preludeDir);
+            fs::create_directories(runtimeDir);
+            fs::copy_file(KEX_BINARY_PATH, binDir / "kex");
+            for (const auto& source : kex::preludeSourceFiles())
+                fs::copy_file(source, preludeDir / fs::path(source).filename());
+            const auto buildRuntime = fs::path(KEX_BINARY_PATH).parent_path() / "runtime/beam";
+            for (const auto& artifact : fs::directory_iterator(buildRuntime))
+                if (artifact.path().extension() == ".beam")
+                    fs::copy_file(artifact.path(), runtimeDir / artifact.path().filename());
+
+            const auto program = root / "installed.kex";
+            std::ofstream(program)
+                << "main do\n"
+                   "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
+                   "end\n";
+
+            const auto interpreterOutput = runCommand(
+                "env -u KEX_STDLIB_DIR " + (binDir / "kex").string() +
+                " --no-check --no-colors " + program.string() + " 2>&1");
+            const auto beamOutput = runCommand(
+                "env -u KEX_STDLIB_DIR -u KEX_RUNTIME_DIR " +
+                (binDir / "kex").string() + " -R --no-check --no-colors " +
+                program.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(interpreterOutput, std::string("[1, 2]\n"));
+            assertEqual(beamOutput, std::string("[1, 2]\n"));
+        });
+    });
+
     describe("REPL CLI — Basic Output", []() {
         it("prints value and type for an expression", []() {
             auto out = runRepl("1 + 2\n");

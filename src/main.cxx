@@ -1113,18 +1113,22 @@ auto printAst(const kex::ast::Program &program) -> void {
   }
 }
 
-// Absolute path to cmake-pre-built Kex runtime beams (kex_io.beam, ...),
-// or empty if none is available. Using these avoids an erlc spawn (~0.15s
-// per module) on every BEAM invocation.
+// Runtime-configured or executable-relative Kex runtime beams. Using these
+// avoids an erlc spawn (~0.15s per module) on every BEAM invocation.
 auto prebuiltRuntimeBeamDir() -> std::string {
-#ifdef KEX_RUNTIME_BEAM_DIR
   namespace fs = std::filesystem;
-  std::error_code ec;
-  if (fs::exists(fs::path{KEX_RUNTIME_BEAM_DIR} / "kex_io.beam", ec))
-    return KEX_RUNTIME_BEAM_DIR;
-#else
-  (void)0;
-#endif
+  std::vector<fs::path> roots;
+  if (const char *configured = std::getenv("KEX_RUNTIME_DIR");
+      configured && *configured)
+    roots.emplace_back(configured);
+  if (const auto executableDir = kex::executableDirectory(); !executableDir.empty()) {
+    roots.push_back((executableDir / "../share/kex/runtime").lexically_normal());
+    roots.push_back((executableDir / "runtime/beam").lexically_normal());
+  }
+  for (const auto &root : roots) {
+    std::error_code ec;
+    if (fs::exists(root / "kex_io.beam", ec)) return root.string();
+  }
   return {};
 }
 
@@ -1207,6 +1211,31 @@ int main(int argc, char *argv[]) {
       if (!compilePreludeCore(dir, &modules))
         return 1;
       try {
+        // The prelude build directory is also the installed-runtime staging
+        // directory. Remove companions from older builds so deleting or
+        // renaming a Kex module cannot leave a stale beam that gets installed
+        // merely because it still matches `*.beam`.
+        std::unordered_set<std::string> currentCompanions;
+        for (size_t i = 1; i < modules.size(); i++)
+          currentCompanions.insert(modules[i].emitted.moduleName);
+        std::error_code cleanupError;
+        for (const auto &entry : std::filesystem::directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied,
+                 cleanupError)) {
+          if (cleanupError) break;
+          const auto &path = entry.path();
+          const auto stem = path.stem().string();
+          const auto extension = path.extension().string();
+          if (stem.rfind("Kex.", 0) == 0 &&
+              (extension == ".beam" || extension == ".core") &&
+              !currentCompanions.contains(stem))
+            std::filesystem::remove(path, cleanupError);
+          if (cleanupError) break;
+        }
+        if (cleanupError)
+          throw std::runtime_error("could not remove stale stdlib artifact: " +
+                                   cleanupError.message());
+
         for (const auto &module : modules) {
           std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir +
                             " " + dir + "/" + module.emitted.moduleName +
@@ -1227,6 +1256,7 @@ int main(int argc, char *argv[]) {
         for (auto &module : modules) {
           auto beamPath = dir + "/" + module.emitted.moduleName + ".beam";
           auto beam = kex::beam::readBeamFile(beamPath);
+          module.interface.artifactHash = kex::beam::computeArtifactHash(beam);
           beam.setChunk(kex::beam::KEXI_CHUNK_ID,
                         kex::beam::serializeKexi(module.interface));
           kex::beam::writeBeamFile(beam, beamPath);
@@ -2645,8 +2675,9 @@ int main(int argc, char *argv[]) {
               }
             }
             chunk.interfaceHash = kex::beam::computeInterfaceHash(chunk);
-            auto payload = kex::beam::serializeKexi(chunk);
             auto bf = kex::beam::readBeamFile(beamPath);
+            chunk.artifactHash = kex::beam::computeArtifactHash(bf);
+            auto payload = kex::beam::serializeKexi(chunk);
             bf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
             kex::beam::writeBeamFile(bf, beamPath);
           } catch (const std::exception& e) {

@@ -1,4 +1,5 @@
 #include "kexi.hxx"
+#include "beam_file.hxx"
 #include <cstring>
 #ifdef __APPLE__
 #include <CommonCrypto/CommonDigest.h>
@@ -530,6 +531,18 @@ auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128 {
     return h;
 }
 
+auto computeArtifactHash(const BeamFile& beam) -> Hash128 {
+    auto implementation = beam;
+    implementation.removeChunk(KEXI_CHUNK_ID);
+    auto bytes = writeBeamFile(implementation);
+
+    uint8_t digest[32];
+    sha256(bytes.data(), bytes.size(), digest);
+    Hash128 hash{};
+    for (int i = 0; i < 16; i++) hash[i] = digest[i];
+    return hash;
+}
+
 auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
     auto hashless = chunkToTermWithoutHash(chunk);
     auto bytes = encodeEtf(hashless);
@@ -539,11 +552,13 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
     Hash128 hash{};
     for (int i = 0; i < 16; i++) hash[i] = digest[i];
 
-    // Now build the full term with the hash included.
+    // Now build the full term with the hashes included.
     auto term = chunkToTermWithoutHash(chunk);
-    // Wrap: {kexi, Version, Hash, TypeInterface, Structural}
+    // v6+: {kexi, Version, InterfaceHash, ArtifactHash,
+    //        TypeInterface, Structural}. Older schemas omit ArtifactHash.
     auto& inner = std::get<Term::Tuple>(term->value).elements;
-    // Insert hash after version (position 2)
+    if (chunk.version >= 6)
+        inner.insert(inner.begin() + 2, hashToTerm(chunk.artifactHash));
     inner.insert(inner.begin() + 2, hashToTerm(hash));
 
     return encodeEtf(term);
@@ -565,8 +580,16 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
 
     chunk.interfaceHash = termToHash(top[2]);
 
-    // Type interface (top[3])
-    auto ti = top[3];
+    size_t payloadIndex = 3;
+    if (chunk.version >= 6) {
+        if (top.size() < 6)
+            throw EtfError("invalid KexI v6 chunk: missing artifact hash");
+        chunk.artifactHash = termToHash(top[3]);
+        payloadIndex = 4;
+    }
+
+    // Type interface
+    auto ti = top[payloadIndex];
     if (auto exports = ti->mapGet("exports"))
         for (const auto& e : exports->asList())
             chunk.typeInterface.exports.push_back(termToExport(e));
@@ -580,8 +603,8 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
         for (const auto& m : methods->asList())
             chunk.typeInterface.methods.push_back(termToMethod(m));
 
-    // Structural metadata (top[4])
-    auto sm = top[4];
+    // Structural metadata
+    auto sm = top[payloadIndex + 1];
     if (auto m = sm->mapGet("module")) chunk.metadata.moduleAtom = m->asBinaryStr();
     if (auto u = sm->mapGet("unit_id")) chunk.metadata.unitId = u->asBinaryStr();
     if (auto s = sm->mapGet("source_module"))

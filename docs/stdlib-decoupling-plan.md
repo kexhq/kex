@@ -148,7 +148,11 @@ The stdlib build must not require a previously compiled copy of itself:
    resolver and caches its parsed/analyzed form for that process.
 
 An interface hash detects dependency-contract changes, but not changed
-function bodies. A cached stdlib BEAM is reusable only when all of these match:
+function bodies. KexI v6 therefore also carries an artifact digest over the
+complete BEAM container with its KexI chunk removed. Unit loading validates
+that digest independently, so changed executable code is rejected without
+changing the public interface hash. A cached stdlib BEAM is reusable only when
+all of these match:
 
 - full digest of the authoritative stdlib sources and package metadata;
 - compiler artifact-format version;
@@ -427,7 +431,14 @@ compiled development fallback and embedded WASM path. Native discovery now
 also checks executable-relative installed (`share/kex/prelude`) and development
 (`src/prelude`) layouts. With those paths validated, the absolute checkout
 `KEX_PRELUDE_DIR` definition has been removed from `kex_lib`; no source-tree
-path is compiled into the runtime.
+path is compiled into the runtime. CMake and Make installs now populate the
+matching `share/kex/prelude` directory alongside the installed binary.
+BEAM runtime discovery follows the same model through `KEX_RUNTIME_DIR`, the
+build-tree `runtime/beam`, or installed `share/kex/runtime`; runtime and prelude
+BEAM artifacts are installed there, and their absolute build path is no longer
+compiled into the CLI. Prelude rebuilds also remove obsolete `Kex.*` companion
+artifacts before installation can copy them, with an isolated artifact-build
+regression covering deleted or renamed stdlib modules.
 
 The prelude source dependency graph has been verified as a DAG with no
 cycles, enabling tiered compilation:
@@ -790,6 +801,10 @@ pure calls.
 - Change only a stdlib function body and prove that the cached BEAM is rejected
   even though its KexI interface hash is unchanged.
 - Build and run an installed layout outside the source checkout.
+  Completed for both backends: the regression suite runs the real CMake install
+  manifest into a temporary prefix, clears the runtime overrides, and exercises
+  a source-owned Stream API through the installed binary in walker and BEAM
+  modes.
 - Enforce dependency layering so compiler targets cannot include stdlib source
   files or native public builtin registries through anything except the generic
   package and intrinsic interfaces.
@@ -798,6 +813,8 @@ pure calls.
   source-owned receiver methods to retain their normal static-call form.
 - Maintain an allowlisted source audit for temporary guard compatibility names;
   the list must shrink and reach zero when the guard workstream completes.
+  Completed: `stdlib_decoupling_audit` extracts the explicitly marked guard
+  lowering block and enforces its exact, shrinking public-name allowlist.
 
 ## Completion criteria
 
