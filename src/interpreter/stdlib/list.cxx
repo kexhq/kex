@@ -230,13 +230,13 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::none();
     });
 
-    reg("find", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("find", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::none();
         for (const auto& elem : elems) {
-            if (fn->native({elem})->isTrue()) return elem;
+            if (fn->native({elem})->isTrue()) return Value::just(elem);
         }
         return Value::none();
     });
@@ -650,7 +650,7 @@ auto Evaluator::registerListBuiltins() -> void {
         return integerResult(total);
     });
 
-    reg("flatMap", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("flatMap", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -660,6 +660,9 @@ auto Evaluator::registerListBuiltins() -> void {
             auto mapped = fn->native({elem});
             if (auto* inner = std::get_if<ListValue>(&mapped->data))
                 for (const auto& e : inner->elements) result.push_back(e);
+            else if (auto* str = std::get_if<StringValue>(&mapped->data))
+                for (unsigned char c : str->value)
+                    result.push_back(Value::character(static_cast<char>(c)));
             else
                 result.push_back(mapped);
         }
@@ -695,21 +698,20 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::string(args[0]->inspect());
     });
 
-    // Private intrinsic identities are category-qualified. Keep the bare
-    // registrations above as a compatibility bridge for unchecked legacy
-    // calls, but snapshot the List implementations before later domains
-    // (notably Stream and Map) replace overlapping bare names.
+    // Private intrinsic identities are category-qualified. Snapshot the List
+    // implementations before later domains (notably Stream and Map) replace
+    // overlapping transitional bare names.
     for (const char* name : {
              "all?", "any?", "count", "drop", "each", "filter", "first",
-             "flatten", "foldLeft", "indexOf", "join", "last", "length",
-             "map", "max", "maxBy", "member", "min", "minBy", "partition",
-             "product", "push", "reject", "sort", "sum", "take", "uniq",
-             "zip"}) {
+             "find", "flatMap", "flatten", "foldLeft", "indexOf", "join",
+             "last", "length", "map", "max", "maxBy", "member", "min",
+             "minBy", "partition", "product", "push", "reject", "sort",
+             "sum", "take", "uniq", "zip"}) {
         if (auto value = m_globalEnv->get(name))
-            m_globalEnv->define("List::" + std::string(name), value);
+            defineIntrinsic("List::" + std::string(name), value);
     }
     if (auto value = m_globalEnv->get("items"))
-        m_globalEnv->define("Range::items", value);
+        defineIntrinsic("Range::items", value);
 }
 
 } // namespace kex::interpreter

@@ -34,9 +34,7 @@ static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
 
 auto Evaluator::registerFileBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        definePublicIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("File", Value::module("File"));
@@ -473,9 +471,7 @@ auto Evaluator::registerFileBuiltins() -> void {
 
 auto Evaluator::registerDirectoryBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        definePublicIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("Directory", Value::module("Directory"));

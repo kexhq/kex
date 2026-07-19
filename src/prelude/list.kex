@@ -66,6 +66,10 @@ make [X], implement: Enumerable do
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
 
+  # Compatibility spelling shared with String.
+  length :> Integer
+  let length = Kex.Intrinsic.List.length(this)
+
   # count(pred) is provided by the Enumerable trait.
   count :> (X -> Bool) -> Integer
 
@@ -167,7 +171,8 @@ make [X], implement: Enumerable do
   let map(f) = Kex.Intrinsic.List.map(this, f)
   let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
   let each(f) = Kex.Intrinsic.List.each(this, f)
-  # find/flatMap — native builtins handle Optional wrapping / string flattening
+  let find(pred) = Kex.Intrinsic.List.find(this, pred)
+  let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
   let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
   let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
   let any?(pred) = Kex.Intrinsic.List.any?(this, pred)

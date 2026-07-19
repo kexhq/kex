@@ -117,6 +117,10 @@ private:
     // Built-in functions — orchestrator defined in evaluator.cxx, domains
     // implemented in src/interpreter/stdlib/*.cxx (same access as before,
     // just split out of the core evaluator file by domain).
+    auto defineIntrinsic(const std::string& name, NativeFunc fn) -> void;
+    auto defineIntrinsic(const std::string& name, const ValuePtr& value) -> void;
+    auto definePublicIntrinsic(const std::string& name, NativeFunc fn) -> void;
+    auto definePublicIntrinsic(const std::string& name, const ValuePtr& value) -> void;
     auto registerBuiltins() -> void;
     auto registerAdtConstructors() -> void;
     auto registerIOBuiltins() -> void;

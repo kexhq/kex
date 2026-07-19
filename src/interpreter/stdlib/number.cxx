@@ -215,6 +215,23 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (...) {}
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
+
+    for (const char* name : {
+             "Float::parse", "Float::parsePrefix", "Integer::parse",
+             "Integer::parsePrefix", "Number::parse"}) {
+        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
+    }
+
+    // Private numeric receiver identities. Public methods are declared in
+    // number.kex; these entries exist solely for Kex.Intrinsic dispatch.
+    for (const char* name : {"modulo", "times"}) {
+        if (auto value = m_globalEnv->get(name))
+            defineIntrinsic("Integer::" + std::string(name), value);
+    }
+    for (const char* name : {"abs", "ceil", "floor", "round", "sqrt"}) {
+        if (auto value = m_globalEnv->get(name))
+            defineIntrinsic("Number::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

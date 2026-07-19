@@ -190,11 +190,18 @@ auto Evaluator::registerStringBuiltins() -> void {
              "at", "chars", "contains?", "endsWith?", "lowerCase", "split",
              "startsWith?", "trim", "upperCase"}) {
         if (auto value = m_globalEnv->get(name))
-            m_globalEnv->define("String::" + std::string(name), value);
+            defineIntrinsic("String::" + std::string(name), value);
     }
     for (const char* name : {"at", "reverse"}) {
         if (auto value = m_globalEnv->get(name))
-            m_globalEnv->define("List::" + std::string(name), value);
+            defineIntrinsic("List::" + std::string(name), value);
+    }
+    for (const auto& [intrinsic, native] : {
+             std::pair{"is_digit", "digit?"},
+             std::pair{"is_alpha", "alpha?"},
+             std::pair{"is_space", "space?"}}) {
+        if (auto value = m_globalEnv->get(native))
+            defineIntrinsic("Char::" + std::string(intrinsic), value);
     }
 }
 

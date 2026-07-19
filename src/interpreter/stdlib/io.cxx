@@ -131,6 +131,15 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::string(std::string(1, static_cast<char>(c)));
     });
 
+    // These namespace functions intentionally have both a public native
+    // binding and a Kex.Intrinsic identity.
+    for (const char* name : {
+             "IO::get", "IO::getLine", "IO::inspect", "IO::print",
+             "IO::printError", "IO::printLine", "IO::put", "IO::putLine",
+             "IO::warn", "IO::warning", "System::exit"}) {
+        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
+    }
+
     // ── Mock.IO ──────────────────────────────────────────────────────
     // When active, IO.print*/printError/warn write to an in-memory
     // buffer instead of stdout/stderr, and IO.getLine/get consume
@@ -190,11 +199,11 @@ auto Evaluator::registerIOBuiltins() -> void {
     reg("Mock::IO::output", mockOutput);
     reg("Mock::IO::clear", mockClear);
     reg("Mock::IO::stop", mockStop);
-    reg("ioMockStart", std::move(mockStart));
-    reg("ioMockInput", std::move(mockInput));
-    reg("ioMockOutput", std::move(mockOutput));
-    reg("ioMockClear", std::move(mockClear));
-    reg("ioMockStop", std::move(mockStop));
+    defineIntrinsic("IO::ioMockStart", std::move(mockStart));
+    defineIntrinsic("IO::ioMockInput", std::move(mockInput));
+    defineIntrinsic("IO::ioMockOutput", std::move(mockOutput));
+    defineIntrinsic("IO::ioMockClear", std::move(mockClear));
+    defineIntrinsic("IO::ioMockStop", std::move(mockStop));
 }
 
 } // namespace kex::interpreter

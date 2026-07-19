@@ -237,6 +237,16 @@ auto Evaluator::registerMapBuiltins() -> void {
         result->data = MapValue{std::move(entries)};
         return result;
     });
+
+    // Private Map primitive identities. Prelude wrappers own the public API;
+    // the category-qualified entries keep intrinsic dispatch independent of
+    // overlapping bare names such as get/count/delete.
+    for (const char* name : {
+             "count", "delete", "entries", "fromEntries", "get",
+             "getWithDefault", "has?", "keys", "merge", "put", "values"}) {
+        if (auto value = m_globalEnv->get(name))
+            defineIntrinsic("Map::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

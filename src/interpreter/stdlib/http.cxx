@@ -39,6 +39,12 @@ auto Evaluator::registerHttpBuiltins() -> void {
     reg("Http::head", httpRequest);
     reg("Http::options", httpRequest);
 
+    for (const char* name : {
+             "Http::get", "Http::post", "Http::put", "Http::patch",
+             "Http::delete", "Http::head", "Http::options"}) {
+        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
+    }
+
     if (!m_globalEnv->has("Mock"))
         m_globalEnv->define("Mock", Value::module("Mock"));
 
@@ -80,14 +86,14 @@ auto Evaluator::registerHttpBuiltins() -> void {
         return Value::unit();
     };
 
-    // Public compatibility bindings remain while the Kex prelude owns the
-    // public functions. The private names are what Kex.Intrinsic.Http calls.
+    // Public bindings back Mock.Http; category-qualified private identities
+    // back Kex.Intrinsic.Http without exposing bare mock-control functions.
     reg("Mock.Http::start", mockStart);
     reg("Mock.Http::respond", mockRespond);
     reg("Mock.Http::stop", mockStop);
-    reg("mockStart", std::move(mockStart));
-    reg("mockRespond", std::move(mockRespond));
-    reg("mockStop", std::move(mockStop));
+    defineIntrinsic("Http::mockStart", std::move(mockStart));
+    defineIntrinsic("Http::mockRespond", std::move(mockRespond));
+    defineIntrinsic("Http::mockStop", std::move(mockStop));
 }
 
 } // namespace kex::interpreter

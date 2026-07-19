@@ -107,6 +107,13 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::error(tup->elements[1]);
     });
 
+    // Private intrinsic identities used by the Kex-owned Pid and Task
+    // receiver methods. The public surface is registered from process.kex.
+    for (const char* name : {"send", "link", "unlink", "alive?", "await"}) {
+        if (auto value = m_globalEnv->get(name))
+            defineIntrinsic("Process::" + std::string(name), value);
+    }
+
     // Task.awaitAll([tasks]) — awaits each task in order, no timeout
     // (matches Task::start's counterpart having no bulk-timeout variant in
     // docs/concurrency.md; call .await(timeout: N) per-task first via
@@ -147,6 +154,10 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
         return Value::list(std::move(results));
     });
+
+    for (const char* name : {"Process::self", "Task::start", "Task::awaitAll"}) {
+        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
+    }
 
     m_globalEnv->define("Supervisor", Value::module("Supervisor"));
 

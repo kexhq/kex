@@ -24,9 +24,7 @@ auto toDouble(const ValuePtr& val) -> double {
 // Kex has no exception type to raise a Math::DomainError equivalent into.
 auto Evaluator::registerMathBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        definePublicIntrinsic(name, std::move(fn));
     };
 
     // Namespace placeholder so `Math.sqrt(...)` resolves via the
@@ -100,68 +98,13 @@ auto Evaluator::registerMathBuiltins() -> void {
         return Value::floating(std::pow(toDouble(args[0]), toDouble(args[1])));
     });
 
-    // Bare-name aliases for the Kex.Intrinsic.Math.* dispatch path.
-    // The intrinsic dispatcher looks up node.method (e.g. "sin") without
-    // the module prefix, so these must exist alongside the "Math::*" forms.
-    reg("PI", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kPi); });
-    reg("E", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kE); });
-    reg("sin", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::sin(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("cos", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::cos(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("tan", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::tan(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("asin", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::asin(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("acos", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::acos(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("atan", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::atan(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("atan2", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
-        return Value::floating(std::atan2(toDouble(args[0]), toDouble(args[1])));
-    });
-    reg("sinh", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::sinh(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("cosh", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::cosh(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("tanh", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::tanh(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("exp", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::exp(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("log", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::floating(0.0);
-        auto x = std::log(toDouble(args[0]));
-        if (args.size() < 2) return Value::floating(x);
-        return Value::floating(x / std::log(toDouble(args[1])));
-    });
-    reg("log2", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::log2(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("log10", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::log10(args.empty() ? 0.0 : toDouble(args[0])));
-    });
-    reg("hypot", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
-        return Value::floating(std::hypot(toDouble(args[0]), toDouble(args[1])));
-    });
-    reg("pow", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::floating(0.0);
-        return Value::floating(std::pow(toDouble(args[0]), toDouble(args[1])));
-    });
-    reg("cbrt", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return Value::floating(std::cbrt(args.empty() ? 0.0 : toDouble(args[0])));
-    });
+    // Math shares these implementations with Number receiver methods, but
+    // publishes its own private intrinsic identities. Do not reintroduce the
+    // old bare-name bridge: Kex.Intrinsic.Math dispatch is category-qualified.
+    for (const char* name : {"abs", "ceil", "floor"}) {
+        if (auto value = m_intrinsicEnv->get("Number::" + std::string(name)))
+            definePublicIntrinsic("Math::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

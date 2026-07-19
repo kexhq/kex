@@ -19,10 +19,6 @@ Evaluator::Evaluator() {
     // spawn/receive use.
     m_scheduler = std::make_unique<Scheduler>(*this);
     registerBuiltins();
-    // Clone all builtins into m_intrinsicEnv so the Kex.Intrinsic.*
-    // dispatch path can look them up without hitting prelude wrappers
-    // (which may later shadow them in m_globalEnv).
-    m_intrinsicEnv->importAll(*m_globalEnv);
     // The Kex-written stdlib shadows the native builtins on every Evaluator, so
     // there is a single source of truth for stdlib behaviour regardless of entry
     // point (CLI, REPL, tests). No-op when KEX_PRELUDE_DIR is unset/unreadable.
@@ -34,6 +30,32 @@ Evaluator::Evaluator() {
     // factories so they win and typeName() renders correctly
     // (e.g. "Result<String, ?>" not bare "Result").
     registerAdtConstructors();
+}
+
+auto Evaluator::defineIntrinsic(const std::string& name, NativeFunc fn) -> void {
+    auto value = std::make_shared<Value>();
+    value->data = FunctionValue{name, std::move(fn)};
+    m_intrinsicEnv->define(name, std::move(value));
+}
+
+auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) -> void {
+    auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
+    if (!function || !function->native) return;
+    defineIntrinsic(name, function->native);
+}
+
+auto Evaluator::definePublicIntrinsic(const std::string& name, NativeFunc fn) -> void {
+    defineIntrinsic(name, fn);
+    auto value = std::make_shared<Value>();
+    value->data = FunctionValue{name, std::move(fn)};
+    m_globalEnv->define(name, std::move(value));
+}
+
+auto Evaluator::definePublicIntrinsic(const std::string& name,
+                                      const ValuePtr& value) -> void {
+    auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
+    if (!function || !function->native) return;
+    definePublicIntrinsic(name, function->native);
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
@@ -385,17 +407,29 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
             }
         }, item);
     }
+    const auto hasPublicNative = [this](const std::string& name) {
+        auto value = m_globalEnv->get(name);
+        auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
+        return function && function->native && !m_functionDefs.contains(name);
+    };
     for (const auto& item : mod.body) {
-        std::visit([this, &mod](const auto& node) {
+        std::visit([this, &mod, &hasPublicNative](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 auto nativeName = mod.name + "::" + node->name;
-                bool hasNative = m_intrinsicEnv->get(nativeName) != nullptr;
+                // Either an explicit qualified intrinsic or a public native
+                // binding owns this module slot. The public check preserves
+                // public-only helpers (such as Mock) without inserting them
+                // into the intrinsic capability registry.
+                bool hasNative = m_intrinsicEnv->get(nativeName) != nullptr ||
+                                 hasPublicNative(nativeName);
                 if (!hasNative && nativeName.find('.') != std::string::npos) {
                     std::string alt;
                     for (char c : mod.name)
                         alt += (c == '.') ? "::" : std::string(1, c);
-                    hasNative = m_intrinsicEnv->get(alt + "::" + node->name) != nullptr;
+                    const auto altName = alt + "::" + node->name;
+                    hasNative = m_intrinsicEnv->get(altName) != nullptr ||
+                                hasPublicNative(altName);
                 }
                 if (!hasNative)
                     execFunctionDef(*node, mod.name);
@@ -438,7 +472,10 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
     // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
     size_t dot = mod.name.find('.');
     if (dot == std::string::npos) {
-        auto existing = m_intrinsicEnv->get(mod.name);
+        // Preserve public constants that deliberately share a namespace name
+        // (notably the ENV Map). This is public binding ownership, not an
+        // intrinsic capability check.
+        auto existing = m_env->get(mod.name);
         if (!existing || std::holds_alternative<ModuleValue>(existing->data))
             m_env->define(mod.name, Value::module(mod.name));
     } else {
@@ -2109,6 +2146,8 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& m
         receiverType = "Map";
     } else if (std::holds_alternative<FileHandleValue>(receiver->data)) {
         receiverType = "FileHandle";
+    } else if (std::holds_alternative<ProcessValue>(receiver->data)) {
+        receiverType = "Pid";
     } else if (std::holds_alternative<IntValue>(receiver->data) ||
                std::holds_alternative<BigIntValue>(receiver->data)) {
         receiverType = "Integer";
@@ -2116,6 +2155,8 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& m
         receiverType = "Float";
     } else if (std::holds_alternative<BoolValue>(receiver->data)) {
         receiverType = "Bool";
+    } else if (std::holds_alternative<CharValue>(receiver->data)) {
+        receiverType = "Char";
     } else if (std::holds_alternative<StringValue>(receiver->data)) {
         receiverType = "String";
     } else if (std::holds_alternative<RangeValue>(receiver->data)) {
@@ -2395,8 +2436,7 @@ auto Evaluator::registerBuiltins() -> void {
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{"applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun::applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];
             auto& item = *args[1];
@@ -2414,16 +2454,22 @@ auto Evaluator::registerBuiltins() -> void {
             if (auto* nf = std::get_if<FunctionValue>(&fn.data))
                 return callFunction(nf->name, std::move(callArgs), {}, {});
             return Value::none();
-        }};
-        m_globalEnv->define("applyItem", val);
+        });
     }
 
     // These public operations are now owned by Kex receiver methods. Their
     // native implementations remain reachable only through the qualified
     // private intrinsic identities installed by the domain registries.
     for (const char* name : {
-             "at", "drop", "filter", "first", "foldLeft", "last", "map",
-             "member", "reverse", "take"})
+             "abs", "all?", "any?", "at", "ceil", "chars", "contains?",
+             "collect", "count", "delete", "drop", "each", "endsWith?", "entries",
+             "filter", "find", "first", "flatMap", "flatten", "floor", "foldLeft", "fromEntries",
+             "get", "getWithDefault", "has?", "in?", "indexOf", "join", "keys",
+             "generate", "items", "last", "length", "map", "max", "maxBy", "member", "merge", "min",
+             "minBy", "modulo", "partition", "product", "push", "put", "reject",
+             "reduce", "reverse", "round", "sort", "split", "sqrt", "startsWith?", "sum",
+             "take", "times", "trim", "uniq", "upperCase", "lowerCase",
+             "values", "zip", "send", "link", "unlink", "alive?"})
         m_globalEnv->erase(name);
 }
 

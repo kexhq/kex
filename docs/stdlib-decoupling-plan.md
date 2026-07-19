@@ -224,20 +224,100 @@ private `List.first` and `List.drop` intrinsics; their public native
 registrations have been deleted while preserving String/[Char] behavior and
 making both receiver families visible in generated interfaces.
 
-The walker now resolves private intrinsics by category-qualified identity
-before consulting transitional bare aliases. List, String, Range, and Stream
-publish qualified registry entries, so overlapping names such as `drop`,
-`take`, `map`, and `filter` no longer depend on registration order or on one
-category's implementation emulating another category. Bare aliases remain a
-temporary unchecked-compatibility bridge for domains not yet migrated. The
-walker now resolves bare UFCS calls generically through the receiver's Kex
-method when no free function exists. Range explicitly implements Enumerable via
+The walker resolves private intrinsics by category-qualified identity. List,
+String, Range, and Stream publish qualified registry entries, so overlapping
+names such as `drop`, `take`, `map`, and `filter` no longer depend on
+registration order or on one category's implementation emulating another
+category. The general bare intrinsic compatibility bridge has been eliminated;
+the bare names that remain are intentional language, callback, testing DSL, or
+documented scheduler-fallback surfaces. The walker resolves bare UFCS calls
+generically through the receiver's Kex method when no free function exists.
+Range explicitly implements Enumerable via
 an `items`-backed `reduce`, while String now owns its Enumerable conformance and
 string-preserving `map`/`filter` wrappers in Kex source. Neither receiver family
-therefore depends on native bare-name dispatch. Bare native registrations for
-`at`, `drop`, `filter`, `first`, `foldLeft`, `last`, `map`, `member`, `reverse`,
-and `take` have been removed; their implementations are reachable only through
-qualified private intrinsic identities.
+therefore depends on native bare-name dispatch. All operations captured under
+the qualified `List::*` private intrinsic registry now have their bare native
+registrations removed, including the collection folds, predicates, ordering,
+selection, and transformation helpers. Public receiver and bare-UFCS calls
+route through Kex methods; their native implementations are reachable only
+through qualified private intrinsic identities. Range's established numeric
+`sum` and `product` surface is now implemented directly from its Kex `reduce`
+primitive rather than inherited accidentally from bare List dispatch. Map's
+primitive registry is likewise category-qualified and its bare aliases are
+removed; String's established `length` compatibility spelling is now an
+explicit Kex method backed by the private List length intrinsic, and its
+string-preserving `uniq` behavior is likewise source-owned. String-only
+primitive aliases (`chars`, containment, prefix/suffix tests, splitting, and
+trimming) have been removed from the bare registry. Range containment is now a
+Kex method over `items`, and Char predicate intrinsics have explicit
+`Char::is_*` private identities while retaining their intentional bare callback
+surface. Numeric receiver primitives now have explicit `Integer::*` and
+`Number::*` private identities; bare aliases for modulo, absolute value, square
+root, repetition, range membership, and rounding have been removed in favor of
+their Kex receiver methods. Walker receiver classification now includes Char,
+so Char membership and predicate calls dispatch to the source-owned `Char::*`
+methods instead of depending on bare native fallthrough.
+Math's interpreter registry now exposes only its qualified `Math::*` intrinsic
+identities. The duplicated bare trigonometric/logarithmic aliases are removed,
+and `Math.abs`, `Math.floor`, and `Math.ceil` explicitly share the qualified
+Number implementations rather than relying on the retired bare numeric bridge.
+Stream construction and Range item materialization no longer retain bare
+`generate` or `items` aliases. Collection `reduce` dispatches through the
+source-owned receiver implementations, List's optimized `find` and `flatMap`
+paths now have qualified private identities and explicit Kex wrappers, and
+`collect` uses the shared Enumerable source implementation. Their transitional
+bare aliases have all been removed.
+Char now owns `upperCase` and `lowerCase` Kex methods that reuse the qualified
+String intrinsic ABI while preserving Char results. This removes the last bare
+String case-conversion aliases, including their former use by shorthand mapping
+callbacks.
+Mock IO and HTTP control primitives now register only as qualified `IO::ioMock*`
+and `Http::mock*` intrinsic identities. Their public `Mock.IO` and `Mock.Http`
+bindings remain intact, while the transitional bare control functions are gone.
+Kex feature probes now use qualified `Kex::featureHas?` and
+`Kex::featureList` intrinsic identities. The walker also classifies native Pid
+values for source method resolution; `send`, `link`, `unlink`, and `alive?` now
+enter the runtime only through qualified `Process::*` identities, with their
+bare native aliases removed. Task `await` retains its isolated bare fallback
+because it yields the scheduler while the walker's evaluator environment is
+active; routing it through a Kex wrapper requires process-local evaluator
+environments first.
+The Enumerable callback adapter is now registered solely as the qualified
+`Fun::applyItem` intrinsic. No public or prelude code depended on its former
+bare registry name.
+The interpreter-only Web server error boundary is likewise registered as
+`Web::serve`; `Server.start` remains the sole public source entry point.
+The interpreter now has a direct `defineIntrinsic` registration path. Private
+Fun, Web, feature-probe, and mock-control implementations use it instead of
+being inserted into the public environment and copied out later, beginning the
+physical separation of primitive capabilities from public stdlib bindings.
+Qualified receiver primitives for List, Map, String, Char, Range, Stream,
+Number, Integer, and Process now use that direct registry as well. Cross-domain
+sharing (notably Stream's List-backed map/filter implementation) reads from the
+intrinsic environment rather than treating public bindings as a staging area.
+This separation exposed List's historical `length` spelling as an accidental
+public lookup of a private binding; List now declares the compatibility method
+explicitly in Kex source.
+An explicit `definePublicIntrinsic` path now registers namespace functions in
+both environments without relying on the constructor's blanket clone. Math,
+Console, and Kex public native namespaces have migrated to it; their private
+helpers remain intrinsic-only.
+IO/System, HTTP, Process/Task, and numeric parsing now explicitly publish their
+dual public/intrinsic identities as well. Their unrelated public helpers are no
+longer implicitly treated as intrinsic capabilities by domain registration.
+File, FileHandle, and Directory operations now use the same explicit dual
+registration path, so filesystem dispatch no longer depends on the
+constructor's blanket public-environment clone.
+With all source-backed intrinsic domains registered deliberately, evaluator
+construction no longer copies the entire public environment into the private
+intrinsic registry. Public-only native modules, test helpers, constructors, and
+scheduler fallbacks therefore remain outside the intrinsic capability surface.
+Native-versus-source module collision handling now recognizes public native
+bindings directly as well as explicit qualified intrinsics. Public-only helpers
+therefore preserve native ownership without gaining intrinsic reachability.
+Module namespace installation likewise preserves an existing public non-module
+binding directly; the `ENV` Map no longer relies on an accidental copy in the
+intrinsic registry to survive loading the source `ENV` namespace declarations.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.

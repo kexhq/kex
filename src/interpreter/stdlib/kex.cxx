@@ -4,9 +4,7 @@ namespace kex::interpreter {
 
 auto Evaluator::registerKexBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        definePublicIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("Kex", Value::module("Kex"));
@@ -44,8 +42,8 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     reg("Kex.Feature::has?", hasFeature);
     reg("Kex.Feature::list", listFeatures);
-    reg("featureHas?", hasFeature);
-    reg("featureList", listFeatures);
+    defineIntrinsic("Kex::featureHas?", hasFeature);
+    defineIntrinsic("Kex::featureList", listFeatures);
 }
 
 } // namespace kex::interpreter

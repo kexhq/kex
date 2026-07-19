@@ -33,6 +33,11 @@ describe("List — count and empty?") do
     assert([42].count == 1)
   end
 
+  it("length is a compatibility spelling for count") do
+    assert([1, 2, 3].length == 3)
+    assert([].length == 0)
+  end
+
   it("empty? is true only for an empty list") do
     assert([].empty?)
     assert(![1].empty?)

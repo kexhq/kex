@@ -25,6 +25,18 @@ describe("Math — roots") do
   end
 end
 
+describe("Math — numeric helpers") do
+  it("abs returns the magnitude") do
+    assert(Math.abs(-7) == 7)
+    assert(Math.abs(-2.5) == 2.5)
+  end
+
+  it("floor and ceil return bounding integers") do
+    assert(Math.floor(2.75) == 2)
+    assert(Math.ceil(2.25) == 3)
+  end
+end
+
 describe("Math — trigonometry") do
   it("sin of 0 is 0") do
     assert(Math.sin(0.0) == 0.0)

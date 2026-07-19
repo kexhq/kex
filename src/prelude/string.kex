@@ -11,6 +11,9 @@ make String, implement: Enumerable do
   filter :> (Char -> Bool) -> String
   let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
 
+  uniq :> String
+  let uniq = Kex.Intrinsic.List.uniq(this)
+
   # Returns the number of characters in the string.
   #
   # @return [Integer]
@@ -20,6 +23,10 @@ make String, implement: Enumerable do
   #   "".count        # => 0
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
+
+  # Compatibility spelling retained as a source-owned String method.
+  length :> Integer
+  let length = Kex.Intrinsic.List.length(this)
 
   # Returns +true+ if the string contains no characters.
   #
@@ -160,6 +167,12 @@ make String, implement: Enumerable do
 end
 
 make Char do
+  # Converts this character to upper/lower case while preserving Char.
+  upperCase :> Char
+  let upperCase = Kex.Intrinsic.String.upperCase(this)
+  lowerCase :> Char
+  let lowerCase = Kex.Intrinsic.String.lowerCase(this)
+
   # Returns +true+ if the character is a decimal digit (+0+..+9+).
   #
   # @return [Bool]
