@@ -211,6 +211,29 @@ int main() {
                               std::string("String"));
         });
 
+        test::it("round-trips export param names (KexI v3)", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "Kex.Stream";
+            KexiExport exp;
+            exp.name = "Sequence";
+            exp.beamFunction = "Sequence";
+            exp.beamArity = 2;
+            exp.paramNames = {"from", "step"};
+            exp.paramTypes = {kexiPrimitive("Integer"), kexiFunc({}, kexiPrimitive("Integer"))};
+            exp.returnType = kexiNamed("Stream", {kexiPrimitive("Integer")});
+            chunk.typeInterface.exports.push_back(std::move(exp));
+            chunk.interfaceHash = computeInterfaceHash(chunk);
+
+            auto bytes = serializeKexi(chunk);
+            auto decoded = deserializeKexi(bytes);
+
+            test::assertEqual(decoded.typeInterface.exports.size(), size_t(1));
+            auto& e = decoded.typeInterface.exports[0];
+            test::assertEqual(e.paramNames.size(), size_t(2));
+            test::assertEqual(e.paramNames[0], std::string("from"));
+            test::assertEqual(e.paramNames[1], std::string("step"));
+        });
+
         test::it("round-trips ADTs with constructors", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "Kex.BinaryTree";

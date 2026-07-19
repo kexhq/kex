@@ -438,7 +438,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
     // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
     size_t dot = mod.name.find('.');
     if (dot == std::string::npos) {
-        m_env->define(mod.name, Value::module(mod.name));
+        auto existing = m_intrinsicEnv->get(mod.name);
+        if (!existing || std::holds_alternative<ModuleValue>(existing->data))
+            m_env->define(mod.name, Value::module(mod.name));
     } else {
         const auto parent = mod.name.substr(0, dot);
         m_env->define(parent, Value::module(parent));
@@ -1148,6 +1150,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     // live in m_globalEnv; the C++ native
                                     // implementations live in m_intrinsicEnv.
                                     auto val = m_intrinsicEnv->get(node.method);
+                                    if (!val)
+                                        val = m_intrinsicEnv->get(catMc->method + "::" + node.method);
                                     if (!val)
                                         throw RuntimeError("Undefined intrinsic: " + node.method, expr.location);
                                     if (auto* func = std::get_if<FunctionValue>(&val->data))
@@ -2050,6 +2054,16 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     }
     auto val = m_env->get(lookupName);
     if (!val) val = m_intrinsicEnv->get(name);
+    if (!val && !name.empty() && std::isupper(static_cast<unsigned char>(name[0]))) {
+        for (const auto& [modName, entry] : m_moduleRegistry) {
+            auto eit = entry.exports.find(name);
+            if (eit != entry.exports.end()) {
+                lookupName = modName + "::" + name;
+                val = eit->second;
+                break;
+            }
+        }
+    }
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
     }

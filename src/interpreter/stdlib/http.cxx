@@ -12,8 +12,10 @@ auto Evaluator::registerHttpBuiltins() -> void {
     m_globalEnv->define("Http", Value::module("Http"));
 
     auto httpError = [](const std::string& kind, const std::string& message) -> ValuePtr {
+        auto kindVal = std::make_shared<Value>();
+        kindVal->data = VariantValue{kind, "NetworkError", {}};
         return Value::error(Value::record("HttpError", {
-            {"kind", Value::string(kind)},
+            {"kind", kindVal},
             {"message", Value::string(message)},
         }));
     };
@@ -21,12 +23,12 @@ auto Evaluator::registerHttpBuiltins() -> void {
     auto httpRequest = [this, httpError](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockHttp) {
             if (m_mockHttpResponses.empty())
-                return httpError("mock", "no responses staged");
+                return httpError("MockEmpty", "no responses staged");
             auto resp = m_mockHttpResponses.front();
             m_mockHttpResponses.pop_front();
             return Value::ok(resp);
         }
-        return httpError("runtime", "Http requires BEAM backend");
+        return httpError("Unknown", "Http requires BEAM backend");
     };
 
     reg("Http::get", httpRequest);

@@ -3,124 +3,102 @@ module FS do
   type FilePath = String
 
   foul module File do
-    # Opens +path+ in +mode+ and passes a +FileHandle+ to the block.
-    # Returns the block's result, or +None+ if the file cannot be opened.
-    # The handle is closed automatically when the block exits.
-    #
-    # @example
-    #   File.open("data.txt", Read) { |f|
-    #     f.readLine
-    #   }
+    open : FilePath -> FileModes -> FileHandle
+    let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
+
     open : FilePath -> FileModes -> (FileHandle -> T) -> T?
+    let open(path, mode, block) = Kex.Intrinsic.File.open(path, mode, block)
 
-    # Opens +path+ without a block; caller must call +handle.close+.
-    # Returns +None+ if the file cannot be opened.
-    open : FilePath -> FileModes -> FileHandle?
-
-    # Reads the entire content of +path+. Returns +None+ on failure.
     read : FilePath -> String?
+    let read(path) = Kex.Intrinsic.File.read(path)
 
-    # Writes +content+ to +path+, replacing any existing file.
-    # Returns +true+ on success.
     write : FilePath -> String -> Bool
+    let write(path, content) = Kex.Intrinsic.File.write(path, content)
 
-    # Appends +content+ to +path+, creating the file if needed.
-    # Returns +true+ on success.
     append : FilePath -> String -> Bool
+    let append(path, content) = Kex.Intrinsic.File.append(path, content)
 
-    # Returns +true+ if +path+ is an existing regular file.
     exists? : FilePath -> Bool
+    let exists?(path) = Kex.Intrinsic.File.exists?(path)
 
-    # Alias for +exists?+ — explicit predicate for "is this a regular file".
     file? : FilePath -> Bool
+    let file?(path) = Kex.Intrinsic.File.file?(path)
 
-    # Returns +true+ if +path+ is an existing directory.
     directory? : FilePath -> Bool
+    let directory?(path) = Kex.Intrinsic.File.directory?(path)
 
-    # Deletes +path+. Returns +true+ if the file was removed.
     delete : FilePath -> Bool
+    let delete(path) = Kex.Intrinsic.File.delete(path)
 
-    # Copies +src+ to +dst+, overwriting +dst+ if it exists.
-    # Returns +true+ on success.
     copy : FilePath -> FilePath -> Bool
+    let copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
 
-    # Renames (moves) +src+ to +dst+. Returns +true+ on success.
     rename : FilePath -> FilePath -> Bool
+    let rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
 
-    # Reads all lines of +path+ into a +[String]+.
-    # Returns +None+ if the file cannot be opened.
     lines : FilePath -> [String]?
+    let lines(path) = Kex.Intrinsic.File.lines(path)
 
-    # Opens +path+ and returns a lazy +Stream<String>+ of its lines.
-    # Returns +None+ if the file cannot be opened.
     feed : FilePath -> Stream<String>?
+    let feed(path) = Kex.Intrinsic.File.feed(path)
 
-    # Returns the file size in bytes, or +None+ if inaccessible.
     size : FilePath -> Integer?
+    let size(path) = Kex.Intrinsic.File.size(path)
 
-    # Returns the filename component of +path+ (no directory).
-    #
-    # @example  File.basename("src/main.kex")   # => "main.kex"
     basename : FilePath -> String
+    let basename(path) = Kex.Intrinsic.File.basename(path)
 
-    # Returns the directory component of +path+.
-    #
-    # @example  File.dirname("src/main.kex")    # => "src"
     dirname : FilePath -> String
+    let dirname(path) = Kex.Intrinsic.File.dirname(path)
 
-    # Returns the file extension including the dot, or empty string.
-    #
-    # @example  File.extension("main.kex")   # => ".kex"
     extension : FilePath -> String
+    let extension(path) = Kex.Intrinsic.File.extension(path)
 
-    # Joins two path components using the OS path separator.
-    #
-    # @example  File.join("src", "main.kex")   # => "src/main.kex"
     join : FilePath -> FilePath -> String
+    let join(a, b) = Kex.Intrinsic.File.join(a, b)
 
-    # Returns the canonical absolute path, or +None+ on failure.
     absolute : FilePath -> String?
+    let absolute(path) = Kex.Intrinsic.File.absolute(path)
   end
 
   foul module Directory do
-    # Returns +true+ if +path+ is an existing directory.
     exists? : FilePath -> Bool
+    let exists?(path) = Kex.Intrinsic.Directory.exists?(path)
 
-    # Alias for +exists?+ — explicit predicate for "is this a directory".
     directory? : FilePath -> Bool
+    let directory?(path) = Kex.Intrinsic.Directory.directory?(path)
 
-    # Returns +true+ if +path+ is an existing regular file.
     file? : FilePath -> Bool
+    let file?(path) = Kex.Intrinsic.Directory.file?(path)
 
-    # Creates +path+ and any missing parent directories.
-    # Returns +true+ on success.
     create : FilePath -> Bool
+    let create(path) = Kex.Intrinsic.Directory.create(path)
 
-    # Deletes the empty directory at +path+. Returns +true+ on success.
     delete : FilePath -> Bool
+    let delete(path) = Kex.Intrinsic.Directory.delete(path)
 
-    # Recursively deletes +path+ and all its contents. Returns +true+ on success.
     deleteAll : FilePath -> Bool
+    let deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
 
-    # Returns all entry names directly inside +path+, or +None+ if inaccessible.
     list : FilePath -> [String]?
+    let list(path) = Kex.Intrinsic.Directory.list(path)
 
-    # Returns only regular file names directly inside +path+, or +None+.
     files : FilePath -> [String]?
+    let files(path) = Kex.Intrinsic.Directory.files(path)
 
-    # Returns only subdirectory names directly inside +path+, or +None+.
     directories : FilePath -> [String]?
+    let directories(path) = Kex.Intrinsic.Directory.directories(path)
 
-    # Returns the current working directory path.
     current : String
+    let current = Kex.Intrinsic.Directory.current
 
-    # Returns the user's home directory, or +None+ if unavailable.
     home : String?
+    let home = Kex.Intrinsic.Directory.home
   end
 end
 
 foul module File do
-  open : String -> FS.FileModes -> FileHandle?
+  open : String -> FS.FileModes -> FileHandle
   let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
 
   open : String -> FS.FileModes -> (FileHandle -> X) -> X?

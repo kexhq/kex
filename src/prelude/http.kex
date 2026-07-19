@@ -1,3 +1,5 @@
+type NetworkError = ConnectionRefused | Timeout | DnsError | SslError | MockEmpty | Unknown
+
 record HttpResponse do
   status  : Integer
   body    : String
@@ -5,7 +7,7 @@ record HttpResponse do
 end
 
 record HttpError do
-  kind    : String
+  kind    : NetworkError
   message : String
 end
 

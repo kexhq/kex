@@ -803,6 +803,32 @@ int main() {
             assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
         });
 
+        it("reorders named args for external module functions using param names", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Stream"] = "Kex.Stream";
+            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
+            external.exportArity["Stream.Sequence"] = 2;
+            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
+
+            auto out = emitWithExternal(
+                "main do Stream.Sequence(from: 0) { |n| n + 1 } end\n",
+                external);
+            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
+        });
+
+        it("resolves bare named-arg calls through external module fallback", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Stream"] = "Kex.Stream";
+            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
+            external.exportArity["Stream.Sequence"] = 2;
+            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
+
+            auto out = emitWithExternal(
+                "main do Sequence(from: 0) { |n| n + 1 } end\n",
+                external);
+            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
+        });
+
         it("lowers the exact receiver target selected by semantic type", []() {
             kex::semantic::ImportedInterfaces interfaces;
             kex::semantic::ImportedFunction integerTarget;

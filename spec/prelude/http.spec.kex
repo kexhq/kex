@@ -182,7 +182,7 @@ describe("Mock.Http — error details") do
     match result do
       Ok(_) -> assert(false, "expected Error")
       Error(e) -> do
-        assert(e.kind == "mock")
+        assert(e.kind == MockEmpty)
         assert(e.message == "no responses staged")
       end
     end

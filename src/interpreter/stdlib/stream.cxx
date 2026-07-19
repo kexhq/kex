@@ -9,8 +9,6 @@ namespace kex::interpreter {
 // in the global environment by the time this runs (enforced by call order
 // in Evaluator::registerBuiltins()).
 //
-// Namespace placeholders — currently static functions are resolved globally.
-// Stream.Sequence → just use Sequence directly for now.
 auto Evaluator::registerStreamBuiltins() -> void {
     m_globalEnv->define("Stream", Value::module("Stream"));
 
@@ -45,8 +43,6 @@ auto Evaluator::registerStreamBuiltins() -> void {
     };
 
     reg("generate", streamMake);
-    reg("Sequence", streamMake);
-    reg("Iterate", streamMake);
 
     // Update take to handle streams
     auto origTake = m_globalEnv->get("take");

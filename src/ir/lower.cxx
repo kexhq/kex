@@ -1223,38 +1223,6 @@ struct Lowering {
                 auto map = callE("maps", "from_list", 1, one(std::move(lst)));
                 return wrapLets(binds, callE("kex_supervisor", "start_link", 1, one(std::move(map))));
             }
-            // ENV is a real Map value (kex_io:env_map()); its methods are just
-            // map operations on that value.
-            if (uid->name == "ENV") {
-                auto envMap = [&]{ return callE("kex_io", "env_map", 0, {}); };
-                // get(key) -> String? : Just(value) if set, None otherwise
-                // (matching the tree-walker's Optional-returning semantics).
-                if (n.method == "get" && args.size() == 1) {
-                    auto keyRef = snap(atomize_ir(std::move(args[0]), binds));
-                    auto just = std::make_unique<Expr>();
-                    just->node = Construct{"Just", one(
-                        callE("maps", "get", 2, two(keyRef.get(), envMap())))};
-                    return wrapLets(binds, matchBool(
-                        callE("maps", "is_key", 2, two(keyRef.get(), envMap())),
-                        std::move(just), lit(LitKind::None, "none")));
-                }
-                if (n.method == "get" && args.size() == 2)
-                    return wrapLets(binds, callE("maps", "get", 3,
-                        three(std::move(args[0]), envMap(), std::move(args[1]))));
-                if (n.method == "has?" && args.size() == 1)
-                    return wrapLets(binds, callE("maps", "is_key", 2,
-                        two(std::move(args[0]), envMap())));
-                if (n.method == "count" || n.method == "size")
-                    return wrapLets(binds, callE("maps", "size", 1, one(envMap())));
-                if (n.method == "keys")
-                    return wrapLets(binds, callE("maps", "keys", 1, one(envMap())));
-                if (n.method == "values")
-                    return wrapLets(binds, callE("maps", "values", 1, one(envMap())));
-                if (n.method == "each" && n.block) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("maps", "foreach", 2, two(std::move(fn), envMap())));
-                }
-            }
             // Static method dispatch: `Type.method(args)` on a user type whose
             // `method` is a local function/make-method. If that method has an
             // implicit `this`, pass a placeholder receiver (the type tag).
@@ -1376,10 +1344,16 @@ struct Lowering {
         static const One calls[] = {
             // handle.feed — the File.open block handle is the path on BEAM.
             {"feed","kex_file","feed",0},
-            // FileHandle methods (File.open(path, Mode) block handles).
-            {"readLine","kex_file","handle_read_line",0},
-            {"writeLine","kex_file","handle_write_line",1},
-            {"eof?","kex_file","handle_eof?",0},
+            // FileHandle text I/O (mirrors IO).
+            {"getLine","kex_file","handle_getLine",0},
+            {"get","kex_file","handle_get",0},
+            {"printLine","kex_file","handle_printLine",1},
+            {"print","kex_file","handle_print",1},
+            // FileHandle binary/raw I/O.
+            {"read","kex_file","handle_read",0},
+            {"write","kex_file","handle_write",1},
+            // FileHandle lifecycle.
+            {"atEnd?","kex_file","handle_atEnd?",0},
         };
         // Guard-safe inline lowerings. External dispatch is skipped in
         // guards (!m_inGuard), so prelude receiver functions that appear in
