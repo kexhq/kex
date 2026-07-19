@@ -1,5 +1,6 @@
 #include "kexi_registry.hxx"
 #include "beam_file.hxx"
+#include "../common/artifact_versions.hxx"
 #include <filesystem>
 #include <optional>
 #include <unordered_set>
@@ -7,6 +8,22 @@
 namespace kex::beam {
 
 namespace {
+
+auto incompatibleBuild(const KexiChunk& chunk, const std::string& label)
+    -> std::optional<LoadError> {
+    if (chunk.version < 6) return std::nullopt;
+    if (chunk.intrinsicAbiVersion != kex::kIntrinsicAbiVersion)
+        return LoadError{label + " uses private intrinsic ABI " +
+            std::to_string(chunk.intrinsicAbiVersion) + ", but this toolchain "
+            "requires ABI " + std::to_string(kex::kIntrinsicAbiVersion)};
+    if (chunk.backendRepresentationVersion !=
+        kex::kBeamRepresentationVersion)
+        return LoadError{label + " uses BEAM representation version " +
+            std::to_string(chunk.backendRepresentationVersion) +
+            ", but this toolchain requires version " +
+            std::to_string(kex::kBeamRepresentationVersion)};
+    return std::nullopt;
+}
 
 auto typeNameStr(const KexiTypePtr& t) -> std::string {
     if (!t) return "";
@@ -209,6 +226,10 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             "entry implementation digest mismatch — rebuild the compiled unit"});
         return errors;
     }
+    if (auto error = incompatibleBuild(entryChunk, "entry artifact")) {
+        errors.push_back(std::move(*error));
+        return errors;
+    }
 
     if (entryChunk.metadata.role == KexiModuleRole::Companion) {
         errors.push_back({
@@ -273,6 +294,11 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             errors.push_back({
                 "companion '" + comp.beamAtom +
                 "' implementation digest mismatch — rebuild the compiled unit"});
+            return errors;
+        }
+        if (auto error = incompatibleBuild(
+                compChunk, "companion '" + comp.beamAtom + "'")) {
+            errors.push_back(std::move(*error));
             return errors;
         }
 

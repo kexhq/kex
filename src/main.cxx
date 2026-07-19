@@ -2,6 +2,8 @@
 #include "beam/collect_metadata.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
+#include "common/artifact_versions.hxx"
+#include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
 #include "ir/emit_core.hxx"
@@ -847,6 +849,14 @@ auto compilePreludeCore(const std::string &dir,
     std::cerr << "error: no prelude source root is available\n";
     return false;
   }
+  try {
+    // Validate the future unit split without changing merged-prelude source
+    // order yet; the legacy merged lowerer still has order-sensitive behavior.
+    (void)kex::groupPreludeSourcesByTier(files);
+  } catch (const std::exception &e) {
+    std::cerr << "error: invalid prelude tier manifest: " << e.what() << "\n";
+    return false;
+  }
   for (const auto &f : files) {
     kex::Lexer lex(readFile(f), f);
     kex::Parser parser(lex.tokenizeAll(), f);
@@ -901,6 +911,7 @@ auto compilePreludeCore(const std::string &dir,
         built.interface.metadata.package.unitIds = {"kex_prelude"};
         built.interface.metadata.package.receiverProviders = {"Prelude"};
         built.interface.metadata.package.automaticImports = {"Prelude"};
+        built.interface.sourceHash = kex::preludeSourceHash(files);
       } else {
         kex::beam::CollectOptions options;
         options.unitId = "kex_prelude";
@@ -1216,6 +1227,11 @@ int main(int argc, char *argv[]) {
         // renaming a Kex module cannot leave a stale beam that gets installed
         // merely because it still matches `*.beam`.
         std::unordered_set<std::string> currentCompanions;
+        for (auto &module : modules) {
+          module.interface.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+          module.interface.backendRepresentationVersion =
+              kex::kBeamRepresentationVersion;
+        }
         for (size_t i = 1; i < modules.size(); i++)
           currentCompanions.insert(modules[i].emitted.moduleName);
         std::error_code cleanupError;
@@ -2666,6 +2682,9 @@ int main(int argc, char *argv[]) {
                 copts.moduleName = irName.substr(4);
             }
             auto chunk = kex::beam::collectMetadata(program, copts);
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
             if (moduleIndex == 0 && moduleResults.size() > 1) {
               for (size_t ci = 1; ci < moduleResults.size(); ci++) {
                 kex::beam::KexiCompanion comp;

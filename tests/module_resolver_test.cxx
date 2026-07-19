@@ -1,5 +1,6 @@
 #include "test.hxx"
 #include "../src/common/prelude_loader.hxx"
+#include "../src/common/prelude_tiers.hxx"
 #include "../src/module/resolver.hxx"
 
 #include <cstdlib>
@@ -80,6 +81,45 @@ int main() {
             assertEqual(files.size(), size_t{2});
             assertEqual(files[0], (base / "prelude/a.kex").string());
             assertEqual(files[1], (base / "prelude/z.kex").string());
+        });
+
+        it("orders the complete stdlib manifest by compilation tier", [&]() {
+            std::vector<std::string> manifest;
+            auto add = [&](const auto& tier) {
+                for (const auto name : tier)
+                    manifest.push_back((base / "manifest" / name).string());
+            };
+            add(kex::kPreludeTier3);
+            add(kex::kPreludeTier1);
+            add(kex::kPreludeTier0);
+            add(kex::kPreludeTier2);
+
+            auto ordered = kex::orderPreludeSourcesByTier(manifest);
+            assertEqual(ordered.size(), size_t{25});
+            assertEqual(fs::path(ordered.front()).filename().string(),
+                        std::string("algebra.kex"));
+            assertEqual(fs::path(ordered[4]).filename().string(),
+                        std::string("kex.kex"));
+            assertEqual(fs::path(ordered.back()).filename().string(),
+                        std::string("map.kex"));
+
+            const auto groups = kex::groupPreludeSourcesByTier(manifest);
+            assertEqual(groups[0].size(), kex::kPreludeTier0.size());
+            assertEqual(groups[1].size(), kex::kPreludeTier1.size());
+            assertEqual(groups[2].size(), kex::kPreludeTier2.size());
+            assertEqual(groups[3].size(), kex::kPreludeTier3.size());
+            assertEqual(fs::path(groups[2].back()).filename().string(),
+                        std::string("file.kex"));
+
+            manifest.push_back((base / "manifest/undeclared.kex").string());
+            bool rejected = false;
+            try {
+                (void)kex::orderPreludeSourcesByTier(manifest);
+            } catch (const std::runtime_error& error) {
+                rejected = std::string(error.what()).find("no compilation tier") !=
+                           std::string::npos;
+            }
+            assertTrue(rejected, "undeclared stdlib source should be rejected");
         });
     });
 

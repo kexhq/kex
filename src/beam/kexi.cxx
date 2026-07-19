@@ -531,16 +531,20 @@ auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128 {
     return h;
 }
 
-auto computeArtifactHash(const BeamFile& beam) -> Hash128 {
-    auto implementation = beam;
-    implementation.removeChunk(KEXI_CHUNK_ID);
-    auto bytes = writeBeamFile(implementation);
-
+auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128 {
     uint8_t digest[32];
     sha256(bytes.data(), bytes.size(), digest);
     Hash128 hash{};
     for (int i = 0; i < 16; i++) hash[i] = digest[i];
     return hash;
+}
+
+auto computeArtifactHash(const BeamFile& beam) -> Hash128 {
+    auto implementation = beam;
+    implementation.removeChunk(KEXI_CHUNK_ID);
+    auto bytes = writeBeamFile(implementation);
+
+    return computeContentHash(bytes);
 }
 
 auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
@@ -554,11 +558,20 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
 
     // Now build the full term with the hashes included.
     auto term = chunkToTermWithoutHash(chunk);
-    // v6+: {kexi, Version, InterfaceHash, ArtifactHash,
-    //        TypeInterface, Structural}. Older schemas omit ArtifactHash.
+    // v6+: {kexi, Version, InterfaceHash, ArtifactHash, SourceHash, BuildInfo,
+    //        TypeInterface, Structural}. Older schemas omit build metadata.
     auto& inner = std::get<Term::Tuple>(term->value).elements;
-    if (chunk.version >= 6)
+    if (chunk.version >= 6) {
+        auto buildInfo = Term::map({
+            {Term::atom("intrinsic_abi"),
+             Term::integer(chunk.intrinsicAbiVersion)},
+            {Term::atom("backend_representation"),
+             Term::integer(chunk.backendRepresentationVersion)},
+        });
+        inner.insert(inner.begin() + 2, std::move(buildInfo));
+        inner.insert(inner.begin() + 2, hashToTerm(chunk.sourceHash));
         inner.insert(inner.begin() + 2, hashToTerm(chunk.artifactHash));
+    }
     inner.insert(inner.begin() + 2, hashToTerm(hash));
 
     return encodeEtf(term);
@@ -582,10 +595,16 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
 
     size_t payloadIndex = 3;
     if (chunk.version >= 6) {
-        if (top.size() < 6)
-            throw EtfError("invalid KexI v6 chunk: missing artifact hash");
+        if (top.size() < 8)
+            throw EtfError("invalid KexI v6 chunk: missing build metadata");
         chunk.artifactHash = termToHash(top[3]);
-        payloadIndex = 4;
+        chunk.sourceHash = termToHash(top[4]);
+        if (auto abi = top[5]->mapGet("intrinsic_abi"))
+            chunk.intrinsicAbiVersion = static_cast<int>(abi->asInt());
+        if (auto backend = top[5]->mapGet("backend_representation"))
+            chunk.backendRepresentationVersion =
+                static_cast<int>(backend->asInt());
+        payloadIndex = 6;
     }
 
     // Type interface

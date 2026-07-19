@@ -151,8 +151,13 @@ An interface hash detects dependency-contract changes, but not changed
 function bodies. KexI v6 therefore also carries an artifact digest over the
 complete BEAM container with its KexI chunk removed. Unit loading validates
 that digest independently, so changed executable code is rejected without
-changing the public interface hash. A cached stdlib BEAM is reusable only when
-all of these match:
+changing the public interface hash. The entry artifact also stores a
+relocation-independent digest of the sorted stdlib filenames and contents;
+prelude registry loading compares it with the discovered authoritative source
+package and rejects stale artifacts. Each unit also declares the private
+intrinsic ABI and BEAM representation versions; registry loading rejects either
+mismatch before exposing package interfaces. A cached stdlib BEAM is reusable
+only when all of these match:
 
 - full digest of the authoritative stdlib sources and package metadata;
 - compiler artifact-format version;
@@ -443,13 +448,23 @@ regression covering deleted or renamed stdlib modules.
 The prelude source dependency graph has been verified as a DAG with no
 cycles, enabling tiered compilation:
 
-- Tier 0 (no deps): algebra, console, errorable, io, math, optional,
+- Tier 0 (no deps): algebra, console, errorable, io, kex, math, optional,
   process, range, stream, system, test
 - Tier 1 (Tier 0 only): blankable, env, http, number, parser, string,
   truthyable, web\_server
 - Tier 2: enumerable (optional, range, stream); evaluator (optional,
   stream); file (stream)
 - Tier 3: list (enumerable, optional, range); map (blankable, enumerable)
+
+These tiers now live in `common/prelude_tiers.hxx` as validated build data.
+Prelude compilation validates the manifest and rejects missing, duplicated, or
+undeclared source files. It deliberately retains the legacy alphabetical merge
+order until the tiers become separate units: directly reordering the merged
+AST exposed an order-sensitive REPL regression. This fixes the earlier
+prose-only manifest, which had accidentally omitted the Tier 0 `kex.kex`
+source, without changing current runtime behavior. The manifest API now also
+returns four validated source groups, providing the direct iteration boundary
+for replacing the merged lowering pass with per-tier units.
 
 Splitting the merged prelude into separately-compiled tiers is the key
 prerequisite for removing the remaining inline lowering section in
@@ -800,6 +815,9 @@ pure calls.
 - Reject backend-unavailable modules during semantic analysis.
 - Change only a stdlib function body and prove that the cached BEAM is rejected
   even though its KexI interface hash is unchanged.
+  Completed: the isolated artifact regression changes only an installed source
+  file after building the prelude and verifies that registry loading rejects
+  the unchanged BEAM with a source-digest diagnostic.
 - Build and run an installed layout outside the source checkout.
   Completed for both backends: the regression suite runs the real CMake install
   manifest into a temporary prefix, clears the runtime overrides, and exercises

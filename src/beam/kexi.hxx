@@ -179,6 +179,11 @@ struct KexiChunk {
     // Separate from interfaceHash so implementation-only changes do not
     // masquerade as public contract changes.
     Hash128 artifactHash{};
+    // Digest of the authoritative source set used to build this entry unit.
+    // Companions and units without available sources leave it zeroed.
+    Hash128 sourceHash{};
+    int intrinsicAbiVersion = 0;
+    int backendRepresentationVersion = 0;
     KexiTypeInterface typeInterface;
     KexiStructuralMetadata metadata;
 };
@@ -189,6 +194,7 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t>;
 auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk;
 
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128;
+auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128;
 
 struct BeamFile;
 auto computeArtifactHash(const BeamFile& beam) -> Hash128;

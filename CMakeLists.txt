@@ -405,6 +405,7 @@ if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_test(NAME prelude_artifact_test
         COMMAND ${CMAKE_COMMAND}
             -DKEX_BINARY=$<TARGET_FILE:kex>
+            -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
             -DKEX_ARTIFACT_TEST_DIR=${CMAKE_BINARY_DIR}/test-prelude-artifacts
             -P ${CMAKE_SOURCE_DIR}/tests/prelude_artifact_test.cmake)
 endif()

@@ -4,6 +4,7 @@
 #include "../src/beam/etf.hxx"
 #include "../src/beam/kexi.hxx"
 #include "../src/beam/kexi_registry.hxx"
+#include "../src/common/artifact_versions.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
@@ -408,12 +409,23 @@ int main() {
             auto interfaceHash = computeInterfaceHash(chunk);
             chunk.artifactHash = {1, 2, 3, 4, 5, 6, 7, 8,
                                   9, 10, 11, 12, 13, 14, 15, 16};
+            chunk.sourceHash = {16, 15, 14, 13, 12, 11, 10, 9,
+                                8, 7, 6, 5, 4, 3, 2, 1};
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
 
             auto decoded = deserializeKexi(serializeKexi(chunk));
             test::assertTrue(decoded.artifactHash == chunk.artifactHash,
                              "artifact digest should round-trip");
+            test::assertTrue(decoded.sourceHash == chunk.sourceHash,
+                             "source digest should round-trip");
+            test::assertEqual(decoded.intrinsicAbiVersion,
+                              kex::kIntrinsicAbiVersion);
+            test::assertEqual(decoded.backendRepresentationVersion,
+                              kex::kBeamRepresentationVersion);
             test::assertTrue(computeInterfaceHash(chunk) == interfaceHash,
-                             "artifact digest must not affect interface hash");
+                             "build digests must not affect interface hash");
         });
 
         test::it("rejects unsupported schema version", []() {
@@ -781,6 +793,9 @@ int main() {
             chunk.metadata.unitId = "fixture-artifact";
             chunk.metadata.sourceModule = "Numbers";
             chunk.metadata.moduleAtom = "kex_fixture";
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
             KexiMethod doubled;
             doubled.name = "doubled";
             doubled.beamFunction = "doubled";
@@ -896,6 +911,9 @@ int main() {
             chunk.metadata.unitId = "stdlib-artifact";
             chunk.metadata.sourceModule = "Core";
             chunk.metadata.moduleAtom = "kex_stdlib";
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
             chunk.metadata.package.id = "kex/stdlib";
             chunk.metadata.package.unitIds = {"stdlib-artifact"};
             chunk.metadata.package.automaticImports = {"Core"};
@@ -956,6 +974,35 @@ int main() {
                 changed.findChunk(KEXI_CHUNK_ID)->data);
             test::assertTrue(embedded.interfaceHash == interfaceHash,
                              "implementation change must preserve interface hash");
+
+            fs::remove_all(root);
+        });
+
+        test::it("rejects an incompatible private intrinsic ABI", []() {
+            namespace fs = std::filesystem;
+            auto root = fs::temp_directory_path() / "kex-intrinsic-abi-test";
+            fs::remove_all(root);
+            fs::create_directories(root);
+            auto beamPath = (root / "fixture.kx.beam").string();
+
+            KexiChunk chunk;
+            chunk.metadata.unitId = "fixture-artifact";
+            chunk.metadata.sourceModule = "Fixture";
+            chunk.metadata.moduleAtom = "kex_fixture";
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion + 1;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
+            BeamFile beam;
+            beam.setChunk("Code", {1, 2, 3, 4});
+            chunk.artifactHash = computeArtifactHash(beam);
+            beam.setChunk(KEXI_CHUNK_ID, serializeKexi(chunk));
+            writeBeamFile(beam, beamPath);
+
+            KexiRegistry registry;
+            auto errors = registry.loadUnit(beamPath);
+            test::assertEqual(errors.size(), size_t(1));
+            test::assertTrue(errors[0].message.find("private intrinsic ABI") !=
+                             std::string::npos, errors[0].message);
 
             fs::remove_all(root);
         });
