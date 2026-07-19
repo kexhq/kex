@@ -1,6 +1,11 @@
 # Range — a range computes everything from its two bounds; `items`
 # materializes the elements into a real list when one is needed.
-make Range do
+make Range, implement: Enumerable do
+  # Enumerable primitive. Range stays structurally minimal; higher-order
+  # operations are inherited from Enumerable and reduce over its materialized
+  # items in ascending range order.
+  let reduce(acc, f) = this.items.reduce(acc, f)
+
   # The range's elements as a list.
   #
   # @example

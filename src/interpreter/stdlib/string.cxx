@@ -183,6 +183,19 @@ auto Evaluator::registerStringBuiltins() -> void {
         }
         return args[0];
     });
+    // String owns these private primitive identities. `at` and `reverse`
+    // also implement the representation-level List operations for String's
+    // [Char] equivalence, so publish those two under List as well.
+    for (const char* name : {
+             "at", "chars", "contains?", "endsWith?", "lowerCase", "split",
+             "startsWith?", "trim", "upperCase"}) {
+        if (auto value = m_globalEnv->get(name))
+            m_globalEnv->define("String::" + std::string(name), value);
+    }
+    for (const char* name : {"at", "reverse"}) {
+        if (auto value = m_globalEnv->get(name))
+            m_globalEnv->define("List::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

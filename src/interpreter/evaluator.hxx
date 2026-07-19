@@ -102,6 +102,8 @@ private:
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
     auto callFunction(const std::string& name, std::vector<ValuePtr> args,
                       NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    auto resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+        -> std::string;
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;

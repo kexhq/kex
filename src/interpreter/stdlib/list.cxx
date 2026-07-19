@@ -103,15 +103,6 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::none();
     });
 
-    reg("empty?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(true);
-        if (auto* list = std::get_if<ListValue>(&args[0]->data))
-            return Value::boolean(list->elements.empty());
-        if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::boolean(str->value.empty());
-        return Value::boolean(true);
-    });
-
     reg("push", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
@@ -279,43 +270,6 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
             return Value::just(Value::integer(range->start));
         return Value::none();
-    });
-
-    reg("second", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            if (list->elements.size() < 2) return Value::none();
-            return Value::just(list->elements[1]);
-        }
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            if (str->value.size() < 2) return Value::none();
-            return Value::just(Value::character(str->value[1]));
-        }
-        return Value::none();
-    });
-
-    reg("third", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            if (list->elements.size() < 3) return Value::none();
-            return Value::just(list->elements[2]);
-        }
-        if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            if (str->value.size() < 3) return Value::none();
-            return Value::just(Value::character(str->value[2]));
-        }
-        return Value::none();
-    });
-
-    reg("rest", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::list({});
-        if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::string(str->value.size() <= 1 ? "" : str->value.substr(1));
-        if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
-            if (list->elements.size() <= 1) return Value::list({});
-            return Value::list({list->elements.begin() + 1, list->elements.end()});
-        }
-        return Value::list({});
     });
 
     reg("last", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -740,6 +694,22 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::string("()");
         return Value::string(args[0]->inspect());
     });
+
+    // Private intrinsic identities are category-qualified. Keep the bare
+    // registrations above as a compatibility bridge for unchecked legacy
+    // calls, but snapshot the List implementations before later domains
+    // (notably Stream and Map) replace overlapping bare names.
+    for (const char* name : {
+             "all?", "any?", "count", "drop", "each", "filter", "first",
+             "flatten", "foldLeft", "indexOf", "join", "last", "length",
+             "map", "max", "maxBy", "member", "min", "minBy", "partition",
+             "product", "push", "reject", "sort", "sum", "take", "uniq",
+             "zip"}) {
+        if (auto value = m_globalEnv->get(name))
+            m_globalEnv->define("List::" + std::string(name), value);
+    }
+    if (auto value = m_globalEnv->get("items"))
+        m_globalEnv->define("Range::items", value);
 }
 
 } // namespace kex::interpreter

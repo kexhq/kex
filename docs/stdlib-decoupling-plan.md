@@ -215,6 +215,29 @@ is their only interpreter definition. Native `ok?`, `error?`, `some?`,
 `present?`, and `none?` registrations have also been deleted; ordinary walker
 calls now execute the same pattern-matching Kex methods as BEAM. The universal
 raw-value behavior of `.or(default)` remains an explicitly tracked fallback.
+Native `even?`, `odd?`, and `empty?` registrations have likewise been removed:
+ordinary walker calls now use the Kex definitions in `number.kex`, `list.kex`,
+`string.kex`, and `map.kex`. Guard-specific BEAM lowering remains tracked
+separately until the generalized pure-guard work is complete. List and String
+`second`, `third`, and `rest` are now explicit Kex wrappers composed from the
+private `List.first` and `List.drop` intrinsics; their public native
+registrations have been deleted while preserving String/[Char] behavior and
+making both receiver families visible in generated interfaces.
+
+The walker now resolves private intrinsics by category-qualified identity
+before consulting transitional bare aliases. List, String, Range, and Stream
+publish qualified registry entries, so overlapping names such as `drop`,
+`take`, `map`, and `filter` no longer depend on registration order or on one
+category's implementation emulating another category. Bare aliases remain a
+temporary unchecked-compatibility bridge for domains not yet migrated. The
+walker now resolves bare UFCS calls generically through the receiver's Kex
+method when no free function exists. Range explicitly implements Enumerable via
+an `items`-backed `reduce`, while String now owns its Enumerable conformance and
+string-preserving `map`/`filter` wrappers in Kex source. Neither receiver family
+therefore depends on native bare-name dispatch. Bare native registrations for
+`at`, `drop`, `filter`, `first`, `foldLeft`, `last`, `map`, `member`, `reverse`,
+and `take` have been removed; their implementations are reachable only through
+qualified private intrinsic identities.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.

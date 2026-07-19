@@ -1,4 +1,16 @@
-make String do
+make String, implement: Enumerable do
+  # Enumerable primitive and string-preserving higher-order operations.
+  # The private List intrinsics understand String's [Char] representation;
+  # the public methods remain owned here in Kex source.
+  reduce :> A -> (A -> Char -> A) -> A
+  let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
+
+  map :> (Char -> B) -> [B]
+  let map(f) = Kex.Intrinsic.List.map(this, f)
+
+  filter :> (Char -> Bool) -> String
+  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+
   # Returns the number of characters in the string.
   #
   # @return [Integer]
@@ -29,6 +41,18 @@ make String do
   #   "hello".at(9)   # => None
   at :> Integer -> Char?
   let at(i) = Kex.Intrinsic.List.at(this, i)
+
+  # Returns the second character wrapped in +Just+, or +None+ when absent.
+  second :> Char?
+  let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
+
+  # Returns the third character wrapped in +Just+, or +None+ when absent.
+  third :> Char?
+  let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
+
+  # Returns all characters after the first.
+  rest :> String
+  let rest = Kex.Intrinsic.List.drop(this, 1)
 
   # Returns a list of the individual characters in the string.
   #

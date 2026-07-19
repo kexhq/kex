@@ -1149,9 +1149,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     // the prelude's Kex.Intrinsic.* wrappers
                                     // live in m_globalEnv; the C++ native
                                     // implementations live in m_intrinsicEnv.
-                                    auto val = m_intrinsicEnv->get(node.method);
+                                    // The category-qualified identity is
+                                    // authoritative. Bare aliases remain only
+                                    // as a compatibility bridge while each
+                                    // native domain migrates its registry.
+                                    auto val = m_intrinsicEnv->get(
+                                        catMc->method + "::" + node.method);
                                     if (!val)
-                                        val = m_intrinsicEnv->get(catMc->method + "::" + node.method);
+                                        val = m_intrinsicEnv->get(node.method);
                                     if (!val)
                                         throw RuntimeError("Undefined intrinsic: " + node.method, expr.location);
                                     if (auto* func = std::get_if<FunctionValue>(&val->data))
@@ -1290,52 +1295,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
             }
 
-            // Type-based dispatch: try TypeName::method first
-            std::string mangledName = node.method;
-            std::string receiverType;
-            if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
-                receiverType = rec->typeName;
-            } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
-                receiverType = var->tag;
-            } else if (std::holds_alternative<ListValue>(receiver->data)) {
-                receiverType = "List";
-            } else if (std::holds_alternative<MapValue>(receiver->data)) {
-                receiverType = "Map";
-            } else if (std::holds_alternative<FileHandleValue>(receiver->data)) {
-                receiverType = "FileHandle";
-            } else if (std::holds_alternative<IntValue>(receiver->data) ||
-                       std::holds_alternative<BigIntValue>(receiver->data)) {
-                receiverType = "Integer";
-            } else if (std::holds_alternative<FloatValue>(receiver->data)) {
-                receiverType = "Float";
-            } else if (std::holds_alternative<BoolValue>(receiver->data)) {
-                receiverType = "Bool";
-            } else if (std::holds_alternative<StringValue>(receiver->data)) {
-                receiverType = "String";
-            } else if (std::holds_alternative<RangeValue>(receiver->data)) {
-                receiverType = "Range";
-            } else if (std::holds_alternative<StreamValue>(receiver->data)) {
-                receiverType = "Stream";
-            }
-            if (!receiverType.empty()) {
-                auto typed = receiverType + "::" + node.method;
-                if (m_env->get(typed)) {
-                    mangledName = typed;
-                } else {
-                    // receiverType may be a variant tag (Just, Ok, Nothing,
-                    // ...) rather than the type that declared it (Option,
-                    // Result, ...) — methods from `make TypeName do ... end`
-                    // are registered under the declared type's name, so
-                    // fall back to that mapping before giving up.
-                    auto parentIt = m_variantParent.find(receiverType);
-                    if (parentIt != m_variantParent.end()) {
-                        auto typedByParent = parentIt->second + "::" + node.method;
-                        if (m_env->get(typedByParent)) {
-                            mangledName = typedByParent;
-                        }
-                    }
-                }
-            }
+            auto mangledName = resolveMethodName(receiver, node.method);
 
             // For mutating calls, reassign back
             if (node.mutating) {
@@ -1603,8 +1563,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 lambda->data = FunctionValue{"&." + method,
                     [this, method](std::vector<ValuePtr> args) -> ValuePtr {
                         if (args.empty()) return Value::none();
-                        // Call method on the arg via UFCS
-                        return callFunction(method, std::move(args), {}, {});
+                        auto dispatchName = resolveMethodName(args[0], method);
+                        return callFunction(dispatchName, std::move(args), {}, {});
                     }};
                 return lambda;
             }
@@ -1618,9 +1578,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 auto lambda = std::make_shared<Value>();
                 lambda->data = FunctionValue{"&." + method,
                     [this, method, extraArgs](std::vector<ValuePtr> args) -> ValuePtr {
+                        if (args.empty()) return Value::none();
+                        auto dispatchName = resolveMethodName(args[0], method);
                         auto allArgs = args;
                         for (const auto& a : extraArgs) allArgs.push_back(a);
-                        return callFunction(method, std::move(allArgs), {}, {});
+                        return callFunction(dispatchName, std::move(allArgs), {}, {});
                     }};
                 return lambda;
             }
@@ -2064,6 +2026,16 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
             }
         }
     }
+    // Bare UFCS (`map(xs, f)`) is equivalent to receiver syntax
+    // (`xs.map(f)`). Once a public native alias is removed, route the call to
+    // the source-owned receiver method selected from argument zero.
+    if (!val && !args.empty() && name.find("::") == std::string::npos) {
+        auto methodName = resolveMethodName(args[0], name);
+        if (methodName != name) {
+            lookupName = std::move(methodName);
+            val = m_env->get(lookupName);
+        }
+    }
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
     }
@@ -2122,6 +2094,48 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     }
 
     throw RuntimeError("'" + name + "' is not callable", loc);
+}
+
+auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+    -> std::string {
+    std::string receiverType;
+    if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
+        receiverType = rec->typeName;
+    } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
+        receiverType = var->tag;
+    } else if (std::holds_alternative<ListValue>(receiver->data)) {
+        receiverType = "List";
+    } else if (std::holds_alternative<MapValue>(receiver->data)) {
+        receiverType = "Map";
+    } else if (std::holds_alternative<FileHandleValue>(receiver->data)) {
+        receiverType = "FileHandle";
+    } else if (std::holds_alternative<IntValue>(receiver->data) ||
+               std::holds_alternative<BigIntValue>(receiver->data)) {
+        receiverType = "Integer";
+    } else if (std::holds_alternative<FloatValue>(receiver->data)) {
+        receiverType = "Float";
+    } else if (std::holds_alternative<BoolValue>(receiver->data)) {
+        receiverType = "Bool";
+    } else if (std::holds_alternative<StringValue>(receiver->data)) {
+        receiverType = "String";
+    } else if (std::holds_alternative<RangeValue>(receiver->data)) {
+        receiverType = "Range";
+    } else if (std::holds_alternative<StreamValue>(receiver->data)) {
+        receiverType = "Stream";
+    }
+
+    if (receiverType.empty()) return method;
+    auto typed = receiverType + "::" + method;
+    if (m_env->get(typed)) return typed;
+
+    // A variant value is tagged with its constructor while methods are
+    // registered under the parent ADT's name.
+    auto parentIt = m_variantParent.find(receiverType);
+    if (parentIt != m_variantParent.end()) {
+        auto typedByParent = parentIt->second + "::" + method;
+        if (m_env->get(typedByParent)) return typedByParent;
+    }
+    return method;
 }
 
 auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr& val) -> ValuePtr {
@@ -2403,6 +2417,14 @@ auto Evaluator::registerBuiltins() -> void {
         }};
         m_globalEnv->define("applyItem", val);
     }
+
+    // These public operations are now owned by Kex receiver methods. Their
+    // native implementations remain reachable only through the qualified
+    // private intrinsic identities installed by the domain registries.
+    for (const char* name : {
+             "at", "drop", "filter", "first", "foldLeft", "last", "map",
+             "member", "reverse", "take"})
+        m_globalEnv->erase(name);
 }
 
 auto Evaluator::pushEnv() -> void {

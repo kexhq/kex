@@ -12,8 +12,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
     };
 
     // asInteger/integerResult (value.hxx) treat IntValue and BigIntValue
-    // uniformly, so modulo/abs/even?/odd? work the same on a value that's
-    // overflowed into the bignum representation as on a plain Int.
+    // uniformly, so modulo/abs work the same on a value that's overflowed
+    // into the bignum representation as on a plain Int.
     reg("modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::integer(0);
         auto a = asInteger(args[0]);
@@ -68,18 +68,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
             return Value::boolean(code >= range->start && code <= range->end);
         }
         return Value::boolean(false);
-    });
-
-    reg("even?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
-        auto i = asInteger(args[0]);
-        return Value::boolean(i.has_value() && mpz_even_p(i->get_mpz_t()) != 0);
-    });
-
-    reg("odd?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
-        auto i = asInteger(args[0]);
-        return Value::boolean(i.has_value() && mpz_odd_p(i->get_mpz_t()) != 0);
     });
 
     reg("floor", [](std::vector<ValuePtr> args) -> ValuePtr {

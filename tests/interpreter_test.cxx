@@ -532,6 +532,17 @@ int main() {
                 run("main do\n  (100000000000000000000 + 1).odd?\nend\n")->data).value);
         });
 
+        it("dispatches shorthand method callbacks through source-owned receiver methods", []() {
+            auto result = run(
+                "main do\n"
+                "  var values = [1, 2, 3, 4]\n"
+                "  values.filter!(&.even?)\n"
+                "  values\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("[2, 4]"));
+        });
+
         it("abs works on a negative bignum", []() {
             auto result = run("main do\n  (-100000000000000000000).abs\nend\n");
             assertEqual(result->toString(), std::string("100000000000000000000"));
@@ -922,6 +933,17 @@ int main() {
             auto& range = std::get<RangeValue>(result->data);
             assertEqual(range.start, int64_t(1));
             assertEqual(range.end, int64_t(10));
+        });
+
+        it("routes bare UFCS through source-owned receiver methods", []() {
+            auto result = run(
+                "main do\n"
+                "  let doubled = map([1, 2, 3]) { |n| n * 2 }\n"
+                "  let odds = filter(1..5) { |n| n.odd? }\n"
+                "  (doubled, odds)\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("([2, 4, 6], [1, 3, 5])"));
         });
     });
 
@@ -1398,6 +1420,19 @@ int main() {
     });
 
     describe("Interpreter — Streams", []() {
+        it("keeps List and Stream intrinsic identities distinct", []() {
+            auto result = run(
+                "main do\n"
+                "  let tail = Kex.Intrinsic.List.drop([1, 2, 3], 1)\n"
+                "  let stream = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let shifted = Kex.Intrinsic.Stream.drop(stream, 2)\n"
+                "  let values = Kex.Intrinsic.Stream.take(shifted, 2)\n"
+                "  (tail, values)\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("([2, 3], [3, 4])"));
+        });
+
         it("creates sequence and takes elements", []() {
             auto result = run(
                 "main do\n"

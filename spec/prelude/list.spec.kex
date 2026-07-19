@@ -259,6 +259,7 @@ describe("List — second and third") do
   it("second returns Just of the second element") do
     assert([1, 2, 3].second == Just(2))
     assert(["a", "b"].second == Just("b"))
+    assert([None, None].second == Just(None))
   end
 
   it("second returns None for short lists") do

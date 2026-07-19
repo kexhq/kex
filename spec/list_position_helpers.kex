@@ -1,0 +1,15 @@
+# Public position helpers are owned by the Kex prelude on both backends.
+main do
+  assert([1, 2, 3].second == Just(2))
+  assert([None, None].second == Just(None))
+  assert([1, 2, 3].third == Just(3))
+  assert([1, 2, 3].rest == [2, 3])
+  assert([].rest == [])
+
+  assert("abc".second == Just('b'))
+  assert("abc".third == Just('c'))
+  assert("abc".rest == "bc")
+  assert("".rest == "")
+
+  IO.printLine("position helpers ok")
+end

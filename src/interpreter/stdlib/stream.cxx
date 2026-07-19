@@ -89,6 +89,17 @@ auto Evaluator::registerStreamBuiltins() -> void {
         std::vector<ValuePtr> result(list->elements.begin() + skip, list->elements.end());
         return Value::list(std::move(result));
     });
+
+    for (const char* name : {"generate", "take", "drop"}) {
+        if (auto value = m_globalEnv->get(name))
+            m_globalEnv->define("Stream::" + std::string(name), value);
+    }
+    // Stream map/filter share the lazy implementation registered by the List
+    // runtime domain, but retain distinct private ABI identities.
+    for (const char* name : {"map", "filter"}) {
+        if (auto value = m_globalEnv->get("List::" + std::string(name)))
+            m_globalEnv->define("Stream::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

@@ -20,6 +20,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].second   # => Just(2)
   #   [1].second         # => None
   second :> X?
+  let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
 
   # Returns the third element wrapped in +Just+, or +None+ if the list has
   # fewer than three elements.
@@ -30,6 +31,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].third   # => Just(3)
   #   [1, 2].third      # => None
   third :> X?
+  let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
 
   # Returns all elements after the first. Returns +[]+ for an empty or
   # single-element list.
@@ -41,8 +43,7 @@ make [X], implement: Enumerable do
   #   [1].rest         # => []
   #   [].rest          # => []
   rest :> [X]
-  let rest(@[]) = []
-  let rest(@[_|xs]) = xs
+  let rest = Kex.Intrinsic.List.drop(this, 1)
 
   # Returns the last element wrapped in +Just+, or +None+ if the list is empty.
   #
