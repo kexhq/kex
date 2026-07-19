@@ -10,11 +10,22 @@ auto Evaluator::registerIOBuiltins() -> void {
         val->data = FunctionValue{name, std::move(fn)};
         m_globalEnv->define(name, val);
     };
+    auto regDual = [this](const std::string& name, NativeFunc fn) {
+        auto val = std::make_shared<Value>();
+        val->data = FunctionValue{name, fn};
+        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
+    };
+    auto aliasDual = [this](const std::string& alias, const std::string& target) {
+        auto value = m_globalEnv->get(target);
+        m_globalEnv->define(alias, value);
+        defineIntrinsic(alias, value);
+    };
 
     m_globalEnv->define("IO", Value::module("IO"));
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
-    reg("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += arg->toString();
         out += "\n";
@@ -28,7 +39,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.print(msg...) — like printLine but without the trailing newline.
-    reg("IO::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("IO::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += arg->toString();
         m_output += out;
@@ -42,7 +53,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.inspect(val) — pretty-prints an inspect representation to stderr
     // then returns the value unchanged so it can be inserted mid-pipeline.
-    reg("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
         if (m_mockIO) {
@@ -58,11 +69,11 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.put/IO.putLine — aliases of IO.print/IO.printLine.
-    m_globalEnv->define("IO::put", m_globalEnv->get("IO::print"));
-    m_globalEnv->define("IO::putLine", m_globalEnv->get("IO::printLine"));
+    aliasDual("IO::put", "IO::print");
+    aliasDual("IO::putLine", "IO::printLine");
 
     // IO.printError(msg) — write a line to stderr (no exit).
-    reg("IO::printError", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("IO::printError", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& a : args) out += a->toString();
         out += "\n";
@@ -76,8 +87,8 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.warn / IO.warning — aliases for printError.
-    m_globalEnv->define("IO::warn",    m_globalEnv->get("IO::printError"));
-    m_globalEnv->define("IO::warning", m_globalEnv->get("IO::printError"));
+    aliasDual("IO::warn", "IO::printError");
+    aliasDual("IO::warning", "IO::printError");
 
     // System.exit(code) — terminate with the given numeric exit code.
     defineIntrinsic("System::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -97,7 +108,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.getLine() — reads one line from stdin (or mock input). Returns
     // String, or None at EOF / when mock input is exhausted.
-    reg("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
+    regDual("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto line = m_mockIOInputLines.front();
@@ -113,7 +124,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.get() — reads a single character from stdin (or mock input).
     // Returns a one-character String, or None at EOF.
-    reg("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
+    regDual("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto& front = m_mockIOInputLines.front();
@@ -129,15 +140,6 @@ auto Evaluator::registerIOBuiltins() -> void {
         if (c == EOF) return Value::none();
         return Value::string(std::string(1, static_cast<char>(c)));
     });
-
-    // These namespace functions intentionally have both a public native
-    // binding and a Kex.Intrinsic identity.
-    for (const char* name : {
-             "IO::get", "IO::getLine", "IO::inspect", "IO::print",
-             "IO::printError", "IO::printLine", "IO::put", "IO::putLine",
-             "IO::warn", "IO::warning"}) {
-        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
-    }
 
     // ── Mock.IO ──────────────────────────────────────────────────────
     // When active, IO.print*/printError/warn write to an in-memory

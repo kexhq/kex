@@ -5,16 +5,10 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerNumberBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     // asInteger/integerResult (value.hxx) treat IntValue and BigIntValue
     // uniformly, so modulo/abs work the same on a value that's overflowed
     // into the bignum representation as on a plain Int.
-    reg("modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::integer(0);
         auto a = asInteger(args[0]);
         auto b = asInteger(args[1]);
@@ -26,7 +20,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("abs", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::abs", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(abs(*i));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -34,7 +28,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    reg("sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::floating(0.0);
         if (auto* i = std::get_if<IntValue>(&args[0]->data)) return Value::floating(std::sqrt(static_cast<double>(i->value)));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -43,7 +37,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // n.times { |i| ... } — runs the block n times, passing the index 0..n-1.
-    reg("times", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::times", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::none() : args[0];
         auto* n = std::get_if<IntValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -54,23 +48,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    // n.in?(range) / c.in?(range) — inclusive range membership for an Int
-    // or Char receiver against an Int or Char range.
-    reg("in?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
-        auto* range = std::get_if<RangeValue>(&args[1]->data);
-        if (!range) return Value::boolean(false);
-        if (auto* i = std::get_if<IntValue>(&args[0]->data)) {
-            return Value::boolean(i->value >= range->start && i->value <= range->end);
-        }
-        if (auto* c = std::get_if<CharValue>(&args[0]->data)) {
-            auto code = static_cast<int64_t>(static_cast<unsigned char>(c->value));
-            return Value::boolean(code >= range->start && code <= range->end);
-        }
-        return Value::boolean(false);
-    });
-
-    reg("floor", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::floor", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -78,7 +56,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -86,7 +64,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("round", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::round", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -216,16 +194,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
 
-    // Private numeric receiver identities. Public methods are declared in
-    // number.kex; these entries exist solely for Kex.Intrinsic dispatch.
-    for (const char* name : {"modulo", "times"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("Integer::" + std::string(name), value);
-    }
-    for (const char* name : {"abs", "ceil", "floor", "round", "sqrt"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("Number::" + std::string(name), value);
-    }
 }
 
 } // namespace kex::interpreter

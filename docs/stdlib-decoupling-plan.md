@@ -240,7 +240,13 @@ the qualified `List::*` private intrinsic registry now have their bare native
 registrations removed, including the collection folds, predicates, ordering,
 selection, and transformation helpers. Public receiver and bare-UFCS calls
 route through Kex methods; their native implementations are reachable only
-through qualified private intrinsic identities. Range's established numeric
+through qualified private intrinsic identities. The runtime now installs those
+identities directly rather than snapshotting temporary bare globals; obsolete
+native `reduce` and `collect` implementations have been deleted because their
+source implementations already own those APIs. Universal `to` and `inspect`
+remain intentional public compatibility functions. With migrated domains now
+registering privately from the outset, the evaluator's bulk post-registration
+erasure list has also been deleted. Range's established numeric
 `sum` and `product` surface is now implemented directly from its Kex `reduce`
 primitive rather than inherited accidentally from bare List dispatch. Map's
 primitive registry is likewise category-qualified and its bare aliases are
@@ -248,13 +254,19 @@ removed; String's established `length` compatibility spelling is now an
 explicit Kex method backed by the private List length intrinsic, and its
 string-preserving `uniq` behavior is likewise source-owned. String-only
 primitive aliases (`chars`, containment, prefix/suffix tests, splitting, and
-trimming) have been removed from the bare registry. Range containment is now a
+trimming) have been removed from the bare registry. These String primitives,
+plus the shared List/String `at` and `reverse` operations, now register directly
+under their qualified private identities rather than passing through temporary
+bare globals. Range containment is now a
 Kex method over `items`, and Char predicate intrinsics have explicit
 `Char::is_*` private identities while retaining their intentional bare callback
-surface. Numeric receiver primitives now have explicit `Integer::*` and
+surface. Those two identities are now registered explicitly rather than by
+copying the temporary public binding. Numeric receiver primitives now have explicit `Integer::*` and
 `Number::*` private identities; bare aliases for modulo, absolute value, square
 root, repetition, range membership, and rounding have been removed in favor of
-their Kex receiver methods. Walker receiver classification now includes Char,
+their Kex receiver methods. The source-owned numeric primitives register
+directly under those private identities instead of being copied from temporary
+bare globals. Walker receiver classification now includes Char,
 so Char membership and predicate calls dispatch to the source-owned `Char::*`
 methods instead of depending on bare native fallthrough.
 Math's interpreter registry now exposes only its qualified `Math::*` intrinsic
@@ -397,6 +409,25 @@ The duplicate CLI registry loader and its separate error path have been
 removed. Interface names, semantic checking, lowering routes, and record
 layouts are all derived from one immutable, validated registry cached for the
 process rather than reloading the BEAM independently for each view.
+
+Prelude source discovery is now centralized in `common/prelude_loader.hxx`.
+The interpreter, CLI semantic fallback, and native REPL consume the same sorted
+source set and native-to-WASM fallback order instead of independently walking
+`KEX_PRELUDE_DIR`. This isolates the remaining compiled development root behind
+one function ahead of replacing it with installation-aware package roots.
+Prelude compilation uses that shared file set as well, the interpreter no
+longer compiles out source loading when the development macro is absent, and
+sealed-method exemptions use exact discovered-file membership instead of an
+absolute-path substring check. CLI prelude compilation and sealed-method
+validation are no longer conditionally compiled behind `KEX_PRELUDE_DIR`; a
+missing runtime source root now produces an explicit build-prelude diagnostic.
+Runtime discovery also accepts `KEX_STDLIB_DIR` as its highest-priority source
+root, providing an installation/toolchain override ahead of the temporary
+compiled development fallback and embedded WASM path. Native discovery now
+also checks executable-relative installed (`share/kex/prelude`) and development
+(`src/prelude`) layouts. With those paths validated, the absolute checkout
+`KEX_PRELUDE_DIR` definition has been removed from `kex_lib`; no source-tree
+path is compiled into the runtime.
 
 The prelude source dependency graph has been verified as a DAG with no
 cycles, enabling tiered compilation:
@@ -561,14 +592,18 @@ Namespace modules with prelude implementations:
   `kex_intrinsic_io.erl` wraps `kex_io`. Walker namespace functions remain
   public-native compatibility bindings: print families are variadic, and all
   IO calls may occur in concurrently scheduled processes before evaluator
-  environments are process-local.
+  environments are process-local. Each compatibility function and alias now
+  declares its public and intrinsic identities together; there is no trailing
+  public-environment copy pass.
 - **System**: source-owned `exit(code)` calls the private
   `Kex.Intrinsic.System.exit` primitive on both backends
 - **Console**: all color constants and functions as `let` definitions
   calling `Kex.Intrinsic.Console.*`; walker calls execute those source wrappers
 - **Process**: `module Process` added with `self`, `exit`, `register`,
   `whereis` calling `Kex.Intrinsic.Process.*`; `Process::self` native wins
-  on interpreter
+  on interpreter. Walker-native Process/Task scheduler fallbacks now declare
+  their public and intrinsic identities explicitly instead of copying them
+  from the public environment after registration
 - **Kex**: `backend` and nested `Feature.has?`/`Feature.list` execute their
   Kex wrappers on the walker over private backend/feature intrinsics
 
@@ -758,6 +793,9 @@ pure calls.
 - Enforce dependency layering so compiler targets cannot include stdlib source
   files or native public builtin registries through anything except the generic
   package and intrinsic interfaces.
+- The interpreter contract suite rejects ordinary namespace calls to private
+  ABI-only names across FS, List, Map, Char, Stream, and IO, while allowing
+  source-owned receiver methods to retain their normal static-call form.
 - Maintain an allowlisted source audit for temporary guard compatibility names;
   the list must shrink and reach zero when the guard workstream completes.
 

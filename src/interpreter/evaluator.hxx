@@ -54,8 +54,8 @@ public:
     auto execute(const ast::Program& program) -> ValuePtr;
     // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
-    // shadows the native builtins. No-op if KEX_PRELUDE_DIR is unset or the
-    // directory can't be read. Idempotent per Evaluator instance.
+    // shadows the native builtins. No-op if no configured or embedded prelude
+    // source root is available. Idempotent per Evaluator instance.
     auto loadPrelude() -> void;
     auto setReplMode(bool enabled) -> void;
     auto output() const -> const std::string&;

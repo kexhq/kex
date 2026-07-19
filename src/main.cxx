@@ -707,9 +707,7 @@ auto resolveBeamDeps(kex::ast::Program &program,
 } // namespace
 
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
-#ifdef KEX_PRELUDE_DIR
-  kex::loadPrelude(db, KEX_PRELUDE_DIR);
-#endif
+  kex::loadDiscoveredPrelude(db);
 }
 
 auto prebuiltRuntimeBeamDir() -> std::string;
@@ -722,12 +720,9 @@ struct PreludeInterfaceNames {
 // BEAM artifacts (currently the browser/wasm build). Native builds use KexI.
 auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
   PreludeInterfaceNames names;
-#ifdef KEX_PRELUDE_DIR
-  std::error_code ec;
-  for (const auto &entry : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec)) {
-    if (entry.path().extension() != ".kex") continue;
-    kex::Lexer lexer(readFile(entry.path().string()), entry.path().string());
-    kex::Parser parser(lexer.tokenizeAll(), entry.path().string());
+  for (const auto &filePath : kex::preludeSourceFiles()) {
+    kex::Lexer lexer(readFile(filePath), filePath);
+    kex::Parser parser(lexer.tokenizeAll(), filePath);
     auto program = parser.parseProgram();
     auto addReceiver = [&](const kex::ast::FunctionDef &fn) {
       names.receiverFunctions.insert(fn.name);
@@ -784,7 +779,6 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
       }
     }
   }
-#endif
   return names;
 }
 
@@ -837,7 +831,6 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
   return result;
 }
 
-#ifdef KEX_PRELUDE_DIR
 struct PreludeBuildModule {
   kex::ir::EmitResult emitted;
   kex::beam::KexiChunk interface;
@@ -848,14 +841,12 @@ struct PreludeBuildModule {
 // IR; public module calls already use companion interfaces.
 auto compilePreludeCore(const std::string &dir,
                         std::vector<PreludeBuildModule> *builtModules) -> bool {
-  namespace fs = std::filesystem;
   kex::ast::Program merged;
-  std::error_code ec;
-  std::vector<std::string> files;
-  for (const auto &e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
-    if (e.path().extension() == ".kex")
-      files.push_back(e.path().string());
-  std::sort(files.begin(), files.end());
+  auto files = kex::preludeSourceFiles();
+  if (files.empty()) {
+    std::cerr << "error: no prelude source root is available\n";
+    return false;
+  }
   for (const auto &f : files) {
     kex::Lexer lex(readFile(f), f);
     kex::Parser parser(lex.tokenizeAll(), f);
@@ -936,7 +927,6 @@ auto compilePreludeCore(const std::string &dir,
   }
   return true;
 }
-#endif
 
 // Load stdlib record layouts from the embedded interface of the explicitly
 // built prelude artifact. Compiled metadata stays separate from the user's AST.
@@ -956,7 +946,6 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   return layouts;
 }
 
-#ifdef KEX_PRELUDE_DIR
 // Receiver-function names the sealed stdlib prelude provides. Qualified module
 // functions share the same source-derived snapshot but are not receiver
 // functions and therefore do not participate in this check.
@@ -990,7 +979,7 @@ auto sealViolations(const kex::ast::Program &program,
                     const std::string &filepath)
     -> std::vector<kex::semantic::Diagnostic> {
   std::vector<kex::semantic::Diagnostic> diags;
-  if (filepath.find(KEX_PRELUDE_DIR) != std::string::npos)
+  if (kex::isPreludeSourceFile(filepath))
     return diags;
   // Keep in sync with the evaluator-side seal (execMakeDef in evaluator.cxx).
   static const std::unordered_set<std::string> builtins = {
@@ -1025,7 +1014,6 @@ auto sealViolations(const kex::ast::Program &program,
     }
   return diags;
 }
-#endif
 
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
@@ -1070,12 +1058,10 @@ auto runSemanticCheck(const kex::ast::Program &program,
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
 
-#ifdef KEX_PRELUDE_DIR
   for (const auto &d : sealViolations(program, filepath)) {
     printDiag(d);
     ok = false;
   }
-#endif
 
   return ok && dbOk;
 }
@@ -1216,7 +1202,6 @@ int main(int argc, char *argv[]) {
       skipPrelude = true;
       break;
     case 1001: {
-#ifdef KEX_PRELUDE_DIR
       std::string dir = optarg;
       std::vector<PreludeBuildModule> modules;
       if (!compilePreludeCore(dir, &modules))
@@ -1252,10 +1237,6 @@ int main(int argc, char *argv[]) {
         return 1;
       }
       return 0;
-#else
-      std::cerr << "error: prelude dir not configured\n";
-      return 1;
-#endif
     }
     case 'r':
       mode = "run";
@@ -2849,12 +2830,10 @@ int main(int argc, char *argv[]) {
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
 
-#ifdef KEX_PRELUDE_DIR
     for (const auto &d : sealViolations(program, filepath)) {
       allDiags.push_back(d);
       dbOk = false;
     }
-#endif
 
     bool allOk = ok && dbOk;
 

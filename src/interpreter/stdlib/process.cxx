@@ -12,16 +12,22 @@ auto Evaluator::registerProcessBuiltins() -> void {
         val->data = FunctionValue{name, std::move(fn)};
         m_globalEnv->define(name, val);
     };
+    auto regDual = [this](const std::string& name, NativeFunc fn) {
+        auto val = std::make_shared<Value>();
+        val->data = FunctionValue{name, fn};
+        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
+    };
 
     // Pre-register the namespace placeholder so `Process.self` resolves via
     // the ModuleValue namespace-dispatch branch in eval() (ast::MethodCall),
-    // the same convention IO/Math use.
+    // the same convention used by the remaining public-native namespaces.
     m_globalEnv->define("Process", Value::module("Process"));
 
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the
     // evaluator's shared environment frame.
-    reg("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
+    regDual("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
@@ -72,7 +78,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // as last positional arg" handling in eval()).
     // Walker-native scheduler fallback. Starting a child while a Kex wrapper's
     // shared evaluator frame is active can corrupt later process execution.
-    reg("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto pid = m_scheduler->startTask(args[0]);
         return Value::task(pid, m_scheduler.get());
@@ -86,7 +92,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // shape (TaskError isn't a distinct type here, just whatever reason
     // atom/value ends up in Error(...) — no separate error ADT to keep
     // this from growing beyond what the interpreter needs).
-    reg("await", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    NativeFunc await = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("not a task"));
         auto* t = std::get_if<TaskValue>(&args[0]->data);
         if (!t) return Value::error(Value::string("not a task"));
@@ -108,13 +114,13 @@ auto Evaluator::registerProcessBuiltins() -> void {
             return Value::ok(tup->elements[1]);
         }
         return Value::error(tup->elements[1]);
-    });
+    };
+    reg("await", await);
 
     // The source declaration still calls the qualified identity (used by
     // direct intrinsic calls and kept ABI-aligned with BEAM), while ordinary
     // walker receiver dispatch intentionally selects the bare fallback above.
-    if (auto value = m_globalEnv->get("await"))
-        defineIntrinsic("Process::await", value);
+    defineIntrinsic("Process::await", std::move(await));
 
     // Task.awaitAll([tasks]) — awaits each task in order, no timeout
     // (matches Task::start's counterpart having no bulk-timeout variant in
@@ -125,7 +131,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // both dispatch to the same surface syntax, camelCase like every other
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
-    reg("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    regDual("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* lst = std::get_if<ListValue>(&args[0]->data);
         if (!lst) return Value::list({});
@@ -156,10 +162,6 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
         return Value::list(std::move(results));
     });
-
-    for (const char* name : {"Process::self", "Task::start", "Task::awaitAll"}) {
-        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
-    }
 
     m_globalEnv->define("Supervisor", Value::module("Supervisor"));
 

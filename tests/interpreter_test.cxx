@@ -1421,19 +1421,26 @@ int main() {
 
     describe("Interpreter — Streams", []() {
         it("does not expose private intrinsics as ordinary namespace functions", []() {
-            bool threw = false;
-            try {
-                run(
-                    "main do\n"
-                    "  FS.file(\"private.txt\", \"hidden\")\n"
-                    "end\n"
-                );
-            } catch (const RuntimeError& error) {
-                threw = true;
-                assertTrue(std::string(error.what()).find("Undefined function: file")
-                           != std::string::npos, error.what());
+            const std::vector<std::pair<std::string, std::string>> cases = {
+                {"FS.file(\"private.txt\", \"hidden\")", "file"},
+                {"List.foldLeft([1, 2], 0, { |acc, n| acc + n })", "foldLeft"},
+                {"Map.getWithDefault({\"a\": 1}, \"a\", 0)", "getWithDefault"},
+                {"Char.is_digit('1')", "is_digit"},
+                {"Stream.generate(0, { |n| n + 1 })", "generate"},
+                {"IO.ioMockStart()", "ioMockStart"},
+            };
+
+            for (const auto& [expression, name] : cases) {
+                bool threw = false;
+                try {
+                    run("main do\n  " + expression + "\nend\n");
+                } catch (const RuntimeError& error) {
+                    threw = true;
+                    assertTrue(std::string(error.what()).find("Undefined function: " + name)
+                               != std::string::npos, error.what());
+                }
+                assertTrue(threw, "private intrinsic should not be publicly callable: " + name);
             }
-            assertTrue(threw, "private FS intrinsic should not be publicly callable");
         });
 
         it("keeps List and Stream intrinsic identities distinct", []() {

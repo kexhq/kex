@@ -9,6 +9,9 @@ auto Evaluator::registerListBuiltins() -> void {
     m_globalEnv->define("Range", Value::module("Range"));
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
+        defineIntrinsic("List::" + name, std::move(fn));
+    };
+    auto regPublic = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
         val->data = FunctionValue{name, std::move(fn)};
         m_globalEnv->define(name, val);
@@ -53,7 +56,7 @@ auto Evaluator::registerListBuiltins() -> void {
     // to(Type) — universal conversion. Type argument is a ModuleValue (for
     // builtin types like Integer, Float, String) or a RecordValue{} namespace
     // sentinel (for user record types used as namespaces).
-    reg("to", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+    regPublic("to", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         std::string targetName;
         if (auto* m = std::get_if<ModuleValue>(&args[1]->data))
@@ -183,20 +186,10 @@ auto Evaluator::registerListBuiltins() -> void {
         return srcIsStr ? repackChars(std::move(result)) : Value::list(std::move(result));
     });
 
-    reg("reduce", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 3) return Value::none();
-        auto elems = getElements(args[0]);
-        auto* fn = std::get_if<FunctionValue>(&args[2]->data);
-        if (!fn || !fn->native) return args[1];
-        auto acc = args[1];
-        for (const auto& elem : elems) acc = fn->native({acc, elem});
-        return acc;
-    });
-
     // foldLeft — the intrinsic backing for Enumerable.reduce (Kex.Intrinsic.List.
-    // foldLeft). Same left fold as `reduce` above (acc-first reducer), exposed
-    // under the primitive name so the prelude's reduce is a thin intrinsic
-    // wrapper on both backends.
+    // foldLeft). It uses an accumulator-first reducer, exposed under the
+    // primitive name so the prelude's reduce is a thin intrinsic wrapper on
+    // both backends.
     reg("foldLeft", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 3) return Value::none();
         auto elems = getElements(args[0]);
@@ -209,7 +202,7 @@ auto Evaluator::registerListBuiltins() -> void {
 
     // Kex.Intrinsic.Range.items — the range's elements as a real list.
     // Backs the prelude's Range `items` (src/prelude/range.kex).
-    reg("items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Range::items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
             return Value::list(rangeToList(*range));
@@ -669,49 +662,12 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
-    // collect(f) — map each element through f (X -> Y?), keep+unwrap Just(y),
-    // drop None. One-pass filter+map fused via an Optional-returning function.
-    reg("collect", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::list({});
-        auto elems = getElements(args[0]);
-        auto* fn = std::get_if<FunctionValue>(&args[1]->data);
-        if (!fn || !fn->native) return Value::list({});
-        std::vector<ValuePtr> result;
-        for (const auto& elem : elems) {
-            auto mapped = fn->native({elem});
-            if (mapped->isNone()) continue;
-            if (auto* var = std::get_if<VariantValue>(&mapped->data)) {
-                if (var->tag == "Just") {
-                    if (!var->args.empty()) result.push_back(var->args[0]);
-                    continue;
-                }
-            }
-            // Raw value (not Just/None) — keep as-is.
-            result.push_back(mapped);
-        }
-        return Value::list(std::move(result));
-    });
-
     // inspect() — pretty-printed representation of any value (UFCS on all types)
-    reg("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regPublic("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");
         return Value::string(args[0]->inspect());
     });
 
-    // Private intrinsic identities are category-qualified. Snapshot the List
-    // implementations before later domains (notably Stream and Map) replace
-    // overlapping transitional bare names.
-    for (const char* name : {
-             "all?", "any?", "count", "drop", "each", "filter", "first",
-             "find", "flatMap", "flatten", "foldLeft", "indexOf", "join",
-             "last", "length", "map", "max", "maxBy", "member", "min",
-             "minBy", "partition", "product", "push", "reject", "sort",
-             "sum", "take", "uniq", "zip"}) {
-        if (auto value = m_globalEnv->get(name))
-            defineIntrinsic("List::" + std::string(name), value);
-    }
-    if (auto value = m_globalEnv->get("items"))
-        defineIntrinsic("Range::items", value);
 }
 
 } // namespace kex::interpreter

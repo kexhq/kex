@@ -116,13 +116,6 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
-# The Kex-written stdlib (src/prelude/*.kex) is loaded at runtime by the
-# Evaluator (loadPrelude) so it shadows the native builtins. kex_lib needs the
-# path baked in — not just the `kex` executable — so the unit tests, which link
-# kex_lib directly, exercise the same prelude the CLI does.
-target_compile_definitions(kex_lib PUBLIC
-    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
-
 # GMP backs the arbitrary-precision `Integer` default (see
 # docs/type-system-plan.md's Runtime representation section). Required,
 # not optional like readline below.
@@ -229,7 +222,6 @@ endif()
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
 target_compile_definitions(kex PRIVATE
-    # KEX_PRELUDE_DIR is inherited (PUBLIC) from kex_lib.
     KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
 )
 if(KEX_HAS_RUNTIME_BEAMS)
@@ -258,8 +250,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # NODERAWFS maps every fs call straight through to Node's real host
     # filesystem (no MEMFS sandbox, no --preload-file needed) — this is
     # what lets `node build-wasm/kex.js some/real/path.kex` work at all,
-    # since KEX_PRELUDE_DIR above is still a real native path baked in at
-    # compile time. Deliberately not applied to kex_repl_wasm (below),
+    # Deliberately not applied to kex_repl_wasm (below),
     # which needs to run in an actual browser, where NODERAWFS doesn't
     # apply — that target uses --preload-file instead. This is what makes
     # `make spec-wasm` possible at all.
@@ -301,8 +292,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # Embeds src/prelude/*.kex into MEMFS at "/prelude" so the wasm
         # REPL's SemanticDB can index the same prelude the native REPL does
         # for tab completion (see src/common/prelude_loader.hxx) — wasm has
-        # no real filesystem, so KEX_PRELUDE_DIR (a native fs path) doesn't
-        # apply here.
+        # no native installation filesystem.
         --preload-file
         "${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
     )

@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../common/prelude_loader.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -21,7 +22,7 @@ Evaluator::Evaluator() {
     registerBuiltins();
     // The Kex-written stdlib shadows the native builtins on every Evaluator, so
     // there is a single source of truth for stdlib behaviour regardless of entry
-    // point (CLI, REPL, tests). No-op when KEX_PRELUDE_DIR is unset/unreadable.
+    // point (CLI, REPL, tests). No-op when no prelude source root is available.
     loadPrelude();
     // The prelude's type declarations (Optional, Result) re-register variant
     // constructors (Just, Ok, Error) via execTypeDef — but the generic
@@ -211,28 +212,14 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
 }
 
 auto Evaluator::loadPrelude() -> void {
-#ifdef KEX_PRELUDE_DIR
     if (m_preludeLoaded) return;
     // Parse the prelude once and cache the merged declarations. The AST must
     // outlive every Evaluator (m_functionDefs keeps raw pointers into it), so
     // it is a function-local static — shared across all instances.
     static const ast::Program* preludeProgram = []() -> const ast::Program* {
         auto* prog = new ast::Program();
-        std::error_code ec;
-        std::vector<std::string> files;
-        // KEX_PRELUDE_DIR is the native source path; on wasm the same files
-        // are embedded into MEMFS at "/prelude" instead (see CMakeLists.txt's
-        // --preload-file and src/common/prelude_loader.hxx, which shares this
-        // convention for the REPL's SemanticDB).
-        for (const char* dir : {KEX_PRELUDE_DIR, "/prelude"}) {
-            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-                if (e.path().extension() == ".kex")
-                    files.push_back(e.path().string());
-            if (!ec && !files.empty()) break;
-            files.clear();
-        }
+        auto files = kex::preludeSourceFiles();
         if (files.empty()) return prog; // no prelude available — run without
-        std::sort(files.begin(), files.end());
         for (const auto& f : files) {
             std::ifstream in(f);
             std::string src((std::istreambuf_iterator<char>(in)),
@@ -266,7 +253,6 @@ auto Evaluator::loadPrelude() -> void {
     }
     for (const auto& item : preludeProgram->items) execTopLevel(item);
     m_preludeLoaded = true;
-#endif
 }
 
 auto Evaluator::setReplMode(bool enabled) -> void {
@@ -2441,20 +2427,6 @@ auto Evaluator::registerBuiltins() -> void {
         });
     }
 
-    // These public operations are now owned by Kex receiver methods. Their
-    // native implementations remain reachable only through the qualified
-    // private intrinsic identities installed by the domain registries.
-    for (const char* name : {
-             "abs", "all?", "any?", "at", "ceil", "chars", "contains?",
-             "collect", "count", "delete", "drop", "each", "endsWith?", "entries",
-             "filter", "find", "first", "flatMap", "flatten", "floor", "foldLeft", "fromEntries",
-             "get", "getWithDefault", "has?", "in?", "indexOf", "join", "keys",
-             "generate", "items", "last", "length", "map", "max", "maxBy", "member", "merge", "min",
-             "minBy", "modulo", "partition", "product", "push", "put", "reject",
-             "reduce", "reverse", "round", "sort", "split", "sqrt", "startsWith?", "sum",
-             "take", "times", "trim", "uniq", "upperCase", "lowerCase",
-             "values", "zip", "send", "link", "unlink", "alive?"})
-        m_globalEnv->erase(name);
 }
 
 auto Evaluator::pushEnv() -> void {

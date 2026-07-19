@@ -1,8 +1,11 @@
 #include "test.hxx"
+#include "../src/common/prelude_loader.hxx"
 #include "../src/module/resolver.hxx"
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 
 using namespace test;
 
@@ -12,6 +15,7 @@ int main() {
     fs::remove_all(base);
     fs::create_directories(base / "lib/http");
     fs::create_directories(base / "src/http");
+    fs::create_directories(base / "prelude");
     {
         std::ofstream libFile(base / "lib/http/router.kex");
         libFile << "module Http.Router\n";
@@ -22,6 +26,9 @@ int main() {
         std::ofstream containerFile(base / "lib/shop.kex");
         containerFile << "module Shop do\n  module Cart do\n  end\nend\n";
         containerFile.close();
+        std::ofstream(base / "prelude/z.kex") << "module Z\n";
+        std::ofstream(base / "prelude/a.kex") << "module A\n";
+        std::ofstream(base / "prelude/ignored.txt") << "not kex\n";
     }
 
     describe("Module resolver", [&]() {
@@ -56,6 +63,23 @@ int main() {
             assertTrue(!resolver.resolve("Erlang.GenServer").has_value());
             assertTrue(!resolver.resolve("Elixir.Phoenix.Router").has_value());
             assertTrue(!resolver.resolve("Gleam.Http").has_value());
+        });
+    });
+
+    describe("Prelude source discovery", [&]() {
+        it("prefers KEX_STDLIB_DIR and returns sorted Kex sources", [&]() {
+            std::optional<std::string> previous;
+            if (const char* value = std::getenv("KEX_STDLIB_DIR")) previous = value;
+            setenv("KEX_STDLIB_DIR", (base / "prelude").c_str(), 1);
+
+            const auto files = kex::preludeSourceFiles();
+
+            if (previous) setenv("KEX_STDLIB_DIR", previous->c_str(), 1);
+            else unsetenv("KEX_STDLIB_DIR");
+
+            assertEqual(files.size(), size_t{2});
+            assertEqual(files[0], (base / "prelude/a.kex").string());
+            assertEqual(files[1], (base / "prelude/z.kex").string());
         });
     });
 
