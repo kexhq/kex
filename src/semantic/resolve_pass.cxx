@@ -20,7 +20,8 @@ static auto editDistance(const std::string& a, const std::string& b) -> int {
     return dp[m][n];
 }
 
-ResolvePass::ResolvePass() : m_stdlib(SignatureTable::withStdlib()) {}
+ResolvePass::ResolvePass(const ImportedInterfaces* imports)
+    : m_imports(imports) {}
 
 auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
     m_db = &db;
@@ -557,8 +558,20 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
             if (sym.name == name && sym.module == m_currentModule) return true;
         }
     }
-    // Stdlib function signatures
-    if (m_stdlib.lookup(name)) return true;
+    if (m_imports) {
+        if (auto sep = name.find("::"); sep != std::string::npos) {
+            auto mod = name.substr(0, sep);
+            auto fn = name.substr(sep + 2);
+            if (auto it = m_imports->modules.find(mod); it != m_imports->modules.end())
+                if (it->second.exports.count(fn)) return true;
+        } else {
+            if (m_imports->receiverFunctions.count(name)) return true;
+            for (const auto& [_, mod] : m_imports->modules) {
+                if (!mod.automaticImport) continue;
+                if (mod.exports.count(name)) return true;
+            }
+        }
+    }
     return false;
 }
 

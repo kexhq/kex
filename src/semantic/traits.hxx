@@ -8,9 +8,8 @@
 
 namespace kex::semantic {
 
-// A named function/method signature — used both for a trait's required
-// methods (TraitDef::requiredMethods) and the stdlib function table (see
-// stdlib_signatures.hxx).
+// A named function/method signature — used for trait required methods
+// (TraitDef::requiredMethods) and imported interface signatures.
 struct Signature {
     std::string name;
     std::vector<TypePtr> params;
@@ -60,12 +59,16 @@ public:
     // built-in primitive/sized types and the Result/Option prelude ADTs.
     static auto withBuiltins() -> TraitRegistry;
 
+    auto implementorKey(const TypePtr& type) const -> std::string;
+    auto hasConformances(const std::string& key) const -> bool {
+        return m_implementations.count(key) > 0;
+    }
+
 private:
     std::unordered_map<std::string, TraitDef> m_traits;
     std::unordered_map<std::string, std::set<std::string>> m_implementations;
 
     auto satisfiesStructurally(const TypePtr& type, const std::string& traitName) const -> bool;
-    auto implementorKey(const TypePtr& type) const -> std::string;
 };
 
 } // namespace kex::semantic

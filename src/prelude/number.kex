@@ -165,8 +165,3 @@ module Float do
   parsePrefix : String -> (Float, String)?
   let parsePrefix(s) = Kex.Intrinsic.Float.parsePrefix(s)
 end
-
-module Number do
-  parse : String -> Result<Number, ParseError>
-  let parse(s) = Kex.Intrinsic.Number.parse(s)
-end

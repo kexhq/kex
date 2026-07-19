@@ -927,6 +927,7 @@ auto compilePreludeCore(const std::string &dir,
         built.interface.metadata.package.id = "kex.stdlib";
         built.interface.metadata.package.unitIds = {"kex_prelude"};
         built.interface.metadata.package.receiverProviders = {"Prelude"};
+        built.interface.metadata.package.automaticImports = {"Prelude"};
       } else {
         kex::beam::CollectOptions options;
         options.unitId = "kex_prelude";
@@ -1070,6 +1071,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
 
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
+  runDb.setImportedInterfaces(&preludeSemanticInterfaces());
   loadPrelude(runDb);
   runDb.updateFile(filepath, readFile(filepath));
   bool dbOk = true;
@@ -1080,7 +1082,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   }
 
   // Pass 3+: existing Analyzer (purity, type checking)
-  kex::semantic::Analyzer localAnalyzer;
+  kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
@@ -1343,6 +1345,7 @@ int main(int argc, char *argv[]) {
 
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
+    db.setImportedInterfaces(&preludeSemanticInterfaces());
     loadPrelude(db);
     if (optind < argc)
       db.updateFile(argv[optind], readFile(argv[optind]));
@@ -1435,8 +1438,10 @@ int main(int argc, char *argv[]) {
     kex::printReplBanner(std::cout, "BEAM");
 
     kex::semantic::SemanticDB beamReplDb;
-    if (!skipPrelude)
+    if (!skipPrelude) {
+      beamReplDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(beamReplDb);
+    }
 #ifdef HAS_READLINE
     g_replDb = &beamReplDb;
     rl_attempted_completion_function = kexCompletion;
@@ -1911,8 +1916,10 @@ int main(int argc, char *argv[]) {
 
     // SemanticDB for REPL: prelude loaded once, updated on each input.
     kex::semantic::SemanticDB replDb;
-    if (!skipPrelude)
+    if (!skipPrelude) {
+      replDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(replDb);
+    }
 #ifdef HAS_READLINE
     g_replDb = &replDb;
     rl_attempted_completion_function = kexCompletion;
@@ -2841,11 +2848,12 @@ int main(int argc, char *argv[]) {
     // mode == "check"
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
+    db.setImportedInterfaces(&preludeSemanticInterfaces());
     loadPrelude(db);
     db.updateFile(filepath, readFile(filepath));
 
     // Pass 3+: existing Analyzer (purity, type checking)
-    kex::semantic::Analyzer analyzer;
+    kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
     bool ok = analyzer.analyze(program);
 
     // Collect all diagnostics

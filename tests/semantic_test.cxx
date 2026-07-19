@@ -5,12 +5,24 @@
 #include "../src/semantic/db.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
-#include "../src/semantic/stdlib_signatures.hxx"
+#include "../src/common/prelude_interfaces.hxx"
 #include <filesystem>
 #include <fstream>
 
 using namespace kex;
 using namespace test;
+
+namespace {
+#ifdef KEX_RUNTIME_BEAM_DIR
+auto preludeInterfaces() -> const semantic::ImportedInterfaces& {
+    return preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+}
+#else
+auto preludeInterfaces() -> semantic::ImportedInterfaces {
+    return {};
+}
+#endif
+}
 
 auto check(const std::string& source) -> std::vector<semantic::Diagnostic> {
     Lexer lexer(source);
@@ -18,7 +30,8 @@ auto check(const std::string& source) -> std::vector<semantic::Diagnostic> {
     Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
 
-    semantic::Analyzer analyzer;
+    static const auto interfaces = preludeInterfaces();
+    semantic::Analyzer analyzer(&interfaces);
     analyzer.analyze(program);
     return analyzer.diagnostics();
 }
@@ -1174,37 +1187,6 @@ int main() {
         it("exposes built-in trait definitions by name", [traits]() {
             assertTrue(traits.get("Comparable") != nullptr);
             assertTrue(traits.get("NoSuchTrait") == nullptr);
-        });
-    });
-
-    describe("Types — stdlib signature table", []() {
-        using namespace kex::semantic;
-        auto table = SignatureTable::withStdlib();
-
-        it("knows even?/odd? take one Integer-constrained param and return Bool", [table]() {
-            auto* sigs = table.lookup("even?");
-            assertTrue(sigs != nullptr);
-            assertEqual(sigs->size(), size_t(1));
-            assertEqual((*sigs)[0].params.size(), size_t(1));
-            assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
-        });
-
-        it("knows ok?/error?/some?/none? return Bool", [table]() {
-            for (const auto& name : {"ok?", "error?", "some?", "none?"}) {
-                auto* sigs = table.lookup(name);
-                assertTrue(sigs != nullptr);
-                assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
-            }
-        });
-
-        it("registers `or` as two overloads, one per prelude ADT family", [table]() {
-            auto* sigs = table.lookup("or");
-            assertTrue(sigs != nullptr);
-            assertEqual(sigs->size(), size_t(2));
-        });
-
-        it("returns nullptr for a function not in the table", [table]() {
-            assertTrue(table.lookup("not_a_real_stdlib_fn") == nullptr);
         });
     });
 

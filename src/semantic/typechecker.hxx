@@ -1,7 +1,6 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "stdlib_signatures.hxx"
 #include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "traits.hxx"
@@ -146,7 +145,6 @@ private:
     std::vector<TypeEnv> m_scopeStack;
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
-    SignatureTable m_stdlib; // AUDIT: stdlib table disabled experimentally
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     // Source module identities declared by the current compilation unit.

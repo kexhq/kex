@@ -983,11 +983,9 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
 auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes) -> std::vector<TypePtr> {
     auto imported = importedCandidateSignatures(name);
-    const std::vector<Signature>* sigs = m_stdlib.lookup(name);
-    if (!sigs) {
-        auto it = m_userSignatures.find(name);
-        if (it != m_userSignatures.end()) sigs = &it->second;
-    }
+    const std::vector<Signature>* sigs = nullptr;
+    auto userIt = m_userSignatures.find(name);
+    if (userIt != m_userSignatures.end()) sigs = &userIt->second;
     if (!sigs && imported.empty()) return {};
 
     auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
@@ -1041,11 +1039,9 @@ auto TypeChecker::resolveArgHints(const std::string& name,
                                    const std::vector<TypePtr>& argTypes,
                                    size_t slArgIdx) -> std::vector<TypePtr> {
     auto imported = importedCandidateSignatures(name);
-    const std::vector<Signature>* sigs = m_stdlib.lookup(name);
-    if (!sigs) {
-        auto it = m_userSignatures.find(name);
-        if (it != m_userSignatures.end()) sigs = &it->second;
-    }
+    const std::vector<Signature>* sigs = nullptr;
+    auto userIt = m_userSignatures.find(name);
+    if (userIt != m_userSignatures.end()) sigs = &userIt->second;
     if (!sigs && imported.empty()) return {};
 
     auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
@@ -1754,8 +1750,6 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto usit = m_userSignatures.find(node.name);
                 if (usit != m_userSignatures.end() && !usit->second.empty())
                     arity = static_cast<int>(usit->second[0].params.size());
-                else if (auto* sigs = m_stdlib.lookup(node.name); sigs && !sigs->empty())
-                    arity = static_cast<int>((*sigs)[0].params.size());
             }
 
             // Remaining params = explicit placeholders + unfilled arity slots.
@@ -2096,7 +2090,6 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
                             SourceLocation loc, bool isMethodCall,
                             const ast::MethodCall* methodCall) -> TypePtr {
-    const std::vector<Signature>* stdlibSigs = m_stdlib.lookup(name);
     auto userIt = m_userSignatures.find(name);
     bool hasUser = (userIt != m_userSignatures.end());
 
@@ -2175,28 +2168,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     const std::vector<Signature>* sigs = nullptr;
     if (!importedSigs.empty()) {
         merged = importedSigs;
-        if (stdlibSigs)
-            for (const auto& stdlibSig : *stdlibSigs) {
-                // The stdlib table still duplicates sigs the generated
-                // interfaces now carry; keep each unique signature once.
-                bool duplicate = false;
-                for (const auto& imported : importedSigs)
-                    if (sameParams(imported, stdlibSig) &&
-                        typesEqual(imported.result, stdlibSig.result)) {
-                        duplicate = true;
-                        break;
-                    }
-                if (!duplicate) merged.push_back(stdlibSig);
-            }
         if (hasUser)
             merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
         sigs = &merged;
-    } else if (stdlibSigs && hasUser) {
-        merged = *stdlibSigs;
-        for (const auto& s : userIt->second) merged.push_back(s);
-        sigs = &merged;
-    } else if (stdlibSigs) {
-        sigs = stdlibSigs;
     } else if (hasUser) {
         sigs = &userIt->second;
     }

@@ -2,7 +2,7 @@
 
 #include "../ast/ast.hxx"
 #include "db.hxx"
-#include "stdlib_signatures.hxx"
+#include "imported_interfaces.hxx"
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -11,11 +11,12 @@
 namespace kex::semantic {
 
 // Pass 2: walk all expression bodies, look up every name reference against
-// the collected symbol index and stdlib, emit an error for unknown names.
-// Populates SymbolInfo::references for go-to-definition / find-references.
+// the collected symbol index and imported interfaces, emit an error for
+// unknown names. Populates SymbolInfo::references for go-to-definition /
+// find-references.
 class ResolvePass {
 public:
-    explicit ResolvePass();
+    explicit ResolvePass(const ImportedInterfaces* imports = nullptr);
     auto run(SemanticDB& db, const std::string& file) -> void;
 
 private:
@@ -52,7 +53,7 @@ private:
 
     SemanticDB* m_db = nullptr;
     FileState* m_state = nullptr;
-    SignatureTable m_stdlib;
+    const ImportedInterfaces* m_imports;
 
     std::vector<std::unordered_set<std::string>> m_scopes;
     struct ImportOrigin { std::string module; bool explicitImport = false; };

@@ -78,7 +78,6 @@ add_library(kex_lib
     src/semantic/analyzer.cxx
     src/semantic/types.cxx
     src/semantic/traits.cxx
-    src/semantic/stdlib_signatures.cxx
     src/semantic/typechecker.cxx
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
@@ -356,6 +355,9 @@ add_test(NAME module_resolver_test COMMAND module_resolver_test)
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)
 target_include_directories(semantic_test PRIVATE tests)
+target_compile_definitions(semantic_test PRIVATE
+    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+add_dependencies(semantic_test kex_prelude_beam)
 add_test(NAME semantic_test COMMAND semantic_test)
 
 add_executable(interpreter_test tests/interpreter_test.cxx)

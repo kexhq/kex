@@ -53,7 +53,7 @@ auto SemanticDB::updateFile(const std::string& path, std::string source) -> void
 
     // Pass 2: resolve name references, report undefined names
     m_resolvingFiles.insert(path);
-    ResolvePass resolve;
+    ResolvePass resolve(m_imports);
     resolve.run(*this, path);
     m_resolvingFiles.erase(path);
 }
