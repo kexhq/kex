@@ -100,11 +100,15 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // die(msg) — print msg to stderr and terminate the process.
-    reg("die", [](std::vector<ValuePtr> args) -> ValuePtr {
-        std::string msg = args.empty() ? "program terminated" : args[0]->toString();
-        std::cerr << "fatal: " << msg << "\n";
-        std::exit(1);
-    });
+    {
+        auto fn = [](std::vector<ValuePtr> args) -> ValuePtr {
+            std::string msg = args.empty() ? "program terminated" : args[0]->toString();
+            std::cerr << "fatal: " << msg << "\n";
+            std::exit(1);
+        };
+        reg("die", fn);
+        defineIntrinsic("System::die", std::move(fn));
+    }
 
     // IO.getLine() — reads one line from stdin (or mock input). Returns
     // String, or None at EOF / when mock input is exhausted.
@@ -191,6 +195,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // public-native because its existing API is variadic while Kex function
     // declarations currently have fixed arity.
     reg("Mock::IO::input", mockInput);
+    defineIntrinsic("Mock::IO::input", mockInput);
     defineIntrinsic("IO::ioMockStart", std::move(mockStart));
     defineIntrinsic("IO::ioMockInput", std::move(mockInput));
     defineIntrinsic("IO::ioMockOutput", std::move(mockOutput));

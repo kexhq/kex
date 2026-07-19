@@ -268,21 +268,18 @@ auto makeTargetName(const KexiTypePtr& type) -> std::string {
 // raw converted KexiType from the annotation: a Func means a 1+ param
 // method (`(X -> Bool) -> [X]` is a 1-param method returning [X]); a
 // non-Func means a 0-param method whose return type is the annotation.
+// Skips entirely when the sig's arity disagrees with the def's arity — a
+// mismatch means the annotation belongs to a different overload.
 void patchMethodWithSig(KexiMethod& method, const KexiTypePtr& sigType) {
     if (!sigType) return;
     if (sigType->kind == KexiType::Func) {
-        // Only patch when the sig's param count matches the method's, or
-        // the method has no params yet AND the sig adds them (first match).
         size_t sigParams = sigType->typeArgs.size();
-        if (!method.paramTypes.empty() && sigParams != method.paramTypes.size())
-            return;
+        if (sigParams != method.paramTypes.size()) return;
         if (method.returnType && method.returnType->kind == KexiType::Unknown)
             method.returnType = sigType->result;
-        for (size_t i = 0; i < sigParams && i < method.paramTypes.size(); i++)
+        for (size_t i = 0; i < sigParams; i++)
             if (method.paramTypes[i]->kind == KexiType::Unknown)
                 method.paramTypes[i] = sigType->typeArgs[i];
-        if (method.paramTypes.empty() && !sigType->typeArgs.empty())
-            method.paramTypes = sigType->typeArgs;
     } else {
         if (!method.paramTypes.empty()) return;
         if (method.returnType && method.returnType->kind == KexiType::Unknown)
@@ -292,21 +289,19 @@ void patchMethodWithSig(KexiMethod& method, const KexiTypePtr& sigType) {
 
 // Same as patchMethodWithSig but for module-level / top-level KexiExports.
 // Standalone sigs at module scope use the full function type
-// (`String -> Result<...>`, params and return together).
+// (`String -> Result<...>`, params and return together). Skips when the
+// sig's arity disagrees with the def's actual arity.
 void patchExportWithSig(KexiExport& exp, const KexiTypePtr& sigType) {
     if (!sigType) return;
     if (sigType->kind == KexiType::Func) {
+        if (sigType->typeArgs.size() != exp.paramTypes.size()) return;
         if (exp.returnType && exp.returnType->kind == KexiType::Unknown)
             exp.returnType = sigType->result;
-        for (size_t i = 0; i < sigType->typeArgs.size() &&
-                            i < exp.paramTypes.size(); i++)
+        for (size_t i = 0; i < exp.paramTypes.size(); i++)
             if (exp.paramTypes[i]->kind == KexiType::Unknown)
                 exp.paramTypes[i] = sigType->typeArgs[i];
-        if (exp.paramTypes.empty() && !sigType->typeArgs.empty()) {
-            exp.paramTypes = sigType->typeArgs;
-            exp.beamArity = static_cast<int>(exp.paramTypes.size());
-        }
     } else {
+        if (!exp.paramTypes.empty()) return;
         if (exp.returnType && exp.returnType->kind == KexiType::Unknown)
             exp.returnType = sigType;
     }

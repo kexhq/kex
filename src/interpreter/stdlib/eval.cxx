@@ -50,16 +50,10 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
 }
 
 auto Evaluator::registerEvalBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     m_globalEnv->define("Evaluator", Value::module("Evaluator"));
 
     // Evaluator.run(source) or Evaluator.run(source, opts)
-    reg("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("Evaluator.run requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(Value::string("Evaluator.run requires a source string"));
@@ -80,7 +74,7 @@ auto Evaluator::registerEvalBuiltins() -> void {
     });
 
     // Evaluator.runExpression(source) or Evaluator.runExpression(source, opts)
-    reg("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(Value::string("Evaluator.runExpression requires a source string"));

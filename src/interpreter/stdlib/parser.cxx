@@ -745,8 +745,9 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
 auto Evaluator::registerParserBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
+        val->data = FunctionValue{name, fn};
         m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("Parser", Value::module("Parser"));

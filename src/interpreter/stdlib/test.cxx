@@ -12,8 +12,9 @@ namespace kex::interpreter {
 auto Evaluator::registerTestBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
         auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
+        val->data = FunctionValue{name, fn};
         m_globalEnv->define(name, val);
+        defineIntrinsic("Test::" + name, std::move(fn));
     };
 
     // describe(name) do ... end — purely organizational: prints a header
