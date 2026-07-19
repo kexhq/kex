@@ -134,6 +134,20 @@ describe("Integer.parse and Float.parse") do
   end
 end
 
+describe("Number.parse") do
+  it("keeps integer input as an Integer") do
+    assert(Number.parse("42").or(0) == 42)
+  end
+
+  it("falls back to Float input") do
+    assert(Number.parse("3.14").or(0.0) == 3.14)
+  end
+
+  it("fails on non-numeric input") do
+    assert(Number.parse("nope").error?)
+  end
+end
+
 describe("Integer — floor, ceil, round") do
   it("floor is identity on integers") do
     assert(5.floor == 5)

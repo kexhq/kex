@@ -101,30 +101,37 @@ instead of illustrative pure-Kex implementations.
 
 ### Phase 3 — fill in the intrinsics — DONE
 
-20 intrinsic runtime modules (`kex_intrinsic_*.erl`) cover all primitives the
-prelude needs. Walker native builtins back the same intrinsics.
+The `kex_intrinsic_*.erl` runtime modules cover all primitives the prelude
+needs. Walker native builtins back the same qualified intrinsic identities.
 
 ### Phase 4 — delete the ladders — MOSTLY DONE
 
 The `preludeFns`/`hofPreludeFns` routing blocks and `migratedPreludeFns()` are
 deleted. Receiver calls route through `resolvedCalls` (semantic) or
 `externalModules->receiverFunctions` (KexI). All namespace module hardcoded
-dispatch removed except Supervisor, ENV, and Mock.FS (sub-module constructors).
+dispatch is removed except Supervisor's syntax-level block/map construction.
+ENV and Mock.FS now route through ordinary source modules and compiled
+interfaces.
 
 Remaining inline lowerings (cannot be removed yet):
 - Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`, `abs`,
   `alive?`, `in?`, `digit?`, `alpha?`, `space?`)
-- File handle methods (`feed`, `readLine`, `writeLine`, `eof?`)
-- Process methods (`send`, `link`/`unlink`, `await`)
 - `.to(Type)` conversion
 - `.or(default)` universal semantics
 
-### KexI v3 — param names for named-arg reordering — DONE
+FileHandle methods and ordinary Process/Pid methods are source-owned. Task
+`await` is source-owned on BEAM; the walker alone retains a bare fallback
+because scheduler suspension cannot preserve a shared evaluator environment
+frame until evaluator environments become process-local.
+
+### KexI v3/v5 — param names for named-arg reordering — DONE
 
 `KexiExport.paramNames` carries parameter names through the binary interface.
 The lowerer resolves named args for external module functions in all three
 paths (method-call, bare-call, bare-name fallback). Stream.Sequence/Iterate
-fully decoupled on both backends via this mechanism.
+fully decoupled on both backends via this mechanism. KexI v5 adds parameter
+names to receiver methods (excluding the receiver itself), allowing generic
+named receiver dispatch such as `task.await(timeout: 1000)`.
 
 ## Enumerable trait (polymorphic HOFs, one definition) — DONE for map/filter/each
 
@@ -206,23 +213,38 @@ All hardcoded namespace dispatch removed from the lowerer. Calls route through
 
 - **IO** (`kex_intrinsic_io`): printLine, print, putLine, put, inspect, getLine,
   get, printError, warn, warning, exit
-- **Math** (`kex_intrinsic_math`): all math functions, PI/E as Kex constants
-- **Console** (`kex_intrinsic_console`): color constants and functions
-- **Process** (`kex_intrinsic_process`): self, exit, register, whereis
-- **Task** (`kex_intrinsic_task`): start, awaitAll
+- **Math** (`kex_intrinsic_math`): all math functions, PI/E as Kex constants;
+  public walker calls execute the source wrappers over private numeric primitives
+- **Console** (`kex_intrinsic_console`): color constants and functions; public
+  walker access executes the source wrappers over private styling primitives
+- **Process** (`kex_intrinsic_process`): self, exit, register, whereis;
+  `Process.self` retains its walker scheduler fallback while the other
+  namespace capabilities remain unavailable there
+- **Kex** (`kex_intrinsic_kex`): backend and feature probes; public walker
+  calls execute the source wrappers over private backend-specific intrinsics
+- **Task** (`kex_intrinsic_task`): start, awaitAll; receiver `await` routes
+  through source on BEAM. Walker `start`, `await`, and `awaitAll` retain
+  scheduler fallbacks until evaluator environments are process-local
 - **Http** (`kex_intrinsic_http`): get/post/put/patch/delete/head/options (1+2 arity)
 - **Stream**: Sequence, Iterate (via generate); named-arg reordering through
-  KexI v3 param names
-- **System** (`kex_intrinsic_system`): exit
-- **File** (`kex_intrinsic_file`): all file operations
-- **Directory** (`kex_intrinsic_directory`): all directory operations
-- **Integer/Float/Number**: parse, parsePrefix functions
-- **Mock.IO/Mock.Http**: fully decoupled via companion modules
+  KexI export param names
+- **System** (`kex_intrinsic_system`): source-owned exit over the private
+  process-termination primitive
+- **File** (`kex_intrinsic_file`): all file operations; public walker calls
+  execute source wrappers over private filesystem primitives
+- **Directory** (`kex_intrinsic_directory`): all directory operations; public
+  walker calls execute source wrappers over private filesystem primitives
+- **Integer/Float/Number**: source-owned parse functions (plus Integer/Float
+  parsePrefix) over private parsing intrinsics
+- **Mock.IO/Mock.Http/Mock.FS**: decoupled via companion modules and private
+  intrinsic state operations. Mock.IO source overloads cover one through four
+  inputs; only the walker's unbounded variadic compatibility form remains
+  public-native until variadic declarations are supported
 - **ENV** (`kex_intrinsic_env`): get, getWithDefault, has?, keys, values,
   count, each, entries; interpreter keeps ENV as a plain MapValue with UFCS
 
-Still hardcoded: **Supervisor** (IR-level map construction),
-**Mock.FS** (sub-module constructors).
+Still hardcoded: **Supervisor** (syntax-level block handling and IR map
+construction).
 
 ### Routing
 

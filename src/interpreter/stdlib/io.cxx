@@ -81,7 +81,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     m_globalEnv->define("IO::warning", m_globalEnv->get("IO::printError"));
 
     // System.exit(code) — terminate with the given numeric exit code.
-    reg("System::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("System::exit", [](std::vector<ValuePtr> args) -> ValuePtr {
         int code = 0;
         if (!args.empty()) {
             if (auto* i = std::get_if<IntValue>(&args[0]->data)) code = static_cast<int>(i->value);
@@ -136,7 +136,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     for (const char* name : {
              "IO::get", "IO::getLine", "IO::inspect", "IO::print",
              "IO::printError", "IO::printLine", "IO::put", "IO::putLine",
-             "IO::warn", "IO::warning", "System::exit"}) {
+             "IO::warn", "IO::warning"}) {
         if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
     }
 
@@ -194,11 +194,10 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::unit();
     };
 
-    reg("Mock::IO::start", mockStart);
+    // The fixed-arity Mock.IO controls are source-owned. `input` alone stays
+    // public-native because its existing API is variadic while Kex function
+    // declarations currently have fixed arity.
     reg("Mock::IO::input", mockInput);
-    reg("Mock::IO::output", mockOutput);
-    reg("Mock::IO::clear", mockClear);
-    reg("Mock::IO::stop", mockStop);
     defineIntrinsic("IO::ioMockStart", std::move(mockStart));
     defineIntrinsic("IO::ioMockInput", std::move(mockInput));
     defineIntrinsic("IO::ioMockOutput", std::move(mockOutput));

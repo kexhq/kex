@@ -1420,6 +1420,22 @@ int main() {
     });
 
     describe("Interpreter — Streams", []() {
+        it("does not expose private intrinsics as ordinary namespace functions", []() {
+            bool threw = false;
+            try {
+                run(
+                    "main do\n"
+                    "  FS.file(\"private.txt\", \"hidden\")\n"
+                    "end\n"
+                );
+            } catch (const RuntimeError& error) {
+                threw = true;
+                assertTrue(std::string(error.what()).find("Undefined function: file")
+                           != std::string::npos, error.what());
+            }
+            assertTrue(threw, "private FS intrinsic should not be publicly callable");
+        });
+
         it("keeps List and Stream intrinsic identities distinct", []() {
             auto result = run(
                 "main do\n"

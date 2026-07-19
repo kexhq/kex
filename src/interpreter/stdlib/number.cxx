@@ -117,7 +117,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     auto noVal = []() { return Value::none(); };  // no value parsed
 
     m_globalEnv->define("Float", Value::module("Float"));
-    reg("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
         size_t consumed = 0;
@@ -135,7 +135,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Float.parsePrefix(s) -> Just((Float, String)) | None
-    reg("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -148,7 +148,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     m_globalEnv->define("Integer", Value::module("Integer"));
-    reg("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
         size_t consumed = 0;
@@ -178,7 +178,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Integer.parsePrefix(s) -> Just((Integer, String)) | None
-    reg("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -199,7 +199,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     m_globalEnv->define("Number", Value::module("Number"));
-    reg("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
         size_t consumed = 0;
@@ -215,12 +215,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (...) {}
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
-
-    for (const char* name : {
-             "Float::parse", "Float::parsePrefix", "Integer::parse",
-             "Integer::parsePrefix", "Number::parse"}) {
-        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
-    }
 
     // Private numeric receiver identities. Public methods are declared in
     // number.kex; these entries exist solely for Kex.Intrinsic dispatch.

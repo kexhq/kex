@@ -18,6 +18,9 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the same convention IO/Math use.
     m_globalEnv->define("Process", Value::module("Process"));
 
+    // Walker-native scheduler fallback. This can be called from concurrently
+    // scheduled processes, where entering a Kex wrapper would mutate the
+    // evaluator's shared environment frame.
     reg("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
@@ -67,6 +70,8 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Task.start { block } — `block` arrives here as an already-evaluated
     // zero-arg FunctionValue (the `{ ... }` block, per MethodCall's "block
     // as last positional arg" handling in eval()).
+    // Walker-native scheduler fallback. Starting a child while a Kex wrapper's
+    // shared evaluator frame is active can corrupt later process execution.
     reg("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto pid = m_scheduler->startTask(args[0]);

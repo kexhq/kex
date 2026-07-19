@@ -18,4 +18,5 @@ ioMockStart()     -> kex_io:mock_start().
 ioMockStop()      -> kex_io:mock_stop().
 ioMockOutput()    -> kex_io:mock_output().
 ioMockClear()     -> kex_io:mock_clear().
-ioMockInput(Lines) -> kex_io:mock_input(Lines).
+ioMockInput(Lines) when is_list(Lines) -> kex_io:mock_input(Lines);
+ioMockInput(Line) -> kex_io:mock_input([Line]).

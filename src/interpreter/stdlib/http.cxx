@@ -3,12 +3,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerHttpBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     m_globalEnv->define("Http", Value::module("Http"));
 
     auto httpError = [](const std::string& kind, const std::string& message) -> ValuePtr {
@@ -31,18 +25,12 @@ auto Evaluator::registerHttpBuiltins() -> void {
         return httpError("NotImplemented", "Http requires BEAM backend");
     };
 
-    reg("Http::get", httpRequest);
-    reg("Http::post", httpRequest);
-    reg("Http::put", httpRequest);
-    reg("Http::patch", httpRequest);
-    reg("Http::delete", httpRequest);
-    reg("Http::head", httpRequest);
-    reg("Http::options", httpRequest);
-
+    // Request operations are private runtime capabilities. The public
+    // Http.* functions are loaded from http.kex and delegate here.
     for (const char* name : {
              "Http::get", "Http::post", "Http::put", "Http::patch",
              "Http::delete", "Http::head", "Http::options"}) {
-        if (auto value = m_globalEnv->get(name)) defineIntrinsic(name, value);
+        defineIntrinsic(name, httpRequest);
     }
 
     if (!m_globalEnv->has("Mock"))
@@ -86,11 +74,8 @@ auto Evaluator::registerHttpBuiltins() -> void {
         return Value::unit();
     };
 
-    // Public bindings back Mock.Http; category-qualified private identities
-    // back Kex.Intrinsic.Http without exposing bare mock-control functions.
-    reg("Mock.Http::start", mockStart);
-    reg("Mock.Http::respond", mockRespond);
-    reg("Mock.Http::stop", mockStop);
+    // Mock.Http's public functions live in http.kex. Only its private state
+    // controls are registered here.
     defineIntrinsic("Http::mockStart", std::move(mockStart));
     defineIntrinsic("Http::mockRespond", std::move(mockRespond));
     defineIntrinsic("Http::mockStop", std::move(mockStop));

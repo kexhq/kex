@@ -119,5 +119,17 @@ foul module Mock do
     foul input(lines) -> Unit do
       return Kex.Intrinsic.IO.ioMockInput(lines)
     end
+
+    foul input(first, second) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second])
+    end
+
+    foul input(first, second, third) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third])
+    end
+
+    foul input(first, second, third, fourth) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
+    end
   end
 end

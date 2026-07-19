@@ -143,7 +143,7 @@ float_parse_prefix(S) ->
 number_parse(S) when is_binary(S) ->
     %% Only accept integer full-match; fall through to float otherwise.
     case kex_intrinsic_integer:integer_parse(S) of
-        {'Ok', {_Int, <<>>}} = Ok -> Ok;
+        {'Ok', Int} = Ok when is_integer(Int) -> Ok;
         _ ->
             case float_parse(S) of
                 {'Ok', _} = Ok -> Ok;

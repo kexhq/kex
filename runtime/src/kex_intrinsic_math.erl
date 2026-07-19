@@ -1,16 +1,13 @@
 %% Kex.Intrinsic.Math — BEAM primitive backend for Math.* functions
-%% that can't be plain 1:1 BIF forwards (math:exp needs an argument so
-%% can't back a 0-arg constant; Erlang's math has no log/2, hypot/2,
-%% or cbrt/1). Moved from kex_io where math functions didn't belong.
+%% that can't be plain 1:1 BIF forwards (Erlang's math has no log/2, hypot/2,
+%% or cbrt/1). Public PI/E constants are Kex literals and do not cross this
+%% private ABI. Moved from kex_io where math functions didn't belong.
 %% Matching src/interpreter/stdlib/math.cxx exactly.
 -module(kex_intrinsic_math).
--export([e/0, pi/0, sqrt/1, cbrt/1, sin/1, cos/1, tan/1,
+-export([sqrt/1, cbrt/1, sin/1, cos/1, tan/1,
          asin/1, acos/1, atan/1, atan2/2, sinh/1, cosh/1, tanh/1,
          log/1, log/2, log2/1, log10/1, exp/1, pow/2,
          abs/1, floor/1, ceil/1, hypot/2]).
-
-%% Math.e / Math.E — Euler's number (0-arg constant).
-e() -> math:exp(1.0).
 
 %% Math.log(x) — natural logarithm.
 log(X) -> math:log(X).
@@ -25,7 +22,6 @@ hypot(A, B) -> math:sqrt(A * A + B * B).
 cbrt(X) when X < 0 -> -math:pow(-X, 1.0 / 3.0);
 cbrt(X) -> math:pow(X, 1.0 / 3.0).
 
-pi() -> math:pi().
 sqrt(X) -> math:sqrt(X).
 sin(X) -> math:sin(X).
 cos(X) -> math:cos(X).

@@ -34,7 +34,7 @@ static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
 
 auto Evaluator::registerFileBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        definePublicIntrinsic(name, std::move(fn));
+        defineIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("File", Value::module("File"));
@@ -492,7 +492,7 @@ auto Evaluator::registerFileBuiltins() -> void {
 
 auto Evaluator::registerDirectoryBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        definePublicIntrinsic(name, std::move(fn));
+        defineIntrinsic(name, std::move(fn));
     };
 
     m_globalEnv->define("Directory", Value::module("Directory"));
@@ -682,18 +682,10 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 }
 
 auto Evaluator::registerMockBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     m_globalEnv->define("Mock", Value::module("Mock"));
 
-    // Mock.FS — returns a sub-namespace placeholder so Mock.FS.File/Directory/clear work
-    reg("Mock::FS", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::module("Mock::FS");
-    });
+    // Namespace shell only; Mock.FS's public operations are loaded from Kex.
+    m_globalEnv->define("Mock::FS", Value::module("Mock.FS"));
 
     // Mock.FS.File(path, content) -> Unit  — register an in-memory file
     auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -720,9 +712,6 @@ auto Evaluator::registerMockBuiltins() -> void {
         return Value::unit();
     };
 
-    reg("Mock::FS::File", mockFile);
-    reg("Mock::FS::Directory", mockDirectory);
-    reg("Mock::FS::clear", mockClear);
     defineIntrinsic("FS::file", std::move(mockFile));
     defineIntrinsic("FS::directory", std::move(mockDirectory));
     defineIntrinsic("FS::clear", std::move(mockClear));

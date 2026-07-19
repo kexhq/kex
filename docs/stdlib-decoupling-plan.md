@@ -272,8 +272,10 @@ String intrinsic ABI while preserving Char results. This removes the last bare
 String case-conversion aliases, including their former use by shorthand mapping
 callbacks.
 Mock IO and HTTP control primitives now register only as qualified `IO::ioMock*`
-and `Http::mock*` intrinsic identities. Their public `Mock.IO` and `Mock.Http`
-bindings remain intact, while the transitional bare control functions are gone.
+and `Http::mock*` intrinsic identities. Public fixed-arity `Mock.IO` and all
+`Mock.Http` calls execute source wrappers; only Mock.IO's unbounded variadic
+`input` compatibility binding remains public-native. Transitional bare control
+functions are gone.
 Kex feature probes now use qualified `Kex::featureHas?` and
 `Kex::featureList` intrinsic identities. The walker also classifies native Pid
 values for source method resolution; `send`, `link`, `unlink`, and `alive?`
@@ -284,6 +286,11 @@ overloads survive parsing and own BEAM dispatch. The walker retains its
 isolated bare `await` fallback: awaiting yields the scheduler while a shared
 evaluator environment frame is active, so routing that backend through the Kex
 wrapper still requires process-local evaluator environments.
+`Process.self`, `Task.start`, and `Task.awaitAll` remain public walker-native
+scheduler fallbacks. Even a non-suspending wrapper may run in one of several
+cooperatively scheduled processes and mutate the evaluator's shared environment
+frame. Process exit/register/whereis remain BEAM-only capabilities; the
+interpreter's feature probe reports Process unavailable.
 The Enumerable callback adapter is now registered solely as the qualified
 `Fun::applyItem` intrinsic. No public or prelude code depended on its former
 bare registry name.
@@ -300,10 +307,20 @@ intrinsic environment rather than treating public bindings as a staging area.
 This separation exposed List's historical `length` spelling as an accidental
 public lookup of a private binding; List now declares the compatibility method
 explicitly in Kex source.
-An explicit `definePublicIntrinsic` path now registers namespace functions in
-both environments without relying on the constructor's blanket clone. Math,
-Console, and Kex public native namespaces have migrated to it; their private
-helpers remain intrinsic-only.
+The transitional `definePublicIntrinsic` dual-registration path has been
+deleted after its final callers moved to source wrappers. Private primitives
+now enter only the intrinsic registry. Intentional public-native compatibility
+functions are registered explicitly by their owning domain and cannot
+accidentally acquire intrinsic capability through a shared helper.
+Ordinary function lookup no longer falls back to that private registry either;
+category-qualified primitives are reachable only through the evaluator's
+dedicated `Kex.Intrinsic.*` dispatch. A contract test verifies that an identity
+such as `FS::file` is not callable as an ordinary namespace function. Toolchain
+capability enforcement for direct `Kex.Intrinsic.*` syntax remains part of the
+installed-stdlib/package phase.
+Intrinsic registration now rejects identities without a category separator,
+making the removal of the bare compatibility bridge an enforced invariant
+rather than a convention.
 IO/System, HTTP, Process/Task, and numeric parsing now explicitly publish their
 dual public/intrinsic identities as well. Their unrelated public helpers are no
 longer implicitly treated as intrinsic capabilities by domain registration.
@@ -330,8 +347,11 @@ intrinsic registry to survive loading the source `ENV` namespace declarations.
   conservatively.
 - Feed the same interface registry to checking, completion, dispatch, record
   layout lookup, lowering, and the REPL.
-- Remove the hardcoded stdlib signature table only after generated interfaces
-  reproduce its accepted calls and diagnostics.
+- Completed: the hardcoded stdlib signature table is gone. `TypeChecker`
+  obtains namespace, automatic-import, and receiver candidates from the shared
+  `ImportedInterfaces` snapshot built from prebuilt KexI metadata. Remaining
+  name-specific checks implement language semantics (for example typed process
+  messages), not duplicate stdlib declarations.
 
 ### 4. Turn the prelude into the installed stdlib package
 
@@ -491,10 +511,11 @@ entirely for lists.
 
 Math module fully decoupled: prelude `module Math` now has `let`
 implementations that call `Kex.Intrinsic.Math.*`; `kex_intrinsic_math.erl`
-has all BIF wrappers; interpreter `math.cxx` has bare-name intrinsic
-aliases. Case-insensitive aliases (`pi`/`PI`, `power`/`pow`) removed —
+has all BIF wrappers; interpreter `math.cxx` exposes qualified private
+identities only. Case-insensitive aliases (`pi`/`PI`, `power`/`pow`) removed —
 names are strictly case-sensitive. Constants `PI` and `E` are literal
-floats in Kex source. The `flattenModules` flag is now set during prelude
+floats in Kex source, and their obsolete private runtime functions have been
+deleted from both backends. The `flattenModules` flag is now set during prelude
 metadata collection so module function exports appear in the KexI chunk.
 Hardcoded namespace dispatch removed from `lower.cxx` for all decoupled
 modules (IO, System, Math, Console, Process, Task, Http, File, Directory,
@@ -502,14 +523,15 @@ Integer, Float, Number). Namespace calls now route through companion
 module exports via `externalModules->exportToBeamFn`. The `nsCall` lambda
 is deleted. Codegen tests updated to verify companion module routing
 (`Kex.IO:printLine` etc.) instead of direct runtime calls
-(`kex_io:print_line`). Only Supervisor and ENV retain hardcoded dispatch.
+(`kex_io:print_line`). Only Supervisor retains syntax-specific hardcoded
+dispatch.
 
-Native-wins guard in the interpreter: `execModule` now skips prelude
-`let` definitions when a native builtin already exists for that
-`Module::function` key in `m_intrinsicEnv`. This lets the prelude carry
-Kex.Intrinsic.* implementations for BEAM without overwriting the
-interpreter's native builtins (which may be variadic or capture evaluator
-state).
+Native-wins guard in the interpreter: `execModule` skips prelude `let`
+definitions only when an explicit public native builtin already exists for
+that `Module::function` key. A private intrinsic with the same qualified name
+no longer suppresses its public Kex wrapper. This lets source ownership advance
+without renaming the private ABI, while preserving intentional variadic or
+evaluator-state public compatibility bindings.
 
 Module-function fallback in the interpreter: `callFunction` now searches
 `m_moduleRegistry` exports when a bare uppercase name (e.g. `Sequence`)
@@ -520,38 +542,50 @@ isn't found in `m_env`/`m_intrinsicEnv`. This lets bare calls like
 Namespace modules with prelude implementations:
 - **Math**: fully decoupled (see above)
 - **IO**: `let` implementations calling `Kex.Intrinsic.IO.*`;
-  `kex_intrinsic_io.erl` wraps `kex_io`; interpreter natives win
-- **System**: `let exit(code)` calling `Kex.Intrinsic.IO.exit`
+  `kex_intrinsic_io.erl` wraps `kex_io`. Walker namespace functions remain
+  public-native compatibility bindings: print families are variadic, and all
+  IO calls may occur in concurrently scheduled processes before evaluator
+  environments are process-local.
+- **System**: source-owned `exit(code)` calls the private
+  `Kex.Intrinsic.System.exit` primitive on both backends
 - **Console**: all color constants and functions as `let` definitions
-  calling `Kex.Intrinsic.Console.*`; interpreter natives win
+  calling `Kex.Intrinsic.Console.*`; walker calls execute those source wrappers
 - **Process**: `module Process` added with `self`, `exit`, `register`,
   `whereis` calling `Kex.Intrinsic.Process.*`; `Process::self` native wins
   on interpreter
+- **Kex**: `backend` and nested `Feature.has?`/`Feature.list` execute their
+  Kex wrappers on the walker over private backend/feature intrinsics
 
 - **Http**: all 7 HTTP methods (get/post/put/patch/delete/head/options)
   with 1- and 2-arity overloads calling `Kex.Intrinsic.Http.*`;
-  `kex_intrinsic_http.erl` wraps `kex_http`; interpreter natives win
+  `kex_intrinsic_http.erl` wraps `kex_http`; interpreter request operations
+  are private-only, so public walker calls execute the Kex wrappers
 
 - **Task**: `start` and `awaitAll` call `Kex.Intrinsic.Task.*`; both receiver
   `await` overloads are source-owned, including named `timeout:` dispatch;
   `kex_intrinsic_task.erl` wraps `kex_task`; interpreter natives win
 
 - **File/Directory**: top-level `foul module File` and `foul module Directory`
-  added alongside `module FS` declaration block; `kex_intrinsic_file.erl` and
-  `kex_intrinsic_directory.erl` wrap `kex_file`; interpreter natives win
-- **Integer/Float/Number**: `module Integer`, `module Float`, `module Number`
-  blocks added to `number.kex` with parse/parsePrefix functions calling
-  `Kex.Intrinsic.*`; `kex_intrinsic_float.erl` created; camelCase aliases
-  added to existing BEAM modules; interpreter natives win via guard
+  live alongside the `module FS` declaration block; `kex_intrinsic_file.erl`
+  and `kex_intrinsic_directory.erl` wrap `kex_file`. Walker filesystem
+  operations are private-only, so public calls execute the Kex wrappers.
+- **Integer/Float/Number**: namespace blocks in `number.kex` own parse and the
+  Integer/Float parsePrefix forms through `Kex.Intrinsic.*`; all walker parsing
+  primitives are private-only. `kex_intrinsic_float.erl` supplies the Float
+  BEAM boundary, while Number uses the shared numeric intrinsic module.
 
 Mock decoupling status:
-- **Mock.IO**: fully decoupled — prelude foul functions in http.kex's
+- **Mock.IO**: decoupled at the runtime boundary — prelude foul functions in http.kex's
   consolidated `module Mock` block dispatch through `Kex.Intrinsic.IO.*`;
   companion `Kex.Mock.IO` module generated; hardcoded lowerer dispatch
-  removed; interpreter natives win via `.`→`::` fallback in native-wins
-  guard
+  removed. Walker `start`, `stop`, `output`, and `clear` execute the source
+  wrappers. Source overloads cover one through four input arguments on BEAM,
+  including scalar and list forms. The walker's unbounded variadic `input(...)`
+  remains the sole public-native compatibility binding until Kex declarations
+  can represent variadic parameters.
 - **Mock.Http**: fully decoupled — companion `Kex.Mock.Http` generated
-  from prelude foul functions; hardcoded dispatch was already removed
+  from prelude foul functions; walker public calls also execute those source
+  wrappers, with only mock-state controls retained as private intrinsics
 - **Mock.FS**: fully decoupled — source `File`, `Directory`, and `clear`
   functions dispatch through `Kex.Intrinsic.FS.*`; the interpreter registers
   private FS primitives and BEAM uses `kex_intrinsic_fs`, so the dedicated

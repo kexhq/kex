@@ -119,8 +119,6 @@ private:
     // just split out of the core evaluator file by domain).
     auto defineIntrinsic(const std::string& name, NativeFunc fn) -> void;
     auto defineIntrinsic(const std::string& name, const ValuePtr& value) -> void;
-    auto definePublicIntrinsic(const std::string& name, NativeFunc fn) -> void;
-    auto definePublicIntrinsic(const std::string& name, const ValuePtr& value) -> void;
     auto registerBuiltins() -> void;
     auto registerAdtConstructors() -> void;
     auto registerIOBuiltins() -> void;

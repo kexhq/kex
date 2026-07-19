@@ -3,10 +3,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerKexBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        definePublicIntrinsic(name, std::move(fn));
-    };
-
     m_globalEnv->define("Kex", Value::module("Kex"));
     m_globalEnv->define("Kex::Feature", Value::module("Kex.Feature"));
 
@@ -36,12 +32,12 @@ auto Evaluator::registerKexBuiltins() -> void {
         return Value::list({makeVariant("FS")});
     };
 
-    reg("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
+    // Kex.backend and Kex.Feature.* are source-owned. These implementations
+    // are reachable only through the private Kex.Intrinsic.Kex boundary.
+    defineIntrinsic("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         return makeVariant("Interpreter");
     });
 
-    reg("Kex.Feature::has?", hasFeature);
-    reg("Kex.Feature::list", listFeatures);
     defineIntrinsic("Kex::featureHas?", hasFeature);
     defineIntrinsic("Kex::featureList", listFeatures);
 }

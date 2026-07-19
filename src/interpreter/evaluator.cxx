@@ -33,6 +33,8 @@ Evaluator::Evaluator() {
 }
 
 auto Evaluator::defineIntrinsic(const std::string& name, NativeFunc fn) -> void {
+    if (name.find("::") == std::string::npos)
+        throw std::logic_error("intrinsic identity must be category-qualified: " + name);
     auto value = std::make_shared<Value>();
     value->data = FunctionValue{name, std::move(fn)};
     m_intrinsicEnv->define(name, std::move(value));
@@ -42,20 +44,6 @@ auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) 
     auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
     if (!function || !function->native) return;
     defineIntrinsic(name, function->native);
-}
-
-auto Evaluator::definePublicIntrinsic(const std::string& name, NativeFunc fn) -> void {
-    defineIntrinsic(name, fn);
-    auto value = std::make_shared<Value>();
-    value->data = FunctionValue{name, std::move(fn)};
-    m_globalEnv->define(name, std::move(value));
-}
-
-auto Evaluator::definePublicIntrinsic(const std::string& name,
-                                      const ValuePtr& value) -> void {
-    auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
-    if (!function || !function->native) return;
-    definePublicIntrinsic(name, function->native);
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
@@ -417,19 +405,18 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 auto nativeName = mod.name + "::" + node->name;
-                // Either an explicit qualified intrinsic or a public native
-                // binding owns this module slot. The public check preserves
-                // public-only helpers (such as Mock) without inserting them
-                // into the intrinsic capability registry.
-                bool hasNative = m_intrinsicEnv->get(nativeName) != nullptr ||
-                                 hasPublicNative(nativeName);
+                // Only an explicit PUBLIC native binding may own a public
+                // module slot. A same-named private intrinsic is the runtime
+                // target of the Kex wrapper, not a reason to suppress it.
+                // Public-only helpers (and intentionally native-wins module
+                // functions such as variadic IO calls) remain preserved.
+                bool hasNative = hasPublicNative(nativeName);
                 if (!hasNative && nativeName.find('.') != std::string::npos) {
                     std::string alt;
                     for (char c : mod.name)
                         alt += (c == '.') ? "::" : std::string(1, c);
                     const auto altName = alt + "::" + node->name;
-                    hasNative = m_intrinsicEnv->get(altName) != nullptr ||
-                                hasPublicNative(altName);
+                    hasNative = hasPublicNative(altName);
                 }
                 if (!hasNative)
                     execFunctionDef(*node, mod.name);
@@ -1187,15 +1174,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     // live in m_globalEnv; the C++ native
                                     // implementations live in m_intrinsicEnv.
                                     // The category-qualified identity is
-                                    // authoritative. Bare aliases remain only
-                                    // as a compatibility bridge while each
-                                    // native domain migrates its registry.
+                                    // authoritative; ordinary/bare intrinsic
+                                    // fallback would leak across categories.
                                     auto val = m_intrinsicEnv->get(
                                         catMc->method + "::" + node.method);
                                     if (!val)
-                                        val = m_intrinsicEnv->get(node.method);
-                                    if (!val)
-                                        throw RuntimeError("Undefined intrinsic: " + node.method, expr.location);
+                                        throw RuntimeError("Undefined intrinsic: " + catMc->method
+                                                           + "." + node.method, expr.location);
                                     if (auto* func = std::get_if<FunctionValue>(&val->data))
                                         return func->native(std::move(args));
                                     throw RuntimeError("Intrinsic " + node.method + " is not a function", expr.location);
@@ -2052,7 +2037,6 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         if (m_env->get(scopedName)) lookupName = scopedName;
     }
     auto val = m_env->get(lookupName);
-    if (!val) val = m_intrinsicEnv->get(name);
     if (!val && !name.empty() && std::isupper(static_cast<unsigned char>(name[0]))) {
         for (const auto& [modName, entry] : m_moduleRegistry) {
             auto eit = entry.exports.find(name);
