@@ -414,6 +414,15 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
                          KexiTypeInterface& iface,
                          KexiStructuralMetadata& meta,
                          const kex::semantic::Analyzer* analysis) {
+    KexiTraitDef traitMetadata;
+    traitMetadata.name = trait.name;
+    for (const auto& item : trait.body)
+        if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
+            ann && *ann)
+            traitMetadata.requiredMethods.push_back(
+                {(*ann)->name, (*ann)->isFoul});
+    meta.traitDefs.push_back(std::move(traitMetadata));
+
     auto receiverType = kexiConstrained("T", trait.name);
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
     for (const auto& item : trait.body)

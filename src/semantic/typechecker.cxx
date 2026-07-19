@@ -55,23 +55,12 @@ auto TypeChecker::check(const ast::Program& program,
         }, item);
     }
 
-    // Built-in prelude ADTs (see src/interpreter/stdlib/adt.cxx) — Just/
-    // None and Ok/Error are bare constructors, not declared via a user
-    // `type ... = ...`, so they're registered here rather than discovered
-    // by walking TypeDefs below.
-    m_adtVariants["Option"] = {"Just", "None"};
-    m_adtOfConstructor["Just"] = "Option";
-    m_adtOfConstructor["None"] = "Option";
-    m_adtVariants["Result"] = {"Ok", "Error"};
-    m_adtOfConstructor["Ok"] = "Result";
-    m_adtOfConstructor["Error"] = "Result";
-    m_adtVariants["Comparison"] = {"Less", "Equal", "Greater"};
-    m_adtOfConstructor["Less"] = "Comparison";
-    m_adtOfConstructor["Equal"] = "Comparison";
-    m_adtOfConstructor["Greater"] = "Comparison";
-    m_adtVariants["Either"] = {"Left", "Right"};
-    m_adtOfConstructor["Left"] = "Either";
-    m_adtOfConstructor["Right"] = "Either";
+    if (m_importedInterfaces)
+        for (const auto& adt : m_importedInterfaces->adts) {
+            m_adtVariants[adt.name] = adt.constructors;
+            for (const auto& ctor : adt.constructors)
+                m_adtOfConstructor[ctor] = adt.name;
+        }
 
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {
@@ -111,6 +100,9 @@ auto TypeChecker::check(const ast::Program& program,
 
     m_globals.set("ENV", Type::map(Type::string(), Type::string()));
 
+    if (m_importedInterfaces)
+        for (const auto& trait : m_importedInterfaces->traits)
+            m_traits.define(trait);
     registerTraits(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)

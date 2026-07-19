@@ -260,6 +260,28 @@ int main() {
             test::assertEqual(tree.constructors[1].fieldNames.size(), size_t(3));
         });
 
+        test::it("round-trips trait definitions (KexI v4)", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "Kex.Contracts";
+            KexiTraitDef trait;
+            trait.name = "Readable";
+            trait.requiredMethods.push_back({"read", true});
+            trait.requiredMethods.push_back({"name", false});
+            chunk.metadata.traitDefs.push_back(std::move(trait));
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+
+            test::assertEqual(decoded.metadata.traitDefs.size(), size_t(1));
+            test::assertEqual(decoded.metadata.traitDefs[0].name,
+                              std::string("Readable"));
+            test::assertEqual(
+                decoded.metadata.traitDefs[0].requiredMethods.size(), size_t(2));
+            test::assertTrue(
+                decoded.metadata.traitDefs[0].requiredMethods[0].isFoul);
+            test::assertTrue(
+                !decoded.metadata.traitDefs[0].requiredMethods[1].isFoul);
+        });
+
         test::it("round-trips companion with back-pointer", []() {
             KexiChunk chunk;
             chunk.metadata.unitId = "example/binary-tree";
@@ -655,6 +677,7 @@ int main() {
         test::it("collects trait default receiver functions", []() {
             kex::Lexer lexer(
                 "trait Enumerable do\n"
+                "  foul reduce : Integer -> Integer\n"
                 "  let map(f) = ()\n"
                 "end\n");
             kex::Parser parser(lexer.tokenizeAll());
@@ -665,7 +688,7 @@ int main() {
             options.flattenModules = true;
             auto chunk = collectMetadata(program, options);
 
-            test::assertEqual(chunk.typeInterface.methods.size(), size_t(1));
+            test::assertEqual(chunk.typeInterface.methods.size(), size_t(2));
             const auto& method = chunk.typeInterface.methods[0];
             test::assertEqual(method.name, std::string("map"));
             test::assertEqual(method.beamFunction, std::string("map"));
@@ -677,6 +700,16 @@ int main() {
             test::assertEqual(chunk.metadata.methodOwnership.size(), size_t(1));
             test::assertEqual(chunk.metadata.methodOwnership[0].methodName,
                               std::string("map"));
+            test::assertEqual(chunk.metadata.traitDefs.size(), size_t(1));
+            test::assertEqual(chunk.metadata.traitDefs[0].name,
+                              std::string("Enumerable"));
+            test::assertEqual(
+                chunk.metadata.traitDefs[0].requiredMethods.size(), size_t(1));
+            test::assertEqual(
+                chunk.metadata.traitDefs[0].requiredMethods[0].name,
+                std::string("reduce"));
+            test::assertTrue(
+                chunk.metadata.traitDefs[0].requiredMethods[0].isFoul);
         });
     });
 

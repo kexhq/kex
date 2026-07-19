@@ -360,6 +360,31 @@ auto termToConformance(const TermPtr& term) -> KexiTraitConformance {
     return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
 }
 
+auto traitDefToTerm(const KexiTraitDef& td) -> TermPtr {
+    std::vector<TermPtr> methods;
+    for (const auto& m : td.requiredMethods) {
+        if (m.isFoul)
+            methods.push_back(Term::tuple({Term::binary(m.name), Term::atom("foul")}));
+        else
+            methods.push_back(Term::binary(m.name));
+    }
+    return Term::tuple({Term::binary(td.name), Term::list(std::move(methods))});
+}
+
+auto termToTraitDef(const TermPtr& term) -> KexiTraitDef {
+    auto& t = term->asTuple();
+    KexiTraitDef td;
+    td.name = t[0]->asBinaryStr();
+    for (const auto& m : t[1]->asList()) {
+        if (auto* tup = std::get_if<Term::Tuple>(&m->value); tup && tup->elements.size() == 2) {
+            td.requiredMethods.push_back({tup->elements[0]->asBinaryStr(), true});
+        } else {
+            td.requiredMethods.push_back({m->asBinaryStr(), false});
+        }
+    }
+    return td;
+}
+
 auto stringsToTerm(const std::vector<std::string>& values) -> TermPtr {
     std::vector<TermPtr> terms;
     terms.reserve(values.size());
@@ -447,6 +472,13 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
                 conformances.push_back(conformanceToTerm(c));
             entries.emplace_back(Term::atom("trait_conformances"),
                                  Term::list(std::move(conformances)));
+        }
+        if (!chunk.metadata.traitDefs.empty()) {
+            std::vector<TermPtr> defs;
+            for (const auto& td : chunk.metadata.traitDefs)
+                defs.push_back(traitDefToTerm(td));
+            entries.emplace_back(Term::atom("trait_defs"),
+                                 Term::list(std::move(defs)));
         }
     }
 
@@ -570,6 +602,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     if (auto tc = sm->mapGet("trait_conformances"))
         for (const auto& c : tc->asList())
             chunk.metadata.traitConformances.push_back(termToConformance(c));
+    if (auto td = sm->mapGet("trait_defs"))
+        for (const auto& d : td->asList())
+            chunk.metadata.traitDefs.push_back(termToTraitDef(d));
 
     // v1 compatibility: ownership was implicit in the entry back-pointer and
     // the Kex.<Module> BEAM naming convention.

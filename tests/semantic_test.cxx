@@ -620,6 +620,33 @@ int main() {
                 "doubled"));
         });
 
+        it("uses imported ADTs for exhaustiveness checking", []() {
+            semantic::ImportedInterfaces interfaces;
+            interfaces.adts.push_back({"Choice", {"Yes", "No"}});
+            assertTrue(hasErrorWithInterfaces(
+                "let choose(value: Choice) do\n"
+                "  match value do\n"
+                "    Yes -> 1\n"
+                "  end\n"
+                "end\n",
+                interfaces, "Non-exhaustive match"));
+        });
+
+        it("validates implementations against imported trait definitions", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::TraitDef readable;
+            readable.name = "Readable";
+            readable.requiredMethods.push_back(
+                {"read", {}, semantic::Type::string(), true});
+            interfaces.traits.push_back(std::move(readable));
+            assertTrue(hasErrorWithInterfaces(
+                "record Document do title : String end\n"
+                "make Document, implement: Readable do\n"
+                "  let read = @title\n"
+                "end\n",
+                interfaces, "must be declared foul"));
+        });
+
         it("lets a local module shadow an imported module target", []() {
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedModuleInterface numbers;

@@ -198,6 +198,17 @@ remain readable through conservative compatibility defaults. A future package
 manifest can supply a stable package identity through the same unit field;
 the standalone compiler currently uses the entry artifact identity.
 
+KexI v4 adds trait definitions alongside the existing generic ADT constructor
+sets in structural metadata. The compiled-interface registry now projects both
+into the backend-neutral semantic snapshot. Match exhaustiveness no longer seeds
+`Optional`, `Result`, `Comparison`, or `Either` by name in the typechecker;
+those closed constructor sets come from the prebuilt stdlib interface. Imported
+trait definitions retain required method names, signatures, and foulness, so a
+dependent package can validate `make ..., implement:` without reparsing the
+provider's source. Primitive structural trait membership and the transitional
+`Resultable`/`Optionable`/`Eitherable` named-ADT bridge remain in the semantic
+registry for a later slice.
+
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.
 - Represent exports, receiver functions, receiver types, generics, traits, records, ADTs,
@@ -280,12 +291,31 @@ The lowerer consumes resolved targets before reaching any hardcoded
 fallback, so calls that the typechecker covers go through a generic
 interface-driven path with no hardcoded function names. KexI method
 `paramTypes` now exclude the receiver (stored separately in `receiverType`),
-fixing a double-receiver arity mismatch. Trait-constrained receiver types
-in imported signatures widen to Unknown for type checking until the trait
-conformance system is fully wired to the static checker. The stdlib
-signature table still shadows imported sigs at matching arities to preserve
-hand-tuned overload diagnostics; removing it requires KexI signatures to
-reach parity with the stdlib table.
+fixing a double-receiver arity mismatch.
+
+The trait conformance system is now wired to the static checker: KexI
+structural metadata carries `trait_conformances` collected from
+`make ... implement:` declarations (with ADT constructors expanded from the
+ADT's conformance), `buildSemanticInterfaces` exposes them through
+`ImportedInterfaces::traitConformances`, and the typechecker registers them
+in its `TraitRegistry` (including compound List/Map/Optional receivers).
+Trait definitions themselves also cross the KexI v4 boundary, allowing the
+checker to resolve imported trait names and validate their required methods.
+Trait-constrained receiver types in imported signatures are no longer
+widened to Unknown — `argMatchesParam` checks them through the registry.
+Generic type variables in KexI signatures map to sequential negative ids
+per signature, so diagnostics render them as A, B, ... like the hand-tuned
+table did. Vacuous full matches (unannotated trait default methods) no
+longer mask concrete receiver-matching signature mismatches, and duplicate
+imported/stdlib candidates are listed once. The CLI Analyzer now receives
+the prelude semantic interfaces, so plain `kex file.kex` checks against
+imported signatures.
+
+The stdlib signature table no longer shadows imported sigs at matching
+arities; imported and table candidates merge (deduplicated) and drive
+checking together. Removing the table entirely still requires auditing
+that generated interfaces reproduce every accepted call and diagnostic it
+covers.
 
 The `preludeFns` parameter and all four of its routing blocks in
 `lowerMethodCall` have been removed from the lowering API. The
@@ -359,6 +389,12 @@ Kex.Intrinsic.* implementations for BEAM without overwriting the
 interpreter's native builtins (which may be variadic or capture evaluator
 state).
 
+Module-function fallback in the interpreter: `callFunction` now searches
+`m_moduleRegistry` exports when a bare uppercase name (e.g. `Sequence`)
+isn't found in `m_env`/`m_intrinsicEnv`. This lets bare calls like
+`Sequence(from: 0) { ... }` resolve to prelude module functions
+(`Stream::Sequence`) without requiring separate global aliases.
+
 Namespace modules with prelude implementations:
 - **Math**: fully decoupled (see above)
 - **IO**: `let` implementations calling `Kex.Intrinsic.IO.*`;
@@ -407,11 +443,19 @@ Stream decoupling status:
   external module functions (method-call, bare-call, and bare-name-fallback
   paths); hardcoded Stream dispatch removed
 
+ENV decoupling:
+- **BEAM**: fully decoupled — prelude `module ENV` dispatches through
+  `Kex.Intrinsic.Env.*`; `kex_intrinsic_env.erl` wraps `kex_io:env_map()`
+  with map operations; hardcoded ENV dispatch removed from lowerer
+- **Interpreter**: ENV remains a plain MapValue (env.cxx); UFCS handles
+  `.get`/`.keys`/`.has?`/etc. via Map builtins; `execModule` guard
+  preserves the MapValue when the prelude's `module ENV` is loaded
+- `main(args, env)` parameter binding to `kex_io:env_map()` retained
+  (language-level, not namespace dispatch)
+
 Namespace modules that remain hardcoded (cannot be simple intrinsic calls):
 - **Supervisor**: `start` needs named-arg destructuring and map
   construction at the IR level
-- **ENV**: not a module — the lowerer constructs `kex_io:env_map()` and
-  inlines map operations with Just/None wrapping
 
 - Resolve module calls and UFCS receiver functions during semantic analysis using receiver
   types, imports, visibility, and interface ownership.

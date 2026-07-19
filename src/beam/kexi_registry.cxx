@@ -137,6 +137,36 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     return result;
 }
 
+auto importedTrait(const KexiTraitDef& trait,
+                   const KexiTypeInterface& interface)
+    -> kex::semantic::TraitDef {
+    kex::semantic::TraitDef result;
+    result.name = trait.name;
+    for (const auto& required : trait.requiredMethods) {
+        auto method = std::find_if(
+            interface.methods.begin(), interface.methods.end(),
+            [&](const KexiMethod& candidate) {
+                return candidate.name == required.name &&
+                       candidate.receiverType &&
+                       candidate.receiverType->kind == KexiType::Constrained &&
+                       candidate.receiverType->traitName == trait.name;
+            });
+        if (method == interface.methods.end()) {
+            result.requiredMethods.push_back(
+                {required.name, {}, kex::semantic::Type::unknown(),
+                 required.isFoul});
+            continue;
+        }
+        auto imported = importedReceiverFunction(*method, {});
+        auto params = std::move(imported.signature.params);
+        if (!params.empty()) params.erase(params.begin());
+        result.requiredMethods.push_back(
+            {required.name, std::move(params), imported.signature.result,
+             required.isFoul});
+    }
+    return result;
+}
+
 } // namespace
 
 auto KexiRegistry::loadUnit(const std::string& beamPath)
@@ -534,6 +564,9 @@ auto KexiRegistry::buildSemanticInterfaces() const
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom));
+            for (const auto& trait : module.chunk.metadata.traitDefs)
+                interfaces.traits.push_back(
+                    importedTrait(trait, module.chunk.typeInterface));
         }
 
     for (const auto& [_, package] : m_packages) {
@@ -560,9 +593,14 @@ auto KexiRegistry::buildSemanticInterfaces() const
     std::unordered_map<std::string, std::vector<std::string>> adtConstructors;
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
-            for (const auto& adt : module.chunk.metadata.adts)
-                for (const auto& ctor : adt.constructors)
+            for (const auto& adt : module.chunk.metadata.adts) {
+                std::vector<std::string> ctors;
+                for (const auto& ctor : adt.constructors) {
                     adtConstructors[adt.name].push_back(ctor.name);
+                    ctors.push_back(ctor.name);
+                }
+                interfaces.adts.push_back({adt.name, std::move(ctors)});
+            }
 
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)

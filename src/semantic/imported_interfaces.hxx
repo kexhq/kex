@@ -31,6 +31,16 @@ struct ResolvedCallTarget {
     bool passesReceiver = false;
 };
 
+struct ImportedTraitConformance {
+    std::string typeName;
+    std::string traitName;
+};
+
+struct ImportedADT {
+    std::string name;
+    std::vector<std::string> constructors;
+};
+
 // Backend-neutral checked interface snapshot. Ordinary module exports retain
 // their owner; receiver functions are populated separately and only after
 // package policy has approved their provider module.
@@ -38,6 +48,9 @@ struct ImportedInterfaces {
     std::unordered_map<std::string, ImportedModuleInterface> modules;
     std::unordered_map<std::string, std::vector<ImportedFunction>>
         receiverFunctions;
+    std::vector<ImportedTraitConformance> traitConformances;
+    std::vector<ImportedADT> adts;
+    std::vector<TraitDef> traits;
 };
 
 } // namespace kex::semantic

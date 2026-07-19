@@ -10,7 +10,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 3;
+static constexpr int KEXI_SCHEMA_VERSION = 4;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -136,6 +136,16 @@ struct KexiTraitConformance {
     std::string traitName;
 };
 
+struct KexiTraitRequiredMethod {
+    std::string name;
+    bool isFoul = false;
+};
+
+struct KexiTraitDef {
+    std::string name;
+    std::vector<KexiTraitRequiredMethod> requiredMethods;
+};
+
 struct KexiStructuralMetadata {
     // Durable ownership within a compiled package/unit. `unitId` identifies
     // the artifact group; `sourceModule` is the Kex-facing qualified module;
@@ -151,6 +161,7 @@ struct KexiStructuralMetadata {
     std::vector<KexiADT> adts;
     std::vector<KexiMethodOwnership> methodOwnership;
     std::vector<KexiTraitConformance> traitConformances;
+    std::vector<KexiTraitDef> traitDefs;
     std::vector<std::string> publicExports;
     // Present only on a package entry module. An empty id means that this
     // compilation unit does not carry package policy.

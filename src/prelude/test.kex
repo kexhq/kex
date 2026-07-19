@@ -72,6 +72,7 @@ after : Block<Unit> -> Unit
 #   assert(42 == 42)
 #   assert("hello".count == 5, "count should be 5")
 assert : Bool -> Bool
+assert : Bool -> String -> Bool
 
 # Focused assertions are ordinary Kex stdlib functions layered on the primitive
 # +assert+, so adding another helper does not require compiler or runtime work.
