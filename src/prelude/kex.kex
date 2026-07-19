@@ -1,0 +1,16 @@
+type Backend = Interpreter | Beam
+
+type Feature = Http | FS | Process | WebServer
+
+foul module Kex do
+  backend : Backend
+  let backend = Kex.Intrinsic.Kex.backend()
+
+  foul module Feature do
+    has? : Feature -> Bool
+    let has?(f) = Kex.Intrinsic.Kex.featureHas?(f)
+
+    list : [Feature]
+    let list = Kex.Intrinsic.Kex.featureList()
+  end
+end

@@ -28,7 +28,7 @@ auto Evaluator::registerHttpBuiltins() -> void {
             m_mockHttpResponses.pop_front();
             return Value::ok(resp);
         }
-        return httpError("Unknown", "Http requires BEAM backend");
+        return httpError("NotImplemented", "Http requires BEAM backend");
     };
 
     reg("Http::get", httpRequest);

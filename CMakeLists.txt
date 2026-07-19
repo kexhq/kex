@@ -107,6 +107,7 @@ add_library(kex_lib
     src/interpreter/stdlib/eval.cxx
     src/interpreter/stdlib/http.cxx
     src/interpreter/stdlib/web.cxx
+    src/interpreter/stdlib/kex.cxx
     src/beam/beam_file.cxx
     src/beam/etf.cxx
     src/beam/kexi.cxx

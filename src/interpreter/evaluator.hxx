@@ -135,6 +135,7 @@ private:
     auto registerEvalBuiltins() -> void;
     auto registerHttpBuiltins() -> void;
     auto registerWebBuiltins() -> void;
+    auto registerKexBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;
