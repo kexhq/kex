@@ -209,7 +209,12 @@ provider's source. `Optionable`, `Resultable`, and `Eitherable` plus their ADT
 conformances now live in `optional.kex`; their transitional named-ADT registry
 bridge has been deleted. Primitive structural trait membership remains part of
 the language implementation. The shared `either.kex` contract test exercises
-the source-owned constructors and matching on both the walker and BEAM.
+the source-owned constructors and matching on both the walker and BEAM. The
+walker no longer registers `Left` or `Right` natively; loading `optional.kex`
+is their only interpreter definition. Native `ok?`, `error?`, `some?`,
+`present?`, and `none?` registrations have also been deleted; ordinary walker
+calls now execute the same pattern-matching Kex methods as BEAM. The universal
+raw-value behavior of `.or(default)` remains an explicitly tracked fallback.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.
@@ -244,6 +249,13 @@ provider. The compiled-interface registry picks this up at load time, so
 `buildExternalModules` and `buildSemanticInterfaces` populate receiver
 functions through the standard package-declared path rather than a global
 name-based fallback.
+
+CLI compilation and semantic tests now share `common/prelude_interfaces.hxx`
+for loading the prebuilt entry artifact and building the semantic snapshot.
+The duplicate CLI registry loader and its separate error path have been
+removed. Interface names, semantic checking, lowering routes, and record
+layouts are all derived from one immutable, validated registry cached for the
+process rather than reloading the BEAM independently for each view.
 
 The prelude source dependency graph has been verified as a DAG with no
 cycles, enabling tiered compilation:

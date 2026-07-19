@@ -38,6 +38,7 @@
 // readline — every native dev machine so far has had it available via
 // Homebrew.
 #include "common/completion.hxx"
+#include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
 // Set to the type name while the user is typing inside a `make X do` block,
@@ -787,20 +788,6 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
   return names;
 }
 
-// Read the native stdlib routing contract from the artifact itself. Falling
-// back only when no artifact is available preserves the wasm build without
-// hiding a malformed native interface.
-auto loadPrebuiltPreludeUnit(const std::string &runtimeDir)
-    -> kex::beam::KexiRegistry {
-  kex::beam::KexiRegistry registry;
-  auto path = (std::filesystem::path{runtimeDir} / "kex_prelude.beam").string();
-  auto errors = registry.loadUnit(path);
-  if (!errors.empty())
-    throw std::runtime_error("invalid prebuilt standard library: " +
-                             errors.front().message);
-  return registry;
-}
-
 auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
   static const PreludeInterfaceNames names = [] {
     auto runtimeDir = prebuiltRuntimeBeamDir();
@@ -808,7 +795,7 @@ auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
     auto path = std::filesystem::path{runtimeDir} / "kex_prelude.beam";
     std::error_code ec;
     if (!std::filesystem::exists(path, ec)) return sourcePreludeInterfaceNames();
-    auto registry = loadPrebuiltPreludeUnit(runtimeDir);
+    const auto &registry = kex::preludeRegistry(runtimeDir);
     PreludeInterfaceNames result;
     for (const auto *module : registry.allLoadedModules()) {
       for (const auto &receiver : module->chunk.typeInterface.methods)
@@ -823,19 +810,14 @@ auto preludeExternalModules() -> const kex::ir::ExternalModules & {
   static const auto modules = [] {
     auto runtimeDir = prebuiltRuntimeBeamDir();
     if (runtimeDir.empty()) return kex::ir::ExternalModules{};
-    return loadPrebuiltPreludeUnit(runtimeDir).buildExternalModules();
+    return kex::preludeRegistry(runtimeDir).buildExternalModules();
   }();
   return modules;
 }
 
 auto preludeSemanticInterfaces()
     -> const kex::semantic::ImportedInterfaces & {
-  static const auto interfaces = [] {
-    auto runtimeDir = prebuiltRuntimeBeamDir();
-    if (runtimeDir.empty()) return kex::semantic::ImportedInterfaces{};
-    return loadPrebuiltPreludeUnit(runtimeDir).buildSemanticInterfaces();
-  }();
-  return interfaces;
+  return kex::preludeSemanticInterfaces(prebuiltRuntimeBeamDir());
 }
 
 auto mergeExternalModules(const kex::ir::ExternalModules &base,
@@ -962,7 +944,7 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   std::vector<kex::ir::ExternalRecordLayout> layouts;
   auto runtimeDir = prebuiltRuntimeBeamDir();
   if (runtimeDir.empty()) return layouts;
-  auto registry = loadPrebuiltPreludeUnit(runtimeDir);
+  const auto &registry = kex::preludeRegistry(runtimeDir);
   for (const auto *module : registry.allLoadedModules())
     for (const auto &record : module->chunk.metadata.records) {
       kex::ir::ExternalRecordLayout layout;
