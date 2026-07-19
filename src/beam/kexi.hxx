@@ -80,6 +80,7 @@ struct KexiMethod {
     KexiTypePtr receiverType;
     int beamArity = 0;
     bool isFoul = false;
+    bool typeOnly = false; // annotation-only, no BEAM implementation
     std::vector<KexiTypePtr> paramTypes;
     KexiTypePtr returnType;
     std::string beamFunction; // emitted BEAM function name
@@ -130,6 +131,11 @@ struct KexiMethodOwnership {
     std::string beamFunction;
 };
 
+struct KexiTraitConformance {
+    std::string typeName;
+    std::string traitName;
+};
+
 struct KexiStructuralMetadata {
     // Durable ownership within a compiled package/unit. `unitId` identifies
     // the artifact group; `sourceModule` is the Kex-facing qualified module;
@@ -144,6 +150,7 @@ struct KexiStructuralMetadata {
     std::vector<KexiRecord> records;
     std::vector<KexiADT> adts;
     std::vector<KexiMethodOwnership> methodOwnership;
+    std::vector<KexiTraitConformance> traitConformances;
     std::vector<std::string> publicExports;
     // Present only on a package entry module. An empty id means that this
     // compilation unit does not carry package policy.

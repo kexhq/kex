@@ -160,7 +160,7 @@ make [X], implement: Enumerable do
   # @example
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
-  reduce :> Acc -> (Acc -> X -> Acc) -> Acc
+  reduce :> A -> (A -> X -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
   let map(f) = Kex.Intrinsic.List.map(this, f)
@@ -183,6 +183,12 @@ make [X], implement: Enumerable do
   #   [10, 20, 30].at(9)   # => None
   at :> Integer -> X?
   let at(i) = Kex.Intrinsic.List.at(this, i)
+
+  get :> Integer -> X?
+  let get(i) = Kex.Intrinsic.Map.get(this, i)
+
+  get :> Integer -> X -> X
+  let get(i, default) = Kex.Intrinsic.Map.get(this, i, default)
 
   # Returns +true+ if +elem+ is present in the list.
   #
@@ -387,7 +393,7 @@ make [Number] do
   # @example
   #   [3, 1, 2].min   # => Just(1)
   #   [].min          # => None
-  min :> Number?
+  min :> X?
   let min = Kex.Intrinsic.List.min(this)
 
   # Returns the element with the smallest +f+ key wrapped in +Just+, or
@@ -408,7 +414,7 @@ make [Number] do
   # @example
   #   [3, 1, 2].max   # => Just(3)
   #   [].max          # => None
-  max :> Number?
+  max :> X?
   let max = Kex.Intrinsic.List.max(this)
 
   # Returns the element with the largest +f+ key wrapped in +Just+, or

@@ -2,7 +2,7 @@ spec/error_lambda_return_type.kex:5:15: error: `filter` expects argument 2 to be
 
 filter : [A] -> (A) -> Bool -> [A]
 
-filter : String -> (Char) -> Bool -> String
-
 filter : {A: B} -> (A, B) -> Bool -> {A: B}
+
+filter : Stream<A> -> (A) -> Bool -> Stream<A>
 Aborted: fix type errors before running (use --no-check to skip).

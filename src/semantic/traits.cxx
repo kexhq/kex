@@ -105,8 +105,25 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     }
 
     auto it = m_implementations.find(implementorKey(type));
-    if (it == m_implementations.end()) return false;
-    return it->second.count(traitName) > 0;
+    if (it != m_implementations.end() && it->second.count(traitName) > 0)
+        return true;
+
+    // Compound types: check the base type name for conformances registered
+    // under "List", "Map", "Optional" (from `make [X], implement: Trait`).
+    if (std::holds_alternative<ListType>(type->kind)) {
+        auto li = m_implementations.find("List");
+        if (li != m_implementations.end() && li->second.count(traitName) > 0)
+            return true;
+    } else if (std::holds_alternative<MapType>(type->kind)) {
+        auto mi = m_implementations.find("Map");
+        if (mi != m_implementations.end() && mi->second.count(traitName) > 0)
+            return true;
+    } else if (std::holds_alternative<OptionalType>(type->kind)) {
+        auto oi = m_implementations.find("Optional");
+        if (oi != m_implementations.end() && oi->second.count(traitName) > 0)
+            return true;
+    }
+    return false;
 }
 
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
@@ -118,7 +135,9 @@ auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std
     // Skip structural/primitive traits — only return user-defined ones.
     static const std::set<std::string> kBuiltin = {
         "Number", "Integer", "Float", "Equatable", "Comparable",
-        "Showable", "Resultable", "Optionable"
+        "Showable", "Resultable", "Optionable", "Eitherable",
+        "Blankable", "Truthyable", "Enumerable",
+        "Semigroup", "Monoid", "Group", "Errorable",
     };
     for (const auto& t : itA->second) {
         if (kBuiltin.count(t)) continue;

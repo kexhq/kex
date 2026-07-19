@@ -108,6 +108,12 @@ private:
                          const std::vector<TypePtr>& argTypes,
                          size_t slArgIdx) -> std::vector<TypePtr>;
 
+    // Signatures of `name` visible through the imported package interfaces:
+    // receiver functions for bare names, qualified module exports for
+    // `Module::name`, and automatic-import module exports otherwise.
+    auto importedCandidateSignatures(const std::string& name) const
+        -> std::vector<Signature>;
+
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
                        SourceLocation loc) -> TypePtr;
@@ -140,7 +146,7 @@ private:
     std::vector<TypeEnv> m_scopeStack;
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
-    SignatureTable m_stdlib = SignatureTable::withStdlib();
+    SignatureTable m_stdlib; // AUDIT: stdlib table disabled experimentally
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
     // Source module identities declared by the current compilation unit.

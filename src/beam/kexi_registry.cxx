@@ -17,12 +17,19 @@ auto typeNameStr(const KexiTypePtr& t) -> std::string {
     }
 }
 
-auto semanticType(const KexiTypePtr& type) -> kex::semantic::TypePtr {
+// Single-letter generic names in KexI signatures (`X`, `K`, `V`) map to
+// sequential negative TypeVar ids (-1, -2, ...) in order of first appearance
+// within one signature — the same convention the hand-written stdlib table
+// uses, so diagnostics render them as A, B, ... and per-signature
+// substitution keeps working.
+using TypeVarMap = std::unordered_map<std::string, int>;
+
+auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::TypePtr {
     using kex::semantic::Type;
     if (!type) return Type::unknown();
-    auto convertAll = [](const std::vector<KexiTypePtr>& types) {
+    auto convertAll = [&vars](const std::vector<KexiTypePtr>& types) {
         std::vector<kex::semantic::TypePtr> converted;
-        for (const auto& item : types) converted.push_back(semanticType(item));
+        for (const auto& item : types) converted.push_back(semanticType(item, vars));
         return converted;
     };
     switch (type->kind) {
@@ -48,22 +55,38 @@ auto semanticType(const KexiTypePtr& type) -> kex::semantic::TypePtr {
         if (type->name == "Float64") return Type::float64();
         return Type::named(type->name);
     case KexiType::Named:
+        if (type->typeArgs.empty() && type->name.size() == 1 &&
+            type->name[0] >= 'A' && type->name[0] <= 'Z') {
+            auto [it, _] = vars.try_emplace(
+                type->name, -static_cast<int>(vars.size() + 1));
+            return Type::typeVar(it->second);
+        }
+        // Prelude make targets name these compound types (`make Map<K, V>`,
+        // `make Optional<X>`); values of them carry the compound semantic
+        // types, so normalize or receiver matching never succeeds.
+        if (type->name == "Optional" && type->typeArgs.size() == 1)
+            return Type::optional(semanticType(type->typeArgs[0], vars));
+        if (type->name == "Map" && type->typeArgs.size() == 2)
+            return Type::map(semanticType(type->typeArgs[0], vars),
+                             semanticType(type->typeArgs[1], vars));
+        if (type->name == "List" && type->typeArgs.size() == 1)
+            return Type::list(semanticType(type->typeArgs[0], vars));
         return Type::named(type->name, convertAll(type->typeArgs));
     case KexiType::Func:
-        return Type::func(convertAll(type->typeArgs), semanticType(type->result));
+        return Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
     case KexiType::Tuple:
         return Type::tuple(convertAll(type->typeArgs));
     case KexiType::List:
         return Type::list(type->typeArgs.empty()
-            ? Type::unknown() : semanticType(type->typeArgs[0]));
+            ? Type::unknown() : semanticType(type->typeArgs[0], vars));
     case KexiType::Map:
         return Type::map(type->typeArgs.size() > 0
-                             ? semanticType(type->typeArgs[0]) : Type::unknown(),
+                             ? semanticType(type->typeArgs[0], vars) : Type::unknown(),
                          type->typeArgs.size() > 1
-                             ? semanticType(type->typeArgs[1]) : Type::unknown());
+                             ? semanticType(type->typeArgs[1], vars) : Type::unknown());
     case KexiType::Optional:
         return Type::optional(type->typeArgs.empty()
-            ? Type::unknown() : semanticType(type->typeArgs[0]));
+            ? Type::unknown() : semanticType(type->typeArgs[0], vars));
     case KexiType::Union:
         return std::make_shared<kex::semantic::Type>(
             kex::semantic::Type{kex::semantic::UnionType{convertAll(type->typeArgs)}});
@@ -85,11 +108,12 @@ auto importedFunction(const KexiExport& exported,
     result.backendFunction = exported.beamFunction;
     result.backendModule = backendModule;
     result.backendArity = exported.beamArity;
+    TypeVarMap vars;
     std::vector<kex::semantic::TypePtr> params;
     for (const auto& param : exported.paramTypes)
-        params.push_back(semanticType(param));
+        params.push_back(semanticType(param, vars));
     result.signature = {exported.name, std::move(params),
-                        semanticType(exported.returnType), exported.isFoul};
+                        semanticType(exported.returnType, vars), exported.isFoul};
     return result;
 }
 
@@ -101,20 +125,15 @@ auto importedReceiverFunction(const KexiMethod& receiver,
     result.backendFunction = receiver.beamFunction;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
-    // Trait-constrained receiver types (e.g. Enumerable, Truthyable) widen
-    // to Unknown for type checking since the typechecker doesn't yet track
-    // all trait conformances statically. The backend routing (beamModule +
-    // beamFunction) is still precise.
-    auto receiverSemType = semanticType(receiver.receiverType);
-    if (std::holds_alternative<kex::semantic::ConstrainedType>(receiverSemType->kind))
-        receiverSemType = kex::semantic::Type::unknown();
+    TypeVarMap vars;
+    auto receiverSemType = semanticType(receiver.receiverType, vars);
     std::vector<kex::semantic::TypePtr> params = {
         std::move(receiverSemType),
     };
     for (const auto& param : receiver.paramTypes)
-        params.push_back(semanticType(param));
+        params.push_back(semanticType(param, vars));
     result.signature = {receiver.name, std::move(params),
-                        semanticType(receiver.returnType), receiver.isFoul};
+                        semanticType(receiver.returnType, vars), receiver.isFoul};
     return result;
 }
 
@@ -477,6 +496,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                     !providers.count(mod.chunk.metadata.sourceModule))
                     continue;
                 for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
+                    if (receiverFn.typeOnly) continue;
                     auto& vec = ext.receiverFunctions[receiverFn.name];
                     bool duplicate = false;
                     for (const auto& existing : vec)
@@ -526,11 +546,35 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 if (!units.count(module.chunk.metadata.unitId) ||
                     !providers.count(module.chunk.metadata.sourceModule))
                     continue;
-                for (const auto& receiver : module.chunk.typeInterface.methods)
+                for (const auto& receiver : module.chunk.typeInterface.methods) {
+                    if (receiver.typeOnly) continue;
                     interfaces.receiverFunctions[receiver.name].push_back(
                         importedReceiverFunction(receiver, module.beamAtom));
+                }
             }
     }
+
+    // Collect trait conformances and expand them to ADT constructors.
+    // When `make Optional<X>, implement: Truthyable`, constructors
+    // Just and None also satisfy Truthyable.
+    std::unordered_map<std::string, std::vector<std::string>> adtConstructors;
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules)
+            for (const auto& adt : module.chunk.metadata.adts)
+                for (const auto& ctor : adt.constructors)
+                    adtConstructors[adt.name].push_back(ctor.name);
+
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules)
+            for (const auto& c : module.chunk.metadata.traitConformances) {
+                interfaces.traitConformances.push_back({c.typeName, c.traitName});
+                if (auto it = adtConstructors.find(c.typeName);
+                    it != adtConstructors.end())
+                    for (const auto& ctorName : it->second)
+                        interfaces.traitConformances.push_back(
+                            {ctorName, c.traitName});
+            }
+
     return interfaces;
 }
 

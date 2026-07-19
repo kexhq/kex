@@ -257,6 +257,7 @@ auto methodToTerm(const KexiMethod& m) -> TermPtr {
         Term::list(std::move(params)),
         typeToTerm(m.returnType),
         Term::binary(m.beamFunction),
+        m.typeOnly ? Term::atom("true") : Term::atom("false"),
     });
 }
 
@@ -271,6 +272,7 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
         m.paramTypes.push_back(termToType(p));
     m.returnType = termToType(t[5]);
     m.beamFunction = t[6]->asBinaryStr();
+    m.typeOnly = t.size() >= 8 && t[7]->isAtom("true");
     return m;
 }
 
@@ -345,6 +347,15 @@ auto methodOwnershipToTerm(const KexiMethodOwnership& mo) -> TermPtr {
 }
 
 auto termToMethodOwnership(const TermPtr& term) -> KexiMethodOwnership {
+    auto& t = term->asTuple();
+    return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
+}
+
+auto conformanceToTerm(const KexiTraitConformance& c) -> TermPtr {
+    return Term::tuple({Term::binary(c.typeName), Term::binary(c.traitName)});
+}
+
+auto termToConformance(const TermPtr& term) -> KexiTraitConformance {
     auto& t = term->asTuple();
     return {t[0]->asBinaryStr(), t[1]->asBinaryStr()};
 }
@@ -430,6 +441,13 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         if (!chunk.metadata.package.id.empty())
             entries.emplace_back(Term::atom("package"),
                                  packageToTerm(chunk.metadata.package));
+        if (!chunk.metadata.traitConformances.empty()) {
+            std::vector<TermPtr> conformances;
+            for (const auto& c : chunk.metadata.traitConformances)
+                conformances.push_back(conformanceToTerm(c));
+            entries.emplace_back(Term::atom("trait_conformances"),
+                                 Term::list(std::move(conformances)));
+        }
     }
 
     return Term::tuple({
@@ -549,6 +567,9 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
             chunk.metadata.publicExports.push_back(e->asBinaryStr());
     if (auto package = sm->mapGet("package"))
         chunk.metadata.package = termToPackage(package);
+    if (auto tc = sm->mapGet("trait_conformances"))
+        for (const auto& c : tc->asList())
+            chunk.metadata.traitConformances.push_back(termToConformance(c));
 
     // v1 compatibility: ownership was implicit in the entry back-pointer and
     // the Kex.<Module> BEAM naming convention.

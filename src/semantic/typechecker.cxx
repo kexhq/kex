@@ -112,6 +112,9 @@ auto TypeChecker::check(const ast::Program& program,
     m_globals.set("ENV", Type::map(Type::string(), Type::string()));
 
     registerTraits(program);
+    if (m_importedInterfaces)
+        for (const auto& c : m_importedInterfaces->traitConformances)
+            m_traits.registerImplementation(c.typeName, c.traitName);
     registerRecordFields(program);
     registerDeclaredSignatures(program);
     preRegisterFunctionSigs(program);
@@ -950,25 +953,51 @@ auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr {
     return lastType;
 }
 
+auto TypeChecker::importedCandidateSignatures(const std::string& name) const
+    -> std::vector<Signature> {
+    std::vector<Signature> result;
+    if (!m_importedInterfaces) return result;
+    if (auto separator = name.find("::"); separator != std::string::npos) {
+        auto module = m_importedInterfaces->modules.find(name.substr(0, separator));
+        if (module != m_importedInterfaces->modules.end())
+            if (auto functions = module->second.exports.find(name.substr(separator + 2));
+                functions != module->second.exports.end())
+                for (const auto& function : functions->second)
+                    result.push_back(function.signature);
+        return result;
+    }
+    if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
+        functions != m_importedInterfaces->receiverFunctions.end())
+        for (const auto& function : functions->second)
+            result.push_back(function.signature);
+    for (const auto& [_, module] : m_importedInterfaces->modules) {
+        if (!module.automaticImport) continue;
+        if (auto functions = module.exports.find(name);
+            functions != module.exports.end())
+            for (const auto& function : functions->second)
+                result.push_back(function.signature);
+    }
+    return result;
+}
+
 auto TypeChecker::resolveBlockHints(const std::string& name,
                                      const std::vector<TypePtr>& nonBlockArgTypes) -> std::vector<TypePtr> {
+    auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = m_stdlib.lookup(name);
     if (!sigs) {
         auto it = m_userSignatures.find(name);
         if (it != m_userSignatures.end()) sigs = &it->second;
     }
-    if (!sigs) return {};
+    if (!sigs && imported.empty()) return {};
 
-    for (const auto& sig : *sigs) {
-        if (sig.params.size() != nonBlockArgTypes.size() + 1) continue;
+    auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
+        if (sig.params.size() != nonBlockArgTypes.size() + 1) return {};
         auto* blockParam = std::get_if<FuncType>(&sig.params.back()->kind);
-        if (!blockParam) continue;
+        if (!blockParam) return {};
 
-        bool allMatch = true;
         for (size_t i = 0; i < nonBlockArgTypes.size(); i++) {
-            if (!argMatchesParam(nonBlockArgTypes[i], sig.params[i])) { allMatch = false; break; }
+            if (!argMatchesParam(nonBlockArgTypes[i], sig.params[i])) return {};
         }
-        if (!allMatch) continue;
 
         // Map negative-ID generic placeholders to concrete types from the actual args.
         std::unordered_map<int, TypePtr> sub;
@@ -994,33 +1023,42 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         std::vector<TypePtr> hints;
         for (const auto& p : blockParam->params) hints.push_back(applySubst(p));
         return hints;
+    };
+
+    for (const auto& sig : imported) {
+        auto hints = hintsFrom(sig);
+        if (!hints.empty()) return hints;
     }
+    if (sigs)
+        for (const auto& sig : *sigs) {
+            auto hints = hintsFrom(sig);
+            if (!hints.empty()) return hints;
+        }
     return {};
 }
 
 auto TypeChecker::resolveArgHints(const std::string& name,
                                    const std::vector<TypePtr>& argTypes,
                                    size_t slArgIdx) -> std::vector<TypePtr> {
+    auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = m_stdlib.lookup(name);
     if (!sigs) {
         auto it = m_userSignatures.find(name);
         if (it != m_userSignatures.end()) sigs = &it->second;
     }
-    if (!sigs) return {};
+    if (!sigs && imported.empty()) return {};
 
-    for (const auto& sig : *sigs) {
-        if (sig.params.size() != argTypes.size()) continue;
-        if (slArgIdx >= sig.params.size()) continue;
+    auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
+        if (sig.params.size() != argTypes.size()) return {};
+        if (slArgIdx >= sig.params.size()) return {};
         auto* funcParam = std::get_if<FuncType>(&sig.params[slArgIdx]->kind);
-        if (!funcParam) continue;
+        if (!funcParam) return {};
 
         // All non-SL positions must match.
-        bool allMatch = true;
         for (size_t i = 0; i < argTypes.size(); i++) {
             if (i == slArgIdx) continue;
-            if (!argMatchesParam(argTypes[i], sig.params[i])) { allMatch = false; break; }
+            if (!argMatchesParam(argTypes[i], sig.params[i])) return {};
         }
-        if (!allMatch) continue;
 
         // Build generic substitution from the concrete args.
         std::unordered_map<int, TypePtr> sub;
@@ -1047,7 +1085,17 @@ auto TypeChecker::resolveArgHints(const std::string& name,
         std::vector<TypePtr> hints;
         for (const auto& p : funcParam->params) hints.push_back(applySubst(p));
         return hints;
+    };
+
+    for (const auto& sig : imported) {
+        auto hints = hintsFrom(sig);
+        if (!hints.empty()) return hints;
     }
+    if (sigs)
+        for (const auto& sig : *sigs) {
+            auto hints = hintsFrom(sig);
+            if (!hints.empty()) return hints;
+        }
     return {};
 }
 
@@ -1094,7 +1142,7 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                      std::holds_alternative<UnknownType>(pt->kind))
                         ? freshTypeVar() : pt);
             }
-            auto resultType = checkCall(sl->name, paramTypes, blockExpr.location);
+            auto resultType = checkCall(sl->name, paramTypes, blockExpr.location, true);
             return Type::func(std::move(paramTypes), resolve(resultType));
         }
         TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
@@ -1103,14 +1151,14 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             paramType = freshTypeVar();
         TypePtr resultType;
         if (sl->kind == ast::ShorthandLambda::Kind::Function) {
-            resultType = checkCall(sl->name, {paramType}, blockExpr.location);
+            resultType = checkCall(sl->name, {paramType}, blockExpr.location, true);
         } else {
             // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
             std::vector<TypePtr> callArgs = {paramType};
             for (const auto& arg : sl->args) {
                 if (arg) callArgs.push_back(inferExpr(*arg));
             }
-            resultType = checkCall(sl->name, callArgs, blockExpr.location);
+            resultType = checkCall(sl->name, callArgs, blockExpr.location, true);
         }
         return Type::func({paramType}, resolve(resultType));
     }
@@ -1970,6 +2018,9 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         auto* argOpt = std::get_if<OptionalType>(&argType->kind);
         return argOpt && argMatchesParam(argOpt->inner, paramOpt->inner);
     }
+    if (auto* argOpt = std::get_if<OptionalType>(&argType->kind)) {
+        return argMatchesParam(argOpt->inner, paramType);
+    }
     // FunctionType param — e.g. `(T-1) -> Bool` vs `(T81) -> Bool`. Without
     // this branch both sides fall to typesEqual which fails on mismatched
     // TypeVar ids even though both are permissive. Recurse into params and
@@ -2074,6 +2125,12 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     for (const auto& function : functions->second)
                         importedFunctions.push_back(&function);
             }
+            // Receiver functions are also callable as bare functions via
+            // UFCS (e.g. `even?(x)` instead of `x.even?`).
+            if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
+                functions != m_importedInterfaces->receiverFunctions.end())
+                for (const auto& function : functions->second)
+                    importedFunctions.push_back(&function);
         }
     }
     // A module declared in the current compilation unit shadows a package
@@ -2114,32 +2171,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     for (const auto* function : importedFunctions)
         importedSigs.push_back(function->signature);
 
-    // When stdlib has receiver-function signatures at the same arity as an
-    // imported candidate, the stdlib overloads are the authority for type
-    // checking (they carry hand-tuned trait matching the KexI signatures
-    // don't yet reproduce). Imported candidates are only used for backend
-    // resolution routing in that case. When no stdlib signature shares an
-    // arity with any import, the names are a coincidence and imports drive
-    // both checking and resolution.
-    bool importedShadowedByStdlib = false;
-    if (isMethodCall && name.find("::") == std::string::npos &&
-        !importedSigs.empty() && stdlibSigs) {
-        for (const auto& imported : importedSigs) {
-            for (const auto& stdlib : *stdlibSigs)
-                if (imported.params.size() == stdlib.params.size()) {
-                    importedShadowedByStdlib = true;
-                    break;
-                }
-            if (importedShadowedByStdlib) break;
-        }
-    }
-
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;
-    if (!importedSigs.empty() && !importedShadowedByStdlib) {
+    if (!importedSigs.empty()) {
         merged = importedSigs;
         if (stdlibSigs)
-            merged.insert(merged.end(), stdlibSigs->begin(), stdlibSigs->end());
+            for (const auto& stdlibSig : *stdlibSigs) {
+                // The stdlib table still duplicates sigs the generated
+                // interfaces now carry; keep each unique signature once.
+                bool duplicate = false;
+                for (const auto& imported : importedSigs)
+                    if (sameParams(imported, stdlibSig) &&
+                        typesEqual(imported.result, stdlibSig.result)) {
+                        duplicate = true;
+                        break;
+                    }
+                if (!duplicate) merged.push_back(stdlibSig);
+            }
         if (hasUser)
             merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
         sigs = &merged;
@@ -2281,10 +2329,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // otherwise get checked against the *stdlib* `modulo`'s signature
     // purely because the names match — a different, unrelated function.
     // Applies to any receiver type (NamedType or primitive) — if no
-    // stdlib overload's first param can accept the receiver, this is a
-    // make-block method call, not a stdlib call.
+    // overload's first param can accept the receiver, this is a
+    // make-block method call, not a known function call. For primitive
+    // receivers outside of make blocks (m_currentMakeType is empty),
+    // imported interfaces are authoritative and a mismatch is a real
+    // type error.
     if (!argTypes.empty() && (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
-                              (isMethodCall && !hasUser &&
+                              (isMethodCall && !hasUser && m_currentMakeType &&
                                (std::holds_alternative<PrimitiveType>(argTypes[0]->kind) ||
                                 std::holds_alternative<SizedIntType>(argTypes[0]->kind))))) {
         bool anyFirstParamPlausible = false;
@@ -2299,8 +2350,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
             }
         }
-        // Don't silence mismatches when a trait-bounded param exists — the
-        // function IS designed for NamedTypes and a constraint violation must error.
+        if (isMethodCall && anyConstrainedFirstParam && !anyFirstParamPlausible) {
+            auto receiverKey = m_traits.implementorKey(argTypes[0]);
+            if (!m_traits.hasConformances(receiverKey))
+                anyConstrainedFirstParam = false;
+        }
         if (!anyFirstParamPlausible && !anyConstrainedFirstParam) return Type::unknown();
     }
 
@@ -2359,6 +2413,43 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             std::vector<const Signature*> reordered = {best};
             for (const auto* s : fullMatches) if (s != best) reordered.push_back(s);
             fullMatches = std::move(reordered);
+        }
+    }
+
+    // When every full match is vacuous (params all Unknown/TypeVar, or only
+    // trait bounds — e.g. a trait default method with no type annotation) but
+    // concrete-typed arity matches exist that DIDN'T match while agreeing on
+    // the receiver, prefer the concrete sigs for error reporting so real type
+    // mismatches aren't masked by the generic overload.
+    if (!fullMatches.empty()) {
+        auto isVacuous = [](const Signature* sig) {
+            for (const auto& p : sig->params)
+                if (!std::holds_alternative<TypeVar>(p->kind) &&
+                    !std::holds_alternative<UnknownType>(p->kind) &&
+                    !std::holds_alternative<ConstrainedType>(p->kind))
+                    return false;
+            return true;
+        };
+        bool allVacuous = true;
+        for (const auto* fm : fullMatches)
+            if (!isVacuous(fm)) { allVacuous = false; break; }
+        if (allVacuous) {
+            bool hasConcrete = false;
+            for (const auto* am : arityMatches) {
+                if (isVacuous(am) ||
+                    std::find(fullMatches.begin(), fullMatches.end(), am) != fullMatches.end())
+                    continue;
+                // For receiver calls, only a concrete sig that agrees on the
+                // receiver speaks for this call. Concrete sigs for other
+                // receiver types must not mask a legitimately matching
+                // generic default (e.g. a user type's trait default method).
+                if (isMethodCall && !am->params.empty() &&
+                    !argMatchesParam(argTypes[0], am->params[0]))
+                    continue;
+                hasConcrete = true;
+                break;
+            }
+            if (hasConcrete) fullMatches.clear();
         }
     }
 
@@ -2423,8 +2514,25 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // Zero matches with at least one arity match: find the first
     // mismatching argument against the first arity-matching candidate for
     // the headline message, then list every candidate signature tried,
-    // Elm-style.
-    const Signature& first = *arityMatches[0];
+    // Elm-style. Prefer a concrete sig that agrees on the receiver over a
+    // vacuous or foreign-receiver one for error reporting.
+    auto isVacuousSig = [](const Signature* sig) {
+        for (const auto& p : sig->params)
+            if (!std::holds_alternative<TypeVar>(p->kind) &&
+                !std::holds_alternative<UnknownType>(p->kind) &&
+                !std::holds_alternative<ConstrainedType>(p->kind))
+                return false;
+        return true;
+    };
+    const Signature* firstPtr = arityMatches[0];
+    for (const auto* am : arityMatches) {
+        if (isVacuousSig(am)) continue;
+        if (isMethodCall && !am->params.empty() &&
+            !argMatchesParam(argTypes[0], am->params[0])) continue;
+        firstPtr = am;
+        break;
+    }
+    const Signature& first = *firstPtr;
     std::string detail = "different arguments";
     for (size_t i = 0; i < first.params.size(); i++) {
         if (!argMatchesParam(argTypes[i], first.params[i])) {
@@ -2437,7 +2545,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
 
     std::string message = "`" + name + "` expects " + detail;
+    // Vacuous candidates (params all TypeVar/Unknown/trait bounds — e.g. an
+    // unannotated trait default method) add noise to the listing when
+    // concrete candidates exist; show them only when they are all we have.
+    bool anyConcreteSig = false;
+    for (const auto& sig : *sigs)
+        if (!isVacuousSig(&sig)) { anyConcreteSig = true; break; }
     for (const auto& sig : *sigs) {
+        if (anyConcreteSig && isVacuousSig(&sig)) continue;
         message += "\n\n" + displaySignature(name, sig);
     }
     error(loc, message);
