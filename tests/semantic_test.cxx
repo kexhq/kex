@@ -1199,25 +1199,38 @@ int main() {
             assertFalse(traits.satisfies(Type::list(Type::named("MysteryType")), "Equatable"));
         });
 
-        it("satisfies Resultable/Optionable via the prelude ADT bridge", [traits]() {
-            assertTrue(traits.satisfies(Type::named("Ok"), "Resultable"));
-            assertTrue(traits.satisfies(Type::named("Error"), "Resultable"));
-            assertTrue(traits.satisfies(Type::named("Optional"), "Optionable"));
-            assertTrue(traits.satisfies(Type::named("Just"), "Optionable"));
-            assertFalse(traits.satisfies(Type::named("Ok"), "Optionable"));
-        });
-
         it("does not satisfy an unregistered trait for a NamedType", [traits]() {
             assertFalse(traits.satisfies(Type::named("Ok"), "Showable"));
         });
 
         it("exposes built-in trait definitions by name", [traits]() {
             assertTrue(traits.get("Comparable") != nullptr);
+            assertTrue(traits.get("Optionable") == nullptr);
             assertTrue(traits.get("NoSuchTrait") == nullptr);
         });
     });
 
     describe("Semantic — Stdlib call checking", []() {
+        it("loads Optional marker traits and conformances from the prelude", []() {
+            assertTrue(noErrors(
+                "let accept(value: Optionable) = value\n"
+                "let forward(value: Optional<Integer>) = accept(value)\n"));
+            assertTrue(hasError(
+                "let accept(value: Optionable) = value\n"
+                "let reject(value: Result<Integer, String>) = accept(value)\n",
+                "expects argument 1 to be Optionable"));
+        });
+
+        it("loads Either and its constructors from the prelude interface", []() {
+            assertTrue(hasError(
+                "let inspect(value: Either<Integer, String>) do\n"
+                "  match value do\n"
+                "    Left(number) -> number\n"
+                "  end\n"
+                "end\n",
+                "Non-exhaustive match on Either: missing case(s) Right"));
+        });
+
         it("rejects 'c'.even? — Char doesn't satisfy the Integer constraint", []() {
             assertTrue(hasError(
                 "main do\n"

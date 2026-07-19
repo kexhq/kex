@@ -205,9 +205,11 @@ into the backend-neutral semantic snapshot. Match exhaustiveness no longer seeds
 those closed constructor sets come from the prebuilt stdlib interface. Imported
 trait definitions retain required method names, signatures, and foulness, so a
 dependent package can validate `make ..., implement:` without reparsing the
-provider's source. Primitive structural trait membership and the transitional
-`Resultable`/`Optionable`/`Eitherable` named-ADT bridge remain in the semantic
-registry for a later slice.
+provider's source. `Optionable`, `Resultable`, and `Eitherable` plus their ADT
+conformances now live in `optional.kex`; their transitional named-ADT registry
+bridge has been deleted. Primitive structural trait membership remains part of
+the language implementation. The shared `either.kex` contract test exercises
+the source-owned constructors and matching on both the walker and BEAM.
 
 - Make semantic analysis retain the checked public interface. KexI collection
   consumes it rather than reconstructing types syntactically from the AST.

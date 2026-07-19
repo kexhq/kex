@@ -6,7 +6,21 @@ type Optional<X> = Just(X) | None
 # or failed with +Error(e)+.
 type Result<X, E> = Ok(X) | Error(E)
 
-make Optional<X> do
+# +Either<L, R>+ holds one of two possible value types.
+type Either<L, R> = Left(L) | Right(R)
+
+# Marker traits used by generic code that accepts one of these ADT families.
+# Their conformances are exported through KexI like any user-defined trait.
+trait Optionable do
+end
+
+trait Resultable do
+end
+
+trait Eitherable do
+end
+
+make Optional<X>, implement: Optionable do
   # Returns +true+ if this optional contains a value.
   #
   # @return [Bool]
@@ -76,7 +90,7 @@ make Optional<X> do
   let flatMap(@Just(x), f) = f(x)
 end
 
-make Result<X, E> do
+make Result<X, E>, implement: Resultable do
   # Returns +true+ if the result is +Ok+.
   #
   # @return [Bool]
@@ -144,4 +158,7 @@ make Result<X, E> do
   toOptional :> X?
   let toOptional(@Ok(x)) = Just(x)
   let toOptional(@Error(_)) = None
+end
+
+make Either<L, R>, implement: Eitherable do
 end

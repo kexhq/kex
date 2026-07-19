@@ -76,13 +76,6 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
         return satisfiesStructurally(type, traitName);
     }
 
-    // Any Optional type satisfies Optionable — Optional<TypeVar>, Optional<String>,
-    // etc. — regardless of inner type, since `.or(default)` only cares that the
-    // receiver is optional, not what T is.
-    if (traitName == "Optionable") {
-        if (std::holds_alternative<OptionalType>(type->kind)) return true;
-    }
-
     // Compound types recurse into their component types for Equatable/
     // Showable — ordering compound types isn't supported structurally
     // here, so Comparable doesn't get this treatment.
@@ -135,7 +128,7 @@ auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std
     // Skip structural/primitive traits — only return user-defined ones.
     static const std::set<std::string> kBuiltin = {
         "Number", "Integer", "Float", "Equatable", "Comparable",
-        "Showable", "Resultable", "Optionable", "Eitherable",
+        "Showable",
         "Blankable", "Truthyable", "Enumerable",
         "Semigroup", "Monoid", "Group", "Errorable",
     };
@@ -158,8 +151,6 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
         {Signature{"compare", {Type::typeVar(-1)}, Type::named("Comparison")}}});
     reg.define(TraitDef{"Showable",
         {Signature{"to_s", {}, Type::string()}}});
-    reg.define(TraitDef{"Resultable", {}});
-    reg.define(TraitDef{"Optionable", {}});
 
     // Primitive/sized types implement Equatable/Showable, keyed by their
     // canonical printed name (see implementorKey) — same registry path a
@@ -183,20 +174,6 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     };
     for (const char* name : kComparable) {
         reg.registerImplementation(name, "Comparable");
-    }
-
-    // Result<T,E> = Ok(T) | Error(E); Option<T> = Just(T) | None — the
-    // checker doesn't yet track these as real generic NamedTypes (that's
-    // phase 5), so the individual constructor names are registered as a
-    // pragmatic bridge until then.
-    for (const char* name : {"Result", "Ok", "Error"}) {
-        reg.registerImplementation(name, "Resultable");
-    }
-    for (const char* name : {"Option", "Optional", "Just", "None"}) {
-        reg.registerImplementation(name, "Optionable");
-    }
-    for (const char* name : {"Either", "Left", "Right"}) {
-        reg.registerImplementation(name, "Eitherable");
     }
 
     return reg;

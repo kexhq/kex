@@ -262,6 +262,6 @@ Enumerable's `reduce`-based defaults which call `kex_intrinsic_map:entries`
 The IR backend and tree-walker must agree on every `spec/*.kex` (identical
 pass/fail set) and every runnable `examples/*.kex`
 (identical output, modulo opaque `#Fun`/`#PID` ids). Current: `ctest` 12/12,
-`make spec` 125/125, prelude spec 292/292, spec-beam 120/123 (3 pre-existing
+`make spec` 126/126, prelude spec 292/292, spec-beam 120/123 (3 pre-existing
 diffs). Anything the pipeline compiles is correct or fails loudly — never
 silently wrong.

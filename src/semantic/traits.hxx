@@ -23,10 +23,9 @@ struct TraitDef {
 };
 
 // Open, name-keyed registry of traits and which types implement them.
-// Built-in traits (Number, Integer, Float, Equatable, Comparable,
-// Resultable, Optionable, Showable) are registered the same way a future
-// user `trait ... end` block would be — no special-casing built-ins vs.
-// user traits at the call sites that consult this registry.
+// Irreducible structural traits (Number, Integer, Float, Equatable,
+// Comparable, Showable) are registered here. Package-defined traits arrive
+// through ImportedInterfaces or local `trait ... end` declarations.
 class TraitRegistry {
 public:
     auto define(TraitDef def) -> void;
@@ -54,9 +53,8 @@ public:
     // heterogeneous list elements to their common trait type.
     auto commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string;
 
-    // A registry with Number/Integer/Float/Equatable/Comparable/Showable/
-    // Resultable/Optionable pre-registered, plus implementations for the
-    // built-in primitive/sized types and the Result/Option prelude ADTs.
+    // A registry with Number/Integer/Float/Equatable/Comparable/Showable
+    // pre-registered, plus implementations for built-in primitive/sized types.
     static auto withBuiltins() -> TraitRegistry;
 
     auto implementorKey(const TypePtr& type) const -> std::string;
