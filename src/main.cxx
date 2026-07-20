@@ -778,6 +778,12 @@ auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
       } else if (const auto *module =
                      std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
         collect(**module);
+      } else if (const auto *fn =
+                     std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
+                         &item)) {
+        if (*fn && !(*fn)->clauses.empty() &&
+            (*fn)->clauses[0].params.size() >= 2)
+          names.receiverFunctions.insert((*fn)->name);
       }
     }
   }
@@ -850,21 +856,27 @@ auto compilePreludeCore(const std::string &dir,
     return false;
   }
   try {
-    // Validate the future unit split without changing merged-prelude source
-    // order yet; the legacy merged lowerer still has order-sensitive behavior.
-    (void)kex::groupPreludeSourcesByTier(files);
+    files = kex::orderPreludeSourcesByTier(files);
   } catch (const std::exception &e) {
     std::cerr << "error: invalid prelude tier manifest: " << e.what() << "\n";
     return false;
   }
-  for (const auto &f : files) {
-    kex::Lexer lex(readFile(f), f);
-    kex::Parser parser(lex.tokenizeAll(), f);
-    auto prog = parser.parseProgram();
-    for (auto &item : prog.items)
-      if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
-        merged.items.push_back(std::move(item));
+  auto tierGroups = kex::groupPreludeSourcesByTier(files);
+  // Track item index boundaries per tier: tierBounds[t] = index of first
+  // item belonging to tier t.  tierBounds[4] = total item count.
+  std::array<size_t, 5> tierBounds{};
+  for (size_t t = 0; t < 4; t++) {
+    tierBounds[t] = merged.items.size();
+    for (const auto &f : tierGroups[t]) {
+      kex::Lexer lex(readFile(f), f);
+      kex::Parser parser(lex.tokenizeAll(), f);
+      auto prog = parser.parseProgram();
+      for (auto &item : prog.items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.items.push_back(std::move(item));
+    }
   }
+  tierBounds[4] = merged.items.size();
   try {
     kex::semantic::Analyzer analyzer;
     if (!analyzer.analyze(merged)) {
@@ -882,8 +894,8 @@ auto compilePreludeCore(const std::string &dir,
             {"kex_prelude", name, arity});
 
     std::vector<kex::ir::Module> modules;
-    modules.push_back(kex::ir::lowerProgram(
-        merged, "prelude", "", &selfExt, nullptr, nullptr, true));
+    modules.push_back(kex::ir::lowerProgramTiered(
+        merged, tierBounds, "prelude", "", &selfExt, nullptr, nullptr, true));
     auto splitModules = kex::ir::lowerModules(
         merged, "prelude", "", nullptr, &selfExt, nullptr, true);
     for (size_t i = 1; i < splitModules.size(); i++)

@@ -21,27 +21,7 @@ trait Eitherable do
 end
 
 make Optional<X>, implement: Optionable do
-  # Returns +true+ if this optional contains a value.
-  #
-  # @return [Bool]
-  #
-  # @example
-  #   Just(42).some?   # => true
-  #   None.some?       # => false
-  some? :> Bool
-  let some?(@Just(_)) = true
-  let some?(@None) = false
-
-  # Alias for +some?+.
-  #
-  # @return [Bool]
-  #
-  # @example
-  #   Just(42).present?   # => true
-  #   None.present?       # => false
-  present? :> Bool
-  let present? = this.some?
-
+  # (+present?+ comes from the +Blankable+ default: +!this.blank?+.)
   # Returns +true+ if this optional is empty.
   #
   # @return [Bool]
@@ -159,6 +139,14 @@ make Result<X, E>, implement: Resultable do
   let toOptional(@Ok(x)) = Just(x)
   let toOptional(@Error(_)) = None
 end
+
+# Universal `.or(default)` catch-all: a value that is neither Optional nor
+# Result is already a successful result — return it unchanged.
+let or(value, _) = value
+
+# Universal `.to(Type)` conversion. The type argument is a runtime Type
+# value (e.g. String, Integer, Float, List). Returns an Optional result.
+let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 
 make Either<L, R>, implement: Eitherable do
 end

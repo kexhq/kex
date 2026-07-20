@@ -144,7 +144,6 @@ make [X], implement: Enumerable do
   # @example
   #   [1, 2, 3, 4].reject { |x| x.even? }   # => [1, 3]
   reject :> (X -> Bool) -> [X]
-  let reject(pred) = this.filter { |x| !pred(x) }
 
   # Calls +f+ with each element for its side effects. Returns unit.
   #
@@ -191,10 +190,10 @@ make [X], implement: Enumerable do
   let at(i) = Kex.Intrinsic.List.at(this, i)
 
   get :> Integer -> X?
-  let get(i) = Kex.Intrinsic.Map.get(this, i)
+  let get(i) = Kex.Intrinsic.List.get(this, i)
 
   get :> Integer -> X -> X
-  let get(i, default) = Kex.Intrinsic.Map.get(this, i, default)
+  let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
 
   # Returns +true+ if +elem+ is present in the list.
   #
@@ -339,16 +338,6 @@ make [X], implement: Enumerable do
   sort :> (X -> X -> Bool) -> [X]
   let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
-  # Converts the collection to another representation.
-  # Most commonly used to materialise a +Range+ into a +List+.
-  #
-  # @param type [Y]
-  # @return [Y?]
-  #
-  # @example
-  #   (1..5).to(List)    # => Just([1, 2, 3, 4, 5])
-  #   "42".to(Integer)   # => Just(42)
-  to :> Y -> Y?
 end
 
 make [Number] do

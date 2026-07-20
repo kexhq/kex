@@ -3,6 +3,7 @@
 -module(kex_intrinsic_number).
 -export([abs/1, sqrt/1, add/2, divide/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
+          convertToInteger/1, convertToFloat/1,
           float_parse/1, float_parse_prefix/1, number_parse/1,
           parse/1, to_integer/1, to_float/1]).
 
@@ -160,6 +161,9 @@ parse(S) -> number_parse(S).
 %% an already-matching type, TRUNCATE (not round) a Float down to Integer,
 %% parse a String, and return {'Just', Value} or 'None'.
 %% Moved from kex_io where type conversion didn't belong.
+convertToInteger(X) -> to_integer(X).
+convertToFloat(X) -> to_float(X).
+
 to_integer({'Char', C}) -> {'Just', C};
 to_integer(X) when is_integer(X) -> {'Just', X};
 to_integer(X) when is_float(X) -> {'Just', erlang:trunc(X)};

@@ -53,6 +53,11 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.inspect(val) — pretty-prints an inspect representation to stderr
     // then returns the value unchanged so it can be inserted mid-pipeline.
+    defineIntrinsic("IO::toStringOptional", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        return Value::just(Value::string(args[0]->toString()));
+    });
+
     regDual("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];

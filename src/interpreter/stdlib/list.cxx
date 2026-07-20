@@ -53,58 +53,18 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::string(std::move(s));
     };
 
-    // to(Type) — universal conversion. Type argument is a ModuleValue (for
-    // builtin types like Integer, Float, String) or a RecordValue{} namespace
-    // sentinel (for user record types used as namespaces).
-    regPublic("to", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("get", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
-        std::string targetName;
-        if (auto* m = std::get_if<ModuleValue>(&args[1]->data))
-            targetName = m->name;
-        else if (auto* r = std::get_if<RecordValue>(&args[1]->data))
-            targetName = r->typeName;
-
-        if (targetName == "Integer") {
-            if (std::holds_alternative<IntValue>(args[0]->data) ||
-                std::holds_alternative<BigIntValue>(args[0]->data))
-                return Value::just(args[0]);
-            if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-                try {
-                    size_t parsed = 0;
-                    auto value = std::stoll(str->value, &parsed);
-                    if (parsed == str->value.size()) return Value::just(Value::integer(value));
-                } catch (...) {}
-            }
-            if (auto* f = std::get_if<FloatValue>(&args[0]->data))
-                return Value::just(Value::integer(static_cast<int64_t>(f->value)));
-            return Value::none();
-        }
-        if (targetName == "Float") {
-            if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-                try {
-                    size_t parsed = 0;
-                    auto value = std::stod(str->value, &parsed);
-                    if (parsed == str->value.size()) return Value::just(Value::floating(value));
-                } catch (...) {}
-            }
-            if (auto* f = std::get_if<FloatValue>(&args[0]->data))
-                return Value::just(args[0]);
-            if (auto i = asInteger(args[0]))
-                return Value::just(Value::floating(i->get_d()));
-            return Value::none();
-        }
-        if (targetName == "String") {
-            return Value::just(Value::string(args[0]->toString()));
-        }
-        if (targetName == "List") {
-            if (auto* range = std::get_if<RangeValue>(&args[0]->data))
-                return Value::just(Value::list(rangeToList(*range)));
-            if (std::holds_alternative<ListValue>(args[0]->data))
-                return Value::just(args[0]);
-            return Value::none();
-        }
-        return Value::none();
+        auto* idx = std::get_if<IntValue>(&args[1]->data);
+        if (!idx || idx->value < 0) return args.size() >= 3 ? args[2] : Value::none();
+        auto i = static_cast<size_t>(idx->value);
+        if (auto* list = std::get_if<ListValue>(&args[0]->data))
+            return i < list->elements.size() ? list->elements[i]
+                   : (args.size() >= 3 ? args[2] : Value::none());
+        return args.size() >= 3 ? args[2] : Value::none();
     });
+
+
 
     reg("push", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];

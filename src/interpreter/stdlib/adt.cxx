@@ -1,5 +1,4 @@
 #include "../evaluator.hxx"
-#include <stdexcept>
 
 namespace kex::interpreter {
 
@@ -27,34 +26,6 @@ auto Evaluator::registerAdtConstructors() -> void {
     m_globalEnv->define("Equal",   Value::variant("Equal",   "Ordering"));
     m_globalEnv->define("Greater", Value::variant("Greater", "Ordering"));
 
-    // `or` — fallback extraction, shared by both prelude ADTs: unwraps
-    // Ok(x)/Just(x) to x, or returns the given default for Error(_)/None.
-    // It also preserves the historical universal behavior for raw successful
-    // values returned by APIs such as File.read, which the typed Kex methods
-    // on Optional and Result intentionally do not cover.
-    {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{"or", [](std::vector<ValuePtr> args) -> ValuePtr {
-            if (args.size() < 2) {
-                throw std::runtime_error("or expects a receiver and a default value");
-            }
-            const auto& receiver = args[0];
-            const auto& fallback = args[1];
-            if (receiver->isNone()) return fallback;
-            if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
-                if (var->tag == "Ok" || var->tag == "Just") {
-                    return var->args.empty() ? Value::none() : var->args[0];
-                }
-                if (var->tag == "Error") return fallback;
-            }
-            // Raw value (not an ADT wrapper, not None) — already the
-            // successful result; return it directly. This handles stdlib
-            // functions that return a raw value on success and None on failure
-            // (e.g. File.read, File.lines) without requiring Just wrapping.
-            return receiver;
-        }};
-        m_globalEnv->define("or", val);
-    }
 }
 
 } // namespace kex::interpreter

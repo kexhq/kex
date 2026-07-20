@@ -2406,6 +2406,62 @@ auto Evaluator::registerBuiltins() -> void {
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
+        defineIntrinsic("Fun::convertTo", [](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.size() < 2) return Value::none();
+            const auto& val = args[0];
+            std::string targetName;
+            if (auto* m = std::get_if<ModuleValue>(&args[1]->data))
+                targetName = m->name;
+            else if (auto* v = std::get_if<VariantValue>(&args[1]->data))
+                targetName = v->tag;
+            if (targetName == "Integer") {
+                if (std::holds_alternative<IntValue>(val->data) ||
+                    std::holds_alternative<BigIntValue>(val->data))
+                    return Value::just(val);
+                if (auto* f = std::get_if<FloatValue>(&val->data))
+                    return Value::just(Value::integer(static_cast<int64_t>(f->value)));
+                if (auto* ch = std::get_if<CharValue>(&val->data))
+                    return Value::just(Value::integer(static_cast<int64_t>(ch->value)));
+                if (auto* s = std::get_if<StringValue>(&val->data)) {
+                    try {
+                        size_t parsed = 0;
+                        auto v = std::stoll(s->value, &parsed);
+                        if (parsed == s->value.size()) return Value::just(Value::integer(v));
+                    } catch (...) {}
+                }
+                return Value::none();
+            }
+            if (targetName == "Float") {
+                if (auto* f = std::get_if<FloatValue>(&val->data))
+                    return Value::just(val);
+                if (auto i = asInteger(val))
+                    return Value::just(Value::floating(i->get_d()));
+                if (auto* s = std::get_if<StringValue>(&val->data)) {
+                    try {
+                        size_t parsed = 0;
+                        auto v = std::stod(s->value, &parsed);
+                        if (parsed == s->value.size()) return Value::just(Value::floating(v));
+                    } catch (...) {}
+                }
+                return Value::none();
+            }
+            if (targetName == "String")
+                return Value::just(Value::string(val->toString()));
+            if (targetName == "List") {
+                if (auto* range = std::get_if<RangeValue>(&val->data)) {
+                    std::vector<ValuePtr> elems;
+                    int64_t step = range->start <= range->end ? 1 : -1;
+                    for (int64_t i = range->start; step > 0 ? i <= range->end : i >= range->end; i += step)
+                        elems.push_back(Value::integer(i));
+                    return Value::just(Value::list(std::move(elems)));
+                }
+                if (std::holds_alternative<ListValue>(val->data))
+                    return Value::just(val);
+                return Value::none();
+            }
+            return Value::none();
+        });
+
         defineIntrinsic("Fun::applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];

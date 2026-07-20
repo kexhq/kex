@@ -46,6 +46,8 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     addExport("Mock.FS", "Kex.Mock.FS", "File", "File", 2);
     addExport("Mock.FS", "Kex.Mock.FS", "Directory", "Directory", 1);
     addExport("Mock.FS", "Kex.Mock.FS", "clear", "clear", 0);
+    ext.receiverFunctions["to"].push_back({"kex_prelude", "to", 2});
+    ext.receiverFunctions["or"].push_back({"kex_prelude", "or", 2});
     return ext;
 }
 
@@ -982,7 +984,7 @@ int main() {
             struct Case { const char* name; const char* expression; };
             const std::vector<Case> cases = {
                 {"none?", "None.none?"},
-                {"some?", "Just(1).some?"},
+                {"present?", "Just(1).present?"},
                 {"ok?", "Ok(1).ok?"},
                 {"error?", "Error(:failed).error?"},
             };

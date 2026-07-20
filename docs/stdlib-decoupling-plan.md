@@ -224,6 +224,10 @@ is their only interpreter definition. Native `ok?`, `error?`, `some?`,
 `present?`, and `none?` registrations have also been deleted; ordinary walker
 calls now execute the same pattern-matching Kex methods as BEAM. The universal
 raw-value behavior of `.or(default)` remains an explicitly tracked fallback.
+`some?` has since been removed from the public interface entirely: `present?`
+is the single predicate spelling and reaches `Optional` through the
+`Blankable` trait default (`!this.blank?`) instead of an Optional-owned
+override. `Assert.some` keeps its name and asserts via `present?`.
 Native `even?`, `odd?`, and `empty?` registrations have likewise been removed:
 ordinary walker calls now use the Kex definitions in `number.kex`, `list.kex`,
 `string.kex`, and `map.kex`. Guard-specific BEAM lowering remains tracked
@@ -458,21 +462,25 @@ cycles, enabling tiered compilation:
 
 These tiers now live in `common/prelude_tiers.hxx` as validated build data.
 Prelude compilation validates the manifest and rejects missing, duplicated, or
-undeclared source files. It deliberately retains the legacy alphabetical merge
-order until the tiers become separate units: directly reordering the merged
-AST exposed an order-sensitive REPL regression. This fixes the earlier
-prose-only manifest, which had accidentally omitted the Tier 0 `kex.kex`
-source, without changing current runtime behavior. The manifest API now also
-returns four validated source groups, providing the direct iteration boundary
-for replacing the merged lowering pass with per-tier units.
+undeclared source files. The merged AST is now ordered by tier
+(T0 → T1 → T2 → T3) instead of alphabetically. The original alphabetical
+ordering was sensitive to two dispatcher bugs exposed by tier reordering:
+(1) List and Range share the `is_list` BIF guard on BEAM — Range's
+Enumerable-inherited methods re-enter the dispatcher with a materialised
+list, so List's clause must precede Range's (the dispatcher now drops the
+shadowed type); (2) duplicate owner entries from trait-plus-direct method
+definitions produced dead clauses (the dispatcher now deduplicates owners).
+The manifest API also returns four validated source groups, providing the
+direct iteration boundary for replacing the merged lowering pass with
+per-tier units.
 
-Splitting the merged prelude into separately-compiled tiers is the key
-prerequisite for removing the remaining inline lowering section in
-`lowerMethodCall` (Step 5). Currently all prelude receiver functions land
-in `localMethods` because the prelude compiles as one unit, which gates
-the `externalModules->receiverFunctions` path. Once tiers compile
-separately, cross-tier receiver calls go through imported interfaces and
-the inline lowerings become dead code.
+The `preferExternalReceivers` flag already routes all prelude receiver
+calls through the external dispatch path during self-compilation,
+bypassing `localMethods`. Per-tier compilation is no longer a
+prerequisite for removing inline lowerings — the remaining `.or()` and
+`.to(Type)` lowerings are removed by adding prelude catch-all methods
+(see Step 5). Splitting the prelude into separately-compiled tiers
+remains a future packaging step for the `.ez` archive.
 
 - Split the merged prelude into ordinary modules with explicit public/private
   exports and a declared dependency graph.
@@ -558,15 +566,43 @@ Removed inline lowerings:
   and 2-arg), `empty?` (all had `!localMethods` guards, unreachable with
   external dispatch)
 
-Remaining inline lowerings that cannot be removed yet:
-- `.or()` hardcoded (`kex_intrinsic_fun:or_else`) — universal semantics
-  for non-Optional/non-Result receivers that the prelude's typed `or/2`
-  doesn't cover
-- Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`,
-  `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`) — external dispatch
-  is skipped in guards, so BIF-based lowerings are required
-- `.to(Type)` — not a prelude receiver function; argument is a type name,
-  not a value
+Remaining inline lowerings — removal plan:
+
+- **`.or(default)` hardcoded** (`kex_intrinsic_fun:or_else`): universal
+  semantics for non-Optional/non-Result receivers. Remove by adding a
+  catch-all `let or(value, _) = value` to the prelude (after Optional and
+  Result type-dispatched clauses, the catch-all returns the receiver
+  unchanged). The typed Optional/Result `or` clauses already handle
+  Just/Ok unwrapping and None/Error fallback. The interpreter's public
+  `or` in adt.cxx becomes dead once the Kex catch-all is defined.
+
+- **`.to(Type)` hardcoded**: the argument is a type token (`String`,
+  `Integer`, `Float`, `List`) — a runtime value of type `Type` that
+  UpperIdentifiers already lower to (atoms on BEAM, ModuleValue on the
+  walker). Remove by adding prelude `to` methods that pattern-match on
+  the type token argument:
+    - `to(value, @String)` → `Kex.Intrinsic.IO.toString(value)`
+    - `to(value, @Integer)` → `Kex.Intrinsic.Number.toInteger(value)`
+    - `to(value, @Float)` → `Kex.Intrinsic.Number.toFloat(value)`
+    - `to(value, @List)` → `Just(value)` (ranges are lists on BEAM)
+  The interpreter's `to` in list.cxx becomes dead once the Kex methods
+  exist. Type arguments of type `Type` are a general language feature,
+  not `.to`-specific.
+
+- **Guard-safe BIF fallbacks** (`even?`, `odd?`, `ok?`, `error?`, `none?`,
+  `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`, `count`/`length`/
+  `size`, `empty?`): external dispatch is skipped in guards because
+  Erlang guards can only contain BIFs. These remain until the
+  pure-guard workstream (see below) produces a general mechanism for
+  lowering proven-pure Kex calls in guard position. They are isolated
+  behind the `m_inGuard` flag and do not participate in ordinary call
+  resolution.
+
+- **Supervisor** (`worker`, `supervisor`, `Supervisor.start`): block
+  arguments become zero-arity start functions rather than ordinary
+  trailing function arguments — this is syntax-level desugaring, not
+  stdlib dispatch. Stays until Supervisor gets a Kex-level block→lambda
+  convention or is moved behind an intrinsic boundary.
 
 Compiled receiver interfaces now retain source parameter names (KexI v5),
 excluding the receiver itself. Both registry-driven and semantically resolved
@@ -674,6 +710,21 @@ walker and BEAM. FileHandle's documented `readLine`, `writeLine`, `read`,
 private intrinsic module. BEAM mock copy/rename, mocked-directory deletion,
 and mocked `File.open` now share the walker's in-memory behavior.
 
+`spec/prelude/{list,map,char,io,optional}.spec.kex` now reach full BEAM
+parity after three follow-up fixes. Record field accessors that collide
+with imported package-declared receiver functions are suppressed in
+`makeAccessors` and kept out of `localMethods`, so `[1,2,3].rest` no
+longer routes to `ParseError`'s `rest` field accessor. The BEAM
+`kex_intrinsic_list` HOFs (`map`, `filter`, `each`, `flatMap`, `reject`,
+`all?`, `any?`, `find`, `count`) auto-splat pair elements through
+`kex_intrinsic_fun:applyItem/2`, matching the Enumerable trait defaults
+and the walker's block invocation — so `map.entries.map { |k, v| ... }`
+works on both backends. The standalone-sig patch on `make`/`trait`/
+module/top-level declarations now refuses to widen a def's arity when the
+annotation belongs to a different overload (fixing `Mock.Http.start` and
+`Mock.Http.stop`, whose `Unit -> Unit` sigs had silently shadowed the
+0-arg implementations).
+
 Stream decoupling status:
 - **Interpreter**: fully decoupled — prelude `let Sequence(from, step)` and
   `let Iterate(seed, step)` in stream.kex dispatch through
@@ -695,6 +746,22 @@ ENV decoupling:
   preserves the MapValue when the prelude's `module ENV` is loaded
 - `main(args, env)` parameter binding to `kex_io:env_map()` retained
   (language-level, not namespace dispatch)
+
+Deferred-module intrinsic decoupling:
+- **Evaluator**: `run` and `runExpression` moved to `defineIntrinsic`; prelude
+  `evaluator.kex` has `let` implementations delegating to
+  `Kex.Intrinsic.Evaluator.*`; only the `Evaluator` module sentinel remains in
+  globalEnv
+- **Parser**: dual registration (globalEnv + intrinsicEnv) for all 6 parser
+  functions; prelude `parser.kex` stays signatures-only to avoid collisions with
+  user `record Parser` definitions (e.g. json_parser.kex)
+- **Test**: dual registration for `describe`, `it`, `before`, `after`, `assert`;
+  prelude `test.kex` stays signatures-only because `after` is a keyword
+  (silently fails to parse as `let after(...)`) and `describe` collides with
+  user pattern-match definitions
+- **IO/System**: `die` converted to dual registration with `System::die`
+  intrinsic; `Mock.IO.input` added to intrinsicEnv alongside its existing
+  globalEnv entry
 
 Namespace modules that remain hardcoded (cannot be simple intrinsic calls):
 - **Supervisor**: `start` needs named-arg destructuring and map

@@ -68,4 +68,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   bool preferExternalReceivers = false)
     -> std::vector<Module>;
 
+// Lower the prelude with per-tier awareness. The full AST is used for the
+// pre-pass (records, types, method owners); items are logically partitioned
+// into tiers by tierBounds. Currently produces one merged module; future
+// versions will produce separate modules per tier.
+auto lowerProgramTiered(
+    const ast::Program& prog,
+    const std::array<size_t, 5>& tierBounds,
+    const std::string& fileStem,
+    const std::string& sourcePath = "",
+    const ExternalModules* externals = nullptr,
+    const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
+    const std::unordered_map<const ast::MethodCall*,
+        semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
+    bool preferExternalReceivers = false) -> Module;
+
 } // namespace kex::ir

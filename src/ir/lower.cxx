@@ -880,9 +880,14 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
-        if (resolvedCalls) {
+        if (resolvedCalls && !m_inGuard) {
+            // Local types shadow prelude-resolved calls (a user `record Parser`
+            // must win over the prelude `module Parser`).
+            bool localTypeShadows = false;
+            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
+                localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
             auto resolved = resolvedCalls->find(&n);
-            if (resolved != resolvedCalls->end()) {
+            if (resolved != resolvedCalls->end() && !localTypeShadows) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -1056,7 +1061,11 @@ struct Lowering {
                     }
                 }
                 // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
-                if (externalModules) {
+                // Skip when the receiver names a local type that owns this
+                // method — local types shadow prelude modules with the same name.
+                if (externalModules
+                    && !(path.size() == 1 && knownTypes.count(path[0])
+                         && localMethods.count(n.method))) {
                     for (const auto& candidate : candidates) {
                         if (candidate.empty()) continue;
                         auto qualKey = candidate + "." + n.method;
@@ -1168,7 +1177,12 @@ struct Lowering {
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("", it->second, ar, std::move(args)));
             }
-            if (externalModules) {
+            // External module dispatch — but skip when the receiver names a
+            // local type that owns this method (local types shadow prelude
+            // modules with the same name, e.g. a user `record Parser` shadows
+            // the prelude's `module Parser`).
+            if (externalModules
+                && !(knownTypes.count(uid->name) && localMethods.count(n.method))) {
                 auto qualKey = uid->name + "." + n.method;
                 auto eit = externalModules->exportToBeamFn.find(qualKey);
                 if (eit != externalModules->exportToBeamFn.end()) {
@@ -1305,14 +1319,6 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
-        // `.or(default)` is universal in the walker — Just/Ok unwrap,
-        // None/Error yield the default, anything else returns itself — so it
-        // can't go through the Optional-owned prelude dispatcher (a plain
-        // value receiver would be a function_clause error).
-        if (!m_inGuard && m == "or" && n.args.size() == 1 && !n.block
-            && !localMethods.count(m))
-            return ret(callE("kex_intrinsic_fun", "or_else", 2,
-                             two(rv(), atomize_ir(lower(n.args[0]), rb))));
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
@@ -1374,11 +1380,6 @@ struct Lowering {
                 }
             }
         }
-        auto justOf = [&](ExprPtr v) {
-            std::vector<ExprPtr> a; a.push_back(std::move(v));
-            auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
-        };
-
         // Guard-safe inline lowerings. External dispatch is skipped in
         // guards (!m_inGuard), so prelude receiver functions that appear in
         // when-clauses need BIF-based fallbacks here.
@@ -1413,22 +1414,13 @@ struct Lowering {
                     return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
                 if (m == "abs") return ret(callE("erlang","abs",1,one(rv())));
                 if (m == "alive?") return ret(callE("erlang","is_process_alive",1,one(rv())));
+                if (m == "count" || m == "length" || m == "size")
+                    return ret(callE("erlang","byte_size",1,one(rv())));
+                if (m == "empty?")
+                    return ret(intrin(Op::Eq, two(callE("erlang","byte_size",1,one(rv())), litInt(0))));
             }
             if (m == "in?" && n.args.size() == 1)
                 return ret(callE("lists","member",2,two(rv(), arg0())));
-        }
-        // .to(Type) numeric/string conversion (unless a user `to` method).
-        if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
-            std::string ty;
-            if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
-            if (ty == "String")
-                return ret(callE("kex_io","to_string_optional",1,one(rv())));
-            if (ty == "Int" || ty == "Integer")
-                return ret(callE("kex_intrinsic_number","to_integer",1,one(rv())));
-            if (ty == "Float")
-                return ret(callE("kex_intrinsic_number","to_float",1,one(rv())));
-            // to(List) — ranges (and lists) are already real lists on BEAM.
-            if (ty == "List") return ret(justOf(rv()));
         }
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so
@@ -2547,13 +2539,19 @@ struct Lowering {
     }
 
     // Emit a `'field'/1` accessor for each record field, unless a real
-    // function/method of the same name exists (which shadows it). When a
-    // field sits at the same position in every record that has it, one
-    // element/2 call suffices; otherwise dispatch on the record tag.
+    // function/method of the same name exists (which shadows it), or the
+    // name matches an imported package-declared receiver function —
+    // otherwise the accessor would shadow the prelude's receiver function
+    // and dispatch `[1,2,3].rest` to a tuple-element read instead of
+    // `kex_prelude:rest/1`. When a field sits at the same position in
+    // every record that has it, one element/2 call suffices; otherwise
+    // dispatch on the record tag.
     auto makeAccessors(const std::unordered_set<std::string>& definedFns) -> std::vector<FunDef> {
         std::vector<FunDef> out;
         for (const auto& [field, entries] : fieldAccessors) {
             if (definedFns.count(field)) continue;
+            if (externalModules &&
+                externalModules->receiverFunctions.count(field)) continue;
             FunDef def; def.name = field; def.arity = 1;
             FunClause fc;
             auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
@@ -2710,7 +2708,44 @@ struct Lowering {
         // matching `is_*` BIF (all guard-safe).
         Match m;
         m.subjects.push_back(var("_a0"));
+        // Primitive-type guards (is_list, is_binary, …) are always safe.
+        // Record/variant guards use erlang:and(is_tuple(V), element(1,V)==Tag)
+        // which evaluates element/2 eagerly and crashes on non-tuples. Emit
+        // safe clauses first so a primitive receiver matches before reaching
+        // an element-based guard.
+        static const std::unordered_map<std::string, const char*> primGuards = {
+            {"Integer","is_integer"}, {"Float","is_float"},
+            {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
+            {"Map","is_map"}, {"List","is_list"}, {"Range","is_list"},
+            {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
+        };
+        std::vector<std::string> sortedOwners;
+        std::vector<std::string> deferredOwners;
+        std::unordered_set<std::string> seen;
         for (const auto& ty : owners) {
+            if (!seen.insert(ty).second) continue;
+            if (primGuards.count(ty) || ty == "Char"
+                || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))
+                sortedOwners.push_back(ty);
+            else
+                deferredOwners.push_back(ty);
+        }
+        // When two types share the same BIF guard, the first clause
+        // shadows the second.  Keep the more general type and drop the
+        // shadowed one — its implementation is reachable through the
+        // general type's method anyway (e.g. Range methods materialise
+        // via .items and re-enter as a List).
+        auto dropShadowed = [&](const std::string& keep,
+                                const std::string& drop) {
+            if (std::find(sortedOwners.begin(), sortedOwners.end(), keep) != sortedOwners.end()) {
+                auto it = std::find(sortedOwners.begin(), sortedOwners.end(), drop);
+                if (it != sortedOwners.end()) sortedOwners.erase(it);
+            }
+        };
+        dropShadowed("List", "Range");
+        dropShadowed("Task", "Pid");
+        sortedOwners.insert(sortedOwners.end(), deferredOwners.begin(), deferredOwners.end());
+        for (const auto& ty : sortedOwners) {
             // ADT types with known variant tags: generate one pattern-match
             // clause per variant instead of a single guard clause. This avoids
             // Core Erlang's strict erlang:and/or in guards (element/2 throws
@@ -3078,7 +3113,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.localMethods = definedFns;
     L.staticCtorNames = staticMethodNames;
     for (const auto& n : staticMethodNames) L.localMethods.insert(n);
-    for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
+    // Record field accessors participate in localMethods only when an
+    // accessor is actually emitted for them — a field whose name collides
+    // with an imported package-declared receiver function is skipped (see
+    // makeAccessors) so it must not appear as a local method either.
+    for (const auto& [field, entries] : L.fieldAccessors) {
+        (void)entries;
+        if (L.externalModules &&
+            L.externalModules->receiverFunctions.count(field)) continue;
+        L.localMethods.insert(field);
+    }
 
     // Buffer consecutive same-name top-level functions so they group into one
     // multi-clause FunDef (flushed on any other item / name change / end).
@@ -3462,15 +3506,50 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // for different types with different clause patterns (e.g. optional.kex
     // defines `or` for both Optional<X> and Result<X,E>); erlc needs a single
     // function with all the clauses unified, not two conflicting definitions.
+    // Clauses arriving after an unguarded catch-all are unreachable (first
+    // match wins) and are dropped — this happens when overlapping traits force
+    // the same method body into two make blocks (e.g. Integer defines
+    // identity/combine for both Monoid and Group).
+    auto unguardedCatchAll = [](const FunClause& c) {
+        return !c.guard &&
+            std::all_of(c.params.begin(), c.params.end(),
+                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+    };
     {
         std::map<std::pair<std::string, int>, FunDef> merged;
         for (auto& f : mod.functions) {
             auto key = std::make_pair(f.name, f.arity);
             auto it = merged.find(key);
             if (it == merged.end()) {
-                merged.emplace(key, std::move(f));
+                auto& fnc = f;
+                // Truncate clauses shadowed by an earlier catch-all within the
+                // same definition as well.
+                for (size_t i = 0; i < fnc.clauses.size(); i++)
+                    if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size())
+                        fnc.clauses.resize(i + 1);
+                merged.emplace(key, std::move(fnc));
             } else {
                 auto& existing = it->second;
+                // If the existing definition already ends with a catch-all
+                // but the incoming definition has specific patterns (e.g.
+                // ADT variant matches), insert the specific clauses BEFORE
+                // the catch-all so they get a chance to match first.
+                bool existingHasCatchAll = std::any_of(
+                    existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+                if (existingHasCatchAll) {
+                    bool incomingHasSpecific = std::any_of(
+                        f.clauses.begin(), f.clauses.end(),
+                        [&](const FunClause& c) { return !unguardedCatchAll(c); });
+                    if (incomingHasSpecific) {
+                        auto catchAllIt = std::find_if(
+                            existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+                        for (auto& c : f.clauses) {
+                            if (!unguardedCatchAll(c))
+                                catchAllIt = existing.clauses.insert(catchAllIt, std::move(c)) + 1;
+                        }
+                    }
+                    continue;
+                }
                 existing.clauses.insert(existing.clauses.end(),
                     std::make_move_iterator(f.clauses.begin()),
                     std::make_move_iterator(f.clauses.end()));
@@ -3481,6 +3560,31 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     }
     mod.typeVariantTags = L.typeVariantTags;
     return mod;
+}
+
+auto lowerProgramTiered(
+    const ast::Program& prog,
+    const std::array<size_t, 5>& tierBounds,
+    const std::string& fileStem,
+    const std::string& sourcePath,
+    const ExternalModules* externals,
+    const std::vector<ExternalRecordLayout>* externalRecords,
+    const std::unordered_map<const ast::MethodCall*,
+        semantic::ResolvedCallTarget>* resolvedCalls,
+    bool preferExternalReceivers) -> Module {
+    // The prelude still lowers as one merged module, so the output is
+    // lowerProgram's by construction and the two paths cannot drift apart.
+    // The bounds only validate the tier partition for now; they become
+    // load-bearing when tiers compile to separate units and cross-tier
+    // receiver calls must route through imported interfaces (see
+    // docs/stdlib-decoupling-plan.md, step 4).
+    for (size_t t = 0; t < 4; t++)
+        if (tierBounds[t] > tierBounds[t + 1])
+            throw LowerError("IR lower: non-monotonic prelude tier bounds");
+    if (tierBounds[4] != prog.items.size())
+        throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
+    return lowerProgram(prog, fileStem, sourcePath, externals, externalRecords,
+                        resolvedCalls, preferExternalReceivers);
 }
 
 namespace {

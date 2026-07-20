@@ -139,10 +139,13 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
     }, type->kind);
 }
 
-auto methodBeamArity(const kex::ast::FunctionDef& fd) -> int {
+auto methodBeamArity(const kex::ast::FunctionDef& fd,
+                     bool firstParamIsReceiver = false) -> int {
     if (fd.clauses.empty()) return 1;
     const auto& params = fd.clauses[0].params;
     if (params.empty()) return 1;
+    if (firstParamIsReceiver)
+        return static_cast<int>(params.size());
     const auto& p0 = params[0];
     bool receiverPat = !p0.name && p0.pattern &&
         (std::holds_alternative<kex::ast::ThisPattern>((*p0.pattern)->kind) ||
@@ -193,22 +196,24 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
 auto receiverFunctionFromDef(
     const kex::ast::FunctionDef& fd,
     KexiTypePtr receiverType,
-    const kex::semantic::Analyzer* analysis) -> KexiMethod {
+    const kex::semantic::Analyzer* analysis,
+    bool firstParamIsReceiver = false) -> KexiMethod {
     KexiMethod method;
     method.name = fd.name;
     method.receiverType = std::move(receiverType);
     method.isFoul = fd.isFoul;
-    method.beamArity = methodBeamArity(fd);
-    // When the first clause uses a receiver pattern (@-pattern), the
-    // semantic signature includes the receiver as param[0].  Skip it
+    method.beamArity = methodBeamArity(fd, firstParamIsReceiver);
+    // When the first clause uses a receiver pattern (@-pattern) or the
+    // first param is the receiver (top-level bare function), skip it
     // since receiverType is stored separately.
-    bool hasReceiverParam = !fd.clauses.empty() && !fd.clauses[0].params.empty() && [&]{
+    bool hasReceiverParam = firstParamIsReceiver ||
+        (!fd.clauses.empty() && !fd.clauses[0].params.empty() && [&]{
         const auto& p0 = fd.clauses[0].params[0];
         return !p0.name && p0.pattern &&
             (std::holds_alternative<kex::ast::ThisPattern>((*p0.pattern)->kind) ||
              std::holds_alternative<kex::ast::RecordPattern>((*p0.pattern)->kind) ||
              std::holds_alternative<kex::ast::RangePattern>((*p0.pattern)->kind));
-    }();
+    }());
     size_t skipParams = hasReceiverParam ? 1 : 0;
 
     if (analysis) {
@@ -244,8 +249,10 @@ void addReceiverFunction(const kex::ast::FunctionDef& fd,
                          KexiTypePtr receiverType,
                          KexiTypeInterface& iface,
                          KexiStructuralMetadata& meta,
-                         const kex::semantic::Analyzer* analysis) {
-    auto method = receiverFunctionFromDef(fd, std::move(receiverType), analysis);
+                         const kex::semantic::Analyzer* analysis,
+                         bool firstParamIsReceiver = false) {
+    auto method = receiverFunctionFromDef(fd, std::move(receiverType), analysis,
+                                          firstParamIsReceiver);
     meta.methodOwnership.push_back({method.name, method.beamFunction});
     iface.methods.push_back(std::move(method));
 }
@@ -573,6 +580,8 @@ void collectFromTopLevel(const kex::ast::Program& program,
         if (it != standaloneSigs.end())
             for (const auto& sig : it->second)
                 patchExportWithSig(iface.exports.back(), sig);
+        if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 2)
+            addReceiverFunction(fd, kexiUnknown(), iface, meta, analysis, true);
     };
 
     for (const auto& item : program.items) {

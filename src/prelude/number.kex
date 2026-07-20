@@ -71,15 +71,6 @@ make Integer do
   times :> (Integer -> Unit) -> Unit
   let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
-  # Converts to another numeric type.
-  #
-  # @param type [Y]
-  # @return [Y?]
-  #
-  # @example
-  #   42.to(Float)   # => Just(42.0)
-  to :> Y -> Y?
-
   # Returns the greatest integer ≤ self. No-op on integers.
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
@@ -123,14 +114,7 @@ make Float do
   in? :> Range<Float> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-  # Converts to another numeric type.
-  #
-  # @param type [Y]
-  # @return [Y?]
-  #
-  # @example
-  #   3.9.to(Integer)   # => Just(3)
-  to :> Y -> Y?
+
 
   # Returns the greatest integer ≤ self.
   floor :> Integer

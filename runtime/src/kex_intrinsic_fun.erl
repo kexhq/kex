@@ -4,7 +4,7 @@
 %% be written `{ |x| }` over elements (List/Range) or `{ |k, v| }` over pairs
 %% (Map). When the item is a 2-tuple and the block takes 2 args, spread it.
 -module(kex_intrinsic_fun).
--export([applyItem/2,
+-export([applyItem/2, convertTo/2,
          each2/2, filter2/2, map2/2, count2/2, any2/2, all2/2, reject2/2,
          find2/2, or_else/2, items/1]).
 
@@ -15,6 +15,13 @@ or_else('None', D) -> D;
 or_else({'Ok', X}, _) -> X;
 or_else({'Error', _}, D) -> D;
 or_else(V, _) -> V.
+
+convertTo(V, 'String') -> kex_io:to_string_optional(V);
+convertTo(V, 'Integer') -> kex_intrinsic_number:to_integer(V);
+convertTo(V, 'Int') -> kex_intrinsic_number:to_integer(V);
+convertTo(V, 'Float') -> kex_intrinsic_number:to_float(V);
+convertTo(V, 'List') when is_list(V) -> {'Just', V};
+convertTo(_, _) -> 'None'.
 
 applyItem(F, Item) ->
     case {erlang:fun_info(F, arity), Item} of

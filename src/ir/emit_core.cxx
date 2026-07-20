@@ -365,10 +365,18 @@ struct Emitter {
             out << " ->\n        " << emitClauseBody(cl.body) << "\n";
         }
         // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`
-        // repeated in a value-list is a duplicate-variable error).
-        out << "      <";
-        for (int i = 0; i < fn.arity; i++) { if (i) out << ", "; out << "_Wf" << i; }
-        out << "> when 'true' -> call 'erlang':'error'('function_clause')\n";
+        // repeated in a value-list is a duplicate-variable error). Skip it
+        // when the last clause is already an unguarded catch-all — the
+        // fallback would be a dead clause there.
+        const auto& last = fn.clauses.back();
+        bool lastIsCatchAll = !last.guard &&
+            std::all_of(last.params.begin(), last.params.end(),
+                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+        if (!lastIsCatchAll) {
+            out << "      <";
+            for (int i = 0; i < fn.arity; i++) { if (i) out << ", "; out << "_Wf" << i; }
+            out << "> when 'true' -> call 'erlang':'error'('function_clause')\n";
+        }
         out << "    end\n";
         return out.str();
     }

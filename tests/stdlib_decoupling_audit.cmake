@@ -5,7 +5,7 @@ endif()
 file(READ "${KEX_SOURCE_DIR}/src/ir/lower.cxx" lower_source)
 
 set(guard_start_marker "// Guard-safe inline lowerings.")
-set(guard_end_marker "// .to(Type) numeric/string conversion")
+set(guard_end_marker "// Generic UFCS fallback")
 string(FIND "${lower_source}" "${guard_start_marker}" guard_start)
 string(FIND "${lower_source}" "${guard_end_marker}" guard_end)
 if(guard_start EQUAL -1 OR guard_end EQUAL -1 OR guard_end LESS guard_start)
@@ -29,13 +29,17 @@ set(allowed_names
     "abs"
     "alive?"
     "alpha?"
+    "count"
     "digit?"
+    "empty?"
     "error?"
     "even?"
     "in?"
+    "length"
     "none?"
     "odd?"
     "ok?"
+    "size"
     "space?"
 )
 list(SORT allowed_names)
