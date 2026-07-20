@@ -4,7 +4,7 @@ endif()
 
 file(READ "${KEX_SOURCE_DIR}/src/ir/lower.cxx" lower_source)
 
-set(guard_start_marker "// Guard-safe inline lowerings.")
+set(guard_start_marker "// Guard-safe BIF lowerings.")
 set(guard_end_marker "// Generic UFCS fallback")
 string(FIND "${lower_source}" "${guard_start_marker}" guard_start)
 string(FIND "${lower_source}" "${guard_end_marker}" guard_end)
@@ -24,7 +24,8 @@ endforeach()
 list(SORT actual_names)
 
 # This is intentionally an exact, shrinking allowlist. Public stdlib names may
-# remain in lowering only until effect-aware pure guards replace this block.
+# remain in lowering only for receive guards (match guards use post-match
+# lowering) until the selective receive workstream replaces this block.
 set(allowed_names
     "abs"
     "alive?"

@@ -585,11 +585,12 @@ Remaining inline lowerings — removal plan:
 - **Guard-safe BIF fallbacks** (`even?`, `odd?`, `ok?`, `error?`, `none?`,
   `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`, `count`/`length`/
   `size`, `empty?`): external dispatch is skipped in guards because
-  Erlang guards can only contain BIFs. These remain until the
-  pure-guard workstream (see below) produces a general mechanism for
-  lowering proven-pure Kex calls in guard position. They are isolated
-  behind the `m_inGuard` flag and do not participate in ordinary call
-  resolution.
+  Erlang guards can only contain BIFs. Match-clause `when` guards no
+  longer use this block — they lower as ordinary expressions via
+  post-match lowering (`expandGuards`). The block remains solely for
+  `receive ... when` guards, which must stay native until the selective
+  receive workstream lands. It is isolated behind the `m_inGuard` flag
+  and does not participate in ordinary call resolution.
 
 - **Supervisor** (`worker`, `supervisor`, `Supervisor.start`): block
   arguments become zero-arity start functions rather than ordinary
@@ -890,24 +891,164 @@ its prelude caller and lowered no remaining dead surface:
 This workstream removes the final guard-specific stdlib coupling without
 blocking the package migration.
 
+### Why
+
+BEAM guards accept only BIFs and guard-legal operators. That is a BEAM
+restriction, not a Kex one: a Kex `when` clause should accept any pure
+expression. Today the compiler papers over the gap with a hardcoded
+method-name → BIF table in the lowerer's `m_inGuard` block (`count`,
+`length`, `size`, `empty?`, `abs`, `alive?`, `in?`, `even?`, `odd?`,
+`ok?`, `error?`, `none?`, `digit?`, `alpha?`, `space?`). That table has
+two problems:
+
+- It couples the compiler to stdlib method names — the last such coupling
+  left after the rest of the migration.
+- It rejects every pure call not in the table, so `when` cannot accept an
+  arbitrary pure function even though nothing in Kex semantics forbids it.
+
+### Design
+
+`when` always lowers to a post-match case. There is no guard pragma, no
+guard-safety analysis, and no native Erlang guard emission — one lowering
+path for all pure expressions.
+
+- **Post-match lowering.** A `when` expression lowers to a nested case
+  after the match: evaluate the subject once, preserve the pattern
+  bindings, evaluate the predicate, and on failure fall through to the
+  remaining clauses without duplicating their bodies. Pure code is never
+  rejected. Multiple clauses with different patterns lower to a decision
+  tree (or generated clause continuations) so each clause body appears
+  once.
+- **Foul calls stay rejected.** Semantic analysis keeps rejecting foul
+  calls in guard position — directly today, transitively once call-graph
+  effect computation lands.
+- **Representation-specific predicates** (`ok?`/`error?`/`none?`,
+  `digit?`/`alpha?`/`space?`) derive from the tagged-tuple and Char
+  representations, not from stdlib names. They fall through to post-match
+  lowering like any other pure call.
+- **Receive guards** are the exception: a BEAM `receive` guard runs while
+  peeking at the mailbox and cannot execute arbitrary code. `receive ...
+  when` keeps the existing hardcoded BIF subset until the selective
+  receive workstream's logical queue lands; other pure calls there get an
+  explicit diagnostic.
+- **Error semantics.** In a native Erlang guard, an error fails the
+  clause; in post-match lowering it crashes. Deciding whether to preserve
+  fail-the-clause behavior (e.g. by wrapping the predicate) goes through
+  the language/contract approval process — see the audit bullet below.
+
+### Example
+
+```kex
+match ch do
+  c when c.digit? -> :digit
+  _ -> :other
+end
+```
+
+```erlang
+case Ch of
+  C ->
+    case 'digit?'(C) of
+      true -> digit;
+      _ -> other   % remaining clauses, not duplicated
+    end
+end
+```
+
+### Steps
+
+1. ✅ DONE — Implement post-match lowering (nested case / decision tree)
+   for `when` expressions on match clauses, with walker/BEAM parity tests
+   covering the former native-guard cases. `expandGuards` in `lower.cxx`
+   rewrites each guarded clause to `P -> case G of true -> B; _ -> Cont()
+   end` plus a `_ -> Cont()` fallthrough, where `Cont` is a LetRec-bound
+   0-arity continuation holding the remaining clauses (no body
+   duplication). Guards lower as ordinary expressions — user-defined pure
+   functions now work in `when`, and the unannotated `count`-on-a-List
+   case that crashed BEAM with `badarg` matches the interpreter.
+   `spec/when_guards.kex` covers list `count`, `empty?` composition,
+   user-defined predicates, and chained guarded clauses on both backends.
+2. ✅ DONE (match side) — Match-clause guards no longer consult the
+   hardcoded `m_inGuard` name-matching block in `lower.cxx`, and the
+   `receiverTypeName` field that fed it is deleted from
+   `ResolvedCallTarget` and the typechecker. The block itself remains,
+   now exclusively serving receive guards (step 3).
+3. Keep the receive-guard compatibility subset with its explicit
+   diagnostic until the selective receive workstream lands.
+4. Shrink the guard compatibility allowlist in `stdlib_decoupling_audit`
+   to the receive-only subset; delete it when the logical queue lands.
+
+### Future optimization: native guards via `#[Erlang.Guard]`
+
+Deferred. If guard performance or fail-the-clause error semantics matter,
+a prelude function could declare the BIF it lowers to in guard position:
+
+```kex
+# list.kex
+#[Erlang.Guard(:erlang, :length, 1)]
+let count = Kex.Intrinsic.List.length(this)
+
+# map.kex — same source name, different BIF; resolved per receiver type
+#[Erlang.Guard(:erlang, :map_size, 1)]
+let count = Kex.Intrinsic.Map.count(this)
+```
+
+The lowerer would walk the `when` expression; if every call resolves to a
+target carrying the pragma and every operator is guard-legal, it emits a
+native Erlang guard instead of the post-match case:
+
+```kex
+match xs do
+  l when l.count > 2 -> :big
+  _ -> :small
+end
+```
+
+```erlang
+case Xs of
+  L when length(L) > 2 -> big;
+  _ -> small
+end
+```
+
+This requires an annotation parser extension, a `guardBif` field on
+`KexiMethod` with KexI serialization, and propagation through
+`ResolvedCallTarget`. It is purely additive: post-match lowering remains
+the fallback for everything without a pragma. Two richer variants were
+considered and rejected even for the future: a structured
+`GuardExpression` pragma (BIF + comparator + operand) invents a mini
+expression language inside annotations, and embedding Kex source in the
+pragma to recompile at the call site is an inlining/macro system built
+just for guards.
+
+### Progress and remaining effects work
+
+Progress: the foundation for effect-aware guard lowering is in place.
+`ResolvedCallTarget` now carries the `isFoul` flag from KexI through the
+typechecker, so the lowerer knows at each call site whether the target is
+pure. The semantic analyzer tracks guard position (`m_inGuard`) and rejects
+foul function and namespace calls in `when`-clause guards with a clear
+diagnostic ("Cannot call foul function 'X' in a guard"). Both walker and
+BEAM backends produce the same diagnostic. The lowerer's guard-safe BIF
+block additionally rejects foul resolved calls as a safety net. A semantic
+test covers foul namespace rejection and pure receiver acceptance in guards.
+
 - Compute effects transitively across the call graph, including recursive
   strongly connected components and imported interfaces.
 - Extend KexI exports and receiver functions with versioned effect summaries. An absent or
   unknown effect is conservatively foul in a guard.
-- Permit any proven non-foul expression or function call in a Kex guard.
 - Reject direct and transitive foul calls during semantic analysis.
-- Lower BEAM-eligible typed IR operations as native guards only as an
-  optimization.
-- Lower other pure guards to a decision tree or generated clause continuation
-  that evaluates the subject once, preserves bindings, and reaches remaining
-  clauses without duplicating their code.
+  Started: direct foul calls in guard position are rejected by the semantic
+  analyzer. Transitive foul detection (a pure function calling a foul
+  function) requires the call-graph effect computation above.
 - Audit whether runtime errors propagate or fail the clause and put any change
   to that behavior through the language/contract approval process.
 - Delete the isolated compatibility guard lowerings once parity tests cover all
   former cases.
 
-The backend eligibility pass recognizes typed IR operations and primitive
-properties, never public stdlib names.
+Any future native-guard eligibility pass (see the deferred optimization
+above) recognizes typed IR operations and primitive properties, never
+public stdlib names.
 
 ## Parallel language workstream: selective receive
 

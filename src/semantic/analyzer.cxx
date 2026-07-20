@@ -294,6 +294,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 error(expr.location,
                     "Cannot call foul function '" + node.name + "' from pure context");
             }
+            if (sym && sym->isFoul && m_inGuard) {
+                error(expr.location,
+                    "Cannot call foul function '" + node.name + "' in a guard");
+            }
             for (const auto& arg : node.args) {
                 if (arg) analyzeExpr(*arg);
             }
@@ -314,22 +318,31 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
 
             // IO.inspect is the documented purity-exempt escape hatch.
             bool isInspect = (node.method == "inspect");
-            if (!m_inFoulContext && !isInspect && node.receiver) {
-                auto receiverName = [&]() -> std::string {
-                    if (auto* lo = std::get_if<ast::Identifier>(&node.receiver->kind))
-                        return lo->name;
-                    if (auto* up = std::get_if<ast::UpperIdentifier>(&node.receiver->kind))
-                        return up->name;
-                    return {};
-                }();
-                if (!receiverName.empty()) {
-                    for (std::string_view mod : kFoulModules) {
-                        if (receiverName == mod) {
-                            error(expr.location,
-                                "Cannot call foul function '" + receiverName + "." +
-                                node.method + "' from pure context");
-                            break;
-                        }
+            auto receiverName = [&]() -> std::string {
+                if (!node.receiver) return {};
+                if (auto* lo = std::get_if<ast::Identifier>(&node.receiver->kind))
+                    return lo->name;
+                if (auto* up = std::get_if<ast::UpperIdentifier>(&node.receiver->kind))
+                    return up->name;
+                return {};
+            }();
+            if (!m_inFoulContext && !isInspect && !receiverName.empty()) {
+                for (std::string_view mod : kFoulModules) {
+                    if (receiverName == mod) {
+                        error(expr.location,
+                            "Cannot call foul function '" + receiverName + "." +
+                            node.method + "' from pure context");
+                        break;
+                    }
+                }
+            }
+            if (m_inGuard && !isInspect && !receiverName.empty()) {
+                for (std::string_view mod : kFoulModules) {
+                    if (receiverName == mod) {
+                        error(expr.location,
+                            "Cannot call foul function '" + receiverName + "." +
+                            node.method + "' in a guard");
+                        break;
                     }
                 }
             }
@@ -372,7 +385,11 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 for (const auto& pat : clause.patterns) {
                     if (pat) bindPatternVars(*pat, expr.location);
                 }
-                if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
+                if (clause.guard && *clause.guard) {
+                    m_inGuard = true;
+                    analyzeExpr(**clause.guard);
+                    m_inGuard = false;
+                }
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
             }
@@ -421,7 +438,11 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 for (const auto& pat : clause.patterns) {
                     if (pat) bindPatternVars(*pat, expr.location);
                 }
-                if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
+                if (clause.guard && *clause.guard) {
+                    m_inGuard = true;
+                    analyzeExpr(**clause.guard);
+                    m_inGuard = false;
+                }
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
             }

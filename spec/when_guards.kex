@@ -46,6 +46,30 @@ let mixed(n) do
   end
 end
 
+# Post-match guard lowering: guards are ordinary pure expressions, not a
+# BIF-only subset. `count` on a List, `empty?`, and user-defined pure
+# functions all work in `when` on both backends.
+let big?(xs) = xs.count > 2
+
+let withList(xs) do
+  return match xs do
+    l when l.big? -> "big"
+    l when l.empty? -> "empty"
+    _ -> "small"
+  end
+end
+
+# Consecutive guarded clauses chain: each failed guard falls through to
+# the remaining clauses.
+let chain(n) do
+  return match n do
+    x when x.even? -> "even"
+    x when x > 100 -> "big odd"
+    x when x > 10 -> "medium odd"
+    _ -> "small odd"
+  end
+end
+
 let withResult(r) do
   return match r do |x|
     Ok(val) when val > 0 -> "ok-positive: ${val}"
@@ -73,6 +97,15 @@ main do
 
   IO.printLine(mixed(100))
   IO.printLine(mixed(60))
+
+  IO.printLine(withList([1, 2, 3]))
+  IO.printLine(withList([1]))
+  IO.printLine(withList([]))
+
+  IO.printLine(chain(4))
+  IO.printLine(chain(101))
+  IO.printLine(chain(11))
+  IO.printLine(chain(3))
 
   IO.printLine(withResult(Ok(5)))
   IO.printLine(withResult(Error("bad")))

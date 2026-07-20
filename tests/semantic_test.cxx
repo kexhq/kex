@@ -363,6 +363,29 @@ int main() {
                 "spawn"
             ));
         });
+
+        it("rejects foul namespace call in guard", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when IO.printLine(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "guard"
+            ));
+        });
+
+        it("allows pure receiver call in guard", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  match \"hello\" do\n"
+                "    s when s.count > 0 -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Semantic — Immutability", []() {

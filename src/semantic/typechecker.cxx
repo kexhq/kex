@@ -2443,6 +2443,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->backendFunction,
                     resolved->backendArity,
                     isReceiver,
+                    resolved->signature.isFoul,
                     resolved->paramNames,
                 };
             }

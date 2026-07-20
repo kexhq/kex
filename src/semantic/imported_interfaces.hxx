@@ -31,6 +31,7 @@ struct ResolvedCallTarget {
     std::string backendFunction;
     int backendArity = 0;
     bool passesReceiver = false;
+    bool isFoul = false;
     // Source parameter names excluding the receiver when passesReceiver is
     // true; otherwise names all function parameters.
     std::vector<std::string> paramNames;

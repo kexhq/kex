@@ -10,5 +10,12 @@ adult
 minor
 exactly 100
 over 50
+big
+small
+empty
+even
+big odd
+medium odd
+small odd
 ok-positive: 5
 error: bad

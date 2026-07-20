@@ -66,6 +66,7 @@ private:
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
     bool m_inFoulContext = false;
+    bool m_inGuard = false;
 
     // Stdlib module names whose methods are inherently foul (I/O, network, etc.).
     // IO.inspect is the one documented exception — always allowed even in pure fns.

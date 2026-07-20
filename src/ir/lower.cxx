@@ -842,9 +842,11 @@ struct Lowering {
     // Set while lowering a mutating `!` call's VALUE (the rebind itself is
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
-    // Set while lowering a match-clause `when` guard: Core Erlang guards can't
-    // call arbitrary functions, so char predicates must inline as guard-safe
-    // range checks rather than a `kex_io:is_*` call.
+    // Set while lowering a receive-clause `when` guard: Core Erlang receive
+    // guards can't call arbitrary functions, so the compatibility block below
+    // inlines a fixed set of guard-safe BIF forms. Match-clause `when` guards
+    // no longer use this — they lower as ordinary expressions and move out of
+    // guard position via expandGuards.
     bool m_inGuard = false;
     auto lowerGuard(const ast::ExprPtr& g) -> ExprPtr {
         m_inGuard = true; auto r = lower(g); m_inGuard = false; return r;
@@ -1380,10 +1382,18 @@ struct Lowering {
                 }
             }
         }
-        // Guard-safe inline lowerings. External dispatch is skipped in
-        // guards (!m_inGuard), so prelude receiver functions that appear in
-        // when-clauses need BIF-based fallbacks here.
+        // Guard-safe BIF lowerings. Core Erlang receive guards can only
+        // contain BIFs, so pure receiver calls that appear in receive
+        // when-clauses are translated to their BIF equivalents here. Foul
+        // calls are rejected. Match-clause guards no longer reach this
+        // block — they lower as ordinary expressions via expandGuards.
         if (m_inGuard && !n.block) {
+            if (resolvedCalls) {
+                auto it = resolvedCalls->find(&n);
+                if (it != resolvedCalls->end() && it->second.isFoul)
+                    return ret(runtimeError(
+                        "cannot call foul function '" + m + "' in a guard"));
+            }
             if (n.args.empty()) {
                 auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
                 auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
@@ -1641,6 +1651,101 @@ struct Lowering {
     auto wildPat() -> PatternPtr {
         auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
     }
+
+    // ---- Guards -------------------------------------------------------------
+    // Expand user-written `when` guards into nested matches. Guards lower as
+    // ordinary expressions (BEAM guards can't hold arbitrary calls, so the
+    // predicate moves out of guard position entirely). A guarded clause
+    // `P when G -> B` becomes `P -> case G of true -> B; _ -> Cont() end`
+    // followed by a wildcard clause `_ -> Cont()`, where Cont is a LetRec-bound
+    // 0-arity function holding the expansion of the remaining clauses — so
+    // clause bodies are never duplicated. A non-`true` guard result fails the
+    // clause, matching native guard semantics. `receive` guards are NOT
+    // expanded here (they must stay native; see lowerReceive).
+    auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr {
+        size_t gi = 0;
+        while (gi < clauses.size() && !clauses[gi].guard) ++gi;
+        if (gi == clauses.size()) {
+            auto e = std::make_unique<Expr>();
+            Match m; m.subjects = std::move(subjects); m.clauses = std::move(clauses);
+            e->node = std::move(m);
+            return e;
+        }
+        // Bind non-variable subjects so the continuation can re-match them.
+        std::vector<std::string> subjNames;
+        std::vector<std::pair<std::string, ExprPtr>> binds;
+        for (auto& s : subjects) {
+            if (auto* v = std::get_if<Var>(&s->node)) {
+                subjNames.push_back(v->name);
+            } else {
+                std::string sv = fresh("Gsubj");
+                binds.push_back({sv, std::move(s)});
+                subjNames.push_back(sv);
+            }
+        }
+        auto subjExprs = [&] {
+            std::vector<ExprPtr> v;
+            for (const auto& n : subjNames) v.push_back(var(n));
+            return v;
+        };
+        // Continuation: expand the remaining clauses, or reproduce the
+        // no-clause-matched failure when none remain.
+        std::vector<MatchClause> rest(
+            std::make_move_iterator(clauses.begin() + gi + 1),
+            std::make_move_iterator(clauses.end()));
+        ExprPtr contBody;
+        if (rest.empty()) {
+            auto tup = std::make_unique<Expr>();
+            tup->node = MakeTuple{two(lit(LitKind::Atom, "case_clause"), var(subjNames[0]))};
+            contBody = std::make_unique<Expr>();
+            contBody->node = Call{"erlang", "error", 1, one(std::move(tup)), false};
+        } else {
+            contBody = expandGuards(subjExprs(), std::move(rest));
+        }
+        std::string contName = "__gcont" + std::to_string(counter++);
+        auto callCont = [&] {
+            auto c = std::make_unique<Expr>();
+            c->node = Call{"", contName, 0, {}, false};
+            return c;
+        };
+        Match m;
+        m.subjects = subjExprs();
+        for (size_t i = 0; i < gi; ++i) m.clauses.push_back(std::move(clauses[i]));
+        MatchClause g;
+        g.patterns = std::move(clauses[gi].patterns);
+        // `true -> body; _ -> cont` — a non-boolean guard fails the clause.
+        Match gm;
+        gm.subjects.push_back(std::move(*clauses[gi].guard));
+        MatchClause gt;
+        auto tp = std::make_unique<Pattern>();
+        tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool; tp->litBool = true;
+        gt.patterns.push_back(std::move(tp));
+        gt.body = std::move(clauses[gi].body);
+        MatchClause gf;
+        gf.patterns.push_back(wildPat());
+        gf.body = callCont();
+        gm.clauses.push_back(std::move(gt));
+        gm.clauses.push_back(std::move(gf));
+        auto ge = std::make_unique<Expr>();
+        ge->node = std::move(gm);
+        g.body = std::move(ge);
+        m.clauses.push_back(std::move(g));
+        MatchClause fall;
+        for (size_t i = 0; i < m.subjects.size(); ++i) fall.patterns.push_back(wildPat());
+        fall.body = callCont();
+        m.clauses.push_back(std::move(fall));
+        auto caseE = std::make_unique<Expr>();
+        caseE->node = std::move(m);
+        LetRec lr; lr.name = contName; lr.params = {};
+        lr.funBody = std::move(contBody);
+        lr.contBody = std::move(caseE);
+        auto e = std::make_unique<Expr>();
+        e->node = std::move(lr);
+        for (auto it = binds.rbegin(); it != binds.rend(); ++it)
+            e = makeLet(it->first, std::move(it->second), std::move(e));
+        return e;
+    }
+
     // Record-destructure `{ f, g: alias, h: { nested } }` → a flat list of
     // (name, accessor-expr) bindings read by field name from `baseVar`.
     // Recurses into nested record patterns.
@@ -1812,19 +1917,21 @@ struct Lowering {
             letWrap = std::move(subjIr);
             subjIr = var(ssa);
         }
-        Match m;
-        m.subjects.push_back(std::move(subjIr));
+        std::vector<ExprPtr> subjects;
+        subjects.push_back(std::move(subjIr));
+        std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             MatchClause mc;
             for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
-            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+            // `when` guards lower as ordinary expressions; expandGuards moves
+            // the predicate out of BEAM guard position into a nested match.
+            if (cl.guard) mc.guard = lower(*cl.guard);
             mc.body = lower(cl.body);
             subst = snap;
-            m.clauses.push_back(std::move(mc));
+            cls.push_back(std::move(mc));
         }
-        auto e = std::make_unique<Expr>();
-        e->node = std::move(m);
+        auto e = expandGuards(std::move(subjects), std::move(cls));
         if (letWrap) {
             auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
             if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);
@@ -1859,9 +1966,10 @@ struct Lowering {
     auto lowerRangeMatch(const ast::MatchExpr& n) -> ExprPtr {
         std::string sv = fresh("RSubj");
         auto subjVal = lower(n.subject);
-        Match m;
-        m.subjects.push_back(callE("erlang", "hd", 1, one(var(sv))));
-        m.subjects.push_back(callE("lists", "last", 1, one(var(sv))));
+        std::vector<ExprPtr> subjects;
+        subjects.push_back(callE("erlang", "hd", 1, one(var(sv))));
+        subjects.push_back(callE("lists", "last", 1, one(var(sv))));
+        std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             MatchClause mc;
@@ -1874,12 +1982,12 @@ struct Lowering {
                 mc.patterns.push_back(wildPat());
                 mc.patterns.push_back(wildPat());
             }
-            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+            if (cl.guard) mc.guard = lower(*cl.guard);
             mc.body = lower(cl.body);
             subst = snap;
-            m.clauses.push_back(std::move(mc));
+            cls.push_back(std::move(mc));
         }
-        auto e = std::make_unique<Expr>(); e->node = std::move(m);
+        auto e = expandGuards(std::move(subjects), std::move(cls));
         return makeLet(sv, std::move(subjVal), std::move(e));
     }
 
@@ -2025,17 +2133,19 @@ struct Lowering {
             if (me->subjectBinding)
                 throw LowerError("IR lower: match |binder| in loop not yet ported");
             std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
-            Match m; m.subjects.push_back(lower(me->subject));
+            std::vector<ExprPtr> subjects;
+            subjects.push_back(lower(me->subject));
+            std::vector<MatchClause> cls;
             for (const auto& cl : me->clauses) {
                 auto snap = subst;
                 MatchClause mcx;
                 for (const auto& p : cl.patterns) mcx.patterns.push_back(lowerPattern(p));
-                if (cl.guard) mcx.guard = lowerGuard(*cl.guard);
+                if (cl.guard) mcx.guard = lower(*cl.guard);
                 mcx.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
                 subst = snap;
-                m.clauses.push_back(std::move(mcx));
+                cls.push_back(std::move(mcx));
             }
-            auto x = std::make_unique<Expr>(); x->node = std::move(m); return x;
+            return expandGuards(std::move(subjects), std::move(cls));
         }
         if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind))
             return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); });
@@ -2367,21 +2477,20 @@ struct Lowering {
                         caseE = matchBool(lower(ie->condition), branch(ie->thenBody),
                                           std::move(elseP));
                     } else {
-                        Match m;
-                        m.subjects.push_back(lower(me->subject));
+                        std::vector<ExprPtr> subjects;
+                        subjects.push_back(lower(me->subject));
+                        std::vector<MatchClause> cls;
                         for (const auto& cl : me->clauses) {
                             auto snap = subst;
                             MatchClause mc;
                             for (const auto& p : cl.patterns)
                                 mc.patterns.push_back(lowerPattern(p));
-                            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+                            if (cl.guard) mc.guard = lower(*cl.guard);
                             mc.body = lowerLoopArmU(cl.body, "", mutVars, yieldState);
                             subst = snap;
-                            m.clauses.push_back(std::move(mc));
+                            cls.push_back(std::move(mc));
                         }
-                        auto x = std::make_unique<Expr>();
-                        x->node = std::move(m);
-                        caseE = std::move(x);
+                        caseE = expandGuards(std::move(subjects), std::move(cls));
                     }
                     // Rebind the mutated names to the yielded values.
                     if (mutVars.size() == 1) {
