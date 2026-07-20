@@ -1,13 +1,13 @@
 # kex: no-check
 
-describe("Optional — some? and none?") do
-  it("some? returns true for Just") do
-    assert(Just(42).some?)
-    assert(Just("hello").some?)
+describe("Optional — present? and none?") do
+  it("present? returns true for Just") do
+    assert(Just(42).present?)
+    assert(Just("hello").present?)
   end
 
-  it("some? returns false for bare None") do
-    assert(!None.some?)
+  it("present? returns false for bare None") do
+    assert(!None.present?)
   end
 
   it("none? returns true for bare None") do
@@ -16,11 +16,6 @@ describe("Optional — some? and none?") do
 
   it("none? returns false for Just") do
     assert(!Just(42).none?)
-  end
-
-  it("present? is an alias for some?") do
-    assert(Just(1).present?)
-    assert(!None.present?)
   end
 end
 

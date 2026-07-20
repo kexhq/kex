@@ -7,7 +7,7 @@
 %% map/filter stay lazy (they wrap the thunk); take/2 is the only
 %% materializer.
 -module(kex_intrinsic_stream).
--export([make/2, generate/2, take/2, drop/2, map/2, filter/2]).
+-export([generate/2, take/2, drop/2, map/2, filter/2]).
 
 %% make/2 — infinite stream from a seed and a successor function.
 make(Seed, Succ) ->

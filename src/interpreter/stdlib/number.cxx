@@ -72,43 +72,6 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    defineIntrinsic("Number::convertToInteger", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        const auto& v = args[0];
-        if (std::holds_alternative<IntValue>(v->data) ||
-            std::holds_alternative<BigIntValue>(v->data))
-            return Value::just(v);
-        if (auto* f = std::get_if<FloatValue>(&v->data))
-            return Value::just(Value::integer(static_cast<int64_t>(f->value)));
-        if (auto* ch = std::get_if<CharValue>(&v->data))
-            return Value::just(Value::integer(static_cast<int64_t>(ch->value)));
-        if (auto* s = std::get_if<StringValue>(&v->data)) {
-            try {
-                size_t parsed = 0;
-                auto val = std::stoll(s->value, &parsed);
-                if (parsed == s->value.size()) return Value::just(Value::integer(val));
-            } catch (...) {}
-        }
-        return Value::none();
-    });
-
-    defineIntrinsic("Number::convertToFloat", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::none();
-        const auto& v = args[0];
-        if (auto* f = std::get_if<FloatValue>(&v->data))
-            return Value::just(v);
-        if (auto i = asInteger(v))
-            return Value::just(Value::floating(i->get_d()));
-        if (auto* s = std::get_if<StringValue>(&v->data)) {
-            try {
-                size_t parsed = 0;
-                auto val = std::stod(s->value, &parsed);
-                if (parsed == s->value.size()) return Value::just(Value::floating(val));
-            } catch (...) {}
-        }
-        return Value::none();
-    });
-
     // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —
     // namespaced under the primitive type, same convention as Math.sqrt
     // etc. The Error payload is a typed ParseError record {input, position,

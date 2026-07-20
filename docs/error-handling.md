@@ -41,7 +41,7 @@ end
 
 ## Checking Without Unwrapping
 
-`ok?`/`error?` (on `Result`) and `some?`/`none?` (on `Optional`) ask "did this succeed" without a `match`:
+`ok?`/`error?` (on `Result`) and `present?`/`none?` (on `Optional`) ask "did this succeed" without a `match`:
 
 ```kex
 if parseInt(input).ok? do

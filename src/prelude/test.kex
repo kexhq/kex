@@ -82,7 +82,7 @@ module Assert do
 
   let truthy(value) = assert(value, "expected a truthy value")
   let falsy(value) = assert(!value, "expected a falsy value")
-  let some(value) = assert(value.some?, "expected Just, got ${value}")
+  let some(value) = assert(value.present?, "expected Just, got ${value}")
   let none(value) = assert(value.none?, "expected None, got ${value}")
   let ok(value) = assert(value.ok?, "expected Ok, got ${value}")
   let error(value) = assert(value.error?, "expected Error, got ${value}")

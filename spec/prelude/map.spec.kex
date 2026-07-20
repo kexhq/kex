@@ -199,7 +199,7 @@ end
 describe("Map — find") do
   it("find returns Just of the first matching entry") do
     let result = { a: 1, b: 2, c: 3 }.find { |k, v| v > 1 }
-    assert(result.some?)
+    assert(result.present?)
   end
 
   it("find returns None when nothing matches") do

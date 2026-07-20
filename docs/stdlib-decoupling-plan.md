@@ -568,26 +568,19 @@ Removed inline lowerings:
 
 Remaining inline lowerings — removal plan:
 
-- **`.or(default)` hardcoded** (`kex_intrinsic_fun:or_else`): universal
-  semantics for non-Optional/non-Result receivers. Remove by adding a
-  catch-all `let or(value, _) = value` to the prelude (after Optional and
-  Result type-dispatched clauses, the catch-all returns the receiver
-  unchanged). The typed Optional/Result `or` clauses already handle
-  Just/Ok unwrapping and None/Error fallback. The interpreter's public
-  `or` in adt.cxx becomes dead once the Kex catch-all is defined.
+- **`.or(default)`** ✅ DONE — catch-all `let or(value, _) = value` added
+  to optional.kex. Typed Optional/Result clauses merge before the catch-all
+  via the function-merge step. Interpreter native `or` in adt.cxx removed.
+  BEAM inline lowering removed from lower.cxx.
 
-- **`.to(Type)` hardcoded**: the argument is a type token (`String`,
-  `Integer`, `Float`, `List`) — a runtime value of type `Type` that
-  UpperIdentifiers already lower to (atoms on BEAM, ModuleValue on the
-  walker). Remove by adding prelude `to` methods that pattern-match on
-  the type token argument:
-    - `to(value, @String)` → `Kex.Intrinsic.IO.toString(value)`
-    - `to(value, @Integer)` → `Kex.Intrinsic.Number.toInteger(value)`
-    - `to(value, @Float)` → `Kex.Intrinsic.Number.toFloat(value)`
-    - `to(value, @List)` → `Just(value)` (ranges are lists on BEAM)
-  The interpreter's `to` in list.cxx becomes dead once the Kex methods
-  exist. Type arguments of type `Type` are a general language feature,
-  not `.to`-specific.
+- **`.to(Type)`** ✅ DONE — bare `let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)`
+  added to optional.kex. Runtime `convertTo/2` dispatches on the type atom
+  (`'String'`, `'Integer'`, `'Float'`, `'List'`). Interpreter `Fun::convertTo`
+  intrinsic handles both ModuleValue and VariantValue type tokens.
+  `to :> Y -> Y?` type annotations removed from Integer/Float/String/List
+  make blocks. BEAM inline lowering removed from lower.cxx. Top-level
+  bare functions now correctly register as receiver functions with
+  `firstParamIsReceiver` (beam arity = params.size(), not +1).
 
 - **Guard-safe BIF fallbacks** (`even?`, `odd?`, `ok?`, `error?`, `none?`,
   `abs`, `alive?`, `in?`, `digit?`, `alpha?`, `space?`, `count`/`length`/
@@ -811,6 +804,26 @@ composition live in Kex; native code retains networking and server lifecycle
 primitives. Neither checker nor ordinary lowering knows these public names.
 
 ### 7. Critical-path dead-code gate
+
+Progress: a cross-reference audit of all `kex_intrinsic_*` BEAM runtime exports
+against the prelude `.core`, lowerer, and emitter identified and cleaned up dead
+exports left over from earlier decoupling phases:
+
+- `kex_intrinsic_fun`: removed 8 dead `*2/2` HOF exports (`each2`, `filter2`,
+  `map2`, `count2`, `any2`, `all2`, `reject2`, `find2`) and their function
+  bodies — these were the old 2-param block HOF forms, superseded by
+  `kex_intrinsic_list` HOFs with `applyItem` auto-splatting.
+- `kex_intrinsic_list`: removed 2 dead exports (`sum_by/2`, `product_by/2`) and
+  their function bodies — the block forms of `sum`/`product` are now
+  source-owned in the prelude. Made 4 internal helpers non-exported
+  (`list_get/2,3`, `index_of/2`, `list_product/1`) — they are only called by
+  their public wrappers (`get`, `indexOf`, `at`, `product`) within the module.
+- `kex_intrinsic_number`: made `number_parse/1` non-exported — only called
+  internally by `parse/1`.
+- `kex_intrinsic_integer`: made `integer_parse_prefix/1` non-exported — only
+  called internally by `parsePrefix/1`.
+- `kex_intrinsic_stream`: made `make/2` non-exported — only called internally by
+  `generate/2`.
 
 - Remove empty forwarding files rather than retaining shells.
 - Search for deleted flags, stdlib names, prelude paths, dispatch sets, and old

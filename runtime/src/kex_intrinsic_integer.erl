@@ -2,7 +2,7 @@
 %% The typed Integer stdlib lives in src/prelude/integer.kex; `even?`/`odd?`
 %% are expressed there in Kex on top of `modulo`. Receiver is the first arg.
 -module(kex_intrinsic_integer).
--export([modulo/2, times/2, integer_parse/1, integer_parse_prefix/1,
+-export([modulo/2, times/2, integer_parse/1,
          parse/1, parsePrefix/1]).
 
 %% Mathematical modulo: the result has the divisor's sign, matching the Kex
