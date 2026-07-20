@@ -115,9 +115,18 @@ interfaces.
 
 Remaining inline lowerings (cannot be removed yet):
 - Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`, `abs`,
-  `alive?`, `in?`, `digit?`, `alpha?`, `space?`)
-- `.to(Type)` conversion
-- `.or(default)` universal semantics
+  `alive?`, `in?`, `digit?`, `alpha?`, `space?`, `count`/`length`/`size`,
+  `empty?`) — retained until the pure-guard workstream produces a general
+  mechanism for lowering proven-pure Kex calls in guard position. The
+  `stdlib_decoupling_audit` test enforces the exact shrinking allowlist.
+- `Supervisor.start` / `worker` / `supervisor` — syntax-level block→lambda
+  desugaring rather than stdlib dispatch.
+
+Removed inline lowerings (now source-owned):
+- `.to(Type)` — bare `let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)`
+  in `optional.kex`; both backends route through the qualified intrinsic.
+- `.or(default)` — catch-all `let or(value, _) = value` in `optional.kex`;
+  typed Optional/Result clauses merge before the catch-all.
 
 FileHandle methods and ordinary Process/Pid methods are source-owned. Task
 `await` is source-owned on BEAM; the walker alone retains a bare fallback

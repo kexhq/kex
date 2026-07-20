@@ -1,7 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
-           inspect/1, inspect_value/1, to_string/1,
-           to_string_optional/1,
+           inspect/1, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0]).

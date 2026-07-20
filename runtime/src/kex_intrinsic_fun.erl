@@ -8,7 +8,6 @@
 
 convertTo(V, 'String') -> kex_io:to_string_optional(V);
 convertTo(V, 'Integer') -> kex_intrinsic_number:to_integer(V);
-convertTo(V, 'Int') -> kex_intrinsic_number:to_integer(V);
 convertTo(V, 'Float') -> kex_intrinsic_number:to_float(V);
 convertTo(V, 'List') when is_list(V) -> {'Just', V};
 convertTo(_, _) -> 'None'.

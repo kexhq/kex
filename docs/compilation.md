@@ -67,7 +67,6 @@ src/
   semantic/    — SemanticDB, collect/resolve passes, typechecker, traits
   interpreter/ — tree-walk interpreter, fiber/scheduler process runtime, stdlib
   ir/          — lowering IR + IR→Core Erlang emitter
-  codegen/     — AST→Core Erlang emitter
   common/      — shared helpers (color, completion, prelude loader)
   prelude/     — prelude .kex sources
   main.cxx     — CLI entry point

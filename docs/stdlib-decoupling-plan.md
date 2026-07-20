@@ -825,6 +825,56 @@ exports left over from earlier decoupling phases:
 - `kex_intrinsic_stream`: made `make/2` non-exported — only called internally by
   `generate/2`.
 
+A follow-up sweep verified every remaining `kex_intrinsic_*` export against
+its prelude caller and lowered no remaining dead surface:
+
+- `kex_intrinsic_fun`: removed the unused `'Int'` atom clause from
+  `convertTo/2` — only `'String'`, `'Integer'`, `'Float'`, and `'List'` are
+  reachable, matching the interpreter's `Fun::convertTo` exactly. The
+  interpreter never had an `"Int"` branch, so the BEAM-only arm was both
+  dead and a parity gap.
+
+- Empty forwarding files: none remain. Every small file under
+  `src/interpreter/stdlib/` and `runtime/src/kex_intrinsic_*.erl` carries a
+  live registration or a real backend implementation; the smallest
+  (`kex_intrinsic_system.erl`, `kex_intrinsic_float.erl`,
+  `kex_intrinsic_task.erl`) are genuine thin wrappers, not shells.
+- Stale references to removed identifiers (`definePublicIntrinsic`,
+  `migratedPreludeFns`, `routedFunctions`, `preludeFns`, `nsCall`,
+  `hof2Name`, `BuiltIn.*`, `KEX_PRELUDE_DIR`, `--legacy-emitter`, the
+  `Elixir.` module prefix, `Math.PI`/`Math.E` runtime functions) survive
+  only inside this plan's own historical narrative; no source or runtime
+  code reads them. The `preferExternalReceivers` and `flattenModules`
+  flags remain in use positionally during prelude self-compilation and
+  metadata collection, so they are not dead.
+- Build-time documentation references fixed: `CMakeLists.txt`'s GMP
+  comment now points at `docs/types.md` (not the nonexistent
+  `docs/type-system-plan.md`); `src/ir/ir.hxx`'s desugar-target comment
+  now points at `docs/ir-format.md`; `docs/plan-brew-distribution.md`
+  and `docs/plan_tey_pm.md` now reference `src/ir/emit_core.cxx` instead
+  of the retired `src/codegen/core_erlang.cxx`.
+- `docs/plan-brew-distribution.md`'s "Blockers" section updated: the
+  `KEX_PRELUDE_DIR` and missing-install-rules blockers are marked
+  resolved (runtime discovery walks executable-relative
+  `share/kex/prelude` and `src/prelude`, with `KEX_STDLIB_DIR` as the
+  toolchain override; CMake and Make installs populate both source and
+  BEAM-runtime trees, exercised by `installed_layout_test`). The
+  formula sketch no longer passes the obsolete
+  `-DKEX_PRELUDE_DIR=…` flag.
+- `docs/compilation.md` dropped its stale `src/codegen/` directory entry
+  from the project layout; the live `src/ir/` entry already described
+  the lowering IR + Core Erlang emitter.
+- `docs/tooling.md` rewritten to match the actual REPL command surface
+  (`/help`, `/load`, `/unload`, `/reload`, `/reset`, `/complete`,
+  `/exit` — not the retired `:` prefix or the never-implemented
+  `:pure`/`:foul`/`:type`/`:doc` commands) and the actual CLI flags
+  (`kex -i`, `kex -R`, `kex -c`, `kex -C`, `kex -e` — not the
+  never-supported `kex repl`).
+- `docs/prelude-intrinsic-plan.md` Phase 4 status refreshed: `.to(Type)`
+  and `.or(default)` are recorded as removed, and the remaining
+  guard-safe BIF allowlist now includes the full set enforced by
+  `stdlib_decoupling_audit`.
+
 - Remove empty forwarding files rather than retaining shells.
 - Search for deleted flags, stdlib names, prelude paths, dispatch sets, and old
   runtime entry points.
@@ -906,9 +956,18 @@ pure calls.
 - Enforce dependency layering so compiler targets cannot include stdlib source
   files or native public builtin registries through anything except the generic
   package and intrinsic interfaces.
+  Completed: `dependency_layering_test` scans every source file in the compiler
+  targets (lexer, parser, ast, semantic, ir, beam, module) for `#include`
+  directives reaching into `prelude/*.kex`, `runtime/*.erl`, or
+  `interpreter/stdlib/` — any hit fails the build.
 - The interpreter contract suite rejects ordinary namespace calls to private
   ABI-only names across FS, List, Map, Char, Stream, and IO, while allowing
   source-owned receiver methods to retain their normal static-call form.
+  Completed: `interpreter_test.cxx` "does not expose private intrinsics as
+  ordinary namespace functions" asserts `Undefined function` for FS.file,
+  List.foldLeft, Map.getWithDefault, Char.is_digit, Stream.generate, and
+  IO.ioMockStart; `beam_test.cxx` "rejects an incompatible private intrinsic
+  ABI" validates the KexI ABI-version gate.
 - Maintain an allowlisted source audit for temporary guard compatibility names;
   the list must shrink and reach zero when the guard workstream completes.
   Completed: `stdlib_decoupling_audit` extracts the explicitly marked guard

@@ -119,7 +119,7 @@ add_library(kex_lib
 target_include_directories(kex_lib PUBLIC src)
 
 # GMP backs the arbitrary-precision `Integer` default (see
-# docs/type-system-plan.md's Runtime representation section). Required,
+# docs/types.md's Runtime representation section). Required,
 # not optional like readline below.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # Wasm has no meaningful dynamic-linking story here, so this is a
@@ -400,6 +400,11 @@ add_test(NAME stdlib_decoupling_audit
     COMMAND ${CMAKE_COMMAND}
         -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
         -P ${CMAKE_SOURCE_DIR}/tests/stdlib_decoupling_audit.cmake)
+
+add_test(NAME dependency_layering_test
+    COMMAND ${CMAKE_COMMAND}
+        -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/tests/dependency_layering_test.cmake)
 
 if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     add_test(NAME prelude_artifact_test

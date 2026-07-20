@@ -56,15 +56,12 @@ end
 
 ## The `to` Convention (Type Conversion)
 
-Universal conversion via `value.to(TargetType, ...options)`:
+Universal conversion via `value.to(TargetType)`. A catch-all implementation
+dispatches through the private `Kex.Intrinsic.Fun.convertTo` primitive,
+supporting `String`, `Integer`, `Float`, and `List` targets. Types can add
+specialized clauses through `make`:
 
 ```kex
-make Integer do
-  let to(String) = Just(BuiltIn.intToString(this))
-  let to(String, base: Integer) = Just(BuiltIn.intToStringBase(this, base))
-  let to(Float) = Just(BuiltIn.intToFloat(this))
-end
-
 make Vector2D do
   let to(String) -> String? do
     return Just("(${this.x}, ${this.y})")
@@ -73,13 +70,13 @@ end
 
 # Usage:
 42.to(String)             # Just("42")
-42.to(String, base: 16)   # Just("2a")
 3.14.to(Integer)          # Just(3)
 "nope".to(Integer)        # None
-myVec.to(String).or("")    # "(3.0, 4.0)"
+myVec.to(String).or("")   # "(3.0, 4.0)"
 ```
 
-The first argument is the target type (pattern matched). Additional arguments are options for the conversion. `to` returns `Optional<TargetType>` because conversion can fail; callers explicitly unwrap, pattern-match, or propagate that result.
+`to` returns `Optional<TargetType>` because conversion can fail; callers
+explicitly unwrap, pattern-match, or propagate that result.
 
 ## Pattern Matching in Functions
 
