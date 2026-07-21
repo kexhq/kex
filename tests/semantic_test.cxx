@@ -386,6 +386,74 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("rejects transitively foul function in guard", []() {
+            assertTrue(hasError(
+                "foul log(msg: String) = msg\n"
+                "let check(x: String) = log(x)\n"
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when check(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "transitively"
+            ));
+        });
+
+        it("rejects multi-hop transitively foul in guard", []() {
+            assertTrue(hasError(
+                "foul write(msg: String) = msg\n"
+                "let step1(x: String) = write(x)\n"
+                "let step2(x: String) = step1(x)\n"
+                "let step3(x: String) = step2(x)\n"
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when step3(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "transitively"
+            ));
+        });
+
+        it("allows pure function chain in guard", []() {
+            assertTrue(noErrors(
+                "let double(x: Int) = x * 2\n"
+                "let quadruple(x: Int) = double(double(x))\n"
+                "main do\n"
+                "  match 5 do\n"
+                "    x when quadruple(x) > 10 -> x\n"
+                "    _ -> 0\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects call to imported foul module from pure context", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface db;
+            db.sourceModule = "Database";
+            db.backendModule = "kex_database";
+            db.isFoul = true;
+            semantic::ImportedFunction query;
+            query.sourceName = "query";
+            query.signature = {"query", {semantic::Type::string()},
+                               semantic::Type::string(), true};
+            db.exports["query"].push_back(std::move(query));
+            interfaces.modules["Database"] = std::move(db);
+            assertTrue(hasErrorWithInterfaces(
+                "let check(sql: String) = Database.query(sql)\n",
+                interfaces, "foul"));
+        });
+
+        it("allows Kex.Intrinsic calls from pure context", []() {
+            assertTrue(noErrors(
+                "make Map<K, V> do\n"
+                "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Semantic — Immutability", []() {

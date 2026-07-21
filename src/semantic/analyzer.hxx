@@ -3,7 +3,9 @@
 #include "../ast/ast.hxx"
 #include "symbol.hxx"
 #include "typechecker.hxx"
+#include <set>
 #include <string>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::semantic {
@@ -18,7 +20,7 @@ struct Diagnostic {
 class Analyzer {
 public:
     explicit Analyzer(const ImportedInterfaces* importedInterfaces = nullptr)
-        : m_checker(importedInterfaces) {}
+        : m_checker(importedInterfaces), m_importedInterfaces(importedInterfaces) {}
 
     auto analyze(const ast::Program& program) -> bool;
     auto diagnostics() const -> const std::vector<Diagnostic>&;
@@ -55,6 +57,12 @@ private:
     auto isInFoulContext() const -> bool;
     auto checkPurity(const std::string& callee, SourceLocation loc) -> void;
 
+    // Transitive effect computation — runs after Phase 1, before Phase 2.
+    auto computeTransitiveEffects(const ast::Program& program) -> void;
+    // Post-typechecking enrichment: feed resolved call isFoul into the
+    // transitive set and re-check guards.
+    auto enrichEffectsFromResolvedCalls(const ast::Program& program) -> void;
+
     // Loop control
     auto checkLoopControl(SourceLocation loc, const std::string& keyword) -> void;
 
@@ -65,6 +73,7 @@ private:
     SymbolTable m_symbols;
     std::vector<Diagnostic> m_diagnostics;
     TypeChecker m_checker;
+    const ImportedInterfaces* m_importedInterfaces = nullptr;
     bool m_inFoulContext = false;
     bool m_inGuard = false;
 
@@ -78,6 +87,11 @@ private:
     // push a marker, so break/next see through them to the loop.
     enum class LoopScope { Loop, Closure };
     std::vector<LoopScope> m_loopScopes;
+
+    // Transitive effect state — populated by computeTransitiveEffects,
+    // enriched by enrichEffectsFromResolvedCalls after type checking.
+    std::unordered_map<std::string, std::set<std::string>> m_callGraph;
+    std::unordered_set<std::string> m_transitivelyFoul;
 };
 
 } // namespace kex::semantic

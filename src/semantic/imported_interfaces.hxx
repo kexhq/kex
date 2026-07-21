@@ -21,6 +21,7 @@ struct ImportedModuleInterface {
     std::string sourceModule;
     std::string backendModule;
     bool automaticImport = false;
+    bool isFoul = false;
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 

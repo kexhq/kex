@@ -605,6 +605,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
             imported.sourceModule = sourceModule;
             imported.backendModule = module.beamAtom;
             imported.automaticImport = automaticModules.count(sourceModule) > 0;
+            imported.isFoul = module.chunk.metadata.isFoul;
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom));

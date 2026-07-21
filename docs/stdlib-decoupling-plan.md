@@ -1043,12 +1043,28 @@ test covers foul namespace rejection and pure receiver acceptance in guards.
 
 - Compute effects transitively across the call graph, including recursive
   strongly connected components and imported interfaces.
+  Progress: the analyzer now builds a call graph over top-level and module
+  functions after Phase 1, seeds directly foul functions (from AST `foul`,
+  foul module calls, spawn/receive), and propagates to a fixpoint. Functions
+  that transitively reach foul operations are rejected in `when`-clause guards
+  with a distinct diagnostic. Semantic tests cover single-hop, multi-hop,
+  and pure-chain cases. SCCs converge via the fixpoint loop.
+  After type checking, a post-Phase-2 enrichment step
+  (`enrichEffectsFromResolvedCalls`) walks function bodies for MethodCall
+  nodes whose resolved target carries `isFoul` from KexI. Newly foul
+  functions are added to the transitive set, the call graph is
+  re-propagated, and guards are re-checked (only newly foul entries to
+  avoid duplicate diagnostics).
 - Extend KexI exports and receiver functions with versioned effect summaries. An absent or
   unknown effect is conservatively foul in a guard.
 - Reject direct and transitive foul calls during semantic analysis.
-  Started: direct foul calls in guard position are rejected by the semantic
-  analyzer. Transitive foul detection (a pure function calling a foul
-  function) requires the call-graph effect computation above.
+  Done: direct foul calls in guard position are rejected by the semantic
+  analyzer (Phase 1). Transitive foul calls in guards are rejected by the
+  post-Phase-1 call-graph propagation (Phase 1.5). Imported receiver
+  functions whose foulness is resolved during type checking are caught by
+  the post-Phase-2 enrichment pass. The three passes together cover
+  AST-declared foul, foul module calls, spawn/receive, imported KexI
+  foulness, and multi-hop transitive chains through the call graph.
 - ✅ DECIDED — Guard predicate errors propagate (crash); they do not fail
   the clause. Non-exhaustive matches raise on both backends.
 - Delete the isolated compatibility guard lowerings once parity tests cover all
