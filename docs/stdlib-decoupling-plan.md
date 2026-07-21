@@ -1057,6 +1057,13 @@ test covers foul namespace rejection and pure receiver acceptance in guards.
   avoid duplicate diagnostics).
 - Extend KexI exports and receiver functions with versioned effect summaries. An absent or
   unknown effect is conservatively foul in a guard.
+  Done: `isFoul` has been present on KexI exports, receiver functions, trait
+  required methods, and module structural metadata since v1 — it is not
+  version-gated and is always serialized. `ImportedModuleInterface.isFoul`
+  now flows from `KexiStructuralMetadata.isFoul` through the registry. The
+  analyzer prefers imported module foulness over the hardcoded `kFoulModules`
+  fallback (kept for null-interface defensive paths). The `dump_prelude_kexi`
+  tool now prints module-level, export-level, and receiver-level foulness.
 - Reject direct and transitive foul calls during semantic analysis.
   Done: direct foul calls in guard position are rejected by the semantic
   analyzer (Phase 1). Transitive foul calls in guards are rejected by the
