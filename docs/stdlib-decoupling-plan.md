@@ -973,10 +973,14 @@ end
    `receiverTypeName` field that fed it is deleted from
    `ResolvedCallTarget` and the typechecker. The block itself remains,
    now exclusively serving receive guards (step 3).
-3. Keep the receive-guard compatibility subset with its explicit
-   diagnostic until the selective receive workstream lands.
-4. Shrink the guard compatibility allowlist in `stdlib_decoupling_audit`
-   to the receive-only subset; delete it when the logical queue lands.
+3. ✅ IN PLACE — The receive-guard compatibility subset is the only
+   remaining consumer of the `m_inGuard` block; receive guards verified
+   working on both backends (`s when s.count > 3` over message payloads).
+   It stays until the selective receive workstream lands.
+4. ✅ DONE — The `stdlib_decoupling_audit` allowlist now covers exactly
+   the receive-only block (nothing exercises it in the corpus, but the
+   names are the meaningful receive-payload predicates). Delete the list
+   when the logical queue lands.
 
 ### Future optimization: native guards via `#[Erlang.Guard]`
 

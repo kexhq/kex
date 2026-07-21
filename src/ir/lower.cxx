@@ -1431,6 +1431,13 @@ struct Lowering {
             }
             if (m == "in?" && n.args.size() == 1)
                 return ret(callE("lists","member",2,two(rv(), arg0())));
+            // Anything else would emit a function call into the Core Erlang
+            // guard, which erlc rejects opaquely — diagnose it here instead.
+            throw LowerError(
+                "unsupported call '" + m + "' in a receive guard: receive "
+                "guards support only guard-safe BIF forms (count/length/size, "
+                "empty?, abs, alive?, even?, odd?, ok?, error?, none?, digit?, "
+                "alpha?, space?, in?) until selective receive lands");
         }
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so

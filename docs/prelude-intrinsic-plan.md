@@ -116,8 +116,9 @@ interfaces.
 Remaining inline lowerings (cannot be removed yet):
 - Guard-safe BIF fallbacks (`even?`, `odd?`, `ok?`, `error?`, `none?`, `abs`,
   `alive?`, `in?`, `digit?`, `alpha?`, `space?`, `count`/`length`/`size`,
-  `empty?`) — retained until the pure-guard workstream produces a general
-  mechanism for lowering proven-pure Kex calls in guard position. The
+  `empty?`) — now used only by `receive ... when` guards, which must stay
+  native until the selective receive workstream lands. Match-clause `when`
+  guards use post-match lowering (`expandGuards`) instead. The
   `stdlib_decoupling_audit` test enforces the exact shrinking allowlist.
 - `Supervisor.start` / `worker` / `supervisor` — syntax-level block→lambda
   desugaring rather than stdlib dispatch.
@@ -265,8 +266,12 @@ module registry exports on the interpreter, and through external module param
 name fallback on BEAM.
 
 **Guard-safety rule:** the external receiver dispatch path is gated on
-`!m_inGuard`. A cross-module `call 'kex_prelude':…` is illegal inside a Core
-Erlang guard, so guarded methods fall through to BIF-based lowerings.
+`!m_inGuard`. `m_inGuard` is now set only while lowering *receive* guards:
+a cross-module `call 'kex_prelude':…` is illegal inside a Core Erlang
+receive guard, so those still fall through to BIF-based lowerings.
+Match-clause `when` guards are unaffected — they lower as ordinary
+expressions and move out of guard position via `expandGuards` (see the
+pure-guard workstream in stdlib-decoupling-plan.md).
 
 ## Maps: unordered with a canonical (sorted) order — DONE
 
