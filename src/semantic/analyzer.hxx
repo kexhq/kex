@@ -53,10 +53,6 @@ private:
     // populating SymbolTable instead of TypeEnv.
     auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void;
 
-    // Purity
-    auto isInFoulContext() const -> bool;
-    auto checkPurity(const std::string& callee, SourceLocation loc) -> void;
-
     // Transitive effect computation — runs after Phase 1, before Phase 2.
     auto computeTransitiveEffects(const ast::Program& program) -> void;
     // Post-typechecking enrichment: feed resolved call isFoul into the
@@ -75,11 +71,6 @@ private:
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     bool m_inFoulContext = false;
-    bool m_inGuard = false;
-
-    // Stdlib module names whose methods are inherently foul (I/O, network, etc.).
-    // IO.inspect is the one documented exception — always allowed even in pure fns.
-    static constexpr std::string_view kFoulModules[] = {"IO", "System", "Net", "File", "Directory", "Mock", "Http", "Database", "Supervisor"};
 
     // break/next bind to the nearest enclosing Loop marker, but a Closure
     // marker in between makes them illegal — they don't cross into a

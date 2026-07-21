@@ -396,11 +396,6 @@ add_test(NAME installed_layout_test
         -DKEX_INSTALL_TEST_PREFIX=${CMAKE_BINARY_DIR}/test-install
         -P ${CMAKE_SOURCE_DIR}/tests/installed_layout_test.cmake)
 
-add_test(NAME stdlib_decoupling_audit
-    COMMAND ${CMAKE_COMMAND}
-        -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
-        -P ${CMAKE_SOURCE_DIR}/tests/stdlib_decoupling_audit.cmake)
-
 add_test(NAME dependency_layering_test
     COMMAND ${CMAKE_COMMAND}
         -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}

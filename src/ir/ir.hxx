@@ -161,7 +161,6 @@ struct Return {
 // `senderVar` bound to the sender pid. Emits Core Erlang's native `receive`.
 struct ReceiveClause {
     PatternPtr pattern; // matched against the payload
-    std::optional<ExprPtr> guard;
     ExprPtr body;
 };
 struct Receive {

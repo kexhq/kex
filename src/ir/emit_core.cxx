@@ -230,8 +230,7 @@ struct Emitter {
         std::string out = "receive\n";
         for (const auto& cl : r.clauses) {
             out += "  {'kex_msg', " + emitPattern(*cl.pattern) + ", " + erlVar(r.senderVar) + "}";
-            out += cl.guard ? " when " + emit(*cl.guard) : " when 'true'";
-            out += " ->\n    " + emit(cl.body) + "\n";
+            out += " when 'true' ->\n    " + emit(cl.body) + "\n";
         }
         if (r.timeout && r.afterBody)
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);

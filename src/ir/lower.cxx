@@ -306,10 +306,7 @@ struct Lowering {
                 }
                 if (auto it = subst.find(n.name); it != subst.end())
                     return var(it->second);
-                // Bare reference to a defined function keeps the old free-var
-                // lowering (erlc rejects it loudly); guards can't call
-                // erlang:error, so they keep it too.
-                if (m_inGuard || knownFns.count(n.name))
+                if (knownFns.count(n.name))
                     return var(n.name);
                 // Genuinely unbound: every binding site registers itself in
                 // `subst`, so absence means the walker would raise at runtime —
@@ -342,14 +339,10 @@ struct Lowering {
                 // Lower to a boolean Match instead, matching the tree-walker
                 // (spec/mutual_recursion.kex relies on `n == 0 || isOdd(n-1)`
                 // never recursing once n == 0).
-                // In a guard, `case` is illegal, so use the strict and/or
-                // guard BIFs instead of the short-circuit Match.
                 if (n.op == TokenType::AmpAmp) {
-                    if (m_inGuard) return callE("erlang","and",2,two(lower(n.left), lower(n.right)));
                     return matchBool(lower(n.left), lower(n.right), litBool(false));
                 }
                 if (n.op == TokenType::PipePipe) {
-                    if (m_inGuard) return callE("erlang","or",2,two(lower(n.left), lower(n.right)));
                     return matchBool(lower(n.left), litBool(true), lower(n.right));
                 }
                 // Division by literal zero → compile-time error with location,
@@ -379,7 +372,7 @@ struct Lowering {
                 // String binary holding the same text ARE equal in Kex.
                 auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
                     Op op = opOf(n.op);
-                    if ((op == Op::Eq || op == Op::Neq) && !m_inGuard)
+                    if (op == Op::Eq || op == Op::Neq)
                         return callE("kex_intrinsic_number",
                                      op == Op::Eq ? "eq" : "neq", 2,
                                      two(std::move(a), std::move(b)));
@@ -842,16 +835,6 @@ struct Lowering {
     // Set while lowering a mutating `!` call's VALUE (the rebind itself is
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
-    // Set while lowering a receive-clause `when` guard: Core Erlang receive
-    // guards can't call arbitrary functions, so the compatibility block below
-    // inlines a fixed set of guard-safe BIF forms. Match-clause `when` guards
-    // no longer use this — they lower as ordinary expressions and move out of
-    // guard position via expandGuards.
-    bool m_inGuard = false;
-    auto lowerGuard(const ast::ExprPtr& g) -> ExprPtr {
-        m_inGuard = true; auto r = lower(g); m_inGuard = false; return r;
-    }
-
     // A module path `A.B.C` (nested modules, encoded by the parser as a chain
     // of MethodCall nodes with no args) flattened to the qualified name
     // ["A","B","C"], or empty if the receiver isn't a pure uppercase path.
@@ -882,7 +865,7 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
-        if (resolvedCalls && !m_inGuard) {
+        if (resolvedCalls) {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
             bool localTypeShadows = false;
@@ -1324,7 +1307,7 @@ struct Lowering {
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
-        if (!m_inGuard && externalModules
+        if (externalModules
             && (!localMethods.count(m) || preferExternalReceivers)) {
             auto found = externalModules->receiverFunctions.find(m);
             if (found != externalModules->receiverFunctions.end()) {
@@ -1381,63 +1364,6 @@ struct Lowering {
                                      actualArity, std::move(pargs)));
                 }
             }
-        }
-        // Guard-safe BIF lowerings. Core Erlang receive guards can only
-        // contain BIFs, so pure receiver calls that appear in receive
-        // when-clauses are translated to their BIF equivalents here. Foul
-        // calls are rejected. Match-clause guards no longer reach this
-        // block — they lower as ordinary expressions via expandGuards.
-        if (m_inGuard && !n.block) {
-            if (resolvedCalls) {
-                auto it = resolvedCalls->find(&n);
-                if (it != resolvedCalls->end() && it->second.isFoul)
-                    return ret(runtimeError(
-                        "cannot call foul function '" + m + "' in a guard"));
-            }
-            if (n.args.empty()) {
-                auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
-                auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
-                auto code = [&]{ return callE("erlang","element",2,two(litInt(2), rv())); };
-                auto between = [&](long lo, long hi) {
-                    return gand(intrin(Op::Gte, two(code(), litInt(lo))),
-                                intrin(Op::Lte, two(code(), litInt(hi))));
-                };
-                if (m == "digit?") return ret(between('0', '9'));
-                if (m == "alpha?") return ret(gor(between('A','Z'), between('a','z')));
-                if (m == "space?") {
-                    ExprPtr chk;
-                    for (int c : {' ', '\t', '\n', '\r'}) {
-                        auto eq = intrin(Op::Eq, two(code(), litInt(c)));
-                        chk = chk ? gor(std::move(chk), std::move(eq)) : std::move(eq);
-                    }
-                    return ret(std::move(chk));
-                }
-                if (m == "even?")
-                    return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-                if (m == "odd?")
-                    return ret(intrin(Op::Neq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-                if (m == "ok?")
-                    return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Ok"))));
-                if (m == "error?")
-                    return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Error"))));
-                if (m == "none?")
-                    return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
-                if (m == "abs") return ret(callE("erlang","abs",1,one(rv())));
-                if (m == "alive?") return ret(callE("erlang","is_process_alive",1,one(rv())));
-                if (m == "count" || m == "length" || m == "size")
-                    return ret(callE("erlang","byte_size",1,one(rv())));
-                if (m == "empty?")
-                    return ret(intrin(Op::Eq, two(callE("erlang","byte_size",1,one(rv())), litInt(0))));
-            }
-            if (m == "in?" && n.args.size() == 1)
-                return ret(callE("lists","member",2,two(rv(), arg0())));
-            // Anything else would emit a function call into the Core Erlang
-            // guard, which erlc rejects opaquely — diagnose it here instead.
-            throw LowerError(
-                "unsupported call '" + m + "' in a receive guard: receive "
-                "guards support only guard-safe BIF forms (count/length/size, "
-                "empty?, abs, alive?, even?, odd?, ok?, error?, none?, digit?, "
-                "alpha?, space?, in?) until selective receive lands");
         }
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so
@@ -1955,7 +1881,6 @@ struct Lowering {
             if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
-            if (cl.guard) rc.guard = lowerGuard(*cl.guard);
             rc.body = lower(cl.body);
             subst = snap;
             r.clauses.push_back(std::move(rc));
@@ -3751,7 +3676,6 @@ auto rewriteModuleCalls(ExprPtr& expr,
             visit(node.funBody); visit(node.contBody);
         } else if constexpr (std::is_same_v<T, Receive>) {
             for (auto& clause : node.clauses) {
-                if (clause.guard) visit(*clause.guard);
                 visit(clause.body);
             }
             if (node.timeout) visit(*node.timeout);

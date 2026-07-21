@@ -304,10 +304,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 error(expr.location,
                     "Cannot call foul function '" + node.name + "' from pure context");
             }
-            if (sym && sym->isFoul && m_inGuard) {
-                error(expr.location,
-                    "Cannot call foul function '" + node.name + "' in a guard");
-            }
             for (const auto& arg : node.args) {
                 if (arg) analyzeExpr(*arg);
             }
@@ -337,13 +333,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 return {};
             }();
             auto isModuleFoul = [&](const std::string& name) -> bool {
-                if (m_importedInterfaces) {
-                    auto it = m_importedInterfaces->modules.find(name);
-                    if (it != m_importedInterfaces->modules.end())
-                        return it->second.isFoul;
-                }
-                for (std::string_view mod : kFoulModules)
-                    if (name == mod) return true;
+                if (!m_importedInterfaces) return false;
+                auto it = m_importedInterfaces->modules.find(name);
+                if (it != m_importedInterfaces->modules.end())
+                    return it->second.isFoul;
                 return false;
             };
             // Kex.Intrinsic.* is the private ABI — its per-export isFoul
@@ -355,13 +348,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                     "Cannot call foul function '" + receiverName + "." +
                     node.method + "' from pure context");
             }
-            if (m_inGuard && !isInspect && !isIntrinsicCall
-                && !receiverName.empty() && isModuleFoul(receiverName)) {
-                error(expr.location,
-                    "Cannot call foul function '" + receiverName + "." +
-                    node.method + "' in a guard");
-            }
-
             // Check mutating call on immutable
             if (node.mutating) {
                 if (auto* ident = std::get_if<ast::Identifier>(&node.receiver->kind)) {
@@ -401,9 +387,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                     if (pat) bindPatternVars(*pat, expr.location);
                 }
                 if (clause.guard && *clause.guard) {
-                    m_inGuard = true;
                     analyzeExpr(**clause.guard);
-                    m_inGuard = false;
                 }
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
@@ -452,11 +436,6 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 }
                 for (const auto& pat : clause.patterns) {
                     if (pat) bindPatternVars(*pat, expr.location);
-                }
-                if (clause.guard && *clause.guard) {
-                    m_inGuard = true;
-                    analyzeExpr(**clause.guard);
-                    m_inGuard = false;
                 }
                 if (clause.body) analyzeExpr(*clause.body);
                 m_symbols.popScope();
@@ -531,7 +510,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     // A function is "directly foul" if:
     //   - its AST isFoul flag is set, or
     //   - it contains spawn/receive, or
-    //   - it calls a method on a kFoulModules module, or
+    //   - it calls a method on a foul imported module, or
     //   - it calls a symbol known to be foul.
     // Propagation: any function calling a (directly or transitively) foul
     // function is itself transitively foul.
@@ -562,18 +541,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                             return up->name;
                         return {};
                     }();
-                    if (!receiverName.empty() && n.method != "Intrinsic") {
-                        bool modFoul = false;
-                        if (m_importedInterfaces) {
-                            auto it = m_importedInterfaces->modules.find(receiverName);
-                            if (it != m_importedInterfaces->modules.end())
-                                modFoul = it->second.isFoul;
-                        }
-                        if (!modFoul) {
-                            for (std::string_view mod : kFoulModules)
-                                if (receiverName == mod) { modFoul = true; break; }
-                        }
-                        if (modFoul) hasFoulOp = true;
+                    if (!receiverName.empty() && n.method != "Intrinsic" && m_importedInterfaces) {
+                        auto it = m_importedInterfaces->modules.find(receiverName);
+                        if (it != m_importedInterfaces->modules.end() && it->second.isFoul)
+                            hasFoulOp = true;
                     }
                 }
                 for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
@@ -739,17 +710,23 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         }
     }
 
-    // Re-walk guard expressions to reject transitive foul calls.
+    auto isModuleFoul = [&](const std::string& name) -> bool {
+        if (!m_importedInterfaces) return false;
+        auto it = m_importedInterfaces->modules.find(name);
+        return it != m_importedInterfaces->modules.end() && it->second.isFoul;
+    };
+
+    // Re-walk guard expressions to reject foul calls (direct, transitive,
+    // and module-level).
     std::function<void(const ast::Expr&)> checkGuard = [&](const ast::Expr& e) {
         std::visit([&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-                // Phase 1 already rejects calls where the symbol itself is
-                // marked foul; here we catch pure-declared functions that
-                // transitively reach foul operations.
                 auto* sym = m_symbols.lookup(n.name);
-                bool symbolFoul = sym && sym->isFoul;
-                if (m_transitivelyFoul.count(n.name) && !symbolFoul) {
+                if (sym && sym->isFoul) {
+                    error(e.location,
+                        "Cannot call foul function '" + n.name + "' in a guard");
+                } else if (m_transitivelyFoul.count(n.name)) {
                     error(e.location,
                         "Cannot call function '" + n.name +
                         "' in a guard: it transitively calls foul operations");
@@ -757,14 +734,31 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 for (const auto& a : n.args) if (a) checkGuard(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) checkGuard(*a);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+                if (n.receiver) {
+                    auto receiverName = [&]() -> std::string {
+                        if (auto* up = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
+                            return up->name;
+                        return {};
+                    }();
+                    bool isInspect = (n.method == "inspect");
+                    bool isIntrinsicCall = (n.method == "Intrinsic");
+                    if (!isInspect && !isIntrinsicCall
+                        && !receiverName.empty() && isModuleFoul(receiverName)) {
+                        error(e.location,
+                            "Cannot call foul function '" + receiverName + "." +
+                            n.method + "' in a guard");
+                    }
+                    checkGuard(*n.receiver);
+                }
                 auto* sym = m_symbols.lookup(n.method);
-                bool symbolFoul = sym && sym->isFoul;
-                if (m_transitivelyFoul.count(n.method) && !symbolFoul) {
+                if (sym && sym->isFoul) {
+                    error(e.location,
+                        "Cannot call foul function '" + n.method + "' in a guard");
+                } else if (m_transitivelyFoul.count(n.method)) {
                     error(e.location,
                         "Cannot call function '" + n.method +
                         "' in a guard: it transitively calls foul operations");
                 }
-                if (n.receiver) checkGuard(*n.receiver);
                 for (const auto& a : n.args) if (a) checkGuard(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) checkGuard(*a);
             } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
@@ -1146,18 +1140,6 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                 }
             }
         }, item);
-    }
-}
-
-auto Analyzer::isInFoulContext() const -> bool {
-    return m_inFoulContext;
-}
-
-auto Analyzer::checkPurity(const std::string& callee, SourceLocation loc) -> void {
-    if (m_inFoulContext) return;
-    auto* sym = m_symbols.lookup(callee);
-    if (sym && sym->isFoul) {
-        error(loc, "Cannot call foul function '" + callee + "' from pure context");
     }
 }
 

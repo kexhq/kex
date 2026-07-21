@@ -972,19 +972,15 @@ end
    case that crashed BEAM with `badarg` matches the interpreter.
    `spec/when_guards.kex` covers list `count`, `empty?` composition,
    user-defined predicates, and chained guarded clauses on both backends.
-2. ✅ DONE (match side) — Match-clause guards no longer consult the
-   hardcoded `m_inGuard` name-matching block in `lower.cxx`, and the
-   `receiverTypeName` field that fed it is deleted from
-   `ResolvedCallTarget` and the typechecker. The block itself remains,
-   now exclusively serving receive guards (step 3).
-3. ✅ IN PLACE — The receive-guard compatibility subset is the only
-   remaining consumer of the `m_inGuard` block; receive guards verified
-   working on both backends (`s when s.count > 3` over message payloads).
-   It stays until the selective receive workstream lands.
-4. ✅ DONE — The `stdlib_decoupling_audit` allowlist now covers exactly
-   the receive-only block (nothing exercises it in the corpus, but the
-   names are the meaningful receive-payload predicates). Delete the list
-   when the logical queue lands.
+2. ✅ DONE — The hardcoded `m_inGuard` name-matching block, its
+   `receiverTypeName` field, the `m_inGuard` flag, the `lowerGuard`
+   method, the guard-specific `&&`/`||`/equality BIF branches, and the
+   `ReceiveClause::guard` IR field have all been deleted. No public
+   stdlib names remain in guard lowering.
+3. ✅ DONE — Receive `when` guards are a parse error. Nothing in the
+   corpus used them, and BEAM receive guards cannot execute arbitrary
+   code. The parser rejects them with a clear diagnostic; the
+   `stdlib_decoupling_audit` test is deleted (allowlist reached zero).
 
 ### Future optimization: native guards via `#[Erlang.Guard]`
 
@@ -1061,9 +1057,11 @@ test covers foul namespace rejection and pure receiver acceptance in guards.
   required methods, and module structural metadata since v1 — it is not
   version-gated and is always serialized. `ImportedModuleInterface.isFoul`
   now flows from `KexiStructuralMetadata.isFoul` through the registry. The
-  analyzer prefers imported module foulness over the hardcoded `kFoulModules`
-  fallback (kept for null-interface defensive paths). The `dump_prelude_kexi`
-  tool now prints module-level, export-level, and receiver-level foulness.
+  hardcoded `kFoulModules` list has been deleted — every construction site
+  passes imported interfaces, and modules not in the prelude (`Net`,
+  `Database`) don't exist yet, so the fallback was pure dead code. The
+  `dump_prelude_kexi` tool now prints module-level, export-level, and
+  receiver-level foulness.
 - Reject direct and transitive foul calls during semantic analysis.
   Done: direct foul calls in guard position are rejected by the semantic
   analyzer (Phase 1). Transitive foul calls in guards are rejected by the
@@ -1074,36 +1072,24 @@ test covers foul namespace rejection and pure receiver acceptance in guards.
   foulness, and multi-hop transitive chains through the call graph.
 - ✅ DECIDED — Guard predicate errors propagate (crash); they do not fail
   the clause. Non-exhaustive matches raise on both backends.
-- Delete the isolated compatibility guard lowerings once parity tests cover all
-  former cases.
+- ✅ DONE — The guard compatibility lowerings, the `m_inGuard` flag, the
+  `kFoulModules` hardcoded list, the `stdlib_decoupling_audit` allowlist,
+  and receive `when` guard support have all been deleted. Guard foulness
+  checking is consolidated in `computeTransitiveEffects`'s `checkGuard`
+  lambda. No public stdlib names remain anywhere in the compiler's guard
+  or lowering paths.
 
 Any future native-guard eligibility pass (see the deferred optimization
 above) recognizes typed IR operations and primitive properties, never
 public stdlib names.
 
-## Parallel language workstream: selective receive
+## Parallel language workstream: selective receive — deferred
 
-General pure guards for ordinary match/function clauses do not wait for receive
-redesign. Arbitrary non-foul predicates in selective receive require a
-persistent logical queue because consuming and re-sending a BEAM message changes
-ordering.
-
-- Generated receive clauses provide a pure matcher returning no match or the
-  selected clause data.
-- The runtime scans retained messages before reading new BEAM mailbox messages.
-- Unmatched messages retain order; new arrivals append after them; a successful
-  match removes only the selected message.
-- Timeout accounting uses one deadline across scanning and predicate
-  evaluation.
-- Raw messages sent to a Kex process enter the logical queue in BEAM arrival
-  order.
-- The interpreter and BEAM run the same ordering, timeout, and false-predicate
-  contract tests.
-
-Native receive guards remain an optimization only when proven equivalent to
-the logical queue. Until this workstream is complete, selective-receive guards
-retain their existing supported subset with an explicit diagnostic for other
-pure calls.
+Receive `when` guards are a parse error. Pattern matching on the message
+payload is the supported filter mechanism. If a future design needs
+arbitrary predicates in receive position, it requires a logical queue
+(re-sending a BEAM message changes ordering). That design is deferred
+indefinitely — nothing in the language or corpus needs it today.
 
 ## Automated architecture tests
 
@@ -1166,12 +1152,11 @@ pure calls.
 
 ### Full decoupling
 
-- Direct and transitive foul calls are rejected in guards; all other Kex guards
-  have backend parity.
-- No public stdlib names remain in guard lowering.
-- Selective receive preserves unmatched messages, arrival order, timeouts, and
-  raw-message interoperability for arbitrary pure predicates.
-- The temporary guard compatibility allowlist is empty and deleted.
+- ✅ Direct and transitive foul calls are rejected in guards; all other Kex
+  match/function guards have backend parity.
+- ✅ No public stdlib names remain in guard lowering.
+- ✅ The guard compatibility allowlist is empty and deleted.
+- Receive `when` guards are a parse error (not a guard-lowering concern).
 
 Measure compiler size, compilation time, interpreter startup, and cached stdlib
 load time before and after each workstream. Material unexplained regressions

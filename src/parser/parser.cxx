@@ -1932,7 +1932,13 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 
     std::vector<ast::MatchClause> clauses;
     while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()) {
-        clauses.push_back(parseMatchClause());
+        auto clause = parseMatchClause();
+        if (clause.guard) {
+            error("'when' guards are not supported on receive clauses; "
+                  "check the condition inside the clause body instead");
+        }
+        clause.guard.reset();
+        clauses.push_back(std::move(clause));
         skipNewlines();
     }
 
