@@ -1210,6 +1210,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         isNamespaceCall = true;
                         namespaceName = rec->typeName;
                     }
+                } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
+                    // An ADT variant whose tag names a registered module is
+                    // the variant clobbering the module's env binding (e.g.
+                    // `Http` is both a `Feature` variant and a module) —
+                    // `Http.get(...)` must dispatch to the module, not UFCS
+                    // on the variant value. Bare-value uses (pattern match,
+                    // passing `Http` to a function) are unaffected: they never
+                    // reach this method-call path.
+                    if (var->args.empty() && m_moduleRegistry.count(var->tag)) {
+                        isNamespaceCall = true;
+                        namespaceName = var->tag;
+                    }
                 }
             }
             if (isNamespaceCall) {
@@ -1457,7 +1469,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
                 popEnv();
             }
-            return Value::none();
+            // No clause matched: BEAM raises `{case_clause, subject}` here,
+            // so the walker must raise too — a match with no matching
+            // clause is a bug, not a value (it previously returned None).
+            throw RuntimeError("no matching clause for " + subject->inspect(),
+                               expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
             // `return EXPR if COND` parses as ReturnExpr(TrailingIf(EXPR,

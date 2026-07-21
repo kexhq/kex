@@ -926,15 +926,19 @@ path for all pure expressions.
   `digit?`/`alpha?`/`space?`) derive from the tagged-tuple and Char
   representations, not from stdlib names. They fall through to post-match
   lowering like any other pure call.
+- **Error semantics — DECIDED: propagate.** A guard predicate that errors
+  crashes; it does NOT silently fail the clause (no try/catch wrapping —
+  that would be more machinery and would hide type bugs a crash
+  surfaces). This matches the interpreter's existing behavior, so BEAM
+  parity comes free. Companion decision: a match with no matching clause
+  is an error on BOTH backends — the walker raises too (it previously
+  returned `None` while BEAM raised `case_clause`).
 - **Receive guards** are the exception: a BEAM `receive` guard runs while
   peeking at the mailbox and cannot execute arbitrary code. `receive ...
   when` keeps the existing hardcoded BIF subset until the selective
   receive workstream's logical queue lands; other pure calls there get an
-  explicit diagnostic.
-- **Error semantics.** In a native Erlang guard, an error fails the
-  clause; in post-match lowering it crashes. Deciding whether to preserve
-  fail-the-clause behavior (e.g. by wrapping the predicate) goes through
-  the language/contract approval process — see the audit bullet below.
+  explicit diagnostic. The selective receive workstream is deferred by
+  decision — nothing in the corpus uses receive guards.
 
 ### Example
 
@@ -1045,8 +1049,8 @@ test covers foul namespace rejection and pure receiver acceptance in guards.
   Started: direct foul calls in guard position are rejected by the semantic
   analyzer. Transitive foul detection (a pure function calling a foul
   function) requires the call-graph effect computation above.
-- Audit whether runtime errors propagate or fail the clause and put any change
-  to that behavior through the language/contract approval process.
+- ✅ DECIDED — Guard predicate errors propagate (crash); they do not fail
+  the clause. Non-exhaustive matches raise on both backends.
 - Delete the isolated compatibility guard lowerings once parity tests cover all
   former cases.
 
