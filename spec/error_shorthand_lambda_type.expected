@@ -1,6 +1,6 @@
 spec/error_shorthand_lambda_type.kex:3:25: error: `split` expects argument 1 to be String, but got Integer
 
-split : String -> String -> [String]
-
 split : String -> [String]
+
+split : String -> String -> [String]
 Aborted: fix type errors before running (use --no-check to skip).

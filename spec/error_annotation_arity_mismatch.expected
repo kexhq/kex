@@ -2,5 +2,5 @@ spec/error_annotation_arity_mismatch.kex:4:1: warning: type annotation for 'add'
 spec/error_annotation_arity_mismatch.kex:4:1: error: `add` declared to return Integer but body returns (Integer, Integer)
 spec/error_annotation_arity_mismatch.kex:7:16: error: `add` expects argument 1 to be (Integer, Integer), but got Integer
 
-add : (Integer, Integer) -> T0 -> Integer
+add : (Integer, Integer) -> A -> Integer
 Aborted: fix type errors before running (use --no-check to skip).

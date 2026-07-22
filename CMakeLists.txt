@@ -118,6 +118,13 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
+# Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
+# no _NSGetExecutablePath) so bake the source path in at compile time.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_definitions(kex_lib PUBLIC
+        KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
+endif()
+
 # GMP backs the arbitrary-precision `Integer` default (see
 # docs/types.md's Runtime representation section). Required,
 # not optional like readline below.
@@ -363,6 +370,9 @@ add_test(NAME semantic_test COMMAND semantic_test)
 add_executable(interpreter_test tests/interpreter_test.cxx)
 target_link_libraries(interpreter_test PRIVATE kex_lib)
 target_include_directories(interpreter_test PRIVATE tests)
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_link_options(interpreter_test PRIVATE -sNODERAWFS=1)
+endif()
 add_test(NAME interpreter_test COMMAND interpreter_test)
 
 add_executable(examples_test tests/examples_test.cxx)

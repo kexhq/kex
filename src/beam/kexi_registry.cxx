@@ -1,6 +1,7 @@
 #include "kexi_registry.hxx"
 #include "beam_file.hxx"
 #include "../common/artifact_versions.hxx"
+#include <algorithm>
 #include <filesystem>
 #include <optional>
 #include <unordered_set>
@@ -171,17 +172,17 @@ auto importedTrait(const KexiTraitDef& trait,
                        candidate.receiverType->traitName == trait.name;
             });
         if (method == interface.methods.end()) {
-            result.requiredMethods.push_back(
-                {required.name, {}, kex::semantic::Type::unknown(),
-                 required.isFoul});
+            result.requiredMethods.push_back(kex::semantic::Signature{
+                required.name, {}, kex::semantic::Type::unknown(),
+                required.isFoul});
             continue;
         }
         auto imported = importedReceiverFunction(*method, {});
         auto params = std::move(imported.signature.params);
         if (!params.empty()) params.erase(params.begin());
-        result.requiredMethods.push_back(
-            {required.name, std::move(params), imported.signature.result,
-             required.isFoul});
+        result.requiredMethods.push_back(kex::semantic::Signature{
+            required.name, std::move(params), imported.signature.result,
+            required.isFoul});
     }
     return result;
 }

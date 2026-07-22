@@ -2064,12 +2064,70 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
 }
 
 auto TypeChecker::displaySignature(const std::string& name, const Signature& sig) const -> std::string {
-    // A ConstrainedType param displays as its trait name ("Integer"), not
-    // its placeholder var name ("T") — readers want to know what's
-    // required, not the table's internal variable naming.
-    auto displayType = [](const TypePtr& t) -> std::string {
+    // Collect TypeVar IDs in order of first appearance, then remap to
+    // sequential negative IDs so they display as A, B, C, ... regardless
+    // of the internal counter state when the signature was built.
+    std::unordered_map<int, int> varRemap;
+    int nextNeg = -1;
+    std::function<void(const TypePtr&)> collectVars = [&](const TypePtr& t) {
+        if (!t) return;
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, TypeVar>) {
+                if (!varRemap.count(node.id)) { varRemap[node.id] = nextNeg--; }
+            } else if constexpr (std::is_same_v<T, ListType>) {
+                collectVars(node.element);
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                collectVars(node.key); collectVars(node.value);
+            } else if constexpr (std::is_same_v<T, FuncType>) {
+                for (const auto& p : node.params) collectVars(p);
+                collectVars(node.result);
+            } else if constexpr (std::is_same_v<T, TupleType>) {
+                for (const auto& e : node.elements) collectVars(e);
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                collectVars(node.inner);
+            } else if constexpr (std::is_same_v<T, NamedType>) {
+                for (const auto& a : node.typeArgs) collectVars(a);
+            }
+        }, t->kind);
+    };
+    for (const auto& p : sig.params) collectVars(p);
+    collectVars(sig.result);
+
+    std::function<TypePtr(const TypePtr&)> remap = [&](const TypePtr& t) -> TypePtr {
+        if (!t) return t;
+        return std::visit([&](const auto& node) -> TypePtr {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, TypeVar>) {
+                auto it = varRemap.find(node.id);
+                return it != varRemap.end() ? Type::typeVar(it->second) : t;
+            } else if constexpr (std::is_same_v<T, ListType>) {
+                return Type::list(remap(node.element));
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                return Type::map(remap(node.key), remap(node.value));
+            } else if constexpr (std::is_same_v<T, FuncType>) {
+                std::vector<TypePtr> ps;
+                for (const auto& p : node.params) ps.push_back(remap(p));
+                return std::make_shared<Type>(Type{FuncType{std::move(ps), remap(node.result)}});
+            } else if constexpr (std::is_same_v<T, TupleType>) {
+                std::vector<TypePtr> es;
+                for (const auto& e : node.elements) es.push_back(remap(e));
+                return std::make_shared<Type>(Type{TupleType{std::move(es)}});
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                return Type::optional(remap(node.inner));
+            } else if constexpr (std::is_same_v<T, NamedType>) {
+                std::vector<TypePtr> args;
+                for (const auto& a : node.typeArgs) args.push_back(remap(a));
+                return Type::named(node.name, std::move(args));
+            } else {
+                return t;
+            }
+        }, t->kind);
+    };
+
+    auto displayType = [&](const TypePtr& t) -> std::string {
         if (auto* constrained = std::get_if<ConstrainedType>(&t->kind)) return constrained->traitName;
-        return typeToString(t);
+        return typeToString(remap(t));
     };
     std::string result = name + " : ";
     for (const auto& param : sig.params) {
@@ -2516,10 +2574,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // Vacuous candidates (params all TypeVar/Unknown/trait bounds — e.g. an
     // unannotated trait default method) add noise to the listing when
     // concrete candidates exist; show them only when they are all we have.
+    auto sortedSigs = *sigs;
+    std::stable_sort(sortedSigs.begin(), sortedSigs.end(),
+        [](const Signature& a, const Signature& b) {
+            if (a.params.size() != b.params.size()) return a.params.size() < b.params.size();
+            for (size_t i = 0; i < a.params.size(); ++i) {
+                auto as = typeToString(a.params[i]), bs = typeToString(b.params[i]);
+                if (as != bs) return as < bs;
+            }
+            return typeToString(a.result) < typeToString(b.result);
+        });
     bool anyConcreteSig = false;
-    for (const auto& sig : *sigs)
+    for (const auto& sig : sortedSigs)
         if (!isVacuousSig(&sig)) { anyConcreteSig = true; break; }
-    for (const auto& sig : *sigs) {
+    for (const auto& sig : sortedSigs) {
         if (anyConcreteSig && isVacuousSig(&sig)) continue;
         message += "\n\n" + displaySignature(name, sig);
     }

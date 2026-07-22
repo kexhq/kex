@@ -48,6 +48,9 @@ inline auto preludeSourceFiles() -> std::vector<std::string> {
         roots.push_back((executableDir / "../share/kex/prelude").lexically_normal().string());
         roots.push_back((executableDir / "../src/prelude").lexically_normal().string());
     }
+#ifdef KEX_PRELUDE_DIR
+    roots.emplace_back(KEX_PRELUDE_DIR);
+#endif
     roots.emplace_back("/prelude");
 
     for (const auto& root : roots) {
