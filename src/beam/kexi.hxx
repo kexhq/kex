@@ -21,7 +21,7 @@ using KexiTypePtr = std::shared_ptr<KexiType>;
 
 struct KexiType {
     enum Kind {
-        Primitive,    // name: "Integer", "Bool", "Char", "String", "Unit", "Atom"
+        Primitive,    // name: "Integer", "Bool", "Char", "String", "Void", "Atom"
         Named,        // name + typeArgs
         Func,         // params + result
         Tuple,        // elements

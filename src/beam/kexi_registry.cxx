@@ -65,7 +65,7 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         if (type->name == "String") return Type::string();
         if (type->name == "Bool") return Type::boolean();
         if (type->name == "Atom") return Type::atom();
-        if (type->name == "Unit") return Type::unit();
+        if (type->name == "Void") return Type::unit();
         if (type->name == "Number") return Type::constrained("Number", "Number");
         if (type->name == "Float") return Type::constrained("Float", "Float");
         if (type->name == "Float32") return Type::float32();

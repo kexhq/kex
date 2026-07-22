@@ -821,10 +821,7 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
     // Sealed-stdlib enforcement: after the prelude has loaded, reject any
     // user make-block on a builtin type that redefines a prelude method.
     if (m_preludeLoaded && !m_sealedMethods.empty()) {
-        static const std::unordered_set<std::string> builtins = {
-            "Integer", "Float", "Char", "Bool", "Number", "String",
-            "List", "Map", "Range", "Optional", "Result"};
-        if (builtins.count(typeName)) {
+        if (builtinTypeNames().count(typeName)) {
             auto checkSeal = [&](const ast::FunctionDef* fd) {
                 if (fd && m_sealedMethods.count(fd->name))
                     throw RuntimeError(
@@ -2121,36 +2118,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
 
 auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& method) const
     -> std::string {
-    std::string receiverType;
-    if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
-        receiverType = rec->typeName;
-    } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
-        receiverType = var->tag;
-    } else if (std::holds_alternative<ListValue>(receiver->data)) {
-        receiverType = "List";
-    } else if (std::holds_alternative<MapValue>(receiver->data)) {
-        receiverType = "Map";
-    } else if (std::holds_alternative<FileHandleValue>(receiver->data)) {
-        receiverType = "FileHandle";
-    } else if (std::holds_alternative<ProcessValue>(receiver->data)) {
-        receiverType = "Pid";
-    } else if (std::holds_alternative<IntValue>(receiver->data) ||
-               std::holds_alternative<BigIntValue>(receiver->data)) {
-        receiverType = "Integer";
-    } else if (std::holds_alternative<FloatValue>(receiver->data)) {
-        receiverType = "Float";
-    } else if (std::holds_alternative<BoolValue>(receiver->data)) {
-        receiverType = "Bool";
-    } else if (std::holds_alternative<CharValue>(receiver->data)) {
-        receiverType = "Char";
-    } else if (std::holds_alternative<StringValue>(receiver->data)) {
-        receiverType = "String";
-    } else if (std::holds_alternative<RangeValue>(receiver->data)) {
-        receiverType = "Range";
-    } else if (std::holds_alternative<StreamValue>(receiver->data)) {
-        receiverType = "Stream";
-    }
-
+    auto receiverType = dispatchTypeName(receiver);
     if (receiverType.empty()) return method;
     auto typed = receiverType + "::" + method;
     if (m_env->get(typed)) return typed;
@@ -2320,18 +2288,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // expression — which resolves to the Integer::parse namespace
                 // RecordValue, not an IntValue — still falls through to the
                 // record-typeName check below instead of failing outright.
-                if (pat.name == "String" && std::holds_alternative<StringValue>(value->data)) return true;
-                if ((pat.name == "Int" || pat.name == "Integer") &&
-                    (std::holds_alternative<IntValue>(value->data) ||
-                     std::holds_alternative<BigIntValue>(value->data))) return true;
-                if (pat.name == "Float" && std::holds_alternative<FloatValue>(value->data)) return true;
-                if (pat.name == "Bool" && std::holds_alternative<BoolValue>(value->data)) return true;
-                if (pat.name == "Atom" && std::holds_alternative<AtomValue>(value->data)) return true;
-                if (pat.name == "List" && std::holds_alternative<ListValue>(value->data)) return true;
-                if (pat.name == "Map" && std::holds_alternative<MapValue>(value->data)) return true;
-                if (pat.name == "Tuple" && std::holds_alternative<TupleValue>(value->data)) return true;
-                if (pat.name == "Range" && std::holds_alternative<RangeValue>(value->data)) return true;
-                if (pat.name == "Stream" && std::holds_alternative<StreamValue>(value->data)) return true;
+                if (matchesTypeName(pat.name, value)) return true;
                 // Match record type name
                 if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                     if (rec->typeName == pat.name) return true;

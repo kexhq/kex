@@ -122,7 +122,7 @@ auto typeToString(const TypePtr& type) -> std::string {
                 case PrimitiveType::Char: return "Char";
                 case PrimitiveType::Bool: return "Bool";
                 case PrimitiveType::Atom: return "Atom";
-                case PrimitiveType::Unit: return "()";
+                case PrimitiveType::Unit: return "Void";
             }
             return "?";
         }

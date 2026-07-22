@@ -1004,10 +1004,7 @@ auto sealViolations(const kex::ast::Program &program,
   std::vector<kex::semantic::Diagnostic> diags;
   if (kex::isPreludeSourceFile(filepath))
     return diags;
-  // Keep in sync with the evaluator-side seal (execMakeDef in evaluator.cxx).
-  static const std::unordered_set<std::string> builtins = {
-      "Integer", "Float", "Char",  "Bool",     "Number", "String",
-      "List",    "Map",   "Range", "Optional", "Result"};
+  const auto& builtins = kex::interpreter::builtinTypeNames();
   auto check = [&](const kex::ast::FunctionDef *fd, const std::string &ty,
                    const kex::SourceLocation &loc) {
     if (fd && preludeReceiverFunctionNames().count(fd->name))

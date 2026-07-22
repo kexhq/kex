@@ -158,7 +158,7 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     static const char* kEquatableShowable[] = {
         "Int", "Integer", "Byte", "Int8", "Int16", "Int32",
         "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        "Char", "Bool", "Atom", "String", "()",
+        "Char", "Bool", "Atom", "String", "Void",
     };
     for (const char* name : kEquatableShowable) {
         reg.registerImplementation(name, "Equatable");

@@ -15,7 +15,7 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
                 name += node.parts[i];
             }
             if (name == "Integer" || name == "Bool" || name == "Char" ||
-                name == "String" || name == "Unit" || name == "Atom" ||
+                name == "String" || name == "Void" || name == "Atom" ||
                 name == "Float" || name == "Number" || name == "Byte" ||
                 name == "Int8" || name == "Int16" || name == "Int32" ||
                 name == "Int64" || name == "UInt8" || name == "UInt16" ||
@@ -94,7 +94,7 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
                 case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
                 case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
                 case kex::semantic::PrimitiveType::Atom: return kexiPrimitive("Atom");
-                case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Unit");
+                case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Void");
             }
         } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
             return kexiPrimitive(std::string(node.isSigned ? "Int" : "UInt") +
