@@ -11,9 +11,7 @@ namespace kex::interpreter {
 // always-in-scope globals rather than something you import.
 auto Evaluator::registerTestBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, fn};
-        m_globalEnv->define(name, val);
+        definePublic(name, fn);
         defineIntrinsic("Test::" + name, std::move(fn));
     };
 

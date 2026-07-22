@@ -13,9 +13,7 @@ auto Evaluator::registerStringBuiltins() -> void {
     auto regCharPredicate = [this](const std::string& publicName,
                                    const std::string& intrinsicName,
                                    NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{publicName, fn};
-        m_globalEnv->define(publicName, val);
+        definePublic(publicName, fn);
         defineIntrinsic("Char::" + intrinsicName, std::move(fn));
     };
 

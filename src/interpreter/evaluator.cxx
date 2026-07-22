@@ -51,6 +51,19 @@ auto Evaluator::defineModule(const std::string& name) -> void {
     m_globalEnv->define(name, Value::module(name));
 }
 
+auto Evaluator::definePublic(const std::string& name, NativeFunc fn) -> void {
+    auto val = std::make_shared<Value>();
+    val->data = FunctionValue{name, std::move(fn)};
+    m_globalEnv->define(name, val);
+}
+
+auto Evaluator::defineDual(const std::string& name, NativeFunc fn) -> void {
+    auto val = std::make_shared<Value>();
+    val->data = FunctionValue{name, fn};
+    m_globalEnv->define(name, val);
+    defineIntrinsic(name, std::move(fn));
+}
+
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     for (const auto& item : program.items) {
         execTopLevel(item);

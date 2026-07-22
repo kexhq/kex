@@ -5,17 +5,6 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerIOBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-    auto regDual = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, fn};
-        m_globalEnv->define(name, val);
-        defineIntrinsic(name, std::move(fn));
-    };
     auto aliasDual = [this](const std::string& alias, const std::string& target) {
         auto value = m_globalEnv->get(target);
         m_globalEnv->define(alias, value);
@@ -25,7 +14,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     defineModule("IO");
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
-    regDual("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += arg->toString();
         out += "\n";
@@ -39,7 +28,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.print(msg...) — like printLine but without the trailing newline.
-    regDual("IO::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& arg : args) out += arg->toString();
         m_output += out;
@@ -51,7 +40,7 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::unit();
     });
 
-    regDual("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
         if (m_mockIO) {
@@ -71,7 +60,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     aliasDual("IO::putLine", "IO::printLine");
 
     // IO.printError(msg) — write a line to stderr (no exit).
-    regDual("IO::printError", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::printError", [this](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
         for (const auto& a : args) out += a->toString();
         out += "\n";
@@ -104,13 +93,13 @@ auto Evaluator::registerIOBuiltins() -> void {
             std::cerr << "fatal: " << msg << "\n";
             std::exit(1);
         };
-        reg("die", fn);
+        definePublic("die", fn);
         defineIntrinsic("System::die", std::move(fn));
     }
 
     // IO.getLine() — reads one line from stdin (or mock input). Returns
     // String, or None at EOF / when mock input is exhausted.
-    regDual("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineDual("IO::getLine", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto line = m_mockIOInputLines.front();
@@ -126,7 +115,7 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // IO.get() — reads a single character from stdin (or mock input).
     // Returns a one-character String, or None at EOF.
-    regDual("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineDual("IO::get", [this](std::vector<ValuePtr>) -> ValuePtr {
         if (m_mockIO) {
             if (m_mockIOInputLines.empty()) return Value::none();
             auto& front = m_mockIOInputLines.front();
@@ -192,8 +181,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     // The fixed-arity Mock.IO controls are source-owned. `input` alone stays
     // public-native because its existing API is variadic while Kex function
     // declarations currently have fixed arity.
-    reg("Mock::IO::input", mockInput);
-    defineIntrinsic("Mock::IO::input", mockInput);
+    defineDual("Mock::IO::input", mockInput);
     defineIntrinsic("IO::ioMockStart", std::move(mockStart));
     defineIntrinsic("IO::ioMockInput", std::move(mockInput));
     defineIntrinsic("IO::ioMockOutput", std::move(mockOutput));

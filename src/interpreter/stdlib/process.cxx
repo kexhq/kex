@@ -7,17 +7,6 @@ namespace kex::interpreter {
 // SpawnExpr/ReceiveExpr branches). This file only covers the ordinary
 // builtins: Process.self and pid.send(msg).
 auto Evaluator::registerProcessBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-    auto regDual = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, fn};
-        m_globalEnv->define(name, val);
-        defineIntrinsic(name, std::move(fn));
-    };
 
     // Pre-register the namespace placeholder so `Process.self` resolves via
     // the ModuleValue namespace-dispatch branch in eval() (ast::MethodCall),
@@ -27,7 +16,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the
     // evaluator's shared environment frame.
-    regDual("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
+    defineDual("Process::self", [this](std::vector<ValuePtr>) -> ValuePtr {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
@@ -78,7 +67,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // as last positional arg" handling in eval()).
     // Walker-native scheduler fallback. Starting a child while a Kex wrapper's
     // shared evaluator frame is active can corrupt later process execution.
-    regDual("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Task::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto pid = m_scheduler->startTask(args[0]);
         return Value::task(pid, m_scheduler.get());
@@ -115,7 +104,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         }
         return Value::error(tup->elements[1]);
     };
-    reg("await", await);
+    definePublic("await", await);
 
     // The source declaration still calls the qualified identity (used by
     // direct intrinsic calls and kept ABI-aligned with BEAM), while ordinary
@@ -131,7 +120,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // both dispatch to the same surface syntax, camelCase like every other
     // multi-word Kex builtin (was briefly registered as "await_all" here,
     // the one snake_case outlier — fixed to match).
-    regDual("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Task::awaitAll", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* lst = std::get_if<ListValue>(&args[0]->data);
         if (!lst) return Value::list({});
@@ -170,7 +159,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // examples/beam/proc_supervisor.kex's `worker { startCounter("A") }`)
     // into a spec Supervisor.start can both call now (to start it) and
     // recall later (to restart it, from the exact same start function).
-    reg("worker", [](std::vector<ValuePtr> args) -> ValuePtr {
+    definePublic("worker", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         return Value::tuple({Value::atom("worker"), args[0]});
     });
@@ -183,7 +172,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // comment on why). Only :only_crashed is supported — anything else is
     // a clear Error(...) pointing at the BEAM backend instead of a silent
     // wrong behavior.
-    reg("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    definePublic("Supervisor::start", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) {
             return Value::error(Value::string("Supervisor.start requires a do...end block"));
         }

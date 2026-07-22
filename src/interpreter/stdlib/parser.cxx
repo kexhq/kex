@@ -743,12 +743,6 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
 // --- Registration ---
 
 auto Evaluator::registerParserBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, fn};
-        m_globalEnv->define(name, val);
-        defineIntrinsic(name, std::move(fn));
-    };
 
     defineModule("Parser");
 
@@ -772,7 +766,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     }
 
     // Parser.parse(source) or Parser.parse(source, filename)
-    reg("Parser::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser::parse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parse requires a source string", std::nullopt, ""));
@@ -798,7 +792,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Parser.parseFile(path)
-    reg("Parser::parseFile", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser::parseFile", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
         auto* pathVal = std::get_if<StringValue>(&args[0]->data);
         if (!pathVal) return Value::error(makeParseError("parseFile requires a file path", std::nullopt, ""));
@@ -825,7 +819,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Parser.parseType(typeStr)
-    reg("Parser::parseType", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser::parseType", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseType requires a type string", std::nullopt, ""));
@@ -857,7 +851,7 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Parser.parseExpression(source)
-    reg("Parser::parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser::parseExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(makeParseError("parseExpression requires a source string", std::nullopt, ""));
@@ -878,12 +872,12 @@ auto Evaluator::registerParserBuiltins() -> void {
     });
 
     // Parser.TypeRef.toString / Parser.PatternRef.toString — registered as methods
-    reg("Parser.TypeRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser.TypeRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("?");
         return Value::string(typeRefToString(args[0]));
     });
 
-    reg("Parser.PatternRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("Parser.PatternRef::toString", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("?");
         auto* var = std::get_if<VariantValue>(&args[0]->data);
         if (!var) return Value::string("?");

@@ -11,11 +11,6 @@ auto Evaluator::registerListBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
         defineIntrinsic("List::" + name, std::move(fn));
     };
-    auto regPublic = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
 
     // Captured by value in every lambda below — rangeToList and getElements
     // are local stack variables that vanish when registerListBuiltins returns.
@@ -623,7 +618,7 @@ auto Evaluator::registerListBuiltins() -> void {
     });
 
     // inspect() — pretty-printed representation of any value (UFCS on all types)
-    regPublic("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+    definePublic("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");
         return Value::string(args[0]->inspect());
     });
