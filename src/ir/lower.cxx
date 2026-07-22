@@ -2702,25 +2702,20 @@ struct Lowering {
         return out;
     }
 
-    // A dispatcher `name/arity` for a colliding method: inspect the
-    // receiver's tag (element 1 of arg 0) and forward to `name__Type`.
-    // A guard testing that `v` has runtime type `ty`. Primitive types use the
-    // matching is_* BIF; everything else is a tagged tuple `{'ty', …}`.
-    auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
-        // Char has no is_* entry: a Char is the tagged tuple {'Char', N},
-        // so it falls to the record/variant branch below.
-        static const std::unordered_map<std::string, const char*> prim = {
+    static auto primGuardBifs() -> const std::unordered_map<std::string, const char*>& {
+        static const std::unordered_map<std::string, const char*> m = {
             {"Integer","is_integer"}, {"Float","is_float"},
             {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
-            // A range is a real list at BEAM runtime (`a..b` lowers to
-            // lists:seq/2 before any method call), so Range-owned prelude
-            // methods dispatch on is_list.
             {"Range","is_list"},
             {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         };
-        auto it = prim.find(ty);
-        if (it != prim.end())
+        return m;
+    }
+
+    auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
+        auto it = primGuardBifs().find(ty);
+        if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
         // Record/variant: is_tuple(V) and element(1,V) =:= 'ty'. Strict `and`
         // (guard-safe); element/2 in a guard just fails the clause on a non-tuple.
@@ -2754,18 +2749,12 @@ struct Lowering {
         // which evaluates element/2 eagerly and crashes on non-tuples. Emit
         // safe clauses first so a primitive receiver matches before reaching
         // an element-based guard.
-        static const std::unordered_map<std::string, const char*> primGuards = {
-            {"Integer","is_integer"}, {"Float","is_float"},
-            {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
-            {"Map","is_map"}, {"List","is_list"}, {"Range","is_list"},
-            {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
-        };
         std::vector<std::string> sortedOwners;
         std::vector<std::string> deferredOwners;
         std::unordered_set<std::string> seen;
         for (const auto& ty : owners) {
             if (!seen.insert(ty).second) continue;
-            if (primGuards.count(ty) || ty == "Char"
+            if (primGuardBifs().count(ty) || ty == "Char"
                 || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))
                 sortedOwners.push_back(ty);
             else

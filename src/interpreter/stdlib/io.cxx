@@ -22,7 +22,7 @@ auto Evaluator::registerIOBuiltins() -> void {
         defineIntrinsic(alias, value);
     };
 
-    m_globalEnv->define("IO", Value::module("IO"));
+    defineModule("IO");
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
     regDual("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {

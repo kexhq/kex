@@ -47,6 +47,10 @@ auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) 
     defineIntrinsic(name, function->native);
 }
 
+auto Evaluator::defineModule(const std::string& name) -> void {
+    m_globalEnv->define(name, Value::module(name));
+}
+
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     for (const auto& item : program.items) {
         execTopLevel(item);

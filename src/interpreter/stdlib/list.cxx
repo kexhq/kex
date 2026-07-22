@@ -4,9 +4,9 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerListBuiltins() -> void {
-    m_globalEnv->define("List",  Value::module("List"));
-    m_globalEnv->define("Tuple", Value::module("Tuple"));
-    m_globalEnv->define("Range", Value::module("Range"));
+    defineModule("List");
+    defineModule("Tuple");
+    defineModule("Range");
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
         defineIntrinsic("List::" + name, std::move(fn));

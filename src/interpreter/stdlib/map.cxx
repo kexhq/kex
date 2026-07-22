@@ -30,7 +30,7 @@ auto sortedEntries(const MapValue& m) -> std::vector<std::pair<ValuePtr, ValuePt
 // handling reassigns the receiver variable to the result automatically,
 // e.g. `obj.put!(key, value)`).
 auto Evaluator::registerMapBuiltins() -> void {
-    m_globalEnv->define("Map", Value::module("Map"));
+    defineModule("Map");
 
     auto reg = [this](const std::string& name, NativeFunc fn) {
         defineIntrinsic("Map::" + name, std::move(fn));

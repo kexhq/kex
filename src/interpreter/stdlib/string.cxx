@@ -5,10 +5,10 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerStringBuiltins() -> void {
-    m_globalEnv->define("String", Value::module("String"));
-    m_globalEnv->define("Char",   Value::module("Char"));
-    m_globalEnv->define("Bool",   Value::module("Bool"));
-    m_globalEnv->define("Atom",   Value::module("Atom"));
+    defineModule("String");
+    defineModule("Char");
+    defineModule("Bool");
+    defineModule("Atom");
 
     auto regCharPredicate = [this](const std::string& publicName,
                                    const std::string& intrinsicName,

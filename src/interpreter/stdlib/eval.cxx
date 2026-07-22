@@ -50,7 +50,7 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
 }
 
 auto Evaluator::registerEvalBuiltins() -> void {
-    m_globalEnv->define("Evaluator", Value::module("Evaluator"));
+    defineModule("Evaluator");
 
     // Evaluator.run(source) or Evaluator.run(source, opts)
     defineIntrinsic("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {

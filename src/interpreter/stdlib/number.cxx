@@ -94,7 +94,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     };
     auto noVal = []() { return Value::none(); };  // no value parsed
 
-    m_globalEnv->define("Float", Value::module("Float"));
+    defineModule("Float");
     defineIntrinsic("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
@@ -125,7 +125,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         }
     });
 
-    m_globalEnv->define("Integer", Value::module("Integer"));
+    defineModule("Integer");
     defineIntrinsic("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
@@ -176,7 +176,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (const std::exception&) { return Value::none(); }
     });
 
-    m_globalEnv->define("Number", Value::module("Number"));
+    defineModule("Number");
     defineIntrinsic("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));

@@ -750,7 +750,7 @@ auto Evaluator::registerParserBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    m_globalEnv->define("Parser", Value::module("Parser"));
+    defineModule("Parser");
 
     // Register TypeRef/PatternRef/Expression variant->parent mappings so UFCS dispatch works
     for (const auto& tag : {"NamedType", "FunctionType", "TupleType", "ListType",

@@ -22,7 +22,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // Pre-register the namespace placeholder so `Process.self` resolves via
     // the ModuleValue namespace-dispatch branch in eval() (ast::MethodCall),
     // the same convention used by the remaining public-native namespaces.
-    m_globalEnv->define("Process", Value::module("Process"));
+    defineModule("Process");
 
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the
@@ -71,7 +71,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::boolean(p->scheduler->isAlive(p->pid));
     });
 
-    m_globalEnv->define("Task", Value::module("Task"));
+    defineModule("Task");
 
     // Task.start { block } — `block` arrives here as an already-evaluated
     // zero-arg FunctionValue (the `{ ... }` block, per MethodCall's "block
@@ -163,7 +163,7 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::list(std::move(results));
     });
 
-    m_globalEnv->define("Supervisor", Value::module("Supervisor"));
+    defineModule("Supervisor");
 
     // worker { startFn() } — wraps a zero-arg block (expected to call
     // `spawn` and return the child's pid, matching
