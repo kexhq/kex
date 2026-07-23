@@ -21,7 +21,7 @@ foul wordCount(path: String) -> [Int] do
 end
 
 # Prints one wc-style row: "  lines  words  bytes  label"
-foul printRow(counts: [Int], label: String) do
+foul printRow(counts: [Number], label: String) do
   let lc    = counts.first.or(0)
   let words = counts.second.or(0)
   let bytes = counts.third.or(0)
@@ -30,11 +30,11 @@ foul printRow(counts: [Int], label: String) do
 end
 
 # Column-wise sum across multiple count triples.
-foul sumCounts(all: [[Int]]) -> [Int] do
+foul sumCounts(all: [[Int]]) -> [Number] do
   [
-    all.sum { |c| c.first.or(0) },
-    all.sum { |c| c.second.or(0) },
-    all.sum { |c| c.third.or(0) }
+    all.map { |c| c.first.or(0) }.sum,
+    all.map { |c| c.second.or(0) }.sum,
+    all.map { |c| c.third.or(0) }.sum
   ]
 end
 

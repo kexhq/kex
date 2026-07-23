@@ -969,72 +969,6 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   return layouts;
 }
 
-// Receiver-function names the sealed stdlib prelude provides. Qualified module
-// functions share the same source-derived snapshot but are not receiver
-// functions and therefore do not participate in this check.
-auto preludeReceiverFunctionNames()
-    -> const std::unordered_set<std::string> & {
-  return preludeInterfaceNames().receiverFunctions;
-}
-
-// The simple name of a `make` target, or "" — with "List"/"Map" for list/map
-// types. Builtin types are sealed against stdlib-method redefinition.
-auto makeTargetName(const kex::ast::TypeExprPtr &t) -> std::string {
-  if (!t)
-    return "";
-  if (auto *tn = std::get_if<kex::ast::TypeName>(&t->kind))
-    if (!tn->parts.empty())
-      return tn->parts.back();
-  if (auto *g = std::get_if<kex::ast::GenericType>(&t->kind))
-    if (!g->name.parts.empty())
-      return g->name.parts.back();
-  if (std::holds_alternative<kex::ast::ListType>(t->kind))
-    return "List";
-  if (std::holds_alternative<kex::ast::MapType>(t->kind))
-    return "Map";
-  return "";
-}
-
-// Sealed-stdlib violations: a make block on a builtin type redefining a
-// prelude-provided method. Returned as diagnostics so every check path (run,
-// -R, and --check) reports them identically. Prelude files are exempt.
-auto sealViolations(const kex::ast::Program &program,
-                    const std::string &filepath)
-    -> std::vector<kex::semantic::Diagnostic> {
-  std::vector<kex::semantic::Diagnostic> diags;
-  if (kex::isPreludeSourceFile(filepath))
-    return diags;
-  const auto& builtins = kex::interpreter::builtinTypeNames();
-  auto check = [&](const kex::ast::FunctionDef *fd, const std::string &ty,
-                   const kex::SourceLocation &loc) {
-    if (fd && preludeReceiverFunctionNames().count(fd->name))
-      diags.push_back({kex::semantic::Diagnostic::Level::Error, loc,
-                       "cannot override sealed stdlib method '" + fd->name +
-                           "' on builtin type '" + ty + "'"});
-  };
-  for (const auto &item : program.items)
-    if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
-      if (!*md)
-        continue;
-      auto ty = makeTargetName((*md)->target);
-      if (!builtins.count(ty))
-        continue;
-      for (const auto &bi : (*md)->body) {
-        if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
-          check(fd->get(), ty, (*md)->location);
-        else if (auto *vb =
-                     std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(
-                         &bi))
-          if (*vb)
-            for (const auto &vi : (*vb)->items)
-              if (auto *vf =
-                      std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi))
-                check(vf->get(), ty, (*md)->location);
-      }
-    }
-  return diags;
-}
-
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
 // Shared by `run` and `compile`/`-R` (BEAM) so both backends catch the same
@@ -1077,11 +1011,6 @@ auto runSemanticCheck(const kex::ast::Program &program,
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
-
-  for (const auto &d : sealViolations(program, filepath)) {
-    printDiag(d);
-    ok = false;
-  }
 
   return ok && dbOk;
 }
@@ -2888,11 +2817,6 @@ int main(int argc, char *argv[]) {
     }
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
-
-    for (const auto &d : sealViolations(program, filepath)) {
-      allDiags.push_back(d);
-      dbOk = false;
-    }
 
     bool allOk = ok && dbOk;
 

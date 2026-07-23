@@ -1,5 +1,57 @@
 type List<X> = [X]
 
+make [Number] do
+  # Sums all elements. Returns +0+ for an empty list.
+  #
+  # @return [Number]
+  #
+  # @example
+  #   [1, 2, 3].sum   # => 6
+  #   [].sum          # => 0
+  sum :> Number
+  let sum = Kex.Intrinsic.List.sum(this)
+
+  # Multiplies all elements. Returns +1+ for an empty list.
+  #
+  # @return [Number]
+  #
+  # @example
+  #   [1, 2, 3].product   # => 6
+  #   [].product          # => 1
+  product :> Number
+  let product = Kex.Intrinsic.List.product(this)
+
+  # Maps each element through +f+ and multiplies the results.
+  #
+  # @param f [X -> Number]
+  # @return [Number]
+  #
+  # @example
+  #   [[1,2],[3,4]].product { |pair| pair.first.or(1) }   # => 3
+  product :> (X -> Number) -> Number
+  let product(f) = this.map(f).product
+
+  # Returns the smallest element wrapped in +Just+, or +None+ for an empty list.
+  #
+  # @return [Number?]
+  #
+  # @example
+  #   [3, 1, 2].min   # => Just(1)
+  #   [].min          # => None
+  min :> X?
+  let min = Kex.Intrinsic.List.min(this)
+
+  # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
+  #
+  # @return [Number?]
+  #
+  # @example
+  #   [3, 1, 2].max   # => Just(3)
+  #   [].max          # => None
+  max :> X?
+  let max = Kex.Intrinsic.List.max(this)
+end
+
 make [X], implement: Enumerable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
@@ -338,59 +390,6 @@ make [X], implement: Enumerable do
   sort :> (X -> X -> Bool) -> [X]
   let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
-end
-
-make [Number] do
-  # Sums all elements. Returns +0+ for an empty list.
-  #
-  # @return [Number]
-  #
-  # @example
-  #   [1, 2, 3].sum   # => 6
-  #   [].sum          # => 0
-  sum :> Number
-  let sum = Kex.Intrinsic.List.sum(this)
-
-  # Maps each element through +f+ and sums the results.
-  #
-  # @param f [X -> Number]
-  # @return [Number]
-  #
-  # @example
-  #   ["hello", "hi"].sum { |s| s.count }   # => 7
-  sum :> (X -> Number) -> Number
-  let sum(f) = this.map(f).sum
-
-  # Multiplies all elements. Returns +1+ for an empty list.
-  #
-  # @return [Number]
-  #
-  # @example
-  #   [1, 2, 3].product   # => 6
-  #   [].product          # => 1
-  product :> Number
-  let product = Kex.Intrinsic.List.product(this)
-
-  # Maps each element through +f+ and multiplies the results.
-  #
-  # @param f [X -> Number]
-  # @return [Number]
-  #
-  # @example
-  #   [[1,2],[3,4]].product { |pair| pair.first.or(1) }   # => 3
-  product :> (X -> Number) -> Number
-  let product(f) = this.map(f).product
-
-  # Returns the smallest element wrapped in +Just+, or +None+ for an empty list.
-  #
-  # @return [Number?]
-  #
-  # @example
-  #   [3, 1, 2].min   # => Just(1)
-  #   [].min          # => None
-  min :> X?
-  let min = Kex.Intrinsic.List.min(this)
-
   # Returns the element with the smallest +f+ key wrapped in +Just+, or
   # +None+ for an empty list.
   #
@@ -402,16 +401,6 @@ make [Number] do
   min :> (X -> Y) -> X?
   let min(f) = Kex.Intrinsic.List.minBy(this, f)
 
-  # Returns the largest element wrapped in +Just+, or +None+ for an empty list.
-  #
-  # @return [Number?]
-  #
-  # @example
-  #   [3, 1, 2].max   # => Just(3)
-  #   [].max          # => None
-  max :> X?
-  let max = Kex.Intrinsic.List.max(this)
-
   # Returns the element with the largest +f+ key wrapped in +Just+, or
   # +None+ for an empty list.
   #
@@ -422,6 +411,17 @@ make [Number] do
   #   ["hey", "hi"].max { |s| s.count }   # => Just("hey")
   max :> (X -> Y) -> X?
   let max(f) = Kex.Intrinsic.List.maxBy(this, f)
+
+  # Maps each element through +f+ and sums the results.
+  #
+  # @param f [X -> Number]
+  # @return [Number]
+  #
+  # @example
+  #   ["hello", "hi"].sum { |s| s.count }   # => 7
+  sum :> (X -> Number) -> Number
+  let sum(f) = Kex.Intrinsic.List.sum(this.map(f))
+
 end
 
 make [String | Char] do

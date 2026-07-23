@@ -120,7 +120,7 @@ main do
   #                 params: [userId] }
 
   IO.printLine(q2.text)
-  IO.printLine(q2.params.inspect())
+  IO.inspect(q2.params)
 
   # Multiple free vars
   let q3 = SQL.select(:all)

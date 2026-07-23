@@ -12,9 +12,7 @@ end
 type Integer < Number
 type Float < Number
 
-# Adding NEW methods to a builtin type is fine; redefining a sealed stdlib
-# method (modulo/even?/odd?/first/last/map/filter/sum/product/to — all provided
-# by the prelude) is a compile error, so those aren't defined here.
+# Adding methods to a builtin type via `make` blocks.
 make Integer do
   let dividesBy?(other: This) -> Bool do
     return this.modulo(other) == 0

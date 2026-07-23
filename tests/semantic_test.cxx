@@ -1304,6 +1304,30 @@ int main() {
     });
 
     describe("Semantic — Stdlib call checking", []() {
+        it("accepts min/max/sum lambdas for lists of non-numeric values", []() {
+            assertTrue(noErrors(
+                "record Shape do\n"
+                "  area : Float\n"
+                "end\n"
+                "main do\n"
+                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n"
+                "  let smallest = shapes.min { |shape| shape.area }\n"
+                "  let largest = shapes.max { |shape| shape.area }\n"
+                "  let total = shapes.sum { |shape| shape.area }\n"
+                "end\n"
+            ));
+        });
+
+        it("types Monoid repeat for strings, lists, and integers", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let text: String = \"ha\".repeat(3)\n"
+                "  let items: [Integer] = [1, 2].repeat(2)\n"
+                "  let total: Integer = 3.repeat(4)\n"
+                "end\n"
+            ));
+        });
+
         it("loads Optional marker traits and conformances from the prelude", []() {
             assertTrue(noErrors(
                 "let accept(value: Optionable) = value\n"

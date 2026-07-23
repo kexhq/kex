@@ -1894,7 +1894,7 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                 error(loc, "Cannot add " + typeToString(lhs) + " and " + typeToString(rhs));
                 return Type::string();
             }
-            if (!typesEqual(lhs, rhs)) {
+            if (!argMatchesParam(lhs, rhs) && !argMatchesParam(rhs, lhs)) {
                 error(loc, "Operator '+' requires matching types, got " +
                       typeToString(lhs) + " and " + typeToString(rhs));
             }
@@ -2007,6 +2007,25 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (auto* argOpt = std::get_if<OptionalType>(&argType->kind)) {
         return argMatchesParam(argOpt->inner, paramType);
     }
+    auto isUnitLike = [](const TypePtr& t) -> bool {
+        if (auto* p = std::get_if<PrimitiveType>(&t->kind))
+            return p->kind == PrimitiveType::Unit;
+        if (auto* tup = std::get_if<TupleType>(&t->kind))
+            return tup->elements.empty();
+        if (auto* n = std::get_if<NamedType>(&t->kind))
+            return n->typeArgs.empty() && (n->name == "Unit" || n->name == "Void");
+        return false;
+    };
+    auto isStringType = [](const TypePtr& t) -> bool {
+        if (auto* n = std::get_if<NamedType>(&t->kind))
+            return n->typeArgs.empty() &&
+                   (n->name == "String" || n->name == "FilePath");
+        if (auto* l = std::get_if<ListType>(&t->kind)) {
+            if (auto* p = std::get_if<PrimitiveType>(&l->element->kind))
+                return p->kind == PrimitiveType::Char;
+        }
+        return false;
+    };
     // FunctionType param — e.g. `(T-1) -> Bool` vs `(T81) -> Bool`. Without
     // this branch both sides fall to typesEqual which fails on mismatched
     // TypeVar ids even though both are permissive. Recurse into params and
@@ -2019,8 +2038,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
                 if (!argMatchesParam(argFn->params[i], paramFn->params[i])) return false;
             }
             // Unit as the expected return means "result discarded" — accept any body type.
-            if (auto* prim = std::get_if<PrimitiveType>(&paramFn->result->kind);
-                prim && prim->kind == PrimitiveType::Unit) return true;
+            if (isUnitLike(paramFn->result)) return true;
             return argMatchesParam(argFn->result, paramFn->result);
         }
         // Curried arg: `(A) -> (B) -> C` matches `(A, B) -> C`.
@@ -2044,7 +2062,10 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // trait-relaxation treatment (argMatchesParam, not typesEqual).
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
-        if (!argNamed || argNamed->name != paramNamed->name) return false;
+        if (!argNamed || argNamed->name != paramNamed->name) {
+            if (isStringType(argType) && isStringType(paramType)) return true;
+            return false;
+        }
         if (argNamed->typeArgs.size() != paramNamed->typeArgs.size()) return false;
         for (size_t i = 0; i < paramNamed->typeArgs.size(); i++) {
             if (!argMatchesParam(argNamed->typeArgs[i], paramNamed->typeArgs[i])) return false;
@@ -2059,6 +2080,10 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         }
         return false;
     }
+
+    if (isUnitLike(argType) && isUnitLike(paramType)) return true;
+
+    if (isStringType(argType) && isStringType(paramType)) return true;
 
     return typesEqual(argType, paramType);
 }

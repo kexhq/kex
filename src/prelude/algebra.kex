@@ -7,6 +7,15 @@ end
 trait Monoid do
   identity :> This
   combine :> This -> This
+
+  # Combines this value with itself +n+ times. Repeating zero times returns
+  # the monoid identity; a negative repetition count is invalid.
+  let repeat(n: Integer) -> This do
+    if n < 0 then die("repeat count cannot be negative")
+    elif n == 0 then this.identity
+    else this.combine(this.repeat(n - 1))
+    end
+  end
 end
 
 trait Group do

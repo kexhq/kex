@@ -25,7 +25,7 @@ let evensInRange = (1..20).filter { |x| x.modulo(2) == 0 }
 # Foul feeds for IO
 foul module FileReader do
   let processLarge(path: String) -> Result<Int, IOError> do
-    let feed = File.feed(path)
+    let feed = File.feed(path).or(Stream.empty)
     var count = 0
 
     feed.each do |line|
@@ -36,13 +36,12 @@ foul module FileReader do
   end
 
   let processWithStream(path: String) -> Result<[String], IOError> do
-    File.open(path) do |handle|
-      let lines = handle.feed
-      let errors = lines
-        .filter(&.contains?("ERROR"))
-        .take(10)
-      return Ok(errors)
-    end
+    let handle = File.open(path, Read)
+    let lines = handle.feed
+    let errors = lines
+      .filter(&.contains?("ERROR"))
+      .take(10)
+    return Ok(errors)
   end
 end
 

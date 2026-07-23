@@ -81,7 +81,8 @@ inline auto preludeRegistry(const std::string& runtimeDir)
 // Simplified AST→Type converter for the source fallback below.
 // Handles the subset of types used in prelude annotations.
 inline auto resolveSourceType(const ast::TypeExpr& expr,
-                              std::unordered_map<std::string, kex::semantic::TypePtr>& vars)
+                              std::unordered_map<std::string, kex::semantic::TypePtr>& vars,
+                              const std::unordered_map<std::string, kex::semantic::TypePtr>* aliases = nullptr)
     -> kex::semantic::TypePtr {
     using Type = kex::semantic::Type;
     return std::visit([&](const auto& node) -> kex::semantic::TypePtr {
@@ -104,13 +105,17 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 vars[name] = tv;
                 return tv;
             }
+            if (aliases) {
+                if (auto it = aliases->find(name); it != aliases->end())
+                    return it->second;
+            }
             return Type::named(name);
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
             std::vector<kex::semantic::TypePtr> args;
             for (const auto& a : node.args)
-                if (a) args.push_back(resolveSourceType(*a, vars));
+                if (a) args.push_back(resolveSourceType(*a, vars, aliases));
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
             if (name == "Map" && args.size() == 2)
@@ -124,26 +129,26 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            auto p = node.param ? resolveSourceType(*node.param, vars) : Type::unknown();
-            auto r = node.result ? resolveSourceType(*node.result, vars) : Type::unknown();
+            auto p = node.param ? resolveSourceType(*node.param, vars, aliases) : Type::unknown();
+            auto r = node.result ? resolveSourceType(*node.result, vars, aliases) : Type::unknown();
             return Type::func({p}, r);
         }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<kex::semantic::TypePtr> elems;
             for (const auto& e : node.elements)
-                if (e) elems.push_back(resolveSourceType(*e, vars));
+                if (e) elems.push_back(resolveSourceType(*e, vars, aliases));
             return Type::tuple(std::move(elems));
         }
         else if constexpr (std::is_same_v<T, ast::ListType>) {
-            return Type::list(node.element ? resolveSourceType(*node.element, vars) : Type::unknown());
+            return Type::list(node.element ? resolveSourceType(*node.element, vars, aliases) : Type::unknown());
         }
         else if constexpr (std::is_same_v<T, ast::MapType>) {
             return Type::map(
-                node.key ? resolveSourceType(*node.key, vars) : Type::unknown(),
-                node.value ? resolveSourceType(*node.value, vars) : Type::unknown());
+                node.key ? resolveSourceType(*node.key, vars, aliases) : Type::unknown(),
+                node.value ? resolveSourceType(*node.value, vars, aliases) : Type::unknown());
         }
         else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return Type::optional(node.inner ? resolveSourceType(*node.inner, vars) : Type::unknown());
+            return Type::optional(node.inner ? resolveSourceType(*node.inner, vars, aliases) : Type::unknown());
         }
         else { return Type::unknown(); }
     }, expr.kind);
@@ -185,7 +190,9 @@ inline auto sourcePreludeSemanticInterfaces()
     -> kex::semantic::ImportedInterfaces {
     kex::semantic::ImportedInterfaces ifaces;
 
-    auto annotationToSignature = [](const ast::TypeAnnotation& ann,
+    std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
+
+    auto annotationToSignature = [&typeAliases](const ast::TypeAnnotation& ann,
                                     kex::semantic::TypePtr selfType,
                                     std::unordered_map<std::string, kex::semantic::TypePtr> vars = {})
         -> kex::semantic::Signature {
@@ -193,7 +200,7 @@ inline auto sourcePreludeSemanticInterfaces()
         sig.name = ann.name;
         sig.isFoul = ann.isFoul;
         if (!ann.type) { sig.result = kex::semantic::Type::unknown(); return sig; }
-        auto resolved = resolveSourceType(*ann.type, vars);
+        auto resolved = resolveSourceType(*ann.type, vars, &typeAliases);
         if (ann.implicitThis && selfType)
             sig.params.push_back(selfType);
         sig.result = flattenFunctionType(resolved, sig.params);
@@ -259,7 +266,18 @@ inline auto sourcePreludeSemanticInterfaces()
             }
         };
 
-        auto collectModule = [&](const ast::ModuleDef& mod) {
+        auto collectTypeAlias = [&](const ast::TypeDef& td) {
+            if (td.variants && td.variants->size() == 1 && (*td.variants)[0]) {
+                std::unordered_map<std::string, kex::semantic::TypePtr> noVars;
+                auto resolved = resolveSourceType(*(*td.variants)[0], noVars, &typeAliases);
+                if (!std::holds_alternative<kex::semantic::NamedType>(resolved->kind) ||
+                    std::get<kex::semantic::NamedType>(resolved->kind).name != td.name)
+                    typeAliases[td.name] = resolved;
+            }
+        };
+
+        std::function<void(const ast::ModuleDef&)> collectModule =
+            [&](const ast::ModuleDef& mod) {
             ifaces.modules[mod.name].sourceModule = mod.name;
             ifaces.modules[mod.name].automaticImport = true;
             ifaces.modules[mod.name].isFoul = mod.isFoul;
@@ -270,6 +288,10 @@ inline auto sourcePreludeSemanticInterfaces()
                     if (*ann) addModuleSig(mod.name, annotationToSignature(**ann, nullptr));
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
                     if (*make) collectMakeAnnotations(**make);
+                if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*nested) collectModule(**nested);
+                if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item))
+                    if (*td) collectTypeAlias(**td);
             }
         };
 
