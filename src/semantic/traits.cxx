@@ -130,7 +130,7 @@ auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std
         "Number", "Integer", "Float", "Equatable", "Comparable",
         "Showable",
         "Blankable", "Truthyable", "Enumerable",
-        "Semigroup", "Monoid", "Group", "Errorable",
+        "Monoid", "Group", "Errorable",
     };
     for (const auto& t : itA->second) {
         if (kBuiltin.count(t)) continue;

@@ -1342,18 +1342,13 @@ int main() {
 
         it("loads algebraic conformances", []() {
             assertTrue(noErrors(
-                "let acceptSemigroup(value: Semigroup) = value\n"
                 "let acceptMonoid(value: Monoid) = value\n"
                 "let acceptGroup(value: Group) = value\n"
                 "main do\n"
-                "  acceptSemigroup(1)\n"
-                "  acceptSemigroup(\"text\")\n"
-                "  acceptSemigroup([1, 2])\n"
                 "  acceptMonoid(1)\n"
                 "  acceptGroup(1)\n"
                 "  let left = { a: 1 }\n"
                 "  let right = { b: 2 }\n"
-                "  acceptSemigroup(left)\n"
                 "  acceptMonoid(left)\n"
                 "  let combined = left.combine(right)\n"
                 "  let repeated = combined.repeat(2)\n"

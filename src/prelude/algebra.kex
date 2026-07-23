@@ -3,13 +3,8 @@
 # Kex traits do not inherit from one another, so concrete types explicitly
 # implement every structure whose laws they satisfy.
 
-trait Semigroup do
-  # Must be associative.
-  combine :> This -> This
-end
-
 trait Monoid do
-  # `identity` must be neutral on both sides of `combine`.
+  # `combine` must be associative and `identity` neutral on both sides.
   identity :> This
   combine :> This -> This
 
@@ -30,18 +25,18 @@ trait Group do
   inverse :> This
 end
 
-make Integer, implement: Semigroup, Monoid, Group do
+make Integer, implement: Monoid, Group do
   let identity = 0
   let combine(other: This) -> This = this + other
   let inverse -> This = -this
 end
 
-make String, implement: Semigroup, Monoid do
+make String, implement: Monoid do
   let identity = ""
   let combine(other: This) -> This = this + other
 end
 
-make [A], implement: Semigroup, Monoid do
+make [A], implement: Monoid do
   let identity = []
   let combine(other: This) -> This = this + other
 end
