@@ -165,32 +165,35 @@ r.max   # 10
 r.map { |x| x * 2 }
 ```
 
-## Enumerable Hierarchy
+## Foldable and Enumerable
 
-`Range`, `[A]` (lists), and `Stream` all implement the `Enumerable` trait,
-the same `trait`/`make implement:` mechanism as the Type Hierarchy section
-above — not nominal inheritance:
+`Range`, `[A]` (lists), `String`, and `Map<K, V>` implement both collection
+traits through the same `trait`/`make implement:` mechanism as the Type
+Hierarchy section above — not nominal inheritance:
 
 ```kex
+trait Foldable do
+  reduce :> A -> (A -> T -> A) -> A
+  # defaults: each, all?, any?, find, count(predicate)
+end
+
 trait Enumerable do
-  each : (This, A -> Unit) -> Unit
+  reduce :> A -> (A -> T -> A) -> A
+  # defaults: map, filter, flatMap, collect
 end
 
-make Range implement: Enumerable do
-  let each(f) = ...
+make Range, implement: Enumerable, Foldable do
+  let reduce(acc, f) = ...
 end
 
-make [A] implement: Enumerable do
-  let each(f) = ...
-end
-
-make Stream implement: Enumerable do
-  let each(f) = ...
+make [A], implement: Enumerable, Foldable do
+  let reduce(acc, f) = ...
 end
 ```
 
-(Required methods beyond `each` — whatever `.map`/`.min`/`.max` etc. need —
-aren't fully enumerated here.)
+`Stream<A>` remains lazy and provides its own `map`, `filter`, `take`, and
+`drop`; it is not `Foldable` because reducing an unbounded stream may not
+terminate.
 
 ## Atoms
 

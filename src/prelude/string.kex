@@ -1,4 +1,4 @@
-make String, implement: Enumerable do
+make String, implement: Enumerable, Foldable do
   # Enumerable primitive and string-preserving higher-order operations.
   # The private List intrinsics understand String's [Char] representation;
   # the public methods remain owned here in Kex source.

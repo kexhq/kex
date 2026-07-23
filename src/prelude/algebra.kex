@@ -1,10 +1,15 @@
-# Algebraic traits
+# Algebraic structures.
+#
+# Kex traits do not inherit from one another, so concrete types explicitly
+# implement every structure whose laws they satisfy.
 
 trait Semigroup do
+  # Must be associative.
   combine :> This -> This
 end
 
 trait Monoid do
+  # `identity` must be neutral on both sides of `combine`.
   identity :> This
   combine :> This -> This
 
@@ -19,40 +24,24 @@ trait Monoid do
 end
 
 trait Group do
+  # Combining a value with its inverse must produce `identity`.
   identity :> This
   combine :> This -> This
   inverse :> This
 end
 
-make Integer, implement: Monoid do
-  let identity = 0
-  let combine(other: This) -> This = this + other
-end
-
-make Integer, implement: Group do
+make Integer, implement: Semigroup, Monoid, Group do
   let identity = 0
   let combine(other: This) -> This = this + other
   let inverse -> This = -this
 end
 
-make String, implement: Monoid do
+make String, implement: Semigroup, Monoid do
   let identity = ""
   let combine(other: This) -> This = this + other
 end
 
-make [A], implement: Monoid do
+make [A], implement: Semigroup, Monoid do
   let identity = []
   let combine(other: This) -> This = this + other
-end
-
-# Generic fold — no seed needed when the element is a Monoid
-
-make [Monoid] do
-  fold :> Monoid
-  fold(@[], f) = f.identity
-  fold(@[x | xs]) = x.combine(xs.fold)
-
-  foldMap :> (A -> This) -> This
-  let foldMap(@[], f) = f.identity
-  let foldMap(@[x | xs], f) = f(x).combine(xs.foldMap(f))
 end

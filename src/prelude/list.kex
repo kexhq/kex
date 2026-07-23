@@ -52,7 +52,7 @@ make [Number] do
   let max = Kex.Intrinsic.List.max(this)
 end
 
-make [X], implement: Enumerable do
+make [X], implement: Enumerable, Foldable do
   # Returns the first element wrapped in +Just+, or +None+ if the list is empty.
   #
   # @return [X?]

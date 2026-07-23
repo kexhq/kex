@@ -1,0 +1,34 @@
+# kex: no-check
+
+describe("Foldable defaults") do
+  it("each visits every item") do
+    var total = 0
+    (1..3).each { |item| total = total + item }
+    assert(total == 6)
+  end
+
+  it("all? and any? derive from reduce") do
+    let items = 1..3
+    assert(items.all? { |item| item > 0 })
+    assert(items.any? { |item| item == 2 })
+    assert(!items.any? { |item| item > 9 })
+  end
+
+  it("find returns the first matching item") do
+    let items = 1..3
+    assert(items.find { |item| item > 1 } == Just(2))
+    assert(items.find { |item| item > 9 } == None)
+  end
+
+  it("count counts matching items") do
+    assert((1..4).count { |item| item.even? } == 2)
+  end
+end
+
+describe("Enumerable defaults") do
+  it("list-producing operations remain on Enumerable") do
+    assert((1..4).map { |item| item * 2 } == [2, 4, 6, 8])
+    assert((1..4).filter { |item| item.even? } == [2, 4])
+    assert((1..3).flatMap { |item| [item, item] } == [1, 1, 2, 2, 3, 3])
+  end
+end

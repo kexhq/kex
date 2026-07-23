@@ -1,11 +1,15 @@
 # Maps are immutable key-value stores. Mutation methods (suffixed +!+)
 # return a new map and rebind the receiver variable — they do not modify
 # in place. Keys are compared by structural equality.
-make Map<K, V>, implement: Enumerable do
+make Map<K, V>, implement: Enumerable, Foldable, Semigroup, Monoid do
   # Enumerable primitive: fold over (key, value) pairs in canonical (sorted)
-  # order. map/filter/each come from the Enumerable trait; their two-arg blocks
-  # auto-splat each pair.
+  # order. Collection-producing operations come from Enumerable and traversal
+  # queries come from Foldable; their two-arg blocks auto-splat each pair.
   let reduce(acc, g) = this.entries.reduce(acc, g)
+
+  # Maps form a right-biased Monoid under merge.
+  let identity = {}
+  let combine(other: This) -> This = this.merge(other)
 
   # Returns the value for +key+ wrapped in +Just+, or +None+ if absent.
   # When a +default+ is supplied, returns the raw unwrapped value instead.
