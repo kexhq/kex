@@ -23,8 +23,8 @@ inline constexpr std::array<std::string_view, 8> kPreludeTier1 = {
 inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
     "enumerable.kex", "evaluator.kex", "file.kex",
 };
-inline constexpr std::array<std::string_view, 2> kPreludeTier3 = {
-    "list.kex", "map.kex",
+inline constexpr std::array<std::string_view, 3> kPreludeTier3 = {
+    "list.kex", "map.kex", "units.kex",
 };
 
 inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)

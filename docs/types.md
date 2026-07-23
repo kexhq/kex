@@ -165,6 +165,43 @@ r.max   # 10
 r.map { |x| x * 2 }
 ```
 
+## Units
+
+Time units are available directly from the prelude. They produce a `Duration`
+stored canonically in seconds:
+
+```kex
+let timeout = 2.5.sec
+let total = 1.minute + 30.sec
+
+timeout.seconds                    # 2.5
+total.convert(Second).to(String)   # "90.0 s"
+```
+
+Physical SI units are opt-in through `Units.SI`. The module defines `Measure`,
+keeping physical measures out of the prelude. `using` brings its public names
+into scope, so qualification is only needed without an import or to resolve an
+ambiguous name:
+
+```kex
+using Units.SI
+
+let distance = meter(100)  # Measure
+let speed = per(distance, 9.58.sec)
+kilo(distance).to(String)  # "0.1 km"
+```
+
+Decimal and binary information units are provided separately by `Units.Data`.
+The uppercase names are unit values:
+
+```kex
+using Units.Data
+
+let asset = size(5, MB)  # DataSize
+let binary = convertTo(asset, MiB)
+let cache = gibibytes(2)
+```
+
 ## Foldable and Enumerable
 
 `Range`, `[A]` (lists), `String`, and `Map<K, V>` implement both collection

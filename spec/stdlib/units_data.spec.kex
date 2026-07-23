@@ -1,0 +1,29 @@
+using Units.Data
+
+describe("Units.Data") do
+  it("constructs decimal byte sizes") do
+    let size = size(5, MB)
+    assert(size.bytes == 5000000.0)
+    assert(size.value == 5.0)
+  end
+
+  it("distinguishes decimal and binary units") do
+    assert(size(1, KB).bytes == 1000.0)
+    assert(size(1, KiB).bytes == 1024.0)
+    assert(megabytes(1).bytes == 1000000.0)
+    assert(mebibytes(1).bytes == 1048576.0)
+  end
+
+  it("converts display units without losing canonical bytes") do
+    let size = convertTo(megabytes(10), MiB)
+    assert(size.bytes == 10000000.0)
+    assert(size.value == 9.5367431640625)
+    assert(size.unit == MiB)
+  end
+
+  it("adds sizes using canonical bytes") do
+    let total = megabytes(1) + kilobytes(500)
+    assert(total.bytes == 1500000.0)
+    assert(total.value == 1.5)
+  end
+end

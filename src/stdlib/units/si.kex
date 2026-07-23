@@ -1,0 +1,179 @@
+module Units.SI
+
+type SIKind = Length | Mass | Temperature | Volume
+            | Speed | Acceleration | Force | Pressure | Energy | Power
+            | Voltage | Current | Resistance | Charge
+
+record Measure do
+  value : Float
+  kind : SIKind
+  symbol : String
+end
+
+let meter(value: Number) -> Measure = Measure { value: amount(value), kind: Length, symbol: "m" }
+
+let gram(value: Number) -> Measure = Measure { value: amount(value), kind: Mass, symbol: "g" }
+
+let kilogram(value: Number) -> Measure = Measure { value: amount(value), kind: Mass, symbol: "kg" }
+
+let kelvin(value: Number) -> Measure = Measure { value: amount(value), kind: Temperature, symbol: "K" }
+
+let liter(value: Number) -> Measure = Measure { value: amount(value), kind: Volume, symbol: "L" }
+
+let newton(value: Number) -> Measure = Measure { value: amount(value), kind: Force, symbol: "N" }
+
+let watt(value: Number) -> Measure = Measure { value: amount(value), kind: Power, symbol: "W" }
+
+let volt(value: Number) -> Measure = Measure { value: amount(value), kind: Voltage, symbol: "V" }
+
+let ampere(value: Number) -> Measure = Measure { value: amount(value), kind: Current, symbol: "A" }
+
+let ohm(value: Number) -> Measure = Measure { value: amount(value), kind: Resistance, symbol: "Ω" }
+
+let coulomb(value: Number) -> Measure = Measure { value: amount(value), kind: Charge, symbol: "C" }
+
+# Applies an SI decimal prefix to the displayed value.
+let kilo(measure: Measure) -> Measure = prefixed(measure, 1000.0, "k")
+
+let mega(measure: Measure) -> Measure = prefixed(measure, 1000000.0, "M")
+
+let giga(measure: Measure) -> Measure = prefixed(measure, 1000000000.0, "G")
+
+let milli(measure: Measure) -> Measure = prefixed(measure, 0.001, "m")
+
+let micro(measure: Measure) -> Measure = prefixed(measure, 0.000001, "μ")
+
+let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
+
+# Divides a measurement by a prelude Duration.
+let per(measure: Measure, duration: Duration) -> Measure do
+  let kind = match measure.kind do
+    Length -> Speed
+    Speed -> Acceleration
+    Energy -> Power
+    _ -> measure.kind
+  end
+  return Measure {
+    value: measure.value / duration.seconds,
+    kind: kind,
+    symbol: "${measure.symbol}/s"
+  }
+end
+
+# Multiplies a measurement by a prelude Duration.
+let forDuration(measure: Measure, duration: Duration) -> Measure do
+  let kind = match measure.kind do
+    Power -> Energy
+    Current -> Charge
+    _ -> measure.kind
+  end
+  return Measure {
+    value: measure.value * duration.seconds,
+    kind: kind,
+    symbol: "${measure.symbol}·s"
+  }
+end
+
+make Measure do
+  let +(other: Measure) -> Result<Measure, String> do
+    match this.kind == other.kind do
+      true -> return Ok(Measure {
+        value: this.value + other.value,
+        kind: this.kind,
+        symbol: this.symbol
+      })
+      false -> return Error("Cannot add SI measurements of different kinds")
+    end
+  end
+
+  let -(other: Measure) -> Result<Measure, String> do
+    match this.kind == other.kind do
+      true -> return Ok(Measure {
+        value: this.value - other.value,
+        kind: this.kind,
+        symbol: this.symbol
+      })
+      false -> return Error("Cannot subtract SI measurements of different kinds")
+    end
+  end
+
+  let *(other: Measure) -> Measure do
+    let kind = this.productKind(this.kind, other.kind)
+    return Measure {
+      value: this.value * other.value,
+      kind: kind,
+      symbol: this.productSymbol(kind, this.symbol, other.symbol)
+    }
+  end
+
+  let /(other: Measure) -> Measure do
+    let kind = this.quotientKind(this.kind, other.kind)
+    return Measure {
+      value: this.value / other.value,
+      kind: kind,
+      symbol: this.quotientSymbol(kind, this.symbol, other.symbol)
+    }
+  end
+
+  let scale(factor: Number) -> Measure = Measure {
+    value: this.value * this.amount(factor),
+    kind: this.kind,
+    symbol: this.symbol
+  }
+
+  let to(String) -> String = "${this.value} ${this.symbol}"
+
+  private do
+    let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+
+    let productKind(Mass, Acceleration) = Force
+    let productKind(Force, Length) = Energy
+    let productKind(Voltage, Current) = Power
+    let productKind(Current, Resistance) = Voltage
+    let productKind(left, _) = left
+
+    let quotientKind(Force, Length) = Pressure
+    let quotientKind(Voltage, Current) = Resistance
+    let quotientKind(left, _) = left
+
+    let productSymbol(Force, _, _) = "N"
+    let productSymbol(Energy, _, _) = "J"
+    let productSymbol(Power, _, _) = "W"
+    let productSymbol(Voltage, _, _) = "V"
+    let productSymbol(_, left, right) = "${left}·${right}"
+
+    let quotientSymbol(Pressure, _, _) = "Pa"
+    let quotientSymbol(Resistance, _, _) = "Ω"
+    let quotientSymbol(_, left, right) = "${left}/${right}"
+  end
+end
+
+private do
+  let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+
+  let prefixed(measure, factor, prefix) = Measure {
+    value: measure.value / factor,
+    kind: measure.kind,
+    symbol: "${prefix}${measure.symbol}"
+  }
+
+  let productKind(Mass, Acceleration) = Force
+  let productKind(Force, Length) = Energy
+  let productKind(Voltage, Current) = Power
+  let productKind(Current, Resistance) = Voltage
+  let productKind(left, _) = left
+
+  let quotientKind(Force, Length) = Pressure
+  let quotientKind(Voltage, Current) = Resistance
+  let quotientKind(left, _) = left
+
+  let productSymbol(Force, _, _) = "N"
+  let productSymbol(Energy, _, _) = "J"
+  let productSymbol(Power, _, _) = "W"
+  let productSymbol(Voltage, _, _) = "V"
+  let productSymbol(_, left, right) = "${left}·${right}"
+
+  let quotientSymbol(Pressure, _, _) = "Pa"
+  let quotientSymbol(Resistance, _, _) = "Ω"
+  let quotientSymbol(_, left, right) = "${left}/${right}"
+end

@@ -1,10 +1,11 @@
-.PHONY: build test spec spec-prelude test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build test spec spec-prelude spec-stdlib spec-stdlib-beam test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 STDLIBDIR ?= $(PREFIX)/share/kex/prelude
+KEXLIBDIR ?= $(PREFIX)/share/kex/stdlib
 
 WASM_BUILD_DIR = build-wasm
 
@@ -68,7 +69,7 @@ web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
 	@python3 -m http.server 8743
 
-test-all: test spec spec-prelude
+test-all: test spec spec-prelude spec-stdlib
 
 SHELL := /bin/bash
 
@@ -208,6 +209,44 @@ spec-wasm: build-wasm
 	echo "  $$passed passing, $$failed failing"; \
 	[ $$failed -eq 0 ]
 
+spec-stdlib: build
+	@echo "Running opt-in stdlib spec suite..."
+	@failed=0; passed=0; \
+	for f in spec/stdlib/*.kex; do \
+		output=$$($(KEX) --no-colors "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
+spec-stdlib-beam: build
+	@echo "Running opt-in stdlib spec suite through BEAM (-R)..."
+	@failed=0; passed=0; \
+	for f in spec/stdlib/*.kex; do \
+		output=$$($(KEX) -R --no-colors "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
 parse: build
 	@echo "Parsing all examples..."
 	@failed=0; passed=0; \
@@ -238,20 +277,23 @@ install:
 	@test -x "$(KEX)" || { echo "Missing $(KEX). Run 'make build' first."; exit 1; }
 	@mkdir -p "$(BINDIR)"
 	@mkdir -p "$(STDLIBDIR)"
+	@mkdir -p "$(KEXLIBDIR)"
 	@install -m 755 "$(KEX)" "$(BINDIR)/kex"
 	@install -m 644 src/prelude/*.kex "$(STDLIBDIR)/"
+	@cp -R src/stdlib/. "$(KEXLIBDIR)/"
 	@if [ -d "$(BUILD_DIR)/runtime/beam" ]; then \
 		mkdir -p "$(PREFIX)/share/kex/runtime"; \
 		install -m 644 "$(BUILD_DIR)"/runtime/beam/*.beam "$(PREFIX)/share/kex/runtime/"; \
 	fi
-	@echo "Installed kex to $(BINDIR)/kex and stdlib to $(STDLIBDIR)"
+	@echo "Installed kex to $(BINDIR), prelude to $(STDLIBDIR), and modules to $(KEXLIBDIR)"
 
 uninstall:
 	@rm -f "$(BINDIR)/kex"
 	@rm -f "$(STDLIBDIR)"/*.kex
+	@rm -rf "$(KEXLIBDIR)"
 	@rm -f "$(PREFIX)/share/kex/runtime"/*.beam
 	@rmdir "$(STDLIBDIR)" 2>/dev/null || true
-	@echo "Removed kex from $(BINDIR) and stdlib from $(STDLIBDIR)"
+	@echo "Removed kex from $(BINDIR), prelude from $(STDLIBDIR), and modules from $(KEXLIBDIR)"
 
 clean:
 	@rm -rf $(BUILD_DIR)

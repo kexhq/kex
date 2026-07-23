@@ -384,8 +384,26 @@ struct Lowering {
                     auto lRef = snap(l); auto rRef = snap(r);
                     auto builtin = builtinOp(lRef.get(), rRef.get());
                     std::vector<ExprPtr> ua; ua.push_back(lRef.get()); ua.push_back(rRef.get());
+                    std::string userModule;
+                    std::string userFunction = sym;
+                    // A locally-defined operator stays a local apply. When the
+                    // overload comes from an imported receiver interface
+                    // (notably the prelude), route it to that provider module.
+                    if (!knownFns.count(sym) && externalModules) {
+                        if (auto it = externalModules->receiverFunctions.find(sym);
+                            it != externalModules->receiverFunctions.end()) {
+                            for (const auto& candidate : it->second) {
+                                if (candidate.beamArity != 2) continue;
+                                userModule = candidate.moduleAtom;
+                                userFunction = candidate.beamFunction;
+                                break;
+                            }
+                        }
+                    }
                     auto userCall = std::make_unique<Expr>();
-                    userCall->node = Call{"", sym, 2, std::move(ua), false};
+                    userCall->node = Call{
+                        std::move(userModule), std::move(userFunction),
+                        2, std::move(ua), false};
                     auto dispatch = matchBool(
                         callE("erlang", "is_tuple", 1, one(lRef.get())),
                         std::move(userCall), std::move(builtin));
@@ -2665,6 +2683,13 @@ struct Lowering {
                             if (tp->inner && std::holds_alternative<ast::ListPattern>(tp->inner->kind))
                                 listReceiver = true;
         auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
+        // An implicit method on a record still needs to constrain its receiver
+        // in Core Erlang. Without this guard, a method such as
+        // `Measure.to(String)` becomes a catch-all `to/2` clause and shadows
+        // the universal conversion function for every other value.
+        if (!receiverPattern && records.count(typeName))
+            for (auto& clause : def.clauses)
+                clause.guard = typeGuard(typeName, var("this"));
         if (listReceiver) def = coerceListReceiver(std::move(def));
         if (collidingMethods.count(first.name) && !typeName.empty())
             def.name = first.name + "__" + typeName;
@@ -2717,12 +2742,19 @@ struct Lowering {
         auto it = primGuardBifs().find(ty);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
-        // Record/variant: is_tuple(V) and element(1,V) =:= 'ty'. Strict `and`
-        // (guard-safe); element/2 in a guard just fails the clause on a non-tuple.
+        // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
+        // (the source-level is_record/2 form is a compiler macro).
+        if (auto record = records.find(ty); record != records.end())
+            return callE("erlang", "is_record", 3,
+                         three(std::move(v), lit(LitKind::Atom, ty),
+                               litInt(static_cast<int64_t>(
+                                   record->second.fields.size() + 1))));
+        // Unknown tagged type fallback.
         auto vRef = snap(v);
         return callE("erlang", "and", 2, two(
             callE("erlang", "is_tuple", 1, one(vRef.get())),
-            intrin(Op::Eq, two(callE("erlang", "element", 2, two(litInt(1), vRef.get())),
+            intrin(Op::Eq, two(callE("erlang", "element", 2,
+                                     two(litInt(1), vRef.get())),
                                lit(LitKind::Atom, ty)))));
     }
     auto makeDispatcher(const std::string& name, int arity,
@@ -2911,6 +2943,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
     L.preferExternalReceivers = preferExternalReceivers;
+    if (externals)
+        for (const auto& [name, candidates] : externals->receiverFunctions) {
+            if (name.empty() ||
+                (std::isalnum(static_cast<unsigned char>(name[0])) ||
+                 name[0] == '_'))
+                continue;
+            if (std::any_of(candidates.begin(), candidates.end(),
+                            [](const auto& candidate) {
+                                return candidate.beamArity == 2;
+                            }))
+                L.overloadedOps.insert(name);
+        }
     Module mod;
     mod.name = "kex_" + fileStem;
 

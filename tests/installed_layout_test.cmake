@@ -14,8 +14,11 @@ endif()
 
 set(program "${KEX_INSTALL_TEST_PREFIX}/installed.kex")
 file(WRITE "${program}"
+    "using Units.Data\n"
+    "\n"
     "main do\n"
     "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
+    "  IO.printLine(Units.Data.megabytes(2).bytes)\n"
     "end\n")
 
 set(ENV{KEX_STDLIB_DIR} "")
@@ -33,7 +36,8 @@ foreach(mode IN ITEMS walker beam)
         RESULT_VARIABLE run_result
         OUTPUT_VARIABLE output
         ERROR_VARIABLE error)
-    if(NOT run_result EQUAL 0 OR NOT output STREQUAL "[1, 2]\n")
+    if(NOT run_result EQUAL 0 OR
+       NOT output STREQUAL "[1, 2]\n2000000.0\n")
         message(FATAL_ERROR
             "installed ${mode} failed (${run_result}): ${output}${error}")
     endif()

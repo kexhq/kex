@@ -712,6 +712,24 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
   kex::loadDiscoveredPrelude(db);
 }
 
+auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
+  namespace fs = std::filesystem;
+  const auto srcDir = fs::weakly_canonical(filepath).parent_path();
+  std::vector<std::string> roots;
+  for (const auto &relative : {"lib", "src"}) {
+    const auto candidate = srcDir / relative;
+    std::error_code ec;
+    if (fs::is_directory(candidate, ec) && !ec)
+      roots.push_back(candidate.string());
+  }
+  if (roots.empty())
+    roots.push_back(srcDir.string());
+  for (auto &root : kex::standardLibraryModuleRoots())
+    if (std::find(roots.begin(), roots.end(), root) == roots.end())
+      roots.push_back(std::move(root));
+  return roots;
+}
+
 auto prebuiltRuntimeBeamDir() -> std::string;
 
 struct PreludeInterfaceNames {
@@ -996,6 +1014,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
+  runDb.setModuleRoots(moduleRootsFor(filepath));
   loadPrelude(runDb);
   runDb.updateFile(filepath, readFile(filepath));
   bool dbOk = true;
@@ -1293,6 +1312,8 @@ int main(int argc, char *argv[]) {
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
+    if (optind < argc)
+      db.setModuleRoots(moduleRootsFor(argv[optind]));
     loadPrelude(db);
     if (optind < argc)
       db.updateFile(argv[optind], readFile(argv[optind]));
@@ -2474,15 +2495,7 @@ int main(int argc, char *argv[]) {
       // resolve module files, parse them, and merge into the program
       // so the IR lowering sees all definitions.
       {
-        namespace fs = std::filesystem;
-        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
-        std::vector<std::string> roots;
-        for (const auto &r : {"lib", "src"}) {
-          auto full = srcDir + "/" + r;
-          if (fs::is_directory(full)) roots.push_back(full);
-        }
-        if (roots.empty()) roots.push_back(srcDir);
-        auto deps = resolveBeamDeps(program, roots);
+        auto deps = resolveBeamDeps(program, moduleRootsFor(filepath));
         (void)deps;
       }
 
@@ -2748,16 +2761,7 @@ int main(int argc, char *argv[]) {
     if (mode == "run") {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
-      {
-        namespace fs = std::filesystem;
-        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
-        std::vector<std::string> roots;
-        for (const auto &r : {"lib", "src"}) {
-          auto full = srcDir + "/" + r;
-          if (fs::is_directory(full)) roots.push_back(full);
-        }
-        if (!roots.empty()) evaluator.setModuleRoots(std::move(roots));
-      }
+      evaluator.setModuleRoots(moduleRootsFor(filepath));
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.
@@ -2800,6 +2804,7 @@ int main(int argc, char *argv[]) {
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
+    db.setModuleRoots(moduleRootsFor(filepath));
     loadPrelude(db);
     db.updateFile(filepath, readFile(filepath));
 

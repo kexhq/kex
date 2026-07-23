@@ -1,0 +1,43 @@
+using Units.SI
+
+describe("Units.SI") do
+  it("constructs base SI measurements") do
+    let distance = meter(5)
+    assert(distance.value == 5.0)
+    assert(distance.kind == Length)
+  end
+
+  it("applies decimal prefixes") do
+    assert(kilo(meter(5000)).value == 5.0)
+    assert(milli(meter(1)).value == 1000.0)
+  end
+
+  it("derives speed and acceleration using prelude durations") do
+    let speed = per(meter(100), 10.sec)
+    let acceleration = per(speed, 2.sec)
+    assert(speed.kind == Speed)
+    assert(speed.value == 10.0)
+    assert(acceleration.kind == Acceleration)
+    assert(acceleration.value == 5.0)
+  end
+
+  it("derives force and electrical units") do
+    let acceleration = per(
+      per(meter(10), 1.sec),
+      1.sec
+    )
+    let force = kilogram(5) * acceleration
+    let voltage = ampere(2) * ohm(100)
+    assert(force.kind == Force)
+    assert(force.value == 50.0)
+    assert(voltage.kind == Voltage)
+    assert(voltage.value == 200.0)
+  end
+
+  it("rejects addition across physical kinds") do
+    match meter(1) + watt(1) do
+      Ok(_) -> assert(false)
+      Error(_) -> assert(true)
+    end
+  end
+end

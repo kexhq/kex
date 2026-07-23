@@ -95,13 +95,13 @@ int main() {
             add(kex::kPreludeTier2);
 
             auto ordered = kex::orderPreludeSourcesByTier(manifest);
-            assertEqual(ordered.size(), size_t{25});
+            assertEqual(ordered.size(), size_t{26});
             assertEqual(fs::path(ordered.front()).filename().string(),
                         std::string("algebra.kex"));
             assertEqual(fs::path(ordered[4]).filename().string(),
                         std::string("kex.kex"));
             assertEqual(fs::path(ordered.back()).filename().string(),
-                        std::string("map.kex"));
+                        std::string("units.kex"));
 
             const auto groups = kex::groupPreludeSourcesByTier(manifest);
             assertEqual(groups[0].size(), kex::kPreludeTier0.size());

@@ -457,6 +457,18 @@ int main() {
             assertEqual(output, std::string("true"));
         });
 
+        it("guards implicit record-method receivers by record type", []() {
+            auto out = emit(
+                "record Box do\n"
+                "  value : Integer\n"
+                "end\n"
+                "make Box do\n"
+                "  let unwrap = this.value\n"
+                "end\n");
+            assertTrue(contains(out, "call 'erlang':'is_record'("), out);
+            assertTrue(contains(out, "'Box', 2"), out);
+        });
+
         it("lowers record layouts supplied by compiled interfaces", []() {
             std::vector<kex::ir::ExternalRecordLayout> records = {
                 {"Response", {"status", "body"}},
@@ -831,6 +843,16 @@ int main() {
             auto out = emitWithExternal(
                 "main do\n  let x = 21\n  x.doubled\nend\n", external);
             assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("routes overloaded operators from external receiver interfaces", []() {
+            kex::ir::ExternalModules external;
+            external.receiverFunctions["/"].push_back(
+                {"kex_units", "divide_measure", 2});
+
+            auto out = emitWithExternal(
+                "main do\n  left / right\nend\n", external);
+            assertTrue(contains(out, "call 'kex_units':'divide_measure'"), out);
         });
 
         it("reorders named args for external module functions using param names", []() {

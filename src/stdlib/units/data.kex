@@ -1,0 +1,108 @@
+module Units.Data
+
+type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
+
+record DataSize do
+  # Canonical storage in bytes.
+  bytes : Float
+
+  # Value and unit used for display.
+  value : Float
+  unit : DataUnit
+  symbol : String
+end
+
+let size(value: Number, unit: DataUnit) -> DataSize do
+  let converted = amount(value)
+  let (factor, symbol) = dataUnitInfo(unit)
+  return DataSize {
+    bytes: converted * factor,
+    value: converted,
+    unit: unit,
+    symbol: symbol
+  }
+end
+
+let byteSize(value: Number) -> DataSize = size(value, B)
+let kilobytes(value: Number) -> DataSize = size(value, KB)
+let megabytes(value: Number) -> DataSize = size(value, MB)
+let gigabytes(value: Number) -> DataSize = size(value, GB)
+let terabytes(value: Number) -> DataSize = size(value, TB)
+let kibibytes(value: Number) -> DataSize = size(value, KiB)
+let mebibytes(value: Number) -> DataSize = size(value, MiB)
+let gibibytes(value: Number) -> DataSize = size(value, GiB)
+let tebibytes(value: Number) -> DataSize = size(value, TiB)
+
+let convertTo(size: DataSize, unit: DataUnit) -> DataSize do
+  let (factor, symbol) = dataUnitInfo(unit)
+  return DataSize {
+    bytes: size.bytes,
+    value: size.bytes / factor,
+    unit: unit,
+    symbol: symbol
+  }
+end
+
+make DataSize do
+  let +(other: DataSize) -> DataSize do
+    let total = this.bytes + other.bytes
+    let (factor, _) = this.dataUnitInfo(this.unit)
+    return DataSize {
+      bytes: total,
+      value: total / factor,
+      unit: this.unit,
+      symbol: this.symbol
+    }
+  end
+
+  let -(other: DataSize) -> DataSize do
+    let total = this.bytes - other.bytes
+    let (factor, _) = this.dataUnitInfo(this.unit)
+    return DataSize {
+      bytes: total,
+      value: total / factor,
+      unit: this.unit,
+      symbol: this.symbol
+    }
+  end
+
+  let scale(factor: Number) -> DataSize do
+    let converted = this.amount(factor)
+    return DataSize {
+      bytes: this.bytes * converted,
+      value: this.value * converted,
+      unit: this.unit,
+      symbol: this.symbol
+    }
+  end
+
+  let to(String) -> String = "${this.value} ${this.symbol}"
+
+  private do
+    let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+
+    let dataUnitInfo(B) = (1.0, "B")
+    let dataUnitInfo(KB) = (1000.0, "KB")
+    let dataUnitInfo(MB) = (1000000.0, "MB")
+    let dataUnitInfo(GB) = (1000000000.0, "GB")
+    let dataUnitInfo(TB) = (1000000000000.0, "TB")
+    let dataUnitInfo(KiB) = (1024.0, "KiB")
+    let dataUnitInfo(MiB) = (1048576.0, "MiB")
+    let dataUnitInfo(GiB) = (1073741824.0, "GiB")
+    let dataUnitInfo(TiB) = (1099511627776.0, "TiB")
+  end
+end
+
+private do
+  let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+
+  let dataUnitInfo(B) = (1.0, "B")
+  let dataUnitInfo(KB) = (1000.0, "KB")
+  let dataUnitInfo(MB) = (1000000.0, "MB")
+  let dataUnitInfo(GB) = (1000000000.0, "GB")
+  let dataUnitInfo(TB) = (1000000000000.0, "TB")
+  let dataUnitInfo(KiB) = (1024.0, "KiB")
+  let dataUnitInfo(MiB) = (1048576.0, "MiB")
+  let dataUnitInfo(GiB) = (1073741824.0, "GiB")
+  let dataUnitInfo(TiB) = (1099511627776.0, "TiB")
+end

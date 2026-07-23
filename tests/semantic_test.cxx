@@ -1356,6 +1356,16 @@ int main() {
             ));
         });
 
+        it("loads durations and numeric time constructors", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let duration: Duration = 2.5.sec\n"
+                "  let converted: Duration = duration.convert(Millisecond)\n"
+                "  let rendered: String = converted.to(String)\n"
+                "end\n"
+            ));
+        });
+
         it("loads Optional marker traits and conformances from the prelude", []() {
             assertTrue(noErrors(
                 "let accept(value: Optionable) = value\n"

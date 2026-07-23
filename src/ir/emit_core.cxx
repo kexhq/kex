@@ -327,7 +327,7 @@ struct Emitter {
         // Fast path: exactly one clause with only var/wildcard params → a bare
         // fun, no case dispatch.
         const auto& cl0 = fn.clauses[0];
-        bool singleSimple = fn.clauses.size() == 1 &&
+        bool singleSimple = fn.clauses.size() == 1 && !cl0.guard &&
             std::all_of(cl0.params.begin(), cl0.params.end(),
                 [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
         if (singleSimple) {
