@@ -4,6 +4,8 @@
 // exports/methods/types, and reload/replacement.
 #include "kexi.hxx"
 #include "../ir/lower.hxx"
+#include "../module/package_metadata.hxx"
+#include "../semantic/imported_interfaces.hxx"
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -34,6 +36,11 @@ public:
 
     auto allLoadedModules() const -> std::vector<const LoadedModule*>;
 
+    auto declarePackage(const kex::module::PackageMetadata& package)
+        -> std::vector<LoadError>;
+
+    auto automaticImportModules() const -> std::vector<const LoadedModule*>;
+
     auto findExport(const std::string& moduleAtom,
                     const std::string& name) const -> const KexiExport*;
 
@@ -60,16 +67,18 @@ public:
 
     auto buildExternalModules() const -> kex::ir::ExternalModules;
 
+    auto buildSemanticInterfaces() const
+        -> kex::semantic::ImportedInterfaces;
+
     auto generateDisplayRegistration(const LoadedUnit& unit) const -> std::string;
 
     auto generateCompletionStubs(const LoadedUnit& unit) const -> std::string;
-
-    auto shortKexName(const std::string& beamAtom) const -> std::string;
 
     auto findEntryByShortName(const std::string& shortName) const -> std::string;
 
 private:
     std::unordered_map<std::string, LoadedUnit> m_units; // keyed by entry atom
+    std::unordered_map<std::string, kex::module::PackageMetadata> m_packages;
     std::string m_lastLoaded;
 };
 

@@ -1,4 +1,4 @@
-# digit?/ok?/error?/some?/none? are type-specific predicates — calling one
+# digit?/ok?/error?/present?/none? are type-specific predicates — calling one
 # on a value outside its ADT family must error, not silently answer
 # `false` (a wrong-type receiver is a caller bug, not a "no"). Only one
 # error per program (it aborts execution), so pick the one most likely to

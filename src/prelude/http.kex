@@ -1,3 +1,5 @@
+type NetworkError = ConnectionRefused | Timeout | DnsError | SslError | NotImplemented | MockEmpty | Unknown
+
 record HttpResponse do
   status  : Integer
   body    : String
@@ -5,7 +7,7 @@ record HttpResponse do
 end
 
 record HttpError do
-  kind    : String
+  kind    : NetworkError
   message : String
 end
 
@@ -16,28 +18,118 @@ end
 
 foul module Http do
   get     : String -> Result<HttpResponse, HttpError>
-  get     : (String, HttpOptions) -> Result<HttpResponse, HttpError>
-  post    : (String, String) -> Result<HttpResponse, HttpError>
-  post    : (String, String, HttpOptions) -> Result<HttpResponse, HttpError>
-  put     : (String, String) -> Result<HttpResponse, HttpError>
-  put     : (String, String, HttpOptions) -> Result<HttpResponse, HttpError>
-  patch   : (String, String) -> Result<HttpResponse, HttpError>
-  patch   : (String, String, HttpOptions) -> Result<HttpResponse, HttpError>
+  get     : String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let get(url) = Kex.Intrinsic.Http.get(url)
+  let get(url, opts) = Kex.Intrinsic.Http.get(url, opts)
+
+  post    : String -> String -> Result<HttpResponse, HttpError>
+  post    : String -> String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let post(url, body) = Kex.Intrinsic.Http.post(url, body)
+  let post(url, body, opts) = Kex.Intrinsic.Http.post(url, body, opts)
+
+  put     : String -> String -> Result<HttpResponse, HttpError>
+  put     : String -> String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let put(url, body) = Kex.Intrinsic.Http.put(url, body)
+  let put(url, body, opts) = Kex.Intrinsic.Http.put(url, body, opts)
+
+  patch   : String -> String -> Result<HttpResponse, HttpError>
+  patch   : String -> String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let patch(url, body) = Kex.Intrinsic.Http.patch(url, body)
+  let patch(url, body, opts) = Kex.Intrinsic.Http.patch(url, body, opts)
+
   delete  : String -> Result<HttpResponse, HttpError>
-  delete  : (String, HttpOptions) -> Result<HttpResponse, HttpError>
+  delete  : String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let delete(url) = Kex.Intrinsic.Http.delete(url)
+  let delete(url, opts) = Kex.Intrinsic.Http.delete(url, opts)
+
   head    : String -> Result<HttpResponse, HttpError>
-  head    : (String, HttpOptions) -> Result<HttpResponse, HttpError>
+  head    : String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let head(url) = Kex.Intrinsic.Http.head(url)
+  let head(url, opts) = Kex.Intrinsic.Http.head(url, opts)
+
   options : String -> Result<HttpResponse, HttpError>
-  options : (String, HttpOptions) -> Result<HttpResponse, HttpError>
+  options : String -> HttpOptions -> Result<HttpResponse, HttpError>
+  let options(url) = Kex.Intrinsic.Http.options(url)
+  let options(url, opts) = Kex.Intrinsic.Http.options(url, opts)
 end
 
 # Deterministic HTTP responses for tests. Responses are consumed in FIFO order;
 # an empty queue makes the next request return Error(HttpError).
+# All Mock.* sub-modules live in a single `module Mock` block to avoid
+# duplicate top-level `Mock` modules when prelude files are merged.
 foul module Mock do
+  foul module FS do
+    File : FS.FilePath -> String -> Unit
+    Directory : FS.FilePath -> Unit
+    clear : Unit -> Unit
+
+    foul File(path: FS.FilePath, content: String) -> Unit do
+      return Kex.Intrinsic.FS.file(path, content)
+    end
+
+    foul Directory(path: FS.FilePath) -> Unit do
+      return Kex.Intrinsic.FS.directory(path)
+    end
+
+    foul clear() -> Unit do
+      return Kex.Intrinsic.FS.clear()
+    end
+  end
+
   foul module Http do
     start   : Unit -> Unit
-    respond : (Integer, String) -> Unit
-    respond : (Integer, String, Map<String, String>) -> Unit
+    respond : Integer -> String -> Unit
+    respond : Integer -> String -> Map<String, String> -> Unit
     stop    : Unit -> Unit
+
+    foul start() -> Unit do
+      return Kex.Intrinsic.Http.mockStart()
+    end
+
+    foul respond(status: Integer, body: String) -> Unit do
+      return Kex.Intrinsic.Http.mockRespond(status, body)
+    end
+
+    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Unit do
+      return Kex.Intrinsic.Http.mockRespond(status, body, headers)
+    end
+
+    foul stop() -> Unit do
+      return Kex.Intrinsic.Http.mockStop()
+    end
+  end
+
+  foul module IO do
+    foul start() -> Unit do
+      return Kex.Intrinsic.IO.ioMockStart()
+    end
+
+    foul stop() -> Unit do
+      return Kex.Intrinsic.IO.ioMockStop()
+    end
+
+    foul output() -> String do
+      return Kex.Intrinsic.IO.ioMockOutput()
+    end
+
+    foul clear() -> Unit do
+      return Kex.Intrinsic.IO.ioMockClear()
+    end
+
+    foul input(lines) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput(lines)
+    end
+
+    foul input(first, second) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second])
+    end
+
+    foul input(first, second, third) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third])
+    end
+
+    foul input(first, second, third, fourth) -> Unit do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
+    end
   end
 end

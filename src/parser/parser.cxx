@@ -256,7 +256,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
             mod->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
             mod->body.push_back(parseFunctionDef());
-        } else if (check(TokenType::LowerIdent)) {
+        } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) {
             mod->body.push_back(parseTypeAnnotation());
         } else {
             error("Unexpected token in module body: " + std::string(tokenTypeName(peek().type)));
@@ -769,7 +769,7 @@ auto Parser::parseParam() -> ast::Param {
     }
 
     // name: Type = default  or  name = default  or  just name
-    if (check(TokenType::LowerIdent)) {
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
         auto& nameToken = advance();
         param.name = nameToken.value;
 
@@ -790,7 +790,7 @@ auto Parser::parseParam() -> ast::Param {
 
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
     auto ann = std::make_unique<ast::TypeAnnotation>();
-    if (check(TokenType::LowerIdent) || check(TokenType::After))
+    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) || check(TokenType::After))
         ann->name = advance().value;
     else
         error("Expected name");
@@ -1529,8 +1529,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Lower ident (variable or function call)
-    if (check(TokenType::LowerIdent)) {
+    // Lower ident (variable or function call). `timeout` is a keyword only in
+    // the receive-clause position; elsewhere it remains a valid source name.
+    if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
         auto name = advance().value;
 
         // Function call with parens
@@ -1931,7 +1932,13 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 
     std::vector<ast::MatchClause> clauses;
     while (!check(TokenType::End) && !check(TokenType::After) && !atEnd()) {
-        clauses.push_back(parseMatchClause());
+        auto clause = parseMatchClause();
+        if (clause.guard) {
+            error("'when' guards are not supported on receive clauses; "
+                  "check the condition inside the clause body instead");
+        }
+        clause.guard.reset();
+        clauses.push_back(std::move(clause));
         skipNewlines();
     }
 
@@ -2935,6 +2942,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::None:
         case TokenType::Atom:
         case TokenType::LowerIdent:
+        case TokenType::Timeout:
         case TokenType::UpperIdent:
         case TokenType::This:
         case TokenType::LParen:

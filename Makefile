@@ -4,6 +4,7 @@ BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
+STDLIBDIR ?= $(PREFIX)/share/kex/prelude
 
 WASM_BUILD_DIR = build-wasm
 
@@ -152,10 +153,11 @@ spec-prelude-beam: build
 # any mismatch means the two backends produce different output for that
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
-# dispatches per-tag). Informational: prints a pass/fail count but always
-# exits 0. Strings are UTF-8 binaries and Chars are tagged {'Char', N}
+# dispatches per-tag). Informational only — never fails the build (BEAM is a
+# secondary backend, kept non-gating by design).
+# Strings are UTF-8 binaries and Chars are tagged {'Char', N}
 # tuples on BEAM, so the old charlist ambiguities ([] vs "", [Int] vs
-# String, Char vs Int) are gone — the suite matches the walker 109/109.
+# String, Char vs Int) are gone.
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \
@@ -235,12 +237,21 @@ check: build
 install:
 	@test -x "$(KEX)" || { echo "Missing $(KEX). Run 'make build' first."; exit 1; }
 	@mkdir -p "$(BINDIR)"
+	@mkdir -p "$(STDLIBDIR)"
 	@install -m 755 "$(KEX)" "$(BINDIR)/kex"
-	@echo "Installed kex to $(BINDIR)/kex"
+	@install -m 644 src/prelude/*.kex "$(STDLIBDIR)/"
+	@if [ -d "$(BUILD_DIR)/runtime/beam" ]; then \
+		mkdir -p "$(PREFIX)/share/kex/runtime"; \
+		install -m 644 "$(BUILD_DIR)"/runtime/beam/*.beam "$(PREFIX)/share/kex/runtime/"; \
+	fi
+	@echo "Installed kex to $(BINDIR)/kex and stdlib to $(STDLIBDIR)"
 
 uninstall:
 	@rm -f "$(BINDIR)/kex"
-	@echo "Removed $(BINDIR)/kex"
+	@rm -f "$(STDLIBDIR)"/*.kex
+	@rm -f "$(PREFIX)/share/kex/runtime"/*.beam
+	@rmdir "$(STDLIBDIR)" 2>/dev/null || true
+	@echo "Removed kex from $(BINDIR) and stdlib from $(STDLIBDIR)"
 
 clean:
 	@rm -rf $(BUILD_DIR)

@@ -7,7 +7,7 @@ type Result<A, E> = Ok(A) | Error(E)
 
 type Either<A, B> = Left(A) | Right(B)
 
-# Option/Result methods (map, flatMap, some?, none?, ok?, error?, or) come from
+# Option/Result methods (map, flatMap, present?, none?, ok?, error?, or) come from
 # the sealed stdlib prelude — see src/prelude/optional.kex.
 
 # User-defined extensions on generic types still work — just not redefinitions

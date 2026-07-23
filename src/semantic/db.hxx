@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../ast/ast.hxx"
+#include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "types.hxx"
 #include <string>
@@ -37,6 +38,9 @@ struct FileState {
 
 class SemanticDB {
 public:
+    auto setImportedInterfaces(const ImportedInterfaces* ifaces) -> void {
+        m_imports = ifaces;
+    }
     auto updateFile(const std::string& path, std::string source) -> void;
     auto removeFile(const std::string& path) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;
@@ -86,6 +90,7 @@ private:
     std::unordered_map<std::string, std::vector<SymbolInfo*>> m_moduleExports;
     std::vector<std::string> m_moduleRoots{"lib", "src"};
     std::unordered_set<std::string> m_loadingModules;
+    const ImportedInterfaces* m_imports = nullptr;
     std::unordered_set<std::string> m_resolvingFiles;
     std::unordered_map<std::string, std::vector<std::string>> m_shadowedModulePaths;
 

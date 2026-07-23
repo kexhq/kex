@@ -20,8 +20,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].second   # => Just(2)
   #   [1].second         # => None
   second :> X?
-  let second(@[_, x | _]) = Just(x)
-  let second(@_) = None
+  let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
 
   # Returns the third element wrapped in +Just+, or +None+ if the list has
   # fewer than three elements.
@@ -32,8 +31,7 @@ make [X], implement: Enumerable do
   #   [1, 2, 3].third   # => Just(3)
   #   [1, 2].third      # => None
   third :> X?
-  let third(@[_, _, x | _]) = Just(x)
-  let third(@_) = None
+  let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
 
   # Returns all elements after the first. Returns +[]+ for an empty or
   # single-element list.
@@ -45,8 +43,7 @@ make [X], implement: Enumerable do
   #   [1].rest         # => []
   #   [].rest          # => []
   rest :> [X]
-  let rest(@[]) = []
-  let rest(@[_|xs]) = xs
+  let rest = Kex.Intrinsic.List.drop(this, 1)
 
   # Returns the last element wrapped in +Just+, or +None+ if the list is empty.
   #
@@ -68,6 +65,10 @@ make [X], implement: Enumerable do
   #   [1, 2, 3, 4].count(&even?)   # => 2
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
+
+  # Compatibility spelling shared with String.
+  length :> Integer
+  let length = Kex.Intrinsic.List.length(this)
 
   # count(pred) is provided by the Enumerable trait.
   count :> (X -> Bool) -> Integer
@@ -143,7 +144,6 @@ make [X], implement: Enumerable do
   # @example
   #   [1, 2, 3, 4].reject { |x| x.even? }   # => [1, 3]
   reject :> (X -> Bool) -> [X]
-  let reject(pred) = this.filter { |x| !pred(x) }
 
   # Calls +f+ with each element for its side effects. Returns unit.
   #
@@ -158,14 +158,24 @@ make [X], implement: Enumerable do
   # element via +f+.
   #
   # @param acc [Acc]   initial accumulator value
-  # @param f   [Acc, X -> Acc]
+  # @param f   [Acc -> X -> Acc]
   # @return [Acc]
   #
   # @example
   #   [1, 2, 3].reduce(0) { |acc, x| acc + x }   # => 6
   #   [1, 2, 3].reduce(1) { |acc, x| acc * x }   # => 6
-  reduce :> (Acc, (Acc, X -> Acc)) -> Acc
+  reduce :> A -> (A -> X -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
+
+  let map(f) = Kex.Intrinsic.List.map(this, f)
+  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+  let each(f) = Kex.Intrinsic.List.each(this, f)
+  let find(pred) = Kex.Intrinsic.List.find(this, pred)
+  let flatMap(f) = Kex.Intrinsic.List.flatMap(this, f)
+  let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
+  let all?(pred) = Kex.Intrinsic.List.all?(this, pred)
+  let any?(pred) = Kex.Intrinsic.List.any?(this, pred)
+  let count(pred) = Kex.Intrinsic.List.count(this, pred)
 
   # Returns the element at position +i+ (0-based) wrapped in +Just+,
   # or +None+ if the index is out of range.
@@ -178,6 +188,12 @@ make [X], implement: Enumerable do
   #   [10, 20, 30].at(9)   # => None
   at :> Integer -> X?
   let at(i) = Kex.Intrinsic.List.at(this, i)
+
+  get :> Integer -> X?
+  let get(i) = Kex.Intrinsic.List.get(this, i)
+
+  get :> Integer -> X -> X
+  let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
 
   # Returns +true+ if +elem+ is present in the list.
   #
@@ -314,24 +330,14 @@ make [X], implement: Enumerable do
   # +comp+ should return +true+ when its first argument should come before
   # its second.
   #
-  # @param comp [(X, X) -> Bool]
+  # @param comp [X -> X -> Bool]
   # @return [[X]]
   #
   # @example
   #   [3, 1, 2].sort { |a, b| a > b }   # => [3, 2, 1]
-  sort :> ((X, X) -> Bool) -> [X]
+  sort :> (X -> X -> Bool) -> [X]
   let sort(comp) = Kex.Intrinsic.List.sort(this, comp)
 
-  # Converts the collection to another representation.
-  # Most commonly used to materialise a +Range+ into a +List+.
-  #
-  # @param type [Y]
-  # @return [Y?]
-  #
-  # @example
-  #   (1..5).to(List)    # => Just([1, 2, 3, 4, 5])
-  #   "42".to(Integer)   # => Just(42)
-  to :> Y -> Y?
 end
 
 make [Number] do
@@ -382,7 +388,7 @@ make [Number] do
   # @example
   #   [3, 1, 2].min   # => Just(1)
   #   [].min          # => None
-  min :> Number?
+  min :> X?
   let min = Kex.Intrinsic.List.min(this)
 
   # Returns the element with the smallest +f+ key wrapped in +Just+, or
@@ -403,7 +409,7 @@ make [Number] do
   # @example
   #   [3, 1, 2].max   # => Just(3)
   #   [].max          # => None
-  max :> Number?
+  max :> X?
   let max = Kex.Intrinsic.List.max(this)
 
   # Returns the element with the largest +f+ key wrapped in +Just+, or

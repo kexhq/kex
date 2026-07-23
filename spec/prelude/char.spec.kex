@@ -23,6 +23,18 @@ describe("Char — predicates") do
   end
 end
 
+describe("Char — case conversion") do
+  it("upperCase and lowerCase preserve Char") do
+    assert('a'.upperCase == 'A')
+    assert('Z'.lowerCase == 'z')
+  end
+
+  it("case conversion works as a String mapping callback") do
+    assert("aBc".map(&.upperCase) == "ABC")
+    assert("AbC".map(&.lowerCase) == "abc")
+  end
+end
+
 describe("Char — in?") do
   it("in? checks membership in a char range") do
     assert('b'.in?('a'..'z'))

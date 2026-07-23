@@ -1,6 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 project(kex LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -69,7 +71,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
 endif()
 
 add_library(kex_lib
-    src/codegen/core_erlang.cxx
     src/ir/lower.cxx
     src/ir/emit_core.cxx
     src/lexer/token.cxx
@@ -79,12 +80,12 @@ add_library(kex_lib
     src/semantic/analyzer.cxx
     src/semantic/types.cxx
     src/semantic/traits.cxx
-    src/semantic/stdlib_signatures.cxx
     src/semantic/typechecker.cxx
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
     src/module/resolver.cxx
+    src/module/package_metadata.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
     src/interpreter/fiber.cxx
@@ -107,6 +108,7 @@ add_library(kex_lib
     src/interpreter/stdlib/eval.cxx
     src/interpreter/stdlib/http.cxx
     src/interpreter/stdlib/web.cxx
+    src/interpreter/stdlib/kex.cxx
     src/beam/beam_file.cxx
     src/beam/etf.cxx
     src/beam/kexi.cxx
@@ -116,15 +118,15 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
-# The Kex-written stdlib (src/prelude/*.kex) is loaded at runtime by the
-# Evaluator (loadPrelude) so it shadows the native builtins. kex_lib needs the
-# path baked in — not just the `kex` executable — so the unit tests, which link
-# kex_lib directly, exercise the same prelude the CLI does.
-target_compile_definitions(kex_lib PUBLIC
-    KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
+# Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
+# no _NSGetExecutablePath) so bake the source path in at compile time.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_definitions(kex_lib PUBLIC
+        KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
+endif()
 
 # GMP backs the arbitrary-precision `Integer` default (see
-# docs/type-system-plan.md's Runtime representation section). Required,
+# docs/types.md's Runtime representation section). Required,
 # not optional like readline below.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # Wasm has no meaningful dynamic-linking story here, so this is a
@@ -198,10 +200,9 @@ find_path(READLINE_INCLUDE readline/readline.h HINTS /opt/homebrew/opt/readline/
 
 # ── Erlang runtime beams ────────────────────────────────────────────────
 # Pre-compile runtime/src/*.erl into the build tree so that BEAM runs don't
-# pay an erlc spawn (~0.15s per module) on every invocation. The absolute
-# output path is compiled into the binary via KEX_RUNTIME_BEAM_DIR; main.cxx
-# uses it directly as a -pa path, falling back to per-run compilation only
-# when the pre-built beams are missing (e.g. running outside the build tree).
+# pay an erlc spawn (~0.15s per module) on every invocation.
+# Missing artifacts are diagnosed; user operations never compile runtime
+# source implicitly.
 find_program(ERLC_EXECUTABLE erlc)
 set(KEX_RUNTIME_BEAM_DIR "${CMAKE_BINARY_DIR}/runtime/beam")
 file(GLOB KEX_RUNTIME_ERL CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/runtime/src/*.erl")
@@ -223,25 +224,28 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     add_custom_target(kex_runtime_beams DEPENDS ${KEX_RUNTIME_BEAMS})
     set(KEX_HAS_RUNTIME_BEAMS TRUE)
 else()
-    message(STATUS "Runtime beams: skipped (erlc not found); BEAM runs will compile on demand")
+    message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
-target_compile_definitions(kex PRIVATE
-    # KEX_PRELUDE_DIR is inherited (PUBLIC) from kex_lib.
-    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}"
-)
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
 endif()
 
-# ── Shared Kex prelude beam ──────────────────────────────────────────────
-# The stdlib is written in Kex (src/prelude/*.kex) and compiled once into a
-# shared kex_prelude.beam, placed alongside the runtime beams so BEAM runs put
-# it on the -pa path and lazy-load it on first use. Built by the freshly-built
-# kex binary (Kex → Core Erlang → beam), so it depends on `kex` and the runtime
-# intrinsic beams it calls (kex_intrinsic_*).
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    install(TARGETS kex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(DIRECTORY src/prelude/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/prelude
+        FILES_MATCHING PATTERN "*.kex")
+endif()
+
+# ── Kex stdlib artifact unit ─────────────────────────────────────────────
+# The stdlib is written in Kex (src/prelude/*.kex) and compiled into a
+# kex_prelude.beam entry plus Kex.* companion modules. They are placed beside
+# the runtime beams so BEAM runs put the unit on the -pa path and lazy-load it
+# on first use. Built by the freshly-built kex binary (Kex → Core Erlang →
+# beam), so it depends on `kex` and the intrinsic beams it calls.
 if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
     file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
@@ -253,13 +257,17 @@ if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         VERBATIM
     )
     add_custom_target(kex_prelude_beam ALL DEPENDS ${KEX_PRELUDE_BEAM})
+    # --build-prelude also emits Kex.* companion modules whose filenames are
+    # discovered only at build time, so install the complete beam directory.
+    install(DIRECTORY "${KEX_RUNTIME_BEAM_DIR}/"
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/runtime
+        FILES_MATCHING PATTERN "*.beam")
 endif()
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     # NODERAWFS maps every fs call straight through to Node's real host
     # filesystem (no MEMFS sandbox, no --preload-file needed) — this is
     # what lets `node build-wasm/kex.js some/real/path.kex` work at all,
-    # since KEX_PRELUDE_DIR above is still a real native path baked in at
-    # compile time. Deliberately not applied to kex_repl_wasm (below),
+    # Deliberately not applied to kex_repl_wasm (below),
     # which needs to run in an actual browser, where NODERAWFS doesn't
     # apply — that target uses --preload-file instead. This is what makes
     # `make spec-wasm` possible at all.
@@ -301,8 +309,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # Embeds src/prelude/*.kex into MEMFS at "/prelude" so the wasm
         # REPL's SemanticDB can index the same prelude the native REPL does
         # for tab completion (see src/common/prelude_loader.hxx) — wasm has
-        # no real filesystem, so KEX_PRELUDE_DIR (a native fs path) doesn't
-        # apply here.
+        # no native installation filesystem.
         --preload-file
         "${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
     )
@@ -355,11 +362,17 @@ add_test(NAME module_resolver_test COMMAND module_resolver_test)
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)
 target_include_directories(semantic_test PRIVATE tests)
+target_compile_definitions(semantic_test PRIVATE
+    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+add_dependencies(semantic_test kex_prelude_beam)
 add_test(NAME semantic_test COMMAND semantic_test)
 
 add_executable(interpreter_test tests/interpreter_test.cxx)
 target_link_libraries(interpreter_test PRIVATE kex_lib)
 target_include_directories(interpreter_test PRIVATE tests)
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_link_options(interpreter_test PRIVATE -sNODERAWFS=1)
+endif()
 add_test(NAME interpreter_test COMMAND interpreter_test)
 
 add_executable(examples_test tests/examples_test.cxx)
@@ -386,6 +399,26 @@ target_include_directories(repl_cli_test PRIVATE tests)
 target_compile_definitions(repl_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(repl_cli_test kex)
 add_test(NAME repl_cli_test COMMAND repl_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+add_test(NAME installed_layout_test
+    COMMAND ${CMAKE_COMMAND}
+        -DKEX_BUILD_DIR=${CMAKE_BINARY_DIR}
+        -DKEX_INSTALL_TEST_PREFIX=${CMAKE_BINARY_DIR}/test-install
+        -P ${CMAKE_SOURCE_DIR}/tests/installed_layout_test.cmake)
+
+add_test(NAME dependency_layering_test
+    COMMAND ${CMAKE_COMMAND}
+        -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+        -P ${CMAKE_SOURCE_DIR}/tests/dependency_layering_test.cmake)
+
+if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    add_test(NAME prelude_artifact_test
+        COMMAND ${CMAKE_COMMAND}
+            -DKEX_BINARY=$<TARGET_FILE:kex>
+            -DKEX_SOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DKEX_ARTIFACT_TEST_DIR=${CMAKE_BINARY_DIR}/test-prelude-artifacts
+            -P ${CMAKE_SOURCE_DIR}/tests/prelude_artifact_test.cmake)
+endif()
 
 # Verifies ANSI coloring is consistent across the REPL, IO.inspect, and error
 # diagnostics by driving the real `kex` binary. colorizeMessage() and the

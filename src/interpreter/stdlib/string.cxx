@@ -5,22 +5,23 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerStringBuiltins() -> void {
-    m_globalEnv->define("String", Value::module("String"));
-    m_globalEnv->define("Char",   Value::module("Char"));
-    m_globalEnv->define("Bool",   Value::module("Bool"));
-    m_globalEnv->define("Atom",   Value::module("Atom"));
+    defineModule("String");
+    defineModule("Char");
+    defineModule("Bool");
+    defineModule("Atom");
 
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+    auto regCharPredicate = [this](const std::string& publicName,
+                                   const std::string& intrinsicName,
+                                   NativeFunc fn) {
+        definePublic(publicName, fn);
+        defineIntrinsic("Char::" + intrinsicName, std::move(fn));
     };
 
     // String.at(i) -> Char (not a 1-char String) — Char and String are
     // interchangeable for comparisons/concatenation (see valuesEqual/+),
     // so existing code comparing the result against a string literal
     // keeps working either way.
-    reg("at", [](std::vector<ValuePtr> args) -> ValuePtr {
+    NativeFunc at = [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* idx = std::get_if<IntValue>(&args[1]->data);
         if (!idx || idx->value < 0) return Value::none();
@@ -31,11 +32,12 @@ auto Evaluator::registerStringBuiltins() -> void {
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::none();
         return i < str->value.size() ? Value::character(str->value[i]) : Value::none();
-    });
+    };
+    defineIntrinsic("List::at", std::move(at));
 
     // Kex.Intrinsic.String.chars — the string's characters as a [Char].
     // Backs the prelude's String `chars` (src/prelude/string.kex).
-    reg("chars", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::chars", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
@@ -48,28 +50,28 @@ auto Evaluator::registerStringBuiltins() -> void {
     // c.digit? -> Bool — true for '0'..'9'. UFCS-callable on a Char.
     // Throws for a non-Char receiver rather than silently answering
     // `false` — "hello".digit? or 5.digit? are caller bugs, not "no".
-    reg("digit?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("digit?", "is_digit", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("digit? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("digit? expects a Char, got " + args[0]->typeName());
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
-    reg("alpha?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("alpha?", "is_alpha", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("alpha? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
         return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
     });
 
-    reg("space?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
         return Value::boolean(std::isspace(static_cast<unsigned char>(c->value)) != 0);
     });
 
-    reg("startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* pre = std::get_if<StringValue>(&args[1]->data);
@@ -77,7 +79,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(str->value.starts_with(pre->value));
     });
 
-    reg("endsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::endsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);
         auto* suf = std::get_if<StringValue>(&args[1]->data);
@@ -85,7 +87,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(str->value.ends_with(suf->value));
     });
 
-    reg("contains?", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::contains?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         // String.contains?(substr)
         auto* str = std::get_if<StringValue>(&args[0]->data);
@@ -110,7 +112,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(false);
     });
 
-    reg("split", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::split", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
@@ -134,7 +136,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::list(std::move(parts));
     });
 
-    reg("trim", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::trim", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
@@ -145,7 +147,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::string(s.substr(start, end - start + 1));
     });
 
-    reg("upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::upperCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.upperCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
@@ -157,7 +159,7 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::string(result);
     });
 
-    reg("lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("String::lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.lowerCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
@@ -171,7 +173,7 @@ auto Evaluator::registerStringBuiltins() -> void {
 
     // Also handles List (reversing elements), since the same `reverse`
     // name is used UFCS-style on both strings and lists.
-    reg("reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("List::reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             std::string result(str->value.rbegin(), str->value.rend());

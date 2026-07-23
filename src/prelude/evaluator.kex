@@ -5,11 +5,15 @@
 module Evaluator do
   # Evaluates a full Kex program string.
   run : String -> Result<Any, String>
-  run : (String, EvaluatorOptions) -> Result<Any, String>
+  run : String -> EvaluatorOptions -> Result<Any, String>
+  let run(source) = Kex.Intrinsic.Evaluator.run(source)
+  let run(source, opts) = Kex.Intrinsic.Evaluator.run(source, opts)
 
   # Evaluates a single Kex expression.
   runExpression : String -> Result<Any, String>
-  runExpression : (String, EvaluatorOptions) -> Result<Any, String>
+  runExpression : String -> EvaluatorOptions -> Result<Any, String>
+  let runExpression(source) = Kex.Intrinsic.Evaluator.runExpression(source)
+  let runExpression(source, opts) = Kex.Intrinsic.Evaluator.runExpression(source, opts)
 
   record EvaluatorOptions do
     allow : [Atom] = [:Math, :List, :String, :Integer, :Map, :Stream]

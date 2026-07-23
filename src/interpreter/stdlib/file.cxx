@@ -34,16 +34,11 @@ static auto splitLines(const std::string& content) -> std::vector<ValuePtr> {
 
 auto Evaluator::registerFileBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
     };
 
-    m_globalEnv->define("File", Value::module("File"));
-    m_globalEnv->define("FileHandle", Value::module("FileHandle"));
-
-    // File.open(path, mode) -> FileHandle?
-    // File.open(path, mode, block) -> block result or None on failure
+    // File.open(path, mode) -> FileHandle  (raises on failure)
+    // File.open(path, mode, block) -> T?  (None if file doesn't exist)
     reg("File::open", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
@@ -58,11 +53,11 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!isMocked) {
             auto flags = modeFlags(args[1]);
             fs = std::make_shared<std::fstream>(path, flags | std::ios::binary);
-            if (!fs->is_open()) return Value::none();
+            if (!fs->is_open()) {
+                if (args.size() >= 3) return Value::none();
+                throw std::runtime_error("File.open: cannot open '" + path + "'");
+            }
         } else {
-            // Mocked: open an in-memory stringstream masquerading as fstream.
-            // We use a real fstream opened on /dev/null so the handle value
-            // exists; actual reads/writes go through the mock registry methods.
             fs = std::make_shared<std::fstream>();
         }
 
@@ -79,32 +74,27 @@ auto Evaluator::registerFileBuiltins() -> void {
         return handle;
     });
 
-    // FileHandle.readLine(handle) -> String?
-    reg("FileHandle::readLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    // --- Text I/O (mirrors IO.getLine / IO.get / IO.printLine / IO.print) ---
+
+    auto mockCursor = [this](const std::string& path) -> size_t {
+        std::string cursorKey = "__mock_pos__" + path;
+        auto posIt = m_mockFiles.find(cursorKey);
+        if (posIt == m_mockFiles.end()) return 0;
+        try { return static_cast<size_t>(std::stoul(posIt->second)); } catch (...) { return 0; }
+    };
+    auto setMockCursor = [this](const std::string& path, size_t pos) {
+        m_mockFiles["__mock_pos__" + path] = std::to_string(pos);
+    };
+
+    // handle.getLine -> String?
+    reg("FileHandle::getLine", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
-            // Mocked: use stream offset stored externally — use stream pos hack:
-            // we store a stringstream in h->stream but that doesn't work.
-            // Simplest: the mock handle reads from a stringstream we create here.
-            // We need per-handle state — use a cursor in the path-keyed mock.
-            // For now: return the first line and pop it (not ideal but functional).
-            // A better approach is to use a position cursor.
-            //
-            // Better: use the fstream's tellg as a cursor into the mock content.
-            // We stuff the mock content into the fstream if it's not open.
-            // Actually, let's store cursor in the stream itself using seekg/tellg
-            // on a stringbuf. Since std::fstream can't use a stringbuf, we'll
-            // simulate with a cursor embedded in the path: __mock_pos__path.
-            std::string cursorKey = "__mock_pos__" + h->path;
-            auto posIt = m_mockFiles.find(cursorKey);
-            size_t pos = 0;
-            if (posIt != m_mockFiles.end()) {
-                try { pos = static_cast<size_t>(std::stoul(posIt->second)); } catch (...) {}
-            }
+            size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
             if (pos >= content.size()) return Value::none();
             auto end = content.find('\n', pos);
@@ -116,7 +106,7 @@ auto Evaluator::registerFileBuiltins() -> void {
                 line = content.substr(pos, end - pos);
                 pos = end + 1;
             }
-            m_mockFiles[cursorKey] = std::to_string(pos);
+            setMockCursor(h->path, pos);
             return Value::string(line);
         }
 
@@ -126,24 +116,78 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::string(line);
     });
 
-    // FileHandle.read(handle) -> String?  (read remaining content)
-    reg("FileHandle::read", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    // handle.get -> String? (single character)
+    reg("FileHandle::get", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::none();
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
-            std::string cursorKey = "__mock_pos__" + h->path;
-            size_t pos = 0;
-            auto posIt = m_mockFiles.find(cursorKey);
-            if (posIt != m_mockFiles.end()) {
-                try { pos = static_cast<size_t>(std::stoul(posIt->second)); } catch (...) {}
-            }
+            size_t pos = mockCursor(h->path);
+            const auto& content = mockIt->second;
+            if (pos >= content.size()) return Value::none();
+            setMockCursor(h->path, pos + 1);
+            return Value::string(std::string(1, content[pos]));
+        }
+
+        if (!h->stream || !h->stream->is_open()) return Value::none();
+        char c;
+        if (!h->stream->get(c)) return Value::none();
+        return Value::string(std::string(1, c));
+    });
+
+    // handle.printLine(msg) -> Bool
+    reg("FileHandle::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) return Value::boolean(false);
+        std::string content = args[1]->toString();
+
+        auto mockIt = m_mockFiles.find(h->path);
+        if (mockIt != m_mockFiles.end()) {
+            mockIt->second += content + "\n";
+            return Value::boolean(true);
+        }
+
+        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
+        *h->stream << content << "\n";
+        return Value::boolean(static_cast<bool>(*h->stream));
+    });
+
+    // handle.print(msg) -> Bool
+    reg("FileHandle::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 2) return Value::boolean(false);
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) return Value::boolean(false);
+        std::string content = args[1]->toString();
+
+        auto mockIt = m_mockFiles.find(h->path);
+        if (mockIt != m_mockFiles.end()) {
+            mockIt->second += content;
+            return Value::boolean(true);
+        }
+
+        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
+        *h->stream << content;
+        return Value::boolean(static_cast<bool>(*h->stream));
+    });
+
+    // --- Binary/raw I/O ---
+
+    // handle.read -> String? (remaining content)
+    reg("FileHandle::read", [this, mockCursor, setMockCursor](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!h) return Value::none();
+
+        auto mockIt = m_mockFiles.find(h->path);
+        if (mockIt != m_mockFiles.end()) {
+            size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
             if (pos >= content.size()) return Value::string("");
             auto remaining = content.substr(pos);
-            m_mockFiles[cursorKey] = std::to_string(content.size());
+            setMockCursor(h->path, content.size());
             return Value::string(remaining);
         }
 
@@ -153,7 +197,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::string(buf.str());
     });
 
-    // FileHandle.write(handle, content) -> Bool
+    // handle.write(data) -> Bool
     reg("FileHandle::write", [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
@@ -171,46 +215,24 @@ auto Evaluator::registerFileBuiltins() -> void {
         return Value::boolean(static_cast<bool>(*h->stream));
     });
 
-    // FileHandle.writeLine(handle, content) -> Bool
-    reg("FileHandle::writeLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
-        auto* h = std::get_if<FileHandleValue>(&args[0]->data);
-        if (!h) return Value::boolean(false);
-        std::string content = args[1]->toString();
+    // --- Lifecycle ---
 
-        auto mockIt = m_mockFiles.find(h->path);
-        if (mockIt != m_mockFiles.end()) {
-            mockIt->second += content + "\n";
-            return Value::boolean(true);
-        }
-
-        if (!h->stream || !h->stream->is_open()) return Value::boolean(false);
-        *h->stream << content << "\n";
-        return Value::boolean(static_cast<bool>(*h->stream));
-    });
-
-    // FileHandle.eof?(handle) -> Bool
-    reg("FileHandle::eof?", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    // handle.atEnd? -> Bool
+    reg("FileHandle::atEnd?", [this, mockCursor](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::boolean(true);
         auto* h = std::get_if<FileHandleValue>(&args[0]->data);
         if (!h) return Value::boolean(true);
 
         auto mockIt = m_mockFiles.find(h->path);
         if (mockIt != m_mockFiles.end()) {
-            std::string cursorKey = "__mock_pos__" + h->path;
-            size_t pos = 0;
-            auto posIt = m_mockFiles.find(cursorKey);
-            if (posIt != m_mockFiles.end()) {
-                try { pos = static_cast<size_t>(std::stoul(posIt->second)); } catch (...) {}
-            }
-            return Value::boolean(pos >= mockIt->second.size());
+            return Value::boolean(mockCursor(h->path) >= mockIt->second.size());
         }
 
         if (!h->stream) return Value::boolean(true);
         return Value::boolean(h->stream->eof());
     });
 
-    // FileHandle.close(handle) -> Unit
+    // handle.close -> Unit
     reg("FileHandle::close", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (!args.empty()) {
             if (auto* h = std::get_if<FileHandleValue>(&args[0]->data)) {
@@ -218,6 +240,27 @@ auto Evaluator::registerFileBuiltins() -> void {
             }
         }
         return Value::unit();
+    });
+
+    // Public FileHandle spellings are Kex methods; these aliases keep their
+    // primitive ABI independent from the older internal IO-style names.
+    for (const auto& [publicName, primitiveName] :
+         std::initializer_list<std::pair<const char*, const char*>>{
+             {"readLine", "getLine"}, {"writeLine", "printLine"},
+             {"read", "read"}, {"write", "write"},
+             {"eof?", "atEnd?"}, {"close", "close"}}) {
+        if (auto value = m_intrinsicEnv->get("FileHandle::" + std::string(primitiveName)))
+            defineIntrinsic("FileHandle::" + std::string(publicName), value);
+    }
+    defineIntrinsic("FileHandle::feed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* handle = std::get_if<FileHandleValue>(&args[0]->data);
+        if (!handle) return Value::none();
+        auto feed = m_intrinsicEnv->get("File::feed");
+        auto* function = feed ? std::get_if<FunctionValue>(&feed->data) : nullptr;
+        return function && function->native
+            ? function->native({Value::string(handle->path)})
+            : Value::none();
     });
 
     // File.read(path) -> String?
@@ -446,12 +489,8 @@ auto Evaluator::registerFileBuiltins() -> void {
 
 auto Evaluator::registerDirectoryBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
     };
-
-    m_globalEnv->define("Directory", Value::module("Directory"));
 
     // Directory.exists?(path) -> Bool  /  Directory.dir?(path) -> Bool
     auto dirExistsFn = [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -638,43 +677,34 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 }
 
 auto Evaluator::registerMockBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
-    m_globalEnv->define("Mock", Value::module("Mock"));
-
-    // Mock.FS — returns a sub-namespace placeholder so Mock.FS.File/Directory/clear work
-    reg("Mock::FS", [](std::vector<ValuePtr>) -> ValuePtr {
-        return Value::module("Mock::FS");
-    });
-
     // Mock.FS.File(path, content) -> Unit  — register an in-memory file
-    reg("Mock::FS::File", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
         m_mockFiles[pathStr->value] = args[1]->toString();
         return Value::unit();
-    });
+    };
 
     // Mock.FS.Directory(path) -> Unit  — register an in-memory directory
-    reg("Mock::FS::Directory", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    auto mockDirectory = [this](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
         m_mockDirs.insert(pathStr->value);
         return Value::unit();
-    });
+    };
 
     // Mock.FS.clear() -> Unit  — reset all FS mocks
-    reg("Mock::FS::clear", [this](std::vector<ValuePtr>) -> ValuePtr {
+    auto mockClear = [this](std::vector<ValuePtr>) -> ValuePtr {
         m_mockFiles.clear();
         m_mockDirs.clear();
         return Value::unit();
-    });
+    };
+
+    defineIntrinsic("FS::file", std::move(mockFile));
+    defineIntrinsic("FS::directory", std::move(mockDirectory));
+    defineIntrinsic("FS::clear", std::move(mockClear));
 }
 
 } // namespace kex::interpreter

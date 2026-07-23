@@ -38,7 +38,6 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/semantic/` — semantic analysis: SemanticDB, collect/resolve passes, typechecker, traits
   - `src/interpreter/` — tree-walk interpreter, fiber/scheduler process runtime, stdlib (stdlib/)
   - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
-  - `src/codegen/` — AST→Core Erlang emitter (core_erlang.hxx/cxx)
   - `src/common/` — shared helpers (color, completion, prelude_loader)
   - `src/prelude/` — prelude `.kex` sources
   - `src/main.cxx` — CLI entry point

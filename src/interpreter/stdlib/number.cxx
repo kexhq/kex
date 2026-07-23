@@ -5,16 +5,10 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerNumberBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
     // asInteger/integerResult (value.hxx) treat IntValue and BigIntValue
-    // uniformly, so modulo/abs/even?/odd? work the same on a value that's
-    // overflowed into the bignum representation as on a plain Int.
-    reg("modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // uniformly, so modulo/abs work the same on a value that's overflowed
+    // into the bignum representation as on a plain Int.
+    defineIntrinsic("Integer::modulo", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::integer(0);
         auto a = asInteger(args[0]);
         auto b = asInteger(args[1]);
@@ -26,7 +20,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("abs", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::abs", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(abs(*i));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -34,7 +28,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    reg("sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::floating(0.0);
         if (auto* i = std::get_if<IntValue>(&args[0]->data)) return Value::floating(std::sqrt(static_cast<double>(i->value)));
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -43,7 +37,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // n.times { |i| ... } — runs the block n times, passing the index 0..n-1.
-    reg("times", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::times", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::none() : args[0];
         auto* n = std::get_if<IntValue>(&args[0]->data);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
@@ -54,35 +48,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return args[0];
     });
 
-    // n.in?(range) / c.in?(range) — inclusive range membership for an Int
-    // or Char receiver against an Int or Char range.
-    reg("in?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::boolean(false);
-        auto* range = std::get_if<RangeValue>(&args[1]->data);
-        if (!range) return Value::boolean(false);
-        if (auto* i = std::get_if<IntValue>(&args[0]->data)) {
-            return Value::boolean(i->value >= range->start && i->value <= range->end);
-        }
-        if (auto* c = std::get_if<CharValue>(&args[0]->data)) {
-            auto code = static_cast<int64_t>(static_cast<unsigned char>(c->value));
-            return Value::boolean(code >= range->start && code <= range->end);
-        }
-        return Value::boolean(false);
-    });
-
-    reg("even?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
-        auto i = asInteger(args[0]);
-        return Value::boolean(i.has_value() && mpz_even_p(i->get_mpz_t()) != 0);
-    });
-
-    reg("odd?", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::boolean(false);
-        auto i = asInteger(args[0]);
-        return Value::boolean(i.has_value() && mpz_odd_p(i->get_mpz_t()) != 0);
-    });
-
-    reg("floor", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::floor", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -90,7 +56,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::ceil", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
@@ -98,21 +64,12 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
-    reg("round", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Number::round", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);
         if (auto* f = std::get_if<FloatValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(std::round(f->value)));
         return Value::integer(0);
-    });
-
-    reg("toFloat", [](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.empty()) return Value::floating(0.0);
-        if (auto* i = std::get_if<IntValue>(&args[0]->data))
-            return Value::floating(static_cast<double>(i->value));
-        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
-            return Value::floating(f->value);
-        return Value::floating(0.0);
     });
 
     // Float.parse(s) / Integer.parse(s) -> Result<Float|Int, ParseError> —
@@ -137,8 +94,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
     };
     auto noVal = []() { return Value::none(); };  // no value parsed
 
-    m_globalEnv->define("Float", Value::module("Float"));
-    reg("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineModule("Float");
+    defineIntrinsic("Float::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Float.parse expects a String", ""));
         size_t consumed = 0;
@@ -156,7 +113,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Float.parsePrefix(s) -> Just((Float, String)) | None
-    reg("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Float::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -168,8 +125,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
         }
     });
 
-    m_globalEnv->define("Integer", Value::module("Integer"));
-    reg("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineModule("Integer");
+    defineIntrinsic("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
         size_t consumed = 0;
@@ -199,7 +156,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
     });
 
     // Integer.parsePrefix(s) -> Just((Integer, String)) | None
-    reg("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Integer::parsePrefix", [](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::none();
         size_t consumed = 0;
@@ -219,11 +176,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (const std::exception&) { return Value::none(); }
     });
 
-    m_globalEnv->define("Number", Value::module("Number"));
-    // Number.parse(s) -> Result<Number, ParseError> — tries an Integer full
-    // match first (arbitrary precision), then falls back to Float. "42" -> Int,
-    // "3.14" -> Float, "1e3" -> Float, "abc" -> Error.
-    reg("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
+    defineModule("Number");
+    defineIntrinsic("Number::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Number.parse expects a String", ""));
         size_t consumed = 0;
@@ -239,6 +193,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (...) {}
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });
+
 }
 
 } // namespace kex::interpreter

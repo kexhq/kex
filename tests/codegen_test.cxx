@@ -1,9 +1,9 @@
 #include "test.hxx"
-#include "../src/codegen/core_erlang.hxx"
 #include "../src/ir/emit_core.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
 #include "../src/parser/parser.hxx"
+#include "../src/semantic/analyzer.hxx"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -16,14 +16,49 @@ using namespace test;
 // Helpers
 // ---------------------------------------------------------------------------
 
-// Parse Kex source and emit Core Erlang text.
+// Minimal external modules covering the most commonly used namespace modules.
+auto stdlibExternal() -> kex::ir::ExternalModules {
+    kex::ir::ExternalModules ext;
+    auto addExport = [&](const char* mod, const char* beamMod,
+                         const char* fn, const char* beamFn, int arity) {
+        ext.nameToAtom[mod] = beamMod;
+        std::string key = std::string(mod) + "." + fn;
+        ext.exportToBeamFn[key] = beamFn;
+        ext.exportArity[key] = arity;
+    };
+    addExport("IO", "Kex.IO", "printLine", "printLine", 1);
+    addExport("IO", "Kex.IO", "print", "print", 1);
+    addExport("IO", "Kex.IO", "putLine", "putLine", 1);
+    addExport("IO", "Kex.IO", "put", "put", 1);
+    addExport("IO", "Kex.IO", "inspect", "inspect", 1);
+    addExport("IO", "Kex.IO", "getLine", "getLine", 0);
+    addExport("IO", "Kex.IO", "get", "get", 0);
+    addExport("IO", "Kex.IO", "printError", "printError", 1);
+    addExport("IO", "Kex.IO", "warn", "warn", 1);
+    addExport("IO", "Kex.IO", "warning", "warning", 1);
+    addExport("Process", "Kex.Process", "self", "self", 0);
+    addExport("Process", "Kex.Process", "exit", "exit", 2);
+    addExport("Process", "Kex.Process", "register", "register", 2);
+    addExport("Process", "Kex.Process", "whereis", "whereis", 1);
+    addExport("System", "Kex.System", "exit", "exit", 1);
+    addExport("Task", "Kex.Task", "start", "start", 1);
+    addExport("Task", "Kex.Task", "awaitAll", "awaitAll", 1);
+    addExport("Mock.FS", "Kex.Mock.FS", "File", "File", 2);
+    addExport("Mock.FS", "Kex.Mock.FS", "Directory", "Directory", 1);
+    addExport("Mock.FS", "Kex.Mock.FS", "clear", "clear", 0);
+    ext.receiverFunctions["to"].push_back({"kex_prelude", "to", 2});
+    ext.receiverFunctions["or"].push_back({"kex_prelude", "or", 2});
+    return ext;
+}
+
+// Parse Kex source and emit Core Erlang text through the production IR path.
 auto emit(const std::string& source, const std::string& stem = "test") -> std::string {
     kex::Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
-    kex::codegen::CoreErlangEmitter emitter;
-    return emitter.emitProgram(program, stem).source;
+    auto ext = stdlibExternal();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
 }
 
 // Exercise the current AST -> IR -> Core Erlang pipeline used by `kex -R`.
@@ -32,7 +67,57 @@ auto emitIr(const std::string& source, const std::string& stem = "test") -> std:
     auto tokens = lexer.tokenizeAll();
     kex::Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
-    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem)).source;
+    auto ext = stdlibExternal();
+    return kex::ir::emitCore(kex::ir::lowerProgram(program, stem, "", &ext)).source;
+}
+
+auto emitWithExternal(const std::string& source,
+                      const kex::ir::ExternalModules& external,
+                      const std::string& stem = "external") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, "", &external)).source;
+}
+
+auto emitWithResolvedCalls(
+    const std::string& source,
+    const kex::semantic::ImportedInterfaces& interfaces,
+    const std::string& stem = "resolved_calls") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    kex::semantic::Analyzer analyzer(&interfaces);
+    assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
+    return kex::ir::emitCore(kex::ir::lowerProgram(
+        program, stem, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
+}
+
+auto emitWithPrelude(const std::string& source,
+                     const std::unordered_set<std::string>& receiverFunctions,
+                     const std::string& stem = "prelude_receiver") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    kex::ir::ExternalModules ext;
+    for (const auto& name : receiverFunctions)
+        for (int arity = 1; arity <= 4; arity++)
+            ext.receiverFunctions[name].push_back(
+                {"kex_prelude", name, arity});
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, "", &ext)).source;
+}
+
+auto emitWithExternalRecords(
+    const std::string& source,
+    const std::vector<kex::ir::ExternalRecordLayout>& records,
+    const std::string& stem = "external_records") -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    return kex::ir::emitCore(
+        kex::ir::lowerProgram(program, stem, "", nullptr, &records)).source;
 }
 
 // Compile an IR-pipeline Core Erlang module and return main/0's value. The
@@ -78,7 +163,7 @@ auto contains(const std::string& haystack, const std::string& needle) -> bool {
 // ---------------------------------------------------------------------------
 
 int main() {
-    describe("CoreErlangEmitter — module structure", []() {
+    describe("IR Core Erlang emitter — module structure", []() {
         it("emits module header with correct name", []() {
             auto out = emit("main do\n  42\nend\n", "hello");
             assertTrue(contains(out, "module 'kex_hello'"), out);
@@ -109,7 +194,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — literals", []() {
+    describe("IR Core Erlang emitter — literals", []() {
         it("emits integer literal", []() {
             auto out = emit("main do\n  42\nend\n");
             assertTrue(contains(out, "42"), out);
@@ -120,9 +205,9 @@ int main() {
             assertTrue(contains(out, "3.14"), out);
         });
 
-        it("emits string literal as quoted charlist", []() {
+        it("emits string literals as UTF-8 binaries", []() {
             auto out = emit("main do\n  \"hello\"\nend\n");
-            assertTrue(contains(out, "\"hello\""), out);
+            assertTrue(contains(out, "#<104>"), out);
         });
 
         it("emits true as atom 'true'", []() {
@@ -135,9 +220,9 @@ int main() {
             assertTrue(contains(out, "'false'"), out);
         });
 
-        it("emits none as atom 'none'", []() {
+        it("emits None as the canonical variant atom", []() {
             auto out = emit("main do\n  None\nend\n");
-            assertTrue(contains(out, "'none'"), out);
+            assertTrue(contains(out, "'None'"), out);
         });
 
         it("emits atom literal", []() {
@@ -180,7 +265,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — binary operators", []() {
+    describe("IR Core Erlang emitter — binary operators", []() {
          it("emits addition via kex_intrinsic_number:add (polymorphic + for numbers and strings)", []() {
             auto out = emit("main do\n  1 + 2\nend\n");
             // + dispatches through kex_intrinsic_number:add/2 which handles both number
@@ -204,9 +289,9 @@ int main() {
             assertTrue(contains(out, "call 'kex_intrinsic_number':'divide'"), out);
         });
 
-        it("emits equality via erlang:'=:='", []() {
+        it("emits polymorphic equality through the number intrinsic", []() {
             auto out = emit("main do\n  1 == 1\nend\n");
-            assertTrue(contains(out, "call 'erlang':'=:='"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_number':'eq'"), out);
         });
 
         it("emits less-than via erlang:'<'", []() {
@@ -225,24 +310,49 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — stdlib dispatch", []() {
-        it("IO.printLine dispatches to kex_io:print_line", []() {
+    describe("IR Core Erlang emitter — stdlib dispatch", []() {
+        it("IO.printLine dispatches through companion module", []() {
             auto out = emit("main do\n  IO.printLine(\"hi\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print_line'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'printLine'"), out);
         });
 
-        it("IO.print dispatches to kex_io:print", []() {
+        it("IO.print dispatches through companion module", []() {
             auto out = emit("main do\n  IO.print(\"hi\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'print'"), out);
         });
 
-        it("IO.printError dispatches to kex_io:print_error", []() {
+        it("IO.printError dispatches through companion module", []() {
             auto out = emit("main do\n  IO.printError(\"bad\")\nend\n");
-            assertTrue(contains(out, "call 'kex_io':'print_error'"), out);
+            assertTrue(contains(out, "call 'Kex.IO':'printError'"), out);
+        });
+
+        it("Mock.FS dispatches through its companion module", []() {
+            auto out = emit(
+                "main do\n"
+                "  Mock.FS.File(\"a.txt\", \"hello\")\n"
+                "  Mock.FS.Directory(\"cache\")\n"
+                "  Mock.FS.clear()\n"
+                "end\n");
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'File'"), out);
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'Directory'"), out);
+            assertTrue(contains(out, "call 'Kex.Mock.FS':'clear'"), out);
+            assertFalse(contains(out, "call 'kex_file':'mock_"), out);
+        });
+
+        it("FS primitives use the generic intrinsic module", []() {
+            auto out = emit(
+                "main do\n"
+                "  Kex.Intrinsic.FS.file(\"a.txt\", \"hello\")\n"
+                "  Kex.Intrinsic.FS.directory(\"cache\")\n"
+                "  Kex.Intrinsic.FS.clear()\n"
+                "end\n");
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'file'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'directory'"), out);
+            assertTrue(contains(out, "call 'kex_intrinsic_fs':'clear'"), out);
         });
     });
 
-    describe("CoreErlangEmitter — let bindings", []() {
+    describe("IR Core Erlang emitter — let bindings", []() {
         it("let binding becomes Core Erlang let <X> = ... in", []() {
             auto out = emit("main do\n  let x = 1\n  x\nend\n");
             assertTrue(contains(out, "let <X>"), out);
@@ -259,7 +369,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — if expressions", []() {
+    describe("IR Core Erlang emitter — if expressions", []() {
         it("if/else becomes a case on true/false atoms", []() {
             auto out = emit("main do\n  if true\n    1\n  else\n    2\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
@@ -347,6 +457,22 @@ int main() {
             assertEqual(output, std::string("true"));
         });
 
+        it("lowers record layouts supplied by compiled interfaces", []() {
+            std::vector<kex::ir::ExternalRecordLayout> records = {
+                {"Response", {"status", "body"}},
+            };
+            auto output = emitWithExternalRecords(
+                "main do\n"
+                "  let response = Response { status: 200, body: \"ok\" }\n"
+                "  response.body\n"
+                "end\n",
+                records);
+            assertTrue(contains(output, "'Response'"),
+                       "external record tag should be lowered");
+            assertTrue(contains(output, "call 'erlang':'element'("),
+                       "external record field should use its compiled layout");
+        });
+
         it("defers unknown free-function errors until the function is called", []() {
             auto output = runIrOnBeam(
                 "let unused() = missingFunction()\n"
@@ -367,12 +493,12 @@ int main() {
             assertEqual(output, std::string("42"));
         });
 
-        it("lowers System.exit to erlang:halt", []() {
+        it("lowers System.exit through companion module", []() {
             auto core = emitIr(
                 "foul stop(code) = System.exit(code)\n"
                 "main do 42 end\n",
                 "system_exit");
-            assertTrue(contains(core, "call 'erlang':'halt'"), core);
+            assertTrue(contains(core, "call 'Kex.System':'exit'"), core);
         });
 
         it("defers an unknown namespace call until it is executed", []() {
@@ -441,6 +567,39 @@ int main() {
             assertFalse(modules[1].functions[1].exported);
             auto globalCore = kex::ir::emitCore(modules[0]).source;
             assertTrue(contains(globalCore, "call 'Kex.Util':'double'"), globalCore);
+        });
+
+        it("passes compiled interfaces through split-module lowering", []() {
+            kex::Lexer lexer("main do Web.Response.text(\"ok\") end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
+            external.exportToBeamFn["Web.Response.text"] = "text";
+            external.exportArity["Web.Response.text"] = 1;
+
+            auto modules = kex::ir::lowerModules(
+                program, "external_split", "", nullptr, &external);
+            auto globalCore = kex::ir::emitCore(modules[0]).source;
+
+            assertTrue(contains(
+                globalCore, "call 'Kex.Web.Response':'text'"), globalCore);
+        });
+
+        it("routes companion calls to file-global functions through the entry", []() {
+            kex::Lexer lexer(
+                "let normalize(n) = n + 1\n"
+                "module Util do\n"
+                "  let adjusted(n) = normalize(n)\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto modules = kex::ir::lowerModules(program, "global_helper");
+            assertEqual(modules.size(), size_t{2});
+            auto companionCore = kex::ir::emitCore(modules[1]).source;
+            assertTrue(contains(
+                companionCore, "call 'kex_global_helper':'normalize'"),
+                companionCore);
         });
 
         it("top-level using resolves to cross-module call", []() {
@@ -561,16 +720,16 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — function definitions", []() {
+    describe("IR Core Erlang emitter — function definitions", []() {
         it("single-clause function emits fun with correct arity", []() {
             auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
             assertTrue(contains(out, "'double'/1"), out);
-            assertTrue(contains(out, "fun (_Arg0)"), out);
+            assertTrue(contains(out, "fun (N)"), out);
         });
 
-        it("function body emits param binding then expression", []() {
+        it("function body uses its normalized parameter directly", []() {
             auto out = emit("let double(n: Integer) -> Integer = n * 2\nmain do\n  double(3)\nend\n");
-            assertTrue(contains(out, "let <N> = _Arg0"), out);
+            assertTrue(contains(out, "call 'erlang':'*'(N, 2)"), out);
         });
 
         it("zero-arity function emits fun ()", []() {
@@ -579,7 +738,7 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — tuples and lists", []() {
+    describe("IR Core Erlang emitter — tuples and lists", []() {
         it("tuple literal emits {...}", []() {
             auto out = emit("main do\n  (1, 2, 3)\nend\n");
             assertTrue(contains(out, "{1, 2, 3}"), out);
@@ -596,17 +755,17 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — match expressions", []() {
+    describe("IR Core Erlang emitter — match expressions", []() {
         it("match emits case with when 'true' guards", []() {
             auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "when 'true'"), out);
         });
 
-        it("tuple subject becomes multi-value case with angle brackets", []() {
+        it("tuple subject remains a tuple in the case expression", []() {
             auto out = emit("main do\n  match (1, 2) do\n    (1, 2) -> true\n    (_, _) -> false\n  end\nend\n");
-            assertTrue(contains(out, "case <"), out);
-            assertTrue(contains(out, "<1, 2>"), out);
+            assertTrue(contains(out, "case {1, 2}"), out);
+            assertTrue(contains(out, "{1, 2} when"), out);
         });
 
         it("no semicolons between match clauses", []() {
@@ -621,58 +780,288 @@ int main() {
         });
     });
 
-    describe("CoreErlangEmitter — string interpolation", []() {
-        it("plain string emits as quoted charlist", []() {
+    describe("IR Core Erlang emitter — string interpolation", []() {
+        it("plain string emits as a UTF-8 binary", []() {
             auto out = emit("main do\n  \"hello\"\nend\n");
-            assertTrue(contains(out, "\"hello\""), out);
+            assertTrue(contains(out, "#<104>"), out);
         });
 
         it("interpolated string uses kex_io:to_string for embedded expr", []() {
             auto out = emit("main do\n  let n = 42\n  \"value: ${n}\"\nend\n");
             assertTrue(contains(out, "kex_io':'to_string'"), out);
-            assertTrue(contains(out, "\"value: \""), out);
+            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
 
-        it("interpolated string concatenates with erlang:'++'", []() {
+        it("interpolated string assembles through Unicode conversion", []() {
             auto out = emit("main do\n  let n = 42\n  \"${n}!\"\nend\n");
-            assertTrue(contains(out, "erlang':'++"), out);
+            assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
     });
 
-    describe("CoreErlangEmitter — UFCS method dispatch", []() {
-        it("modulo routes to kex_prelude", []() {
-            auto out = emit("main do\n  let x = 5\n  x.modulo(3)\nend\n");
+    describe("IR Core Erlang emitter — receiver-function dispatch", []() {
+        it("does not treat an external module export as a receiver function", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Numbers"] = "kex_numbers";
+            external.exportToBeamFn["Numbers.doubled"] = "doubled";
+            external.exportArity["Numbers.doubled"] = 1;
+
+            auto out = emitWithExternal(
+                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            assertTrue(!contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("routes a qualified module call through its compiled interface", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Web.Response"] = "Kex.Web.Response";
+            external.exportToBeamFn["Web.Response.text"] = "text";
+            external.exportArity["Web.Response.text"] = 1;
+
+            auto out = emitWithExternal(
+                "main do Web.Response.text(\"ok\") end\n", external);
+            assertTrue(contains(out, "call 'Kex.Web.Response':'text'"), out);
+            assertFalse(contains(out, "call 'kex_prelude':'Web__Response__text'"),
+                        out);
+        });
+
+        it("routes only declared external receiver functions", []() {
+            kex::ir::ExternalModules external;
+            external.receiverFunctions["doubled"].push_back(
+                {"kex_numbers", "doubled", 1});
+
+            auto out = emitWithExternal(
+                "main do\n  let x = 21\n  x.doubled\nend\n", external);
+            assertTrue(contains(out, "call 'kex_numbers':'doubled'"), out);
+        });
+
+        it("reorders named args for external module functions using param names", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Stream"] = "Kex.Stream";
+            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
+            external.exportArity["Stream.Sequence"] = 2;
+            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
+
+            auto out = emitWithExternal(
+                "main do Stream.Sequence(from: 0) { |n| n + 1 } end\n",
+                external);
+            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
+        });
+
+        it("resolves bare named-arg calls through external module fallback", []() {
+            kex::ir::ExternalModules external;
+            external.nameToAtom["Stream"] = "Kex.Stream";
+            external.exportToBeamFn["Stream.Sequence"] = "Sequence";
+            external.exportArity["Stream.Sequence"] = 2;
+            external.exportParamNames["Stream.Sequence"] = {"from", "step"};
+
+            auto out = emitWithExternal(
+                "main do Sequence(from: 0) { |n| n + 1 } end\n",
+                external);
+            assertTrue(contains(out, "call 'Kex.Stream':'Sequence'"), out);
+        });
+
+        it("lowers the exact receiver target selected by semantic type", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedFunction integerTarget;
+            integerTarget.sourceName = "describe";
+            integerTarget.backendModule = "Kex.Numbers";
+            integerTarget.backendFunction = "describe_integer";
+            integerTarget.backendArity = 1;
+            integerTarget.signature = {
+                "describe", {kex::semantic::Type::integer()},
+                kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(integerTarget));
+
+            kex::semantic::ImportedFunction stringTarget;
+            stringTarget.sourceName = "describe";
+            stringTarget.backendModule = "Kex.Strings";
+            stringTarget.backendFunction = "describe_string";
+            stringTarget.backendArity = 1;
+            stringTarget.signature = {
+                "describe", {kex::semantic::Type::string()},
+                kex::semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(stringTarget));
+
+            auto out = emitWithResolvedCalls("main do 42.describe end\n", interfaces);
+
+            assertTrue(contains(
+                out, "call 'Kex.Numbers':'describe_integer'(42)"), out);
+            assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
+        });
+
+        it("orders named args for the receiver target selected by semantics", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedFunction scaled;
+            scaled.sourceName = "scaled";
+            scaled.backendModule = "Kex.Numbers";
+            scaled.backendFunction = "scaled";
+            scaled.backendArity = 2;
+            scaled.paramNames = {"factor"};
+            scaled.signature = {
+                "scaled",
+                {kex::semantic::Type::integer(), kex::semantic::Type::integer()},
+                kex::semantic::Type::integer()};
+            interfaces.receiverFunctions["scaled"].push_back(std::move(scaled));
+
+            auto out = emitWithResolvedCalls(
+                "main do 7.scaled(factor: 6) end\n", interfaces);
+
+            assertTrue(contains(out, "call 'Kex.Numbers':'scaled'(7, 6)"), out);
+        });
+
+        it("lowers an imported namespace target without a receiver argument", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            kex::semantic::ImportedModuleInterface response;
+            response.sourceModule = "Web.Response";
+            response.backendModule = "Kex.Web.Response";
+            kex::semantic::ImportedFunction text;
+            text.sourceName = "text";
+            text.backendModule = "Kex.Web.Response";
+            text.backendFunction = "make_text";
+            text.backendArity = 1;
+            text.signature = {
+                "text", {kex::semantic::Type::string()},
+                kex::semantic::Type::named("Response")};
+            response.exports["text"].push_back(std::move(text));
+            interfaces.modules["Web.Response"] = std::move(response);
+
+            auto out = emitWithResolvedCalls(
+                "main do Web.Response.text(\"ok\") end\n", interfaces);
+
+            assertTrue(contains(
+                out, "call 'Kex.Web.Response':'make_text'("), out);
+            assertFalse(contains(out, "'make_text'('Web.Response'"), out);
+        });
+
+        it("routes a declared block receiver function without a compiler name", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = [1]\n  x.transform { |item| item }\nend\n",
+                {"transform"});
+            assertTrue(contains(out, "call 'kex_prelude':'transform'"), out);
+        });
+
+        it("routes migrated list receiver functions through their Kex declarations", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"first", "xs.first"},
+                {"second", "xs.second"},
+                {"third", "xs.third"},
+                {"rest", "xs.rest"},
+                {"push", "xs.push(4)"},
+                {"indexOf", "xs.indexOf(2)"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  let xs = [1,2,3]\n  ") +
+                              item.expression + "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes migrated numeric receiver functions through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"even?", "value.even?"},
+                {"odd?", "value.odd?"},
+                {"modulo", "value.modulo(2)"},
+                {"abs", "value.abs"},
+                {"sqrt", "value.sqrt"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  let value = 4\n  ") +
+                              item.expression + "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes Optional and Result predicates through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"none?", "None.none?"},
+                {"present?", "Just(1).present?"},
+                {"ok?", "Ok(1).ok?"},
+                {"error?", "Error(:failed).error?"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  ") + item.expression +
+                              "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes migrated collection and process predicates through Kex", []() {
+            struct Case { const char* name; const char* expression; };
+            const std::vector<Case> cases = {
+                {"contains?", "[1,2,3].contains?(2)"},
+                {"empty?", "[].empty?"},
+                {"in?", "2.in?([1,2,3])"},
+                {"alive?", "self().alive?"},
+            };
+            for (const auto& item : cases) {
+                auto source = std::string("main do\n  ") + item.expression +
+                              "\nend\n";
+                auto out = emitWithPrelude(source, {item.name});
+                assertTrue(contains(
+                    out, std::string("call 'kex_prelude':'") + item.name + "'"),
+                    out);
+            }
+        });
+
+        it("routes zero-argument count through Kex", []() {
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].count\nend\n", {"count"});
+            assertTrue(contains(out, "call 'kex_prelude':'count'"), out);
+        });
+
+        it("modulo routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = 5\n  x.modulo(3)\nend\n", {"modulo"});
             assertTrue(contains(out, "call 'kex_prelude':'modulo'"), out);
         });
 
-        it("even? routes to kex_prelude", []() {
-            auto out = emit("main do\n  let x = 4\n  x.even?\nend\n");
+        it("even? routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let x = 4\n  x.even?\nend\n", {"even?"});
             assertTrue(contains(out, "call 'kex_prelude':'even?'"), out);
         });
 
         it("each binds lambda and calls lists:foreach", []() {
-            auto out = emit("main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].each { |x| IO.printLine(x) }\nend\n",
+                {"each"});
             assertTrue(contains(out, "call 'kex_prelude':'each'"), out);
         });
 
         it("map routes to kex_prelude", []() {
-            auto out = emit("main do\n  [1,2,3].map { |x| x }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].map { |x| x }\nend\n", {"map"});
             assertTrue(contains(out, "call 'kex_prelude':'map'"), out);
         });
 
         it("filter routes to kex_prelude", []() {
-            auto out = emit("main do\n  [1,2,3].filter { |x| true }\nend\n");
+            auto out = emitWithPrelude(
+                "main do\n  [1,2,3].filter { |x| true }\nend\n", {"filter"});
             assertTrue(contains(out, "call 'kex_prelude':'filter'"), out);
         });
 
-        it("push routes to kex_prelude", []() {
-            auto out = emit("main do\n  let xs = [1]\n  xs.push(2)\nend\n");
+        it("push routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
+                "main do\n  let xs = [1]\n  xs.push(2)\nend\n", {"push"});
             assertTrue(contains(out, "call 'kex_prelude':'push'"), out);
         });
 
     });
 
-    describe("CoreErlangEmitter — process primitives", []() {
+    describe("IR Core Erlang emitter — process primitives", []() {
         it("spawn emits erlang:spawn with a 0-arity fun", []() {
             auto out = emit(
                 "# kex: no-check\n"
@@ -713,14 +1102,14 @@ int main() {
             assertTrue(contains(out, "after 1000"), out);
         });
 
-        it("pid.send(msg) routes to kex_prelude", []() {
-            auto out = emit(
+        it("pid.send(msg) routes through the source receiver method", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul go(pid) do\n"
                 "  pid.send(:ping)\n"
                 "end\n"
-                "main do go(self()) end\n"
-            );
+                "main do go(self()) end\n",
+                {"send"});
             assertTrue(contains(out, "call 'kex_prelude':'send'"), out);
         });
 
@@ -744,25 +1133,29 @@ int main() {
             assertTrue(contains(out, "call 'erlang':'self'()"), out);
         });
 
-        it("pid.link() routes to kex_prelude", []() {
-            auto out = emit(
+        it("pid link operations route through source receiver methods", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
-                "foul go(pid) do pid.link() end\n"
-                "main do go(self()) end\n"
-            );
+                "foul go(pid) do\n"
+                "  pid.link()\n"
+                "  pid.unlink()\n"
+                "end\n"
+                "main do go(self()) end\n",
+                {"link", "unlink"});
             assertTrue(contains(out, "call 'kex_prelude':'link'"), out);
+            assertTrue(contains(out, "call 'kex_prelude':'unlink'"), out);
         });
 
-        it("pid.alive?() routes to kex_prelude", []() {
-            auto out = emit(
+        it("pid.alive?() routes through kex_prelude", []() {
+            auto out = emitWithPrelude(
                 "# kex: no-check\n"
                 "foul check(pid) do pid.alive?() end\n"
-                "main do check(self()) end\n"
-            );
+                "main do check(self()) end\n",
+                {"alive?"});
             assertTrue(contains(out, "call 'kex_prelude':'alive?'"), out);
         });
 
-        it("Task.start { block } emits kex_task:start/1", []() {
+        it("Task.start { block } emits through companion module", []() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul go do\n"
@@ -770,31 +1163,56 @@ int main() {
                 "end\n"
                 "main do go() end\n"
             );
-            assertTrue(contains(out, "call 'kex_task':'start'"), out);
+            assertTrue(contains(out, "call 'Kex.Task':'start'"), out);
         });
 
-        it("task.await() routes to kex_prelude with infinity", []() {
-            auto out = emit(
+        it("emits source-owned Task.await receiver overloads", []() {
+            const std::string source =
+                "# kex: no-check\n"
+                "make Task do\n"
+                "  let await = Kex.Intrinsic.Process.await(this, :infinity)\n"
+                "  let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)\n"
+                "end\n"
+                "main do 0 end\n";
+            auto out = emit(source);
+            assertTrue(contains(out, "'await'/1 ="), out);
+            assertTrue(contains(out, "'await'/2 ="), out);
+        });
+
+        it("task.await() routes through the source-owned receiver", []() {
+            kex::ir::ExternalModules ext;
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 1, {}});
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 2, {"timeout"}});
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let t = Task.start { 42 }\n"
                 "  t.await()\n"
                 "end\n"
-                "main do go() end\n"
-            );
-            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
+                "main do go() end\n",
+                ext);
+            assertTrue(contains(out, "call 'kex_prelude':'await'(T)"), out);
+            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
-        it("task.await(timeout: N) routes to kex_prelude with timeout", []() {
-            auto out = emit(
+        it("task.await(timeout: N) orders the named receiver argument", []() {
+            kex::ir::ExternalModules ext;
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 1, {}});
+            ext.receiverFunctions["await"].push_back(
+                {"kex_prelude", "await", 2, {"timeout"}});
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let t = Task.start { 42 }\n"
                 "  t.await(timeout: 5000)\n"
                 "end\n"
-                "main do go() end\n"
-            );
-            assertTrue(contains(out, "call 'kex_prelude':'await'"), out);
+                "main do go() end\n",
+                ext);
+            assertTrue(contains(out, "call 'kex_prelude':'await'(T, 5000)"), out);
+            assertTrue(!contains(out, "call 'kex_task':'await'"), out);
         });
 
         it("Supervisor.start(strategy:) do block end emits kex_supervisor:start_link", []() {
@@ -847,7 +1265,7 @@ int main() {
                 "end\n"
             );
             assertTrue(contains(out, "call 'kex_database':'start'"), out);
-            assertTrue(contains(out, "\"postgres://localhost\""), out);
+            assertTrue(contains(out, "#<112>"), out);
         });
 
         it("supervisor(strategy:) do block end as free fn emits nested start_link", []() {
@@ -871,20 +1289,25 @@ int main() {
             assertTrue(count >= 2, "expected at least 2 start_link calls (outer + nested)");
         });
 
-        it("Process.self without parens emits erlang:self()", []() {
-            auto out = emit(
+        it("Process.self without parens emits call through companion module", []() {
+            kex::ir::ExternalModules ext;
+            ext.nameToAtom["Process"] = "Kex.Process";
+            ext.exportToBeamFn["Process.self"] = "self";
+            ext.exportArity["Process.self"] = 0;
+            auto out = emitWithExternal(
                 "# kex: no-check\n"
                 "foul go do\n"
                 "  let me = Process.self\n"
                 "  me\n"
                 "end\n"
-                "main do go() end\n"
+                "main do go() end\n",
+                ext
             );
-            assertTrue(contains(out, "call 'erlang':'self'()"), out);
+            assertTrue(contains(out, "call 'Kex.Process':'self'()"), out);
         });
     });
 
-    describe("CoreErlangEmitter — end-to-end compilation", []() {
+    describe("IR Core Erlang emitter — end-to-end compilation", []() {
         // These tests require erlc on PATH. Skip gracefully if not available.
         auto erlcAvailable = []() -> bool {
             return std::system("erlc -help > /dev/null 2>&1") == 0 ||

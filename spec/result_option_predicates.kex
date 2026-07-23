@@ -1,14 +1,13 @@
-# ok?/error? (Result<T, E> = Ok(T) | Error(E)) and some?/none?
-# (T? = Just(T) | None) — predicates over the prelude ADTs, registered in
-# registerAdtConstructors (adt.cxx) so callers don't have to hand-write a
-# `match` just to ask "did this succeed".
+# ok?/error? (Result<T, E> = Ok(T) | Error(E)) and present?/none?
+# (T? = Just(T) | None) — predicates implemented by the source-owned
+# Optional and Result make blocks in optional.kex.
 main do
   IO.printLine(Ok(1).ok?)
   IO.printLine(Ok(1).error?)
   IO.printLine(Error("bad").error?)
   IO.printLine(Error("bad").ok?)
-  IO.printLine(Just(1).some?)
+  IO.printLine(Just(1).present?)
   IO.printLine(Just(1).none?)
   IO.printLine(None.none?)
-  IO.printLine(None.some?)
+  IO.printLine(None.present?)
 end

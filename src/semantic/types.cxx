@@ -122,7 +122,7 @@ auto typeToString(const TypePtr& type) -> std::string {
                 case PrimitiveType::Char: return "Char";
                 case PrimitiveType::Bool: return "Bool";
                 case PrimitiveType::Atom: return "Atom";
-                case PrimitiveType::Unit: return "()";
+                case PrimitiveType::Unit: return "Void";
             }
             return "?";
         }
@@ -223,7 +223,7 @@ auto typeToString(const TypePtr& type) -> std::string {
 }
 
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
-// PrimitiveType{Unit} (from Type::unit() in stdlib signatures) represent
+// PrimitiveType{Unit} (from Type::unit() in compiled signatures) represent
 // the same concept. Normalize both to Unit before comparing.
 static auto isUnit(const TypePtr& t) -> bool {
     if (!t) return false;

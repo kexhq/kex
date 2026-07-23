@@ -1,7 +1,9 @@
 -module(kex_io).
--export([print_line/1, print/1, print_error/1, read_line/0, inspect/1, inspect_value/1, to_string/1,
-           to_string_optional/1,
-           to_string_bin/1, env_map/0, register_display/2]).
+-export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
+           inspect/1, to_string/1, to_string_optional/1,
+           to_string_bin/1, env_map/0, register_display/2,
+           mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
+           mock_stop/0]).
 
 %% register_display/2 — called once at main start with the compiling module's
 %% record layouts (#{Tag => [field, …]} in declaration order) and ADT payload
@@ -17,25 +19,101 @@ register_display(Records, Variants) ->
 
 %% IO.printLine(x) — print x followed by a newline to stdout.
 print_line(X) ->
-    io:format("~ts~n", [to_string(X)]),
-    'Kex.Unit'.
+    case mock_active() of
+        true -> mock_append(X, <<"\n">>);
+        false -> io:format("~ts~n", [to_string(X)]), 'Kex.Unit'
+    end.
 
 %% IO.print(x) — print x without a trailing newline.
 print(X) ->
-    io:format("~ts", [to_string(X)]),
-    'Kex.Unit'.
+    case mock_active() of
+        true -> mock_append(X, <<>>);
+        false -> io:format("~ts", [to_string(X)]), 'Kex.Unit'
+    end.
 
 %% IO.printError / IO.warn / IO.warning — print to stderr.
 print_error(X) ->
-    io:format(standard_error, "~ts~n", [to_string(X)]),
-    'Kex.Unit'.
+    case mock_active() of
+        true -> mock_append(X, <<"\n">>);
+        false -> io:format(standard_error, "~ts~n", [to_string(X)]), 'Kex.Unit'
+    end.
 
 %% IO.readLine — read a line from stdin, returns a String (UTF-8 binary).
 read_line() ->
-    case io:get_line("") of
-        eof -> 'None';
-        {error, _} -> 'None';
-        Line -> unicode:characters_to_binary(string:trim(Line, trailing, "\n"))
+    case mock_active() of
+        true -> mock_take_line();
+        false ->
+            case io:get_line("") of
+                eof -> 'None';
+                {error, _} -> 'None';
+                Line -> unicode:characters_to_binary(string:trim(Line, trailing, "\n"))
+            end
+    end.
+
+%% IO.get — read one Unicode character, sharing the mock input queue used by
+%% read_line/0. The terminal fallback asks the IO server for one character.
+read_char() ->
+    case mock_active() of
+        true -> mock_take_char();
+        false ->
+            case io:get_chars("", 1) of
+                eof -> 'None';
+                {error, _} -> 'None';
+                Chars -> unicode:characters_to_binary(Chars)
+            end
+    end.
+
+mock_start() ->
+    put(kex_mock_io_active, true),
+    mock_clear().
+
+mock_input(Lines) ->
+    Existing = case get(kex_mock_io_input) of undefined -> []; V -> V end,
+    put(kex_mock_io_input, Existing ++ [to_string_bin(L) || L <- Lines]),
+    'Kex.Unit'.
+
+mock_output() ->
+    case get(kex_mock_io_output) of undefined -> <<>>; V -> V end.
+
+mock_clear() ->
+    put(kex_mock_io_output, <<>>),
+    put(kex_mock_io_input, []),
+    'Kex.Unit'.
+
+mock_stop() ->
+    erase(kex_mock_io_active),
+    erase(kex_mock_io_output),
+    erase(kex_mock_io_input),
+    'Kex.Unit'.
+
+mock_active() -> get(kex_mock_io_active) =:= true.
+
+mock_append(X, Suffix) ->
+    Current = mock_output(),
+    Text = to_string_bin(X),
+    put(kex_mock_io_output, <<Current/binary, Text/binary, Suffix/binary>>),
+    'Kex.Unit'.
+
+mock_take_line() ->
+    case get(kex_mock_io_input) of
+        [Line | Rest] -> put(kex_mock_io_input, Rest), Line;
+        _ -> 'None'
+    end.
+
+mock_take_char() ->
+    case get(kex_mock_io_input) of
+        [Line | Rest] ->
+            case unicode:characters_to_list(Line) of
+                [Char | More] ->
+                    Tail = unicode:characters_to_binary(More),
+                    Next = case More of [] -> Rest; _ -> [Tail | Rest] end,
+                    put(kex_mock_io_input, Next),
+                    unicode:characters_to_binary([Char]);
+                [] ->
+                    put(kex_mock_io_input, Rest),
+                    mock_take_char()
+            end;
+        _ -> 'None'
     end.
 
 %% IO.inspect — print "=> <value> : <Type>" with ANSI colours, returns value.
@@ -46,31 +124,37 @@ read_line() ->
 -define(GREEN, "\e[32m").
 -define(WHITE, "\e[97m").
 
-inspect(X) when is_integer(X) ->
+inspect(X) ->
+    case mock_active() of
+        true -> mock_append(inspect_value(X), <<"\n">>), X;
+        false -> inspect_real(X)
+    end.
+
+inspect_real(X) when is_integer(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~p" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Int" ++ ?RESET ++ "~n", [X]), X;
-inspect(X) when is_float(X) ->
+inspect_real(X) when is_float(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~g" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Float" ++ ?RESET ++ "~n", [X]), X;
-inspect(true) ->
+inspect_real(true) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "true" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), true;
-inspect(false) ->
+inspect_real(false) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "false" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), false;
-inspect('Kex.Unit') ->
+inspect_real('Kex.Unit') ->
     'Kex.Unit';
-inspect(ok) ->
+inspect_real(ok) ->
     ok;
-inspect('None') ->
+inspect_real('None') ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), 'None';
-inspect(X) when is_atom(X) ->
+inspect_real(X) when is_atom(X) ->
     Name = atom_to_list(X),
     case Name of
         [C | _] when C >= $A, C =< $Z ->
@@ -84,46 +168,46 @@ inspect(X) when is_atom(X) ->
                       ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [Name])
     end,
     X;
-inspect(X) when is_binary(X) ->
+inspect_real(X) when is_binary(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [X]), X;
-inspect([{'Char', _} | _] = X) ->
+inspect_real([{'Char', _} | _] = X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [to_string(X)]), X;
-inspect(X) when is_list(X) ->
+inspect_real(X) when is_list(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), list_type_name(X)]), X;
-inspect({'Char', C}) ->
+inspect_real({'Char', C}) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "'~ts'" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n", [[C]]), {'Char', C};
-inspect({'Just', {'Char', C}} = X) ->
+inspect_real({'Just', {'Char', C}} = X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "Just("
               ++ [C] ++ ")" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n"), X;
-inspect(X) when is_tuple(X), tuple_size(X) >= 1,
+inspect_real(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), value_type_name(X)]), X;
-inspect(X) when is_tuple(X) ->
+inspect_real(X) when is_tuple(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), value_type_name(X)]), X;
-inspect(X) when is_map(X) ->
+inspect_real(X) when is_map(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Map" ++ ?RESET ++ "~n",
               [inspect_string(X)]), X;
-inspect(X) ->
+inspect_real(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p~n", [X]), X.
 
 %% UFCS value.inspect() — return the colored representation as a String.

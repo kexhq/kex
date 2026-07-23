@@ -5,11 +5,6 @@ namespace kex::interpreter {
 
 namespace {
 
-// Constants are defined directly rather than relying on <cmath>'s
-// non-standard M_PI/M_E (not guaranteed available on every platform).
-constexpr double kPi = 3.14159265358979323846;
-constexpr double kE = 2.71828182845904523536;
-
 auto toDouble(const ValuePtr& val) -> double {
     if (auto* i = std::get_if<IntValue>(&val->data)) return static_cast<double>(i->value);
     if (auto* f = std::get_if<FloatValue>(&val->data)) return f->value;
@@ -18,24 +13,15 @@ auto toDouble(const ValuePtr& val) -> double {
 
 } // namespace
 
-// Math.PI, Math.E, and the usual trig/log/power functions — modeled on
-// Ruby's Math module. Domain errors (e.g. Math.sqrt(-1.0)) propagate as
+// Math's trig/log/power primitives. Public PI and E constants are literals in
+// math.kex and require no runtime ABI entry. Domain errors (e.g.
+// Math.sqrt(-1.0)) propagate as
 // NaN/Infinity rather than raising, matching plain `<cmath>` behavior;
 // Kex has no exception type to raise a Math::DomainError equivalent into.
 auto Evaluator::registerMathBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
     };
-
-    // Namespace placeholder so `Math.sqrt(...)` resolves via the
-    // empty-RecordValue namespace-dispatch branch in eval() (ast::MethodCall)
-    // and gets the mangled "Math::" dispatch — see io.cxx for the same setup.
-    m_globalEnv->define("Math", Value::module("Math"));
-
-    reg("Math::PI", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kPi); });
-    reg("Math::E", [](std::vector<ValuePtr>) -> ValuePtr { return Value::floating(kE); });
 
     reg("Math::sqrt", [](std::vector<ValuePtr> args) -> ValuePtr {
         return Value::floating(std::sqrt(args.empty() ? 0.0 : toDouble(args[0])));
@@ -99,6 +85,14 @@ auto Evaluator::registerMathBuiltins() -> void {
         if (args.size() < 2) return Value::floating(0.0);
         return Value::floating(std::pow(toDouble(args[0]), toDouble(args[1])));
     });
+
+    // Math shares these implementations with Number receiver methods, but
+    // publishes its own private intrinsic identities. Do not reintroduce the
+    // old bare-name bridge: Kex.Intrinsic.Math dispatch is category-qualified.
+    for (const char* name : {"abs", "ceil", "floor"}) {
+        if (auto value = m_intrinsicEnv->get("Number::" + std::string(name)))
+            defineIntrinsic("Math::" + std::string(name), value);
+    }
 }
 
 } // namespace kex::interpreter

@@ -8,9 +8,8 @@
 
 namespace kex::semantic {
 
-// A named function/method signature — used both for a trait's required
-// methods (TraitDef::requiredMethods) and the stdlib function table (see
-// stdlib_signatures.hxx).
+// A named function/method signature — used for trait required methods
+// (TraitDef::requiredMethods) and imported interface signatures.
 struct Signature {
     std::string name;
     std::vector<TypePtr> params;
@@ -24,10 +23,9 @@ struct TraitDef {
 };
 
 // Open, name-keyed registry of traits and which types implement them.
-// Built-in traits (Number, Integer, Float, Equatable, Comparable,
-// Resultable, Optionable, Showable) are registered the same way a future
-// user `trait ... end` block would be — no special-casing built-ins vs.
-// user traits at the call sites that consult this registry.
+// Irreducible structural traits (Number, Integer, Float, Equatable,
+// Comparable, Showable) are registered here. Package-defined traits arrive
+// through ImportedInterfaces or local `trait ... end` declarations.
 class TraitRegistry {
 public:
     auto define(TraitDef def) -> void;
@@ -55,17 +53,20 @@ public:
     // heterogeneous list elements to their common trait type.
     auto commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string;
 
-    // A registry with Number/Integer/Float/Equatable/Comparable/Showable/
-    // Resultable/Optionable pre-registered, plus implementations for the
-    // built-in primitive/sized types and the Result/Option prelude ADTs.
+    // A registry with Number/Integer/Float/Equatable/Comparable/Showable
+    // pre-registered, plus implementations for built-in primitive/sized types.
     static auto withBuiltins() -> TraitRegistry;
+
+    auto implementorKey(const TypePtr& type) const -> std::string;
+    auto hasConformances(const std::string& key) const -> bool {
+        return m_implementations.count(key) > 0;
+    }
 
 private:
     std::unordered_map<std::string, TraitDef> m_traits;
     std::unordered_map<std::string, std::set<std::string>> m_implementations;
 
     auto satisfiesStructurally(const TypePtr& type, const std::string& traitName) const -> bool;
-    auto implementorKey(const TypePtr& type) const -> std::string;
 };
 
 } // namespace kex::semantic

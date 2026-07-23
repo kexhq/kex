@@ -1,4 +1,4 @@
-# Spec: parse + parsePrefix — Result-typed API
+# Spec: parse (Result-typed) + parsePrefix (Optional-typed)
 #
 # Run: ./build/kex spec/additional_improvements.kex
 
@@ -48,12 +48,11 @@ let Ok(nf) = Number.parse("3.14")
 assert(nf > 3.13, "Number.parse float")
 
 # ---------------------------------------------------------------
-# parsePrefix: Result<(T, String), ParseError> — Ok((v, rest))
-#   on any partial/full match, Error on complete failure
+# parsePrefix: Optional<(T, String)> — Just((v, rest))
+#   on any partial/full match, None on complete failure
 # ---------------------------------------------------------------
 
 # one-liner
-# ---- parsePrefix: Optional<(T, String)> — Just((v,r)) | None ----
 
 let Just((val, rest)) = Integer.parsePrefix("123abc")
 assert(val == 123, "parsePrefix val")
@@ -64,10 +63,7 @@ assert(v == 6, "parsePrefix whitespace val")
 assert(r == " USD", "parsePrefix whitespace rest")
 
 # invalid
-match Integer.parsePrefix("xyz") do
-  Error(e) -> assert(e.message == "invalid integer prefix", "parsePrefix invalid")
-  Ok(_) -> assert(false, "parsePrefix invalid — unexpected Ok")
-end
+assert(Integer.parsePrefix("xyz") == None, "parsePrefix invalid")
 
 main do
   IO.printLine("passed")

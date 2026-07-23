@@ -33,6 +33,11 @@ describe("List — count and empty?") do
     assert([42].count == 1)
   end
 
+  it("length is a compatibility spelling for count") do
+    assert([1, 2, 3].length == 3)
+    assert([].length == 0)
+  end
+
   it("empty? is true only for an empty list") do
     assert([].empty?)
     assert(![1].empty?)
@@ -259,6 +264,7 @@ describe("List — second and third") do
   it("second returns Just of the second element") do
     assert([1, 2, 3].second == Just(2))
     assert(["a", "b"].second == Just("b"))
+    assert([None, None].second == Just(None))
   end
 
   it("second returns None for short lists") do

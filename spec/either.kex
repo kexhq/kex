@@ -1,0 +1,16 @@
+# Either is a prelude-owned ADT whose constructors and closed variant set are
+# shared by both backends through the generated standard-library interface.
+main do
+  let left = Left(42)
+  let right = Right("yes")
+
+  match left do
+    Left(value) -> IO.printLine("left ${value}")
+    Right(value) -> IO.printLine("right ${value}")
+  end
+
+  match right do
+    Left(value) -> IO.printLine("left ${value}")
+    Right(value) -> IO.printLine("right ${value}")
+  end
+end

@@ -27,13 +27,11 @@ jobs:
       - name: Spec suite
         run: make spec
 
-      # Informational only (make spec-beam always exits 0 — see its own
-      # comment in the Makefile). BEAM is a secondary backend behind the
-      # tree-walk interpreter, so this reports the match count without
-      # gating CI — currently at full parity (109/109), but kept non-gating
-      # so BEAM-backend work doesn't block unrelated PRs.
+      # Informational — BEAM is a secondary backend; report the match count
+      # without gating CI so BEAM-backend work doesn't block unrelated PRs.
       - name: Spec suite via BEAM (informational)
         run: make spec-beam
+        continue-on-error: true
 
   wasm:
     runs-on: ubuntu-latest

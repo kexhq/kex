@@ -54,8 +54,8 @@ public:
     auto execute(const ast::Program& program) -> ValuePtr;
     // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
-    // shadows the native builtins. No-op if KEX_PRELUDE_DIR is unset or the
-    // directory can't be read. Idempotent per Evaluator instance.
+    // shadows the native builtins. No-op if no configured or embedded prelude
+    // source root is available. Idempotent per Evaluator instance.
     auto loadPrelude() -> void;
     auto setReplMode(bool enabled) -> void;
     auto output() const -> const std::string&;
@@ -68,13 +68,17 @@ private:
     // Top-level
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
     auto execModule(const ast::ModuleDef& mod) -> void;
-    auto execFunctionDef(const ast::FunctionDef& def, const std::string& typeScope = "") -> void;
+    auto execFunctionDef(const ast::FunctionDef& def,
+                         const std::string& typeScope = "",
+                         bool hasImplicitReceiver = false) -> void;
     auto execMakeDef(const ast::MakeDef& def) -> void;
     auto execTypeDef(const ast::TypeDef& def) -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
     auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
-    auto execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope = "") -> void;
+    auto execVisibilityBlock(const ast::VisibilityBlock& block,
+                             const std::string& typeScope = "",
+                             bool hasImplicitReceiver = false) -> void;
     auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
@@ -98,6 +102,8 @@ private:
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
     auto callFunction(const std::string& name, std::vector<ValuePtr> args,
                       NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    auto resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+        -> std::string;
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
@@ -111,6 +117,11 @@ private:
     // Built-in functions — orchestrator defined in evaluator.cxx, domains
     // implemented in src/interpreter/stdlib/*.cxx (same access as before,
     // just split out of the core evaluator file by domain).
+    auto defineIntrinsic(const std::string& name, NativeFunc fn) -> void;
+    auto defineIntrinsic(const std::string& name, const ValuePtr& value) -> void;
+    auto defineModule(const std::string& name) -> void;
+    auto definePublic(const std::string& name, NativeFunc fn) -> void;
+    auto defineDual(const std::string& name, NativeFunc fn) -> void;
     auto registerBuiltins() -> void;
     auto registerAdtConstructors() -> void;
     auto registerIOBuiltins() -> void;
@@ -131,6 +142,7 @@ private:
     auto registerEvalBuiltins() -> void;
     auto registerHttpBuiltins() -> void;
     auto registerWebBuiltins() -> void;
+    auto registerKexBuiltins() -> void;
 
     // Environment
     auto pushEnv() -> void;

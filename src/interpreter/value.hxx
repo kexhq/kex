@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <variant>
 #include <vector>
 
@@ -163,6 +164,21 @@ struct Value {
 };
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
+
+// The method-dispatch type name for a value — the name used for UFCS resolution
+// (e.g. "Integer" for both IntValue/BigIntValue, "Pid" for ProcessValue).
+// Separate from typeName() which is for display.
+auto dispatchTypeName(const ValuePtr& v) -> std::string;
+
+// Returns true when `name` is a valid type-pattern name for the value's
+// runtime type (e.g. both "Int" and "Integer" match IntValue/BigIntValue).
+auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool;
+
+// The set of builtin type names that cannot have prelude methods overridden.
+auto builtinTypeNames() -> const std::unordered_set<std::string>&;
+
+// Default module allowlist for sandboxed Evaluator.run / .runExpression.
+auto defaultEvalAllowList() -> const std::vector<std::string>&;
 
 // Extracts the value as an mpz_class if it's IntValue or BigIntValue
 // (the two runtime representations of `Integer`), else nullopt — the

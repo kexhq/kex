@@ -64,7 +64,7 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
 
     // A ConstrainedType("T", "Integer") satisfies "Integer" and (by extension) "Number";
     // likewise "Float" satisfies "Number". This comes up when a constrained hint type
-    // (e.g., from a stdlib sig's integerLike() placeholder) is passed as an arg against
+    // (e.g., from an imported signature's Integer constraint) is passed as an arg against
     // another constrained param — both are constrained the same way and are compatible.
     if (auto* ct = std::get_if<ConstrainedType>(&type->kind)) {
         if (ct->traitName == traitName) return true;
@@ -74,13 +74,6 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
 
     if (traitName == "Number" || traitName == "Integer" || traitName == "Float") {
         return satisfiesStructurally(type, traitName);
-    }
-
-    // Any Optional type satisfies Optionable — Optional<TypeVar>, Optional<String>,
-    // etc. — regardless of inner type, since `.or(default)` only cares that the
-    // receiver is optional, not what T is.
-    if (traitName == "Optionable") {
-        if (std::holds_alternative<OptionalType>(type->kind)) return true;
     }
 
     // Compound types recurse into their component types for Equatable/
@@ -105,8 +98,25 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     }
 
     auto it = m_implementations.find(implementorKey(type));
-    if (it == m_implementations.end()) return false;
-    return it->second.count(traitName) > 0;
+    if (it != m_implementations.end() && it->second.count(traitName) > 0)
+        return true;
+
+    // Compound types: check the base type name for conformances registered
+    // under "List", "Map", "Optional" (from `make [X], implement: Trait`).
+    if (std::holds_alternative<ListType>(type->kind)) {
+        auto li = m_implementations.find("List");
+        if (li != m_implementations.end() && li->second.count(traitName) > 0)
+            return true;
+    } else if (std::holds_alternative<MapType>(type->kind)) {
+        auto mi = m_implementations.find("Map");
+        if (mi != m_implementations.end() && mi->second.count(traitName) > 0)
+            return true;
+    } else if (std::holds_alternative<OptionalType>(type->kind)) {
+        auto oi = m_implementations.find("Optional");
+        if (oi != m_implementations.end() && oi->second.count(traitName) > 0)
+            return true;
+    }
+    return false;
 }
 
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
@@ -118,7 +128,9 @@ auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std
     // Skip structural/primitive traits — only return user-defined ones.
     static const std::set<std::string> kBuiltin = {
         "Number", "Integer", "Float", "Equatable", "Comparable",
-        "Showable", "Resultable", "Optionable"
+        "Showable",
+        "Blankable", "Truthyable", "Enumerable",
+        "Semigroup", "Monoid", "Group", "Errorable",
     };
     for (const auto& t : itA->second) {
         if (kBuiltin.count(t)) continue;
@@ -139,8 +151,6 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
         {Signature{"compare", {Type::typeVar(-1)}, Type::named("Comparison")}}});
     reg.define(TraitDef{"Showable",
         {Signature{"to_s", {}, Type::string()}}});
-    reg.define(TraitDef{"Resultable", {}});
-    reg.define(TraitDef{"Optionable", {}});
 
     // Primitive/sized types implement Equatable/Showable, keyed by their
     // canonical printed name (see implementorKey) — same registry path a
@@ -148,7 +158,7 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     static const char* kEquatableShowable[] = {
         "Int", "Integer", "Byte", "Int8", "Int16", "Int32",
         "UInt16", "UInt32", "UInt64", "Float32", "Float64",
-        "Char", "Bool", "Atom", "String", "()",
+        "Char", "Bool", "Atom", "String", "Void",
     };
     for (const char* name : kEquatableShowable) {
         reg.registerImplementation(name, "Equatable");
@@ -164,20 +174,6 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     };
     for (const char* name : kComparable) {
         reg.registerImplementation(name, "Comparable");
-    }
-
-    // Result<T,E> = Ok(T) | Error(E); Option<T> = Just(T) | None — the
-    // checker doesn't yet track these as real generic NamedTypes (that's
-    // phase 5), so the individual constructor names are registered as a
-    // pragmatic bridge until then.
-    for (const char* name : {"Result", "Ok", "Error"}) {
-        reg.registerImplementation(name, "Resultable");
-    }
-    for (const char* name : {"Option", "Just", "None"}) {
-        reg.registerImplementation(name, "Optionable");
-    }
-    for (const char* name : {"Either", "Left", "Right"}) {
-        reg.registerImplementation(name, "Eitherable");
     }
 
     return reg;

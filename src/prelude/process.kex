@@ -2,6 +2,24 @@
 # the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
 # spawned process with an awaitable result.
 
+foul module Process do
+  # Returns the calling process's Pid.
+  self : Pid
+  let self = Kex.Intrinsic.Process.self
+
+  # Sends an exit signal with +reason+ to +pid+.
+  exit : Pid -> X -> Unit
+  let exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
+
+  # Registers +pid+ under the given atom +name+.
+  register : Pid -> Atom -> Unit
+  let register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
+
+  # Returns the Pid registered under +name+, or None.
+  whereis : Atom -> Pid?
+  let whereis(name) = Kex.Intrinsic.Process.whereis(name)
+end
+
 make Pid do
   # Sends +msg+ to the process, wrapped in the standard Kex message format.
   send :> X -> Unit
@@ -24,6 +42,16 @@ make Pid do
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
 
+foul module Task do
+  # Spawns a new process that runs +f+ and returns a Task handle.
+  start : Block<X> -> Task
+  let start(f) = Kex.Intrinsic.Task.start(f)
+
+  # Awaits all tasks in +tasks+, returning their results.
+  awaitAll : [Task] -> [X]
+  let awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
+end
+
 make Task do
   # Waits for the task's result indefinitely.
   await :> X
@@ -32,7 +60,7 @@ make Task do
   # Waits for the task's result, with a timeout in milliseconds.
   # Returns +None+ on timeout.
   await :> Integer -> X
-  let await(ms) = Kex.Intrinsic.Process.await(this, ms)
+  let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
 
 make Reference do

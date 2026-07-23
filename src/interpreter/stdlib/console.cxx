@@ -5,12 +5,8 @@ namespace kex::interpreter {
 
 auto Evaluator::registerConsoleBuiltins() -> void {
     auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
+        defineIntrinsic(name, std::move(fn));
     };
-
-    m_globalEnv->define("Console", Value::module("Console"));
 
     const auto constant = [&](const char* name, const char* ansi) {
         reg(std::string("Console::") + name, [ansi](std::vector<ValuePtr>) {

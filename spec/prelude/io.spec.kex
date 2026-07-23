@@ -122,6 +122,14 @@ describe("IO.getLine (mocked)") do
     assert(IO.getLine() == "b")
     Mock.IO.stop()
   end
+
+  it("accepts a list of input lines") do
+    Mock.IO.start()
+    Mock.IO.input(["left", "right"])
+    assert(IO.getLine() == "left")
+    assert(IO.getLine() == "right")
+    Mock.IO.stop()
+  end
 end
 
 describe("IO.get (mocked)") do

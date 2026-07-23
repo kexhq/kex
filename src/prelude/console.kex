@@ -1,31 +1,30 @@
 # ANSI terminal styling. Color constants become empty strings when Kex is
 # started with --no-colors, so callers can compose them without branching.
 module Console do
-  # Reset all terminal attributes.
-  # Console.Reset : String
-
-  # Text attributes and the standard foreground palette.
-  # Console.Bold : String
-  # Console.Dim : String
-  # Console.Italic : String
-  # Console.Underline : String
-  # Console.Blink : String
-  # Console.Reverse : String
-  # Console.Hidden : String
-  # Console.Strikethrough : String
-  # Console.Red : String
-  # Console.Green : String
-  # Console.Yellow : String
-  # Console.Blue : String
-  # Console.Magenta : String
-  # Console.Cyan : String
-  # Console.White : String
-  # Console.Gray : String
-  # Console.Purple : String
+  let Reset = Kex.Intrinsic.Console.Reset
+  let Bold = Kex.Intrinsic.Console.Bold
+  let Dim = Kex.Intrinsic.Console.Dim
+  let Italic = Kex.Intrinsic.Console.Italic
+  let Underline = Kex.Intrinsic.Console.Underline
+  let Blink = Kex.Intrinsic.Console.Blink
+  let Reverse = Kex.Intrinsic.Console.Reverse
+  let Hidden = Kex.Intrinsic.Console.Hidden
+  let Strikethrough = Kex.Intrinsic.Console.Strikethrough
+  let Red = Kex.Intrinsic.Console.Red
+  let Green = Kex.Intrinsic.Console.Green
+  let Yellow = Kex.Intrinsic.Console.Yellow
+  let Blue = Kex.Intrinsic.Console.Blue
+  let Magenta = Kex.Intrinsic.Console.Magenta
+  let Cyan = Kex.Intrinsic.Console.Cyan
+  let White = Kex.Intrinsic.Console.White
+  let Gray = Kex.Intrinsic.Console.Gray
+  let Purple = Kex.Intrinsic.Console.Purple
 
   # Wrap +text+ in an ANSI style and reset attributes afterwards.
-  colorize : (String, String) -> String
+  colorize : String -> String -> String
+  let colorize(text, color) = Kex.Intrinsic.Console.colorize(text, color)
 
   # Whether terminal styling is enabled for this process.
-  enabled? : () -> Bool
+  enabled? : Bool
+  let enabled? = Kex.Intrinsic.Console.enabled?
 end

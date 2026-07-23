@@ -15,9 +15,9 @@ static auto getIntField(const RecordValue& rec, const std::string& name, int64_t
 // Helper: extract the allow list from EvaluatorOptions
 static auto getAllowList(const RecordValue& rec) -> std::vector<std::string> {
     auto it = rec.fields.find("allow");
-    if (it == rec.fields.end()) return {"Math", "List", "String", "Integer", "Map", "Stream"};
+    if (it == rec.fields.end()) return defaultEvalAllowList();
     auto* list = std::get_if<ListValue>(&it->second->data);
-    if (!list) return {"Math", "List", "String", "Integer", "Map", "Stream"};
+    if (!list) return defaultEvalAllowList();
     std::vector<std::string> result;
     for (const auto& elem : list->elements) {
         if (auto* atom = std::get_if<AtomValue>(&elem->data)) {
@@ -50,23 +50,17 @@ static auto sandboxedEval(const std::string& source, bool exprOnly,
 }
 
 auto Evaluator::registerEvalBuiltins() -> void {
-    auto reg = [this](const std::string& name, NativeFunc fn) {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{name, std::move(fn)};
-        m_globalEnv->define(name, val);
-    };
-
-    m_globalEnv->define("Evaluator", Value::module("Evaluator"));
+    defineModule("Evaluator");
 
     // Evaluator.run(source) or Evaluator.run(source, opts)
-    reg("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Evaluator::run", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("Evaluator.run requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(Value::string("Evaluator.run requires a source string"));
 
         int64_t maxSteps = 1000000;
         int64_t maxDepth = 256;
-        std::vector<std::string> allow = {"Math", "List", "String", "Integer", "Map", "Stream"};
+        std::vector<std::string> allow = defaultEvalAllowList();
 
         if (args.size() > 1) {
             if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {
@@ -80,14 +74,14 @@ auto Evaluator::registerEvalBuiltins() -> void {
     });
 
     // Evaluator.runExpression(source) or Evaluator.runExpression(source, opts)
-    reg("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
+    defineIntrinsic("Evaluator::runExpression", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
         auto* srcVal = std::get_if<StringValue>(&args[0]->data);
         if (!srcVal) return Value::error(Value::string("Evaluator.runExpression requires a source string"));
 
         int64_t maxSteps = 1000000;
         int64_t maxDepth = 256;
-        std::vector<std::string> allow = {"Math", "List", "String", "Integer", "Map", "Stream"};
+        std::vector<std::string> allow = defaultEvalAllowList();
 
         if (args.size() > 1) {
             if (auto* rec = std::get_if<RecordValue>(&args[1]->data)) {

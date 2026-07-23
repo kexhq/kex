@@ -3,7 +3,7 @@
          'Blink'/0, 'Reverse'/0, 'Hidden'/0, 'Strikethrough'/0,
          'Red'/0, 'Green'/0, 'Yellow'/0,
          'Blue'/0, 'Magenta'/0, 'Cyan'/0, 'White'/0, 'Gray'/0,
-         'Purple'/0, enabled/0, colorize/2]).
+         'Purple'/0, 'enabled?'/0, colorize/2]).
 
 'Reset'() -> code(<<27, "[0m">>).
 'Bold'() -> code(<<27, "[1m">>).
@@ -26,6 +26,8 @@
 
 enabled() ->
     os:getenv("KEX_COLORS", "1") =/= "0".
+
+'enabled?'() -> enabled().
 
 code(Value) ->
     case enabled() of true -> Value; false -> <<>> end.

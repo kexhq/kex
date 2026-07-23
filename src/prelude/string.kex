@@ -1,4 +1,19 @@
-make String do
+make String, implement: Enumerable do
+  # Enumerable primitive and string-preserving higher-order operations.
+  # The private List intrinsics understand String's [Char] representation;
+  # the public methods remain owned here in Kex source.
+  reduce :> A -> (A -> Char -> A) -> A
+  let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
+
+  map :> (Char -> B) -> [B]
+  let map(f) = Kex.Intrinsic.List.map(this, f)
+
+  filter :> (Char -> Bool) -> String
+  let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
+
+  uniq :> String
+  let uniq = Kex.Intrinsic.List.uniq(this)
+
   # Returns the number of characters in the string.
   #
   # @return [Integer]
@@ -8,6 +23,10 @@ make String do
   #   "".count        # => 0
   count :> Integer
   let count = Kex.Intrinsic.List.length(this)
+
+  # Compatibility spelling retained as a source-owned String method.
+  length :> Integer
+  let length = Kex.Intrinsic.List.length(this)
 
   # Returns +true+ if the string contains no characters.
   #
@@ -29,6 +48,18 @@ make String do
   #   "hello".at(9)   # => None
   at :> Integer -> Char?
   let at(i) = Kex.Intrinsic.List.at(this, i)
+
+  # Returns the second character wrapped in +Just+, or +None+ when absent.
+  second :> Char?
+  let second = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 1))
+
+  # Returns the third character wrapped in +Just+, or +None+ when absent.
+  third :> Char?
+  let third = Kex.Intrinsic.List.first(Kex.Intrinsic.List.drop(this, 2))
+
+  # Returns all characters after the first.
+  rest :> String
+  let rest = Kex.Intrinsic.List.drop(this, 1)
 
   # Returns a list of the individual characters in the string.
   #
@@ -123,19 +154,15 @@ make String do
   let endsWith?(suffix) = Kex.Intrinsic.String.endsWith?(this, suffix)
 
   # Converts to another type. The most common target is +Integer+ or +Float+.
-  # Returns +None+ when conversion is not possible.
-  #
-  # @param type [Y]
-  # @return [Y?]
-  #
-  # @example
-  #   "42".to(Integer)    # => Just(42)
-  #   "3.14".to(Float)    # => Just(3.14)
-  #   "abc".to(Integer)   # => None
-  to :> Y -> Y?
 end
 
 make Char do
+  # Converts this character to upper/lower case while preserving Char.
+  upperCase :> Char
+  let upperCase = Kex.Intrinsic.String.upperCase(this)
+  lowerCase :> Char
+  let lowerCase = Kex.Intrinsic.String.lowerCase(this)
+
   # Returns +true+ if the character is a decimal digit (+0+..+9+).
   #
   # @return [Bool]

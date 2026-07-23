@@ -6,28 +6,22 @@ type Optional<X> = Just(X) | None
 # or failed with +Error(e)+.
 type Result<X, E> = Ok(X) | Error(E)
 
-make Optional<X> do
-  # Returns +true+ if this optional contains a value.
-  #
-  # @return [Bool]
-  #
-  # @example
-  #   Just(42).some?   # => true
-  #   None.some?       # => false
-  some? :> Bool
-  let some?(@Just(_)) = true
-  let some?(@None) = false
+# +Either<L, R>+ holds one of two possible value types.
+type Either<L, R> = Left(L) | Right(R)
 
-  # Alias for +some?+.
-  #
-  # @return [Bool]
-  #
-  # @example
-  #   Just(42).present?   # => true
-  #   None.present?       # => false
-  present? :> Bool
-  let present? = this.some?
+# Marker traits used by generic code that accepts one of these ADT families.
+# Their conformances are exported through KexI like any user-defined trait.
+trait Optionable do
+end
 
+trait Resultable do
+end
+
+trait Eitherable do
+end
+
+make Optional<X>, implement: Optionable do
+  # (+present?+ comes from the +Blankable+ default: +!this.blank?+.)
   # Returns +true+ if this optional is empty.
   #
   # @return [Bool]
@@ -76,7 +70,7 @@ make Optional<X> do
   let flatMap(@Just(x), f) = f(x)
 end
 
-make Result<X, E> do
+make Result<X, E>, implement: Resultable do
   # Returns +true+ if the result is +Ok+.
   #
   # @return [Bool]
@@ -144,4 +138,15 @@ make Result<X, E> do
   toOptional :> X?
   let toOptional(@Ok(x)) = Just(x)
   let toOptional(@Error(_)) = None
+end
+
+# Universal `.or(default)` catch-all: a value that is neither Optional nor
+# Result is already a successful result — return it unchanged.
+let or(value, _) = value
+
+# Universal `.to(Type)` conversion. The type argument is a runtime Type
+# value (e.g. String, Integer, Float, List). Returns an Optional result.
+let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
+
+make Either<L, R>, implement: Eitherable do
 end

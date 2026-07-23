@@ -70,9 +70,6 @@ struct Lowering {
     // Top-level `let name = expr` bindings become 0-arity functions; a bare
     // reference to one compiles to `apply 'name'/0()`, not a variable.
     std::unordered_set<std::string> topLevelConstants;
-    // Stdlib functions provided by the shared kex_prelude module; a UFCS call
-    // to one that isn't a local method routes to `kex_prelude:<fn>`.
-    std::unordered_set<std::string> preludeFns;
     // Top-level zero-parameter functions (e.g. `foul name do ... end`). A bare
     // reference to one (no parens) is a call `apply 'name'/0()`, not a var.
     std::unordered_set<std::string> zeroArgFns;
@@ -99,6 +96,14 @@ struct Lowering {
     std::unordered_map<std::string, std::string> moduleAliases;
     // Loaded external modules from KexI registry (/load).
     const ExternalModules* externalModules = nullptr;
+    // When true, external receiver functions take priority over localMethods.
+    // Set during prelude self-compilation so internal receiver calls route
+    // through the module's own type-dispatching wrappers instead of the
+    // inline block/HOF lowerings.
+    bool preferExternalReceivers = false;
+    // Exact imported call ownership selected by semantic analysis.
+    const std::unordered_map<const ast::MethodCall*,
+        semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -235,19 +240,6 @@ struct Lowering {
         return var(name);
     }
 
-    // The kex_intrinsic_fun `*2` helper backing a pair-iterating HOF (a
-    // 2-param `{ |k, v| }` block), or nullptr for methods whose 2-param
-    // block means something else (reduce's (acc, x), sort's comparator).
-    static auto hof2Name(const std::string& m) -> const char* {
-        static const std::unordered_map<std::string, const char*> hof2 = {
-            {"each","each2"}, {"filter","filter2"}, {"select","filter2"},
-            {"map","map2"}, {"count","count2"},
-            {"any?","any2"}, {"some?","any2"}, {"all?","all2"},
-            {"reject","reject2"}, {"find","find2"},
-        };
-        auto it = hof2.find(m);
-        return it != hof2.end() ? it->second : nullptr;
-    }
 
     auto opOf(TokenType t) -> Op {
         switch (t) {
@@ -314,10 +306,7 @@ struct Lowering {
                 }
                 if (auto it = subst.find(n.name); it != subst.end())
                     return var(it->second);
-                // Bare reference to a defined function keeps the old free-var
-                // lowering (erlc rejects it loudly); guards can't call
-                // erlang:error, so they keep it too.
-                if (m_inGuard || knownFns.count(n.name))
+                if (knownFns.count(n.name))
                     return var(n.name);
                 // Genuinely unbound: every binding site registers itself in
                 // `subst`, so absence means the walker would raise at runtime —
@@ -350,14 +339,10 @@ struct Lowering {
                 // Lower to a boolean Match instead, matching the tree-walker
                 // (spec/mutual_recursion.kex relies on `n == 0 || isOdd(n-1)`
                 // never recursing once n == 0).
-                // In a guard, `case` is illegal, so use the strict and/or
-                // guard BIFs instead of the short-circuit Match.
                 if (n.op == TokenType::AmpAmp) {
-                    if (m_inGuard) return callE("erlang","and",2,two(lower(n.left), lower(n.right)));
                     return matchBool(lower(n.left), lower(n.right), litBool(false));
                 }
                 if (n.op == TokenType::PipePipe) {
-                    if (m_inGuard) return callE("erlang","or",2,two(lower(n.left), lower(n.right)));
                     return matchBool(lower(n.left), litBool(true), lower(n.right));
                 }
                 // Division by literal zero → compile-time error with location,
@@ -387,7 +372,7 @@ struct Lowering {
                 // String binary holding the same text ARE equal in Kex.
                 auto builtinOp = [&](ExprPtr a, ExprPtr b) -> ExprPtr {
                     Op op = opOf(n.op);
-                    if ((op == Op::Eq || op == Op::Neq) && !m_inGuard)
+                    if (op == Op::Eq || op == Op::Neq)
                         return callE("kex_intrinsic_number",
                                      op == Op::Eq ? "eq" : "neq", 2,
                                      two(std::move(a), std::move(b)));
@@ -633,22 +618,118 @@ struct Lowering {
     }
 
     auto lowerFunctionCall(const ast::FunctionCall& n) -> ExprPtr {
+        // Supervisor child helpers are syntax-level builders because their
+        // blocks become zero-arity start functions rather than ordinary
+        // trailing function arguments.
+        if (n.name == "worker" && !knownFns.count("worker")) {
+            std::vector<Binding> binds;
+            ExprPtr startFn;
+            if (n.block && n.args.empty() && n.namedArgs.empty()) {
+                startFn = atomize(*n.block, binds);
+            } else if (!n.args.empty()) {
+                auto* module = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
+                if (module) {
+                    std::string beamModule = "kex_";
+                    for (char c : module->name)
+                        beamModule += static_cast<char>(
+                            std::tolower(static_cast<unsigned char>(c)));
+                    std::vector<ExprPtr> startArgs;
+                    for (const auto& [name, value] : n.namedArgs) {
+                        if (name != "args") continue;
+                        if (auto* list = std::get_if<ast::ListExpr>(&value->kind))
+                            for (const auto& item : list->elements)
+                                startArgs.push_back(lower(item));
+                    }
+                    Lambda start;
+                    start.body = callE(beamModule, "start",
+                        static_cast<int>(startArgs.size()), std::move(startArgs));
+                    auto fn = std::make_unique<Expr>();
+                    fn->node = std::move(start);
+                    startFn = atomize_ir(std::move(fn), binds);
+                }
+            }
+            if (startFn)
+                return wrapLets(binds, callE("kex_supervisor", "worker", 1,
+                                             one(std::move(startFn))));
+        }
+        if (n.name == "supervisor" && n.block && !knownFns.count("supervisor")) {
+            std::vector<Binding> binds;
+            ExprPtr strategy = lit(LitKind::Atom, "only_crashed");
+            for (const auto& [name, value] : n.namedArgs)
+                if (name == "strategy" || name == "restart")
+                    strategy = lower(value);
+            ExprPtr children;
+            if (auto* lambda = std::get_if<ast::Lambda>(&(*n.block)->kind))
+                children = lowerBody(lambda->body);
+            else
+                children = lower(*n.block);
+            auto pair = [&](const char* key, ExprPtr value) {
+                auto tuple = std::make_unique<Expr>();
+                tuple->node = MakeTuple{two(lit(LitKind::Atom, key),
+                                            std::move(value))};
+                return tuple;
+            };
+            std::vector<ExprPtr> pairs;
+            pairs.push_back(pair("strategy", atomize_ir(std::move(strategy), binds)));
+            pairs.push_back(pair("children", atomize_ir(std::move(children), binds)));
+            auto list = std::make_unique<Expr>();
+            list->node = MakeList{std::move(pairs), std::nullopt};
+            auto spec = callE("maps", "from_list", 1, one(std::move(list)));
+            return wrapLets(binds, callE("kex_supervisor", "start_link", 1,
+                                         one(std::move(spec))));
+        }
         // Named args → reorder into the callee's positional slots by param
         // name; then positional args (and a trailing block) fill remaining
         // slots in order, leftovers default to None. Mirrors the string
         // emitter / Evaluator::callFunction (spec/optional_parens_do.kex).
         if (!n.namedArgs.empty()) {
-            // Sequence(from: Seed) { |x| next } → an infinite lazy stream
-            // ({'Stream', Thunk} — see runtime/src/kex_intrinsic_stream.erl).
-            if (n.name == "Sequence" && n.block && n.namedArgs.size() == 1 &&
-                n.namedArgs[0].first == "from" && !knownFns.count("Sequence")) {
-                std::vector<Binding> binds;
-                auto seed = atomize(n.namedArgs[0].second, binds);
-                auto fn = atomize(*n.block, binds);
-                return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
-                                             two(std::move(seed), std::move(fn))));
-            }
             auto it = fnParamNames.find(n.name);
+            std::string emittedName = n.name;
+            if (it == fnParamNames.end()) {
+                for (const auto& [key, val] : moduleFunctions) {
+                    auto dot = key.rfind('.');
+                    if (dot != std::string::npos && key.substr(dot + 1) == n.name) {
+                        auto pit = fnParamNames.find(key);
+                        if (pit != fnParamNames.end()) {
+                            it = pit;
+                            emittedName = val;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (it == fnParamNames.end() && externalModules) {
+                for (const auto& [qualKey, pnames] : externalModules->exportParamNames) {
+                    auto dot = qualKey.rfind('.');
+                    if (dot != std::string::npos && qualKey.substr(dot + 1) == n.name) {
+                        auto eit = externalModules->exportToBeamFn.find(qualKey);
+                        if (eit != externalModules->exportToBeamFn.end()) {
+                            auto modName = qualKey.substr(0, dot);
+                            auto ait = externalModules->nameToAtom.find(modName);
+                            if (ait != externalModules->nameToAtom.end()) {
+                                std::vector<Binding> binds;
+                                std::vector<ExprPtr> slots(pnames.size());
+                                for (const auto& [an, av] : n.namedArgs)
+                                    for (size_t i = 0; i < pnames.size(); i++)
+                                        if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                                std::vector<ExprPtr> positional;
+                                for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                                if (n.block) positional.push_back(atomize(*n.block, binds));
+                                size_t next = 0;
+                                for (auto& p : positional) {
+                                    while (next < slots.size() && slots[next]) next++;
+                                    if (next >= slots.size()) break;
+                                    slots[next] = std::move(p);
+                                }
+                                for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                                int ar = static_cast<int>(slots.size());
+                                return wrapLets(binds,
+                                    callE(ait->second, eit->second, ar, std::move(slots)));
+                            }
+                        }
+                    }
+                }
+            }
             if (it == fnParamNames.end())
                 throw LowerError("IR lower: named args to unknown function " + n.name);
             const auto& pnames = it->second;
@@ -669,7 +750,7 @@ struct Lowering {
             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
             auto ex = std::make_unique<Expr>();
             int ar = (int)slots.size();
-            ex->node = Call{"", n.name, ar, std::move(slots), false};
+            ex->node = Call{"", emittedName, ar, std::move(slots), false};
             return wrapLets(binds, std::move(ex));
         }
         std::vector<Binding> binds;
@@ -689,12 +770,6 @@ struct Lowering {
             auto arity = static_cast<int>(args.size());
             return wrapLets(binds, callE("kex_test", n.name, arity, std::move(args)));
         }
-        // worker { block } → kex_supervisor:worker(fun() -> block end), unless
-        // the program defines its own `worker`.
-        if (n.name == "worker" && n.block && !knownFns.count("worker")) {
-            auto fn = atomize(*n.block, binds);
-            return wrapLets(binds, callE("kex_supervisor", "worker", 1, one(std::move(fn))));
-        }
         // assert(cond[, msg]) — a plain global builtin, not a local function.
         if (n.name == "assert" && !n.args.empty() && !n.block) {
             std::vector<ExprPtr> as;
@@ -706,6 +781,17 @@ struct Lowering {
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
         // A trailing do-block is passed as the function's last argument.
         if (n.block) args.push_back(atomize(*n.block, binds));
+        if (n.name == "self" && args.empty() && !knownFns.count("self"))
+            return callE("erlang", "self", 0, {});
+        if (n.name == "send" && args.size() == 2 && !knownFns.count("send")) {
+            auto message = std::make_unique<Expr>();
+            message->node = MakeTuple{three(lit(LitKind::Atom, "kex_msg"),
+                                            std::move(args[1]),
+                                            callE("erlang", "self", 0, {}))};
+            return wrapLets(binds, callE("erlang", "send", 2,
+                                         two(std::move(args[0]),
+                                             std::move(message))));
+        }
         auto ex = std::make_unique<Expr>();
         int arity = static_cast<int>(args.size());
         // A 0-arity function/constant holding a fun (e.g. `let inc = ~add(1)`)
@@ -744,20 +830,11 @@ struct Lowering {
         return wrapLets(binds, std::move(ex));
     }
 
-    // Minimal UFCS/stdlib resolution for the walking skeleton. Only the
-    // handful of forms an early target program needs; everything else errors
-    // (to be widened as constructs are ported from core_erlang.cxx).
+    // Receiver-call and stdlib compatibility resolution. Unknown forms fail
+    // explicitly rather than silently emitting a nonexistent function.
     // Set while lowering a mutating `!` call's VALUE (the rebind itself is
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
-    // Set while lowering a match-clause `when` guard: Core Erlang guards can't
-    // call arbitrary functions, so char predicates must inline as guard-safe
-    // range checks rather than a `kex_io:is_*` call.
-    bool m_inGuard = false;
-    auto lowerGuard(const ast::ExprPtr& g) -> ExprPtr {
-        m_inGuard = true; auto r = lower(g); m_inGuard = false; return r;
-    }
-
     // A module path `A.B.C` (nested modules, encoded by the parser as a chain
     // of MethodCall nodes with no args) flattened to the qualified name
     // ["A","B","C"], or empty if the receiver isn't a pure uppercase path.
@@ -787,6 +864,62 @@ struct Lowering {
             }
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
+        }
+        if (resolvedCalls) {
+            // Local types shadow prelude-resolved calls (a user `record Parser`
+            // must win over the prelude `module Parser`).
+            bool localTypeShadows = false;
+            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
+                localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
+            auto resolved = resolvedCalls->find(&n);
+            if (resolved != resolvedCalls->end() && !localTypeShadows) {
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                if (resolved->second.passesReceiver)
+                    args.push_back(atomize(n.receiver, binds));
+                if (!n.namedArgs.empty()) {
+                    const auto& pnames = resolved->second.paramNames;
+                    auto expected = static_cast<size_t>(
+                        resolved->second.backendArity -
+                        (resolved->second.passesReceiver ? 1 : 0));
+                    if (pnames.size() != expected)
+                        throw LowerError(
+                            "IR lower: named args to imported function with unknown params: " +
+                            resolved->second.backendFunction);
+                    std::vector<ExprPtr> slots(pnames.size());
+                    for (const auto& [name, value] : n.namedArgs) {
+                        auto it = std::find(pnames.begin(), pnames.end(), name);
+                        if (it == pnames.end())
+                            throw LowerError("IR lower: unknown named arg " + name +
+                                             " for " + resolved->second.backendFunction);
+                        slots[static_cast<size_t>(it - pnames.begin())] =
+                            atomize(value, binds);
+                    }
+                    std::vector<ExprPtr> positional;
+                    for (const auto& arg : n.args)
+                        positional.push_back(atomize(arg, binds));
+                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                    size_t next = 0;
+                    for (auto& value : positional) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next++] = std::move(value);
+                    }
+                    for (auto& slot : slots)
+                        if (!slot) slot = lit(LitKind::None, "none");
+                    for (auto& slot : slots) args.push_back(std::move(slot));
+                } else {
+                    for (const auto& arg : n.args)
+                        args.push_back(atomize(arg, binds));
+                    if (n.block) args.push_back(atomize(*n.block, binds));
+                }
+                return wrapLets(
+                    binds,
+                    callE(resolved->second.backendModule,
+                          resolved->second.backendFunction,
+                          resolved->second.backendArity,
+                          std::move(args)));
+            }
         }
         // A call into the `Kex.Intrinsic.<Category>` runtime module, e.g.
         // `Kex.Intrinsic.List.reverse(x)`. Compile to a plain cross-module call
@@ -846,65 +979,11 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             }
         }
-        // Namespaced constructors/helpers implemented by the merged Kex
-        // prelude. Block modules inside src/prelude are flattened there using
-        // `__` separators, so Web.Server.new and Web.Response.text route to
-        // those exported functions rather than companion modules.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && path.size() == 2 &&
-                path[0] == "Web" && (path[1] == "Server" || path[1] == "Response")) {
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                if (n.block) args.push_back(atomize(*n.block, binds));
-                std::string fn = "Web__" + path[1] + "__" + n.method;
-                return wrapLets(binds, callE("kex_prelude", fn,
-                    static_cast<int>(args.size()), std::move(args)));
-            }
-        }
-        // Mock.FS.File(path, content) / Mock.FS.Directory(path) /
-        // Mock.FS.clear() — the in-memory test filesystem, mirrored by
-        // kex_file's mock registry.
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) &&
-                path.size() == 2 && path[0] == "Mock" && path[1] == "FS") {
-                const char* fn = n.method == "File" ? "mock_file"
-                               : n.method == "Directory" ? "mock_dir"
-                               : n.method == "clear" ? "mock_clear" : nullptr;
-                if (!fn) throw LowerError("IR lower: Mock.FS." + n.method + " not supported");
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                int ar = static_cast<int>(args.size());
-                return wrapLets(binds, callE("kex_file", fn, ar, std::move(args)));
-            }
-        }
-        // Mock.Http.start() / Mock.Http.respond(...) / Mock.Http.stop()
-        {
-            std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) &&
-                path.size() == 2 && path[0] == "Mock" && path[1] == "Http") {
-                const char* fn = n.method == "start" ? "mock_start"
-                               : n.method == "respond" ? "mock_respond"
-                               : n.method == "stop" ? "mock_stop" : nullptr;
-                if (!fn) throw LowerError("IR lower: Mock.Http." + n.method + " not supported");
-                std::vector<Binding> binds;
-                std::vector<ExprPtr> args;
-                for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                int ar = static_cast<int>(args.size());
-                return wrapLets(binds, callE("kex_http", fn, ar, std::move(args)));
-            }
-        }
         // User module function: `Util.double(21)` / `Util.Math.double(21)`.
         // Resolve first against the explicit receiver path, then relative to
         // the enclosing module path so nested modules can refer to siblings.
         {
             std::vector<std::string> path;
-            if (modulePath(*n.receiver, path) && !n.namedArgs.empty() &&
-                records.find(n.method) == records.end())
-                throw LowerError("IR lower: named args to module function not yet ported");
             if (!path.empty() || modulePath(*n.receiver, path)) {
                 auto pathToString = [&](const std::vector<std::string>& p) {
                     std::string out;
@@ -933,22 +1012,32 @@ struct Lowering {
                 std::unordered_set<std::string> tried;
                 for (const auto& candidate : candidates) {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
-                    if (preludeFns.count(candidate + "." + n.method)) {
-                        std::vector<Binding> binds;
-                        std::vector<ExprPtr> args;
-                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
-                        if (n.block) args.push_back(atomize(*n.block, binds));
-                        std::string emitted;
-                        for (char c : candidate)
-                            emitted += c == '.' ? "__" : std::string(1, c);
-                        emitted += "__" + n.method;
-                        auto arity = static_cast<int>(args.size());
-                        return wrapLets(binds,
-                            callE("kex_prelude", emitted, arity, std::move(args)));
-                    }
-                    auto it = moduleFunctions.find(candidate + "." + n.method);
+                    auto qualKey = candidate + "." + n.method;
+                    auto it = moduleFunctions.find(qualKey);
                     if (it != moduleFunctions.end()) {
                         std::vector<Binding> binds;
+                        if (!n.namedArgs.empty()) {
+                            auto pit = fnParamNames.find(qualKey);
+                            if (pit == fnParamNames.end())
+                                throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
+                            const auto& pnames = pit->second;
+                            std::vector<ExprPtr> slots(pnames.size());
+                            for (const auto& [an, av] : n.namedArgs)
+                                for (size_t i = 0; i < pnames.size(); i++)
+                                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                            std::vector<ExprPtr> positional;
+                            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                            if (n.block) positional.push_back(atomize(*n.block, binds));
+                            size_t next = 0;
+                            for (auto& p : positional) {
+                                while (next < slots.size() && slots[next]) next++;
+                                if (next >= slots.size()) break;
+                                slots[next] = std::move(p);
+                            }
+                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            int ar = static_cast<int>(slots.size());
+                            return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                        }
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
@@ -957,7 +1046,11 @@ struct Lowering {
                     }
                 }
                 // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
-                if (externalModules) {
+                // Skip when the receiver names a local type that owns this
+                // method — local types shadow prelude modules with the same name.
+                if (externalModules
+                    && !(path.size() == 1 && knownTypes.count(path[0])
+                         && localMethods.count(n.method))) {
                     for (const auto& candidate : candidates) {
                         if (candidate.empty()) continue;
                         auto qualKey = candidate + "." + n.method;
@@ -966,6 +1059,29 @@ struct Lowering {
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
                                 std::vector<Binding> binds;
+                                if (!n.namedArgs.empty()) {
+                                    auto pit = externalModules->exportParamNames.find(qualKey);
+                                    if (pit == externalModules->exportParamNames.end())
+                                        throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+                                    const auto& pnames = pit->second;
+                                    std::vector<ExprPtr> slots(pnames.size());
+                                    for (const auto& [an, av] : n.namedArgs)
+                                        for (size_t i = 0; i < pnames.size(); i++)
+                                            if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                                    std::vector<ExprPtr> positional;
+                                    for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                                    size_t next = 0;
+                                    for (auto& p : positional) {
+                                        while (next < slots.size() && slots[next]) next++;
+                                        if (next >= slots.size()) break;
+                                        slots[next] = std::move(p);
+                                    }
+                                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                                    int ar = static_cast<int>(slots.size());
+                                    return wrapLets(binds,
+                                        callE(ait->second, eit->second, ar, std::move(slots)));
+                                }
                                 std::vector<ExprPtr> args;
                                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                                 if (n.block) args.push_back(atomize(*n.block, binds));
@@ -1015,22 +1131,73 @@ struct Lowering {
         // Namespace calls on an UpperIdentifier receiver, e.g. IO.printLine.
         if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
             std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
             if (auto it = moduleFunctions.find(uid->name + "." + n.method);
                 it != moduleFunctions.end()) {
-                if (!n.namedArgs.empty())
-                    throw LowerError("IR lower: named args to module function not yet ported");
+                auto qualKey = uid->name + "." + n.method;
+                if (!n.namedArgs.empty()) {
+                    auto pit = fnParamNames.find(qualKey);
+                    if (pit == fnParamNames.end())
+                        throw LowerError("IR lower: named args to module function with unknown params: " + qualKey);
+                    const auto& pnames = pit->second;
+                    std::vector<ExprPtr> slots(pnames.size());
+                    for (const auto& [an, av] : n.namedArgs)
+                        for (size_t i = 0; i < pnames.size(); i++)
+                            if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                    std::vector<ExprPtr> positional;
+                    for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                    if (n.block) positional.push_back(atomize(*n.block, binds));
+                    size_t next = 0;
+                    for (auto& p : positional) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next] = std::move(p);
+                    }
+                    for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                    int ar = static_cast<int>(slots.size());
+                    return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                }
+                std::vector<ExprPtr> args;
+                for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
                 int ar = static_cast<int>(args.size());
                 return wrapLets(binds, callE("", it->second, ar, std::move(args)));
             }
-            if (externalModules) {
+            // External module dispatch — but skip when the receiver names a
+            // local type that owns this method (local types shadow prelude
+            // modules with the same name, e.g. a user `record Parser` shadows
+            // the prelude's `module Parser`).
+            if (externalModules
+                && !(knownTypes.count(uid->name) && localMethods.count(n.method))) {
                 auto qualKey = uid->name + "." + n.method;
                 auto eit = externalModules->exportToBeamFn.find(qualKey);
                 if (eit != externalModules->exportToBeamFn.end()) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
+                        if (!n.namedArgs.empty()) {
+                            auto pit = externalModules->exportParamNames.find(qualKey);
+                            if (pit == externalModules->exportParamNames.end())
+                                throw LowerError("IR lower: named args to external function with unknown params: " + qualKey);
+                            const auto& pnames = pit->second;
+                            std::vector<ExprPtr> slots(pnames.size());
+                            for (const auto& [an, av] : n.namedArgs)
+                                for (size_t i = 0; i < pnames.size(); i++)
+                                    if (pnames[i] == an) { slots[i] = atomize(av, binds); break; }
+                            std::vector<ExprPtr> positional;
+                            for (const auto& a : n.args) positional.push_back(atomize(a, binds));
+                            if (n.block) positional.push_back(atomize(*n.block, binds));
+                            size_t next = 0;
+                            for (auto& p : positional) {
+                                while (next < slots.size() && slots[next]) next++;
+                                if (next >= slots.size()) break;
+                                slots[next] = std::move(p);
+                            }
+                            for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
+                            int ar = static_cast<int>(slots.size());
+                            return wrapLets(binds,
+                                callE(ait->second, eit->second, ar, std::move(slots)));
+                        }
+                        std::vector<ExprPtr> args;
+                        for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
                         int ar = static_cast<int>(args.size());
                         return wrapLets(binds,
@@ -1038,82 +1205,14 @@ struct Lowering {
                     }
                 }
             }
-            auto nsCall = [&](const char* mod, const char* fn) {
-                auto ex = std::make_unique<Expr>();
-                int ar = static_cast<int>(args.size());
-                ex->node = Call{mod, fn, ar, std::move(args), false};
-                return wrapLets(binds, std::move(ex));
-            };
-            if (uid->name == "IO") {
-                auto ioCall = [&](const char* fn) {
-                    // No-arg print/printLine/printError: print an empty string
-                    // (match the walker's behaviour).
-                    if (args.empty()) args.push_back(atomize_ir(lit(LitKind::String, ""), binds));
-                    auto ex = std::make_unique<Expr>();
-                    int ar = static_cast<int>(args.size());
-                    ex->node = Call{"kex_io", fn, ar, std::move(args), false};
-                    return wrapLets(binds, std::move(ex));
-                };
-                if (n.method == "printLine")  return ioCall("print_line");
-                if (n.method == "print")      return ioCall("print");
-                if (n.method == "printError") return ioCall("print_error");
-                if (n.method == "warn")       return ioCall("print_error");
-                if (n.method == "warning")    return ioCall("print_error");
-                if (n.method == "inspect")    return ioCall("inspect");
-                // IO.read is still an aspirational API. Preserve the walker's
-                // lazy failure semantics: an unused function containing it
-                // must not prevent the program from compiling on BEAM.
-                if (n.method == "read")
-                    return wrapLets(binds, runtimeError("Undefined function: IO.read"));
-                throw LowerError("IR lower: IO." + n.method + " not yet ported");
-            }
-            if (uid->name == "System" && n.method == "exit" && args.size() == 1)
-                return wrapLets(binds, callE("erlang", "halt", 1, std::move(args)));
-            if (uid->name == "Integer" && n.method == "parse") return nsCall("kex_intrinsic_integer", "integer_parse");
-            if (uid->name == "Integer" && n.method == "parsePrefix") return nsCall("kex_intrinsic_integer", "integer_parse_prefix");
-            if (uid->name == "Float" && n.method == "parse")   return nsCall("kex_intrinsic_number", "float_parse");
-            if (uid->name == "Float" && n.method == "parsePrefix")   return nsCall("kex_intrinsic_number", "float_parse_prefix");
-            if (uid->name == "Number" && n.method == "parse")  return nsCall("kex_intrinsic_number", "number_parse");
-            // Stream.Sequence(from: Seed) { |x| next } / Stream.Iterate(Seed) { }
-            // → kex_intrinsic_stream:make(Seed, Fun) — same lazy stream the
-            // bare Sequence(from:) form builds.
-            if (uid->name == "Stream" &&
-                (n.method == "Sequence" || n.method == "Iterate") && n.block) {
-                ExprPtr seed;
-                if (n.namedArgs.size() == 1 && n.namedArgs[0].first == "from")
-                    seed = atomize(n.namedArgs[0].second, binds);
-                else if (!args.empty())
-                    seed = std::move(args[0]);
-                if (seed) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("kex_intrinsic_stream", "make", 2,
-                                                 two(std::move(seed), std::move(fn))));
-                }
-            }
-            if (uid->name == "Process") {
-                if (n.method == "self" && args.empty()) return callE("erlang", "self", 0, {});
-                if (n.method == "exit" && args.size() == 2)
-                    return wrapLets(binds, callE("erlang", "exit", 2, std::move(args)));
-                if (n.method == "register" && args.size() == 2)
-                    return wrapLets(binds, callE("erlang", "register", 2, std::move(args)));
-                if (n.method == "whereis" && args.size() == 1)
-                    return wrapLets(binds, callE("erlang", "whereis", 1, std::move(args)));
-            }
-            if (uid->name == "Task") {
-                // Task.start { block } → kex_task:start(fun() -> block end).
-                if (n.method == "start" && n.block) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("kex_task", "start", 1, one(std::move(fn))));
-                }
-                if (n.method == "awaitAll" && !args.empty())
-                    return wrapLets(binds, callE("kex_task", "await_all", 1, one(std::move(args[0]))));
-            }
+            std::vector<ExprPtr> args;
+            for (const auto& a : n.args) args.push_back(atomize(a, binds));
             // Supervisor.start(restart: strat) do children end →
             // kex_supervisor:start_link(#{strategy => strat, children => Kids}).
             if (uid->name == "Supervisor" && n.method == "start" && n.block) {
                 ExprPtr strat = lit(LitKind::Atom, "only_crashed");
                 for (const auto& [k, v] : n.namedArgs)
-                    if (k == "restart") strat = lower(v);
+                    if (k == "restart" || k == "strategy") strat = lower(v);
                 ExprPtr children;
                 if (auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind))
                     children = lowerBody(lam->body);
@@ -1133,127 +1232,6 @@ struct Lowering {
                 lst->node = MakeList{std::move(pairs), std::nullopt};
                 auto map = callE("maps", "from_list", 1, one(std::move(lst)));
                 return wrapLets(binds, callE("kex_supervisor", "start_link", 1, one(std::move(map))));
-            }
-            if (uid->name == "Console") {
-                if (n.method == "enabled?") return nsCall("kex_intrinsic_console", "enabled");
-                return nsCall("kex_intrinsic_console", n.method.c_str());
-            }
-            if (uid->name == "Math") {
-                if (n.method == "sqrt") return nsCall("math", "sqrt");
-                if (n.method == "pow" || n.method == "power") return nsCall("math", "pow");
-                if (n.method == "sin") return nsCall("math", "sin");
-                if (n.method == "cos") return nsCall("math", "cos");
-                if (n.method == "tan") return nsCall("math", "tan");
-                if (n.method == "log") return nsCall("kex_intrinsic_math", "log");
-                if (n.method == "abs") return nsCall("erlang", "abs");
-                if (n.method == "floor") return nsCall("erlang", "floor");
-                if (n.method == "ceil") return nsCall("erlang", "ceil");
-                if (n.method == "PI" || n.method == "pi") return nsCall("math", "pi");
-                if (n.method == "E" || n.method == "e") return nsCall("kex_intrinsic_math", "e");
-                if (n.method == "atan2") return nsCall("math", "atan2");
-                if (n.method == "atan") return nsCall("math", "atan");
-                if (n.method == "log10") return nsCall("math", "log10");
-                if (n.method == "hypot") return nsCall("kex_intrinsic_math", "hypot");
-                if (n.method == "cbrt") return nsCall("kex_intrinsic_math", "cbrt");
-                if (n.method == "exp") return nsCall("math", "exp");
-                if (n.method == "log2") return nsCall("math", "log2");
-                if (n.method == "asin") return nsCall("math", "asin");
-                if (n.method == "acos") return nsCall("math", "acos");
-                if (n.method == "sinh") return nsCall("math", "sinh");
-                if (n.method == "cosh") return nsCall("math", "cosh");
-                if (n.method == "tanh") return nsCall("math", "tanh");
-            }
-            if (uid->name == "Http") {
-                if (n.method == "get") return nsCall("kex_http", "get");
-                if (n.method == "post") return nsCall("kex_http", "post");
-                if (n.method == "put") return nsCall("kex_http", "put");
-                if (n.method == "patch") return nsCall("kex_http", "patch");
-                if (n.method == "delete") return nsCall("kex_http", "delete");
-                if (n.method == "head") return nsCall("kex_http", "head");
-                if (n.method == "options") return nsCall("kex_http", "options");
-                throw LowerError("IR lower: Http." + n.method + " not yet ported");
-            }
-            if (uid->name == "File") {
-                // File.open(path) do |handle| … end → kex_file:open(Path, Fun).
-                // The handle on BEAM is the path itself (kex_file ops are
-                // path-based); open returns the block's result, or 'none'
-                // when the file doesn't exist — matching the walker.
-                if (n.method == "open" && n.block && args.size() == 1) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("kex_file", "open", 2,
-                                                 two(std::move(args[0]), std::move(fn))));
-                }
-                // File.open(path, Mode) do |f| … end → a real io-device
-                // handle, closed when the block returns.
-                if (n.method == "open" && n.block && args.size() == 2) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("kex_file", "open", 3,
-                        three(std::move(args[0]), std::move(args[1]), std::move(fn))));
-                }
-                if (n.method == "read") return nsCall("kex_file", "read");
-                if (n.method == "write") return nsCall("kex_file", "write");
-                if (n.method == "append") return nsCall("kex_file", "append");
-                if (n.method == "exists?") return nsCall("kex_file", "exists");
-                if (n.method == "delete") return nsCall("kex_file", "delete");
-                if (n.method == "lines") return nsCall("kex_file", "lines");
-                if (n.method == "feed") return nsCall("kex_file", "feed");
-                if (n.method == "size") return nsCall("kex_file", "size");
-                if (n.method == "file?") return nsCall("kex_file", "file?");
-                if (n.method == "directory?") return nsCall("kex_file", "directory?");
-                if (n.method == "basename") return nsCall("kex_file", "basename");
-                if (n.method == "dirname") return nsCall("kex_file", "dirname");
-                if (n.method == "extension") return nsCall("kex_file", "extension");
-                if (n.method == "join") return nsCall("kex_file", "join");
-                if (n.method == "absolute") return nsCall("kex_file", "absolute");
-                if (n.method == "copy") return nsCall("kex_file", "copy");
-                if (n.method == "rename") return nsCall("kex_file", "rename");
-                throw LowerError("IR lower: File." + n.method + " not yet ported");
-            }
-            if (uid->name == "Directory") {
-                if (n.method == "current") return nsCall("kex_file", "dir_current");
-                if (n.method == "home") return nsCall("kex_file", "dir_home");
-                if (n.method == "exists?" || n.method == "directory?")
-                    return nsCall("kex_file", "dir_exists?");
-                if (n.method == "file?") return nsCall("kex_file", "dir_file?");
-                if (n.method == "create") return nsCall("kex_file", "dir_create");
-                if (n.method == "delete") return nsCall("kex_file", "dir_delete");
-                if (n.method == "deleteAll") return nsCall("kex_file", "dir_delete_all");
-                if (n.method == "list") return nsCall("kex_file", "dir_list");
-                if (n.method == "files") return nsCall("kex_file", "dir_files");
-                if (n.method == "directories") return nsCall("kex_file", "dir_directories");
-                throw LowerError("IR lower: Directory." + n.method + " not yet ported");
-            }
-            // ENV is a real Map value (kex_io:env_map()); its methods are just
-            // map operations on that value.
-            if (uid->name == "ENV") {
-                auto envMap = [&]{ return callE("kex_io", "env_map", 0, {}); };
-                // get(key) -> String? : Just(value) if set, None otherwise
-                // (matching the tree-walker's Optional-returning semantics).
-                if (n.method == "get" && args.size() == 1) {
-                    auto keyRef = snap(atomize_ir(std::move(args[0]), binds));
-                    auto just = std::make_unique<Expr>();
-                    just->node = Construct{"Just", one(
-                        callE("maps", "get", 2, two(keyRef.get(), envMap())))};
-                    return wrapLets(binds, matchBool(
-                        callE("maps", "is_key", 2, two(keyRef.get(), envMap())),
-                        std::move(just), lit(LitKind::None, "none")));
-                }
-                if (n.method == "get" && args.size() == 2)
-                    return wrapLets(binds, callE("maps", "get", 3,
-                        three(std::move(args[0]), envMap(), std::move(args[1]))));
-                if (n.method == "has?" && args.size() == 1)
-                    return wrapLets(binds, callE("maps", "is_key", 2,
-                        two(std::move(args[0]), envMap())));
-                if (n.method == "count" || n.method == "size")
-                    return wrapLets(binds, callE("maps", "size", 1, one(envMap())));
-                if (n.method == "keys")
-                    return wrapLets(binds, callE("maps", "keys", 1, one(envMap())));
-                if (n.method == "values")
-                    return wrapLets(binds, callE("maps", "values", 1, one(envMap())));
-                if (n.method == "each" && n.block) {
-                    auto fn = atomize(*n.block, binds);
-                    return wrapLets(binds, callE("maps", "foreach", 2, two(std::move(fn), envMap())));
-                }
             }
             // Static method dispatch: `Type.method(args)` on a user type whose
             // `method` is a local function/make-method. If that method has an
@@ -1326,476 +1304,67 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
-        // `.or(default)` is universal in the walker — Just/Ok unwrap,
-        // None/Error yield the default, anything else returns itself — so it
-        // can't go through the Optional-owned prelude dispatcher (a plain
-        // value receiver would be a function_clause error).
-        if (!m_inGuard && m == "or" && n.args.size() == 1 && !n.block
-            && !localMethods.count(m))
-            return ret(callE("kex_intrinsic_fun", "or_else", 2,
-                             two(rv(), atomize_ir(lower(n.args[0]), rb))));
-        // External loaded module methods take priority over prelude for UFCS.
-        if (!m_inGuard && externalModules && n.namedArgs.empty()
-            && !localMethods.count(m)) {
-            for (const auto& [qualKey, beamFn] : externalModules->exportToBeamFn) {
-                auto dot = qualKey.rfind('.');
-                if (dot != std::string::npos && qualKey.substr(dot + 1) == m) {
-                    auto modName = qualKey.substr(0, dot);
-                    auto ait = externalModules->nameToAtom.find(modName);
-                    if (ait != externalModules->nameToAtom.end()) {
-                        auto arit = externalModules->exportArity.find(qualKey);
-                        int expectedArity = arit != externalModules->exportArity.end()
-                            ? arit->second : -1;
-                        int blockExtra = n.block ? 1 : 0;
-                        int actualArity = static_cast<int>(n.args.size()) + 1 + blockExtra;
-                        if (expectedArity == -1 || expectedArity == actualArity) {
-                            std::vector<ExprPtr> pargs;
-                            pargs.push_back(rv());
-                            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-                            if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
-                            return ret(callE(ait->second, beamFn,
-                                static_cast<int>(pargs.size()), std::move(pargs)));
+        // External receiver functions take priority over prelude for UFCS.
+        // The registry includes only package-declared provider modules here;
+        // ordinary module exports never become receiver functions implicitly.
+        if (externalModules
+            && (!localMethods.count(m) || preferExternalReceivers)) {
+            auto found = externalModules->receiverFunctions.find(m);
+            if (found != externalModules->receiverFunctions.end()) {
+                int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+                                  (n.block ? 1 : 0);
+                const ExternalModules::ReceiverFunction* match = nullptr;
+                for (const auto& candidate : found->second) {
+                    if (candidate.beamArity != actualArity) continue;
+                    if (match)
+                        return ret(runtimeError(
+                            "Ambiguous receiver function: " + m + "/" +
+                            std::to_string(actualArity)));
+                    match = &candidate;
+                }
+                if (match) {
+                    std::vector<ExprPtr> pargs;
+                    pargs.push_back(rv());
+                    if (!n.namedArgs.empty()) {
+                        auto expected = static_cast<size_t>(actualArity - 1);
+                        if (match->paramNames.size() != expected)
+                            throw LowerError(
+                                "IR lower: named args to receiver function with unknown params: " + m);
+                        std::vector<ExprPtr> slots(match->paramNames.size());
+                        for (const auto& [name, value] : n.namedArgs) {
+                            auto it = std::find(match->paramNames.begin(),
+                                                match->paramNames.end(), name);
+                            if (it == match->paramNames.end())
+                                throw LowerError("IR lower: unknown named arg " + name +
+                                                 " for receiver function " + m);
+                            slots[static_cast<size_t>(it - match->paramNames.begin())] =
+                                atomize_ir(lower(value), rb);
                         }
+                        std::vector<ExprPtr> positional;
+                        for (const auto& a : n.args)
+                            positional.push_back(atomize_ir(lower(a), rb));
+                        if (n.block)
+                            positional.push_back(atomize_ir(lower(*n.block), rb));
+                        size_t next = 0;
+                        for (auto& value : positional) {
+                            while (next < slots.size() && slots[next]) next++;
+                            if (next >= slots.size()) break;
+                            slots[next++] = std::move(value);
+                        }
+                        for (auto& slot : slots)
+                            if (!slot) slot = lit(LitKind::None, "none");
+                        for (auto& slot : slots) pargs.push_back(std::move(slot));
+                    } else {
+                        for (const auto& a : n.args)
+                            pargs.push_back(atomize_ir(lower(a), rb));
+                        if (n.block)
+                            pargs.push_back(atomize_ir(lower(*n.block), rb));
                     }
+                    return ret(callE(match->moduleAtom, match->beamFunction,
+                                     actualArity, std::move(pargs)));
                 }
             }
         }
-        // Prelude stdlib functions → kex_prelude module.
-        // Not in a guard (cross-module calls are illegal in Core Erlang guards).
-        // Methods that have explicit inline lowerings below must not be
-        // short-circuited to kex_prelude — they need the intrinsic path.
-        static const std::unordered_set<std::string> inlinedMethods = {
-            "second", "third", "even?", "odd?", "modulo", "rest",
-            "none?", "some?", "ok?", "error?", "or", "first",
-            "count", "length", "size", "to", "push", "contains?",
-            "indexOf", "empty?", "in?", "alive?", "abs", "sqrt",
-        };
-        // Web.Server route declarations accept their handler as a trailing
-        // block (`server.get("/") do |request| ... end`). They are ordinary
-        // prelude methods whose block is the final function argument.
-        static const std::unordered_set<std::string> webRouteMethods = {
-            "mount", "get", "post", "put", "patch", "delete"
-        };
-        if (!m_inGuard && webRouteMethods.count(m) && n.block &&
-            n.args.size() == 1 && n.namedArgs.empty() && !localMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            pargs.push_back(atomize_ir(lower(n.args[0]), rb));
-            pargs.push_back(atomize_ir(lower(*n.block), rb));
-            return ret(callE("kex_prelude", m, 3, std::move(pargs)));
-        }
-        if (!m_inGuard && preludeFns.count(m) && !n.block && n.namedArgs.empty()
-            && !localMethods.count(m) && !inlinedMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-            return ret(callE("kex_prelude", m, static_cast<int>(n.args.size()) + 1, std::move(pargs)));
-        }
-        // `{ |k, v| }` two-param blocks iterate PAIRS: the receiver is a Map
-        // or a list of pairs (`m.entries.map { |k, v| … }`), which only the
-        // runtime can tell apart — kex_intrinsic_fun's *2 helpers dispatch
-        // on is_map. This must intercept before the kex_prelude routing
-        // below, whose dispatchers send a Map to the reduce-based List
-        // defaults (which can't iterate a map). reduce/sort also take
-        // 2-param blocks but are NOT pair iteration — hof2Name excludes them.
-        if (!m_inGuard && n.block && n.args.empty() && n.namedArgs.empty()
-            && !localMethods.count(m)) {
-            auto* lam = std::get_if<ast::Lambda>(&(*n.block)->kind);
-            if (lam && lam->params.size() == 2) {
-                if (const char* fn2 = hof2Name(m)) {
-                    auto fnV = atomize_ir(lower(*n.block), rb);
-                    return ret(callE("kex_intrinsic_fun", fn2, 2,
-                                     two(rv(), std::move(fnV))));
-                }
-            }
-        }
-        // n.times { |i| block } → kex_intrinsic_integer:times(n, fun).
-        if (m == "times" && n.block && n.args.empty()) {
-            auto fn = atomize_ir(lower(*n.block), rb);
-            return ret(callE("kex_intrinsic_integer", "times", 2, two(rv(), std::move(fn))));
-        }
-        // HOF prelude functions (take a block/function argument).
-        static const std::unordered_set<std::string> hofPreludeFns = {"reduce", "map", "each", "filter", "reject", "mapValues", "mapKeys", "all?", "any?", "find", "flatMap", "collect", "count", "partition", "times", "sort"};
-        if (!m_inGuard && hofPreludeFns.count(m) && n.namedArgs.empty()
-            && !localMethods.count(m)) {
-            std::vector<ExprPtr> pargs;
-            pargs.push_back(rv());
-            for (const auto& a : n.args) pargs.push_back(atomize_ir(lower(a), rb));
-            if (n.block) pargs.push_back(atomize_ir(lower(*n.block), rb));
-            int ar = static_cast<int>(pargs.size());
-            return ret(callE("kex_prelude", m, ar, std::move(pargs)));
-        }
-
-        // `case rv of [] -> empty; _ -> nonEmpty end` (Just/None-on-empty).
-        auto onEmpty = [&](ExprPtr empty, ExprPtr nonEmpty) -> ExprPtr {
-            Match mm; mm.subjects.push_back(rv());
-            MatchClause e; auto ep = std::make_unique<Pattern>();
-            ep->kind = PatKind::List; e.patterns.push_back(std::move(ep)); e.body = std::move(empty);
-            MatchClause ne; auto np = std::make_unique<Pattern>();
-            np->kind = PatKind::Wild; ne.patterns.push_back(std::move(np)); ne.body = std::move(nonEmpty);
-            mm.clauses.push_back(std::move(e)); mm.clauses.push_back(std::move(ne));
-            auto x = std::make_unique<Expr>(); x->node = std::move(mm); return x;
-        };
-        auto justOf = [&](ExprPtr v) {
-            std::vector<ExprPtr> a; a.push_back(std::move(v));
-            auto x = std::make_unique<Expr>(); x->node = Construct{"Just", std::move(a)}; return x;
-        };
-
-        if ((m == "second" || m == "third") && n.args.empty()) {
-            int idx = (m == "second") ? 1 : 2;
-            auto tmp = fresh("_nth");
-            auto letE = std::make_unique<Expr>();
-            letE->node = Let{tmp, callE("kex_intrinsic_list","list_get",2,two(rv(), litInt(idx))),
-                matchBool(
-                    intrin(Op::Eq, two(var(tmp), lit(LitKind::None, "none"))),
-                    lit(LitKind::None, "none"),
-                    justOf(var(tmp)))};
-            return ret(std::move(letE));
-        }
-
-        // No-/one-arg builtins with a single runtime call (receiver first).
-        struct One { const char* method; const char* mod; const char* fn; int nargs; };
-        static const One calls[] = {
-            {"product","kex_intrinsic_list","list_product",0}, {"sum","lists","sum",0},
-            {"sort","lists","sort",0},
-            // handle.feed — the File.open block handle is the path on BEAM.
-            {"feed","kex_file","feed",0},
-            // FileHandle methods (File.open(path, Mode) block handles).
-            {"readLine","kex_file","handle_read_line",0},
-            {"writeLine","kex_file","handle_write_line",1},
-            {"eof?","kex_file","handle_eof?",0},
-            {"uniq","lists","usort",0}, {"unique","lists","usort",0},
-            {"abs","erlang","abs",0}, {"sqrt","math","sqrt",0},
-            // x.inspect returns the pretty-printed representation; IO.inspect
-            // is the separate diagnostic form handled above.
-            {"inspect","kex_io","inspect_value",0},
-            // kex_intrinsic_string handles both String binaries and bare
-            // Char codepoints (string:uppercase alone rejects integers).
-            {"upperCase","kex_intrinsic_string","upperCase",0}, {"upcase","kex_intrinsic_string","upperCase",0},
-            {"lowerCase","kex_intrinsic_string","lowerCase",0}, {"downcase","kex_intrinsic_string","lowerCase",0},
-            {"trim","string","trim",0}, {"at","kex_intrinsic_list","list_get",1},
-            // digit?/alpha?/space? — guard-inlined form below is the guard fallback.
-        };
-        // Char predicates in a guard must inline as guard-safe range checks
-        // (a `kex_io:is_*` call is an illegal guard expression).
-        // Guards can't contain `case`, so use the strict erlang and/or BIFs
-        // (guard-safe) rather than the short-circuit Op::And/Or (which emit a
-        // case).
-        if (m_inGuard && n.args.empty() && !n.block) {
-            auto gand = [&](ExprPtr a, ExprPtr b){ return callE("erlang","and",2,two(std::move(a),std::move(b))); };
-            auto gor  = [&](ExprPtr a, ExprPtr b){ return callE("erlang","or",2,two(std::move(a),std::move(b))); };
-            // A Char is {'Char', Codepoint} — compare its element(2, _)
-            // (guard-safe; the receiver is always a Char where these fire).
-            auto code = [&]{ return callE("erlang","element",2,two(litInt(2), rv())); };
-            auto between = [&](long lo, long hi) {
-                return gand(intrin(Op::Gte, two(code(), litInt(lo))),
-                            intrin(Op::Lte, two(code(), litInt(hi))));
-            };
-            if (m == "digit?") return ret(between('0', '9'));
-            if (m == "alpha?") return ret(gor(between('A','Z'), between('a','z')));
-            if (m == "space?") {
-                ExprPtr chk;
-                for (int c : {' ', '\t', '\n', '\r'}) {
-                    auto eq = intrin(Op::Eq, two(code(), litInt(c)));
-                    chk = chk ? gor(std::move(chk), std::move(eq)) : std::move(eq);
-                }
-                return ret(std::move(chk));
-            }
-        }
-        for (const auto& b : calls)
-            if (m == b.method && (int)n.args.size() == b.nargs && !n.block) {
-                std::vector<ExprPtr> a;
-                // lists:* entries also serve String receivers ([Char] IS
-                // String) — coerce a binary to its codepoint list first.
-                bool coerce = std::string(b.mod) == "lists" ||
-                              std::string(b.fn) == "list_product";
-                a.push_back(coerce
-                    ? callE("kex_intrinsic_list", "as_list", 1, one(rv()))
-                    : rv());
-                if (b.nargs == 1) a.push_back(arg0());
-                return ret(callE(b.mod, b.fn, b.nargs + 1, std::move(a)));
-            }
-
-        if (m == "modulo" && n.args.size() == 1)
-            return ret(callE("erlang","rem",2,two(rv(), arg0())));
-        if (m == "even?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-        if (m == "odd?" && n.args.empty())
-            return ret(intrin(Op::Neq, two(callE("erlang","rem",2,two(rv(),litInt(2))), litInt(0))));
-        if (m == "ok?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Ok"))));
-        if (m == "error?" && n.args.empty())
-            return ret(intrin(Op::Eq, two(callE("erlang","element",2,two(litInt(1),rv())), lit(LitKind::Atom,"Error"))));
-        if (m == "push" && n.args.size() == 1) {
-            auto lst = std::make_unique<Expr>();
-            lst->node = MakeList{one(arg0()), std::nullopt};
-            return ret(callE("erlang","++",2,two(rv(), std::move(lst))));
-        }
-        // in? guard fallback (lists:member is guard-safe on OTP≥21).
-        if (m_inGuard && m == "in?" && n.args.size() == 1)
-            return ret(callE("lists","member",2,two(rv(), arg0())));
-        // pid.send(m) → erlang:send(Pid, {'kex_msg', M, self()}). Every Kex
-        // message is wrapped with the sender pid for `receive |sender|`.
-        if (m == "send" && n.args.size() == 1) {
-            auto tup = std::make_unique<Expr>();
-            tup->node = MakeTuple{[&]{
-                std::vector<ExprPtr> t;
-                t.push_back(lit(LitKind::Atom, "kex_msg"));
-                t.push_back(arg0());
-                t.push_back(callE("erlang", "self", 0, {}));
-                return t;
-            }()};
-            return ret(callE("erlang", "send", 2, two(rv(), std::move(tup))));
-        }
-        if ((m == "link" || m == "unlink") && n.args.empty())
-            return ret(callE("erlang", m, 1, one(rv())));
-        // task.await(timeout: T) / task.await(T) → kex_task:await/2.
-        if (m == "await") {
-            ExprPtr timeout;
-            for (const auto& [k, v] : n.namedArgs)
-                if (k == "timeout") timeout = lower(v);
-            if (!n.args.empty()) timeout = arg0();
-            if (!timeout) timeout = lit(LitKind::Atom, "infinity");
-            return ret(callE("kex_task", "await", 2,
-                two(rv(), atomize_ir(std::move(timeout), rb))));
-        }
-        // contains?: a String (binary) needle means substring search
-        // (string:find handles binary and charlist receivers alike); a
-        // scalar needle means element membership (lists:member).
-        if (m == "contains?" && n.args.size() == 1) {
-            auto needleRef = snap(atomize_ir(lower(n.args[0]), rb));
-            auto substr = intrin(Op::Neq, two(
-                callE("string","find",2,two(rv(), needleRef.get())),
-                lit(LitKind::Atom, "nomatch")));
-            auto substr2 = intrin(Op::Neq, two(
-                callE("string","find",2,two(rv(), needleRef.get())),
-                lit(LitKind::Atom, "nomatch")));
-            auto member = callE("lists","member",2,two(needleRef.get(), rv()));
-            return ret(matchBool(callE("erlang","is_binary",1,one(needleRef.get())),
-                std::move(substr),
-                matchBool(callE("erlang","is_list",1,one(needleRef.get())),
-                    std::move(substr2), std::move(member))));
-        }
-        if (m == "indexOf" && n.args.size() == 1)
-            return ret(callE("kex_intrinsic_list","index_of",2,two(arg0(), rv())));
-        if (m == "alive?"  && n.args.empty()) return ret(callE("erlang","is_process_alive",1,one(rv())));
-        if ((m == "count" || m == "length" || m == "size") && n.args.empty() && !n.block
-            && !localMethods.count(m))
-            return ret(matchBool(callE("erlang","is_map",1,one(rv())),
-                callE("maps","size",1,one(rv())),
-                matchBool(callE("erlang","is_binary",1,one(rv())),
-                    callE("string","length",1,one(rv())),
-                    callE("erlang","length",1,one(rv())))));
-        if (m == "first" && n.args.empty() && !localMethods.count("first"))
-            return ret(onEmpty(lit(LitKind::None,"none"), justOf(callE("erlang","hd",1,one(rv())))));
-        if (m == "rest" && n.args.empty()) {
-            auto empty = std::make_unique<Expr>(); empty->node = MakeList{{}, std::nullopt};
-            return ret(onEmpty(std::move(empty), callE("erlang","tl",1,one(rv()))));
-        }
-        // .to(Type) numeric/string conversion (unless a user `to` method).
-        if (m == "to" && n.args.size() == 1 && !localMethods.count("to")) {
-            std::string ty;
-            if (auto* ui = std::get_if<ast::UpperIdentifier>(&n.args[0]->kind)) ty = ui->name;
-            if (ty == "String")
-                return ret(callE("kex_io","to_string_optional",1,one(rv())));
-            if (ty == "Int" || ty == "Integer")
-                return ret(callE("kex_intrinsic_number","to_integer",1,one(rv())));
-            if (ty == "Float")
-                return ret(callE("kex_intrinsic_number","to_float",1,one(rv())));
-            // to(List) — ranges (and lists) are already real lists on BEAM.
-            if (ty == "List") return ret(justOf(rv()));
-        }
-        // none?: an Option is None (Kex None → the 'None' atom).
-        if (m == "none?" && n.args.empty() && !localMethods.count("none?"))
-            return ret(intrin(Op::Eq, two(rv(), lit(LitKind::None, "none"))));
-        // get(key, default): list → list_get/3; map → maps:get/3.
-        if (m == "get" && n.args.size() == 2 && !localMethods.count("get")) {
-            auto kRef = snap(atomize_ir(lower(n.args[0]), rb));
-            auto dRef = snap(atomize_ir(lower(n.args[1]), rb));
-            return ret(matchBool(callE("erlang","is_list",1,one(rv())),
-                callE("kex_intrinsic_list","list_get",3,three(rv(), kRef.get(), dRef.get())),
-                callE("maps","get",3,three(kRef.get(), rv(), dRef.get()))));
-        }
-        // empty?: works for both maps and lists (size 0 / []).
-        if (m == "empty?" && n.args.empty() && !localMethods.count("empty?"))
-            return ret(matchBool(callE("erlang","is_map",1,one(rv())),
-                intrin(Op::Eq, two(callE("maps","size",1,one(rv())), litInt(0))),
-                matchBool(callE("erlang","is_binary",1,one(rv())),
-                    intrin(Op::Eq, two(callE("erlang","byte_size",1,one(rv())), litInt(0))),
-                    intrin(Op::Eq, two(rv(), [&]{ auto e=std::make_unique<Expr>(); e->node=MakeList{{},std::nullopt}; return e; }())))));
-        // .or(default): unwrap Just/Some/Ok, else the default.
-        if (m == "or" && n.args.size() == 1) {
-            auto dflt = arg0();
-            Match mm; mm.subjects.push_back(rv());
-            auto ctorPat = [&](const char* tag) {
-                auto p = std::make_unique<Pattern>(); p->kind = PatKind::Construct; p->tag = tag;
-                auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Var; vp->name = "_v";
-                p->args.push_back(std::move(vp)); return p;
-            };
-            for (const char* tag : {"Just", "Some", "Ok"}) {
-                MatchClause c; c.patterns.push_back(ctorPat(tag)); c.body = var("_v");
-                mm.clauses.push_back(std::move(c));
-            }
-            MatchClause d; auto wp = std::make_unique<Pattern>(); wp->kind = PatKind::Wild;
-            d.patterns.push_back(std::move(wp)); d.body = std::move(dflt);
-            mm.clauses.push_back(std::move(d));
-            auto x = std::make_unique<Expr>(); x->node = std::move(mm);
-            return ret(std::move(x));
-        }
-        // list[i] / list.get(i): list → raw elem-or-none; map → Just/None.
-        if (m == "get" && n.args.size() == 1 && !localMethods.count("get")) {
-            auto idxRef = snap(atomize_ir(lower(n.args[0]), rb));
-            Match inner; inner.subjects.push_back(callE("maps","find",2,two(idxRef.get(), rv())));
-            MatchClause ok; auto okp = std::make_unique<Pattern>(); okp->kind = PatKind::Tuple;
-            auto okt = std::make_unique<Pattern>(); okt->kind = PatKind::Lit; okt->litKind = LitKind::Atom; okt->litText = "ok";
-            auto okv = std::make_unique<Pattern>(); okv->kind = PatKind::Var; okv->name = "_gv";
-            okp->args.push_back(std::move(okt)); okp->args.push_back(std::move(okv));
-            ok.patterns.push_back(std::move(okp)); ok.body = justOf(var("_gv"));
-            MatchClause er; auto erp = std::make_unique<Pattern>(); erp->kind = PatKind::Lit; erp->litKind = LitKind::Atom; erp->litText = "error";
-            er.patterns.push_back(std::move(erp)); er.body = lit(LitKind::None, "none");
-            inner.clauses.push_back(std::move(ok)); inner.clauses.push_back(std::move(er));
-            auto innerE = std::make_unique<Expr>(); innerE->node = std::move(inner);
-            return ret(matchBool(callE("erlang","is_list",1,one(rv())),
-                callE("kex_intrinsic_list","list_get",2,two(rv(), idxRef.get())),
-                std::move(innerE)));
-        }
-
-        // Block/higher-order list methods. The block lowers to a Lambda,
-        // which — being non-atomic — atomize() naturally let-binds (Core
-        // Erlang requires funs to be bound before being passed as call args).
-        const ast::ExprPtr* blk = n.block ? &*n.block
-                                : (!n.args.empty() ? &n.args.back() : nullptr);
-        if (blk) {
-            std::vector<Binding> binds;
-            auto fn = atomize(*blk, binds);
-            auto fnVar = [&]() -> ExprPtr {
-                if (auto* v = std::get_if<Var>(&fn->node)) return var(v->name);
-                if (auto* l = std::get_if<Lit>(&fn->node)) { auto e = std::make_unique<Expr>(); e->node = *l; return e; }
-                return clone(fn, "fnVar");
-            };
-            // rb binds the receiver (outer), binds the block fn (inner).
-            auto build = [&](ExprPtr call) { return wrapLets(rb, wrapLets(binds, std::move(call))); };
-            // A 2-parameter block (|k, v|) iterates pairs — but the receiver
-            // may be a Map OR a list of pairs (`m.entries.map { |k, v| … }`),
-            // which only the runtime can tell apart. kex_intrinsic_fun's *2
-            // helpers dispatch on is_map and auto-splat tuples for lists.
-            bool mapForm = false;
-            if (auto* lam = std::get_if<ast::Lambda>(&(*blk)->kind))
-                mapForm = lam->params.size() == 2;
-            if (mapForm) {
-                if (const char* fn2 = hof2Name(m))
-                    return build(callE("kex_intrinsic_fun", fn2, 2,
-                                       two(rv(), std::move(fn))));
-            }
-            // Aggregations with a key block: `.sum { |x| k }` maps then sums,
-            // `.max { |x| k }` picks the element with the greatest key.
-            {
-                static const std::unordered_map<std::string, const char*> aggBy = {
-                    {"sum","sum_by"}, {"product","product_by"},
-                    {"min","minBy"}, {"max","maxBy"},
-                };
-                if (auto it = aggBy.find(m); it != aggBy.end())
-                    return build(callE("kex_intrinsic_list", it->second, 2,
-                                       two(rv(), std::move(fn))));
-            }
-            // List HOFs also serve String receivers ([Char] IS String):
-            // as_list coerces a binary to its codepoint list, everything
-            // else passes through.
-            auto rvList = [&]{ return callE("kex_intrinsic_list", "as_list", 1, one(rv())); };
-            if (m == "each")
-                return build(callE("lists", "foreach", 2, two(std::move(fn), rvList())));
-            if (m == "map")
-                return build(callE("lists", "map", 2, two(std::move(fn), rvList())));
-            if (m == "filter" || m == "select")
-                return build(callE("lists", "filter", 2, two(std::move(fn), rvList())));
-            if (m == "all?")
-                return build(callE("lists", "all", 2, two(std::move(fn), rvList())));
-            if (m == "any?" || m == "some?")
-                return build(callE("lists", "any", 2, two(std::move(fn), rvList())));
-            if (m == "flatMap" || m == "flat_map")
-                return build(callE("lists", "flatmap", 2, two(std::move(fn), rvList())));
-            // reject { pred } → keep elements where pred is false.
-            if (m == "reject") {
-                std::string nx = fresh("Nx");
-                Lambda neg; neg.params = {nx};
-                neg.body = intrin(Op::Not, one(callE_indirect(fnVar(), one(var(nx)))));
-                auto negFn = std::make_unique<Expr>(); negFn->node = std::move(neg);
-                auto negV = atomize_ir(std::move(negFn), binds);
-                return build(callE("lists", "filter", 2, two(std::move(negV), rvList())));
-            }
-            // Block arity of the original `{ ... }` (−1 if not a Lambda).
-            auto blockArity = [&](const ast::ExprPtr* b) -> int {
-                if (b) if (auto* lam = std::get_if<ast::Lambda>(&(*b)->kind))
-                    return static_cast<int>(lam->params.size());
-                return -1;
-            };
-            // mapValues { |v| } / { |k,v| } → maps:map(fun(K,V)->NewV, m).
-            if (m == "mapValues") {
-                ExprPtr mapper;
-                if (blockArity(blk) == 2) mapper = std::move(fn);
-                else {
-                    std::string kk = fresh("K"), vv = fresh("V");
-                    Lambda w; w.params = {kk, vv};
-                    w.body = callE_indirect(std::move(fn), one(var(vv)));
-                    auto wf = std::make_unique<Expr>(); wf->node = std::move(w);
-                    mapper = atomize_ir(std::move(wf), binds);
-                }
-                return build(callE("maps", "map", 2, two(std::move(mapper), rv())));
-            }
-            // mapKeys { |k| } → maps:fold(fun(K,V,A)->put(fn(K),V,A), #{}, m).
-            if (m == "mapKeys") {
-                std::string kk = fresh("K"), vv = fresh("V"), acc = fresh("Acc");
-                Lambda fold; fold.params = {kk, vv, acc};
-                fold.body = callE("maps", "put", 3, three(
-                    callE_indirect(std::move(fn), one(var(kk))), var(vv), var(acc)));
-                auto ff = std::make_unique<Expr>(); ff->node = std::move(fold);
-                auto foldV = atomize_ir(std::move(ff), binds);
-                return build(callE("maps", "fold", 3, three(std::move(foldV),
-                    callE("maps", "new", 0, {}), rv())));
-            }
-            // find { pred } → Just(x) for the first match, else None. Built on
-            // lists:search/2 which returns {value, X} | false.
-            if (m == "find") {
-                std::string found = fresh("Found");
-                Match mm;
-                mm.subjects.push_back(callE("lists", "search", 2, two(std::move(fn), rvList())));
-                MatchClause hit;
-                auto tp = std::make_unique<Pattern>(); tp->kind = PatKind::Tuple;
-                auto vp = std::make_unique<Pattern>(); vp->kind = PatKind::Lit;
-                vp->litKind = LitKind::Atom; vp->litText = "value";
-                auto xp = std::make_unique<Pattern>(); xp->kind = PatKind::Var; xp->name = found;
-                tp->args.push_back(std::move(vp)); tp->args.push_back(std::move(xp));
-                hit.patterns.push_back(std::move(tp));
-                hit.body = justOf(var(found));
-                MatchClause miss;
-                auto fp = std::make_unique<Pattern>(); fp->kind = PatKind::Lit;
-                fp->litKind = LitKind::Bool; fp->litBool = false;
-                miss.patterns.push_back(std::move(fp));
-                miss.body = lit(LitKind::None, "none");
-                mm.clauses.push_back(std::move(hit)); mm.clauses.push_back(std::move(miss));
-                auto e = std::make_unique<Expr>(); e->node = std::move(mm);
-                return build(std::move(e));
-            }
-            if (m == "count") // count matching a predicate
-                return build(callE("erlang", "length", 1,
-                    one(callE("lists", "filter", 2, two(std::move(fn), rvList())))));
-            // reduce(seed) { |acc, x| } / reduce(seed, fn) → lists:foldl(
-            // fun(x,acc)->fn(acc,x), seed, recv). The fn is either a trailing
-            // block or the 2nd positional arg (e.g. a curried `~(+)`).
-            if ((m == "reduce" || m == "inject") &&
-                ((n.block && n.args.size() == 1) || (!n.block && n.args.size() == 2))) {
-                auto seed = atomize(n.args[0], binds);
-                // Kex block is (acc, elem); Erlang foldl passes (elem, acc) → swap.
-                Lambda swap;
-                swap.params = {"_e", "_a"};
-                swap.body = callE_indirect(fnVar(), two(var("_a"), var("_e")));
-                auto swapFn = std::make_unique<Expr>(); swapFn->node = std::move(swap);
-                auto swapVar = atomize_ir(std::move(swapFn), binds);
-                return build(callE("lists", "foldl", 3,
-                    three(std::move(swapVar), std::move(seed), rvList())));
-            }
-        }
-
         // Generic UFCS fallback: a field access or a make-block method are
         // BOTH emitted as local functions taking the receiver first, so
         // `x.foo(a, b)` → `apply 'foo'/3(x, a, b)`. This is exactly how the
@@ -1815,18 +1384,6 @@ struct Lowering {
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.method, arity, std::move(args), false};
             return ret(wrapLets(binds, std::move(ex)));
-        }
-        // Prelude stdlib function → the shared kex_prelude BEAM module
-        // (`x.reverse` → `kex_prelude:reverse(x)`). The typed impl lives in the
-        // Kex prelude; this is just the cross-module dispatch. A user-defined
-        // method of the same name shadows it (localMethods is checked above).
-        if (preludeFns.count(n.method) && !n.block && n.namedArgs.empty()) {
-            std::vector<Binding> binds;
-            std::vector<ExprPtr> args;
-            args.push_back(rv());
-            for (const auto& a : n.args) args.push_back(atomize(a, binds));
-            int arity = static_cast<int>(n.args.size()) + 1;
-            return ret(wrapLets(binds, callE("kex_prelude", n.method, arity, std::move(args))));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
         return ret(runtimeError("Undefined method: " + n.method));
@@ -1861,7 +1418,7 @@ struct Lowering {
     // "text ${expr} more" → a ++ chain of literal segments and to_string'd
     // sub-expressions. The `${...}` sub-expressions are raw text in the AST,
     // so they're re-lexed/parsed here and lowered like any other expression
-    // (matching CoreErlangEmitter::emitInterpolatedString).
+    // This keeps interpolation evaluation order explicit in IR.
     auto lowerInterpolatedString(const std::string& raw) -> ExprPtr {
         std::vector<ExprPtr> parts;
         size_t pos = 0;
@@ -2027,6 +1584,101 @@ struct Lowering {
     auto wildPat() -> PatternPtr {
         auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w;
     }
+
+    // ---- Guards -------------------------------------------------------------
+    // Expand user-written `when` guards into nested matches. Guards lower as
+    // ordinary expressions (BEAM guards can't hold arbitrary calls, so the
+    // predicate moves out of guard position entirely). A guarded clause
+    // `P when G -> B` becomes `P -> case G of true -> B; _ -> Cont() end`
+    // followed by a wildcard clause `_ -> Cont()`, where Cont is a LetRec-bound
+    // 0-arity function holding the expansion of the remaining clauses — so
+    // clause bodies are never duplicated. A non-`true` guard result fails the
+    // clause, matching native guard semantics. `receive` guards are NOT
+    // expanded here (they must stay native; see lowerReceive).
+    auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr {
+        size_t gi = 0;
+        while (gi < clauses.size() && !clauses[gi].guard) ++gi;
+        if (gi == clauses.size()) {
+            auto e = std::make_unique<Expr>();
+            Match m; m.subjects = std::move(subjects); m.clauses = std::move(clauses);
+            e->node = std::move(m);
+            return e;
+        }
+        // Bind non-variable subjects so the continuation can re-match them.
+        std::vector<std::string> subjNames;
+        std::vector<std::pair<std::string, ExprPtr>> binds;
+        for (auto& s : subjects) {
+            if (auto* v = std::get_if<Var>(&s->node)) {
+                subjNames.push_back(v->name);
+            } else {
+                std::string sv = fresh("Gsubj");
+                binds.push_back({sv, std::move(s)});
+                subjNames.push_back(sv);
+            }
+        }
+        auto subjExprs = [&] {
+            std::vector<ExprPtr> v;
+            for (const auto& n : subjNames) v.push_back(var(n));
+            return v;
+        };
+        // Continuation: expand the remaining clauses, or reproduce the
+        // no-clause-matched failure when none remain.
+        std::vector<MatchClause> rest(
+            std::make_move_iterator(clauses.begin() + gi + 1),
+            std::make_move_iterator(clauses.end()));
+        ExprPtr contBody;
+        if (rest.empty()) {
+            auto tup = std::make_unique<Expr>();
+            tup->node = MakeTuple{two(lit(LitKind::Atom, "case_clause"), var(subjNames[0]))};
+            contBody = std::make_unique<Expr>();
+            contBody->node = Call{"erlang", "error", 1, one(std::move(tup)), false};
+        } else {
+            contBody = expandGuards(subjExprs(), std::move(rest));
+        }
+        std::string contName = "__gcont" + std::to_string(counter++);
+        auto callCont = [&] {
+            auto c = std::make_unique<Expr>();
+            c->node = Call{"", contName, 0, {}, false};
+            return c;
+        };
+        Match m;
+        m.subjects = subjExprs();
+        for (size_t i = 0; i < gi; ++i) m.clauses.push_back(std::move(clauses[i]));
+        MatchClause g;
+        g.patterns = std::move(clauses[gi].patterns);
+        // `true -> body; _ -> cont` — a non-boolean guard fails the clause.
+        Match gm;
+        gm.subjects.push_back(std::move(*clauses[gi].guard));
+        MatchClause gt;
+        auto tp = std::make_unique<Pattern>();
+        tp->kind = PatKind::Lit; tp->litKind = LitKind::Bool; tp->litBool = true;
+        gt.patterns.push_back(std::move(tp));
+        gt.body = std::move(clauses[gi].body);
+        MatchClause gf;
+        gf.patterns.push_back(wildPat());
+        gf.body = callCont();
+        gm.clauses.push_back(std::move(gt));
+        gm.clauses.push_back(std::move(gf));
+        auto ge = std::make_unique<Expr>();
+        ge->node = std::move(gm);
+        g.body = std::move(ge);
+        m.clauses.push_back(std::move(g));
+        MatchClause fall;
+        for (size_t i = 0; i < m.subjects.size(); ++i) fall.patterns.push_back(wildPat());
+        fall.body = callCont();
+        m.clauses.push_back(std::move(fall));
+        auto caseE = std::make_unique<Expr>();
+        caseE->node = std::move(m);
+        LetRec lr; lr.name = contName; lr.params = {};
+        lr.funBody = std::move(contBody);
+        lr.contBody = std::move(caseE);
+        auto e = std::make_unique<Expr>();
+        e->node = std::move(lr);
+        for (auto it = binds.rbegin(); it != binds.rend(); ++it)
+            e = makeLet(it->first, std::move(it->second), std::move(e));
+        return e;
+    }
+
     // Record-destructure `{ f, g: alias, h: { nested } }` → a flat list of
     // (name, accessor-expr) bindings read by field name from `baseVar`.
     // Recurses into nested record patterns.
@@ -2198,19 +1850,21 @@ struct Lowering {
             letWrap = std::move(subjIr);
             subjIr = var(ssa);
         }
-        Match m;
-        m.subjects.push_back(std::move(subjIr));
+        std::vector<ExprPtr> subjects;
+        subjects.push_back(std::move(subjIr));
+        std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             MatchClause mc;
             for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
-            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+            // `when` guards lower as ordinary expressions; expandGuards moves
+            // the predicate out of BEAM guard position into a nested match.
+            if (cl.guard) mc.guard = lower(*cl.guard);
             mc.body = lower(cl.body);
             subst = snap;
-            m.clauses.push_back(std::move(mc));
+            cls.push_back(std::move(mc));
         }
-        auto e = std::make_unique<Expr>();
-        e->node = std::move(m);
+        auto e = expandGuards(std::move(subjects), std::move(cls));
         if (letWrap) {
             auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
             if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);
@@ -2227,7 +1881,6 @@ struct Lowering {
             if (n.senderBinding) subst[*n.senderBinding] = *n.senderBinding;
             ReceiveClause rc;
             rc.pattern = cl.patterns.empty() ? wildPat() : lowerPattern(cl.patterns[0]);
-            if (cl.guard) rc.guard = lowerGuard(*cl.guard);
             rc.body = lower(cl.body);
             subst = snap;
             r.clauses.push_back(std::move(rc));
@@ -2245,9 +1898,10 @@ struct Lowering {
     auto lowerRangeMatch(const ast::MatchExpr& n) -> ExprPtr {
         std::string sv = fresh("RSubj");
         auto subjVal = lower(n.subject);
-        Match m;
-        m.subjects.push_back(callE("erlang", "hd", 1, one(var(sv))));
-        m.subjects.push_back(callE("lists", "last", 1, one(var(sv))));
+        std::vector<ExprPtr> subjects;
+        subjects.push_back(callE("erlang", "hd", 1, one(var(sv))));
+        subjects.push_back(callE("lists", "last", 1, one(var(sv))));
+        std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             MatchClause mc;
@@ -2260,12 +1914,12 @@ struct Lowering {
                 mc.patterns.push_back(wildPat());
                 mc.patterns.push_back(wildPat());
             }
-            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+            if (cl.guard) mc.guard = lower(*cl.guard);
             mc.body = lower(cl.body);
             subst = snap;
-            m.clauses.push_back(std::move(mc));
+            cls.push_back(std::move(mc));
         }
-        auto e = std::make_unique<Expr>(); e->node = std::move(m);
+        auto e = expandGuards(std::move(subjects), std::move(cls));
         return makeLet(sv, std::move(subjVal), std::move(e));
     }
 
@@ -2353,6 +2007,7 @@ struct Lowering {
         if (auto* ve = std::get_if<ast::VarExpr>(&e->kind)) {
             auto val = lower(ve->value);
             std::string nv = fresh(ve->name); subst[ve->name] = nv;
+            immutableBindings.erase(ve->name);
             return makeLet(nv, std::move(val), cont());
         }
         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
@@ -2410,17 +2065,19 @@ struct Lowering {
             if (me->subjectBinding)
                 throw LowerError("IR lower: match |binder| in loop not yet ported");
             std::function<ExprPtr()> armEnd = [&]() -> ExprPtr { return cont(); };
-            Match m; m.subjects.push_back(lower(me->subject));
+            std::vector<ExprPtr> subjects;
+            subjects.push_back(lower(me->subject));
+            std::vector<MatchClause> cls;
             for (const auto& cl : me->clauses) {
                 auto snap = subst;
                 MatchClause mcx;
                 for (const auto& p : cl.patterns) mcx.patterns.push_back(lowerPattern(p));
-                if (cl.guard) mcx.guard = lowerGuard(*cl.guard);
+                if (cl.guard) mcx.guard = lower(*cl.guard);
                 mcx.body = lowerLoopArmU(cl.body, loopFn, mutVars, armEnd);
                 subst = snap;
-                m.clauses.push_back(std::move(mcx));
+                cls.push_back(std::move(mcx));
             }
-            auto x = std::make_unique<Expr>(); x->node = std::move(m); return x;
+            return expandGuards(std::move(subjects), std::move(cls));
         }
         if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind))
             return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); });
@@ -2586,6 +2243,7 @@ struct Lowering {
             auto val = lower(ve->value);
             std::string ssa = subst.count(ve->name) ? fresh(ve->name) : ve->name;
             subst[ve->name] = ssa;
+            immutableBindings.erase(ve->name);
             auto rest = isLast ? var(ssa) : lowerBodyFrom(body, i + 1);
             return makeLet(ssa, std::move(val), std::move(rest));
         }
@@ -2618,12 +2276,14 @@ struct Lowering {
             }
         }
         // A closure captures the walker's mutable bindings by reference, but
-        // BEAM closures only capture values. For a list `each` callback that
-        // reassigns an outer variable, lower it to lists:foldl and use the fold
-        // accumulator as the callback's explicit mutable state. Once the
-        // callback completes, rebind that state in the enclosing SSA scope.
+        // BEAM closures only capture values. For finite iteration receiver
+        // functions (`each` and `times`) whose callback reassigns an outer
+        // variable, lower the iteration to lists:foldl and use the accumulator
+        // as explicit mutable state. Once the callback completes, rebind that
+        // state in the enclosing SSA scope.
         if (auto* mc = std::get_if<ast::MethodCall>(&e->kind);
-            mc && mc->method == "each" && mc->receiver && mc->args.empty()
+            mc && (mc->method == "each" || mc->method == "times") &&
+            mc->receiver && mc->args.empty()
             && mc->namedArgs.empty() && mc->block) {
             auto* lam = std::get_if<ast::Lambda>(&(*mc->block)->kind);
             std::unordered_set<std::string> muts;
@@ -2631,7 +2291,11 @@ struct Lowering {
             std::vector<std::string> mutVars;
             for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
             std::sort(mutVars.begin(), mutVars.end());
-            if (lam && (lam->params.size() == 1 || lam->params.size() == 2) && !mutVars.empty()) {
+            bool supportedArity = lam &&
+                ((mc->method == "times" && lam->params.size() == 1) ||
+                 (mc->method == "each" &&
+                  (lam->params.size() == 1 || lam->params.size() == 2)));
+            if (supportedArity && !mutVars.empty()) {
                 std::vector<Binding> binds;
                 auto receiver = atomize_ir(lower(mc->receiver), binds);
                 auto snap = subst;
@@ -2681,8 +2345,18 @@ struct Lowering {
                 foldExpr->node = std::move(fold);
                 auto foldFn = atomize_ir(std::move(foldExpr), binds);
                 auto initial = atomize_ir(stateExpr(mutVars), binds);
+                ExprPtr items;
+                if (mc->method == "times") {
+                    auto last = intrin(Op::Sub,
+                        two(std::move(receiver), litInt(1)));
+                    items = callE("lists", "seq", 2,
+                                  two(litInt(0), std::move(last)));
+                } else {
+                    items = callE("kex_intrinsic_fun", "items", 1,
+                                  one(std::move(receiver)));
+                }
                 auto result = wrapLets(binds, callE("lists", "foldl", 3,
-                    three(std::move(foldFn), std::move(initial), std::move(receiver))));
+                    three(std::move(foldFn), std::move(initial), std::move(items))));
 
                 if (mutVars.size() == 1) {
                     std::string nv = fresh(mutVars[0]);
@@ -2715,6 +2389,7 @@ struct Lowering {
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
                 for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
+                for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
                 std::sort(mutVars.begin(), mutVars.end());
                 if (!mutVars.empty()) {
                     std::function<ExprPtr()> yieldState =
@@ -2734,21 +2409,20 @@ struct Lowering {
                         caseE = matchBool(lower(ie->condition), branch(ie->thenBody),
                                           std::move(elseP));
                     } else {
-                        Match m;
-                        m.subjects.push_back(lower(me->subject));
+                        std::vector<ExprPtr> subjects;
+                        subjects.push_back(lower(me->subject));
+                        std::vector<MatchClause> cls;
                         for (const auto& cl : me->clauses) {
                             auto snap = subst;
                             MatchClause mc;
                             for (const auto& p : cl.patterns)
                                 mc.patterns.push_back(lowerPattern(p));
-                            if (cl.guard) mc.guard = lowerGuard(*cl.guard);
+                            if (cl.guard) mc.guard = lower(*cl.guard);
                             mc.body = lowerLoopArmU(cl.body, "", mutVars, yieldState);
                             subst = snap;
-                            m.clauses.push_back(std::move(mc));
+                            cls.push_back(std::move(mc));
                         }
-                        auto x = std::make_unique<Expr>();
-                        x->node = std::move(m);
-                        caseE = std::move(x);
+                        caseE = expandGuards(std::move(subjects), std::move(cls));
                     }
                     // Rebind the mutated names to the yielded values.
                     if (mutVars.size() == 1) {
@@ -2883,6 +2557,17 @@ struct Lowering {
     }
 
     // ---- Records ----------------------------------------------------------
+    void collectRecordLayout(const std::string& name,
+                             const std::vector<std::string>& fields) {
+        RecordInfo info;
+        for (int i = 0; i < static_cast<int>(fields.size()); i++) {
+            info.fields.push_back(fields[i]);
+            info.defaults.push_back(nullptr);
+            fieldAccessors[fields[i]].push_back({name, i + 2});
+        }
+        records[name] = std::move(info);
+    }
+
     void collectRecord(const ast::RecordDef& rec) {
         RecordInfo info;
         for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
@@ -2895,13 +2580,19 @@ struct Lowering {
     }
 
     // Emit a `'field'/1` accessor for each record field, unless a real
-    // function/method of the same name exists (which shadows it). When a
-    // field sits at the same position in every record that has it, one
-    // element/2 call suffices; otherwise dispatch on the record tag.
+    // function/method of the same name exists (which shadows it), or the
+    // name matches an imported package-declared receiver function —
+    // otherwise the accessor would shadow the prelude's receiver function
+    // and dispatch `[1,2,3].rest` to a tuple-element read instead of
+    // `kex_prelude:rest/1`. When a field sits at the same position in
+    // every record that has it, one element/2 call suffices; otherwise
+    // dispatch on the record tag.
     auto makeAccessors(const std::unordered_set<std::string>& definedFns) -> std::vector<FunDef> {
         std::vector<FunDef> out;
         for (const auto& [field, entries] : fieldAccessors) {
             if (definedFns.count(field)) continue;
+            if (externalModules &&
+                externalModules->receiverFunctions.count(field)) continue;
             FunDef def; def.name = field; def.arity = 1;
             FunClause fc;
             auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
@@ -3011,25 +2702,20 @@ struct Lowering {
         return out;
     }
 
-    // A dispatcher `name/arity` for a colliding method: inspect the
-    // receiver's tag (element 1 of arg 0) and forward to `name__Type`.
-    // A guard testing that `v` has runtime type `ty`. Primitive types use the
-    // matching is_* BIF; everything else is a tagged tuple `{'ty', …}`.
-    auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
-        // Char has no is_* entry: a Char is the tagged tuple {'Char', N},
-        // so it falls to the record/variant branch below.
-        static const std::unordered_map<std::string, const char*> prim = {
+    static auto primGuardBifs() -> const std::unordered_map<std::string, const char*>& {
+        static const std::unordered_map<std::string, const char*> m = {
             {"Integer","is_integer"}, {"Float","is_float"},
             {"Number","is_number"}, {"String","is_binary"}, {"Bool","is_boolean"},
             {"Map","is_map"}, {"List","is_list"},
-            // A range is a real list at BEAM runtime (`a..b` lowers to
-            // lists:seq/2 before any method call), so Range-owned prelude
-            // methods dispatch on is_list.
             {"Range","is_list"},
             {"Pid","is_pid"}, {"Task","is_pid"}, {"Reference","is_reference"},
         };
-        auto it = prim.find(ty);
-        if (it != prim.end())
+        return m;
+    }
+
+    auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
+        auto it = primGuardBifs().find(ty);
+        if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
         // Record/variant: is_tuple(V) and element(1,V) =:= 'ty'. Strict `and`
         // (guard-safe); element/2 in a guard just fails the clause on a non-tuple.
@@ -3058,7 +2744,38 @@ struct Lowering {
         // matching `is_*` BIF (all guard-safe).
         Match m;
         m.subjects.push_back(var("_a0"));
+        // Primitive-type guards (is_list, is_binary, …) are always safe.
+        // Record/variant guards use erlang:and(is_tuple(V), element(1,V)==Tag)
+        // which evaluates element/2 eagerly and crashes on non-tuples. Emit
+        // safe clauses first so a primitive receiver matches before reaching
+        // an element-based guard.
+        std::vector<std::string> sortedOwners;
+        std::vector<std::string> deferredOwners;
+        std::unordered_set<std::string> seen;
         for (const auto& ty : owners) {
+            if (!seen.insert(ty).second) continue;
+            if (primGuardBifs().count(ty) || ty == "Char"
+                || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))
+                sortedOwners.push_back(ty);
+            else
+                deferredOwners.push_back(ty);
+        }
+        // When two types share the same BIF guard, the first clause
+        // shadows the second.  Keep the more general type and drop the
+        // shadowed one — its implementation is reachable through the
+        // general type's method anyway (e.g. Range methods materialise
+        // via .items and re-enter as a List).
+        auto dropShadowed = [&](const std::string& keep,
+                                const std::string& drop) {
+            if (std::find(sortedOwners.begin(), sortedOwners.end(), keep) != sortedOwners.end()) {
+                auto it = std::find(sortedOwners.begin(), sortedOwners.end(), drop);
+                if (it != sortedOwners.end()) sortedOwners.erase(it);
+            }
+        };
+        dropShadowed("List", "Range");
+        dropShadowed("Task", "Pid");
+        sortedOwners.insert(sortedOwners.end(), deferredOwners.begin(), deferredOwners.end());
+        for (const auto& ty : sortedOwners) {
             // ADT types with known variant tags: generate one pattern-match
             // clause per variant instead of a single guard clause. This avoids
             // Core Erlang's strict erlang:and/or in guards (element/2 throws
@@ -3182,13 +2899,18 @@ static auto beamArity(const ast::FunctionDef* fd) -> size_t {
 } // namespace
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns,
                   const std::string& sourcePath,
-                  const ExternalModules* externals) -> Module {
+                  const ExternalModules* externals,
+                  const std::vector<ExternalRecordLayout>* externalRecords,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls,
+                  bool preferExternalReceivers)
+    -> Module {
     Lowering L;
-    L.preludeFns = preludeFns;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
+    L.resolvedCalls = resolvedCalls;
+    L.preferExternalReceivers = preferExternalReceivers;
     Module mod;
     mod.name = "kex_" + fileStem;
 
@@ -3255,6 +2977,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     staticMethodNames.insert(sf->name);
                 }
     };
+    if (externalRecords)
+        for (const auto& record : *externalRecords) {
+            L.collectRecordLayout(record.name, record.fields);
+            L.knownTypes.insert(record.name);
+        }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
         if (!fd.clauses.empty()) {
@@ -3329,6 +3056,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             const std::string emitted = mangledPrefix + "__" + fd->name;
             definedFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
+            if (!fd->clauses.empty()) {
+                std::vector<std::string> pnames;
+                for (const auto& p : fd->clauses[0].params)
+                    pnames.push_back(p.name ? *p.name : "");
+                L.fnParamNames[path + "." + fd->name] = std::move(pnames);
+            }
         };
         for (const auto& item : module.body) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
@@ -3410,7 +3143,16 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.localMethods = definedFns;
     L.staticCtorNames = staticMethodNames;
     for (const auto& n : staticMethodNames) L.localMethods.insert(n);
-    for (const auto& [field, entries] : L.fieldAccessors) { (void)entries; L.localMethods.insert(field); }
+    // Record field accessors participate in localMethods only when an
+    // accessor is actually emitted for them — a field whose name collides
+    // with an imported package-declared receiver function is skipped (see
+    // makeAccessors) so it must not appear as a local method either.
+    for (const auto& [field, entries] : L.fieldAccessors) {
+        (void)entries;
+        if (L.externalModules &&
+            L.externalModules->receiverFunctions.count(field)) continue;
+        L.localMethods.insert(field);
+    }
 
     // Buffer consecutive same-name top-level functions so they group into one
     // multi-clause FunDef (flushed on any other item / name change / end).
@@ -3648,24 +3390,25 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                     if (*td && (*td)->variants) {
                                         // Skip transparent type aliases (single bare TypeName).
-                                        if ((*td)->variants->size() == 1) {
-                                            auto* tn = std::get_if<ast::TypeName>(&(*(*td)->variants)[0]->kind);
-                                            if (tn) goto skipAlias;
-                                        }
-                                        std::vector<std::string> tags;
-                                        for (const auto& v : *(*td)->variants) {
-                                            auto t = Lowering::simpleTypeName(v);
-                                            if (!t.empty()) {
-                                                tags.push_back(t);
-                                                if (std::holds_alternative<ast::TypeName>(v->kind))
-                                                    L.nullaryVariantTags.insert(t);
+                                        bool transparentAlias =
+                                            (*td)->variants->size() == 1 &&
+                                            std::holds_alternative<ast::TypeName>(
+                                                (*(*td)->variants)[0]->kind);
+                                        if (!transparentAlias) {
+                                            std::vector<std::string> tags;
+                                            for (const auto& v : *(*td)->variants) {
+                                                auto t = Lowering::simpleTypeName(v);
+                                                if (!t.empty()) {
+                                                    tags.push_back(t);
+                                                    if (std::holds_alternative<ast::TypeName>(v->kind))
+                                                        L.nullaryVariantTags.insert(t);
+                                                }
                                             }
+                                            if (!tags.empty())
+                                                L.typeVariantTags[(*td)->name] = std::move(tags);
                                         }
-                                        if (!tags.empty())
-                                            L.typeVariantTags[(*td)->name] = std::move(tags);
                                     }
                                 }
-                            skipAlias:
                             } else {
                                 flush();
                             }
@@ -3793,15 +3536,50 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // for different types with different clause patterns (e.g. optional.kex
     // defines `or` for both Optional<X> and Result<X,E>); erlc needs a single
     // function with all the clauses unified, not two conflicting definitions.
+    // Clauses arriving after an unguarded catch-all are unreachable (first
+    // match wins) and are dropped — this happens when overlapping traits force
+    // the same method body into two make blocks (e.g. Integer defines
+    // identity/combine for both Monoid and Group).
+    auto unguardedCatchAll = [](const FunClause& c) {
+        return !c.guard &&
+            std::all_of(c.params.begin(), c.params.end(),
+                [](const PatternPtr& p){ return p->kind == PatKind::Var || p->kind == PatKind::Wild; });
+    };
     {
         std::map<std::pair<std::string, int>, FunDef> merged;
         for (auto& f : mod.functions) {
             auto key = std::make_pair(f.name, f.arity);
             auto it = merged.find(key);
             if (it == merged.end()) {
-                merged.emplace(key, std::move(f));
+                auto& fnc = f;
+                // Truncate clauses shadowed by an earlier catch-all within the
+                // same definition as well.
+                for (size_t i = 0; i < fnc.clauses.size(); i++)
+                    if (unguardedCatchAll(fnc.clauses[i]) && i + 1 < fnc.clauses.size())
+                        fnc.clauses.resize(i + 1);
+                merged.emplace(key, std::move(fnc));
             } else {
                 auto& existing = it->second;
+                // If the existing definition already ends with a catch-all
+                // but the incoming definition has specific patterns (e.g.
+                // ADT variant matches), insert the specific clauses BEFORE
+                // the catch-all so they get a chance to match first.
+                bool existingHasCatchAll = std::any_of(
+                    existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+                if (existingHasCatchAll) {
+                    bool incomingHasSpecific = std::any_of(
+                        f.clauses.begin(), f.clauses.end(),
+                        [&](const FunClause& c) { return !unguardedCatchAll(c); });
+                    if (incomingHasSpecific) {
+                        auto catchAllIt = std::find_if(
+                            existing.clauses.begin(), existing.clauses.end(), unguardedCatchAll);
+                        for (auto& c : f.clauses) {
+                            if (!unguardedCatchAll(c))
+                                catchAllIt = existing.clauses.insert(catchAllIt, std::move(c)) + 1;
+                        }
+                    }
+                    continue;
+                }
                 existing.clauses.insert(existing.clauses.end(),
                     std::make_move_iterator(f.clauses.begin()),
                     std::make_move_iterator(f.clauses.end()));
@@ -3812,6 +3590,31 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     }
     mod.typeVariantTags = L.typeVariantTags;
     return mod;
+}
+
+auto lowerProgramTiered(
+    const ast::Program& prog,
+    const std::array<size_t, 5>& tierBounds,
+    const std::string& fileStem,
+    const std::string& sourcePath,
+    const ExternalModules* externals,
+    const std::vector<ExternalRecordLayout>* externalRecords,
+    const std::unordered_map<const ast::MethodCall*,
+        semantic::ResolvedCallTarget>* resolvedCalls,
+    bool preferExternalReceivers) -> Module {
+    // The prelude still lowers as one merged module, so the output is
+    // lowerProgram's by construction and the two paths cannot drift apart.
+    // The bounds only validate the tier partition for now; they become
+    // load-bearing when tiers compile to separate units and cross-tier
+    // receiver calls must route through imported interfaces (see
+    // docs/stdlib-decoupling-plan.md, step 4).
+    for (size_t t = 0; t < 4; t++)
+        if (tierBounds[t] > tierBounds[t + 1])
+            throw LowerError("IR lower: non-monotonic prelude tier bounds");
+    if (tierBounds[4] != prog.items.size())
+        throw LowerError("IR lower: tier bounds do not cover the full prelude AST");
+    return lowerProgram(prog, fileStem, sourcePath, externals, externalRecords,
+                        resolvedCalls, preferExternalReceivers);
 }
 
 namespace {
@@ -3862,7 +3665,6 @@ auto rewriteModuleCalls(ExprPtr& expr,
             visit(node.funBody); visit(node.contBody);
         } else if constexpr (std::is_same_v<T, Receive>) {
             for (auto& clause : node.clauses) {
-                if (clause.guard) visit(*clause.guard);
                 visit(clause.body);
             }
             if (node.timeout) visit(*node.timeout);
@@ -3874,9 +3676,16 @@ auto rewriteModuleCalls(ExprPtr& expr,
 } // namespace
 
 auto lowerModules(const ast::Program& prog, const std::string& fileStem,
-                  const std::unordered_set<std::string>& preludeFns,
-                  const std::string& sourcePath) -> std::vector<Module> {
-    auto flat = lowerProgram(prog, fileStem, preludeFns, sourcePath);
+                  const std::string& sourcePath,
+                  const std::vector<ExternalRecordLayout>* externalRecords,
+                  const ExternalModules* externals,
+                  const std::unordered_map<const ast::MethodCall*,
+                      semantic::ResolvedCallTarget>* resolvedCalls,
+                  bool preferExternalReceivers)
+    -> std::vector<Module> {
+    auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
+                             externalRecords, resolvedCalls,
+                             preferExternalReceivers);
 
     struct Definition { std::string path; std::string sourceName; bool exported; };
     std::unordered_map<std::string, Definition> definitions;
@@ -3951,6 +3760,10 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         fn.exported = def.exported;
         moduleBuckets[def.path].push_back(std::move(fn));
     }
+    std::unordered_map<std::string, std::pair<std::string, std::string>>
+        globalTargets;
+    for (const auto& fn : globalFunctions)
+        globalTargets[fn.name] = {flat.name, fn.name};
     flat.functions = std::move(globalFunctions);
 
     result.push_back(std::move(flat));
@@ -3962,12 +3775,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         result.push_back(std::move(module));
     }
 
-    for (auto& module : result)
+    for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
+        auto& module = result[moduleIndex];
         for (auto& fn : module.functions)
             for (auto& clause : fn.clauses) {
                 if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
                 rewriteModuleCalls(clause.body, targets);
+                if (moduleIndex > 0) {
+                    if (clause.guard)
+                        rewriteModuleCalls(*clause.guard, globalTargets);
+                    rewriteModuleCalls(clause.body, globalTargets);
+                }
             }
+    }
     return result;
 }
 

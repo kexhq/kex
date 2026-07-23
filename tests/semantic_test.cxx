@@ -5,12 +5,24 @@
 #include "../src/semantic/db.hxx"
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
-#include "../src/semantic/stdlib_signatures.hxx"
+#include "../src/common/prelude_interfaces.hxx"
 #include <filesystem>
 #include <fstream>
 
 using namespace kex;
 using namespace test;
+
+namespace {
+#ifdef KEX_RUNTIME_BEAM_DIR
+auto preludeInterfaces() -> const semantic::ImportedInterfaces& {
+    return preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+}
+#else
+auto preludeInterfaces() -> semantic::ImportedInterfaces {
+    return {};
+}
+#endif
+}
 
 auto check(const std::string& source) -> std::vector<semantic::Diagnostic> {
     Lexer lexer(source);
@@ -18,7 +30,8 @@ auto check(const std::string& source) -> std::vector<semantic::Diagnostic> {
     Parser parser(std::move(tokens));
     auto program = parser.parseProgram();
 
-    semantic::Analyzer analyzer;
+    static const auto interfaces = preludeInterfaces();
+    semantic::Analyzer analyzer(&interfaces);
     analyzer.analyze(program);
     return analyzer.diagnostics();
 }
@@ -41,6 +54,22 @@ auto noErrors(const std::string& source) -> bool {
         if (d.level == semantic::Diagnostic::Level::Error) return false;
     }
     return true;
+}
+
+auto hasErrorWithInterfaces(
+    const std::string& source,
+    const semantic::ImportedInterfaces& interfaces,
+    const std::string& containing) -> bool {
+    Lexer lexer(source);
+    Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    semantic::Analyzer analyzer(&interfaces);
+    analyzer.analyze(program);
+    for (const auto& diagnostic : analyzer.diagnostics())
+        if (diagnostic.level == semantic::Diagnostic::Level::Error &&
+            diagnostic.message.find(containing) != std::string::npos)
+            return true;
+    return false;
 }
 
 int main() {
@@ -334,6 +363,97 @@ int main() {
                 "spawn"
             ));
         });
+
+        it("rejects foul namespace call in guard", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when IO.printLine(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "guard"
+            ));
+        });
+
+        it("allows pure receiver call in guard", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  match \"hello\" do\n"
+                "    s when s.count > 0 -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects transitively foul function in guard", []() {
+            assertTrue(hasError(
+                "foul log(msg: String) = msg\n"
+                "let check(x: String) = log(x)\n"
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when check(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "transitively"
+            ));
+        });
+
+        it("rejects multi-hop transitively foul in guard", []() {
+            assertTrue(hasError(
+                "foul write(msg: String) = msg\n"
+                "let step1(x: String) = write(x)\n"
+                "let step2(x: String) = step1(x)\n"
+                "let step3(x: String) = step2(x)\n"
+                "main do\n"
+                "  match \"test\" do\n"
+                "    s when step3(s) -> s\n"
+                "    _ -> \"\"\n"
+                "  end\n"
+                "end\n",
+                "transitively"
+            ));
+        });
+
+        it("allows pure function chain in guard", []() {
+            assertTrue(noErrors(
+                "let double(x: Int) = x * 2\n"
+                "let quadruple(x: Int) = double(double(x))\n"
+                "main do\n"
+                "  match 5 do\n"
+                "    x when quadruple(x) > 10 -> x\n"
+                "    _ -> 0\n"
+                "  end\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects call to imported foul module from pure context", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface db;
+            db.sourceModule = "Database";
+            db.backendModule = "kex_database";
+            db.isFoul = true;
+            semantic::ImportedFunction query;
+            query.sourceName = "query";
+            query.signature = {"query", {semantic::Type::string()},
+                               semantic::Type::string(), true};
+            db.exports["query"].push_back(std::move(query));
+            interfaces.modules["Database"] = std::move(db);
+            assertTrue(hasErrorWithInterfaces(
+                "let check(sql: String) = Database.query(sql)\n",
+                interfaces, "foul"));
+        });
+
+        it("allows Kex.Intrinsic calls from pure context", []() {
+            assertTrue(noErrors(
+                "make Map<K, V> do\n"
+                "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"
+                "end\n"
+            ));
+        });
     });
 
     describe("Semantic — Immutability", []() {
@@ -559,6 +679,159 @@ int main() {
                 "end\n"
             ));
         });
+
+        it("does not resolve private intrinsic calls as public overloads", []() {
+            assertTrue(noErrors(
+                "module Routes do\n"
+                "  let delete(server: Server, path: String, handler: Handler) -> Server = server\n"
+                "end\n"
+                "make Map<K, V> do\n"
+                "  let delete(key) = Kex.Intrinsic.Map.delete(this, key)\n"
+                "  let count = Kex.Intrinsic.Map.count(this)\n"
+                "end\n"
+                "make List<A> do\n"
+                "  let join(sep) = Kex.Intrinsic.List.join(this, sep)\n"
+                "end\n"
+            ));
+        });
+
+        it("checks qualified exports from imported interfaces", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface numbers;
+            numbers.sourceModule = "Numbers";
+            numbers.backendModule = "kex_numbers";
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            numbers.exports["doubled"].push_back(std::move(doubled));
+            interfaces.modules["Numbers"] = std::move(numbers);
+            assertTrue(hasErrorWithInterfaces(
+                "main do Numbers.doubled(\"wrong\") end\n", interfaces,
+                "doubled"));
+        });
+
+        it("uses imported ADTs for exhaustiveness checking", []() {
+            semantic::ImportedInterfaces interfaces;
+            interfaces.adts.push_back({"Choice", {"Yes", "No"}});
+            assertTrue(hasErrorWithInterfaces(
+                "let choose(value: Choice) do\n"
+                "  match value do\n"
+                "    Yes -> 1\n"
+                "  end\n"
+                "end\n",
+                interfaces, "Non-exhaustive match"));
+        });
+
+        it("validates implementations against imported trait definitions", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::TraitDef readable;
+            readable.name = "Readable";
+            readable.requiredMethods.push_back(
+                {"read", {}, semantic::Type::string(), true});
+            interfaces.traits.push_back(std::move(readable));
+            assertTrue(hasErrorWithInterfaces(
+                "record Document do title : String end\n"
+                "make Document, implement: Readable do\n"
+                "  let read = @title\n"
+                "end\n",
+                interfaces, "must be declared foul"));
+        });
+
+        it("lets a local module shadow an imported module target", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface numbers;
+            numbers.sourceModule = "Numbers";
+            numbers.backendModule = "Kex.Stdlib.Numbers";
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.backendModule = "Kex.Stdlib.Numbers";
+            doubled.backendFunction = "stdlib_doubled";
+            doubled.backendArity = 1;
+            doubled.signature = {
+                "doubled", {semantic::Type::integer()}, semantic::Type::integer()};
+            numbers.exports["doubled"].push_back(std::move(doubled));
+            interfaces.modules["Numbers"] = std::move(numbers);
+
+            Lexer lexer(
+                "module Numbers do\n"
+                "  let doubled(n: Integer) = n * 2\n"
+                "end\n"
+                "main do Numbers.doubled(21) end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+
+            assertTrue(analyzer.analyze(program));
+            assertTrue(analyzer.resolvedCalls().empty(),
+                       "local module call must not retain imported ownership");
+        });
+
+        it("checks only package-approved imported receiver functions", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
+            assertTrue(hasErrorWithInterfaces(
+                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+        });
+
+        it("retains the exact imported receiver target selected by type", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedFunction integerTarget;
+            integerTarget.sourceName = "describe";
+            integerTarget.backendModule = "Kex.Numbers";
+            integerTarget.backendFunction = "describe_integer";
+            integerTarget.backendArity = 1;
+            integerTarget.paramNames = {};
+            integerTarget.signature = {
+                "describe", {semantic::Type::integer()}, semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(integerTarget));
+
+            semantic::ImportedFunction stringTarget;
+            stringTarget.sourceName = "describe";
+            stringTarget.backendModule = "Kex.Strings";
+            stringTarget.backendFunction = "describe_string";
+            stringTarget.backendArity = 1;
+            stringTarget.signature = {
+                "describe", {semantic::Type::string()}, semantic::Type::string()};
+            interfaces.receiverFunctions["describe"].push_back(
+                std::move(stringTarget));
+
+            Lexer lexer("main do 42.describe end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&interfaces);
+
+            assertTrue(analyzer.analyze(program));
+            assertEqual(analyzer.resolvedCalls().size(), size_t(1));
+            const auto& target = analyzer.resolvedCalls().begin()->second;
+            assertEqual(target.backendModule, std::string("Kex.Numbers"));
+            assertEqual(target.backendFunction,
+                        std::string("describe_integer"));
+            assertEqual(target.backendArity, 1);
+            assertTrue(target.passesReceiver);
+            assertTrue(target.paramNames.empty());
+        });
+
+        it("rejects ambiguous imported receiver ownership", []() {
+            semantic::ImportedInterfaces interfaces;
+            for (const auto& backend : {"kex_first", "kex_second"}) {
+                semantic::ImportedFunction doubled;
+                doubled.sourceName = "doubled";
+                doubled.backendModule = backend;
+                doubled.signature = {"doubled", {semantic::Type::integer()},
+                                     semantic::Type::integer()};
+                interfaces.receiverFunctions["doubled"].push_back(
+                    std::move(doubled));
+            }
+            assertTrue(hasErrorWithInterfaces(
+                "main do 2.doubled end\n", interfaces,
+                "ambiguous imported receiver function"));
+        });
     });
 
     describe("Semantic — Purity (Edge Cases)", []() {
@@ -749,6 +1022,14 @@ int main() {
 
         it("accepts ! on Bool", []() {
             assertTrue(noErrors("main do\n  let x = !true\nend\n"));
+        });
+
+        it("keeps primitive make receivers canonical", []() {
+            assertTrue(noErrors(
+                "make Bool do\n"
+                "  let inverted = !this\n"
+                "end\n"
+            ));
         });
     });
 
@@ -1011,55 +1292,38 @@ int main() {
             assertFalse(traits.satisfies(Type::list(Type::named("MysteryType")), "Equatable"));
         });
 
-        it("satisfies Resultable/Optionable via the prelude ADT bridge", [traits]() {
-            assertTrue(traits.satisfies(Type::named("Ok"), "Resultable"));
-            assertTrue(traits.satisfies(Type::named("Error"), "Resultable"));
-            assertTrue(traits.satisfies(Type::named("Just"), "Optionable"));
-            assertFalse(traits.satisfies(Type::named("Ok"), "Optionable"));
-        });
-
         it("does not satisfy an unregistered trait for a NamedType", [traits]() {
             assertFalse(traits.satisfies(Type::named("Ok"), "Showable"));
         });
 
         it("exposes built-in trait definitions by name", [traits]() {
             assertTrue(traits.get("Comparable") != nullptr);
+            assertTrue(traits.get("Optionable") == nullptr);
             assertTrue(traits.get("NoSuchTrait") == nullptr);
         });
     });
 
-    describe("Types — stdlib signature table", []() {
-        using namespace kex::semantic;
-        auto table = SignatureTable::withStdlib();
-
-        it("knows even?/odd? take one Integer-constrained param and return Bool", [table]() {
-            auto* sigs = table.lookup("even?");
-            assertTrue(sigs != nullptr);
-            assertEqual(sigs->size(), size_t(1));
-            assertEqual((*sigs)[0].params.size(), size_t(1));
-            assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
-        });
-
-        it("knows ok?/error?/some?/none? return Bool", [table]() {
-            for (const auto& name : {"ok?", "error?", "some?", "none?"}) {
-                auto* sigs = table.lookup(name);
-                assertTrue(sigs != nullptr);
-                assertTrue(typesEqual((*sigs)[0].result, Type::boolean()));
-            }
-        });
-
-        it("registers `or` as two overloads, one per prelude ADT family", [table]() {
-            auto* sigs = table.lookup("or");
-            assertTrue(sigs != nullptr);
-            assertEqual(sigs->size(), size_t(2));
-        });
-
-        it("returns nullptr for a function not in the table", [table]() {
-            assertTrue(table.lookup("not_a_real_stdlib_fn") == nullptr);
-        });
-    });
-
     describe("Semantic — Stdlib call checking", []() {
+        it("loads Optional marker traits and conformances from the prelude", []() {
+            assertTrue(noErrors(
+                "let accept(value: Optionable) = value\n"
+                "let forward(value: Optional<Integer>) = accept(value)\n"));
+            assertTrue(hasError(
+                "let accept(value: Optionable) = value\n"
+                "let reject(value: Result<Integer, String>) = accept(value)\n",
+                "expects argument 1 to be Optionable"));
+        });
+
+        it("loads Either and its constructors from the prelude interface", []() {
+            assertTrue(hasError(
+                "let inspect(value: Either<Integer, String>) do\n"
+                "  match value do\n"
+                "    Left(number) -> number\n"
+                "  end\n"
+                "end\n",
+                "Non-exhaustive match on Either: missing case(s) Right"));
+        });
+
         it("rejects 'c'.even? — Char doesn't satisfy the Integer constraint", []() {
             assertTrue(hasError(
                 "main do\n"

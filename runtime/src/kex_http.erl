@@ -40,7 +40,7 @@ mock_dequeue() ->
             erlang:put(kex_mock_http_queue, Rest),
             {'Ok', Resp};
         [] ->
-            {'Error', {'HttpError', <<"mock">>, <<"no responses staged">>}}
+            {'Error', {'HttpError', 'MockEmpty', <<"no responses staged">>}}
     end.
 
 %% ── Public API ──────────────────────────────────────────────────────────
@@ -124,25 +124,22 @@ real_request(Method, Url, Body, Headers, Timeout) ->
             {'Error', {'HttpError', Kind2, Msg2}}
     end.
 
-classify_error({failed_connect, [{to_address, {_, _, _}} | _] = Info}) ->
+classify_error({failed_connect, Info}) ->
     Flat = lists:flatten(io_lib:format("~p", [Info])),
-    case lists:flatten(io_lib:format("~p", [Info])) of
-        S ->
-            case string:find(S, "nxdomain") of
-                nomatch ->
-                    case string:find(S, "econnrefused") of
-                        nomatch -> {<<"connection">>, list_to_binary(Flat)};
-                        _ -> {<<"connection_refused">>, <<"connection refused">>}
-                    end;
-                _ -> {<<"dns">>, <<"DNS resolution failed">>}
-            end
+    case string:find(Flat, "nxdomain") of
+        nomatch ->
+            case string:find(Flat, "econnrefused") of
+                nomatch -> {'Unknown', list_to_binary(Flat)};
+                _ -> {'ConnectionRefused', <<"connection refused">>}
+            end;
+        _ -> {'DnsError', <<"DNS resolution failed">>}
     end;
 classify_error(timeout) ->
-    {<<"timeout">>, <<"request timed out">>};
+    {'Timeout', <<"request timed out">>};
 classify_error({tls_alert, _} = E) ->
-    {<<"ssl">>, list_to_binary(lists:flatten(io_lib:format("~p", [E])))};
+    {'SslError', list_to_binary(lists:flatten(io_lib:format("~p", [E])))};
 classify_error(Reason) ->
-    {<<"unknown">>, list_to_binary(lists:flatten(io_lib:format("~p", [Reason])))}.
+    {'Unknown', list_to_binary(lists:flatten(io_lib:format("~p", [Reason])))}.
 
 headers_to_map(M) when is_map(M) -> M;
 headers_to_map(_) -> #{}.

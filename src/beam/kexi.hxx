@@ -2,6 +2,7 @@
 // KexI chunk: combined type interface + structural metadata for one Kex
 // module, stored as a custom BEAM chunk in ETF format. See docs/kexm-plan.md.
 #include "etf.hxx"
+#include "../module/package_metadata.hxx"
 #include <array>
 #include <string>
 #include <vector>
@@ -9,7 +10,7 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 1;
+static constexpr int KEXI_SCHEMA_VERSION = 6;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -20,7 +21,7 @@ using KexiTypePtr = std::shared_ptr<KexiType>;
 
 struct KexiType {
     enum Kind {
-        Primitive,    // name: "Integer", "Bool", "Char", "String", "Unit", "Atom"
+        Primitive,    // name: "Integer", "Bool", "Char", "String", "Void", "Atom"
         Named,        // name + typeArgs
         Func,         // params + result
         Tuple,        // elements
@@ -55,9 +56,11 @@ auto kexiUnknown() -> KexiTypePtr;
 
 struct KexiExport {
     std::string name;
+    std::string beamFunction; // emitted function name; v1 defaults to name
     int beamArity = 0;
     bool isFoul = false;
     std::vector<KexiTypePtr> paramTypes;
+    std::vector<std::string> paramNames;
     KexiTypePtr returnType;
 };
 
@@ -77,7 +80,10 @@ struct KexiMethod {
     KexiTypePtr receiverType;
     int beamArity = 0;
     bool isFoul = false;
+    bool typeOnly = false; // annotation-only, no BEAM implementation
     std::vector<KexiTypePtr> paramTypes;
+    // Source parameter names excluding the receiver (KexI v5+).
+    std::vector<std::string> paramNames;
     KexiTypePtr returnType;
     std::string beamFunction; // emitted BEAM function name
 };
@@ -127,7 +133,27 @@ struct KexiMethodOwnership {
     std::string beamFunction;
 };
 
+struct KexiTraitConformance {
+    std::string typeName;
+    std::string traitName;
+};
+
+struct KexiTraitRequiredMethod {
+    std::string name;
+    bool isFoul = false;
+};
+
+struct KexiTraitDef {
+    std::string name;
+    std::vector<KexiTraitRequiredMethod> requiredMethods;
+};
+
 struct KexiStructuralMetadata {
+    // Durable ownership within a compiled package/unit. `unitId` identifies
+    // the artifact group; `sourceModule` is the Kex-facing qualified module;
+    // `moduleAtom` is its backend identity.
+    std::string unitId;
+    std::string sourceModule;
     std::string moduleAtom;
     bool isFoul = false;
     KexiModuleRole role = KexiModuleRole::Entry;
@@ -136,7 +162,12 @@ struct KexiStructuralMetadata {
     std::vector<KexiRecord> records;
     std::vector<KexiADT> adts;
     std::vector<KexiMethodOwnership> methodOwnership;
+    std::vector<KexiTraitConformance> traitConformances;
+    std::vector<KexiTraitDef> traitDefs;
     std::vector<std::string> publicExports;
+    // Present only on a package entry module. An empty id means that this
+    // compilation unit does not carry package policy.
+    kex::module::PackageMetadata package;
 };
 
 // ── KexI chunk (both sections) ───────────────────────────────────────
@@ -144,6 +175,15 @@ struct KexiStructuralMetadata {
 struct KexiChunk {
     int version = KEXI_SCHEMA_VERSION;
     Hash128 interfaceHash{};
+    // Digest of the complete BEAM container with its KexI chunk removed.
+    // Separate from interfaceHash so implementation-only changes do not
+    // masquerade as public contract changes.
+    Hash128 artifactHash{};
+    // Digest of the authoritative source set used to build this entry unit.
+    // Companions and units without available sources leave it zeroed.
+    Hash128 sourceHash{};
+    int intrinsicAbiVersion = 0;
+    int backendRepresentationVersion = 0;
     KexiTypeInterface typeInterface;
     KexiStructuralMetadata metadata;
 };
@@ -154,5 +194,9 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t>;
 auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk;
 
 auto computeInterfaceHash(const KexiChunk& chunk) -> Hash128;
+auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128;
+
+struct BeamFile;
+auto computeArtifactHash(const BeamFile& beam) -> Hash128;
 
 } // namespace kex::beam

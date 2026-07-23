@@ -2,7 +2,8 @@
 #include "beam/collect_metadata.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
-#include "codegen/core_erlang.hxx"
+#include "common/artifact_versions.hxx"
+#include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
 #include "interpreter/evaluator.hxx"
 #include "ir/emit_core.hxx"
@@ -19,6 +20,7 @@
 #include <getopt.h>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 #include <vector>
 #ifndef __EMSCRIPTEN__
@@ -38,6 +40,7 @@
 // readline — every native dev machine so far has had it available via
 // Homebrew.
 #include "common/completion.hxx"
+#include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
 // Set to the type name while the user is typing inside a `make X do` block,
@@ -706,198 +709,272 @@ auto resolveBeamDeps(kex::ast::Program &program,
 } // namespace
 
 auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
-#ifdef KEX_PRELUDE_DIR
-  kex::loadPrelude(db, KEX_PRELUDE_DIR);
-#endif
+  kex::loadDiscoveredPrelude(db);
 }
 
-// Stdlib functions in the Kex prelude — UFCS calls to these route to the
-// shared `kex_prelude` BEAM module instead of the emitter's inline ladder.
-static const std::unordered_set<std::string> &migratedPreludeFns() {
-  static const std::unordered_set<std::string> fns = [] {
-    std::unordered_set<std::string> names = {
-      "reverse",     "sort",      "uniq",      "flatten", "take",
-      "drop",        "zip",       "push",      "sum",     "product",
-      "indexOf",     "at",        "min",       "max",     "count",
-      "join",        "upperCase", "lowerCase", "trim",    "split",
-      "startsWith?", "endsWith?", "digit?",    "alpha?",  "space?",
-      "modulo",      "even?",     "odd?",      "keys",    "values",
-      "entries",     "merge",     "has?",      "put",     "delete",
-      "abs",         "sqrt",      "none?",     "some?",   "ok?",
-      "error?",      "first",     "last",      "empty?",  "or",
-      "in?",         "blank?",    "present?",  "truthy?", "falsy?",
-      "second",      "third",     "floor",     "ceil",    "round",
-      "toFloat",     "toInteger", "toString",  "rest",    "toOptional",
-      "chars",       "items",     "send",      "link",    "unlink",
-      "monitor",     "alive?",    "demonitor", "await",
-      "mount",       "get",       "post",      "patch", "start"};
-#ifdef KEX_PRELUDE_DIR
-    // Explicit prelude module calls are safe to discover generically: their
-    // BEAM names are deterministic (`Assert.equal` -> `Assert__equal`). This
-    // lets stdlib modules grow without adding another compiler dispatch case.
-    std::error_code ec;
-    for (const auto &entry : std::filesystem::directory_iterator(KEX_PRELUDE_DIR, ec)) {
-      if (entry.path().extension() != ".kex") continue;
-      kex::Lexer lexer(readFile(entry.path().string()), entry.path().string());
-      kex::Parser parser(lexer.tokenizeAll(), entry.path().string());
-      auto program = parser.parseProgram();
-      std::function<void(const kex::ast::ModuleDef &)> collect;
-      collect = [&](const kex::ast::ModuleDef &module) {
-        for (const auto &item : module.body) {
-          if (const auto *fn = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item))
-            names.insert(module.name + "." + (*fn)->name);
-          else if (const auto *child = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-            collect(**child);
+auto prebuiltRuntimeBeamDir() -> std::string;
+
+struct PreludeInterfaceNames {
+  std::unordered_set<std::string> receiverFunctions;
+};
+
+// Source discovery remains the interface boundary for builds that cannot use
+// BEAM artifacts (currently the browser/wasm build). Native builds use KexI.
+auto sourcePreludeInterfaceNames() -> PreludeInterfaceNames {
+  PreludeInterfaceNames names;
+  for (const auto &filePath : kex::preludeSourceFiles()) {
+    kex::Lexer lexer(readFile(filePath), filePath);
+    kex::Parser parser(lexer.tokenizeAll(), filePath);
+    auto program = parser.parseProgram();
+    auto addReceiver = [&](const kex::ast::FunctionDef &fn) {
+      names.receiverFunctions.insert(fn.name);
+    };
+    auto collectMake = [&](const kex::ast::MakeDef &make) {
+      for (const auto &item : make.body) {
+        if (const auto *fn =
+                std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item)) {
+          if (*fn) addReceiver(**fn);
+        } else if (const auto *visibility =
+                       std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(
+                           &item)) {
+          if (!*visibility) continue;
+          for (const auto &visible : (*visibility)->items)
+            if (const auto *fn =
+                    std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
+                        &visible); fn && *fn)
+              addReceiver(**fn);
         }
-      };
-      for (const auto &item : program.items)
-        if (const auto *module = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item))
-          collect(**module);
+      }
+    };
+    auto collectTrait = [&](const kex::ast::TraitDef &trait) {
+      for (const auto &item : trait.body)
+        if (const auto *fn =
+                std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
+            fn && *fn)
+          addReceiver(**fn);
+    };
+    std::function<void(const kex::ast::ModuleDef &)> collect;
+    collect = [&](const kex::ast::ModuleDef &module) {
+      for (const auto &item : module.body) {
+        if (const auto *make =
+                std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
+          if (*make) collectMake(**make);
+        } else if (const auto *trait =
+                       std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
+          if (*trait) collectTrait(**trait);
+        } else if (const auto *child =
+                       std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
+          collect(**child);
+        }
+      }
+    };
+    for (const auto &item : program.items) {
+      if (const auto *make =
+              std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
+        if (*make) collectMake(**make);
+      } else if (const auto *trait =
+                     std::get_if<std::unique_ptr<kex::ast::TraitDef>>(&item)) {
+        if (*trait) collectTrait(**trait);
+      } else if (const auto *module =
+                     std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
+        collect(**module);
+      } else if (const auto *fn =
+                     std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
+                         &item)) {
+        if (*fn && !(*fn)->clauses.empty() &&
+            (*fn)->clauses[0].params.size() >= 2)
+          names.receiverFunctions.insert((*fn)->name);
+      }
     }
-#endif
-    return names;
-  }();
-  return fns;
+  }
+  return names;
 }
 
-#ifdef KEX_PRELUDE_DIR
-// Parse+merge the Kex prelude (src/prelude/*.kex, MainBlocks dropped) into one
-// Program and lower it to the shared `kex_prelude` module's Core Erlang,
-// written to <dir>/kex_prelude.core. Returns false (with a message) if the
-// prelude can't be lowered yet.
-auto compilePreludeCore(const std::string &dir) -> bool {
-  namespace fs = std::filesystem;
+auto preludeInterfaceNames() -> const PreludeInterfaceNames & {
+  static const PreludeInterfaceNames names = [] {
+    auto runtimeDir = prebuiltRuntimeBeamDir();
+    if (runtimeDir.empty()) return sourcePreludeInterfaceNames();
+    auto path = std::filesystem::path{runtimeDir} / "kex_prelude.beam";
+    std::error_code ec;
+    if (!std::filesystem::exists(path, ec)) return sourcePreludeInterfaceNames();
+    const auto &registry = kex::preludeRegistry(runtimeDir);
+    PreludeInterfaceNames result;
+    for (const auto *module : registry.allLoadedModules()) {
+      for (const auto &receiver : module->chunk.typeInterface.methods)
+        result.receiverFunctions.insert(receiver.name);
+    }
+    return result;
+  }();
+  return names;
+}
+
+auto preludeExternalModules() -> const kex::ir::ExternalModules & {
+  static const auto modules = [] {
+    auto runtimeDir = prebuiltRuntimeBeamDir();
+    if (runtimeDir.empty()) return kex::ir::ExternalModules{};
+    return kex::preludeRegistry(runtimeDir).buildExternalModules();
+  }();
+  return modules;
+}
+
+auto preludeSemanticInterfaces()
+    -> const kex::semantic::ImportedInterfaces & {
+  return kex::preludeSemanticInterfaces(prebuiltRuntimeBeamDir());
+}
+
+auto mergeExternalModules(const kex::ir::ExternalModules &base,
+                          const kex::ir::ExternalModules &overrides)
+    -> kex::ir::ExternalModules {
+  auto result = base;
+  for (const auto &[name, atom] : overrides.nameToAtom)
+    result.nameToAtom[name] = atom;
+  for (const auto &[name, function] : overrides.exportToBeamFn)
+    result.exportToBeamFn[name] = function;
+  for (const auto &[name, arity] : overrides.exportArity)
+    result.exportArity[name] = arity;
+  for (const auto &[name, names] : overrides.exportParamNames)
+    result.exportParamNames[name] = names;
+  for (const auto &[name, functions] : overrides.receiverFunctions)
+    result.receiverFunctions[name] = functions;
+  return result;
+}
+
+struct PreludeBuildModule {
+  kex::ir::EmitResult emitted;
+  kex::beam::KexiChunk interface;
+};
+
+// Build the stdlib entry plus ordinary Kex module companions. The entry keeps
+// receiver compatibility code until typed receiver ownership is carried into
+// IR; public module calls already use companion interfaces.
+auto compilePreludeCore(const std::string &dir,
+                        std::vector<PreludeBuildModule> *builtModules) -> bool {
   kex::ast::Program merged;
-  std::error_code ec;
-  std::vector<std::string> files;
-  for (const auto &e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
-    if (e.path().extension() == ".kex")
-      files.push_back(e.path().string());
-  std::sort(files.begin(), files.end());
-  for (const auto &f : files) {
-    kex::Lexer lex(readFile(f), f);
-    kex::Parser parser(lex.tokenizeAll(), f);
-    auto prog = parser.parseProgram();
-    for (auto &item : prog.items)
-      if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
-        merged.items.push_back(std::move(item));
+  auto files = kex::preludeSourceFiles();
+  if (files.empty()) {
+    std::cerr << "error: no prelude source root is available\n";
+    return false;
   }
   try {
-    auto mod = kex::ir::lowerProgram(merged, "prelude");
-    auto res = kex::ir::emitCore(mod);
-    std::ofstream out(dir + "/kex_prelude.core");
-    if (!out)
+    files = kex::orderPreludeSourcesByTier(files);
+  } catch (const std::exception &e) {
+    std::cerr << "error: invalid prelude tier manifest: " << e.what() << "\n";
+    return false;
+  }
+  auto tierGroups = kex::groupPreludeSourcesByTier(files);
+  // Track item index boundaries per tier: tierBounds[t] = index of first
+  // item belonging to tier t.  tierBounds[4] = total item count.
+  std::array<size_t, 5> tierBounds{};
+  for (size_t t = 0; t < 4; t++) {
+    tierBounds[t] = merged.items.size();
+    for (const auto &f : tierGroups[t]) {
+      kex::Lexer lex(readFile(f), f);
+      kex::Parser parser(lex.tokenizeAll(), f);
+      auto prog = parser.parseProgram();
+      for (auto &item : prog.items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.items.push_back(std::move(item));
+    }
+  }
+  tierBounds[4] = merged.items.size();
+  try {
+    kex::semantic::Analyzer analyzer;
+    if (!analyzer.analyze(merged)) {
+      for (const auto &diag : analyzer.diagnostics())
+        if (diag.level == kex::semantic::Diagnostic::Level::Error)
+          std::cerr << "error: prelude interface: " << diag.message << "\n";
       return false;
-    out << res.source;
+    }
+
+    kex::ir::ExternalModules selfExt;
+    auto selfNames = sourcePreludeInterfaceNames();
+    for (const auto& name : selfNames.receiverFunctions)
+      for (int arity = 1; arity <= 4; arity++)
+        selfExt.receiverFunctions[name].push_back(
+            {"kex_prelude", name, arity});
+
+    std::vector<kex::ir::Module> modules;
+    modules.push_back(kex::ir::lowerProgramTiered(
+        merged, tierBounds, "prelude", "", &selfExt, nullptr, nullptr, true));
+    auto splitModules = kex::ir::lowerModules(
+        merged, "prelude", "", nullptr, &selfExt, nullptr, true);
+    for (size_t i = 1; i < splitModules.size(); i++)
+      modules.push_back(std::move(splitModules[i]));
+
+    builtModules->clear();
+    for (size_t i = 0; i < modules.size(); i++) {
+      PreludeBuildModule built;
+      built.emitted = kex::ir::emitCore(modules[i]);
+      std::ofstream out(dir + "/" + built.emitted.moduleName + ".core");
+      if (!out) return false;
+      out << built.emitted.source;
+
+      if (i == 0) {
+        kex::beam::CollectOptions options;
+        options.unitId = "kex_prelude";
+        options.moduleAtom = built.emitted.moduleName;
+        options.moduleName = "Prelude";
+        options.collectTopLevel = true;
+        options.flattenModules = true;
+        options.role = kex::beam::KexiModuleRole::Entry;
+        options.analysis = &analyzer;
+        built.interface = kex::beam::collectMetadata(merged, options);
+        built.interface.metadata.package.id = "kex.stdlib";
+        built.interface.metadata.package.unitIds = {"kex_prelude"};
+        built.interface.metadata.package.receiverProviders = {"Prelude"};
+        built.interface.metadata.package.automaticImports = {"Prelude"};
+        built.interface.sourceHash = kex::preludeSourceHash(files);
+      } else {
+        kex::beam::CollectOptions options;
+        options.unitId = "kex_prelude";
+        options.moduleAtom = built.emitted.moduleName;
+        options.analysis = &analyzer;
+        options.role = kex::beam::KexiModuleRole::Companion;
+        options.entryBackPointer = "kex_prelude";
+        options.moduleName = built.emitted.moduleName.rfind("Kex.", 0) == 0
+            ? built.emitted.moduleName.substr(4) : built.emitted.moduleName;
+        built.interface = kex::beam::collectMetadata(merged, options);
+      }
+      builtModules->push_back(std::move(built));
+    }
+    for (size_t i = 1; i < builtModules->size(); i++) {
+      kex::beam::KexiCompanion companion;
+      companion.beamAtom = (*builtModules)[i].emitted.moduleName;
+      companion.relativePath = companion.beamAtom + ".beam";
+      (*builtModules)[0].interface.metadata.companions.push_back(
+          std::move(companion));
+    }
   } catch (const kex::ir::LowerError &e) {
     std::cerr << "error: prelude: " << e.what() << "\n";
     return false;
   }
   return true;
 }
-#endif
 
-#ifdef KEX_PRELUDE_DIR
-// Prelude record defs (e.g. ParseError in src/prelude/errorable.kex) aren't
-// in the user's AST, but the BEAM codegen needs their field layout to emit
-// field accessors (e.field -> element(N, e)). Merge just the RecordDef items
-// (metadata-only — no runtime code) into the user program before codegen.
-// Mirrors how the interpreter's Evaluator executes the prelude
-// (evaluator.cxx's preludeProgram).
-auto collectPreludeRecordDefs() -> std::vector<kex::ast::TopLevelItem> {
-  std::vector<kex::ast::TopLevelItem> defs;
-  namespace fs = std::filesystem;
-  std::error_code ec;
-  std::vector<std::string> files;
-  for (const auto& e : fs::directory_iterator(KEX_PRELUDE_DIR, ec))
-    if (e.path().extension() == ".kex")
-      files.push_back(e.path().string());
-  std::sort(files.begin(), files.end());
-
-  std::function<void(std::vector<kex::ast::ModuleItem>&)> extractFromModule;
-  extractFromModule = [&](std::vector<kex::ast::ModuleItem>& body) {
-    for (auto& item : body) {
-      if (auto* rd = std::get_if<std::unique_ptr<kex::ast::RecordDef>>(&item)) {
-        if (*rd) {
-          auto copy = std::make_unique<kex::ast::RecordDef>();
-          copy->name = (*rd)->name;
-          copy->location = (*rd)->location;
-          for (const auto& f : (*rd)->fields) {
-            kex::ast::RecordField rf;
-            rf.name = f.name;
-            copy->fields.push_back(std::move(rf));
-          }
-          defs.push_back(std::move(copy));
-        }
-      } else if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
-        if (*md) extractFromModule((*md)->body);
-      }
+// Load stdlib record layouts from the embedded interface of the explicitly
+// built prelude artifact. Compiled metadata stays separate from the user's AST.
+auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
+  std::vector<kex::ir::ExternalRecordLayout> layouts;
+  auto runtimeDir = prebuiltRuntimeBeamDir();
+  if (runtimeDir.empty()) return layouts;
+  const auto &registry = kex::preludeRegistry(runtimeDir);
+  for (const auto *module : registry.allLoadedModules())
+    for (const auto &record : module->chunk.metadata.records) {
+      kex::ir::ExternalRecordLayout layout;
+      layout.name = record.name;
+      for (const auto &field : record.fields)
+        layout.fields.push_back(field.name);
+      layouts.push_back(std::move(layout));
     }
-  };
-
-  for (const auto& f : files) {
-    kex::Lexer lex(readFile(f), f);
-    kex::Parser parser(lex.tokenizeAll(), f);
-    auto prog = parser.parseProgram();
-    for (auto& item : prog.items) {
-      if (std::holds_alternative<std::unique_ptr<kex::ast::RecordDef>>(item)) {
-        defs.push_back(std::move(item));
-      } else if (auto* md = std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item)) {
-        if (*md) extractFromModule((*md)->body);
-      }
-    }
-  }
-  return defs;
+  return layouts;
 }
-#endif
 
-#ifdef KEX_PRELUDE_DIR
-// Method names the sealed stdlib prelude provides — make-block methods across
-// src/prelude/*.kex plus trait methods (Enumerable's map/filter/…). A user may
-// ADD new methods to a builtin type but not REDEFINE one of these on it (they
-// carry contracts like `first : X?`), so such a collision is a compile error.
-auto preludeMethodNames() -> const std::unordered_set<std::string> & {
-  static const std::unordered_set<std::string> names = [] {
-    std::unordered_set<std::string> s;
-    namespace fs = std::filesystem;
-    std::error_code ec;
-    auto addFn = [&](const kex::ast::FunctionDef *fd) {
-      if (fd)
-        s.insert(fd->name);
-    };
-    for (const auto &e : fs::directory_iterator(KEX_PRELUDE_DIR, ec)) {
-      if (e.path().extension() != ".kex")
-        continue;
-      try {
-        kex::Lexer lex(readFile(e.path().string()), e.path().string());
-        kex::Parser parser(lex.tokenizeAll(), e.path().string());
-        auto prog = parser.parseProgram();
-        for (auto &item : prog.items) {
-          if (auto *md =
-                  std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
-            if (*md)
-              for (auto &bi : (*md)->body)
-                if (auto *fd =
-                        std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
-                            &bi))
-                  addFn(fd->get());
-          } else if (auto *td =
-                         std::get_if<std::unique_ptr<kex::ast::TraitDef>>(
-                             &item)) {
-            if (*td)
-              for (auto &bi : (*td)->body)
-                if (auto *fd =
-                        std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(
-                            &bi))
-                  addFn(fd->get());
-          }
-        }
-      } catch (...) {
-      }
-    }
-    return s;
-  }();
-  return names;
+// Receiver-function names the sealed stdlib prelude provides. Qualified module
+// functions share the same source-derived snapshot but are not receiver
+// functions and therefore do not participate in this check.
+auto preludeReceiverFunctionNames()
+    -> const std::unordered_set<std::string> & {
+  return preludeInterfaceNames().receiverFunctions;
 }
 
 // The simple name of a `make` target, or "" — with "List"/"Map" for list/map
@@ -925,15 +1002,12 @@ auto sealViolations(const kex::ast::Program &program,
                     const std::string &filepath)
     -> std::vector<kex::semantic::Diagnostic> {
   std::vector<kex::semantic::Diagnostic> diags;
-  if (filepath.find(KEX_PRELUDE_DIR) != std::string::npos)
+  if (kex::isPreludeSourceFile(filepath))
     return diags;
-  // Keep in sync with the evaluator-side seal (execMakeDef in evaluator.cxx).
-  static const std::unordered_set<std::string> builtins = {
-      "Integer", "Float", "Char",  "Bool",     "Number", "String",
-      "List",    "Map",   "Range", "Optional", "Result"};
+  const auto& builtins = kex::interpreter::builtinTypeNames();
   auto check = [&](const kex::ast::FunctionDef *fd, const std::string &ty,
                    const kex::SourceLocation &loc) {
-    if (fd && preludeMethodNames().count(fd->name))
+    if (fd && preludeReceiverFunctionNames().count(fd->name))
       diags.push_back({kex::semantic::Diagnostic::Level::Error, loc,
                        "cannot override sealed stdlib method '" + fd->name +
                            "' on builtin type '" + ty + "'"});
@@ -960,7 +1034,6 @@ auto sealViolations(const kex::ast::Program &program,
     }
   return diags;
 }
-#endif
 
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
@@ -971,7 +1044,8 @@ auto sealViolations(const kex::ast::Program &program,
 // error ("unbound variable 'UndefinedFunctionCall' in main/0") instead of
 // this backend-agnostic diagnostic. Returns false if there were any errors.
 auto runSemanticCheck(const kex::ast::Program &program,
-                      const std::string &filepath) -> bool {
+                      const std::string &filepath,
+                      kex::semantic::Analyzer *retainedAnalyzer = nullptr) -> bool {
   auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
     bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
     std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
@@ -987,6 +1061,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
 
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
+  runDb.setImportedInterfaces(&preludeSemanticInterfaces());
   loadPrelude(runDb);
   runDb.updateFile(filepath, readFile(filepath));
   bool dbOk = true;
@@ -997,17 +1072,16 @@ auto runSemanticCheck(const kex::ast::Program &program,
   }
 
   // Pass 3+: existing Analyzer (purity, type checking)
-  kex::semantic::Analyzer analyzer;
+  kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
+  auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
 
-#ifdef KEX_PRELUDE_DIR
   for (const auto &d : sealViolations(program, filepath)) {
     printDiag(d);
     ok = false;
   }
-#endif
 
   return ok && dbOk;
 }
@@ -1059,44 +1133,21 @@ auto printAst(const kex::ast::Program &program) -> void {
   }
 }
 
-// Absolute path to cmake-pre-built Kex runtime beams (kex_io.beam, ...),
-// or empty if none is available. Using these avoids an erlc spawn (~0.15s
-// per module) on every BEAM invocation.
+// Runtime-configured or executable-relative Kex runtime beams. Using these
+// avoids an erlc spawn (~0.15s per module) on every BEAM invocation.
 auto prebuiltRuntimeBeamDir() -> std::string {
-#ifdef KEX_RUNTIME_BEAM_DIR
   namespace fs = std::filesystem;
-  std::error_code ec;
-  if (fs::exists(fs::path{KEX_RUNTIME_BEAM_DIR} / "kex_io.beam", ec))
-    return KEX_RUNTIME_BEAM_DIR;
-#else
-  (void)0;
-#endif
-  return {};
-}
-
-// Fallback: walk up from argv[0] to find runtime/src/*.erl and compile them
-// into a fresh temp dir. Returns the dir (empty on failure); caller owns
-// cleanup via fs::remove_all.
-auto compileRuntimeBeamsToTemp(const char *argv0) -> std::string {
-  namespace fs = std::filesystem;
-  fs::path bin = fs::weakly_canonical(argv0);
-  for (auto dir = bin.parent_path(); dir != dir.root_path();
-       dir = dir.parent_path()) {
-    auto rtSrc = dir / "runtime" / "src";
-    if (!fs::exists(rtSrc))
-      continue;
-    char tmp[] = "/tmp/kex_rt_XXXXXX";
-    if (!mkdtemp(tmp))
-      return {};
-    std::string out = tmp;
-    for (const auto &e : fs::directory_iterator(rtSrc)) {
-      if (e.path().extension() == ".erl") {
-        std::string cmd =
-            "erlc -o " + out + " " + e.path().string() + " > /dev/null 2>&1";
-        std::system(cmd.c_str());
-      }
-    }
-    return out;
+  std::vector<fs::path> roots;
+  if (const char *configured = std::getenv("KEX_RUNTIME_DIR");
+      configured && *configured)
+    roots.emplace_back(configured);
+  if (const auto executableDir = kex::executableDirectory(); !executableDir.empty()) {
+    roots.push_back((executableDir / "../share/kex/runtime").lexically_normal());
+    roots.push_back((executableDir / "runtime/beam").lexically_normal());
+  }
+  for (const auto &root : roots) {
+    std::error_code ec;
+    if (fs::exists(root / "kex_io.beam", ec)) return root.string();
   }
   return {};
 }
@@ -1124,9 +1175,7 @@ auto printUsage(const char *progName) -> void {
          ".)\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
-      << "  --no-colors       Disable ANSI color output\n"
-      << "  --legacy-emitter  Use the legacy string-based Core Erlang "
-         "emitter\n";
+      << "  --no-colors       Disable ANSI color output\n";
 }
 
 auto printVersion() -> void {
@@ -1151,12 +1200,6 @@ int main(int argc, char *argv[]) {
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
-      // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
-      // backend; --ir is kept as a no-op for compatibility.
-      {"ir", no_argument, nullptr, 1000},
-      // Escape hatch: route BEAM codegen through the legacy string emitter
-      // (src/codegen/core_erlang.cxx) instead of the IR pipeline.
-      {"legacy-emitter", no_argument, nullptr, 1002},
       {"no-prelude", no_argument, nullptr, 1003},
       // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
@@ -1175,32 +1218,80 @@ int main(int argc, char *argv[]) {
   int opt;
 
   bool compileRun = false;
-  bool useIr = true;
   bool skipPrelude = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
-    case 1000:
-      useIr = true; // already the default; kept for compatibility
-      break;
-    case 1002:
-      useIr = false;
-      break;
     case 1003:
       skipPrelude = true;
       break;
     case 1001: {
-#ifdef KEX_PRELUDE_DIR
       std::string dir = optarg;
-      if (!compilePreludeCore(dir))
+      std::vector<PreludeBuildModule> modules;
+      if (!compilePreludeCore(dir, &modules))
         return 1;
-      std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir + " " +
-                        dir + "/kex_prelude.core";
-      return std::system(cmd.c_str()) == 0 ? 0 : 1;
-#else
-      std::cerr << "error: prelude dir not configured\n";
-      return 1;
-#endif
+      try {
+        // The prelude build directory is also the installed-runtime staging
+        // directory. Remove companions from older builds so deleting or
+        // renaming a Kex module cannot leave a stale beam that gets installed
+        // merely because it still matches `*.beam`.
+        std::unordered_set<std::string> currentCompanions;
+        for (auto &module : modules) {
+          module.interface.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+          module.interface.backendRepresentationVersion =
+              kex::kBeamRepresentationVersion;
+        }
+        for (size_t i = 1; i < modules.size(); i++)
+          currentCompanions.insert(modules[i].emitted.moduleName);
+        std::error_code cleanupError;
+        for (const auto &entry : std::filesystem::directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied,
+                 cleanupError)) {
+          if (cleanupError) break;
+          const auto &path = entry.path();
+          const auto stem = path.stem().string();
+          const auto extension = path.extension().string();
+          if (stem.rfind("Kex.", 0) == 0 &&
+              (extension == ".beam" || extension == ".core") &&
+              !currentCompanions.contains(stem))
+            std::filesystem::remove(path, cleanupError);
+          if (cleanupError) break;
+        }
+        if (cleanupError)
+          throw std::runtime_error("could not remove stale stdlib artifact: " +
+                                   cleanupError.message());
+
+        for (const auto &module : modules) {
+          std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir +
+                            " " + dir + "/" + module.emitted.moduleName +
+                            ".core";
+          if (std::system(cmd.c_str()) != 0) return 1;
+        }
+
+        for (size_t i = 1; i < modules.size(); i++)
+          modules[i].interface.interfaceHash =
+              kex::beam::computeInterfaceHash(modules[i].interface);
+        for (auto &companion : modules[0].interface.metadata.companions)
+          for (size_t i = 1; i < modules.size(); i++)
+            if (modules[i].emitted.moduleName == companion.beamAtom)
+              companion.expectedHash = modules[i].interface.interfaceHash;
+        modules[0].interface.interfaceHash =
+            kex::beam::computeInterfaceHash(modules[0].interface);
+
+        for (auto &module : modules) {
+          auto beamPath = dir + "/" + module.emitted.moduleName + ".beam";
+          auto beam = kex::beam::readBeamFile(beamPath);
+          module.interface.artifactHash = kex::beam::computeArtifactHash(beam);
+          beam.setChunk(kex::beam::KEXI_CHUNK_ID,
+                        kex::beam::serializeKexi(module.interface));
+          kex::beam::writeBeamFile(beam, beamPath);
+        }
+      } catch (const std::exception &e) {
+        std::cerr << "error: could not attach stdlib interface: " << e.what()
+                  << "\n";
+        return 1;
+      }
+      return 0;
     }
     case 'r':
       mode = "run";
@@ -1272,6 +1363,7 @@ int main(int argc, char *argv[]) {
 
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
+    db.setImportedInterfaces(&preludeSemanticInterfaces());
     loadPrelude(db);
     if (optind < argc)
       db.updateFile(argv[optind], readFile(argv[optind]));
@@ -1305,26 +1397,13 @@ int main(int argc, char *argv[]) {
     }
     std::string beamDir = rtd;
 
-    // Put runtime beams (kex_io, ...) on the path. Prefer the cmake
-    // pre-built dir (added as an extra -pa at run time); fall back to
-    // compiling them into beamDir so a single -pa suffices.
+    // Runtime artifacts are produced explicitly by the toolchain build.
     std::string rtPaDir = prebuiltRuntimeBeamDir();
     if (rtPaDir.empty()) {
-      namespace fs = std::filesystem;
-      fs::path bin = fs::weakly_canonical(argv[0]);
-      for (auto dir = bin.parent_path(); dir != dir.root_path();
-           dir = dir.parent_path()) {
-        auto rtDir = dir / "runtime" / "src";
-        if (fs::exists(rtDir)) {
-          for (const auto &entry : fs::directory_iterator(rtDir))
-            if (entry.path().extension() == ".erl") {
-              std::string cmd = "erlc -o " + beamDir + " " +
-                                entry.path().string() + " > /dev/null 2>&1";
-              std::system(cmd.c_str());
-            }
-          break;
-        }
-      }
+      std::cerr << "error: prebuilt runtime artifacts are missing; "
+                   "rebuild or reinstall the Kex toolchain\n";
+      std::filesystem::remove_all(beamDir);
+      return 1;
     }
 
     // Spawn ONE persistent erl VM for the whole session — driven by
@@ -1377,8 +1456,10 @@ int main(int argc, char *argv[]) {
     kex::printReplBanner(std::cout, "BEAM");
 
     kex::semantic::SemanticDB beamReplDb;
-    if (!skipPrelude)
+    if (!skipPrelude) {
+      beamReplDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(beamReplDb);
+    }
 #ifdef HAS_READLINE
     g_replDb = &beamReplDb;
     rl_attempted_completion_function = kexCompletion;
@@ -1755,10 +1836,15 @@ int main(int argc, char *argv[]) {
               // file changed underneath us, just skip it this round.
             }
           }
-          auto extMods = kexiRegistry.buildExternalModules();
+          auto extMods = mergeExternalModules(
+              preludeExternalModules(), kexiRegistry.buildExternalModules());
+          kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
+          replAnalyzer.analyze(program);
           auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
-                                             migratedPreludeFns(), "",
-                                             extMods.nameToAtom.empty() ? nullptr : &extMods);
+                                             "",
+                                             extMods.nameToAtom.empty() ? nullptr : &extMods,
+                                             nullptr,
+                                             &replAnalyzer.resolvedCalls());
           auto result = kex::ir::emitCore(irMod);
 
           std::string corePath = beamDir + "/" + result.moduleName + ".core";
@@ -1848,8 +1934,10 @@ int main(int argc, char *argv[]) {
 
     // SemanticDB for REPL: prelude loaded once, updated on each input.
     kex::semantic::SemanticDB replDb;
-    if (!skipPrelude)
+    if (!skipPrelude) {
+      replDb.setImportedInterfaces(&preludeSemanticInterfaces());
       loadPrelude(replDb);
+    }
 #ifdef HAS_READLINE
     g_replDb = &replDb;
     rl_attempted_completion_function = kexCompletion;
@@ -2236,14 +2324,12 @@ int main(int argc, char *argv[]) {
       moduleName = modFile.substr(0, modFile.size() - 5);
     }
 
-    // Put Kex runtime beams (kex_io, kex_file, ...) on the code path.
-    // Prefer cmake-pre-built beams (zero compile cost); fall back to
-    // compiling them into a temp dir we clean up afterwards.
+    // Put explicitly built Kex runtime beams on the code path.
     std::string rtBeamDir = prebuiltRuntimeBeamDir();
-    bool rtTemp = false;
     if (rtBeamDir.empty()) {
-      rtBeamDir = compileRuntimeBeamsToTemp(argv[0]);
-      rtTemp = !rtBeamDir.empty();
+      std::cerr << "error: prebuilt runtime artifacts are missing; "
+                   "rebuild or reinstall the Kex toolchain\n";
+      return 1;
     }
 
     // Load explicitly — code:load_abs rejects when filename != module name,
@@ -2267,9 +2353,13 @@ int main(int argc, char *argv[]) {
         "Result -> halt() "
         "catch _:Reason:_ -> io:format(standard_error, \"Internal error: "
         "runtime error: ~p~n\", [Reason]), halt(1) end";
-    std::string runCmd = "erl -noshell -pa " + absBeamDir;
+    // Erlang prepends each -pa directory, so add the toolchain first and the
+    // compiled unit last. A source module intentionally shadows a stdlib
+    // module with the same public name (for example a user-defined `Math`).
+    std::string runCmd = "erl -noshell";
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
+    runCmd += " -pa " + absBeamDir;
     // shellSingleQuote (see its own comment) wraps the whole -eval
     // text as one shell argument, so quote characters embedded in it
     // (e.g. around a module name with a literal '.' in its stem)
@@ -2281,8 +2371,6 @@ int main(int argc, char *argv[]) {
         runCmd += " " + a;
     }
     int rc = std::system(runCmd.c_str());
-    if (rtTemp)
-      fs::remove_all(rtBeamDir);
     return rc;
   }
 
@@ -2369,6 +2457,7 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+    std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
     if (mode == "compile" && !skipCheck) {
       // Same pre-execution check `run` mode does — see
       // runSemanticCheck's doc comment for why this matters: without
@@ -2376,7 +2465,9 @@ int main(int argc, char *argv[]) {
       // Not applied to emit-core (a debug/inspection dump — you may
       // want to see the emitted Core Erlang for code that doesn't
       // type-check yet).
-      if (!runSemanticCheck(program, filepath)) {
+      compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
+          &preludeSemanticInterfaces());
+      if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
         // -R (run-beam) sets mode == "compile" internally too (see
         // compileRun above) — say "before running" there, matching
         // the tree-walker's identical message for the same failure,
@@ -2466,54 +2557,39 @@ int main(int argc, char *argv[]) {
         (void)deps;
       }
 
-      // An explicit `main do ... end` is no longer required here —
-      // CoreErlangEmitter already synthesizes one from trailing bare
-      // top-level expressions when there isn't one (see its
-      // `bareExprs` handling), matching the tree-walker's own
-      // implicit-top-level-execution behavior exactly. This used to
-      // hard-require an explicit main block and reject anything else
-      // outright, which was stricter than the emitter itself actually
-      // needs — a real, reproduced case: spec/comparision.kex is
-      // pure top-level `type`/`make`/`let` declarations plus bare
-      // `comps.each { ... }` calls with no `main` block at all, and
-      // runs identically under both backends once this guard is gone.
-      // The AST→IR→Core Erlang pipeline (src/ir/) is the default BEAM
-      // backend; `--legacy-emitter` opts back into the string emitter.
-      // Both produce the same {source, moduleName, mainArity} shape, so
-      // the downstream erlc/erl path is identical. A LowerError means
-      // the IR path doesn't support that construct — reported cleanly,
-      // never falling back (so gaps are visible, not masked).
-#ifdef KEX_PRELUDE_DIR
-      // Prelude record defs (e.g. ParseError) aren't in the user's AST; merge
-      // them so the codegen can emit field accessors for prelude records.
-      for (auto& item : collectPreludeRecordDefs())
-        program.items.push_back(std::move(item));
-#endif
-      kex::codegen::CoreErlangEmitter::EmitResult result;
-      std::vector<kex::codegen::CoreErlangEmitter::EmitResult> moduleResults;
-      if (useIr) {
-        try {
-          auto irModules = kex::ir::lowerModules(program, stem,
-                                                 migratedPreludeFns(), filepath);
-          for (const auto &irMod : irModules) {
-            auto irRes = kex::ir::emitCore(irMod);
-            kex::codegen::CoreErlangEmitter::EmitResult emitted;
-            emitted.source = std::move(irRes.source);
-            emitted.moduleName = std::move(irRes.moduleName);
-            emitted.mainArity = irRes.mainArity;
-            moduleResults.push_back(std::move(emitted));
-          }
-          result = moduleResults.front();
-        } catch (const kex::ir::LowerError &e) {
-          std::cerr << "error: " << e.what() << "\n";
-          if (compileRun && !outputDirExplicit && !tempDir.empty())
-            std::filesystem::remove_all(tempDir);
-          return 1;
-        }
-      } else {
-        kex::codegen::CoreErlangEmitter emitter;
-        result = emitter.emitProgram(program, stem);
-        moduleResults.push_back(result);
+      // An explicit `main do ... end` is not required: IR lowering
+      // synthesizes one from trailing bare top-level expressions, matching
+      // the tree-walker's implicit top-level execution behavior.
+      // Prelude record layouts come from the embedded compiled interface, not
+      // from reparsing stdlib source or injecting declarations into the user AST.
+      std::vector<kex::ir::ExternalRecordLayout> preludeRecordLayouts;
+      try {
+        preludeRecordLayouts = loadPreludeRecordLayouts();
+      } catch (const std::exception &e) {
+        std::cerr << "error: invalid prebuilt standard library: " << e.what()
+                  << "\n";
+        if (compileRun && !outputDirExplicit && !tempDir.empty())
+          std::filesystem::remove_all(tempDir);
+        return 1;
+      }
+      kex::ir::EmitResult result;
+      std::vector<kex::ir::EmitResult> moduleResults;
+      try {
+        auto irModules = kex::ir::lowerModules(program, stem,
+                                               filepath,
+                                               &preludeRecordLayouts,
+                                               &preludeExternalModules(),
+                                               compileAnalysis
+                                                   ? &compileAnalysis->resolvedCalls()
+                                                   : nullptr);
+        for (const auto &irMod : irModules)
+          moduleResults.push_back(kex::ir::emitCore(irMod));
+        result = moduleResults.front();
+      } catch (const kex::ir::LowerError &e) {
+        std::cerr << "error: " << e.what() << "\n";
+        if (compileRun && !outputDirExplicit && !tempDir.empty())
+          std::filesystem::remove_all(tempDir);
+        return 1;
       }
 
       std::vector<std::string> corePaths;
@@ -2534,56 +2610,37 @@ int main(int argc, char *argv[]) {
       }
 
       // --compile: also invoke erlc to produce a .beam file.
-      // Place Kex runtime beams (kex_io, kex_file, ...) into the output
-      // dir so the compiled .beam is self-contained. Prefer copying the
-      // cmake-pre-built beams; fall back to compiling from source.
+      // Place explicitly built Kex runtime beams into the output directory.
       {
         namespace fs = std::filesystem;
         std::string prebuilt = prebuiltRuntimeBeamDir();
-        if (!prebuilt.empty()) {
-          std::error_code ec;
-          for (const auto &e : fs::directory_iterator(prebuilt))
-            if (e.path().extension() == ".beam")
-              fs::copy_file(e.path(), fs::path{outputDir} / e.path().filename(),
-                            fs::copy_options::overwrite_existing, ec);
-        } else {
-          fs::path bin = fs::weakly_canonical(argv[0]);
-          for (auto dir = bin.parent_path(); dir != dir.root_path();
-               dir = dir.parent_path()) {
-            auto rtDir = dir / "runtime" / "src";
-            if (fs::exists(rtDir)) {
-              for (const auto &entry : fs::directory_iterator(rtDir)) {
-                if (entry.path().extension() == ".erl") {
-                  std::string rtCmd = "erlc -o " + outputDir + " " +
-                                      entry.path().string() +
-                                      " > /dev/null 2>&1";
-                  std::system(rtCmd.c_str());
-                }
-              }
-              break;
-            }
-          }
+        if (prebuilt.empty()) {
+          std::cerr << "error: prebuilt runtime artifacts are missing; "
+                       "rebuild or reinstall the Kex toolchain\n";
+          if (compileRun && !outputDirExplicit && !tempDir.empty())
+            fs::remove_all(tempDir);
+          return 1;
         }
+        std::error_code ec;
+        for (const auto &e : fs::directory_iterator(prebuilt))
+          if (e.path().extension() == ".beam")
+            fs::copy_file(e.path(), fs::path{outputDir} / e.path().filename(),
+                          fs::copy_options::overwrite_existing, ec);
       }
 
-#ifdef KEX_PRELUDE_DIR
-      // Shared stdlib: kex_prelude.beam is normally prebuilt into the
-      // runtime beam dir (see CMakeLists.txt) and staged with the other
-      // runtime beams above, so BEAM lazy-loads it. Only fall back to a
-      // per-run compile when that prebuilt beam isn't present (e.g.
-      // running outside the build tree).
-      // Both backends emit `call 'kex_prelude':...` for migrated stdlib
-      // methods, so the fallback compile isn't gated on the backend.
-      if (!std::filesystem::exists(std::filesystem::path{outputDir} /
-                                   "kex_prelude.beam") &&
-          compilePreludeCore(outputDir)) {
-        std::string preCmd = "erlc +from_core -pa " + outputDir + " -o " +
-                             outputDir + " " + outputDir + "/kex_prelude.core";
-        if (!tempDir.empty())
-          preCmd += " > /dev/null 2>&1";
-        std::system(preCmd.c_str());
+      // User compilation consumes the explicitly built stdlib artifact. A
+      // missing installed/development artifact is a toolchain error; never
+      // rebuild stdlib source as an implicit side effect of compiling a user
+      // program.
+      if (!skipPrelude &&
+          !std::filesystem::exists(std::filesystem::path{outputDir} /
+                                   "kex_prelude.beam")) {
+        std::cerr << "error: prebuilt standard library is missing; "
+                     "rebuild or reinstall the Kex toolchain\n";
+        if (compileRun && !outputDirExplicit && !tempDir.empty())
+          std::filesystem::remove_all(tempDir);
+        return 1;
       }
-#endif
 
       int erlcRet = 0;
       for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
@@ -2619,9 +2676,11 @@ int main(int argc, char *argv[]) {
                                  moduleResults[moduleIndex].moduleName + ".beam";
           try {
             kex::beam::CollectOptions copts;
+            copts.unitId = moduleResults[0].moduleName;
             copts.moduleAtom = moduleResults[moduleIndex].moduleName;
             copts.fileStem = stem;
             copts.noCheck = skipCheck;
+            copts.analysis = compileAnalysis.get();
             copts.role = moduleIndex == 0
                 ? kex::beam::KexiModuleRole::Entry
                 : kex::beam::KexiModuleRole::Companion;
@@ -2632,6 +2691,9 @@ int main(int argc, char *argv[]) {
                 copts.moduleName = irName.substr(4);
             }
             auto chunk = kex::beam::collectMetadata(program, copts);
+            chunk.intrinsicAbiVersion = kex::kIntrinsicAbiVersion;
+            chunk.backendRepresentationVersion =
+                kex::kBeamRepresentationVersion;
             if (moduleIndex == 0 && moduleResults.size() > 1) {
               for (size_t ci = 1; ci < moduleResults.size(); ci++) {
                 kex::beam::KexiCompanion comp;
@@ -2641,8 +2703,9 @@ int main(int argc, char *argv[]) {
               }
             }
             chunk.interfaceHash = kex::beam::computeInterfaceHash(chunk);
-            auto payload = kex::beam::serializeKexi(chunk);
             auto bf = kex::beam::readBeamFile(beamPath);
+            chunk.artifactHash = kex::beam::computeArtifactHash(bf);
+            auto payload = kex::beam::serializeKexi(chunk);
             bf.setChunk(kex::beam::KEXI_CHUNK_ID, std::move(payload));
             kex::beam::writeBeamFile(bf, beamPath);
           } catch (const std::exception& e) {
@@ -2807,11 +2870,12 @@ int main(int argc, char *argv[]) {
     // mode == "check"
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
+    db.setImportedInterfaces(&preludeSemanticInterfaces());
     loadPrelude(db);
     db.updateFile(filepath, readFile(filepath));
 
     // Pass 3+: existing Analyzer (purity, type checking)
-    kex::semantic::Analyzer analyzer;
+    kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());
     bool ok = analyzer.analyze(program);
 
     // Collect all diagnostics
@@ -2825,12 +2889,10 @@ int main(int argc, char *argv[]) {
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
 
-#ifdef KEX_PRELUDE_DIR
     for (const auto &d : sealViolations(program, filepath)) {
       allDiags.push_back(d);
       dbOk = false;
     }
-#endif
 
     bool allOk = ok && dbOk;
 

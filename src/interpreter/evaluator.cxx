@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../common/prelude_loader.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -19,13 +20,9 @@ Evaluator::Evaluator() {
     // spawn/receive use.
     m_scheduler = std::make_unique<Scheduler>(*this);
     registerBuiltins();
-    // Clone all builtins into m_intrinsicEnv so the Kex.Intrinsic.*
-    // dispatch path can look them up without hitting prelude wrappers
-    // (which may later shadow them in m_globalEnv).
-    m_intrinsicEnv->importAll(*m_globalEnv);
     // The Kex-written stdlib shadows the native builtins on every Evaluator, so
     // there is a single source of truth for stdlib behaviour regardless of entry
-    // point (CLI, REPL, tests). No-op when KEX_PRELUDE_DIR is unset/unreadable.
+    // point (CLI, REPL, tests). No-op when no prelude source root is available.
     loadPrelude();
     // The prelude's type declarations (Optional, Result) re-register variant
     // constructors (Just, Ok, Error) via execTypeDef — but the generic
@@ -34,6 +31,37 @@ Evaluator::Evaluator() {
     // factories so they win and typeName() renders correctly
     // (e.g. "Result<String, ?>" not bare "Result").
     registerAdtConstructors();
+}
+
+auto Evaluator::defineIntrinsic(const std::string& name, NativeFunc fn) -> void {
+    if (name.find("::") == std::string::npos)
+        throw std::logic_error("intrinsic identity must be category-qualified: " + name);
+    auto value = std::make_shared<Value>();
+    value->data = FunctionValue{name, std::move(fn)};
+    m_intrinsicEnv->define(name, std::move(value));
+}
+
+auto Evaluator::defineIntrinsic(const std::string& name, const ValuePtr& value) -> void {
+    auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
+    if (!function || !function->native) return;
+    defineIntrinsic(name, function->native);
+}
+
+auto Evaluator::defineModule(const std::string& name) -> void {
+    m_globalEnv->define(name, Value::module(name));
+}
+
+auto Evaluator::definePublic(const std::string& name, NativeFunc fn) -> void {
+    auto val = std::make_shared<Value>();
+    val->data = FunctionValue{name, std::move(fn)};
+    m_globalEnv->define(name, val);
+}
+
+auto Evaluator::defineDual(const std::string& name, NativeFunc fn) -> void {
+    auto val = std::make_shared<Value>();
+    val->data = FunctionValue{name, fn};
+    m_globalEnv->define(name, val);
+    defineIntrinsic(name, std::move(fn));
 }
 
 auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
@@ -201,28 +229,14 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
 }
 
 auto Evaluator::loadPrelude() -> void {
-#ifdef KEX_PRELUDE_DIR
     if (m_preludeLoaded) return;
     // Parse the prelude once and cache the merged declarations. The AST must
     // outlive every Evaluator (m_functionDefs keeps raw pointers into it), so
     // it is a function-local static — shared across all instances.
     static const ast::Program* preludeProgram = []() -> const ast::Program* {
         auto* prog = new ast::Program();
-        std::error_code ec;
-        std::vector<std::string> files;
-        // KEX_PRELUDE_DIR is the native source path; on wasm the same files
-        // are embedded into MEMFS at "/prelude" instead (see CMakeLists.txt's
-        // --preload-file and src/common/prelude_loader.hxx, which shares this
-        // convention for the REPL's SemanticDB).
-        for (const char* dir : {KEX_PRELUDE_DIR, "/prelude"}) {
-            for (const auto& e : std::filesystem::directory_iterator(dir, ec))
-                if (e.path().extension() == ".kex")
-                    files.push_back(e.path().string());
-            if (!ec && !files.empty()) break;
-            files.clear();
-        }
+        auto files = kex::preludeSourceFiles();
         if (files.empty()) return prog; // no prelude available — run without
-        std::sort(files.begin(), files.end());
         for (const auto& f : files) {
             std::ifstream in(f);
             std::string src((std::istreambuf_iterator<char>(in)),
@@ -256,7 +270,6 @@ auto Evaluator::loadPrelude() -> void {
     }
     for (const auto& item : preludeProgram->items) execTopLevel(item);
     m_preludeLoaded = true;
-#endif
 }
 
 auto Evaluator::setReplMode(bool enabled) -> void {
@@ -385,11 +398,31 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
             }
         }, item);
     }
+    const auto hasPublicNative = [this](const std::string& name) {
+        auto value = m_globalEnv->get(name);
+        auto* function = value ? std::get_if<FunctionValue>(&value->data) : nullptr;
+        return function && function->native && !m_functionDefs.contains(name);
+    };
     for (const auto& item : mod.body) {
-        std::visit([this, &mod](const auto& node) {
+        std::visit([this, &mod, &hasPublicNative](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, mod.name);
+                auto nativeName = mod.name + "::" + node->name;
+                // Only an explicit PUBLIC native binding may own a public
+                // module slot. A same-named private intrinsic is the runtime
+                // target of the Kex wrapper, not a reason to suppress it.
+                // Public-only helpers (and intentionally native-wins module
+                // functions such as variadic IO calls) remain preserved.
+                bool hasNative = hasPublicNative(nativeName);
+                if (!hasNative && nativeName.find('.') != std::string::npos) {
+                    std::string alt;
+                    for (char c : mod.name)
+                        alt += (c == '.') ? "::" : std::string(1, c);
+                    const auto altName = alt + "::" + node->name;
+                    hasNative = hasPublicNative(altName);
+                }
+                if (!hasNative)
+                    execFunctionDef(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 execModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
@@ -429,7 +462,12 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
     // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
     size_t dot = mod.name.find('.');
     if (dot == std::string::npos) {
-        m_env->define(mod.name, Value::module(mod.name));
+        // Preserve public constants that deliberately share a namespace name
+        // (notably the ENV Map). This is public binding ownership, not an
+        // intrinsic capability check.
+        auto existing = m_env->get(mod.name);
+        if (!existing || std::holds_alternative<ModuleValue>(existing->data))
+            m_env->define(mod.name, Value::module(mod.name));
     } else {
         const auto parent = mod.name.substr(0, dot);
         m_env->define(parent, Value::module(parent));
@@ -459,7 +497,7 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
     // the trait name so `make X, implement: Trait` can inherit them.
     for (const auto& item : def.body) {
         if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
-            execFunctionDef(**fn, def.name);
+            execFunctionDef(**fn, def.name, true);
         }
     }
 }
@@ -561,17 +599,19 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
     }
 }
 
-auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std::string& typeScope) -> void {
+auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
+                                    const std::string& typeScope,
+                                    bool hasImplicitReceiver) -> void {
     std::unordered_set<std::string> importsBefore;
     const auto prefix = typeScope.empty() ? std::string{} : typeScope + "::";
     for (const auto& [name, _] : m_moduleImportOrigins)
         if (!prefix.empty() && name.rfind(prefix, 0) == 0) importsBefore.insert(name);
 
     for (const auto& item : block.items) {
-        std::visit([this, &typeScope](const auto& node) {
+        std::visit([this, &typeScope, hasImplicitReceiver](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeScope);
+                execFunctionDef(*node, typeScope, hasImplicitReceiver);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
@@ -596,7 +636,9 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block, const std
     }
 }
 
-auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& typeScope) -> void {
+auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
+                                const std::string& typeScope,
+                                bool hasImplicitReceiver) -> void {
     // Collect clauses: if there's already a function with this name, merge
     auto existing = m_env->get(def.name);
     std::vector<const ast::FunctionClause*> allClauses;
@@ -645,10 +687,10 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
     // vector from the map — avoids a dangling pointer when unordered_map
     // rehashes after a new key is inserted for a different function.
     auto funcValue = std::make_shared<Value>();
-    // A name containing "::" was registered with a type scope → it's a UFCS
-    // method and the first arg is always the receiver ("this").
-    bool isMethod = regName.find("::") != std::string::npos;
-    const std::string moduleScope = m_moduleRegistry.contains(typeScope) ? typeScope : "";
+    const std::string moduleScope = hasImplicitReceiver ? "" : typeScope;
+    // Module functions are namespaced but have no implicit receiver. Only
+    // functions scoped to a make/record type use the UFCS receiver slot.
+    bool isMethod = hasImplicitReceiver;
     std::vector<std::pair<std::string, ValuePtr>> capturedImports;
     if (!moduleScope.empty()) {
         const auto prefix = moduleScope + "::";
@@ -709,7 +751,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def, const std::string& 
                     // the extra arg is the receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
-                } else if (args.size() > clause.params.size()) {
+                } else if (isMethod && args.size() > clause.params.size()) {
                     // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
                     argOffset = 1;
@@ -796,10 +838,7 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
     // Sealed-stdlib enforcement: after the prelude has loaded, reject any
     // user make-block on a builtin type that redefines a prelude method.
     if (m_preludeLoaded && !m_sealedMethods.empty()) {
-        static const std::unordered_set<std::string> builtins = {
-            "Integer", "Float", "Char", "Bool", "Number", "String",
-            "List", "Map", "Range", "Optional", "Result"};
-        if (builtins.count(typeName)) {
+        if (builtinTypeNames().count(typeName)) {
             auto checkSeal = [&](const ast::FunctionDef* fd) {
                 if (fd && m_sealedMethods.count(fd->name))
                     throw RuntimeError(
@@ -850,9 +889,9 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
         std::visit([this, &typeName](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeName);
+                execFunctionDef(*node, typeName, true);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                execVisibilityBlock(*node, typeName);
+                execVisibilityBlock(*node, typeName, true);
             }
         }, item);
     }
@@ -866,7 +905,7 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
                 if (!traitFn) continue;
                 if (traitFn->clauses.empty() || traitFn->clauses[0].body.empty()) continue;
                 if (ownMethods.count({traitFn->name, arityOf(traitFn)})) continue;
-                execFunctionDef(*traitFn, typeName);
+                execFunctionDef(*traitFn, typeName, true);
             }
         }
     }
@@ -1134,9 +1173,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                     // the prelude's Kex.Intrinsic.* wrappers
                                     // live in m_globalEnv; the C++ native
                                     // implementations live in m_intrinsicEnv.
-                                    auto val = m_intrinsicEnv->get(node.method);
+                                    // The category-qualified identity is
+                                    // authoritative; ordinary/bare intrinsic
+                                    // fallback would leak across categories.
+                                    auto val = m_intrinsicEnv->get(
+                                        catMc->method + "::" + node.method);
                                     if (!val)
-                                        throw RuntimeError("Undefined intrinsic: " + node.method, expr.location);
+                                        throw RuntimeError("Undefined intrinsic: " + catMc->method
+                                                           + "." + node.method, expr.location);
                                     if (auto* func = std::get_if<FunctionValue>(&val->data))
                                         return func->native(std::move(args));
                                     throw RuntimeError("Intrinsic " + node.method + " is not a function", expr.location);
@@ -1180,6 +1224,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         isNamespaceCall = true;
                         namespaceName = rec->typeName;
                     }
+                } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
+                    // An ADT variant whose tag names a registered module is
+                    // the variant clobbering the module's env binding (e.g.
+                    // `Http` is both a `Feature` variant and a module) —
+                    // `Http.get(...)` must dispatch to the module, not UFCS
+                    // on the variant value. Bare-value uses (pattern match,
+                    // passing `Http` to a function) are unaffected: they never
+                    // reach this method-call path.
+                    if (var->args.empty() && m_moduleRegistry.count(var->tag)) {
+                        isNamespaceCall = true;
+                        namespaceName = var->tag;
+                    }
                 }
             }
             if (isNamespaceCall) {
@@ -1208,6 +1264,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // registered without a mangled prefix (e.g. Stream.Sequence).
                 std::string dispatchName = node.method;
                 auto mangled = namespaceName + "::" + node.method;
+                if (namespaceName.find('.') != std::string::npos && !m_env->get(mangled)) {
+                    std::string alt;
+                    for (char c : namespaceName)
+                        alt += (c == '.') ? "::" : std::string(1, c);
+                    mangled = alt + "::" + node.method;
+                }
                 if (auto target = m_env->get(mangled)) {
                     if (node.args.empty() && node.namedArgs.empty() && !node.block
                         && std::holds_alternative<ModuleValue>(target->data))
@@ -1267,52 +1329,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
             }
 
-            // Type-based dispatch: try TypeName::method first
-            std::string mangledName = node.method;
-            std::string receiverType;
-            if (auto* rec = std::get_if<RecordValue>(&receiver->data)) {
-                receiverType = rec->typeName;
-            } else if (auto* var = std::get_if<VariantValue>(&receiver->data)) {
-                receiverType = var->tag;
-            } else if (std::holds_alternative<ListValue>(receiver->data)) {
-                receiverType = "List";
-            } else if (std::holds_alternative<MapValue>(receiver->data)) {
-                receiverType = "Map";
-            } else if (std::holds_alternative<FileHandleValue>(receiver->data)) {
-                receiverType = "FileHandle";
-            } else if (std::holds_alternative<IntValue>(receiver->data) ||
-                       std::holds_alternative<BigIntValue>(receiver->data)) {
-                receiverType = "Integer";
-            } else if (std::holds_alternative<FloatValue>(receiver->data)) {
-                receiverType = "Float";
-            } else if (std::holds_alternative<BoolValue>(receiver->data)) {
-                receiverType = "Bool";
-            } else if (std::holds_alternative<StringValue>(receiver->data)) {
-                receiverType = "String";
-            } else if (std::holds_alternative<RangeValue>(receiver->data)) {
-                receiverType = "Range";
-            } else if (std::holds_alternative<StreamValue>(receiver->data)) {
-                receiverType = "Stream";
-            }
-            if (!receiverType.empty()) {
-                auto typed = receiverType + "::" + node.method;
-                if (m_env->get(typed)) {
-                    mangledName = typed;
-                } else {
-                    // receiverType may be a variant tag (Just, Ok, Nothing,
-                    // ...) rather than the type that declared it (Option,
-                    // Result, ...) — methods from `make TypeName do ... end`
-                    // are registered under the declared type's name, so
-                    // fall back to that mapping before giving up.
-                    auto parentIt = m_variantParent.find(receiverType);
-                    if (parentIt != m_variantParent.end()) {
-                        auto typedByParent = parentIt->second + "::" + node.method;
-                        if (m_env->get(typedByParent)) {
-                            mangledName = typedByParent;
-                        }
-                    }
-                }
-            }
+            auto mangledName = resolveMethodName(receiver, node.method);
 
             // For mutating calls, reassign back
             if (node.mutating) {
@@ -1466,7 +1483,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
                 popEnv();
             }
-            return Value::none();
+            // No clause matched: BEAM raises `{case_clause, subject}` here,
+            // so the walker must raise too — a match with no matching
+            // clause is a bug, not a value (it previously returned None).
+            throw RuntimeError("no matching clause for " + subject->inspect(),
+                               expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
             // `return EXPR if COND` parses as ReturnExpr(TrailingIf(EXPR,
@@ -1580,8 +1601,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 lambda->data = FunctionValue{"&." + method,
                     [this, method](std::vector<ValuePtr> args) -> ValuePtr {
                         if (args.empty()) return Value::none();
-                        // Call method on the arg via UFCS
-                        return callFunction(method, std::move(args), {}, {});
+                        auto dispatchName = resolveMethodName(args[0], method);
+                        return callFunction(dispatchName, std::move(args), {}, {});
                     }};
                 return lambda;
             }
@@ -1595,9 +1616,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 auto lambda = std::make_shared<Value>();
                 lambda->data = FunctionValue{"&." + method,
                     [this, method, extraArgs](std::vector<ValuePtr> args) -> ValuePtr {
+                        if (args.empty()) return Value::none();
+                        auto dispatchName = resolveMethodName(args[0], method);
                         auto allArgs = args;
                         for (const auto& a : extraArgs) allArgs.push_back(a);
-                        return callFunction(method, std::move(allArgs), {}, {});
+                        return callFunction(dispatchName, std::move(allArgs), {}, {});
                     }};
                 return lambda;
             }
@@ -2030,7 +2053,26 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
         if (m_env->get(scopedName)) lookupName = scopedName;
     }
     auto val = m_env->get(lookupName);
-    if (!val) val = m_intrinsicEnv->get(name);
+    if (!val && !name.empty() && std::isupper(static_cast<unsigned char>(name[0]))) {
+        for (const auto& [modName, entry] : m_moduleRegistry) {
+            auto eit = entry.exports.find(name);
+            if (eit != entry.exports.end()) {
+                lookupName = modName + "::" + name;
+                val = eit->second;
+                break;
+            }
+        }
+    }
+    // Bare UFCS (`map(xs, f)`) is equivalent to receiver syntax
+    // (`xs.map(f)`). Once a public native alias is removed, route the call to
+    // the source-owned receiver method selected from argument zero.
+    if (!val && !args.empty() && name.find("::") == std::string::npos) {
+        auto methodName = resolveMethodName(args[0], name);
+        if (methodName != name) {
+            lookupName = std::move(methodName);
+            val = m_env->get(lookupName);
+        }
+    }
     if (!val) {
         throw RuntimeError("Undefined function: " + name, loc);
     }
@@ -2089,6 +2131,23 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     }
 
     throw RuntimeError("'" + name + "' is not callable", loc);
+}
+
+auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+    -> std::string {
+    auto receiverType = dispatchTypeName(receiver);
+    if (receiverType.empty()) return method;
+    auto typed = receiverType + "::" + method;
+    if (m_env->get(typed)) return typed;
+
+    // A variant value is tagged with its constructor while methods are
+    // registered under the parent ADT's name.
+    auto parentIt = m_variantParent.find(receiverType);
+    if (parentIt != m_variantParent.end()) {
+        auto typedByParent = parentIt->second + "::" + method;
+        if (m_env->get(typedByParent)) return typedByParent;
+    }
+    return method;
 }
 
 auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr& val) -> ValuePtr {
@@ -2246,18 +2305,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // expression — which resolves to the Integer::parse namespace
                 // RecordValue, not an IntValue — still falls through to the
                 // record-typeName check below instead of failing outright.
-                if (pat.name == "String" && std::holds_alternative<StringValue>(value->data)) return true;
-                if ((pat.name == "Int" || pat.name == "Integer") &&
-                    (std::holds_alternative<IntValue>(value->data) ||
-                     std::holds_alternative<BigIntValue>(value->data))) return true;
-                if (pat.name == "Float" && std::holds_alternative<FloatValue>(value->data)) return true;
-                if (pat.name == "Bool" && std::holds_alternative<BoolValue>(value->data)) return true;
-                if (pat.name == "Atom" && std::holds_alternative<AtomValue>(value->data)) return true;
-                if (pat.name == "List" && std::holds_alternative<ListValue>(value->data)) return true;
-                if (pat.name == "Map" && std::holds_alternative<MapValue>(value->data)) return true;
-                if (pat.name == "Tuple" && std::holds_alternative<TupleValue>(value->data)) return true;
-                if (pat.name == "Range" && std::holds_alternative<RangeValue>(value->data)) return true;
-                if (pat.name == "Stream" && std::holds_alternative<StreamValue>(value->data)) return true;
+                if (matchesTypeName(pat.name, value)) return true;
                 // Match record type name
                 if (auto* rec = std::get_if<RecordValue>(&value->data)) {
                     if (rec->typeName == pat.name) return true;
@@ -2321,8 +2369,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
 
 auto Evaluator::registerBuiltins() -> void {
     // Orchestrator only — each domain is implemented in its own file under
-    // src/interpreter/stdlib/. Order matters: registerStreamBuiltins()
-    // wraps the plain-list `take` registered by registerListBuiltins().
+    // src/interpreter/stdlib/. Collection domains run after List because they
+    // reuse selected qualified List implementations.
     registerAdtConstructors();
     registerIOBuiltins();
     registerFileBuiltins();
@@ -2342,13 +2390,69 @@ auto Evaluator::registerBuiltins() -> void {
     registerEvalBuiltins();
     registerHttpBuiltins();
     registerWebBuiltins();
+    registerKexBuiltins();
 
     // Kex.Intrinsic.Fun.applyItem(f, item) — auto-splat a pair into a
     // two-arg block. Backs all Enumerable HOFs (map/filter/each/etc.)
     // for Map enumeration where each item is a (K,V) tuple.
     {
-        auto val = std::make_shared<Value>();
-        val->data = FunctionValue{"applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        defineIntrinsic("Fun::convertTo", [](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.size() < 2) return Value::none();
+            const auto& val = args[0];
+            std::string targetName;
+            if (auto* m = std::get_if<ModuleValue>(&args[1]->data))
+                targetName = m->name;
+            else if (auto* v = std::get_if<VariantValue>(&args[1]->data))
+                targetName = v->tag;
+            if (targetName == "Integer") {
+                if (std::holds_alternative<IntValue>(val->data) ||
+                    std::holds_alternative<BigIntValue>(val->data))
+                    return Value::just(val);
+                if (auto* f = std::get_if<FloatValue>(&val->data))
+                    return Value::just(Value::integer(static_cast<int64_t>(f->value)));
+                if (auto* ch = std::get_if<CharValue>(&val->data))
+                    return Value::just(Value::integer(static_cast<int64_t>(ch->value)));
+                if (auto* s = std::get_if<StringValue>(&val->data)) {
+                    try {
+                        size_t parsed = 0;
+                        auto v = std::stoll(s->value, &parsed);
+                        if (parsed == s->value.size()) return Value::just(Value::integer(v));
+                    } catch (...) {}
+                }
+                return Value::none();
+            }
+            if (targetName == "Float") {
+                if (auto* f = std::get_if<FloatValue>(&val->data))
+                    return Value::just(val);
+                if (auto i = asInteger(val))
+                    return Value::just(Value::floating(i->get_d()));
+                if (auto* s = std::get_if<StringValue>(&val->data)) {
+                    try {
+                        size_t parsed = 0;
+                        auto v = std::stod(s->value, &parsed);
+                        if (parsed == s->value.size()) return Value::just(Value::floating(v));
+                    } catch (...) {}
+                }
+                return Value::none();
+            }
+            if (targetName == "String")
+                return Value::just(Value::string(val->toString()));
+            if (targetName == "List") {
+                if (auto* range = std::get_if<RangeValue>(&val->data)) {
+                    std::vector<ValuePtr> elems;
+                    int64_t step = range->start <= range->end ? 1 : -1;
+                    for (int64_t i = range->start; step > 0 ? i <= range->end : i >= range->end; i += step)
+                        elems.push_back(Value::integer(i));
+                    return Value::just(Value::list(std::move(elems)));
+                }
+                if (std::holds_alternative<ListValue>(val->data))
+                    return Value::just(val);
+                return Value::none();
+            }
+            return Value::none();
+        });
+
+        defineIntrinsic("Fun::applyItem", [this](std::vector<ValuePtr> args) -> ValuePtr {
             if (args.size() < 2) return Value::none();
             auto& fn = *args[0];
             auto& item = *args[1];
@@ -2366,9 +2470,9 @@ auto Evaluator::registerBuiltins() -> void {
             if (auto* nf = std::get_if<FunctionValue>(&fn.data))
                 return callFunction(nf->name, std::move(callArgs), {}, {});
             return Value::none();
-        }};
-        m_globalEnv->define("applyItem", val);
+        });
     }
+
 }
 
 auto Evaluator::pushEnv() -> void {

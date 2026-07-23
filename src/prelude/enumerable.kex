@@ -7,7 +7,7 @@
 # block — so `list.map { |x| … }` and `map.map { |k, v| … }` both work.
 
 trait Enumerable do
-  reduce :> (A, (A, T) -> A) -> A
+  reduce :> A -> (A -> T -> A) -> A
 
   # Transforms each item by applying +f+, collecting the results into a list.
   let map(f) do

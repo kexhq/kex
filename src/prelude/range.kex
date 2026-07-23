@@ -1,6 +1,20 @@
 # Range — a range computes everything from its two bounds; `items`
 # materializes the elements into a real list when one is needed.
-make Range do
+make Range, implement: Enumerable do
+  # Enumerable primitive. Range stays structurally minimal; higher-order
+  # operations are inherited from Enumerable and reduce over its materialized
+  # items in ascending range order.
+  let reduce(acc, f) = this.items.reduce(acc, f)
+
+  # Numeric range aggregates are expressed in terms of the Enumerable
+  # primitive rather than relying on the walker's historical List fallback.
+  let sum = this.reduce(0) { |acc, n| acc + n }
+  let product = this.reduce(1) { |acc, n| acc * n }
+
+  # Membership is a Range method, not a fallback into the bare String/List
+  # native dispatcher.
+  let contains?(value) = this.items.contains?(value)
+
   # The range's elements as a list.
   #
   # @example

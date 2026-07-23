@@ -5,20 +5,28 @@ foul module IO do
   # @example
   #   IO.printLine("hello")      # prints: hello
   #   IO.printLine("x = ", 42)   # prints: x = 42
-  printLine : String -> Unit
+  printLine : A -> Unit
+  let printLine(msg) = Kex.Intrinsic.IO.printLine(msg)
+  let printLine = Kex.Intrinsic.IO.printLine("")
 
   # Writes each argument to stdout without a trailing newline.
   #
   # @example
   #   IO.print("hello ")
   #   IO.print("world")   # stdout: hello world
-  print : String -> Unit
+  print : A -> Unit
+  let print(msg) = Kex.Intrinsic.IO.print(msg)
+  let print = Kex.Intrinsic.IO.print("")
 
   # Alias for +printLine+.
-  putLine : String -> Unit
+  putLine : A -> Unit
+  let putLine(msg) = Kex.Intrinsic.IO.putLine(msg)
+  let putLine = Kex.Intrinsic.IO.putLine("")
 
   # Alias for +print+.
-  put : String -> Unit
+  put : A -> Unit
+  let put(msg) = Kex.Intrinsic.IO.put(msg)
+  let put = Kex.Intrinsic.IO.put("")
 
   # Pretty-prints a colored inspect representation of +val+ to stderr.
   # Returns +val+ unchanged so it can be inserted into any pipeline.
@@ -27,25 +35,32 @@ foul module IO do
   # @example
   #   xs.map(&double).inspect.filter(&even?)
   inspect : A -> A
+  let inspect(val) = Kex.Intrinsic.IO.inspect(val)
 
   # Reads one line from stdin. Returns +None+ at end-of-input.
   #
   # @example  IO.getLine.or("")
   getLine : String?
+  let getLine = Kex.Intrinsic.IO.getLine
 
   # Reads a single character from stdin. Returns +None+ at end-of-input.
   get : String?
+  let get = Kex.Intrinsic.IO.get
 
   # Writes a line to stderr. Does not exit.
   # Use for error messages that should not go to stdout.
   #
   # @example  IO.printError("config file not found")
-  printError : String -> Unit
+  printError : A -> Unit
+  let printError(msg) = Kex.Intrinsic.IO.printError(msg)
+  let printError = Kex.Intrinsic.IO.printError("")
 
   # Alias for +printError+ — use when signalling a non-fatal condition.
-  warn : String -> Unit
+  warn : A -> Unit
+  let warn(msg) = Kex.Intrinsic.IO.warn(msg)
 
   # Alias for +printError+ — longer form of +warn+.
-  warning : String -> Unit
+  warning : A -> Unit
+  let warning(msg) = Kex.Intrinsic.IO.warning(msg)
 
 end

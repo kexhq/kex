@@ -8,7 +8,7 @@ in a global, content-pinned, read-only cache (Go-style), not under each project.
 
 | Decision | Choice | Rationale |
 |---|---|---|
-| Runtime | **BEAM (Core Erlang)** | Kex compiles to Core Erlang (`src/codegen/core_erlang.cxx`) and runs on BEAM. The tree-walk interpreter is a development fallback, not a target. Tey runs on BEAM. |
+| Runtime | **BEAM (Core Erlang)** | Kex compiles to Core Erlang (`src/ir/emit_core.cxx`) and runs on BEAM. The tree-walk interpreter is a development fallback, not a target. Tey runs on BEAM. |
 | Implementation language | **Kex** (bootstrap) | Matches the mix/shards precedent; the language is DSL-friendly. Depends on Kex→BEAM codegen reaching production quality and an Erlang FFI (§"Precursor"). |
 | Manifest | **`package.kex`** (DSL) | "Everything is Kex." Read by shelling out to the already-built `kex`. |
 | Dependency source | **Git now, registry later** | No infrastructure to stand up on day one. Git deps are source-only by policy (clone the pinned commit, compile locally — no source/binary gap). The manifest field shape lets `registry:` (and hub-only binary artifacts) slot in later without a breaking change. |
@@ -74,7 +74,7 @@ C++ natives. Two compiler-side prerequisites make this possible; Tey blocks on b
 
 ### (a) Kex → Core Erlang reaches production quality
 
-`src/codegen/core_erlang.cxx` already emits Core Erlang (`.core`), and `kex --emit-core`
+`src/ir/emit_core.cxx` already emits Core Erlang (`.core`), and `kex --emit-core`
 is wired in `src/main.cxx`. The prerequisite is closing the gap between "emits a `.core`
 for small programs" and "compiles and runs a multi-module program end-to-end on BEAM" —
 enough to host Tey itself. This is a compiler workstream, tracked separately from Tey.

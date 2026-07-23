@@ -8,13 +8,16 @@
 module Parser do
   # Parses a Kex source string into a structured AST.
   parse : String -> Result<Program, ParseError>
-  parse : (String, String) -> Result<Program, ParseError>
+  parse : String -> String -> Result<Program, ParseError>
 
   # Reads a file and parses it.
   parseFile : FS.FilePath -> Result<Program, ParseError>
 
   # Parses a type expression string into a TypeRef.
   parseType : String -> Result<TypeRef, ParseError>
+
+  # Parses a single expression string into an Expression AST node.
+  parseExpression : String -> Result<Expression, ParseError>
 
   # Structured representation of type expressions.
   type TypeRef

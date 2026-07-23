@@ -34,6 +34,17 @@ describe("Range — Enumerable via reduce") do
     assert((1..5).reduce(0) { |acc, x| acc + x } == 15)
   end
 
+  it("numeric aggregates are source-owned") do
+    assert((1..5).sum == 15)
+    assert((1..5).product == 120)
+  end
+
+  it("membership is source-owned") do
+    assert((1..5).contains?(3))
+    assert(!((1..5).contains?(9)))
+    assert(('a'..'c').contains?('b'))
+  end
+
   it("each works on ranges") do
     var total = 0
     (1..5).each { |x| total = total + x }

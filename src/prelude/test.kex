@@ -34,7 +34,7 @@
 #       end
 #     end
 #   end
-describe : (String, Block<Unit>) -> Unit
+describe : String -> Block<Unit> -> Unit
 
 # Defines a single test case. The block is run and any exception thrown
 # inside it (typically a failed +assert+) marks the test failed without
@@ -49,7 +49,7 @@ describe : (String, Block<Unit>) -> Unit
 #     assert(2.even?)
 #     assert(!3.even?)
 #   end
-it : (String, Block<Unit>) -> Unit
+it : String -> Block<Unit> -> Unit
 
 # Registers setup for the current group. +before { ... }+ and
 # +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
@@ -72,6 +72,7 @@ after : Block<Unit> -> Unit
 #   assert(42 == 42)
 #   assert("hello".count == 5, "count should be 5")
 assert : Bool -> Bool
+assert : Bool -> String -> Bool
 
 # Focused assertions are ordinary Kex stdlib functions layered on the primitive
 # +assert+, so adding another helper does not require compiler or runtime work.
@@ -81,7 +82,7 @@ module Assert do
 
   let truthy(value) = assert(value, "expected a truthy value")
   let falsy(value) = assert(!value, "expected a falsy value")
-  let some(value) = assert(value.some?, "expected Just, got ${value}")
+  let some(value) = assert(value.present?, "expected Just, got ${value}")
   let none(value) = assert(value.none?, "expected None, got ${value}")
   let ok(value) = assert(value.ok?, "expected Ok, got ${value}")
   let error(value) = assert(value.error?, "expected Error, got ${value}")

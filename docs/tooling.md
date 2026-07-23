@@ -2,10 +2,12 @@
 
 ## REPL
 
-Built-in interactive REPL, foul by default:
+Built-in interactive REPL (`kex -i` or `kex -R` with no file), foul by default:
 
 ```
-$ kex
+$ kex -i
+
+Kex Interactive 0.2.0 — press Ctrl+C to exit (type /help ENTER for commands)
 
 kex> 1 + 2
 => 3 : Int
@@ -30,26 +32,15 @@ kex> name.
 
 ### Commands
 
-```
-kex> :load MyModule       # load a module
-kex> :type expr           # show type without evaluating
-kex> :doc String.split    # show documentation
-kex> :pure                # enter pure mode (no foul allowed)
-kex> :foul                # back to foul mode
-```
-
-### Pure Mode
+REPL commands use a `/` prefix (use `/help` for the full list):
 
 ```
-kex> :pure
-kex(pure)> IO.read("x")
-=> error: IO.read is foul, not available in pure mode
-
-kex(pure)> 1 + 2
-=> 3 : Int
-
-kex(pure)> :foul
-kex>
+kex> /load myfile.kex     # load a module from file
+kex> /unload MyModule     # unload a previously loaded module
+kex> /reload              # reload all loaded modules
+kex> /reset               # clear all bindings
+kex> /complete prefix     # show completions for a prefix
+kex> /exit                # exit (also: Ctrl+C)
 ```
 
 ## File Extension
@@ -59,9 +50,15 @@ kex>
 ## CLI
 
 ```
-kex <file.kex>           # type-check and run
-kex <file.kex> --no-check  # skip type checking and run directly
-kex repl                 # start REPL (or just `kex` with no args)
+kex <file.kex>              # type-check and run (default)
+kex <file.kex> --no-check   # skip type checking and run directly
+kex -i                      # start interactive REPL (or `kex -R` for BEAM REPL)
+kex -c <file.kex>           # compile to BEAM via Core Erlang
+kex -R <file.kex>           # run on BEAM
+kex -C <file.kex>           # run semantic analysis only
+kex -e <file.kex>           # emit Core Erlang (.core) without invoking erlc
 ```
 
-`kex run` gates on type checking by default. Use `--no-check` to skip the type-checker (useful when iterating on code that type-checks correctly at runtime but has incomplete annotations).
+`kex` gates on type checking by default. Use `--no-check` to skip the
+type-checker (useful when iterating on code that type-checks correctly at
+runtime but has incomplete annotations).

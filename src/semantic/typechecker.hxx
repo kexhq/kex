@@ -1,13 +1,14 @@
 #pragma once
 
 #include "../ast/ast.hxx"
-#include "stdlib_signatures.hxx"
+#include "imported_interfaces.hxx"
 #include "symbol.hxx"
 #include "traits.hxx"
 #include "types.hxx"
 #include <set>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::semantic {
@@ -16,12 +17,19 @@ struct Diagnostic;
 
 class TypeChecker {
 public:
+    explicit TypeChecker(const ImportedInterfaces* importedInterfaces = nullptr)
+        : m_importedInterfaces(importedInterfaces) {}
+
     auto check(const ast::Program& program, std::vector<Diagnostic>& diagnostics) -> void;
 
     // Query the inferred type of any expression node after check() has run.
     // Returns nullptr for nodes not visited (e.g. unreachable code).
     auto typeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    auto functionSignatures(const ast::FunctionDef* function) const
+        -> const std::vector<Signature>*;
+    auto resolvedCalls() const
+        -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
 
 private:
     // Top-level
@@ -99,19 +107,26 @@ private:
                          const std::vector<TypePtr>& argTypes,
                          size_t slArgIdx) -> std::vector<TypePtr>;
 
+    // Signatures of `name` visible through the imported package interfaces:
+    // receiver functions for bare names, qualified module exports for
+    // `Module::name`, and automatic-import module exports otherwise.
+    auto importedCandidateSignatures(const std::string& name) const
+        -> std::vector<Signature>;
+
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
                        SourceLocation loc) -> TypePtr;
 
     // Call checking (FunctionCall and MethodCall, the latter desugared to
     // the same path with the receiver prepended as the first argument).
-    // Resolves `name` against the stdlib table, then the user-defined
+    // Resolves `name` against imported package interfaces and the user-defined
     // top-level/module-level function table (m_userSignatures) — not
     // make-block methods, whose implicit `this` receiver isn't a regular
     // param, so the "receiver is argument 0" UFCS desugaring used here
     // would mis-count arity for them (see checkMakeDef).
     auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
-                   SourceLocation loc, bool isMethodCall = false) -> TypePtr;
+                   SourceLocation loc, bool isMethodCall = false,
+                   const ast::MethodCall* methodCall = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
 
@@ -130,7 +145,11 @@ private:
     std::vector<TypeEnv> m_scopeStack;
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
-    SignatureTable m_stdlib = SignatureTable::withStdlib();
+    const ImportedInterfaces* m_importedInterfaces = nullptr;
+    std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    // Source module identities declared by the current compilation unit.
+    // Local modules take precedence over package interfaces with the same name.
+    std::unordered_set<std::string> m_localModules;
 
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
@@ -163,14 +182,20 @@ private:
     // today, just not yet improved; that's call-graph SCC ordering,
     // phase 5b, not attempted here).
     std::unordered_map<std::string, std::vector<Signature>> m_userSignatures;
+    // Checked interface attached to its exact syntax declaration. Unlike the
+    // call-resolution table above, this preserves ownership when separate
+    // modules or overload declarations reuse the same unqualified name.
+    std::unordered_map<const ast::FunctionDef*, std::vector<Signature>>
+        m_functionSignatures;
     // Names whose provisional pre-registration has been replaced by the first
     // real checkFunctionDef call. Subsequent calls for the same name append
     // rather than replace, building the overload set incrementally.
     std::set<std::string> m_checkedFunctions;
+    std::unordered_map<std::string, std::set<size_t>> m_annotationArities;
     bool m_inMakeBlock = false;
-    // The record type name being defined by the current `make X do` block,
-    // so `this` and `@field` expressions resolve to `NamedType("X")`.
-    std::string m_currentMakeType;
+    // The complete receiver type of the current `make X do` block, used for
+    // `this`, `This`, and receiver-aware body inference.
+    TypePtr m_currentMakeType;
 
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;

@@ -1,7 +1,7 @@
 #pragma once
 // Kex in-memory lowering IR.
 //
-// This is the "desugar target" from docs/beam-codegen-plan.md: a small,
+// This is the "desugar target" from docs/ir-format.md: a small,
 // normalized core calculus that sits between the (name-resolved, typed) AST
 // and the Core Erlang emitter. The point is to move ALL the desugaring —
 // UFCS resolution, operator lowering, loops→tail-recursion, mutable-variable
@@ -161,7 +161,6 @@ struct Return {
 // `senderVar` bound to the sender pid. Emits Core Erlang's native `receive`.
 struct ReceiveClause {
     PatternPtr pattern; // matched against the payload
-    std::optional<ExprPtr> guard;
     ExprPtr body;
 };
 struct Receive {

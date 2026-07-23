@@ -13,43 +13,40 @@ Captured 2026-06-28. Not yet started.
 
 ## Blockers (must fix before either route works)
 
-### 1. `KEX_PRELUDE_DIR` is broken for installed binaries
-`CMakeLists.txt:76` bakes it at compile time to
-`${CMAKE_SOURCE_DIR}/src/prelude`, which won't exist on a user's machine
-after `brew install`. The prelude `.kex` files must be installed alongside
-the binary and the path resolved to the install prefix.
+### 1. ~~`KEX_PRELUDE_DIR` is broken for installed binaries~~ — resolved
+Runtime prelude discovery now walks executable-relative installed
+(`share/kex/prelude`) and development (`src/prelude`) layouts, plus the
+`KEX_STDLIB_DIR` toolchain override. The absolute checkout path is no
+longer compiled into the binary (see `docs/stdlib-decoupling-plan.md`
+step 4). BEAM runtime discovery follows the same model through
+`KEX_RUNTIME_DIR`.
 
-### 2. No `install` rules in CMakeLists
-`cmake --install` currently does nothing — there's no
-`install(TARGETS kex ...)` and nothing for the prelude.
+### 2. ~~No `install` rules in CMakeLists~~ — resolved
+CMake and Make installs now populate `share/kex/prelude` (sources) and
+`share/kex/runtime` (BEAM artifacts) alongside the binary. The
+`installed_layout_test` fixture exercises a real install into a
+temporary prefix on both backends.
 
 ### 3. No tagged releases
 A formula needs a stable `url` + `sha256` (a tag tarball). `head`-only
 formulas are discouraged by Homebrew.
 
 ### 4. Future dependency: Erlang/BEAM
-BEAM codegen is already in flight (`src/codegen/core_erlang.cxx`,
-`docs/beam-codegen.md`, `*.beam` artifacts in the tree). Once the compiler
-emits `.beam` files that users are expected to *run* (not just produce),
-the formula will need `depends_on "erlang"` so the BEAM runtime is
-available. Today the interpreter is self-contained and Erlang is only a
-build-time/development concern, so this can be deferred — but it should
-land in the same formula revision that ships runnable BEAM output, not
-after.
+BEAM codegen is implemented at full spec parity
+(`src/ir/emit_core.cxx`, `docs/ir-format.md`, `*.beam` artifacts in
+the tree). Once the compiler ships `.beam` files that users are
+expected to *run* (not just produce), the formula will need
+`depends_on "erlang"` so the BEAM runtime is available. Today the
+interpreter is self-contained and Erlang is only a build-time/optional
+concern, so this can be deferred — but it should land in the same
+formula revision that ships runnable BEAM output, not after.
 
-## Fix outline
+## Install path notes
 
-In `CMakeLists.txt`, make the prelude path overridable and add install rules:
-
-```cmake
-# Keep dev-build default, allow formula to override.
-set(KEX_PRELUDE_DIR "${CMAKE_SOURCE_DIR}/src/prelude"
-    CACHE PATH "Runtime location of prelude .kex files")
-# ...existing target_compile_definitions(kex ... KEX_PRELUDE_DIR=...) stays.
-
-install(TARGETS kex RUNTIME DESTINATION bin)
-install(DIRECTORY src/prelude/ DESTINATION share/kex/prelude)
-```
+`cmake --install` already ships the binary, prelude sources, and BEAM
+runtime artifacts under the standard install prefix. A formula only
+needs to invoke the existing install rules; no `KEX_PRELUDE_DIR` override
+is required.
 
 The GMP dynamic-link constraint in the existing CMake
 (`CMAKE_FIND_LIBRARY_SUFFIXES` forced to `.dylib`/`.so`) is already what
@@ -75,8 +72,7 @@ class Kex < Formula
   # depends_on "erlang"  # TODO: add when BEAM output is shippable (blocker #4)
 
   def install
-    system "cmake", "-S", ".", "-B", "build", *std_cmake_args,
-           "-DKEX_PRELUDE_DIR=#{pkgshare}/kex/prelude"
+    system "cmake", "-S", ".", "-B", "build", *std_cmake_args
     system "cmake", "--build", "build"
     system "cmake", "--install", "build"
   end

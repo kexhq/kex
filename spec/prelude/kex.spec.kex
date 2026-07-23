@@ -1,0 +1,38 @@
+describe("Kex.backend") do
+  it("returns Interpreter on the tree-walk backend") do
+    assert(Kex.backend == Interpreter)
+  end
+end
+
+describe("Kex.Feature.has?") do
+  it("returns true for FS") do
+    assert(Kex.Feature.has?(FS))
+  end
+
+  it("returns false for Http on interpreter") do
+    assert(Kex.Feature.has?(Http) == false)
+  end
+
+  it("returns false for Process on interpreter") do
+    assert(Kex.Feature.has?(Process) == false)
+  end
+
+  it("returns false for WebServer on interpreter") do
+    assert(Kex.Feature.has?(WebServer) == false)
+  end
+end
+
+describe("Kex.Feature.list") do
+  it("returns a list of available features") do
+    let features = Kex.Feature.list()
+    assert(features.length() >= 1)
+  end
+
+  it("includes FS on interpreter") do
+    assert(Kex.Feature.list().contains?(FS))
+  end
+
+  it("does not include Http on interpreter") do
+    assert(Kex.Feature.list().contains?(Http) == false)
+  end
+end

@@ -332,7 +332,7 @@ auto Value::toRepr() const -> std::string {
 auto Value::typeName() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, UnitValue>) return "()";
+        if constexpr (std::is_same_v<T, UnitValue>) return "Void";
         else if constexpr (std::is_same_v<T, IntValue>) return "Int";
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
@@ -621,6 +621,58 @@ auto Value::inspect() const -> std::string {
         }, v.data);
     };
     return rec(*this);
+}
+
+auto dispatchTypeName(const ValuePtr& v) -> std::string {
+    return std::visit([](const auto& d) -> std::string {
+        using T = std::decay_t<decltype(d)>;
+        if constexpr (std::is_same_v<T, RecordValue>) return d.typeName;
+        else if constexpr (std::is_same_v<T, VariantValue>) return d.tag;
+        else if constexpr (std::is_same_v<T, ListValue>) return "List";
+        else if constexpr (std::is_same_v<T, MapValue>) return "Map";
+        else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";
+        else if constexpr (std::is_same_v<T, ProcessValue>) return "Pid";
+        else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>) return "Integer";
+        else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
+        else if constexpr (std::is_same_v<T, BoolValue>) return "Bool";
+        else if constexpr (std::is_same_v<T, CharValue>) return "Char";
+        else if constexpr (std::is_same_v<T, StringValue>) return "String";
+        else if constexpr (std::is_same_v<T, RangeValue>) return "Range";
+        else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
+        else return "";
+    }, v->data);
+}
+
+auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {
+    return std::visit([&name](const auto& d) -> bool {
+        using T = std::decay_t<decltype(d)>;
+        if constexpr (std::is_same_v<T, StringValue>) return name == "String";
+        else if constexpr (std::is_same_v<T, IntValue> || std::is_same_v<T, BigIntValue>)
+            return name == "Int" || name == "Integer";
+        else if constexpr (std::is_same_v<T, FloatValue>) return name == "Float";
+        else if constexpr (std::is_same_v<T, BoolValue>) return name == "Bool";
+        else if constexpr (std::is_same_v<T, AtomValue>) return name == "Atom";
+        else if constexpr (std::is_same_v<T, CharValue>) return name == "Char";
+        else if constexpr (std::is_same_v<T, ListValue>) return name == "List";
+        else if constexpr (std::is_same_v<T, TupleValue>) return name == "Tuple";
+        else if constexpr (std::is_same_v<T, MapValue>) return name == "Map";
+        else if constexpr (std::is_same_v<T, RangeValue>) return name == "Range";
+        else if constexpr (std::is_same_v<T, StreamValue>) return name == "Stream";
+        else return false;
+    }, v->data);
+}
+
+auto builtinTypeNames() -> const std::unordered_set<std::string>& {
+    static const std::unordered_set<std::string> names = {
+        "Integer", "Float", "Char", "Bool", "Number", "String",
+        "List", "Map", "Range", "Optional", "Result"};
+    return names;
+}
+
+auto defaultEvalAllowList() -> const std::vector<std::string>& {
+    static const std::vector<std::string> allow = {
+        "Math", "List", "String", "Integer", "Map", "Stream"};
+    return allow;
 }
 
 } // namespace kex::interpreter

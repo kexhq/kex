@@ -2,9 +2,9 @@
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
 -export([abs/1, sqrt/1, add/2, divide/2, eq/2, neq/2,
-          floor/1, ceil/1, round/1, toFloat/1, toInteger/1,
-          'toString'/1, float_parse/1, float_parse_prefix/1, number_parse/1,
-          to_integer/1, to_float/1]).
+          floor/1, ceil/1, round/1, toInteger/1,
+          float_parse/1, float_parse_prefix/1,
+          parse/1, to_integer/1, to_float/1]).
 
 abs(N)  -> erlang:abs(N).
 sqrt(N) -> math:sqrt(N).
@@ -68,15 +68,8 @@ floor(N)      -> erlang:floor(N).
 ceil(N)       -> erlang:ceil(N).
 round(N)      -> erlang:round(N).       %% works on both int and float
 
-%% toFloat/1 — convert integer to float (no-op on floats).
-toFloat(N)    -> erlang:float(N).
-
 %% toInteger/1 — truncate toward zero (no-op on integers).
 toInteger(N)  -> erlang:trunc(N).
-
-%% toString/1 — convert number to string, matching Kex's display formatting
-%% (6 decimal places for floats, matching kex_io:to_string / interpreter).
-'toString'(N) -> unicode:characters_to_binary(kex_io:to_string(N)).
 
 %% ParseError is the tagged tuple {'ParseError', Input, Position, Value, Message, Rest}
 %% (record lowered by src/ir/lower.cxx). Matches src/interpreter/stdlib/number.cxx.
@@ -150,7 +143,7 @@ float_parse_prefix(S) ->
 number_parse(S) when is_binary(S) ->
     %% Only accept integer full-match; fall through to float otherwise.
     case kex_intrinsic_integer:integer_parse(S) of
-        {'Ok', {_Int, <<>>}} = Ok -> Ok;
+        {'Ok', Int} = Ok when is_integer(Int) -> Ok;
         _ ->
             case float_parse(S) of
                 {'Ok', _} = Ok -> Ok;
@@ -160,11 +153,13 @@ number_parse(S) when is_binary(S) ->
     end;
 number_parse(S) -> number_parse(unicode:characters_to_binary(S)).
 
+parse(S) -> number_parse(S).
+
 %% x.to(Integer) / x.to(Float) — universal numeric conversion, mirroring
 %% src/interpreter/stdlib/list.cxx's `to` builtin exactly: passthrough for
 %% an already-matching type, TRUNCATE (not round) a Float down to Integer,
 %% parse a String, and return {'Just', Value} or 'None'.
-%% Moved from kex_io where type conversion didn't belong.
+
 to_integer({'Char', C}) -> {'Just', C};
 to_integer(X) when is_integer(X) -> {'Just', X};
 to_integer(X) when is_float(X) -> {'Just', erlang:trunc(X)};

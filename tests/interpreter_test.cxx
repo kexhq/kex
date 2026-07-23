@@ -75,6 +75,17 @@ int main() {
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
+        it("does not treat an extra module overload argument as a receiver", []() {
+            auto result = run(
+                "module Replies do\n"
+                "  let build(a, b) = a + b\n"
+                "  let build(a, b, c) = a + b + c\n"
+                "end\n"
+                "main do Replies.build(10, 20, 12) end\n"
+            );
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
         it("discovers and loads an unresolved module from a source root", []() {
             namespace fs = std::filesystem;
             const auto root = fs::temp_directory_path() / "kex-module-load-test";
@@ -521,6 +532,17 @@ int main() {
                 run("main do\n  (100000000000000000000 + 1).odd?\nend\n")->data).value);
         });
 
+        it("dispatches shorthand method callbacks through source-owned receiver methods", []() {
+            auto result = run(
+                "main do\n"
+                "  var values = [1, 2, 3, 4]\n"
+                "  values.filter!(&.even?)\n"
+                "  values\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("[2, 4]"));
+        });
+
         it("abs works on a negative bignum", []() {
             auto result = run("main do\n  (-100000000000000000000).abs\nend\n");
             assertEqual(result->toString(), std::string("100000000000000000000"));
@@ -911,6 +933,17 @@ int main() {
             auto& range = std::get<RangeValue>(result->data);
             assertEqual(range.start, int64_t(1));
             assertEqual(range.end, int64_t(10));
+        });
+
+        it("routes bare UFCS through source-owned receiver methods", []() {
+            auto result = run(
+                "main do\n"
+                "  let doubled = map([1, 2, 3]) { |n| n * 2 }\n"
+                "  let odds = filter(1..5) { |n| n.odd? }\n"
+                "  (doubled, odds)\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("([2, 4, 6], [1, 3, 5])"));
         });
     });
 
@@ -1387,6 +1420,42 @@ int main() {
     });
 
     describe("Interpreter — Streams", []() {
+        it("does not expose private intrinsics as ordinary namespace functions", []() {
+            const std::vector<std::pair<std::string, std::string>> cases = {
+                {"FS.file(\"private.txt\", \"hidden\")", "file"},
+                {"List.foldLeft([1, 2], 0, { |acc, n| acc + n })", "foldLeft"},
+                {"Map.getWithDefault({\"a\": 1}, \"a\", 0)", "getWithDefault"},
+                {"Char.is_digit('1')", "is_digit"},
+                {"Stream.generate(0, { |n| n + 1 })", "generate"},
+                {"IO.ioMockStart()", "ioMockStart"},
+            };
+
+            for (const auto& [expression, name] : cases) {
+                bool threw = false;
+                try {
+                    run("main do\n  " + expression + "\nend\n");
+                } catch (const RuntimeError& error) {
+                    threw = true;
+                    assertTrue(std::string(error.what()).find("Undefined function: " + name)
+                               != std::string::npos, error.what());
+                }
+                assertTrue(threw, "private intrinsic should not be publicly callable: " + name);
+            }
+        });
+
+        it("keeps List and Stream intrinsic identities distinct", []() {
+            auto result = run(
+                "main do\n"
+                "  let tail = Kex.Intrinsic.List.drop([1, 2, 3], 1)\n"
+                "  let stream = Sequence(from: 1) { |n| n + 1 }\n"
+                "  let shifted = Kex.Intrinsic.Stream.drop(stream, 2)\n"
+                "  let values = Kex.Intrinsic.Stream.take(shifted, 2)\n"
+                "  (tail, values)\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("([2, 3], [3, 4])"));
+        });
+
         it("creates sequence and takes elements", []() {
             auto result = run(
                 "main do\n"

@@ -9,10 +9,10 @@
          sum/1, product/1, indexOf/2, at/2, foldLeft/3, min/1, max/1, length/1,
          first/1, last/1,
          join/1, join/2, partition/2, member/2, as_list/1,
-         sum_by/2, product_by/2, minBy/2, maxBy/2,
-         %% Lower-level list ops used directly by the emitters (moved here from
-         %% kex_io, where list operations didn't belong).
-         list_get/2, list_get/3, index_of/2, list_product/1]).
+         map/2, filter/2, each/2, find/2, flatMap/2, reject/2,
+         'all?'/2, 'any?'/2, count/2,
+         minBy/2, maxBy/2,
+         get/2, get/3]).
 
 %% as_list/1 — a String receiver (UTF-8 binary) as its [Char] list of tagged
 %% {'Char', N} tuples; everything else unchanged. The list HOF lowerings wrap
@@ -49,6 +49,8 @@ sum(L)     -> lists:sum(as_list(L)).
 product(L) -> list_product(as_list(L)).
 indexOf(L, X) -> index_of(X, as_list(L)).
 at(L, I)   -> list_get(L, I).
+get(L, I)  -> list_get(L, I).
+get(L, I, Default) -> list_get(L, I, Default).
 %% foldLeft/3 — the universal left fold backing Enumerable.reduce (and so every
 %% HOF derived from it). Kex's reducer takes (acc, elem); Erlang's lists:foldl
 %% takes fun(elem, acc), so swap the argument order at the boundary.
@@ -121,12 +123,26 @@ index_of(Value, [_ | Rest], I) -> index_of(Value, Rest, I + 1).
 %% list.product — no lists:product/1 BIF.
 list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
 
-%% *_by/2 — the block forms of the aggregations: `.sum { |x| key }` maps then
-%% sums; `.max { |x| key }` returns Just(elem) with the greatest key (None
-%% for []), mirroring src/interpreter/stdlib/list.cxx's fn-arg branches.
-sum_by(L, F) -> lists:sum([kex_intrinsic_fun:applyItem(F, I) || I <- as_list(L)]).
-product_by(L, F) ->
-    lists:foldl(fun(I, A) -> A * kex_intrinsic_fun:applyItem(F, I) end, 1, as_list(L)).
+%% HOF intrinsics — BIF-backed versions that override the Enumerable trait's
+%% reduce-based defaults. Handle String (binary) receivers via as_list/1.
+%% Each HOF routes its block through kex_intrinsic_fun:applyItem/2 so that
+%% 2-param blocks (`{ |k, v| ... }`) auto-splat pair elements (e.g. when
+%% mapping over Map.entries), matching the Enumerable trait defaults and
+%% the interpreter's block invocation.
+map(L, Fun)    -> [kex_intrinsic_fun:applyItem(Fun, I) || I <- as_list(L)].
+filter(L, Fun) -> lists:filter(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+each(L, Fun)   -> lists:foreach(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)), 'None'.
+flatMap(L, Fun) -> lists:flatmap(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+reject(L, Fun) -> lists:filter(fun(X) -> not kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+'all?'(L, Fun)  -> lists:all(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+'any?'(L, Fun)  -> lists:any(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+find(L, Fun)   ->
+    case lists:search(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)) of
+        {value, V} -> {'Just', V};
+        false      -> 'None'
+    end.
+count(L, Fun)  -> erlang:length(lists:filter(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L))).
+
 minBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A < B end).
 maxBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A > B end).
 
