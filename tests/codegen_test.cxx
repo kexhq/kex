@@ -628,6 +628,17 @@ int main() {
             assertTrue(contains(globalCore, "call 'Kex.Utils':'double'"), globalCore);
         });
 
+        it("top-level using enables UFCS for imported functions", []() {
+            auto output = runIrOnBeam(
+                "module Utils do\n"
+                "  let double(n) = n * 2\n"
+                "end\n"
+                "using Utils, only: [double]\n"
+                "main do 10.double end\n",
+                "using_ufcs_cross_module");
+            assertEqual(output, std::string("20"));
+        });
+
         it("using inside module body resolves to cross-module call", []() {
             auto output = runIrOnBeam(
                 "module Utils do\n"

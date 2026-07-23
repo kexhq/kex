@@ -1,0 +1,15 @@
+# Decimal and binary data units are provided by the opt-in Units.Data module.
+using Units.Data
+
+main do
+  let download = 5.megabytes
+  let cache = 2.gibibytes
+
+  IO.printLine("download: ${download.to(String)}")
+  match download.convertTo(MiB) do
+    Ok(binary) -> IO.printLine("download in MiB: ${binary.to(String)}")
+    Error(error) -> IO.printLine(error)
+  end
+  IO.printLine("cache: ${cache.to(String)}")
+  IO.printLine("cache bytes: ${cache.canonical}")
+end

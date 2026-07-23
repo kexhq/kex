@@ -1356,12 +1356,12 @@ int main() {
             ));
         });
 
-        it("loads durations and numeric time constructors", []() {
+        it("loads measures, durations, and numeric time constructors", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  let duration: Duration = 2.5.sec\n"
-                "  let converted: Duration = duration.convert(Millisecond)\n"
-                "  let rendered: String = converted.to(String)\n"
+                "  let measure: Measure = 2.5.sec\n"
+                "  let duration: Duration = Duration { seconds: measure.canonical }\n"
+                "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
                 "end\n"
             ));
         });

@@ -38,6 +38,7 @@ auto runFile(const std::string& path) -> std::string {
     Parser parser(std::move(tokens), path);
     auto program = parser.parseProgram();
     Evaluator evaluator;
+    evaluator.setModuleRoots({"src/stdlib"});
     evaluator.execute(program);
     return evaluator.output();
 }
@@ -72,6 +73,8 @@ int main() {
         it("streams.kex", []() { assertTrue(parseFile("examples/streams.kex")); });
         it("testing.kex", []() { assertTrue(parseFile("examples/testing.kex")); });
         it("types.kex", []() { assertTrue(parseFile("examples/types.kex")); });
+        it("units_data.kex", []() { assertTrue(parseFile("examples/units_data.kex")); });
+        it("units_si.kex", []() { assertTrue(parseFile("examples/units_si.kex")); });
         it("vectors.kex", []() { assertTrue(parseFile("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(parseFile("examples/vectors_advanced.kex")); });
         it("env.kex", []() { assertTrue(parseFile("examples/env.kex")); });
@@ -135,6 +138,8 @@ int main() {
         it("stdlib_demo.kex", []() { assertTrue(runFileOk("examples/stdlib_demo.kex")); });
         it("test_union.kex", []() { assertTrue(runFileOk("examples/test_union.kex")); });
         it("types.kex", []() { assertTrue(runFileOk("examples/types.kex")); });
+        it("units_data.kex", []() { assertTrue(runFileOk("examples/units_data.kex")); });
+        it("units_si.kex", []() { assertTrue(runFileOk("examples/units_si.kex")); });
         it("vectors.kex", []() { assertTrue(runFileOk("examples/vectors.kex")); });
         it("vectors_advanced.kex", []() { assertTrue(runFileOk("examples/vectors_advanced.kex")); });
 

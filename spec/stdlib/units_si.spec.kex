@@ -1,41 +1,40 @@
 using Units.SI
 
 describe("Units.SI") do
-  it("constructs base SI measurements") do
-    let distance = meter(5)
+  it("constructs the shared Measure type") do
+    let distance = 5.meter
+    let elapsed = 2.sec
     assert(distance.value == 5.0)
-    assert(distance.kind == Length)
+    assert(distance.kind == :length)
+    assert(elapsed.kind == :time)
   end
 
   it("applies decimal prefixes") do
-    assert(kilo(meter(5000)).value == 5.0)
-    assert(milli(meter(1)).value == 1000.0)
+    assert(5000.meter.kilo.value == 5.0)
+    assert(1.meter.milli.value == 1000.0)
   end
 
-  it("derives speed and acceleration using prelude durations") do
-    let speed = per(meter(100), 10.sec)
-    let acceleration = per(speed, 2.sec)
-    assert(speed.kind == Speed)
+  it("derives speed and acceleration with /") do
+    let speed = 100.meter / 10.sec
+    let acceleration = speed / 2.sec
+    assert(speed.kind == :speed)
     assert(speed.value == 10.0)
-    assert(acceleration.kind == Acceleration)
+    assert(acceleration.kind == :acceleration)
     assert(acceleration.value == 5.0)
   end
 
   it("derives force and electrical units") do
-    let acceleration = per(
-      per(meter(10), 1.sec),
-      1.sec
-    )
-    let force = kilogram(5) * acceleration
-    let voltage = ampere(2) * ohm(100)
-    assert(force.kind == Force)
+    let acceleration = 10.meter / 1.sec / 1.sec
+    let force = 5.kilogram * acceleration
+    let voltage = 2.ampere * 100.ohm
+    assert(force.kind == :force)
     assert(force.value == 50.0)
-    assert(voltage.kind == Voltage)
+    assert(voltage.kind == :voltage)
     assert(voltage.value == 200.0)
   end
 
-  it("rejects addition across physical kinds") do
-    match meter(1) + watt(1) do
+  it("rejects addition across measurement kinds") do
+    match 1.meter + 1.watt do
       Ok(_) -> assert(false)
       Error(_) -> assert(true)
     end

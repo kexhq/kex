@@ -1,139 +1,170 @@
-# Time units are small and universal enough to live in the prelude. Physical
-# and information units are opt-in modules under Units.SI and Units.Data.
+# A Measure is shared by every unit module. `canonical` stores the value in
+# that dimension's base unit; `factor` converts the displayed value to it.
+record Measure do
+  canonical : Float
+  value : Float
+  factor : Float
+  kind : Atom
+  unit : Atom
+  symbol : String
+end
+
+# Duration is an elapsed span used by Time, Date, and DateTime. A time Measure
+# is deliberately not a Duration: `5.sec` describes a measurement.
+record Duration do
+  seconds : Float
+end
 
 type TimeUnit = Nanosecond | Microsecond | Millisecond
               | Second | Minute | Hour | Day | Week
 
-record Duration do
-  # Canonical storage used by arithmetic.
-  seconds : Float
-
-  # Value and symbol used for display.
-  value : Float
-  symbol : String
-end
-
 make Integer do
-  let nanosecond -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) / 1000000000.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "ns"
-  }
+  let nanosecond -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    0.000000001, :nanosecond, "ns"
+  )
 
-  let microsecond -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) / 1000000.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "μs"
-  }
+  let microsecond -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    0.000001, :microsecond, "μs"
+  )
 
-  let millisecond -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) / 1000.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "ms"
-  }
+  let millisecond -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    0.001, :millisecond, "ms"
+  )
 
-  let sec -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "s"
-  }
+  let sec -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    1.0, :second, "s"
+  )
 
-  let minute -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 60.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "min"
-  }
+  let minute -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    60.0, :minute, "min"
+  )
 
-  let hour -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 3600.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "h"
-  }
+  let hour -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    3600.0, :hour, "h"
+  )
 
-  let day -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 86400.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "d"
-  }
+  let day -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    86400.0, :day, "d"
+  )
 
-  let week -> Duration = Duration {
-    seconds: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 604800.0,
-    value: Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    symbol: "wk"
-  }
+  let week -> Measure = this.timeMeasure(
+    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
+    604800.0, :week, "wk"
+  )
+
+  private do
+    let timeMeasure(value, factor, unit, symbol) = Measure {
+      canonical: value * factor,
+      value: value,
+      factor: factor,
+      kind: :time,
+      unit: unit,
+      symbol: symbol
+    }
+  end
 end
 
 make Float do
-  let nanosecond -> Duration = Duration {
-    seconds: this / 1000000000.0, value: this, symbol: "ns"
-  }
-  let microsecond -> Duration = Duration {
-    seconds: this / 1000000.0, value: this, symbol: "μs"
-  }
-  let millisecond -> Duration = Duration {
-    seconds: this / 1000.0, value: this, symbol: "ms"
-  }
-  let sec -> Duration = Duration {
-    seconds: this, value: this, symbol: "s"
-  }
-  let minute -> Duration = Duration {
-    seconds: this * 60.0, value: this, symbol: "min"
-  }
-  let hour -> Duration = Duration {
-    seconds: this * 3600.0, value: this, symbol: "h"
-  }
-  let day -> Duration = Duration {
-    seconds: this * 86400.0, value: this, symbol: "d"
-  }
-  let week -> Duration = Duration {
-    seconds: this * 604800.0, value: this, symbol: "wk"
-  }
+  let nanosecond -> Measure = this.timeMeasure(this, 0.000000001, :nanosecond, "ns")
+  let microsecond -> Measure = this.timeMeasure(this, 0.000001, :microsecond, "μs")
+  let millisecond -> Measure = this.timeMeasure(this, 0.001, :millisecond, "ms")
+  let sec -> Measure = this.timeMeasure(this, 1.0, :second, "s")
+  let minute -> Measure = this.timeMeasure(this, 60.0, :minute, "min")
+  let hour -> Measure = this.timeMeasure(this, 3600.0, :hour, "h")
+  let day -> Measure = this.timeMeasure(this, 86400.0, :day, "d")
+  let week -> Measure = this.timeMeasure(this, 604800.0, :week, "wk")
+
+  private do
+    let timeMeasure(value, factor, unit, symbol) = Measure {
+      canonical: value * factor,
+      value: value,
+      factor: factor,
+      kind: :time,
+      unit: unit,
+      symbol: symbol
+    }
+  end
 end
 
-make Duration do
+make Measure do
   let to(String) -> String = "${this.value} ${this.symbol}"
 
-  let scale(factor: Number) -> Duration do
-    let converted = Kex.Intrinsic.Fun.convertTo(factor, Float).or(0.0)
-    return Duration {
-      seconds: this.seconds * converted,
+  let scale(multiplier: Number) -> Measure do
+    let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
+    return Measure {
+      canonical: this.canonical * converted,
       value: this.value * converted,
+      factor: this.factor,
+      kind: this.kind,
+      unit: this.unit,
       symbol: this.symbol
     }
   end
 
-  let convert(unit: TimeUnit) -> Duration do
-    let (factor, symbol) = durationUnitInfo(unit)
-    return Duration {
-      seconds: this.seconds,
-      value: this.seconds / factor,
-      symbol: symbol
-    }
+  let convert(unit: TimeUnit) -> Result<Measure, String> do
+    match this.kind == :time do
+      true -> do
+        let (factor, tag, symbol) = timeUnitInfo(unit)
+        return Ok(Measure {
+          canonical: this.canonical,
+          value: this.canonical / factor,
+          factor: factor,
+          kind: :time,
+          unit: tag,
+          symbol: symbol
+        })
+      end
+      false -> return Error("Only time measures can be converted to a time unit")
+    end
   end
 
-  let +(other: Duration) -> Duration do
-    return Duration {
-      seconds: this.seconds + other.seconds,
-      value: this.seconds + other.seconds,
-      symbol: "s"
-    }
+  let +(other: Measure) -> Result<Measure, String> do
+    match this.kind == other.kind do
+      true -> do
+        let total = this.canonical + other.canonical
+        return Ok(Measure {
+          canonical: total,
+          value: total / this.factor,
+          factor: this.factor,
+          kind: this.kind,
+          unit: this.unit,
+          symbol: this.symbol
+        })
+      end
+      false -> return Error("Cannot add measures of different kinds")
+    end
   end
 
-  let -(other: Duration) -> Duration do
-    return Duration {
-      seconds: this.seconds - other.seconds,
-      value: this.seconds - other.seconds,
-      symbol: "s"
-    }
+  let -(other: Measure) -> Result<Measure, String> do
+    match this.kind == other.kind do
+      true -> do
+        let total = this.canonical - other.canonical
+        return Ok(Measure {
+          canonical: total,
+          value: total / this.factor,
+          factor: this.factor,
+          kind: this.kind,
+          unit: this.unit,
+          symbol: this.symbol
+        })
+      end
+      false -> return Error("Cannot subtract measures of different kinds")
+    end
   end
-
 end
 
-let durationUnitInfo(Nanosecond) = (0.000000001, "ns")
-let durationUnitInfo(Microsecond) = (0.000001, "μs")
-let durationUnitInfo(Millisecond) = (0.001, "ms")
-let durationUnitInfo(Second) = (1.0, "s")
-let durationUnitInfo(Minute) = (60.0, "min")
-let durationUnitInfo(Hour) = (3600.0, "h")
-let durationUnitInfo(Day) = (86400.0, "d")
-let durationUnitInfo(Week) = (604800.0, "wk")
+let timeUnitInfo(Nanosecond) = (0.000000001, :nanosecond, "ns")
+let timeUnitInfo(Microsecond) = (0.000001, :microsecond, "μs")
+let timeUnitInfo(Millisecond) = (0.001, :millisecond, "ms")
+let timeUnitInfo(Second) = (1.0, :second, "s")
+let timeUnitInfo(Minute) = (60.0, :minute, "min")
+let timeUnitInfo(Hour) = (3600.0, :hour, "h")
+let timeUnitInfo(Day) = (86400.0, :day, "d")
+let timeUnitInfo(Week) = (604800.0, :week, "wk")

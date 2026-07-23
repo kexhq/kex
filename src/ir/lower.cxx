@@ -1322,6 +1322,63 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
+        // A public function brought into scope by `using Module` also
+        // participates in UFCS: `100.meter` is `meter(100)`, and
+        // `distance.per(duration)` is `per(distance, duration)`. Keep local
+        // make methods ahead of imports, matching bare-call shadowing.
+        if (!localMethods.count(m)) {
+            if (auto imported = moduleImports.find(m);
+                imported != moduleImports.end()) {
+                const std::vector<std::string>* pnames = nullptr;
+                for (const auto& [qualified, emitted] : moduleFunctions) {
+                    if (emitted != imported->second) continue;
+                    if (auto names = fnParamNames.find(qualified);
+                        names != fnParamNames.end())
+                        pnames = &names->second;
+                    break;
+                }
+
+                std::vector<ExprPtr> args;
+                if (!n.namedArgs.empty() && pnames) {
+                    std::vector<ExprPtr> slots(pnames->size());
+                    if (!slots.empty()) slots[0] = rv();
+                    for (const auto& [name, value] : n.namedArgs) {
+                        auto it = std::find(pnames->begin(), pnames->end(), name);
+                        if (it == pnames->end() || it == pnames->begin())
+                            throw LowerError("IR lower: unknown named arg " + name +
+                                             " for imported UFCS function " + m);
+                        slots[static_cast<size_t>(it - pnames->begin())] =
+                            atomize_ir(lower(value), rb);
+                    }
+                    size_t next = 1;
+                    for (const auto& value : n.args) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next++] = atomize_ir(lower(value), rb);
+                    }
+                    if (n.block) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next < slots.size())
+                            slots[next] = atomize_ir(lower(*n.block), rb);
+                    }
+                    for (auto& slot : slots)
+                        if (!slot) slot = lit(LitKind::None, "none");
+                    args = std::move(slots);
+                } else {
+                    args.push_back(rv());
+                    for (const auto& value : n.args)
+                        args.push_back(atomize_ir(lower(value), rb));
+                    for (const auto& [_, value] : n.namedArgs)
+                        args.push_back(atomize_ir(lower(value), rb));
+                    if (n.block)
+                        args.push_back(atomize_ir(lower(*n.block), rb));
+                }
+                return ret(callE("", imported->second,
+                                 static_cast<int>(args.size()),
+                                 std::move(args)));
+            }
+        }
+
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.

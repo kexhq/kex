@@ -1,0 +1,13 @@
+# SI measurements are opt-in; time measurements are available from the prelude.
+using Units.SI
+
+main do
+  let distance = 100.meter
+  let elapsed = 9.58.sec
+  let speed = distance / elapsed
+
+  IO.printLine("distance: ${distance.to(String)}")
+  IO.printLine("distance in kilometres: ${distance.kilo.to(String)}")
+  IO.printLine("elapsed: ${elapsed.to(String)}")
+  IO.printLine("average speed: ${speed.to(String)}")
+end

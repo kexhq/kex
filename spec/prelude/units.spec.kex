@@ -1,40 +1,63 @@
-describe("Duration creation") do
-  it("creates time units from integers and floats") do
-    assert(2.sec.seconds == 2.0)
-    assert(2.5.minute.seconds == 150.0)
-    assert(1.hour.seconds == 3600.0)
-    assert(1.day.seconds == 86400.0)
+describe("time measures") do
+  it("creates time measures from integers and floats") do
+    assert(2.sec.canonical == 2.0)
+    assert(2.5.minute.canonical == 150.0)
+    assert(1.hour.canonical == 3600.0)
+    assert(1.day.canonical == 86400.0)
+    assert(2.sec.kind == :time)
   end
 
   it("supports sub-second units") do
-    assert(1.millisecond.seconds == 0.001)
-    assert(1.microsecond.seconds == 0.000001)
-    assert(1.nanosecond.seconds == 0.000000001)
+    assert(1.millisecond.canonical == 0.001)
+    assert(1.microsecond.canonical == 0.000001)
+    assert(1.nanosecond.canonical == 0.000000001)
+  end
+
+  it("is distinct from Duration") do
+    let measure = 2.sec
+    let duration = Duration { seconds: measure.canonical }
+    assert(duration.seconds == 2.0)
   end
 end
 
-describe("Duration arithmetic") do
-  it("adds and subtracts through canonical seconds") do
-    assert((1.minute + 30.sec).seconds == 90.0)
-    assert((2.minute - 30.sec).seconds == 90.0)
+describe("Measure arithmetic") do
+  it("adds and subtracts through the canonical value") do
+    match 1.minute + 30.sec do
+      Ok(total) -> assert(total.canonical == 90.0)
+      Error(_) -> assert(false)
+    end
+
+    match 2.minute - 30.sec do
+      Ok(total) -> assert(total.canonical == 90.0)
+      Error(_) -> assert(false)
+    end
   end
 
-  it("scales a duration") do
-    let duration = 2.5.sec.scale(4)
-    assert(duration.seconds == 10.0)
-    assert(duration.to(String) == "10.0 s")
+  it("scales a measure") do
+    let measure = 2.5.sec.scale(4)
+    assert(measure.canonical == 10.0)
+    assert(measure.to(String) == "10.0 s")
   end
 end
 
-describe("Duration conversion and formatting") do
+describe("time conversion and formatting") do
   it("converts between display units") do
-    let duration = 90.minute
-    assert(duration.convert(Hour).value == 1.5)
-    assert(duration.convert(Second).value == 5400.0)
+    match 90.minute.convert(Hour) do
+      Ok(measure) -> assert(measure.value == 1.5)
+      Error(_) -> assert(false)
+    end
+
+    match 90.minute.convert(Second) do
+      Ok(measure) -> assert(measure.value == 5400.0)
+      Error(_) -> assert(false)
+    end
   end
 
   it("formats the selected unit") do
     assert(2.hour.to(String) == "2.0 h")
-    assert(90.minute.convert(Hour).to(String) == "1.5 h")
+    match 90.minute.convert(Hour) do
+      Ok(measure) -> assert(measure.to(String) == "1.5 h")
+      Error(_) -> assert(false)
+    end
   end
 end

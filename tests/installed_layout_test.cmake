@@ -18,7 +18,7 @@ file(WRITE "${program}"
     "\n"
     "main do\n"
     "  IO.printLine(Stream.Sequence(from: 1) { |n| n + 1 }.take(2))\n"
-    "  IO.printLine(Units.Data.megabytes(2).bytes)\n"
+    "  IO.printLine(Units.Data.megabytes(2).canonical)\n"
     "end\n")
 
 set(ENV{KEX_STDLIB_DIR} "")
