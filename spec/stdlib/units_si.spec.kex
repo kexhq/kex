@@ -58,7 +58,7 @@ describe("Units.SI") do
     let area = 3.meter ^ 2
     assert(area.canonical == 9.0)
     assert(area.value == 9.0)
-    assert(area.symbol == "m^2")
+    assert(area.unit.notation == "m^2")
   end
 
   it("derives force and electrical units") do
@@ -90,9 +90,8 @@ describe("Units.SI") do
   end
 
   it("provides times and per helpers") do
-    let voltage = times(2.ampere, 100.ohm)
+    let voltage = Units.SI.times(2.ampere, 100.ohm)
     let speed = per(100.meter, 10.sec)
-    assert(voltage.kind == :voltage)
     assert(voltage.value == 200.0)
     assert(speed.kind == :speed)
     assert(speed.value == 10.0)

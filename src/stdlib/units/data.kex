@@ -1,6 +1,7 @@
 module Units.Data
 
 type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
+type DataPrefix = Kilo | Mega | Giga
 
 make DataUnit, implement: Unit do
   let factor(@B) = 1.0

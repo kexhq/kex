@@ -1285,6 +1285,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
             }
 
+            // UFCS and free-call syntax share imported overloads.
+            if (auto imported = findImportedNamedOverload(node.method, namedArgs))
+                return callFunction(*imported, std::move(args),
+                                    std::move(namedArgs), expr.location);
+
             auto mangledName = resolveMethodName(receiver, node.method);
 
             // For mutating calls, reassign back
@@ -2054,52 +2059,11 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
             if (!namedArgs.empty()) {
                 auto it = m_functionDefs.find(lookupName);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
-                    const ast::FunctionClause* selectedClause = &it->second[0]->clauses[0];
-                    // Choose the first overload that names every supplied
-                    // keyword. This matters for `to(String, in: Mega)`: the
-                    // one-argument display overload must not discard `in`.
-                    for (const auto* definition : it->second) {
-                        for (const auto& clause : definition->clauses) {
-                            bool acceptsAllNames = true;
-                            for (const auto& [argName, _] : namedArgs) {
-                                bool found = false;
-                                for (const auto& param : clause.params)
-                                    if (param.name && *param.name == argName) {
-                                        found = true;
-                                        break;
-                                    }
-                                if (!found) {
-                                    acceptsAllNames = false;
-                                    break;
-                                }
-                            }
-                            if (acceptsAllNames) {
-                                selectedClause = &clause;
-                                goto found_named_overload;
-                            }
-                        }
-                    }
-found_named_overload:
-                    const auto& firstClause = *selectedClause;
-                    // A receiver method's implicit `this` is the first
-                    // runtime argument but not one of the declared params.
-                    // Keep it in place while mapping named arguments; without
-                    // this, `measure.to(String, in: Mega)` dropped `measure`
-                    // and evaluated the method with a stale/unbound receiver.
-                    bool isMethod = false;
-                    size_t receiverOffset = 0;
-                    const auto separator = lookupName.rfind("::");
-                    if (separator != std::string::npos && !args.empty()) {
-                        const auto scope = lookupName.substr(0, separator);
-                        const auto receiverType = dispatchTypeName(args[0]);
-                        isMethod = scope == receiverType;
-                        if (!isMethod) {
-                            if (auto parent = m_variantParent.find(receiverType);
-                                parent != m_variantParent.end())
-                                isMethod = scope == parent->second;
-                        }
-                        if (isMethod) receiverOffset = 1;
-                    }
+                    const auto* selected = findNamedClause(lookupName, namedArgs);
+                    const auto& clause = selected
+                        ? *selected : it->second[0]->clauses[0];
+                    const auto receiverOffset =
+                        receiverArgumentOffset(lookupName, args);
                     // Build full arg list: place named args by matching
                     // param names first, then fill whatever slots remain
                     // (in order) from the positional args. Named-first
@@ -2109,25 +2073,26 @@ found_named_overload:
                     // param is often last, not at the front, so it must
                     // land in whichever slot is actually still open rather
                     // than wherever index 0 happens to be.
-                    size_t totalParams = firstClause.params.size();
+                    size_t totalParams = clause.params.size();
                     std::vector<ValuePtr> fullArgs(totalParams + receiverOffset, nullptr);
-                    if (isMethod) fullArgs[0] = std::move(args[0]);
+                    if (receiverOffset) fullArgs[0] = std::move(args[0]);
 
                     for (auto& [argName, argVal] : namedArgs) {
-                        for (size_t i = 0; i < firstClause.params.size(); i++) {
-                            if (firstClause.params[i].name.has_value() &&
-                                *firstClause.params[i].name == argName) {
+                        for (size_t i = 0; i < clause.params.size(); i++) {
+                            if (clause.params[i].name &&
+                                *clause.params[i].name == argName) {
                                 fullArgs[i + receiverOffset] = std::move(argVal);
                                 break;
                             }
                         }
                     }
 
-                    size_t nextSlot = 0;
+                    size_t nextSlot = receiverOffset;
                     for (size_t argIndex = receiverOffset; argIndex < args.size(); argIndex++) {
                         auto& a = args[argIndex];
-                        while (nextSlot < totalParams && fullArgs[nextSlot]) nextSlot++;
-                        if (nextSlot >= totalParams + receiverOffset) break;
+                        while (nextSlot < fullArgs.size() && fullArgs[nextSlot])
+                            nextSlot++;
+                        if (nextSlot == fullArgs.size()) break;
                         fullArgs[nextSlot] = std::move(a);
                     }
 
@@ -2149,6 +2114,59 @@ found_named_overload:
     }
 
     throw RuntimeError("'" + name + "' is not callable", loc);
+}
+
+auto Evaluator::findNamedClause(const std::string& functionName,
+                                const NamedArgs& namedArgs) const
+    -> const ast::FunctionClause* {
+    auto definitions = m_functionDefs.find(functionName);
+    if (definitions == m_functionDefs.end()) return nullptr;
+
+    for (const auto* definition : definitions->second) {
+        for (const auto& clause : definition->clauses) {
+            bool acceptsAll = std::all_of(
+                namedArgs.begin(), namedArgs.end(), [&](const auto& named) {
+                    return std::any_of(
+                        clause.params.begin(), clause.params.end(),
+                        [&](const auto& param) {
+                            return param.name && *param.name == named.first;
+                        });
+                });
+            if (acceptsAll) return &clause;
+        }
+    }
+    return nullptr;
+}
+
+auto Evaluator::findImportedNamedOverload(const std::string& functionName,
+                                          const NamedArgs& namedArgs) const
+    -> std::optional<std::string> {
+    if (namedArgs.empty()) return std::nullopt;
+
+    for (auto scope = m_importScopes.rbegin(); scope != m_importScopes.rend(); ++scope) {
+        auto imported = scope->find(functionName);
+        if (imported == scope->end()) continue;
+
+        auto qualified = imported->second.module + "::" + functionName;
+        if (findNamedClause(qualified, namedArgs)) return qualified;
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
+auto Evaluator::receiverArgumentOffset(const std::string& functionName,
+                                       const std::vector<ValuePtr>& args) const -> size_t {
+    if (args.empty()) return 0;
+
+    auto separator = functionName.rfind("::");
+    if (separator == std::string::npos) return 0;
+
+    auto scope = functionName.substr(0, separator);
+    auto receiverType = dispatchTypeName(args[0]);
+    if (scope == receiverType) return 1;
+
+    auto parent = m_variantParent.find(receiverType);
+    return parent != m_variantParent.end() && scope == parent->second ? 1 : 0;
 }
 
 auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& method) const

@@ -102,6 +102,14 @@ private:
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
     auto callFunction(const std::string& name, std::vector<ValuePtr> args,
                       NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    auto findNamedClause(const std::string& functionName,
+                         const NamedArgs& namedArgs) const
+        -> const ast::FunctionClause*;
+    auto findImportedNamedOverload(const std::string& functionName,
+                                   const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
+    auto receiverArgumentOffset(const std::string& functionName,
+                                const std::vector<ValuePtr>& args) const -> size_t;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method) const
         -> std::string;
 
