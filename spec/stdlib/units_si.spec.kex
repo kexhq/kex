@@ -30,9 +30,11 @@ describe("Units.SI") do
     assert(1.meter.milli.value == 1000.0)
     assert(3.kilo.watt.canonical == 3000.0)
     assert(3.kilo.watt.to(String) == "3000.0 W")
+    assert((31544.watt * 1.hour).to(String, in: Mega) == Just("113.5584 MJ"))
     let energy = 31544.watt * 1.hour
-    assert(energy.to(String, in: Kilo(Joule)) == "113558.4 kJ")
-    assert(energy.to(String, in: Kilo(Watt * Hour)) == "31.544 kWh")
+    assert(energy.to(String, in: Kilo(Joule)) == Just("113558.4 kJ"))
+    assert(energy.to(String, in: Kilo(Watt * Hour)) == Just("31.544 kWh"))
+    assert(1.watt.to(String, in: Kilo(Watt * Hour)) == None)
   end
 
   it("formats every decimal prefix") do

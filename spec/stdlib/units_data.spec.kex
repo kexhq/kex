@@ -44,6 +44,15 @@ describe("Units.Data") do
     end
   end
 
+  it("formats decimal data prefixes from canonical bytes") do
+    let size = 5000000.byteSize
+    assert(size.to(String, in: Kilo) == Just("5000.0 KB"))
+    assert(size.to(String, in: Mega) == Just("5.0 MB"))
+    assert(size.to(String, in: Giga) == Just("0.005 GB"))
+    assert(5.megabytes.to(String, in: Mega) == Just("5.0 MB"))
+    assert(1.sec.to(String, in: Mega) == None)
+  end
+
   it("adds data measures using canonical bytes") do
     match 1.megabytes + 500.kilobytes do
       Ok(total) -> do

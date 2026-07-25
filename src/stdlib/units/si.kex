@@ -94,7 +94,18 @@ make SIUnit do
 end
 
 let to(measure: Measure, String) -> String = "${measure.value} ${measure.unit.symbol}"
-let to(measure: Measure, String, in: SIPrefix) -> String = "${measure.canonical / in.factor} ${in.symbol}"
+let to(measure: Measure, String, @Kilo) -> String? = Just(displayWithPrefix(measure, 1000.0, "k"))
+let to(measure: Measure, String, @Mega) -> String? = Just(displayWithPrefix(measure, 1000000.0, "M"))
+let to(measure: Measure, String, @Giga) -> String? = Just(displayWithPrefix(measure, 1000000000.0, "G"))
+let to(measure: Measure, String, @Milli) -> String? = Just(displayWithPrefix(measure, 0.001, "m"))
+let to(measure: Measure, String, @Micro) -> String? = Just(displayWithPrefix(measure, 0.000001, "μ"))
+let to(measure: Measure, String, @Nano) -> String? = Just(displayWithPrefix(measure, 0.000000001, "n"))
+let to(measure: Measure, String, in: SIPrefix) -> String? do
+  match measure.kind == in.kind do
+    true -> return Just("${measure.canonical / in.factor} ${in.symbol}")
+    false -> return None
+  end
+end
 
 let mega(measure: Measure) -> Measure = prefixed(measure, 1000000.0, "M")
 let giga(measure: Measure) -> Measure = prefixed(measure, 1000000000.0, "G")
@@ -183,6 +194,8 @@ make Measure do
 end
 
 private do
+  let displayWithPrefix(measure, prefixFactor, prefix) = "${measure.canonical / (measure.factor * prefixFactor)} ${prefix}${measure.symbol}"
+
   let displayFactor(@Meter) = 1.0
   let displayFactor(@Gram) = 1.0
   let displayFactor(@Kilogram) = 1.0

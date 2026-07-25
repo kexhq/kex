@@ -114,9 +114,9 @@ make Measure do
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
   let to(String) -> String = "${this.value} ${this.unit.symbol}"
-  # Unit modules may refine display with an `in:` target. The prelude keeps
-  # the default representation when it has no specialised formatter.
-  let to(String, in) -> String = this.to(String)
+  # A target display unit is optional: only an opt-in unit module can prove
+  # that it is compatible with this measure.
+  let to(String, in) -> String? = None
 
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)

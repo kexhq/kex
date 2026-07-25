@@ -193,12 +193,13 @@ let distance = 100.meter  # Measure
 let speed = distance / 9.58.sec
 distance.kilo.to(String)  # "0.1 km"
 let energy = 31544.watt * 1.hour
-energy.to(String, in: Kilo(Watt * Hour))  # "31.544 kWh"
+energy.to(String, in: Kilo(Watt * Hour))  # Just("31.544 kWh")
 ```
 
 `Kilo`, `Mega`, `Giga`, `Milli`, `Micro`, and `Nano` construct display units.
 Combine one with a unit expression in `to(String, in:)` to format a measure
-without changing its canonical value.
+without changing its canonical value. Target formatting returns `String?`:
+it is `None` when the target has a different measurement kind.
 
 Decimal and binary information units are provided separately by `Units.Data`.
 They produce the same `Measure` type; the uppercase names are conversion unit
@@ -210,6 +211,7 @@ using Units.Data
 let asset: Measure = 5.megabytes
 let binary: Result<Measure, String> = asset.convertTo(MiB)
 let cache = 2.gibibytes
+asset.to(String, in: Mega)  # Just("5.0 MB")
 ```
 
 ## Foldable and Enumerable

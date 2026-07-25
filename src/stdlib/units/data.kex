@@ -59,6 +59,23 @@ let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   end
 end
 
+# Data prefixes select their standard decimal byte unit.  They are targets
+# for formatting, so `Mega` means MB rather than a prefix applied twice to
+# the measure's existing unit.
+let to(measure: Measure, String, in) -> String? do
+  match measure.kind == :data do
+    false -> return None
+    true -> do
+  match in do
+    Kilo -> return Just(displayWithPrefix(measure, 1000.0, "KB"))
+    Mega -> return Just(displayWithPrefix(measure, 1000000.0, "MB"))
+    Giga -> return Just(displayWithPrefix(measure, 1000000000.0, "GB"))
+    _ -> return None
+  end
+  end
+  end
+end
+
 let byteSize(value: Number) -> Measure = size(value, B)
 let kilobytes(value: Number) -> Measure = size(value, KB)
 let megabytes(value: Number) -> Measure = size(value, MB)
@@ -70,6 +87,8 @@ let gibibytes(value: Number) -> Measure = size(value, GiB)
 let tebibytes(value: Number) -> Measure = size(value, TiB)
 
 private do
+  let displayWithPrefix(measure, factor, symbol) = "${measure.canonical / factor} ${symbol}"
+
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
 
   let definition(B) = UnitDefinition { conversionFactor: 1.0, dimension: :data, notation: "B" }
