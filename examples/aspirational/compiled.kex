@@ -22,7 +22,7 @@ end
 # Generate from env
 module Config do
   compiled do
-    ENV_PREFIX = Env.get("APP_PREFIX") ?? "app"
+    ENV_PREFIX = Env.get("APP_PREFIX").or("app")
 
     KEYS = ["database_url", "redis_url", "secret_key", "port"]
 

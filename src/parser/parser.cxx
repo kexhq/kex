@@ -1028,7 +1028,7 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
 auto Parser::parseOr() -> ast::ExprPtr {
     auto left = parseAnd();
 
-    while (check(TokenType::PipePipe) || check(TokenType::QuestionQuestion)) {
+    while (check(TokenType::PipePipe)) {
         auto opType = peek().type;
         advance();
         auto op = std::make_unique<ast::Expr>();

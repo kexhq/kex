@@ -1087,11 +1087,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 auto right = node.right ? eval(*node.right) : Value::none();
                 return Value::boolean(right && right->isTrue());
             }
-            if (node.op == TokenType::QuestionQuestion) {
-                auto left = node.left ? eval(*node.left) : Value::none();
-                if (left && !left->isNone()) return left;
-                return node.right ? eval(*node.right) : Value::none();
-            }
             auto left = node.left ? eval(*node.left) : Value::none();
             auto right = node.right ? eval(*node.right) : Value::none();
             return evalBinaryOp(node.op, left, right, expr.location);

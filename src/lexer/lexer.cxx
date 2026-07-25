@@ -87,7 +87,6 @@ auto Lexer::nextToken() -> Token {
         case ',': return makeToken(TokenType::Comma);
         case '@': return makeToken(TokenType::At);
         case '?':
-            if (match('?')) return makeToken(TokenType::QuestionQuestion);
             return makeToken(TokenType::Question);
         case '/': return makeToken(TokenType::Slash);
         case '*': return makeToken(TokenType::Star);
