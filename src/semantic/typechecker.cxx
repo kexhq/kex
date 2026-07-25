@@ -1810,9 +1810,9 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
             };
 
             switch (op) {
-                // -, *, /, %: both operands must be Number.
+                // -, *, /, %, ^: both operands must be Number.
                 case TokenType::Minus: case TokenType::Star:
-                case TokenType::Slash: case TokenType::Percent: {
+                case TokenType::Slash: case TokenType::Percent: case TokenType::Caret: {
                     auto nc = Type::constrained("N", "Number");
                     if (int id = varId(lhs); id >= 0) unifyVar(id, nc);
                     if (int id = varId(rhs); id >= 0) unifyVar(id, nc);
@@ -1901,6 +1901,7 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         case TokenType::Star:
         case TokenType::Slash:
         case TokenType::Percent:
+        case TokenType::Caret:
             if (leftIsInt && rightIsInt)
                 return Type::integer();
             if ((leftIsFloat || rightIsFloat) && (leftIsFloat || leftIsInt) && (rightIsFloat || rightIsInt))

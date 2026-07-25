@@ -46,6 +46,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::At: return "@";
         case TokenType::Bang: return "!";
         case TokenType::Colon: return ":";
+        case TokenType::Caret: return "^";
         case TokenType::TypeAnnotation: return ":>";
         case TokenType::Comma: return ",";
         case TokenType::Dot: return ".";

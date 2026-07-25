@@ -78,6 +78,12 @@ int main() {
         });
     });
 
+    describe("Parser — Exponentiation", []() {
+        it("parses right-associative powers with the expected precedence", []() {
+            assertTrue(!parseFails("main do\n  let x = -2 ^ 3 ^ 2 * 4\nend\n"));
+        });
+    });
+
     describe("Parser — Modules", []() {
         it("parses simple module", []() {
             auto program = parse("module Math do\nend");

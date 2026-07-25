@@ -18,6 +18,7 @@ main do
   IO.printLine(greet("World"))
   IO.printLine(Math.square(7).to(String).or(""))
   IO.printLine(Math.cube(3).to(String).or(""))
+  IO.printLine((2 ^ 3).to(String).or(""))
 
   let p = Point { x: 10, y: 20 }
   IO.printLine(p.x.to(String).or("") + ", " + p.y.to(String).or(""))

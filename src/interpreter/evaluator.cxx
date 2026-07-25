@@ -1628,7 +1628,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     static const std::unordered_map<std::string, TokenType> opToks = {
                         {"+", TokenType::Plus}, {"-", TokenType::Minus},
                         {"*", TokenType::Star}, {"/", TokenType::Slash},
-                        {"%", TokenType::Percent}, {"==", TokenType::EqEq},
+                        {"%", TokenType::Percent}, {"^", TokenType::Caret}, {"==", TokenType::EqEq},
                         {"!=", TokenType::NotEq}, {"<", TokenType::LessThan},
                         {"<=", TokenType::LessEq}, {">", TokenType::GreaterThan},
                         {">=", TokenType::GreaterEq},
@@ -1644,7 +1644,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             static const std::unordered_map<std::string, TokenType> opTokens = {
                 {"+", TokenType::Plus}, {"-", TokenType::Minus},
                 {"*", TokenType::Star}, {"/", TokenType::Slash},
-                {"%", TokenType::Percent}, {"==", TokenType::EqEq},
+                {"%", TokenType::Percent}, {"^", TokenType::Caret}, {"==", TokenType::EqEq},
                 {"!=", TokenType::NotEq}, {"<", TokenType::LessThan},
                 {"<=", TokenType::LessEq}, {">", TokenType::GreaterThan},
                 {">=", TokenType::GreaterEq},
@@ -1799,29 +1799,28 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right,
                              SourceLocation loc) -> ValuePtr {
     // Operator overloading: `make Type do let +(other) -> Type ... end`
-    // registers "Type::+", dispatched here the same way method calls
-    // dispatch on receiver type, before any built-in handling.
-    if (auto* rec = std::get_if<RecordValue>(&left->data)) {
-        std::string opSymbol;
-        switch (op) {
-            case TokenType::Plus:       opSymbol = "+";  break;
-            case TokenType::Minus:      opSymbol = "-";  break;
-            case TokenType::Star:       opSymbol = "*";  break;
-            case TokenType::Slash:      opSymbol = "/";  break;
-            case TokenType::Percent:    opSymbol = "%";  break;
-            case TokenType::EqEq:       opSymbol = "=="; break;
-            case TokenType::NotEq:      opSymbol = "!="; break;
-            case TokenType::LessThan:   opSymbol = "<";  break;
-            case TokenType::GreaterThan: opSymbol = ">"; break;
-            case TokenType::LessEq:     opSymbol = "<="; break;
-            case TokenType::GreaterEq:  opSymbol = ">="; break;
-            default: break;
-        }
-        if (!opSymbol.empty()) {
-            auto mangled = rec->typeName + "::" + opSymbol;
-            if (m_env->get(mangled)) {
-                return callFunction(mangled, {left, right}, {}, loc);
-            }
+    // registers "Type::+", dispatched here through the same receiver-type
+    // resolution as method calls (including ADT variants), before built-ins.
+    std::string opSymbol;
+    switch (op) {
+        case TokenType::Plus:       opSymbol = "+";  break;
+        case TokenType::Minus:      opSymbol = "-";  break;
+        case TokenType::Star:       opSymbol = "*";  break;
+        case TokenType::Slash:      opSymbol = "/";  break;
+        case TokenType::Percent:    opSymbol = "%";  break;
+        case TokenType::Caret:      opSymbol = "^";  break;
+        case TokenType::EqEq:       opSymbol = "=="; break;
+        case TokenType::NotEq:      opSymbol = "!="; break;
+        case TokenType::LessThan:   opSymbol = "<";  break;
+        case TokenType::GreaterThan: opSymbol = ">"; break;
+        case TokenType::LessEq:     opSymbol = "<="; break;
+        case TokenType::GreaterEq:  opSymbol = ">="; break;
+        default: break;
+    }
+    if (!opSymbol.empty()) {
+        auto methodName = resolveMethodName(left, opSymbol);
+        if (methodName != opSymbol) {
+            return callFunction(methodName, {left, right}, {}, loc);
         }
     }
 
@@ -1921,6 +1920,22 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                 return integerResult(*leftInt % *rightInt);
             }
             throw RuntimeError("Modulo requires integers", loc);
+
+        case TokenType::Caret:
+            // Preserve integer arithmetic (including arbitrary-precision
+            // results) for non-negative integer exponents; fractional and
+            // negative powers follow the floating-point Math.pow behavior.
+            if (leftInt && rightInt && *rightInt >= 0 && rightInt->fits_ulong_p()) {
+                mpz_class result;
+                mpz_pow_ui(result.get_mpz_t(), leftInt->get_mpz_t(), rightInt->get_ui());
+                return integerResult(std::move(result));
+            }
+            if (leftInt && rightInt)
+                return Value::floating(std::pow(intToDouble(li, *leftInt), intToDouble(ri, *rightInt)));
+            if (lf && rf) return Value::floating(std::pow(lf->value, rf->value));
+            if (leftInt && rf) return Value::floating(std::pow(intToDouble(li, *leftInt), rf->value));
+            if (lf && rightInt) return Value::floating(std::pow(lf->value, intToDouble(ri, *rightInt)));
+            throw RuntimeError("Exponentiation requires numbers", loc);
 
         case TokenType::EqEq: return Value::boolean(valuesEqual(left, right));
         case TokenType::NotEq: return Value::boolean(!valuesEqual(left, right));
@@ -2039,7 +2054,52 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
             if (!namedArgs.empty()) {
                 auto it = m_functionDefs.find(lookupName);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
-                    const auto& firstClause = it->second[0]->clauses[0];
+                    const ast::FunctionClause* selectedClause = &it->second[0]->clauses[0];
+                    // Choose the first overload that names every supplied
+                    // keyword. This matters for `to(String, in: Mega)`: the
+                    // one-argument display overload must not discard `in`.
+                    for (const auto* definition : it->second) {
+                        for (const auto& clause : definition->clauses) {
+                            bool acceptsAllNames = true;
+                            for (const auto& [argName, _] : namedArgs) {
+                                bool found = false;
+                                for (const auto& param : clause.params)
+                                    if (param.name && *param.name == argName) {
+                                        found = true;
+                                        break;
+                                    }
+                                if (!found) {
+                                    acceptsAllNames = false;
+                                    break;
+                                }
+                            }
+                            if (acceptsAllNames) {
+                                selectedClause = &clause;
+                                goto found_named_overload;
+                            }
+                        }
+                    }
+found_named_overload:
+                    const auto& firstClause = *selectedClause;
+                    // A receiver method's implicit `this` is the first
+                    // runtime argument but not one of the declared params.
+                    // Keep it in place while mapping named arguments; without
+                    // this, `measure.to(String, in: Mega)` dropped `measure`
+                    // and evaluated the method with a stale/unbound receiver.
+                    bool isMethod = false;
+                    size_t receiverOffset = 0;
+                    const auto separator = lookupName.rfind("::");
+                    if (separator != std::string::npos && !args.empty()) {
+                        const auto scope = lookupName.substr(0, separator);
+                        const auto receiverType = dispatchTypeName(args[0]);
+                        isMethod = scope == receiverType;
+                        if (!isMethod) {
+                            if (auto parent = m_variantParent.find(receiverType);
+                                parent != m_variantParent.end())
+                                isMethod = scope == parent->second;
+                        }
+                        if (isMethod) receiverOffset = 1;
+                    }
                     // Build full arg list: place named args by matching
                     // param names first, then fill whatever slots remain
                     // (in order) from the positional args. Named-first
@@ -2050,22 +2110,24 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                     // land in whichever slot is actually still open rather
                     // than wherever index 0 happens to be.
                     size_t totalParams = firstClause.params.size();
-                    std::vector<ValuePtr> fullArgs(totalParams, nullptr);
+                    std::vector<ValuePtr> fullArgs(totalParams + receiverOffset, nullptr);
+                    if (isMethod) fullArgs[0] = std::move(args[0]);
 
                     for (auto& [argName, argVal] : namedArgs) {
                         for (size_t i = 0; i < firstClause.params.size(); i++) {
                             if (firstClause.params[i].name.has_value() &&
                                 *firstClause.params[i].name == argName) {
-                                fullArgs[i] = std::move(argVal);
+                                fullArgs[i + receiverOffset] = std::move(argVal);
                                 break;
                             }
                         }
                     }
 
                     size_t nextSlot = 0;
-                    for (auto& a : args) {
+                    for (size_t argIndex = receiverOffset; argIndex < args.size(); argIndex++) {
+                        auto& a = args[argIndex];
                         while (nextSlot < totalParams && fullArgs[nextSlot]) nextSlot++;
-                        if (nextSlot >= totalParams) break;
+                        if (nextSlot >= totalParams + receiverOffset) break;
                         fullArgs[nextSlot] = std::move(a);
                     }
 
@@ -2253,6 +2315,13 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // Match zero-arg variant constructors (Nothing, Less, Fizz, ...)
                 if (auto* var = std::get_if<VariantValue>(&value->data)) {
                     if (var->tag == pat.name && var->args.empty()) return true;
+                }
+                // A bare payload constructor used as a display-prefix marker
+                // (for example `in: Mega`) is represented by its constructor
+                // function until it receives a payload. Let a nullary pattern
+                // select that marker without attempting to call it.
+                if (auto* func = std::get_if<FunctionValue>(&value->data)) {
+                    if (func->name == pat.name) return true;
                 }
 
                 // Match type names as type patterns (for runtime type checking).

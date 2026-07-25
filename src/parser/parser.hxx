@@ -83,6 +83,7 @@ private:
     auto parseAddition() -> ast::ExprPtr;
     auto parseMultiplication() -> ast::ExprPtr;
     auto parseUnary() -> ast::ExprPtr;
+    auto parsePower() -> ast::ExprPtr;
     auto parsePostfix() -> ast::ExprPtr;
     auto parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr;
     auto parsePrimary() -> ast::ExprPtr;

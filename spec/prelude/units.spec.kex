@@ -64,6 +64,14 @@ describe("Measure arithmetic") do
     assert(measure.canonical == 10.0)
     assert(measure.to(String) == "10.0 s")
   end
+
+  it("raises a measure and its display unit to a power") do
+    let squared = 2.sec ^ 2
+    assert(squared.canonical == 4.0)
+    assert(squared.value == 4.0)
+    assert(squared.factor == 1.0)
+    assert(squared.symbol == "s^2")
+  end
 end
 
 describe("time conversion and formatting") do

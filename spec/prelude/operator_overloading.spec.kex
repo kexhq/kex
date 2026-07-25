@@ -1,0 +1,52 @@
+# Every overloadable binary operator dispatches through the left-hand
+# receiver's `make` block. These deliberately return conspicuous values so a
+# missing dispatch cannot be mistaken for a built-in numeric operation.
+record Operand do
+  value : Int
+end
+
+make Operand do
+  let +(other: Operand) = @value + other.value
+  let -(other: Operand) = @value - other.value
+  let *(other: Operand) = @value * other.value
+  let /(other: Operand) = @value / other.value
+  let %(other: Operand) = @value % other.value
+  let ^(other: Operand) = @value ^ other.value
+  let ==(other: Operand) = @value == other.value
+  let !=(other: Operand) = @value != other.value
+  let <(other: Operand) = @value < other.value
+  let >(other: Operand) = @value > other.value
+  let <=(other: Operand) = @value <= other.value
+  let >=(other: Operand) = @value >= other.value
+end
+
+describe("binary operator overloading") do
+  it("dispatches arithmetic operators") do
+    let ten = Operand { value: 10 }
+    let three = Operand { value: 3 }
+    assert(ten + three == 13)
+    assert(ten - three == 7)
+    assert(ten * three == 30)
+    assert(ten / three == 3)
+    assert(ten % three == 1)
+    assert(three ^ three == 27)
+  end
+
+  it("dispatches equality and ordering operators") do
+    let low = Operand { value: 2 }
+    let same = Operand { value: 2 }
+    let high = Operand { value: 5 }
+    assert(low == same)
+    assert(low != high)
+    assert(low < high)
+    assert(high > low)
+    assert(low <= same)
+    assert(high >= same)
+  end
+
+  it("keeps power right-associative and above multiplication") do
+    assert(2 ^ 3 ^ 2 == 512)
+    assert(2 * 3 ^ 2 == 18)
+    assert(-2 ^ 2 == -4)
+  end
+end

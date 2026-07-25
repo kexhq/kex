@@ -54,6 +54,13 @@ describe("Units.SI") do
     assert(acceleration.value == 5.0)
   end
 
+  it("raises SI measures with ^") do
+    let area = 3.meter ^ 2
+    assert(area.canonical == 9.0)
+    assert(area.value == 9.0)
+    assert(area.symbol == "m^2")
+  end
+
   it("derives force and electrical units") do
     let acceleration = 10.meter / 1.sec / 1.sec
     let force = 5.kilogram * acceleration

@@ -51,6 +51,7 @@ enum class TokenType {
     At,           // @
     Bang,         // !
     Colon,        // :
+    Caret,        // ^
     TypeAnnotation, // :>
     Comma,        // ,
     Dot,          // .

@@ -559,6 +559,14 @@ int main() {
             ));
         });
 
+        it("accepts numeric exponentiation", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let x = 2 ^ 10\n"
+                "end\n"
+            ));
+        });
+
         it("rejects non-Bool in if condition", []() {
             assertTrue(hasError(
                 "main do\n"

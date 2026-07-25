@@ -134,11 +134,11 @@ make Measure do
 end
 
 make Integer do
-  let kilo -> Float = amount(this) * 1000.0
+  let kilo -> Float = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 1000.0
 end
 
 make Float do
-  let kilo -> Float = amount(this) * 1000.0
+  let kilo -> Float = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0) * 1000.0
 end
 
 make Measure do

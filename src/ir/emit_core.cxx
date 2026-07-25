@@ -131,6 +131,7 @@ struct Emitter {
             case Op::Mul:    return "call 'erlang':'*'(" + a(0) + ", " + a(1) + ")";
             case Op::Div:    return "call 'kex_intrinsic_number':'divide'(" + a(0) + ", " + a(1) + ")";
             case Op::Mod:    return "call 'erlang':'rem'(" + a(0) + ", " + a(1) + ")";
+            case Op::Pow:    return "call 'kex_intrinsic_number':'pow'(" + a(0) + ", " + a(1) + ")";
             case Op::Neg:    return "call 'erlang':'-'(" + a(0) + ")";
             case Op::Eq:     return "call 'erlang':'=:='(" + a(0) + ", " + a(1) + ")";
             case Op::Neq:    return "call 'erlang':'=/='(" + a(0) + ", " + a(1) + ")";

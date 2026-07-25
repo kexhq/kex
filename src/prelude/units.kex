@@ -114,8 +114,8 @@ make Measure do
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
   let to(String) -> String = "${this.value} ${this.unit.symbol}"
-  # A target display unit is optional: only an opt-in unit module can prove
-  # that it is compatible with this measure.
+  # A target display unit is optional; unit modules can provide compatible
+  # target formatting through their own Measure overload.
   let to(String, in) -> String? = None
 
   let scale(multiplier: Number) -> Measure do
@@ -124,6 +124,22 @@ make Measure do
       canonical: this.canonical * converted,
       value: this.value * converted,
       unit: this.unit
+    }
+  end
+
+  # Raising a measure preserves its display unit while applying the power to
+  # its canonical value, display value, and conversion factor. The current
+  # Unit trait represents a dimension as one Atom, so the dimension remains
+  # the base kind; the notation records the derived unit (for example `s^2`).
+  let ^(exponent: Number) -> Measure do
+    return Measure {
+      canonical: Kex.Intrinsic.Math.pow(this.canonical, exponent),
+      value: Kex.Intrinsic.Math.pow(this.value, exponent),
+      unit: UnitDefinition {
+        conversionFactor: Kex.Intrinsic.Math.pow(this.factor, exponent),
+        dimension: this.kind,
+        notation: "${this.symbol}^${exponent}"
+      }
     }
   end
 

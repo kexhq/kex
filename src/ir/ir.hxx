@@ -48,7 +48,7 @@ struct Var {
 
 // ---- Primitive operations (operators) ------------------------------------
 enum class Op {
-    Add, Sub, Mul, Div, Mod, Neg,
+    Add, Sub, Mul, Div, Mod, Pow, Neg,
     Eq, Neq, Lt, Gt, Lte, Gte,
     And, Or, Not,
     Concat,

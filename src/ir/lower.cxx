@@ -135,7 +135,8 @@ struct Lowering {
         switch (t) {
             case TokenType::Plus: return "+";     case TokenType::Minus: return "-";
             case TokenType::Star: return "*";     case TokenType::Slash: return "/";
-            case TokenType::Percent: return "%";  case TokenType::EqEq: return "==";
+            case TokenType::Percent: return "%";  case TokenType::Caret: return "^";
+            case TokenType::EqEq: return "==";
             case TokenType::NotEq: return "!=";   case TokenType::LessThan: return "<";
             case TokenType::GreaterThan: return ">"; case TokenType::LessEq: return "<=";
             case TokenType::GreaterEq: return ">="; default: return "";
@@ -248,6 +249,7 @@ struct Lowering {
             case TokenType::Star: return Op::Mul;
             case TokenType::Slash: return Op::Div;
             case TokenType::Percent: return Op::Mod;
+            case TokenType::Caret: return Op::Pow;
             case TokenType::EqEq: return Op::Eq;
             case TokenType::NotEq: return Op::Neq;
             case TokenType::LessThan: return Op::Lt;
@@ -589,7 +591,7 @@ struct Lowering {
     // string emitter's opBif table (+ and / stay polymorphic via kex_io).
     static auto curryOp(const std::string& name) -> std::optional<Op> {
         static const std::unordered_map<std::string, Op> t = {
-            {"+",Op::Add},{"-",Op::Sub},{"*",Op::Mul},{"/",Op::Div},{"%",Op::Mod},
+            {"+",Op::Add},{"-",Op::Sub},{"*",Op::Mul},{"/",Op::Div},{"%",Op::Mod},{"^",Op::Pow},
             {"==",Op::Eq},{"!=",Op::Neq},{"<",Op::Lt},{"<=",Op::Lte},{">",Op::Gt},{">=",Op::Gte},
         };
         auto it = t.find(name); return it == t.end() ? std::nullopt : std::optional<Op>(it->second);

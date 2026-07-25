@@ -1,7 +1,7 @@
 %% Kex.Intrinsic.Number — BEAM primitive backend for numeric intrinsics shared
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
--export([abs/1, sqrt/1, add/2, divide/2, eq/2, neq/2,
+-export([abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
           float_parse/1, float_parse_prefix/1,
           parse/1, to_integer/1, to_float/1]).
@@ -61,6 +61,17 @@ charlist_opt(_, _) -> error.
 divide(A, B) when is_integer(A), is_integer(B), B =:= 0 -> erlang:error("runtime error: Division by zero");
 divide(A, B) when is_integer(A), is_integer(B) -> A div B;
 divide(A, B) -> A / B.
+
+%% pow/2 keeps integral bases raised to non-negative integral exponents exact,
+%% matching the interpreter's arbitrary-precision Integer result. Other powers
+%% use Erlang's floating-point math semantics.
+pow(A, B) when is_integer(A), is_integer(B), B >= 0 -> int_pow(A, B, 1);
+pow(A, B) -> math:pow(A, B).
+
+int_pow(_, 0, Acc) -> Acc;
+int_pow(Base, Exponent, Acc) when Exponent rem 2 =:= 1 ->
+    int_pow(Base * Base, Exponent div 2, Acc * Base);
+int_pow(Base, Exponent, Acc) -> int_pow(Base * Base, Exponent div 2, Acc).
 
 %% floor/ceil/round — rounding operations on numbers. erlang:floor/1 and
 %% erlang:ceil/1 are OTP 27+; on integer input they return the integer itself.

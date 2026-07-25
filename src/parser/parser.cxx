@@ -655,7 +655,7 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         def->name = advance().value;
     } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
                check(TokenType::Star) || check(TokenType::Slash) ||
-               check(TokenType::Percent) || check(TokenType::EqEq) ||
+               check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
                check(TokenType::NotEq) || check(TokenType::LessThan) ||
                check(TokenType::GreaterThan) || check(TokenType::LessEq) ||
                check(TokenType::GreaterEq)) {
@@ -1142,7 +1142,24 @@ auto Parser::parseUnary() -> ast::ExprPtr {
         return expr;
     }
 
-    return parsePostfix();
+    return parsePower();
+}
+
+auto Parser::parsePower() -> ast::ExprPtr {
+    auto left = parsePostfix();
+
+    // Exponentiation is right-associative and binds more tightly than unary
+    // negation: `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, while `-2 ^ 2` is `-(2 ^ 2)`.
+    if (check(TokenType::Caret)) {
+        auto opType = advance().type;
+        auto op = std::make_unique<ast::Expr>();
+        op->location = currentLocation();
+        auto right = parseUnary();
+        op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
+        return op;
+    }
+
+    return left;
 }
 
 auto Parser::parsePostfix() -> ast::ExprPtr {
@@ -2245,7 +2262,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
             name = advance().value;
         } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
                    check(TokenType::Star) || check(TokenType::Slash) ||
-                   check(TokenType::Percent) || check(TokenType::EqEq) ||
+                   check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
                    check(TokenType::NotEq) || check(TokenType::LessThan) ||
                    check(TokenType::GreaterThan)) {
             name = std::string(tokenTypeName(advance().type));
@@ -2306,7 +2323,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
 
     // &operator (e.g. &.+ 1) or &function_name
     if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-        check(TokenType::Slash) || check(TokenType::Percent)) {
+        check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret)) {
         auto opName = std::string(tokenTypeName(advance().type));
         expr->kind = ast::ShorthandLambda{
             ast::ShorthandLambda::Kind::Function, opName, {}};
@@ -2765,7 +2782,7 @@ auto Parser::parseUsingOptions(std::optional<std::string>& alias,
         if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) return advance().value;
         if (match(TokenType::LParen)) {
             if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-                check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::EqEq) ||
+                check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
                 check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
                 check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
                 auto name = std::string(tokenTypeName(advance().type));
@@ -2982,7 +2999,7 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
         // ~(op) form
         advance(); // consume '('
         if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-            check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::EqEq) ||
+            check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
             check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
             check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
             name = std::string(tokenTypeName(advance().type));

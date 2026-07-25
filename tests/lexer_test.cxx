@@ -184,6 +184,7 @@ int main() {
             assertEqual(firstToken("*").type, TokenType::Star);
             assertEqual(firstToken("/").type, TokenType::Slash);
             assertEqual(firstToken("%").type, TokenType::Percent);
+            assertEqual(firstToken("^").type, TokenType::Caret);
             assertEqual(firstToken("@").type, TokenType::At);
             assertEqual(firstToken("&").type, TokenType::Amp);
             assertEqual(firstToken("?").type, TokenType::Question);
