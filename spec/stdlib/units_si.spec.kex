@@ -9,11 +9,38 @@ describe("Units.SI") do
     assert(elapsed.kind == :time)
   end
 
-  it("applies decimal prefixes") do
+  it("constructs every SI base and derived unit") do
+    assert(1.meter.symbol == "m")
+    assert(1.gram.symbol == "g")
+    assert(1.kilogram.symbol == "kg")
+    assert(1.kelvin.symbol == "K")
+    assert(1.liter.symbol == "L")
+    assert(1.newton.kind == :force)
+    assert(1.joule.kind == :energy)
+    assert(1.watt.kind == :power)
+    assert(1.volt.kind == :voltage)
+    assert(1.ampere.kind == :current)
+    assert(1.ohm.kind == :resistance)
+    assert(1.coulomb.kind == :charge)
+    assert(2.5.joule.canonical == 2.5)
+  end
+
+  it("applies decimal prefixes and formats composite display units") do
     assert(5000.meter.kilo.value == 5.0)
     assert(1.meter.milli.value == 1000.0)
     assert(3.kilo.watt.canonical == 3000.0)
     assert(3.kilo.watt.to(String) == "3000.0 W")
+    let energy = 31544.watt * 1.hour
+    assert(energy.to(String, in: Kilo(Joule)) == "113558.4 kJ")
+    assert(energy.to(String, in: Kilo(Watt * Hour)) == "31.544 kWh")
+  end
+
+  it("formats every decimal prefix") do
+    assert(mega(2000000.watt).to(String) == "2.0 MW")
+    assert(giga(3000000000.watt).to(String) == "3.0 GW")
+    assert(milli(0.004.watt).to(String) == "4.0 mW")
+    assert(micro(0.000005.watt).to(String) == "5.0 μW")
+    assert(nano(0.000000006.watt).to(String) == "6.0 nW")
   end
 
   it("derives speed and acceleration with /") do
@@ -33,6 +60,33 @@ describe("Units.SI") do
     assert(force.value == 50.0)
     assert(voltage.kind == :voltage)
     assert(voltage.value == 200.0)
+  end
+
+  it("derives energy, power, charge, pressure, and resistance") do
+    let energy = 10.newton * 3.meter
+    let power = energy / 2.sec
+    let charge = 3.ampere * 2.sec
+    let pressure = 10.newton / 2.meter
+    let resistance = 12.volt / 3.ampere
+    assert(energy.kind == :energy)
+    assert(energy.value == 30.0)
+    assert(power.kind == :power)
+    assert(power.value == 15.0)
+    assert(charge.kind == :charge)
+    assert(charge.value == 6.0)
+    assert(pressure.kind == :pressure)
+    assert(pressure.value == 5.0)
+    assert(resistance.kind == :resistance)
+    assert(resistance.value == 4.0)
+  end
+
+  it("provides times and per helpers") do
+    let voltage = times(2.ampere, 100.ohm)
+    let speed = per(100.meter, 10.sec)
+    assert(voltage.kind == :voltage)
+    assert(voltage.value == 200.0)
+    assert(speed.kind == :speed)
+    assert(speed.value == 10.0)
   end
 
   it("rejects addition across measurement kinds") do

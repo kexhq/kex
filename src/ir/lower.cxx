@@ -404,6 +404,20 @@ struct Lowering {
                     userCall->node = Call{
                         std::move(userModule), std::move(userFunction),
                         2, std::move(ua), false};
+                    // Nullary ADT values such as `Watt` are atoms rather
+                    // than tuples. If their declared type owns this operator,
+                    // statically select that overload instead of falling
+                    // through to Erlang arithmetic.
+                    if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.left->kind)) {
+                        if (auto owner = variantOwner.find(uid->name);
+                            owner != variantOwner.end()) {
+                            if (auto methods = methodOwners.find(sym);
+                                methods != methodOwners.end() &&
+                                std::find(methods->second.begin(), methods->second.end(),
+                                          owner->second) != methods->second.end())
+                                return wrapLets(binds, std::move(userCall));
+                        }
+                    }
                     auto dispatch = matchBool(
                         callE("erlang", "is_tuple", 1, one(lRef.get())),
                         std::move(userCall), std::move(builtin));
@@ -1454,11 +1468,15 @@ struct Lowering {
         // without needing types. Gated on localMethods so an UNPORTED builtin
         // (e.g. `.get`/`.map`) errors loudly instead of silently becoming a
         // call to a function that doesn't exist.
-        if (localMethods.count(n.method) && !n.block && n.namedArgs.empty()) {
+        if (localMethods.count(n.method) && !n.block) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            // Make-block methods lower receiver-first. Named arguments follow
+            // positional ones in the common `method(Type, name: value)` form.
+            for (const auto& [_, value] : n.namedArgs)
+                args.push_back(atomize(value, binds));
             if (auto it = methodDefaults.find(n.method); it != methodDefaults.end())
                 for (size_t i = n.args.size(); i < it->second.size(); i++)
                     if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
