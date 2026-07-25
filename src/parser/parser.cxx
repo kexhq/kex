@@ -906,7 +906,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     // Tuple type: (A, B, C) or unit type ()
     if (match(TokenType::LParen)) {
         if (match(TokenType::RParen)) {
-            // Unit type ()
+            // Void type ()
             type->kind = ast::TupleType{{}};
             return type;
         }
@@ -2465,7 +2465,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
     auto loc = currentLocation();
     expect(TokenType::LParen, "Expected '('");
 
-    // Unit value: ()
+    // Void value: ()
     if (match(TokenType::RParen)) {
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;

@@ -118,7 +118,7 @@ make Server do
     return Server { port: @port, routes: @routes + [route] }
   end
 
-  foul start() -> Result<Unit, String> do
+  foul start() -> Result<Void, String> do
     return Kex.Intrinsic.Web.serve(this)
   end
 end

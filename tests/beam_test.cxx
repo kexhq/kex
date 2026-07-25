@@ -334,7 +334,7 @@ int main() {
             KexiExport exp;
             exp.name = "run";
             exp.beamFunction = "ignored_in_v1";
-            exp.returnType = kexiPrimitive("Unit");
+            exp.returnType = kexiPrimitive("Void");
             chunk.typeInterface.exports.push_back(std::move(exp));
 
             auto decoded = deserializeKexi(serializeKexi(chunk));

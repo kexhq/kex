@@ -274,7 +274,20 @@ int main() {
             assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
         });
 
-        it("renders String lists as Kex strings and suppresses IO Unit", []() {
+        it("keeps imported unit modules and lambda bindings live across reloads", []() {
+            auto out = runBeamRepl(
+                "using Units.SI\n"
+                "3.kilo.watt.to(String)\n"
+                "let kilowatts = &.kilo.watt.to(String)\n"
+                "kilowatts(54)\n"
+                "kilowatts(99)\n");
+            assertTrue(out.find("\"3000.0 W\"") != std::string::npos, out);
+            assertTrue(out.find("\"54000.0 W\"") != std::string::npos, out);
+            assertTrue(out.find("\"99000.0 W\"") != std::string::npos, out);
+            assertTrue(out.find("badfun") == std::string::npos, out);
+        });
+
+        it("renders String lists as Kex strings and suppresses IO Void", []() {
             auto out = runBeamRepl(
                 "(1..3).items.map(&.to(String).or(\"\"))\n"
                 "IO.printLine({ \"kex\": 3 })\n");

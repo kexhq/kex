@@ -63,12 +63,12 @@ make Integer do
 
   # Calls +f+ exactly +self+ times, passing the current index (0-based).
   #
-  # @param f [Integer -> Unit]
-  # @return [Unit]
+  # @param f [Integer -> Void]
+  # @return [Void]
   #
   # @example
   #   3.times { |i| IO.printLine(i) }   # prints 0, 1, 2
-  times :> (Integer -> Unit) -> Unit
+  times :> (Integer -> Void) -> Void
   let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
   # Returns the greatest integer ≤ self. No-op on integers.

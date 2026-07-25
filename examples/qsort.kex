@@ -1,0 +1,18 @@
+# Alternative with currying:
+# let lesser = xs.filter(~(<)(_, x))
+# let greater = xs.filter(~(>=)(_, x))
+
+qsort : [Int] -> [Int]
+let qsort([]) = []
+let qsort([ x | xs ]) do
+  let lesser = xs.filter { |y| y < x }
+  let greater = xs.filter { |y| y >= x }
+
+  return qsort(lesser) + [x] + qsort(greater)
+end
+
+main do
+  let list = [84, 2, 3, 44, 22, 1, 931, 2, 11, 432]
+  IO.inspect(list)
+  IO.inspect(qsort(list))
+end

@@ -67,6 +67,36 @@ inline auto preludeSourceFiles() -> std::vector<std::string> {
     return {};
 }
 
+// Ordinary standard-library modules are opt-in through `using`, unlike the
+// prelude. Return every available module root in preference order so project
+// roots can be placed before these by the caller.
+inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
+    std::vector<std::filesystem::path> candidates;
+    if (const char* configured = std::getenv("KEX_LIBRARY_DIR");
+        configured && *configured)
+        candidates.emplace_back(configured);
+    if (const auto executableDir = executableDirectory(); !executableDir.empty()) {
+        candidates.push_back(
+            (executableDir / "../share/kex/stdlib").lexically_normal());
+        candidates.push_back(
+            (executableDir / "../src/stdlib").lexically_normal());
+    }
+#ifdef KEX_STDLIB_MODULE_DIR
+    candidates.emplace_back(KEX_STDLIB_MODULE_DIR);
+#endif
+    candidates.emplace_back("/stdlib");
+
+    std::vector<std::string> roots;
+    for (const auto& candidate : candidates) {
+        std::error_code ec;
+        if (!std::filesystem::is_directory(candidate, ec) || ec) continue;
+        const auto normalized = candidate.lexically_normal().string();
+        if (std::find(roots.begin(), roots.end(), normalized) == roots.end())
+            roots.push_back(normalized);
+    }
+    return roots;
+}
+
 inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
     const auto candidate = std::filesystem::path(filePath).lexically_normal();
     const auto files = preludeSourceFiles();

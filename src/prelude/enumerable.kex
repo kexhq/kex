@@ -1,29 +1,10 @@
-# Enumerable — the shared higher-order collection interface.
+# Foldable — traversal operations derived from a left fold.
 #
-# A type is Enumerable by providing `reduce` (the universal left fold over its
-# items). Every other HOF derives from it, so List, Map, Range, and Stream all
-# get map/filter/each/… from one place. Blocks are applied via
-# Kex.Intrinsic.Fun.applyItem, which auto-splats a pair item into a two-arg
-# block — so `list.map { |x| … }` and `map.map { |k, v| … }` both work.
+# Blocks are applied via Kex.Intrinsic.Fun.applyItem, which auto-splats a pair
+# item into a two-argument block.
 
-trait Enumerable do
+trait Foldable do
   reduce :> A -> (A -> T -> A) -> A
-
-  # Transforms each item by applying +f+, collecting the results into a list.
-  let map(f) do
-    let acc = this.reduce([]) do |a, item|
-      [Kex.Intrinsic.Fun.applyItem(f, item) | a]
-    end
-    return acc.reverse
-  end
-
-  # Keeps the items for which +pred+ holds.
-  let filter(pred) do
-    let acc = this.reduce([]) do |a, item|
-      Kex.Intrinsic.Fun.applyItem(pred, item) then [item | a] else a
-    end
-    return acc.reverse
-  end
 
   # Applies +f+ to each item for its side effects. Returns unit.
   let each(f) do
@@ -52,6 +33,33 @@ trait Enumerable do
     end
   end
 
+  # Counts the items for which +pred+ holds.
+  let count(pred) = this.reduce(0) do |acc, item|
+    Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc
+  end
+end
+
+# Enumerable — collection-producing operations derived from a left fold.
+
+trait Enumerable do
+  reduce :> A -> (A -> T -> A) -> A
+
+  # Transforms each item by applying +f+, collecting the results into a list.
+  let map(f) do
+    let acc = this.reduce([]) do |a, item|
+      [Kex.Intrinsic.Fun.applyItem(f, item) | a]
+    end
+    return acc.reverse
+  end
+
+  # Keeps the items for which +pred+ holds.
+  let filter(pred) do
+    let acc = this.reduce([]) do |a, item|
+      Kex.Intrinsic.Fun.applyItem(pred, item) then [item | a] else a
+    end
+    return acc.reverse
+  end
+
   # Maps each item to a list and concatenates the results.
   let flatMap(f) = this.reduce([]) do |acc, item|
     acc + Kex.Intrinsic.Fun.applyItem(f, item)
@@ -70,8 +78,4 @@ trait Enumerable do
     return acc.reverse
   end
 
-  # Counts the items for which +pred+ holds.
-  let count(pred) = this.reduce(0) do |acc, item|
-    Kex.Intrinsic.Fun.applyItem(pred, item) then acc + 1 else acc
-  end
 end

@@ -56,6 +56,7 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   else if (source.rfind("record ", 0) == 0) off = 7;
   else if (source.rfind("module ", 0) == 0) off = 7;
   else if (source.rfind("make ", 0) == 0) off = 5;
+  else if (source.rfind("using ", 0) == 0) off = 6;
   while (off < source.size() && std::isspace((unsigned char)source[off])) off++;
   if (source.compare(off, 6, "final:") == 0) {
     off += 6;
@@ -712,6 +713,24 @@ auto loadPrelude(kex::semantic::SemanticDB &db) -> void {
   kex::loadDiscoveredPrelude(db);
 }
 
+auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
+  namespace fs = std::filesystem;
+  const auto srcDir = fs::weakly_canonical(filepath).parent_path();
+  std::vector<std::string> roots;
+  for (const auto &relative : {"lib", "src"}) {
+    const auto candidate = srcDir / relative;
+    std::error_code ec;
+    if (fs::is_directory(candidate, ec) && !ec)
+      roots.push_back(candidate.string());
+  }
+  if (roots.empty())
+    roots.push_back(srcDir.string());
+  for (auto &root : kex::standardLibraryModuleRoots())
+    if (std::find(roots.begin(), roots.end(), root) == roots.end())
+      roots.push_back(std::move(root));
+  return roots;
+}
+
 auto prebuiltRuntimeBeamDir() -> std::string;
 
 struct PreludeInterfaceNames {
@@ -962,77 +981,12 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
     for (const auto &record : module->chunk.metadata.records) {
       kex::ir::ExternalRecordLayout layout;
       layout.name = record.name;
+      layout.moduleAtom = module->beamAtom;
       for (const auto &field : record.fields)
         layout.fields.push_back(field.name);
       layouts.push_back(std::move(layout));
     }
   return layouts;
-}
-
-// Receiver-function names the sealed stdlib prelude provides. Qualified module
-// functions share the same source-derived snapshot but are not receiver
-// functions and therefore do not participate in this check.
-auto preludeReceiverFunctionNames()
-    -> const std::unordered_set<std::string> & {
-  return preludeInterfaceNames().receiverFunctions;
-}
-
-// The simple name of a `make` target, or "" — with "List"/"Map" for list/map
-// types. Builtin types are sealed against stdlib-method redefinition.
-auto makeTargetName(const kex::ast::TypeExprPtr &t) -> std::string {
-  if (!t)
-    return "";
-  if (auto *tn = std::get_if<kex::ast::TypeName>(&t->kind))
-    if (!tn->parts.empty())
-      return tn->parts.back();
-  if (auto *g = std::get_if<kex::ast::GenericType>(&t->kind))
-    if (!g->name.parts.empty())
-      return g->name.parts.back();
-  if (std::holds_alternative<kex::ast::ListType>(t->kind))
-    return "List";
-  if (std::holds_alternative<kex::ast::MapType>(t->kind))
-    return "Map";
-  return "";
-}
-
-// Sealed-stdlib violations: a make block on a builtin type redefining a
-// prelude-provided method. Returned as diagnostics so every check path (run,
-// -R, and --check) reports them identically. Prelude files are exempt.
-auto sealViolations(const kex::ast::Program &program,
-                    const std::string &filepath)
-    -> std::vector<kex::semantic::Diagnostic> {
-  std::vector<kex::semantic::Diagnostic> diags;
-  if (kex::isPreludeSourceFile(filepath))
-    return diags;
-  const auto& builtins = kex::interpreter::builtinTypeNames();
-  auto check = [&](const kex::ast::FunctionDef *fd, const std::string &ty,
-                   const kex::SourceLocation &loc) {
-    if (fd && preludeReceiverFunctionNames().count(fd->name))
-      diags.push_back({kex::semantic::Diagnostic::Level::Error, loc,
-                       "cannot override sealed stdlib method '" + fd->name +
-                           "' on builtin type '" + ty + "'"});
-  };
-  for (const auto &item : program.items)
-    if (auto *md = std::get_if<std::unique_ptr<kex::ast::MakeDef>>(&item)) {
-      if (!*md)
-        continue;
-      auto ty = makeTargetName((*md)->target);
-      if (!builtins.count(ty))
-        continue;
-      for (const auto &bi : (*md)->body) {
-        if (auto *fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&bi))
-          check(fd->get(), ty, (*md)->location);
-        else if (auto *vb =
-                     std::get_if<std::unique_ptr<kex::ast::VisibilityBlock>>(
-                         &bi))
-          if (*vb)
-            for (const auto &vi : (*vb)->items)
-              if (auto *vf =
-                      std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&vi))
-                check(vf->get(), ty, (*md)->location);
-      }
-    }
-  return diags;
 }
 
 // Runs semantic analysis (undefined-name detection + type checking) and
@@ -1062,6 +1016,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
+  runDb.setModuleRoots(moduleRootsFor(filepath));
   loadPrelude(runDb);
   runDb.updateFile(filepath, readFile(filepath));
   bool dbOk = true;
@@ -1077,11 +1032,6 @@ auto runSemanticCheck(const kex::ast::Program &program,
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
-
-  for (const auto &d : sealViolations(program, filepath)) {
-    printDiag(d);
-    ok = false;
-  }
 
   return ok && dbOk;
 }
@@ -1364,6 +1314,8 @@ int main(int argc, char *argv[]) {
   if (mode == "complete") {
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
+    if (optind < argc)
+      db.setModuleRoots(moduleRootsFor(argv[optind]));
     loadPrelude(db);
     if (optind < argc)
       db.updateFile(argv[optind], readFile(argv[optind]));
@@ -1769,7 +1721,8 @@ int main(int argc, char *argv[]) {
         }
       }
       if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
-          source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0)
+          source.rfind("record ", 0) == 0 || source.rfind("make ", 0) == 0 ||
+          source.rfind("using ", 0) == 0)
         isFuncDef = true;
 
       try {
@@ -1836,32 +1789,50 @@ int main(int argc, char *argv[]) {
               // file changed underneath us, just skip it this round.
             }
           }
+          // Source-module imports in a REPL expression need the same
+          // dependency expansion as `kex -R file.kex`.  Without this,
+          // `using Units.SI` parses but its postfix functions are never
+          // lowered into the transient session module.
+          auto replDeps = resolveBeamDeps(
+              program, kex::standardLibraryModuleRoots());
+          (void)replDeps;
           auto extMods = mergeExternalModules(
               preludeExternalModules(), kexiRegistry.buildExternalModules());
           kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
           replAnalyzer.analyze(program);
-          auto irMod = kex::ir::lowerProgram(program, "kex_repl_session",
-                                             "",
-                                             extMods.nameToAtom.empty() ? nullptr : &extMods,
-                                             nullptr,
-                                             &replAnalyzer.resolvedCalls());
-          auto result = kex::ir::emitCore(irMod);
+          auto replRecordLayouts = loadPreludeRecordLayouts();
+          auto irModules = kex::ir::lowerModules(
+              program, "kex_repl_session", "", &replRecordLayouts,
+              extMods.nameToAtom.empty() ? nullptr : &extMods,
+              &replAnalyzer.resolvedCalls());
+          std::vector<kex::ir::EmitResult> results;
+          for (const auto& irModule : irModules)
+            results.push_back(kex::ir::emitCore(irModule));
+          const auto& result = results.front();
 
-          std::string corePath = beamDir + "/" + result.moduleName + ".core";
-          std::ofstream cf(corePath);
-          if (!cf) {
-            std::cerr << "  error: cannot write " << corePath << "\n";
-            continue;
+          bool compiled = true;
+          for (const auto& emitted : results) {
+            std::string corePath = beamDir + "/" + emitted.moduleName + ".core";
+            std::ofstream cf(corePath);
+            if (!cf) {
+              std::cerr << "  error: cannot write " << corePath << "\n";
+              compiled = false;
+              break;
+            }
+            cf << emitted.source;
+            cf.close();
+
+            std::string erlCmd = "erlc +from_core -W0 -pa " +
+                                 beamDir + " -o " + beamDir + " " +
+                                 corePath + " 2>&1";
+            int erlcRet = std::system(erlCmd.c_str());
+            std::filesystem::remove(corePath);
+            if (erlcRet != 0) {
+              compiled = false;
+              break;
+            }
           }
-          cf << result.source;
-          cf.close();
-
-          std::string erlCmd = "erlc +from_core -W0 -pa " +
-                               beamDir + " -o " + beamDir + " " +
-                               corePath + " 2>&1";
-          int erlcRet = std::system(erlCmd.c_str());
-          std::filesystem::remove(corePath);
-          if (erlcRet != 0) {
+          if (!compiled) {
             std::cerr << "  error: compilation failed\n";
             continue;
           }
@@ -1870,13 +1841,22 @@ int main(int argc, char *argv[]) {
           // persistent VM, then evaluate it. The stable module name
           // means each reload is a new version superseding the
           // previous — code:load_binary's native code-upgrade path.
-          std::string beamPath = beamDir + "/" + result.moduleName + ".beam";
-          std::string loadNonce = std::to_string(++iteration);
-          vm.writeLine("load " + loadNonce + " " + result.moduleName + " " +
-                       beamPath);
-          std::string loadStatus;
-          vm.readUntilSentinel("KEX_REPL_DONE " + loadNonce + " ", loadStatus);
-          if (loadStatus != "ok") {
+          bool loaded = true;
+          // Load companion modules first; the session entry can then call
+          // imported module functions immediately after it is hot-loaded.
+          for (auto it = results.rbegin(); it != results.rend(); ++it) {
+            std::string beamPath = beamDir + "/" + it->moduleName + ".beam";
+            std::string loadNonce = std::to_string(++iteration);
+            vm.writeLine("load " + loadNonce + " " + it->moduleName + " " +
+                         beamPath);
+            std::string loadStatus;
+            vm.readUntilSentinel("KEX_REPL_DONE " + loadNonce + " ", loadStatus);
+            if (loadStatus != "ok") {
+              loaded = false;
+              break;
+            }
+          }
+          if (!loaded) {
             std::cerr << "  " << kex::color::apply(kex::color::red)
                       << "error:" << kex::color::apply(kex::color::reset)
                       << " failed to load session module\n";
@@ -1895,10 +1875,27 @@ int main(int argc, char *argv[]) {
                       << output;
           }
 
-          if (isLocalLet)
-            localBinds += "  let " + letVarName +
-                          " = Erlang.Erlang.get(:kexrepl" +
-                          letVarName + ")\n";
+          if (isLocalLet) {
+            const auto equals = source.find('=');
+            const auto rhs = equals == std::string::npos
+                ? std::string::npos
+                : source.find_first_not_of(" \t", equals + 1);
+            // An anonymous fun belongs to the currently loaded session
+            // module. Keeping it in the process dictionary turns it into a
+            // badfun after that module is hot-reloaded, so retain its source
+            // and recreate it on every REPL evaluation instead.
+            const bool isLambda = rhs != std::string::npos &&
+                (source[rhs] == '&' ||
+                 (source[rhs] == '{' &&
+                  source.find_first_not_of(" \t", rhs + 1) != std::string::npos &&
+                  source[source.find_first_not_of(" \t", rhs + 1)] == '|'));
+            if (isLambda)
+              localBinds += "  " + source + "\n";
+            else
+              localBinds += "  let " + letVarName +
+                            " = Erlang.Erlang.get(:kexrepl" +
+                            letVarName + ")\n";
+          }
         }
       } catch (const std::exception &e) {
         std::cerr << "  " << kex::color::apply(kex::color::red)
@@ -2458,31 +2455,6 @@ int main(int argc, char *argv[]) {
     }
 
     std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
-    if (mode == "compile" && !skipCheck) {
-      // Same pre-execution check `run` mode does — see
-      // runSemanticCheck's doc comment for why this matters: without
-      // it, an error here only ever surfaced as a raw erlc failure.
-      // Not applied to emit-core (a debug/inspection dump — you may
-      // want to see the emitted Core Erlang for code that doesn't
-      // type-check yet).
-      compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
-          &preludeSemanticInterfaces());
-      if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
-        // -R (run-beam) sets mode == "compile" internally too (see
-        // compileRun above) — say "before running" there, matching
-        // the tree-walker's identical message for the same failure,
-        // since from the user's point of view they ran `kex -R
-        // file.kex`, not `kex --compile file.kex`.
-        std::cerr << kex::color::apply(kex::color::bold)
-                  << kex::color::apply(kex::color::magenta)
-                  << "Aborted:" << kex::color::apply(kex::color::reset)
-                  << " fix type errors before "
-                  << (compileRun ? "running" : "compiling")
-                  << " (use --no-check to skip).\n";
-        return 1;
-      }
-    }
-
     if (mode == "compile" || mode == "emit-core") {
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
@@ -2545,16 +2517,25 @@ int main(int argc, char *argv[]) {
       // resolve module files, parse them, and merge into the program
       // so the IR lowering sees all definitions.
       {
-        namespace fs = std::filesystem;
-        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
-        std::vector<std::string> roots;
-        for (const auto &r : {"lib", "src"}) {
-          auto full = srcDir + "/" + r;
-          if (fs::is_directory(full)) roots.push_back(full);
-        }
-        if (roots.empty()) roots.push_back(srcDir);
-        auto deps = resolveBeamDeps(program, roots);
+        auto deps = resolveBeamDeps(program, moduleRootsFor(filepath));
         (void)deps;
+      }
+
+      // Type-check the same dependency-expanded program that lowering will
+      // compile.  In particular, `using Units.SI` must make its ordinary
+      // functions visible before names such as `times` are resolved.
+      if (mode == "compile" && !skipCheck) {
+        compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
+            &preludeSemanticInterfaces());
+        if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
+          std::cerr << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::magenta)
+                    << "Aborted:" << kex::color::apply(kex::color::reset)
+                    << " fix type errors before "
+                    << (compileRun ? "running" : "compiling")
+                    << " (use --no-check to skip).\n";
+          return 1;
+        }
       }
 
       // An explicit `main do ... end` is not required: IR lowering
@@ -2760,14 +2741,23 @@ int main(int argc, char *argv[]) {
       }
 
       if (compileRun) {
-        // Use code:load_binary for explicit load (filename != module name).
+        // Load every freshly emitted module explicitly.  Relying on the code
+        // path here lets BEAM autoload a same-named module from an earlier
+        // compilation, which is particularly easy to hit for imported
+        // standard-library modules such as Kex.Units.Data.
         namespace fs = std::filesystem;
-        std::string absBeam = fs::weakly_canonical(kxBeam).string();
-        std::string loadExpr = "{ok,_B}=file:read_file(\"" + absBeam +
-                               "\"), "
-                               "code:load_binary('" +
-                               result.moduleName + "',\"" + absBeam +
-                               "\",_B), ";
+        std::string loadExpr;
+        for (size_t moduleIndex = 0; moduleIndex < moduleResults.size();
+             ++moduleIndex) {
+          const auto &emitted = moduleResults[moduleIndex];
+          std::string beam = outputDir + "/" + emitted.moduleName + ".beam";
+          std::string absBeam = fs::weakly_canonical(beam).string();
+          std::string binaryVar = "_B" + std::to_string(moduleIndex);
+          loadExpr += "{ok," + binaryVar + "}=file:read_file(\"" +
+                      absBeam + "\"), "
+                      "code:load_binary('" + emitted.moduleName + "',\"" +
+                      absBeam + "\"," + binaryVar + "), ";
+        }
         // Kex runtime errors carry a String (binary/charlist) reason
         // printed verbatim; anything else (raw BEAM errors like
         // badarg tuples) falls back to ~p.
@@ -2819,16 +2809,7 @@ int main(int argc, char *argv[]) {
     if (mode == "run") {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
-      {
-        namespace fs = std::filesystem;
-        auto srcDir = fs::weakly_canonical(filepath).parent_path().string();
-        std::vector<std::string> roots;
-        for (const auto &r : {"lib", "src"}) {
-          auto full = srcDir + "/" + r;
-          if (fs::is_directory(full)) roots.push_back(full);
-        }
-        if (!roots.empty()) evaluator.setModuleRoots(std::move(roots));
-      }
+      evaluator.setModuleRoots(moduleRootsFor(filepath));
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.
@@ -2871,6 +2852,7 @@ int main(int argc, char *argv[]) {
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
+    db.setModuleRoots(moduleRootsFor(filepath));
     loadPrelude(db);
     db.updateFile(filepath, readFile(filepath));
 
@@ -2888,11 +2870,6 @@ int main(int argc, char *argv[]) {
     }
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
-
-    for (const auto &d : sealViolations(program, filepath)) {
-      allDiags.push_back(d);
-      dbOk = false;
-    }
 
     bool allOk = ok && dbOk;
 

@@ -1692,6 +1692,34 @@ int main() {
             assertEqual(std::get<StringValue>(result->data).value, std::string("DOG: REX"));
         });
 
+        it("repeats Monoid values through the default method", []() {
+            auto text = run("main do \"ha\".repeat(3) end\n");
+            assertEqual(std::get<StringValue>(text->data).value,
+                        std::string("hahaha"));
+
+            auto items = run("main do [1, 2].repeat(2) end\n");
+            const auto& list = std::get<ListValue>(items->data);
+            assertEqual(list.elements.size(), size_t(4));
+            assertEqual(std::get<IntValue>(list.elements[0]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[1]->data).value, int64_t(2));
+            assertEqual(std::get<IntValue>(list.elements[2]->data).value, int64_t(1));
+            assertEqual(std::get<IntValue>(list.elements[3]->data).value, int64_t(2));
+
+            auto number = run("main do 3.repeat(4) end\n");
+            assertEqual(std::get<IntValue>(number->data).value, int64_t(12));
+        });
+
+        it("returns identity for zero repetitions", []() {
+            auto text = run("main do \"ha\".repeat(0) end\n");
+            assertEqual(std::get<StringValue>(text->data).value, std::string(""));
+
+            auto items = run("main do [1, 2].repeat(0) end\n");
+            assertTrue(std::get<ListValue>(items->data).elements.empty());
+
+            auto number = run("main do 3.repeat(0) end\n");
+            assertEqual(std::get<IntValue>(number->data).value, int64_t(0));
+        });
+
         it("Less/Equal/Greater are stdlib builtins", []() {
             auto result = run("main do Less end\n");
             assertEqual(std::get<VariantValue>(result->data).tag, std::string("Less"));

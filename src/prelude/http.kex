@@ -59,52 +59,52 @@ end
 # duplicate top-level `Mock` modules when prelude files are merged.
 foul module Mock do
   foul module FS do
-    File : FS.FilePath -> String -> Unit
-    Directory : FS.FilePath -> Unit
-    clear : Unit -> Unit
+    File : FS.FilePath -> String -> Void
+    Directory : FS.FilePath -> Void
+    clear : Void -> Void
 
-    foul File(path: FS.FilePath, content: String) -> Unit do
+    foul File(path: FS.FilePath, content: String) -> Void do
       return Kex.Intrinsic.FS.file(path, content)
     end
 
-    foul Directory(path: FS.FilePath) -> Unit do
+    foul Directory(path: FS.FilePath) -> Void do
       return Kex.Intrinsic.FS.directory(path)
     end
 
-    foul clear() -> Unit do
+    foul clear() -> Void do
       return Kex.Intrinsic.FS.clear()
     end
   end
 
   foul module Http do
-    start   : Unit -> Unit
-    respond : Integer -> String -> Unit
-    respond : Integer -> String -> Map<String, String> -> Unit
-    stop    : Unit -> Unit
+    start   : Void -> Void
+    respond : Integer -> String -> Void
+    respond : Integer -> String -> Map<String, String> -> Void
+    stop    : Void -> Void
 
-    foul start() -> Unit do
+    foul start() -> Void do
       return Kex.Intrinsic.Http.mockStart()
     end
 
-    foul respond(status: Integer, body: String) -> Unit do
+    foul respond(status: Integer, body: String) -> Void do
       return Kex.Intrinsic.Http.mockRespond(status, body)
     end
 
-    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Unit do
+    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Void do
       return Kex.Intrinsic.Http.mockRespond(status, body, headers)
     end
 
-    foul stop() -> Unit do
+    foul stop() -> Void do
       return Kex.Intrinsic.Http.mockStop()
     end
   end
 
   foul module IO do
-    foul start() -> Unit do
+    foul start() -> Void do
       return Kex.Intrinsic.IO.ioMockStart()
     end
 
-    foul stop() -> Unit do
+    foul stop() -> Void do
       return Kex.Intrinsic.IO.ioMockStop()
     end
 
@@ -112,23 +112,23 @@ foul module Mock do
       return Kex.Intrinsic.IO.ioMockOutput()
     end
 
-    foul clear() -> Unit do
+    foul clear() -> Void do
       return Kex.Intrinsic.IO.ioMockClear()
     end
 
-    foul input(lines) -> Unit do
+    foul input(lines) -> Void do
       return Kex.Intrinsic.IO.ioMockInput(lines)
     end
 
-    foul input(first, second) -> Unit do
+    foul input(first, second) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second])
     end
 
-    foul input(first, second, third) -> Unit do
+    foul input(first, second, third) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third])
     end
 
-    foul input(first, second, third, fourth) -> Unit do
+    foul input(first, second, third, fourth) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
     end
   end

@@ -9,7 +9,7 @@ sections for the full pattern):
 
 ```kex
 trait Enumerable do
-  each : (This, A -> Unit) -> Unit
+  each : (This, A -> Void) -> Void
 end
 
 make Range implement: Enumerable do

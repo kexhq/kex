@@ -384,8 +384,40 @@ struct Lowering {
                     auto lRef = snap(l); auto rRef = snap(r);
                     auto builtin = builtinOp(lRef.get(), rRef.get());
                     std::vector<ExprPtr> ua; ua.push_back(lRef.get()); ua.push_back(rRef.get());
+                    std::string userModule;
+                    std::string userFunction = sym;
+                    // A locally-defined operator stays a local apply. When the
+                    // overload comes from an imported receiver interface
+                    // (notably the prelude), route it to that provider module.
+                    if (!knownFns.count(sym) && externalModules) {
+                        if (auto it = externalModules->receiverFunctions.find(sym);
+                            it != externalModules->receiverFunctions.end()) {
+                            for (const auto& candidate : it->second) {
+                                if (candidate.beamArity != 2) continue;
+                                userModule = candidate.moduleAtom;
+                                userFunction = candidate.beamFunction;
+                                break;
+                            }
+                        }
+                    }
                     auto userCall = std::make_unique<Expr>();
-                    userCall->node = Call{"", sym, 2, std::move(ua), false};
+                    userCall->node = Call{
+                        std::move(userModule), std::move(userFunction),
+                        2, std::move(ua), false};
+                    // Nullary ADT values such as `Watt` are atoms rather
+                    // than tuples. If their declared type owns this operator,
+                    // statically select that overload instead of falling
+                    // through to Erlang arithmetic.
+                    if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.left->kind)) {
+                        if (auto owner = variantOwner.find(uid->name);
+                            owner != variantOwner.end()) {
+                            if (auto methods = methodOwners.find(sym);
+                                methods != methodOwners.end() &&
+                                std::find(methods->second.begin(), methods->second.end(),
+                                          owner->second) != methods->second.end())
+                                return wrapLets(binds, std::move(userCall));
+                        }
+                    }
                     auto dispatch = matchBool(
                         callE("erlang", "is_tuple", 1, one(lRef.get())),
                         std::move(userCall), std::move(builtin));
@@ -641,8 +673,9 @@ struct Lowering {
                                 startArgs.push_back(lower(item));
                     }
                     Lambda start;
+                    const int startArity = static_cast<int>(startArgs.size());
                     start.body = callE(beamModule, "start",
-                        static_cast<int>(startArgs.size()), std::move(startArgs));
+                        startArity, std::move(startArgs));
                     auto fn = std::make_unique<Expr>();
                     fn->node = std::move(start);
                     startFn = atomize_ir(std::move(fn), binds);
@@ -872,7 +905,14 @@ struct Lowering {
             if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
                 localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
             auto resolved = resolvedCalls->find(&n);
-            if (resolved != resolvedCalls->end() && !localTypeShadows) {
+            // `using Units.Data` can intentionally provide a more-specific
+            // UFCS overload than a prelude receiver with the same spelling.
+            // Resolve that lexical import below instead of freezing the
+            // prelude target selected before dependency sources were merged.
+            bool importedUfcs = !std::holds_alternative<ast::UpperIdentifier>(
+                n.receiver->kind) && moduleImports.count(n.method);
+            if (resolved != resolvedCalls->end() && !localTypeShadows &&
+                !importedUfcs) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -1304,6 +1344,62 @@ struct Lowering {
         auto ret = [&](ExprPtr e) { return wrapLets(rb, std::move(e)); };
         auto arg0 = [&]() { return lower(n.args[0]); };
 
+        // A public function brought into scope by `using Module` also
+        // participates in UFCS: `100.meter` is `meter(100)`, and
+        // `distance.per(duration)` is `per(distance, duration)`. The source
+        // import must win over an identically named prelude receiver method:
+        // module compilation merges declarations into one flat IR first, so
+        // imported functions also appear in localMethods at this point.
+        if (auto imported = moduleImports.find(m);
+            imported != moduleImports.end()) {
+                const std::vector<std::string>* pnames = nullptr;
+                for (const auto& [qualified, emitted] : moduleFunctions) {
+                    if (emitted != imported->second) continue;
+                    if (auto names = fnParamNames.find(qualified);
+                        names != fnParamNames.end())
+                        pnames = &names->second;
+                    break;
+                }
+
+                std::vector<ExprPtr> args;
+                if (!n.namedArgs.empty() && pnames) {
+                    std::vector<ExprPtr> slots(pnames->size());
+                    if (!slots.empty()) slots[0] = rv();
+                    for (const auto& [name, value] : n.namedArgs) {
+                        auto it = std::find(pnames->begin(), pnames->end(), name);
+                        if (it == pnames->end() || it == pnames->begin())
+                            throw LowerError("IR lower: unknown named arg " + name +
+                                             " for imported UFCS function " + m);
+                        slots[static_cast<size_t>(it - pnames->begin())] =
+                            atomize_ir(lower(value), rb);
+                    }
+                    size_t next = 1;
+                    for (const auto& value : n.args) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next >= slots.size()) break;
+                        slots[next++] = atomize_ir(lower(value), rb);
+                    }
+                    if (n.block) {
+                        while (next < slots.size() && slots[next]) next++;
+                        if (next < slots.size())
+                            slots[next] = atomize_ir(lower(*n.block), rb);
+                    }
+                    for (auto& slot : slots)
+                        if (!slot) slot = lit(LitKind::None, "none");
+                    args = std::move(slots);
+                } else {
+                    args.push_back(rv());
+                    for (const auto& value : n.args)
+                        args.push_back(atomize_ir(lower(value), rb));
+                    for (const auto& [_, value] : n.namedArgs)
+                        args.push_back(atomize_ir(lower(value), rb));
+                    if (n.block)
+                        args.push_back(atomize_ir(lower(*n.block), rb));
+                }
+            const int arity = static_cast<int>(args.size());
+            return ret(callE("", imported->second, arity, std::move(args)));
+        }
+
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
@@ -1372,11 +1468,15 @@ struct Lowering {
         // without needing types. Gated on localMethods so an UNPORTED builtin
         // (e.g. `.get`/`.map`) errors loudly instead of silently becoming a
         // call to a function that doesn't exist.
-        if (localMethods.count(n.method) && !n.block && n.namedArgs.empty()) {
+        if (localMethods.count(n.method) && !n.block) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
             for (const auto& a : n.args) args.push_back(atomize(a, binds));
+            // Make-block methods lower receiver-first. Named arguments follow
+            // positional ones in the common `method(Type, name: value)` form.
+            for (const auto& [_, value] : n.namedArgs)
+                args.push_back(atomize(value, binds));
             if (auto it = methodDefaults.find(n.method); it != methodDefaults.end())
                 for (size_t i = n.args.size(); i < it->second.size(); i++)
                     if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
@@ -2665,6 +2765,13 @@ struct Lowering {
                             if (tp->inner && std::holds_alternative<ast::ListPattern>(tp->inner->kind))
                                 listReceiver = true;
         auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
+        // An implicit method on a record still needs to constrain its receiver
+        // in Core Erlang. Without this guard, a method such as
+        // `Measure.to(String)` becomes a catch-all `to/2` clause and shadows
+        // the universal conversion function for every other value.
+        if (!receiverPattern && records.count(typeName))
+            for (auto& clause : def.clauses)
+                clause.guard = typeGuard(typeName, var("this"));
         if (listReceiver) def = coerceListReceiver(std::move(def));
         if (collidingMethods.count(first.name) && !typeName.empty())
             def.name = first.name + "__" + typeName;
@@ -2717,12 +2824,19 @@ struct Lowering {
         auto it = primGuardBifs().find(ty);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
-        // Record/variant: is_tuple(V) and element(1,V) =:= 'ty'. Strict `and`
-        // (guard-safe); element/2 in a guard just fails the clause on a non-tuple.
+        // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
+        // (the source-level is_record/2 form is a compiler macro).
+        if (auto record = records.find(ty); record != records.end())
+            return callE("erlang", "is_record", 3,
+                         three(std::move(v), lit(LitKind::Atom, ty),
+                               litInt(static_cast<int64_t>(
+                                   record->second.fields.size() + 1))));
+        // Unknown tagged type fallback.
         auto vRef = snap(v);
         return callE("erlang", "and", 2, two(
             callE("erlang", "is_tuple", 1, one(vRef.get())),
-            intrin(Op::Eq, two(callE("erlang", "element", 2, two(litInt(1), vRef.get())),
+            intrin(Op::Eq, two(callE("erlang", "element", 2,
+                                     two(litInt(1), vRef.get())),
                                lit(LitKind::Atom, ty)))));
     }
     auto makeDispatcher(const std::string& name, int arity,
@@ -2911,6 +3025,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
     L.preferExternalReceivers = preferExternalReceivers;
+    if (externals)
+        for (const auto& [name, candidates] : externals->receiverFunctions) {
+            if (name.empty() ||
+                (std::isalnum(static_cast<unsigned char>(name[0])) ||
+                 name[0] == '_'))
+                continue;
+            if (std::any_of(candidates.begin(), candidates.end(),
+                            [](const auto& candidate) {
+                                return candidate.beamArity == 2;
+                            }))
+                L.overloadedOps.insert(name);
+        }
     Module mod;
     mod.name = "kex_" + fileStem;
 
@@ -3687,8 +3813,29 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                              externalRecords, resolvedCalls,
                              preferExternalReceivers);
 
-    struct Definition { std::string path; std::string sourceName; bool exported; };
+    struct Definition {
+        std::string path;
+        std::string sourceName;
+        bool exported;
+        // External record accessors are already compiled in their owner
+        // module (not necessarily `Kex.<path>`).
+        std::string beamModule;
+    };
     std::unordered_map<std::string, Definition> definitions;
+    if (externalRecords) {
+        for (const auto& record : *externalRecords) {
+            if (record.moduleAtom.empty()) continue;
+            for (const auto& field : record.fields) {
+                // A field accessor name can also be a real method (notably
+                // Unit.kind/factor/symbol). Route only the unambiguous record
+                // fields here; make-method dispatch remains module-local.
+                if (field != "unit" && field != "canonical" && field != "value" &&
+                    field != "conversionFactor" && field != "dimension" && field != "notation")
+                    continue;
+                definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
+            }
+        }
+    }
     std::vector<std::string> modulePaths;
     std::unordered_set<std::string> seenModulePaths;
     std::function<void(const ast::ModuleDef&)> collect;
@@ -3703,10 +3850,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
+            const std::string typeName = Lowering::simpleTypeName(mk->target);
             auto collectMethod = [&](const ast::FunctionDef* fd) {
                 if (!fd) return;
                 if (!definitions.count(fd->name))
                     definitions[fd->name] = {path, fd->name, true};
+                // A make method is emitted as `method__Type` when the same
+                // method name has implementations for multiple receiver
+                // types. Keep that generated name in its declaring module;
+                // otherwise module-local calls get mistaken for flat/global
+                // functions and point at `kex_<stem>` on BEAM.
+                if (!typeName.empty())
+                    definitions[fd->name + "__" + typeName] =
+                        {path, fd->name + "__" + typeName, true};
             };
             for (const auto& mi : mk->body) {
                 if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
@@ -3744,7 +3900,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     std::unordered_map<std::string, std::pair<std::string, std::string>> targets;
     for (const auto& [emitted, def] : definitions)
-        targets[emitted] = {"Kex." + def.path, def.sourceName};
+        targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
+                            def.sourceName};
 
     std::vector<Module> result;
     std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;

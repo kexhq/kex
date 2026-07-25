@@ -1,5 +1,5 @@
 # Truthyable — types that can be checked for boolean truthiness (Crystal semantics).
-# Only false, None, () (Unit), and NaN are falsy; everything else is truthy.
+# Only false, None, () (Void), and NaN are falsy; everything else is truthy.
 
 trait Truthyable do
   truthy? :> Bool

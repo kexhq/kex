@@ -250,24 +250,6 @@ auto Evaluator::loadPrelude() -> void {
         }
         return prog;
     }();
-    // Collect sealed method names from make blocks and trait defs.
-    for (const auto& item : preludeProgram->items) {
-        auto addFn = [this](const ast::FunctionDef* fd) { if (fd) m_sealedMethods.insert(fd->name); };
-        if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-            if (*md) for (const auto& bi : (*md)->body) {
-                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                    addFn(fd->get());
-                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
-                    if (*vb) for (const auto& vi : (*vb)->items)
-                        if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                            addFn(vf->get());
-            }
-        } else if (auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
-            if (*td) for (const auto& bi : (*td)->body)
-                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                    addFn(fd->get());
-        }
-    }
     for (const auto& item : preludeProgram->items) execTopLevel(item);
     m_preludeLoaded = true;
 }
@@ -832,27 +814,6 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
             typeName = "List";
         } else if (std::holds_alternative<ast::MapType>(def.target->kind)) {
             typeName = "Map";
-        }
-    }
-
-    // Sealed-stdlib enforcement: after the prelude has loaded, reject any
-    // user make-block on a builtin type that redefines a prelude method.
-    if (m_preludeLoaded && !m_sealedMethods.empty()) {
-        if (builtinTypeNames().count(typeName)) {
-            auto checkSeal = [&](const ast::FunctionDef* fd) {
-                if (fd && m_sealedMethods.count(fd->name))
-                    throw RuntimeError(
-                        "cannot override sealed stdlib method '" + fd->name +
-                        "' on builtin type '" + typeName + "'", def.location);
-            };
-            for (const auto& bi : def.body) {
-                if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi))
-                    checkSeal(fd->get());
-                else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi))
-                    if (*vb) for (const auto& vi : (*vb)->items)
-                        if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                            checkSeal(vf->get());
-            }
         }
     }
 

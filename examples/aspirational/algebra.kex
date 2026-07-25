@@ -1,11 +1,7 @@
-# Algebraic traits — Semigroup, Monoid, Group
+# Algebraic traits — Monoid and Group
 #
 # These aren't in the prelude, but show how Kex's trait system
 # can express abstract algebra and enable generic algorithms.
-
-trait Semigroup do
-  combine :> This -> This
-end
 
 trait Monoid do
   identity :> This

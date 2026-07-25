@@ -122,7 +122,8 @@ target_include_directories(kex_lib PUBLIC src)
 # no _NSGetExecutablePath) so bake the source path in at compile time.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_compile_definitions(kex_lib PUBLIC
-        KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude")
+        KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
+        KEX_STDLIB_MODULE_DIR="${CMAKE_SOURCE_DIR}/src/stdlib")
 endif()
 
 # GMP backs the arbitrary-precision `Integer` default (see
@@ -238,6 +239,9 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     install(DIRECTORY src/prelude/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/prelude
         FILES_MATCHING PATTERN "*.kex")
+    install(DIRECTORY src/stdlib/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/stdlib
+        FILES_MATCHING PATTERN "*.kex")
 endif()
 
 # ── Kex stdlib artifact unit ─────────────────────────────────────────────
@@ -310,8 +314,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # REPL's SemanticDB can index the same prelude the native REPL does
         # for tab completion (see src/common/prelude_loader.hxx) — wasm has
         # no native installation filesystem.
-        --preload-file
-        "${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
+        # Keep each flag and its mapped path together. CMake otherwise
+        # de-duplicates the repeated --preload-file flag, leaving the second
+        # path as a bogus linker input.
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
     )
 endif()
 

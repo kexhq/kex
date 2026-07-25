@@ -8,11 +8,11 @@ foul module Process do
   let self = Kex.Intrinsic.Process.self
 
   # Sends an exit signal with +reason+ to +pid+.
-  exit : Pid -> X -> Unit
+  exit : Pid -> X -> Void
   let exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
   # Registers +pid+ under the given atom +name+.
-  register : Pid -> Atom -> Unit
+  register : Pid -> Atom -> Void
   let register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
 
   # Returns the Pid registered under +name+, or None.
@@ -22,19 +22,19 @@ end
 
 make Pid do
   # Sends +msg+ to the process, wrapped in the standard Kex message format.
-  send :> X -> Unit
+  send :> X -> Void
   let send(msg) = Kex.Intrinsic.Process.send(this, msg)
 
   # Links the calling process to this one (bidirectional exit propagation).
-  link :> Unit
+  link :> Void
   let link = Kex.Intrinsic.Process.link(this)
 
   # Removes the link between the calling process and this one.
-  unlink :> Unit
+  unlink :> Void
   let unlink = Kex.Intrinsic.Process.unlink(this)
 
   # Starts monitoring this process. Returns a reference for +demonitor+.
-  monitor :> Unit
+  monitor :> Void
   let monitor = Kex.Intrinsic.Process.monitor(this)
 
   # Returns +true+ if the process is currently alive.
@@ -63,8 +63,11 @@ make Task do
   let await(timeout) = Kex.Intrinsic.Process.await(this, timeout)
 end
 
+# Wraps a spawn block into a worker spec for Supervisor.start.
+worker : Block<Pid> -> (Atom, Block<Pid>)
+
 make Reference do
   # Stops monitoring the process that produced this reference.
-  demonitor :> Unit
+  demonitor :> Void
   let demonitor = Kex.Intrinsic.Process.demonitor(this)
 end

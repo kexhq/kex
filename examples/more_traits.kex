@@ -90,7 +90,7 @@ main do
   shapes.each(&printShape)
 
   if let Just(largest) = shapes.max { |s| s.area }
-    IO.printLine("Largest area: ${largest}")
+    IO.printLine("Largest area: ${largest.describe}")
   end
 
   let v1 = Version { major: 1, minor: 2, patch: 0 }

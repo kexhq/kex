@@ -23,8 +23,7 @@ public:
     auto parent() const -> std::shared_ptr<Environment>;
     // Copy all bindings from `other` into this environment.
     auto importAll(const Environment& other) -> void;
-    // Names bound directly in this environment (not parents). Used to snapshot
-    // the registered stdlib for the sealed-method check.
+    // Names bound directly in this environment (not parents).
     auto names() const -> std::vector<std::string>;
 
 private:

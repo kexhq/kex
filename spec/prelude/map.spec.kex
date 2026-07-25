@@ -176,6 +176,26 @@ describe("Map — merge") do
   end
 end
 
+describe("Map — Monoid") do
+  it("combine is right-biased merge") do
+    let combined = { a: 1, b: 2 }.combine({ b: 99, c: 3 })
+    assert(combined == { a: 1, b: 99, c: 3 })
+  end
+
+  it("identity is the empty map") do
+    let m = { a: 1 }
+    assert(m.combine(m.identity) == m)
+    assert(m.identity.combine(m) == m)
+  end
+
+  it("repeat combines the map with itself") do
+    let m = { a: 1 }
+    assert(m.repeat(0) == {})
+    assert(m.repeat(1) == m)
+    assert(m.repeat(3) == m)
+  end
+end
+
 describe("Map — any? and all?") do
   it("any? returns true if at least one entry matches") do
     assert({ a: 1, b: 2 }.any? { |k, v| v > 1 })

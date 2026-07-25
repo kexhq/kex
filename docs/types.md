@@ -165,32 +165,84 @@ r.max   # 10
 r.map { |x| x * 2 }
 ```
 
-## Enumerable Hierarchy
+## Units
 
-`Range`, `[A]` (lists), and `Stream` all implement the `Enumerable` trait,
-the same `trait`/`make implement:` mechanism as the Type Hierarchy section
-above — not nominal inheritance:
+`Measure` is the shared representation for every unit family. Time units are
+available directly from the prelude and produce time measures stored
+canonically in seconds:
 
 ```kex
+let elapsed: Measure = 2.5.sec
+
+elapsed.canonical                 # 2.5
+elapsed.kind                      # :time
+elapsed.to(String)                # "2.5 s"
+```
+
+`Duration` is a separate elapsed-span concept intended for `Time`, `Date`, and
+`DateTime`; a value such as `5.sec` is a `Measure`, not a `Duration`.
+
+Physical SI constructors and arithmetic are opt-in through `Units.SI`. `using`
+brings its public names into scope, so qualification is only needed without an
+import or to resolve an ambiguous name:
+
+```kex
+using Units.SI
+
+let distance = 100.meter  # Measure
+let speed = distance / 9.58.sec
+distance.kilo.to(String)  # "0.1 km"
+let energy = 31544.watt * 1.hour
+energy.to(String, in: Kilo(Watt * Hour))  # Just("31.544 kWh")
+```
+
+`Kilo`, `Mega`, `Giga`, `Milli`, `Micro`, and `Nano` construct display units.
+Combine one with a unit expression in `to(String, in:)` to format a measure
+without changing its canonical value. Target formatting returns `String?`:
+it is `None` when the target has a different measurement kind.
+
+Decimal and binary information units are provided separately by `Units.Data`.
+They produce the same `Measure` type; the uppercase names are conversion unit
+values:
+
+```kex
+using Units.Data
+
+let asset: Measure = 5.megabytes
+let binary: Result<Measure, String> = asset.convertTo(MiB)
+let cache = 2.gibibytes
+asset.to(String, in: Mega)  # Just("5.0 MB")
+```
+
+## Foldable and Enumerable
+
+`Range`, `[A]` (lists), `String`, and `Map<K, V>` implement both collection
+traits through the same `trait`/`make implement:` mechanism as the Type
+Hierarchy section above — not nominal inheritance:
+
+```kex
+trait Foldable do
+  reduce :> A -> (A -> T -> A) -> A
+  # defaults: each, all?, any?, find, count(predicate)
+end
+
 trait Enumerable do
-  each : (This, A -> Unit) -> Unit
+  reduce :> A -> (A -> T -> A) -> A
+  # defaults: map, filter, flatMap, collect
 end
 
-make Range implement: Enumerable do
-  let each(f) = ...
+make Range, implement: Enumerable, Foldable do
+  let reduce(acc, f) = ...
 end
 
-make [A] implement: Enumerable do
-  let each(f) = ...
-end
-
-make Stream implement: Enumerable do
-  let each(f) = ...
+make [A], implement: Enumerable, Foldable do
+  let reduce(acc, f) = ...
 end
 ```
 
-(Required methods beyond `each` — whatever `.map`/`.min`/`.max` etc. need —
-aren't fully enumerated here.)
+`Stream<A>` remains lazy and provides its own `map`, `filter`, `take`, and
+`drop`; it is not `Foldable` because reducing an unbounded stream may not
+terminate.
 
 ## Atoms
 

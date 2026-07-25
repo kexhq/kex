@@ -1,0 +1,103 @@
+module Units.Data
+
+type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
+
+make DataUnit, implement: Unit do
+  let factor(@B) = 1.0
+  let factor(@KB) = 1000.0
+  let factor(@MB) = 1000000.0
+  let factor(@GB) = 1000000000.0
+  let factor(@TB) = 1000000000000.0
+  let factor(@KiB) = 1024.0
+  let factor(@MiB) = 1048576.0
+  let factor(@GiB) = 1073741824.0
+  let factor(@TiB) = 1099511627776.0
+
+  let kind = :data
+
+  let symbol(@B) = "B"
+  let symbol(@KB) = "KB"
+  let symbol(@MB) = "MB"
+  let symbol(@GB) = "GB"
+  let symbol(@TB) = "TB"
+  let symbol(@KiB) = "KiB"
+  let symbol(@MiB) = "MiB"
+  let symbol(@GiB) = "GiB"
+  let symbol(@TiB) = "TiB"
+end
+
+make UnitDefinition, implement: Unit do
+  let factor = @conversionFactor
+  let kind = @dimension
+  let symbol = @notation
+end
+
+make Measure do
+  let factor -> Float = @unit.factor
+  let kind -> Atom = @unit.kind
+  let symbol -> String = @unit.symbol
+end
+
+let size(value: Number, unit: DataUnit) -> Measure do
+  let converted = amount(value)
+  return Measure {
+    canonical: converted * unit.factor,
+    value: converted,
+    unit: definition(unit)
+  }
+end
+
+let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
+  let target = definition(unit)
+  match measure.kind == target.dimension do
+    true -> return Ok(Measure {
+      canonical: measure.canonical,
+      value: measure.canonical / target.factor,
+      unit: target
+    })
+    false -> return Error("Cannot convert between different measurement kinds")
+  end
+end
+
+# Data prefixes select their standard decimal byte unit.  They are targets
+# for formatting, so `Mega` means MB rather than a prefix applied twice to
+# the measure's existing unit.
+let to(measure: Measure, String, in) -> String? do
+  match measure.kind == :data do
+    false -> return None
+    true -> do
+  match in do
+    Kilo -> return Just(displayWithPrefix(measure, 1000.0, "KB"))
+    Mega -> return Just(displayWithPrefix(measure, 1000000.0, "MB"))
+    Giga -> return Just(displayWithPrefix(measure, 1000000000.0, "GB"))
+    _ -> return None
+  end
+  end
+  end
+end
+
+let byteSize(value: Number) -> Measure = size(value, B)
+let kilobytes(value: Number) -> Measure = size(value, KB)
+let megabytes(value: Number) -> Measure = size(value, MB)
+let gigabytes(value: Number) -> Measure = size(value, GB)
+let terabytes(value: Number) -> Measure = size(value, TB)
+let kibibytes(value: Number) -> Measure = size(value, KiB)
+let mebibytes(value: Number) -> Measure = size(value, MiB)
+let gibibytes(value: Number) -> Measure = size(value, GiB)
+let tebibytes(value: Number) -> Measure = size(value, TiB)
+
+private do
+  let displayWithPrefix(measure, factor, symbol) = "${measure.canonical / factor} ${symbol}"
+
+  let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
+
+  let definition(B) = UnitDefinition { conversionFactor: 1.0, dimension: :data, notation: "B" }
+  let definition(KB) = UnitDefinition { conversionFactor: 1000.0, dimension: :data, notation: "KB" }
+  let definition(MB) = UnitDefinition { conversionFactor: 1000000.0, dimension: :data, notation: "MB" }
+  let definition(GB) = UnitDefinition { conversionFactor: 1000000000.0, dimension: :data, notation: "GB" }
+  let definition(TB) = UnitDefinition { conversionFactor: 1000000000000.0, dimension: :data, notation: "TB" }
+  let definition(KiB) = UnitDefinition { conversionFactor: 1024.0, dimension: :data, notation: "KiB" }
+  let definition(MiB) = UnitDefinition { conversionFactor: 1048576.0, dimension: :data, notation: "MiB" }
+  let definition(GiB) = UnitDefinition { conversionFactor: 1073741824.0, dimension: :data, notation: "GiB" }
+  let definition(TiB) = UnitDefinition { conversionFactor: 1099511627776.0, dimension: :data, notation: "TiB" }
+end

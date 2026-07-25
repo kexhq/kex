@@ -1304,6 +1304,68 @@ int main() {
     });
 
     describe("Semantic — Stdlib call checking", []() {
+        it("accepts min/max/sum lambdas for lists of non-numeric values", []() {
+            assertTrue(noErrors(
+                "record Shape do\n"
+                "  area : Float\n"
+                "end\n"
+                "main do\n"
+                "  let shapes = [Shape { area: 4.0 }, Shape { area: 12.5 }]\n"
+                "  let smallest = shapes.min { |shape| shape.area }\n"
+                "  let largest = shapes.max { |shape| shape.area }\n"
+                "  let total = shapes.sum { |shape| shape.area }\n"
+                "end\n"
+            ));
+        });
+
+        it("types Monoid repeat for strings, lists, and integers", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let text: String = \"ha\".repeat(3)\n"
+                "  let items: [Integer] = [1, 2].repeat(2)\n"
+                "  let total: Integer = 3.repeat(4)\n"
+                "end\n"
+            ));
+        });
+
+        it("loads Foldable conformances for collection types", []() {
+            assertTrue(noErrors(
+                "let accept(value: Foldable) = value\n"
+                "main do\n"
+                "  accept([1, 2])\n"
+                "  accept(\"text\")\n"
+                "  accept({ a: 1 })\n"
+                "  accept(1..3)\n"
+                "end\n"
+            ));
+        });
+
+        it("loads algebraic conformances", []() {
+            assertTrue(noErrors(
+                "let acceptMonoid(value: Monoid) = value\n"
+                "let acceptGroup(value: Group) = value\n"
+                "main do\n"
+                "  acceptMonoid(1)\n"
+                "  acceptGroup(1)\n"
+                "  let left = { a: 1 }\n"
+                "  let right = { b: 2 }\n"
+                "  acceptMonoid(left)\n"
+                "  let combined = left.combine(right)\n"
+                "  let repeated = combined.repeat(2)\n"
+                "end\n"
+            ));
+        });
+
+        it("loads measures, durations, and numeric time constructors", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let measure: Measure = 2.5.sec\n"
+                "  let duration: Duration = Duration { seconds: measure.canonical }\n"
+                "  let converted: Result<Measure, String> = measure.convert(Millisecond)\n"
+                "end\n"
+            ));
+        });
+
         it("loads Optional marker traits and conformances from the prelude", []() {
             assertTrue(noErrors(
                 "let accept(value: Optionable) = value\n"
@@ -2061,8 +2123,8 @@ int main() {
             ));
         });
 
-        it("Void is an alias for the unit type ()", []() {
-            // Swift-style: `Void` is `()`, not the bottom type. A function
+        it("Void is the unit type ()", []() {
+            // `Void` is `()`, not the bottom type. A function
             // returning `Void` may return `()`.
             assertTrue(noErrors(
                 "let noop() -> Void do\n"

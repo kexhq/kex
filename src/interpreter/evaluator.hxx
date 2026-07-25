@@ -189,9 +189,7 @@ private:
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
     bool m_preludeLoaded = false;
-    // Method names defined by the prelude (sealed stdlib). Users may add new
-    // methods to builtin types but not redefine these.
-    std::unordered_set<std::string> m_sealedMethods;
+
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
 

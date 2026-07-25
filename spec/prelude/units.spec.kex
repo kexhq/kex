@@ -1,0 +1,101 @@
+describe("time measures") do
+  it("creates time measures from integers and floats") do
+    assert(2.sec.canonical == 2.0)
+    assert(2.5.minute.canonical == 150.0)
+    assert(1.hour.canonical == 3600.0)
+    assert(1.day.canonical == 86400.0)
+    assert(2.sec.kind == :time)
+  end
+
+  it("supports sub-second units") do
+    assert(1.millisecond.canonical == 0.001)
+    assert(1.microsecond.canonical == 0.000001)
+    assert(1.nanosecond.canonical == 0.000000001)
+  end
+
+  it("constructs every time unit") do
+    assert(1.nanosecond.symbol == "ns")
+    assert(1.microsecond.symbol == "μs")
+    assert(1.millisecond.symbol == "ms")
+    assert(1.sec.symbol == "s")
+    assert(1.minute.symbol == "min")
+    assert(1.hour.symbol == "h")
+    assert(1.day.symbol == "d")
+    assert(1.week.symbol == "wk")
+    assert(1.week.canonical == 604800.0)
+    assert(0.5.hour.canonical == 1800.0)
+  end
+
+  it("is distinct from Duration") do
+    let measure = 2.sec
+    let duration = Duration { seconds: measure.canonical }
+    assert(duration.seconds == 2.0)
+  end
+end
+
+describe("Measure arithmetic") do
+  it("adds and subtracts through the canonical value") do
+    match 1.minute + 30.sec do
+      Ok(total) -> assert(total.canonical == 90.0)
+      Error(_) -> assert(false)
+    end
+
+    match 2.minute - 30.sec do
+      Ok(total) -> assert(total.canonical == 90.0)
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("rejects arithmetic across different kinds") do
+    let length = Measure { canonical: 1.0, value: 1.0,
+      unit: UnitDefinition { conversionFactor: 1.0, dimension: :length, notation: "m" } }
+    match 1.sec + length do
+      Ok(_) -> assert(false)
+      Error(_) -> assert(true)
+    end
+    match 1.sec - length do
+      Ok(_) -> assert(false)
+      Error(_) -> assert(true)
+    end
+  end
+
+  it("scales a measure") do
+    let measure = 2.5.sec.scale(4)
+    assert(measure.canonical == 10.0)
+    assert(measure.to(String) == "10.0 s")
+  end
+end
+
+describe("time conversion and formatting") do
+  it("converts between display units") do
+    match 90.minute.convert(Hour) do
+      Ok(measure) -> assert(measure.value == 1.5)
+      Error(_) -> assert(false)
+    end
+
+    match 90.minute.convert(Second) do
+      Ok(measure) -> assert(measure.value == 5400.0)
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("formats the selected unit") do
+    assert(2.hour.to(String) == "2.0 h")
+    match 90.minute.convert(Hour) do
+      Ok(measure) -> assert(measure.to(String) == "1.5 h")
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("converts through the Unit trait and rejects incompatible targets") do
+    match 3600.sec.convertTo(Hour) do
+      Ok(measure) -> assert(measure.to(String) == "1.0 h")
+      Error(_) -> assert(false)
+    end
+    let length = UnitDefinition { conversionFactor: 1.0, dimension: :length, notation: "m" }
+    match 1.sec.convertTo(length) do
+      Ok(_) -> assert(false)
+      Error(_) -> assert(true)
+    end
+  end
+end
