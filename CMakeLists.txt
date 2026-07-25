@@ -314,10 +314,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # REPL's SemanticDB can index the same prelude the native REPL does
         # for tab completion (see src/common/prelude_loader.hxx) — wasm has
         # no native installation filesystem.
-        --preload-file
-        "${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
-        --preload-file
-        "${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
+        # Keep each flag and its mapped path together. CMake otherwise
+        # de-duplicates the repeated --preload-file flag, leaving the second
+        # path as a bogus linker input.
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
+        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
     )
 endif()
 

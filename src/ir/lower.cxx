@@ -673,8 +673,9 @@ struct Lowering {
                                 startArgs.push_back(lower(item));
                     }
                     Lambda start;
+                    const int startArity = static_cast<int>(startArgs.size());
                     start.body = callE(beamModule, "start",
-                        static_cast<int>(startArgs.size()), std::move(startArgs));
+                        startArity, std::move(startArgs));
                     auto fn = std::make_unique<Expr>();
                     fn->node = std::move(start);
                     startFn = atomize_ir(std::move(fn), binds);
@@ -1395,9 +1396,8 @@ struct Lowering {
                     if (n.block)
                         args.push_back(atomize_ir(lower(*n.block), rb));
                 }
-            return ret(callE("", imported->second,
-                             static_cast<int>(args.size()),
-                             std::move(args)));
+            const int arity = static_cast<int>(args.size());
+            return ret(callE("", imported->second, arity, std::move(args)));
         }
 
         // External receiver functions take priority over prelude for UFCS.
