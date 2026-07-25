@@ -74,7 +74,7 @@ int main() {
         });
 
         it("allows after as a top-level annotation name", []() {
-            assertTrue(!parseFails("after : Block<Unit> -> Unit\n"));
+            assertTrue(!parseFails("after : Block<Void> -> Void\n"));
         });
     });
 

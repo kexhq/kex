@@ -96,7 +96,7 @@ Traits can declare foul methods:
 
 ```kex
 trait Serializable for: This do
-  foul save : (path: String) -> Result<Unit, Error>
+  foul save : (path: String) -> Result<Void, Error>
   foul load : (path: String) -> This
 end
 ```

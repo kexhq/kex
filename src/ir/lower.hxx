@@ -45,6 +45,8 @@ struct ExternalModules {
 struct ExternalRecordLayout {
     std::string name;
     std::vector<std::string> fields;
+    // BEAM module that owns the record's field accessors.
+    std::string moduleAtom;
 };
 
 auto lowerProgram(const ast::Program& prog, const std::string& fileStem,

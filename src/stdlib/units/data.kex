@@ -2,17 +2,61 @@ module Units.Data
 
 type DataUnit = B | KB | MB | GB | TB | KiB | MiB | GiB | TiB
 
+make DataUnit, implement: Unit do
+  let factor(@B) = 1.0
+  let factor(@KB) = 1000.0
+  let factor(@MB) = 1000000.0
+  let factor(@GB) = 1000000000.0
+  let factor(@TB) = 1000000000000.0
+  let factor(@KiB) = 1024.0
+  let factor(@MiB) = 1048576.0
+  let factor(@GiB) = 1073741824.0
+  let factor(@TiB) = 1099511627776.0
+
+  let kind = :data
+
+  let symbol(@B) = "B"
+  let symbol(@KB) = "KB"
+  let symbol(@MB) = "MB"
+  let symbol(@GB) = "GB"
+  let symbol(@TB) = "TB"
+  let symbol(@KiB) = "KiB"
+  let symbol(@MiB) = "MiB"
+  let symbol(@GiB) = "GiB"
+  let symbol(@TiB) = "TiB"
+end
+
+make UnitDefinition, implement: Unit do
+  let factor = @conversionFactor
+  let kind = @dimension
+  let symbol = @notation
+end
+
+make Measure do
+  let factor -> Float = @unit.factor
+  let kind -> Atom = @unit.kind
+  let symbol -> String = @unit.symbol
+end
+
 let size(value: Number, unit: DataUnit) -> Measure do
   let converted = amount(value)
-  let (factor, tag, symbol) = dataUnitInfo(unit)
   return Measure {
-    canonical: converted * factor,
+    canonical: converted * unit.factor,
     value: converted,
-    factor: factor,
-    kind: :data,
-    unit: tag,
-    symbol: symbol
+    unit: definition(unit)
   }
+end
+
+let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
+  let target = definition(unit)
+  match measure.kind == target.dimension do
+    true -> return Ok(Measure {
+      canonical: measure.canonical,
+      value: measure.canonical / target.factor,
+      unit: target
+    })
+    false -> return Error("Cannot convert between different measurement kinds")
+  end
 end
 
 let byteSize(value: Number) -> Measure = size(value, B)
@@ -25,33 +69,16 @@ let mebibytes(value: Number) -> Measure = size(value, MiB)
 let gibibytes(value: Number) -> Measure = size(value, GiB)
 let tebibytes(value: Number) -> Measure = size(value, TiB)
 
-let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
-  match measure.kind == :data do
-    true -> do
-      let (factor, tag, symbol) = dataUnitInfo(unit)
-      return Ok(Measure {
-        canonical: measure.canonical,
-        value: measure.canonical / factor,
-        factor: factor,
-        kind: :data,
-        unit: tag,
-        symbol: symbol
-      })
-    end
-    false -> return Error("Only data measures can be converted to a data unit")
-  end
-end
-
 private do
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
 
-  let dataUnitInfo(B) = (1.0, :byte, "B")
-  let dataUnitInfo(KB) = (1000.0, :kilobyte, "KB")
-  let dataUnitInfo(MB) = (1000000.0, :megabyte, "MB")
-  let dataUnitInfo(GB) = (1000000000.0, :gigabyte, "GB")
-  let dataUnitInfo(TB) = (1000000000000.0, :terabyte, "TB")
-  let dataUnitInfo(KiB) = (1024.0, :kibibyte, "KiB")
-  let dataUnitInfo(MiB) = (1048576.0, :mebibyte, "MiB")
-  let dataUnitInfo(GiB) = (1073741824.0, :gibibyte, "GiB")
-  let dataUnitInfo(TiB) = (1099511627776.0, :tebibyte, "TiB")
+  let definition(B) = UnitDefinition { conversionFactor: 1.0, dimension: :data, notation: "B" }
+  let definition(KB) = UnitDefinition { conversionFactor: 1000.0, dimension: :data, notation: "KB" }
+  let definition(MB) = UnitDefinition { conversionFactor: 1000000.0, dimension: :data, notation: "MB" }
+  let definition(GB) = UnitDefinition { conversionFactor: 1000000000.0, dimension: :data, notation: "GB" }
+  let definition(TB) = UnitDefinition { conversionFactor: 1000000000000.0, dimension: :data, notation: "TB" }
+  let definition(KiB) = UnitDefinition { conversionFactor: 1024.0, dimension: :data, notation: "KiB" }
+  let definition(MiB) = UnitDefinition { conversionFactor: 1048576.0, dimension: :data, notation: "MiB" }
+  let definition(GiB) = UnitDefinition { conversionFactor: 1073741824.0, dimension: :data, notation: "GiB" }
+  let definition(TiB) = UnitDefinition { conversionFactor: 1099511627776.0, dimension: :data, notation: "TiB" }
 end

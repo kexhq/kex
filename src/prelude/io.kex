@@ -5,7 +5,7 @@ foul module IO do
   # @example
   #   IO.printLine("hello")      # prints: hello
   #   IO.printLine("x = ", 42)   # prints: x = 42
-  printLine : A -> Unit
+  printLine : A -> Void
   let printLine(msg) = Kex.Intrinsic.IO.printLine(msg)
   let printLine = Kex.Intrinsic.IO.printLine("")
 
@@ -14,17 +14,17 @@ foul module IO do
   # @example
   #   IO.print("hello ")
   #   IO.print("world")   # stdout: hello world
-  print : A -> Unit
+  print : A -> Void
   let print(msg) = Kex.Intrinsic.IO.print(msg)
   let print = Kex.Intrinsic.IO.print("")
 
   # Alias for +printLine+.
-  putLine : A -> Unit
+  putLine : A -> Void
   let putLine(msg) = Kex.Intrinsic.IO.putLine(msg)
   let putLine = Kex.Intrinsic.IO.putLine("")
 
   # Alias for +print+.
-  put : A -> Unit
+  put : A -> Void
   let put(msg) = Kex.Intrinsic.IO.put(msg)
   let put = Kex.Intrinsic.IO.put("")
 
@@ -51,16 +51,16 @@ foul module IO do
   # Use for error messages that should not go to stdout.
   #
   # @example  IO.printError("config file not found")
-  printError : A -> Unit
+  printError : A -> Void
   let printError(msg) = Kex.Intrinsic.IO.printError(msg)
   let printError = Kex.Intrinsic.IO.printError("")
 
   # Alias for +printError+ — use when signalling a non-fatal condition.
-  warn : A -> Unit
+  warn : A -> Void
   let warn(msg) = Kex.Intrinsic.IO.warn(msg)
 
   # Alias for +printError+ — longer form of +warn+.
-  warning : A -> Unit
+  warning : A -> Void
   let warning(msg) = Kex.Intrinsic.IO.warning(msg)
 
 end

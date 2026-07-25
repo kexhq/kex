@@ -274,7 +274,7 @@ int main() {
             assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
         });
 
-        it("renders String lists as Kex strings and suppresses IO Unit", []() {
+        it("renders String lists as Kex strings and suppresses IO Void", []() {
             auto out = runBeamRepl(
                 "(1..3).items.map(&.to(String).or(\"\"))\n"
                 "IO.printLine({ \"kex\": 3 })\n");

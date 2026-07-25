@@ -1,28 +1,89 @@
 module Units.SI
 
-let meter(value: Number) -> Measure = measure(value, 1.0, :length, :meter, "m")
-let gram(value: Number) -> Measure = measure(value, 0.001, :mass, :gram, "g")
-let kilogram(value: Number) -> Measure = measure(value, 1.0, :mass, :kilogram, "kg")
-let kelvin(value: Number) -> Measure = measure(value, 1.0, :temperature, :kelvin, "K")
-let liter(value: Number) -> Measure = measure(value, 1.0, :volume, :liter, "L")
-let newton(value: Number) -> Measure = measure(value, 1.0, :force, :newton, "N")
-let watt(value: Number) -> Measure = measure(value, 1.0, :power, :watt, "W")
-let volt(value: Number) -> Measure = measure(value, 1.0, :voltage, :volt, "V")
-let ampere(value: Number) -> Measure = measure(value, 1.0, :current, :ampere, "A")
-let ohm(value: Number) -> Measure = measure(value, 1.0, :resistance, :ohm, "Ω")
-let coulomb(value: Number) -> Measure = measure(value, 1.0, :charge, :coulomb, "C")
+type SIUnit = Meter | Gram | Kilogram | Kelvin | Liter | Newton | Watt
+            | Volt | Ampere | Ohm | Coulomb
 
-# Applies an SI decimal prefix to the displayed unit.
-let kilo(measure: Measure) -> Measure = prefixed(measure, 1000.0, "k")
+make SIUnit, implement: Unit do
+  let factor = 1.0
+  let kind(@Meter) = :length
+  let kind(@Gram) = :mass
+  let kind(@Kilogram) = :mass
+  let kind(@Kelvin) = :temperature
+  let kind(@Liter) = :volume
+  let kind(@Newton) = :force
+  let kind(@Watt) = :power
+  let kind(@Volt) = :voltage
+  let kind(@Ampere) = :current
+  let kind(@Ohm) = :resistance
+  let kind(@Coulomb) = :charge
+
+  let symbol(@Meter) = "m"
+  let symbol(@Gram) = "g"
+  let symbol(@Kilogram) = "kg"
+  let symbol(@Kelvin) = "K"
+  let symbol(@Liter) = "L"
+  let symbol(@Newton) = "N"
+  let symbol(@Watt) = "W"
+  let symbol(@Volt) = "V"
+  let symbol(@Ampere) = "A"
+  let symbol(@Ohm) = "Ω"
+  let symbol(@Coulomb) = "C"
+end
+
+make UnitDefinition, implement: Unit do
+  let factor = @conversionFactor
+  let kind = @dimension
+  let symbol = @notation
+end
+
+make Measure do
+  let factor -> Float = @unit.factor
+  let kind -> Atom = @unit.kind
+  let symbol -> String = @unit.symbol
+end
+
+let meter(value: Number) -> Measure = measure(value, Meter)
+let gram(value: Number) -> Measure = measure(value, Gram)
+let kilogram(value: Number) -> Measure = measure(value, Kilogram)
+let kelvin(value: Number) -> Measure = measure(value, Kelvin)
+let liter(value: Number) -> Measure = measure(value, Liter)
+let newton(value: Number) -> Measure = measure(value, Newton)
+let watt(value: Number) -> Measure = measure(value, Watt)
+let volt(value: Number) -> Measure = measure(value, Volt)
+let ampere(value: Number) -> Measure = measure(value, Ampere)
+let ohm(value: Number) -> Measure = measure(value, Ohm)
+let coulomb(value: Number) -> Measure = measure(value, Coulomb)
+
 let mega(measure: Measure) -> Measure = prefixed(measure, 1000000.0, "M")
 let giga(measure: Measure) -> Measure = prefixed(measure, 1000000000.0, "G")
 let milli(measure: Measure) -> Measure = prefixed(measure, 0.001, "m")
 let micro(measure: Measure) -> Measure = prefixed(measure, 0.000001, "μ")
 let nano(measure: Measure) -> Measure = prefixed(measure, 0.000000001, "n")
 
-# Named forms of Measure division and multiplication.
 let per(measure: Measure, other: Measure) -> Measure = divideMeasures(measure, other)
 let times(measure: Measure, other: Measure) -> Measure = multiplyMeasures(measure, other)
+
+# Prefixes work both on an existing measure (`5000.meter.kilo`) and at the
+# beginning of a postfix unit expression (`3.kilo.watt`).
+make Measure do
+  let kilo -> Measure = Measure {
+    canonical: this.canonical,
+    value: this.canonical / (this.factor * 1000.0),
+    unit: UnitDefinition {
+      conversionFactor: this.factor * 1000.0,
+      dimension: this.kind,
+      notation: "k${this.symbol}"
+    }
+  }
+end
+
+make Integer do
+  let kilo -> Float = amount(this) * 1000.0
+end
+
+make Float do
+  let kilo -> Float = amount(this) * 1000.0
+end
 
 make Measure do
   let *(other: Measure) -> Measure = this.product(other)
@@ -31,30 +92,18 @@ make Measure do
   private do
     let product(other) -> Measure do
       let kind = this.productKind(this.kind, other.kind)
-      let (unit, symbol) = this.productUnit(kind, this.symbol, other.symbol)
+      let symbol = this.productSymbol(kind, this.symbol, other.symbol)
       let value = this.canonical * other.canonical
-      return Measure {
-        canonical: value,
-        value: value,
-        factor: 1.0,
-        kind: kind,
-        unit: unit,
-        symbol: symbol
-      }
+      return Measure { canonical: value, value: value,
+        unit: UnitDefinition { conversionFactor: 1.0, dimension: kind, notation: symbol } }
     end
 
     let quotient(other) -> Measure do
       let kind = this.quotientKind(this.kind, other.kind)
-      let (unit, symbol) = this.quotientUnit(kind, this.symbol, other.symbol)
+      let symbol = this.quotientSymbol(kind, this.symbol, other.symbol)
       let value = this.canonical / other.canonical
-      return Measure {
-        canonical: value,
-        value: value,
-        factor: 1.0,
-        kind: kind,
-        unit: unit,
-        symbol: symbol
-      }
+      return Measure { canonical: value, value: value,
+        unit: UnitDefinition { conversionFactor: 1.0, dimension: kind, notation: symbol } }
     end
 
     let productKind(:mass, :acceleration) = :force
@@ -72,63 +121,65 @@ make Measure do
     let quotientKind(:voltage, :current) = :resistance
     let quotientKind(left, _) = left
 
-    let productUnit(:force, _, _) = (:newton, "N")
-    let productUnit(:energy, _, _) = (:joule, "J")
-    let productUnit(:power, _, _) = (:watt, "W")
-    let productUnit(:voltage, _, _) = (:volt, "V")
-    let productUnit(:charge, _, _) = (:coulomb, "C")
-    let productUnit(_, left, right) = (:derived, "${left}·${right}")
+    let productSymbol(:force, _, _) = "N"
+    let productSymbol(:energy, _, _) = "J"
+    let productSymbol(:power, _, _) = "W"
+    let productSymbol(:voltage, _, _) = "V"
+    let productSymbol(:charge, _, _) = "C"
+    let productSymbol(_, left, right) = "${left}·${right}"
 
-    let quotientUnit(:speed, left, _) = (:derived, "${left}/s")
-    let quotientUnit(:acceleration, left, _) = (:derived, "${left}/s")
-    let quotientUnit(:power, _, _) = (:watt, "W")
-    let quotientUnit(:pressure, _, _) = (:pascal, "Pa")
-    let quotientUnit(:resistance, _, _) = (:ohm, "Ω")
-    let quotientUnit(_, left, right) = (:derived, "${left}/${right}")
+    let quotientSymbol(:speed, left, _) = "${left}/s"
+    let quotientSymbol(:acceleration, left, _) = "${left}/s"
+    let quotientSymbol(:power, _, _) = "W"
+    let quotientSymbol(:pressure, _, _) = "Pa"
+    let quotientSymbol(:resistance, _, _) = "Ω"
+    let quotientSymbol(_, left, right) = "${left}/${right}"
   end
 end
 
 private do
   let amount(value) = Kex.Intrinsic.Fun.convertTo(value, Float).or(0.0)
-
-  let measure(value, factor, kind, unit, symbol) = Measure {
-    canonical: amount(value) * factor,
+  let measure(value, unit: SIUnit) = Measure {
+    canonical: amount(value) * unit.factor,
     value: amount(value),
-    factor: factor,
-    kind: kind,
-    unit: unit,
-    symbol: symbol
-  }
-
-  let derived(value, kind, unit, symbol) = Measure {
-    canonical: value,
-    value: value,
-    factor: 1.0,
-    kind: kind,
-    unit: unit,
-    symbol: symbol
+    unit: UnitDefinition {
+      conversionFactor: unit.factor,
+      dimension: unit.kind,
+      notation: unit.symbol
+    }
   }
 
   let prefixed(measure, prefixFactor, prefix) = Measure {
     canonical: measure.canonical,
     value: measure.canonical / (measure.factor * prefixFactor),
-    factor: measure.factor * prefixFactor,
-    kind: measure.kind,
-    unit: measure.unit,
-    symbol: "${prefix}${measure.symbol}"
+    unit: UnitDefinition {
+      conversionFactor: measure.factor * prefixFactor,
+      dimension: measure.kind,
+      notation: "${prefix}${measure.symbol}"
+    }
   }
 
   let multiplyMeasures(left, right) do
     let kind = productKind(left.kind, right.kind)
-    let (unit, symbol) = productUnit(kind, left.symbol, right.symbol)
-    return derived(left.canonical * right.canonical, kind, unit, symbol)
+    let symbol = productSymbol(kind, left.symbol, right.symbol)
+    return derived(left.canonical * right.canonical, kind, symbol)
   end
 
   let divideMeasures(left, right) do
     let kind = quotientKind(left.kind, right.kind)
-    let (unit, symbol) = quotientUnit(kind, left.symbol, right.symbol)
-    return derived(left.canonical / right.canonical, kind, unit, symbol)
+    let symbol = quotientSymbol(kind, left.symbol, right.symbol)
+    return derived(left.canonical / right.canonical, kind, symbol)
   end
+
+  let derived(value, kind, symbol) = Measure {
+    canonical: value,
+    value: value,
+    unit: UnitDefinition {
+      conversionFactor: 1.0,
+      dimension: kind,
+      notation: symbol
+    }
+  }
 
   let productKind(:mass, :acceleration) = :force
   let productKind(:force, :length) = :energy
@@ -145,17 +196,17 @@ private do
   let quotientKind(:voltage, :current) = :resistance
   let quotientKind(left, _) = left
 
-  let productUnit(:force, _, _) = (:newton, "N")
-  let productUnit(:energy, _, _) = (:joule, "J")
-  let productUnit(:power, _, _) = (:watt, "W")
-  let productUnit(:voltage, _, _) = (:volt, "V")
-  let productUnit(:charge, _, _) = (:coulomb, "C")
-  let productUnit(_, left, right) = (:derived, "${left}·${right}")
+  let productSymbol(:force, _, _) = "N"
+  let productSymbol(:energy, _, _) = "J"
+  let productSymbol(:power, _, _) = "W"
+  let productSymbol(:voltage, _, _) = "V"
+  let productSymbol(:charge, _, _) = "C"
+  let productSymbol(_, left, right) = "${left}·${right}"
 
-  let quotientUnit(:speed, left, _) = (:derived, "${left}/s")
-  let quotientUnit(:acceleration, left, _) = (:derived, "${left}/s")
-  let quotientUnit(:power, _, _) = (:watt, "W")
-  let quotientUnit(:pressure, _, _) = (:pascal, "Pa")
-  let quotientUnit(:resistance, _, _) = (:ohm, "Ω")
-  let quotientUnit(_, left, right) = (:derived, "${left}/${right}")
+  let quotientSymbol(:speed, left, _) = "${left}/s"
+  let quotientSymbol(:acceleration, left, _) = "${left}/s"
+  let quotientSymbol(:power, _, _) = "W"
+  let quotientSymbol(:pressure, _, _) = "Pa"
+  let quotientSymbol(:resistance, _, _) = "Ω"
+  let quotientSymbol(_, left, right) = "${left}/${right}"
 end

@@ -980,6 +980,7 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
     for (const auto &record : module->chunk.metadata.records) {
       kex::ir::ExternalRecordLayout layout;
       layout.name = record.name;
+      layout.moduleAtom = module->beamAtom;
       for (const auto &field : record.fields)
         layout.fields.push_back(field.name);
       layouts.push_back(std::move(layout));
@@ -2702,14 +2703,23 @@ int main(int argc, char *argv[]) {
       }
 
       if (compileRun) {
-        // Use code:load_binary for explicit load (filename != module name).
+        // Load every freshly emitted module explicitly.  Relying on the code
+        // path here lets BEAM autoload a same-named module from an earlier
+        // compilation, which is particularly easy to hit for imported
+        // standard-library modules such as Kex.Units.Data.
         namespace fs = std::filesystem;
-        std::string absBeam = fs::weakly_canonical(kxBeam).string();
-        std::string loadExpr = "{ok,_B}=file:read_file(\"" + absBeam +
-                               "\"), "
-                               "code:load_binary('" +
-                               result.moduleName + "',\"" + absBeam +
-                               "\",_B), ";
+        std::string loadExpr;
+        for (size_t moduleIndex = 0; moduleIndex < moduleResults.size();
+             ++moduleIndex) {
+          const auto &emitted = moduleResults[moduleIndex];
+          std::string beam = outputDir + "/" + emitted.moduleName + ".beam";
+          std::string absBeam = fs::weakly_canonical(beam).string();
+          std::string binaryVar = "_B" + std::to_string(moduleIndex);
+          loadExpr += "{ok," + binaryVar + "}=file:read_file(\"" +
+                      absBeam + "\"), "
+                      "code:load_binary('" + emitted.moduleName + "',\"" +
+                      absBeam + "\"," + binaryVar + "), ";
+        }
         // Kex runtime errors carry a String (binary/charlist) reason
         // printed verbatim; anything else (raw BEAM errors like
         // badarg tuples) falls back to ~p.

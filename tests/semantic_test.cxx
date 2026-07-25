@@ -2123,8 +2123,8 @@ int main() {
             ));
         });
 
-        it("Void is an alias for the unit type ()", []() {
-            // Swift-style: `Void` is `()`, not the bottom type. A function
+        it("Void is the unit type ()", []() {
+            // `Void` is `()`, not the bottom type. A function
             // returning `Void` may return `()`.
             assertTrue(noErrors(
                 "let noop() -> Void do\n"

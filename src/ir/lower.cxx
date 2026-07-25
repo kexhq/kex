@@ -890,7 +890,14 @@ struct Lowering {
             if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
                 localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
             auto resolved = resolvedCalls->find(&n);
-            if (resolved != resolvedCalls->end() && !localTypeShadows) {
+            // `using Units.Data` can intentionally provide a more-specific
+            // UFCS overload than a prelude receiver with the same spelling.
+            // Resolve that lexical import below instead of freezing the
+            // prelude target selected before dependency sources were merged.
+            bool importedUfcs = !std::holds_alternative<ast::UpperIdentifier>(
+                n.receiver->kind) && moduleImports.count(n.method);
+            if (resolved != resolvedCalls->end() && !localTypeShadows &&
+                !importedUfcs) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -1324,11 +1331,12 @@ struct Lowering {
 
         // A public function brought into scope by `using Module` also
         // participates in UFCS: `100.meter` is `meter(100)`, and
-        // `distance.per(duration)` is `per(distance, duration)`. Keep local
-        // make methods ahead of imports, matching bare-call shadowing.
-        if (!localMethods.count(m)) {
-            if (auto imported = moduleImports.find(m);
-                imported != moduleImports.end()) {
+        // `distance.per(duration)` is `per(distance, duration)`. The source
+        // import must win over an identically named prelude receiver method:
+        // module compilation merges declarations into one flat IR first, so
+        // imported functions also appear in localMethods at this point.
+        if (auto imported = moduleImports.find(m);
+            imported != moduleImports.end()) {
                 const std::vector<std::string>* pnames = nullptr;
                 for (const auto& [qualified, emitted] : moduleFunctions) {
                     if (emitted != imported->second) continue;
@@ -1373,10 +1381,9 @@ struct Lowering {
                     if (n.block)
                         args.push_back(atomize_ir(lower(*n.block), rb));
                 }
-                return ret(callE("", imported->second,
-                                 static_cast<int>(args.size()),
-                                 std::move(args)));
-            }
+            return ret(callE("", imported->second,
+                             static_cast<int>(args.size()),
+                             std::move(args)));
         }
 
         // External receiver functions take priority over prelude for UFCS.
@@ -3788,8 +3795,29 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                              externalRecords, resolvedCalls,
                              preferExternalReceivers);
 
-    struct Definition { std::string path; std::string sourceName; bool exported; };
+    struct Definition {
+        std::string path;
+        std::string sourceName;
+        bool exported;
+        // External record accessors are already compiled in their owner
+        // module (not necessarily `Kex.<path>`).
+        std::string beamModule;
+    };
     std::unordered_map<std::string, Definition> definitions;
+    if (externalRecords) {
+        for (const auto& record : *externalRecords) {
+            if (record.moduleAtom.empty()) continue;
+            for (const auto& field : record.fields) {
+                // A field accessor name can also be a real method (notably
+                // Unit.kind/factor/symbol). Route only the unambiguous record
+                // fields here; make-method dispatch remains module-local.
+                if (field != "unit" && field != "canonical" && field != "value" &&
+                    field != "conversionFactor" && field != "dimension" && field != "notation")
+                    continue;
+                definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
+            }
+        }
+    }
     std::vector<std::string> modulePaths;
     std::unordered_set<std::string> seenModulePaths;
     std::function<void(const ast::ModuleDef&)> collect;
@@ -3804,10 +3832,19 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
+            const std::string typeName = Lowering::simpleTypeName(mk->target);
             auto collectMethod = [&](const ast::FunctionDef* fd) {
                 if (!fd) return;
                 if (!definitions.count(fd->name))
                     definitions[fd->name] = {path, fd->name, true};
+                // A make method is emitted as `method__Type` when the same
+                // method name has implementations for multiple receiver
+                // types. Keep that generated name in its declaring module;
+                // otherwise module-local calls get mistaken for flat/global
+                // functions and point at `kex_<stem>` on BEAM.
+                if (!typeName.empty())
+                    definitions[fd->name + "__" + typeName] =
+                        {path, fd->name + "__" + typeName, true};
             };
             for (const auto& mi : mk->body) {
                 if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))
@@ -3845,7 +3882,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
 
     std::unordered_map<std::string, std::pair<std::string, std::string>> targets;
     for (const auto& [emitted, def] : definitions)
-        targets[emitted] = {"Kex." + def.path, def.sourceName};
+        targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
+                            def.sourceName};
 
     std::vector<Module> result;
     std::unordered_map<std::string, std::vector<FunDef>> moduleBuckets;

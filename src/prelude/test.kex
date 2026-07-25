@@ -24,7 +24,7 @@
 #
 # @param label [String]
 # @param block [Block]
-# @return [Unit]
+# @return [Void]
 #
 # @example
 #   describe "String" do
@@ -34,7 +34,7 @@
 #       end
 #     end
 #   end
-describe : String -> Block<Unit> -> Unit
+describe : String -> Block<Void> -> Void
 
 # Defines a single test case. The block is run and any exception thrown
 # inside it (typically a failed +assert+) marks the test failed without
@@ -42,24 +42,24 @@ describe : String -> Block<Unit> -> Unit
 #
 # @param label [String]
 # @param block [Block]
-# @return [Unit]
+# @return [Void]
 #
 # @example
 #   it "returns true for even numbers" do
 #     assert(2.even?)
 #     assert(!3.even?)
 #   end
-it : String -> Block<Unit> -> Unit
+it : String -> Block<Void> -> Void
 
 # Registers setup for the current group. +before { ... }+ and
 # +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
 # once before the group's tests, following RSpec's scope convention.
-before : Block<Unit> -> Unit
+before : Block<Void> -> Void
 
 # Registers cleanup for the current group. +after { ... }+ defaults to +:each+;
 # +after(:all) { ... }+ runs once when the group finishes. Cleanup is
 # unconditional, and inner per-test hooks run before outer hooks.
-after : Block<Unit> -> Unit
+after : Block<Void> -> Void
 
 # Throws a runtime error if +value+ is falsy, failing the enclosing +it+.
 # The optional +message+ is included in the failure output.

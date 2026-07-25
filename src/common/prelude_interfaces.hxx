@@ -96,7 +96,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             if (name == "Char") return Type::charT();
             if (name == "Float") return Type::constrained("Float", "Float");
             if (name == "Number") return Type::constrained("Number", "Number");
-            if (name == "Void" || name == "Unit") return Type::unit();
+            if (name == "Void") return Type::unit();
             if (name == "Any") return Type::unknown();
             if (name.size() == 1 && std::isupper(static_cast<unsigned char>(name[0]))) {
                 auto it = vars.find(name);

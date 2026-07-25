@@ -199,12 +199,12 @@ make [X], implement: Enumerable, Foldable do
 
   # Calls +f+ with each element for its side effects. Returns unit.
   #
-  # @param f [X -> Unit]
-  # @return [Unit]
+  # @param f [X -> Void]
+  # @return [Void]
   #
   # @example
   #   [1, 2, 3].each { |x| IO.printLine(x) }
-  each :> (X -> Unit) -> Unit
+  each :> (X -> Void) -> Void
 
   # Folds the list from the left, starting with +acc+ and combining each
   # element via +f+.

@@ -89,7 +89,7 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
   #
   # @example
   #   scores.each { |k, v| IO.printLine("${k}: ${v}") }
-  each :> (K -> V -> Unit) -> Unit
+  each :> (K -> V -> Void) -> Void
 
   # Transforms each entry by calling +f(k, v)+. Returns a list of results.
   #

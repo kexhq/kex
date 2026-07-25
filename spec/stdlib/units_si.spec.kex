@@ -12,6 +12,8 @@ describe("Units.SI") do
   it("applies decimal prefixes") do
     assert(5000.meter.kilo.value == 5.0)
     assert(1.meter.milli.value == 1000.0)
+    assert(3.kilo.watt.canonical == 3000.0)
+    assert(3.kilo.watt.to(String) == "3000.0 W")
   end
 
   it("derives speed and acceleration with /") do

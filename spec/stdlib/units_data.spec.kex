@@ -20,7 +20,7 @@ describe("Units.Data") do
       Ok(size) -> do
         assert(size.canonical == 10000000.0)
         assert(size.value == 9.5367431640625)
-        assert(size.unit == :mebibyte)
+        assert(size.unit.symbol == "MiB")
       end
       Error(_) -> assert(false)
     end

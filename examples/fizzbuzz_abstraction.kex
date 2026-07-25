@@ -5,7 +5,7 @@
 let divisibleBy?(n: Int, divisor: Int) = n.modulo(divisor) == 0
 
 # Composable rule builder
-let fizzBuzzRule(n: Int, word: String, divisor: Int) do
+let fizzBuzzRule(n: Int, word: String, divisor: Int) -> String? do
   return Just(word) if divisibleBy?(n, divisor)
 
   return None

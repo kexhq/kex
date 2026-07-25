@@ -2001,6 +2001,11 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
                argMatchesParam(argMap->value, paramMap->value);
     }
     if (auto* paramOpt = std::get_if<OptionalType>(&paramType->kind)) {
+        // `None` has no payload from which to infer an inner type, but it is
+        // valid for every optional return/parameter type.
+        if (auto* argNamed = std::get_if<NamedType>(&argType->kind);
+            argNamed && argNamed->typeArgs.empty() && argNamed->name == "None")
+            return true;
         auto* argOpt = std::get_if<OptionalType>(&argType->kind);
         return argOpt && argMatchesParam(argOpt->inner, paramOpt->inner);
     }
@@ -2013,7 +2018,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         if (auto* tup = std::get_if<TupleType>(&t->kind))
             return tup->elements.empty();
         if (auto* n = std::get_if<NamedType>(&t->kind))
-            return n->typeArgs.empty() && (n->name == "Unit" || n->name == "Void");
+            return n->typeArgs.empty() && n->name == "Void";
         return false;
     };
     auto isStringType = [](const TypePtr& t) -> bool {
@@ -2037,7 +2042,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
             for (size_t i = 0; i < paramFn->params.size(); i++) {
                 if (!argMatchesParam(argFn->params[i], paramFn->params[i])) return false;
             }
-            // Unit as the expected return means "result discarded" — accept any body type.
+            // Void as the expected return means "result discarded" — accept any body type.
             if (isUnitLike(paramFn->result)) return true;
             return argMatchesParam(argFn->result, paramFn->result);
         }

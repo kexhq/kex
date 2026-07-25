@@ -1,12 +1,32 @@
+trait Unit do
+  factor :> Float
+  kind :> Atom
+  symbol :> String
+end
+
+let measureKind(measure: Measure) -> Atom = measure.unit.dimension
+let measureSymbol(measure: Measure) -> String = measure.unit.notation
+let measureFactor(measure: Measure) -> Float = measure.unit.conversionFactor
+
+# Runtime-defined units are used for prefixes and units derived by arithmetic.
+record UnitDefinition do
+  conversionFactor : Float
+  dimension : Atom
+  notation : String
+end
+
+make UnitDefinition, implement: Unit do
+  let factor = @conversionFactor
+  let kind = @dimension
+  let symbol = @notation
+end
+
 # A Measure is shared by every unit module. `canonical` stores the value in
-# that dimension's base unit; `factor` converts the displayed value to it.
+# that dimension's base unit; its Unit controls its display.
 record Measure do
   canonical : Float
   value : Float
-  factor : Float
-  kind : Atom
-  unit : Atom
-  symbol : String
+  unit : UnitDefinition
 end
 
 # Duration is an elapsed span used by Time, Date, and DateTime. A time Measure
@@ -18,124 +38,123 @@ end
 type TimeUnit = Nanosecond | Microsecond | Millisecond
               | Second | Minute | Hour | Day | Week
 
+make TimeUnit, implement: Unit do
+  let factor(@Nanosecond) = 0.000000001
+  let factor(@Microsecond) = 0.000001
+  let factor(@Millisecond) = 0.001
+  let factor(@Second) = 1.0
+  let factor(@Minute) = 60.0
+  let factor(@Hour) = 3600.0
+  let factor(@Day) = 86400.0
+  let factor(@Week) = 604800.0
+
+  let kind = :time
+
+  let symbol(@Nanosecond) = "ns"
+  let symbol(@Microsecond) = "μs"
+  let symbol(@Millisecond) = "ms"
+  let symbol(@Second) = "s"
+  let symbol(@Minute) = "min"
+  let symbol(@Hour) = "h"
+  let symbol(@Day) = "d"
+  let symbol(@Week) = "wk"
+end
+
 make Integer do
-  let nanosecond -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    0.000000001, :nanosecond, "ns"
-  )
-
-  let microsecond -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    0.000001, :microsecond, "μs"
-  )
-
-  let millisecond -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    0.001, :millisecond, "ms"
-  )
-
-  let sec -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    1.0, :second, "s"
-  )
-
-  let minute -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    60.0, :minute, "min"
-  )
-
-  let hour -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    3600.0, :hour, "h"
-  )
-
-  let day -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    86400.0, :day, "d"
-  )
-
-  let week -> Measure = this.timeMeasure(
-    Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0),
-    604800.0, :week, "wk"
-  )
+  let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+  let microsecond -> Measure = this.timeMeasure(Microsecond)
+  let millisecond -> Measure = this.timeMeasure(Millisecond)
+  let sec -> Measure = this.timeMeasure(Second)
+  let minute -> Measure = this.timeMeasure(Minute)
+  let hour -> Measure = this.timeMeasure(Hour)
+  let day -> Measure = this.timeMeasure(Day)
+  let week -> Measure = this.timeMeasure(Week)
 
   private do
-    let timeMeasure(value, factor, unit, symbol) = Measure {
-      canonical: value * factor,
-      value: value,
-      factor: factor,
-      kind: :time,
-      unit: unit,
-      symbol: symbol
-    }
+    let timeMeasure(unit: TimeUnit) -> Measure do
+      let value = Kex.Intrinsic.Fun.convertTo(this, Float).or(0.0)
+      return Measure {
+        canonical: value * unit.factor,
+        value: value,
+        unit: UnitDefinition {
+          conversionFactor: unit.factor,
+          dimension: unit.kind,
+          notation: unit.symbol
+        }
+      }
+    end
   end
 end
 
 make Float do
-  let nanosecond -> Measure = this.timeMeasure(this, 0.000000001, :nanosecond, "ns")
-  let microsecond -> Measure = this.timeMeasure(this, 0.000001, :microsecond, "μs")
-  let millisecond -> Measure = this.timeMeasure(this, 0.001, :millisecond, "ms")
-  let sec -> Measure = this.timeMeasure(this, 1.0, :second, "s")
-  let minute -> Measure = this.timeMeasure(this, 60.0, :minute, "min")
-  let hour -> Measure = this.timeMeasure(this, 3600.0, :hour, "h")
-  let day -> Measure = this.timeMeasure(this, 86400.0, :day, "d")
-  let week -> Measure = this.timeMeasure(this, 604800.0, :week, "wk")
+  let nanosecond -> Measure = this.timeMeasure(Nanosecond)
+  let microsecond -> Measure = this.timeMeasure(Microsecond)
+  let millisecond -> Measure = this.timeMeasure(Millisecond)
+  let sec -> Measure = this.timeMeasure(Second)
+  let minute -> Measure = this.timeMeasure(Minute)
+  let hour -> Measure = this.timeMeasure(Hour)
+  let day -> Measure = this.timeMeasure(Day)
+  let week -> Measure = this.timeMeasure(Week)
 
   private do
-    let timeMeasure(value, factor, unit, symbol) = Measure {
-      canonical: value * factor,
-      value: value,
-      factor: factor,
-      kind: :time,
-      unit: unit,
-      symbol: symbol
+    let timeMeasure(unit: TimeUnit) -> Measure = Measure {
+      canonical: this * unit.factor,
+      value: this,
+      unit: UnitDefinition {
+        conversionFactor: unit.factor,
+        dimension: unit.kind,
+        notation: unit.symbol
+      }
     }
   end
 end
 
 make Measure do
-  let to(String) -> String = "${this.value} ${this.symbol}"
+  let factor -> Float = this.unit.factor
+  let kind -> Atom = this.unit.kind
+  let symbol -> String = this.unit.symbol
+  let to(String) -> String = "${this.value} ${this.unit.symbol}"
 
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
     return Measure {
       canonical: this.canonical * converted,
       value: this.value * converted,
-      factor: this.factor,
-      kind: this.kind,
-      unit: this.unit,
-      symbol: this.symbol
+      unit: this.unit
     }
   end
 
-  let convert(unit: TimeUnit) -> Result<Measure, String> do
-    match this.kind == :time do
-      true -> do
-        let (factor, tag, symbol) = timeUnitInfo(unit)
-        return Ok(Measure {
-          canonical: this.canonical,
-          value: this.canonical / factor,
-          factor: factor,
-          kind: :time,
-          unit: tag,
-          symbol: symbol
-        })
-      end
-      false -> return Error("Only time measures can be converted to a time unit")
+  # Convert through the Unit trait so units from opt-in modules (SI, Data,
+  # and future domains) remain interchangeable with prelude time units.
+  let convertTo(unit: Unit) -> Result<Measure, String> do
+    let target = UnitDefinition {
+      conversionFactor: unit.factor,
+      dimension: unit.kind,
+      notation: unit.symbol
+    }
+    match this.unit.kind == target.kind do
+      true -> return Ok(Measure {
+        canonical: this.canonical,
+        value: this.canonical / target.factor,
+        unit: target
+      })
+      false -> return Error("Cannot convert between different measurement kinds")
     end
   end
 
+  # Short time-unit spelling retained for prelude time measures.
+  let convert(unit: TimeUnit) -> Result<Measure, String> do
+    return this.convertTo(unit)
+  end
+
   let +(other: Measure) -> Result<Measure, String> do
-    match this.kind == other.kind do
+    match this.unit.kind == other.unit.kind do
       true -> do
         let total = this.canonical + other.canonical
         return Ok(Measure {
           canonical: total,
-          value: total / this.factor,
-          factor: this.factor,
-          kind: this.kind,
-          unit: this.unit,
-          symbol: this.symbol
+          value: total / this.unit.factor,
+          unit: this.unit
         })
       end
       false -> return Error("Cannot add measures of different kinds")
@@ -143,28 +162,16 @@ make Measure do
   end
 
   let -(other: Measure) -> Result<Measure, String> do
-    match this.kind == other.kind do
+    match this.unit.kind == other.unit.kind do
       true -> do
         let total = this.canonical - other.canonical
         return Ok(Measure {
           canonical: total,
-          value: total / this.factor,
-          factor: this.factor,
-          kind: this.kind,
-          unit: this.unit,
-          symbol: this.symbol
+          value: total / this.unit.factor,
+          unit: this.unit
         })
       end
       false -> return Error("Cannot subtract measures of different kinds")
     end
   end
 end
-
-let timeUnitInfo(Nanosecond) = (0.000000001, :nanosecond, "ns")
-let timeUnitInfo(Microsecond) = (0.000001, :microsecond, "μs")
-let timeUnitInfo(Millisecond) = (0.001, :millisecond, "ms")
-let timeUnitInfo(Second) = (1.0, :second, "s")
-let timeUnitInfo(Minute) = (60.0, :minute, "min")
-let timeUnitInfo(Hour) = (3600.0, :hour, "h")
-let timeUnitInfo(Day) = (86400.0, :day, "d")
-let timeUnitInfo(Week) = (604800.0, :week, "wk")

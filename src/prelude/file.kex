@@ -226,7 +226,7 @@ make FileHandle do
   feed :> Stream<String>?
   let feed = Kex.Intrinsic.FileHandle.feed(this)
 
-  close :> Unit
+  close :> Void
   let close = Kex.Intrinsic.FileHandle.close(this)
 end
 
