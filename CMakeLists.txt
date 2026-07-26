@@ -175,7 +175,7 @@ else()
     endif()
 endif()
 
-target_include_directories(kex_lib PUBLIC ${GMP_INCLUDE})
+target_include_directories(kex_lib SYSTEM PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 
 # SHA-256 for KexI interface hashing: CommonCrypto on macOS, OpenSSL on Linux
@@ -381,6 +381,18 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_link_options(interpreter_test PRIVATE -sNODERAWFS=1)
 endif()
 add_test(NAME interpreter_test COMMAND interpreter_test)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Compile the browser REPL entry point natively as a lightweight contract
+    # test. This catches session-configuration drift without requiring a
+    # browser or Asyncify-capable JS harness in the native CI job.
+    add_executable(wasm_repl_test
+        tests/wasm_repl_test.cxx
+        src/wasm_repl.cxx)
+    target_link_libraries(wasm_repl_test PRIVATE kex_lib)
+    target_include_directories(wasm_repl_test PRIVATE tests)
+    add_test(NAME wasm_repl_test COMMAND wasm_repl_test)
+endif()
 
 add_executable(examples_test tests/examples_test.cxx)
 target_link_libraries(examples_test PRIVATE kex_lib)

@@ -20,7 +20,7 @@ help:
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
 	@echo "  make uninstall    Remove kex from $(BINDIR)"
-	@echo "  make clean        Clean build artifacts"
+	@echo "  make clean        Remove native, wasm, and package build artifacts"
 	@echo "  make run F=<file>  Run a .kex file"
 	@echo "  make check F=<file>  Semantic check a .kex file"
 	@echo "  make build-wasm   Build the Emscripten/wasm target (requires emsdk"
@@ -296,4 +296,4 @@ uninstall:
 	@echo "Removed kex from $(BINDIR), prelude from $(STDLIBDIR), and modules from $(KEXLIBDIR)"
 
 clean:
-	@rm -rf $(BUILD_DIR)
+	@rm -rf "$(BUILD_DIR)" "$(WASM_BUILD_DIR)" packages/kex/dist

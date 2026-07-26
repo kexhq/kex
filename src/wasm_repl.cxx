@@ -29,6 +29,7 @@
 #endif
 
 #include <memory>
+#include <new>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -85,6 +86,10 @@ KexReplSession* kex_repl_create() {
     // execMainBlock's `!m_replMode && !block.synthetic` check), which
     // would make a `let` on one call invisible on the next.
     session->evaluator.setReplMode(true);
+    // Opt-in stdlib modules are embedded at /stdlib. The native CLI adds its
+    // discovered stdlib roots before evaluating REPL input; do the same here
+    // so `using Units.SI` and other source-module imports resolve in wasm.
+    session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
     // "/prelude" is embedded into MEMFS at build time by the kex_repl_wasm
     // target's `--preload-file src/prelude@/prelude` link option (see
     // CMakeLists.txt) — the wasm equivalent of KEX_PRELUDE_DIR, a real
@@ -159,8 +164,14 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             return;
         }
         if (source == "/reset") {
-            session->evaluator = kex::interpreter::Evaluator();
+            // Evaluator owns a Scheduler that keeps a reference back to its
+            // Evaluator. Move-assignment from a temporary would leave that
+            // reference pointing at the destroyed temporary, so rebuild the
+            // evaluator in place instead.
+            session->evaluator.~Evaluator();
+            new (&session->evaluator) kex::interpreter::Evaluator();
             session->evaluator.setReplMode(true);
+            session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
             session->replAccumSource.clear();
             g_programs.clear();
             session->lastResult = "  (bindings cleared)\n";
