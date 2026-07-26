@@ -3,6 +3,7 @@
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
+#include <cmath>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
