@@ -778,6 +778,17 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                         auto result = evalBody(clause.body);
                         popEnv();
                         return result;
+                    } catch (TryException& e) {
+                        if (clause.rescue) {
+                            auto result = evalRescue(*clause.rescue, e.error(), funcDef->location);
+                            popEnv();
+                            return result;
+                        }
+                        popEnv();
+                        // No rescue — propagate as return Error(e)
+                        auto errorVal = std::make_shared<Value>();
+                        errorVal->data = VariantValue{"Error", "Result", {e.error()}, {}, {}};
+                        throw ReturnException(errorVal);
                     } catch (ReturnException& ret) {
                         popEnv();
                         return ret.value();
@@ -897,6 +908,14 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
     ValuePtr result;
     try {
         result = evalBody(block.body);
+    } catch (TryException& e) {
+        if (block.rescue) {
+            result = evalRescue(*block.rescue, e.error(), block.location);
+        } else {
+            if (!m_replMode && !block.synthetic) popEnv();
+            throw RuntimeError(".try failed with no rescue handler: " + e.error()->toString(),
+                               block.location);
+        }
     } catch (ReturnException& ret) {
         result = ret.value();
     } catch (const BreakException&) {
@@ -1743,6 +1762,32 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }
+        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            auto value = eval(*node.operand);
+            if (auto* var = std::get_if<VariantValue>(&value->data)) {
+                if (var->tag == "Ok" && !var->args.empty()) {
+                    return var->args[0];
+                }
+                if (var->tag == "Error" && !var->args.empty()) {
+                    throw TryException(var->args[0]);
+                }
+                if (var->tag == "Just" && !var->args.empty()) {
+                    return var->args[0];
+                }
+                if (var->tag == "None" || (var->tag == "Error" && var->args.empty())) {
+                    throw TryException(Value::none());
+                }
+            }
+            throw RuntimeError(".try called on non-Result/Option value: " + value->toString(),
+                               expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            try {
+                return evalBody(node.body);
+            } catch (TryException& e) {
+                return evalRescue(node.rescue, e.error(), expr.location);
+            }
+        }
         else if constexpr (std::is_same_v<T, ast::ErrorNode>) {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
                                expr.location);
@@ -2529,6 +2574,49 @@ auto Evaluator::popEnv() -> void {
         m_env = m_env->parent();
         m_importScopes.pop_back();
     }
+}
+
+auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
+                           SourceLocation loc) -> ValuePtr {
+    if (rescue.isInlineReturn) {
+        return eval(*rescue.inlineReturnExpr);
+    }
+
+    if (rescue.isCatchAll) {
+        pushEnv();
+        if (!rescue.catchAllParam.empty()) {
+            m_env->define(rescue.catchAllParam, error);
+        }
+        auto result = evalBody(rescue.catchAllBody);
+        popEnv();
+        return result;
+    }
+
+    pushEnv();
+    for (const auto& clause : rescue.clauses) {
+        bool matched = false;
+        for (const auto& pattern : clause.patterns) {
+            if (matchPattern(*pattern, error)) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            if (clause.guard) {
+                auto guardVal = eval(**clause.guard);
+                if (auto* b = std::get_if<BoolValue>(&guardVal->data); b && !b->value) {
+                    continue;
+                }
+            }
+            auto result = eval(*clause.body);
+            popEnv();
+            return result;
+        }
+    }
+    popEnv();
+
+    // No clause matched — re-throw
+    throw TryException(error);
 }
 
 } // namespace kex::interpreter

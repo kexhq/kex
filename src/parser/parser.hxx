@@ -105,6 +105,8 @@ private:
     auto parseListExpr() -> ast::ExprPtr;
     auto parseMapOrBlock() -> ast::ExprPtr;
     auto parseTupleOrGrouped() -> ast::ExprPtr;
+    auto parseTryingExpr() -> ast::ExprPtr;
+    auto parseRescueBlock() -> ast::RescueBlock;
 
     // Patterns
     auto parsePattern() -> ast::PatternPtr;

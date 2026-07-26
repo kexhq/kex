@@ -578,6 +578,70 @@ struct Lowering {
                 moduleImports = std::move(saved);
                 moduleAliases = std::move(savedAliases);
                 return result;
+            } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+                // .try desugars to: case operand of Ok(v) -> v; Error(e) -> return Error(e)
+                auto subject = lower(n.operand);
+                std::vector<Binding> binds;
+                auto sAtom = atomize_ir(std::move(subject), binds);
+                auto okVar = fresh("_try_ok");
+                auto errVar = fresh("_try_err");
+
+                auto mkConstructPat = [](const std::string& tag, std::vector<PatternPtr> args) {
+                    auto p = std::make_unique<Pattern>();
+                    p->kind = PatKind::Construct;
+                    p->tag = tag;
+                    p->args = std::move(args);
+                    return p;
+                };
+                auto mkVarPat = [](const std::string& name) {
+                    auto p = std::make_unique<Pattern>();
+                    p->kind = PatKind::Var;
+                    p->name = name;
+                    return p;
+                };
+                auto mkConstruct = [&](const std::string& tag, std::vector<ExprPtr> args) {
+                    auto e = std::make_unique<Expr>();
+                    e->node = Construct{tag, std::move(args)};
+                    return e;
+                };
+
+                // Ok(v) -> v
+                MatchClause okClause;
+                std::vector<PatternPtr> okArgs; okArgs.push_back(mkVarPat(okVar));
+                okClause.patterns.push_back(mkConstructPat("Ok", std::move(okArgs)));
+                okClause.body = var(okVar);
+                // Error(e) -> return Error(e)
+                MatchClause errClause;
+                std::vector<PatternPtr> errArgs; errArgs.push_back(mkVarPat(errVar));
+                errClause.patterns.push_back(mkConstructPat("Error", std::move(errArgs)));
+                auto retExpr = std::make_unique<Expr>();
+                retExpr->node = Return{mkConstruct("Error", one(var(errVar)))};
+                errClause.body = std::move(retExpr);
+                // Just(v) -> v
+                auto justVar = fresh("_try_just");
+                MatchClause justClause;
+                std::vector<PatternPtr> justArgs; justArgs.push_back(mkVarPat(justVar));
+                justClause.patterns.push_back(mkConstructPat("Just", std::move(justArgs)));
+                justClause.body = var(justVar);
+                // None -> return Error(none)
+                MatchClause noneClause;
+                noneClause.patterns.push_back(mkConstructPat("None", {}));
+                auto noneRet = std::make_unique<Expr>();
+                noneRet->node = Return{mkConstruct("Error", one(lit(LitKind::Atom, "none")))};
+                noneClause.body = std::move(noneRet);
+
+                Match m;
+                m.subjects.push_back(std::move(sAtom));
+                m.clauses.push_back(std::move(okClause));
+                m.clauses.push_back(std::move(justClause));
+                m.clauses.push_back(std::move(errClause));
+                m.clauses.push_back(std::move(noneClause));
+                auto ex = std::make_unique<Expr>();
+                ex->node = std::move(m);
+                return wrapLets(binds, std::move(ex));
+            } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+                // TODO: full BEAM lowering for trying/rescue
+                throw LowerError("IR lower: trying/rescue blocks are not yet supported on BEAM");
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());

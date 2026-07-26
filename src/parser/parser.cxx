@@ -700,8 +700,14 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     // do...end block body
     else if (match(TokenType::Do)) {
         skipNewlines();
-        while (!check(TokenType::End) && !atEnd()) {
+        while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
             clause.body.push_back(parseExpr());
+            skipNewlines();
+        }
+
+        if (match(TokenType::Rescue)) {
+            skipNewlines();
+            clause.rescue = parseRescueBlock();
             skipNewlines();
         }
 
@@ -1180,6 +1186,16 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         // Method call: expr.method or expr.method(args) or expr.method!
         // Also handles module access: Mod.Sub.func
         if (match(TokenType::Dot)) {
+            // .try — postfix unwrap
+            if (check(TokenType::Try)) {
+                advance();
+                auto tryExpr = std::make_unique<ast::Expr>();
+                tryExpr->location = currentLocation();
+                tryExpr->kind = ast::TryExpr{std::move(expr)};
+                expr = std::move(tryExpr);
+                continue;
+            }
+
             if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent)) {
                 error("Expected method or module name after '.'");
             }
@@ -1400,6 +1416,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     if (check(TokenType::Var)) return parseVarExpr();
     if (check(TokenType::Return)) return parseReturnExpr();
     if (check(TokenType::Spawn)) return parseSpawnExpr();
+    if (check(TokenType::Trying)) return parseTryingExpr();
     if (check(TokenType::Break)) {
         advance();
         expr->kind = ast::BreakExpr{};
@@ -2836,9 +2853,14 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     expect(TokenType::Do, "Expected 'do' after 'main'");
     skipNewlines();
 
-    while (!check(TokenType::End) && !atEnd()) {
+    while (!check(TokenType::End) && !check(TokenType::Rescue) && !atEnd()) {
         block->body.push_back(parseExpr());
         skipNewlines();
+    }
+
+    if (match(TokenType::Rescue)) {
+        skipNewlines();
+        block->rescue = parseRescueBlock();
     }
 
     expect(TokenType::End, "Expected 'end' to close main block");
@@ -3042,6 +3064,76 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
     }
 
     expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups)};
+    return expr;
+}
+
+auto Parser::parseRescueBlock() -> ast::RescueBlock {
+    ast::RescueBlock rescue;
+
+    // `rescue return expr` — inline return shorthand
+    if (check(TokenType::Return)) {
+        advance();
+        rescue.isInlineReturn = true;
+        rescue.inlineReturnExpr = parseExpr();
+        return rescue;
+    }
+
+    // `rescue do |param| ... end` — catch-all block
+    if (check(TokenType::Do)) {
+        advance();
+        rescue.isCatchAll = true;
+        if (match(TokenType::Pipe)) {
+            if (check(TokenType::LowerIdent)) {
+                rescue.catchAllParam = advance().value;
+            } else {
+                error("Expected parameter name after '|' in rescue");
+            }
+            expect(TokenType::Pipe, "Expected '|' after rescue parameter");
+        }
+        skipNewlines();
+        while (!check(TokenType::End) && !atEnd()) {
+            rescue.catchAllBody.push_back(parseExpr());
+            skipNewlines();
+        }
+        expect(TokenType::End, "Expected 'end' to close rescue block");
+        return rescue;
+    }
+
+    // Pattern matching clauses (same as match clauses)
+    skipNewlines();
+    while (!check(TokenType::End) && !atEnd()) {
+        rescue.clauses.push_back(parseMatchClause());
+        skipNewlines();
+    }
+
+    return rescue;
+}
+
+auto Parser::parseTryingExpr() -> ast::ExprPtr {
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = currentLocation();
+
+    expect(TokenType::Trying, "Expected 'trying'");
+    expect(TokenType::Do, "Expected 'do' after 'trying'");
+    skipNewlines();
+
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::Rescue) && !check(TokenType::End) && !atEnd()) {
+        body.push_back(parseExpr());
+        skipNewlines();
+    }
+
+    if (!match(TokenType::Rescue)) {
+        error("'trying' block requires 'rescue'");
+    }
+    skipNewlines();
+
+    auto rescue = parseRescueBlock();
+    skipNewlines();
+
+    expect(TokenType::End, "Expected 'end' to close trying block");
+
+    expr->kind = ast::TryingExpr{std::move(body), std::move(rescue)};
     return expr;
 }
 

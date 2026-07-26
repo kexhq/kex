@@ -26,6 +26,15 @@ private:
 class BreakException : public std::exception {};
 class NextException : public std::exception {};
 
+class TryException : public std::exception {
+public:
+    explicit TryException(ValuePtr error) : m_error(std::move(error)) {}
+    auto error() const -> ValuePtr { return m_error; }
+
+private:
+    ValuePtr m_error;
+};
+
 class RuntimeError : public std::runtime_error {
 public:
     RuntimeError(const std::string& msg, SourceLocation loc)
@@ -115,6 +124,10 @@ private:
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
+
+    // Try/rescue support
+    auto evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
+                    SourceLocation loc) -> ValuePtr;
 
     // `let NAME = expr` at top level registers NAME as a zero-arg function
     // (constant) — auto-call it on lookup so `NAME` reads as its value, not

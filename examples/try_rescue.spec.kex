@@ -1,0 +1,101 @@
+let divide(a: Int, b: Int) -> Result<Int, String> do
+  if b == 0
+    Error("division by zero")
+  else
+    Ok(a / b)
+  end
+end
+
+let safeDivide(a: Int, b: Int) -> String do
+  let result = divide(a, b).try
+  "result: ${result}"
+rescue
+  e -> "error: ${e}"
+end
+
+let withCatchAll(a: Int, b: Int) -> String do
+  let r = divide(a, b).try
+  "ok: ${r}"
+rescue do |e|
+  "caught: ${e}"
+end
+end
+
+let withInlineRescue(items: [Int]) -> Int do
+  trying do
+    items.first.try * 10
+  rescue return -1
+  end
+end
+
+let withPatternGuard(a: Int, b: Int) -> String do
+  divide(a, b).try
+  "ok"
+rescue
+  e when e == "division by zero" -> "div0"
+  e -> "other: ${e}"
+end
+
+let nestedTrying(a: Int, b: Int) -> String do
+  trying do
+    trying do
+      divide(a, b).try
+      "inner ok"
+    rescue
+      _ -> "inner caught"
+    end
+  rescue
+    _ -> "outer caught"
+  end
+end
+
+describe(".try / rescue / trying") do
+  describe(".try on Result") do
+    it("unwraps Ok") do
+      assert(divide(10, 2) == Ok(5))
+      assert(safeDivide(10, 2) == "result: 5")
+    end
+
+    it("propagates Error to rescue") do
+      assert(safeDivide(10, 0) == "error: division by zero")
+    end
+  end
+
+  describe(".try on Option") do
+    it("unwraps Just") do
+      assert([42].first.try == 42)
+    end
+
+    it("raises on None") do
+      assert(withInlineRescue([]) == -1)
+    end
+  end
+
+  describe("trying do...rescue...end") do
+    it("catches errors in block") do
+      assert(nestedTrying(10, 2) == "inner ok")
+      assert(nestedTrying(10, 0) == "inner caught")
+    end
+  end
+
+  describe("rescue return") do
+    it("returns fallback on error") do
+      assert(withInlineRescue([5]) == 50)
+      assert(withInlineRescue([]) == -1)
+    end
+  end
+
+  describe("rescue do |e| ... end") do
+    it("catches with catch-all block") do
+      assert(withCatchAll(10, 2) == "ok: 5")
+      assert(withCatchAll(10, 0) == "caught: division by zero")
+    end
+  end
+
+  describe("rescue with guards") do
+    it("matches guarded patterns") do
+      assert(withPatternGuard(10, 2) == "ok")
+      assert(withPatternGuard(10, 0) == "div0")
+    end
+  end
+end

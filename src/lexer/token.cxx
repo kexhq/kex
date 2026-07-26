@@ -28,6 +28,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Public: return "public";
         case TokenType::Receive: return "receive";
         case TokenType::Record: return "record";
+        case TokenType::Rescue: return "rescue";
         case TokenType::Return: return "return";
         case TokenType::Spawn: return "spawn";
         case TokenType::Static: return "static";
@@ -36,6 +37,8 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Timeout: return "timeout";
         case TokenType::Trait: return "trait";
         case TokenType::True: return "true";
+        case TokenType::Try: return "try";
+        case TokenType::Trying: return "trying";
         case TokenType::Type: return "type";
         case TokenType::Using: return "using";
         case TokenType::Var: return "var";

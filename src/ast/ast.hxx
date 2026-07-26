@@ -325,6 +325,24 @@ struct BlockExpr {
     std::vector<ExprPtr> body;
 };
 
+struct TryExpr {
+    ExprPtr operand;
+};
+
+struct RescueBlock {
+    std::vector<MatchClause> clauses;
+    bool isCatchAll = false;
+    std::string catchAllParam;
+    std::vector<ExprPtr> catchAllBody;
+    bool isInlineReturn = false;
+    ExprPtr inlineReturnExpr;
+};
+
+struct TryingExpr {
+    std::vector<ExprPtr> body;
+    RescueBlock rescue;
+};
+
 // Placeholder inserted by the parser at a recovery point. Carries the
 // original error message so downstream passes can skip this node without
 // re-emitting the diagnostic.
@@ -384,6 +402,8 @@ struct Expr {
         BlockExpr,
         CurryPlaceholder,
         CurryExpr,
+        TryExpr,
+        TryingExpr,
         ErrorNode,
         UsingExpr
     > kind;
@@ -409,6 +429,7 @@ struct FunctionClause {
     std::vector<Param> params;
     std::vector<ExprPtr> body;
     std::optional<TypeExprPtr> returnAnnotation;
+    std::optional<RescueBlock> rescue;
 };
 
 struct FunctionDef {
@@ -534,6 +555,7 @@ struct MainBlock {
     // True only for explicit `main do ... end` blocks (parsed by parseMainBlock).
     // False for synthetic let-wrappers and bare top-level expression wrappers.
     bool isExplicitMain = false;
+    std::optional<RescueBlock> rescue;
 };
 
 struct Pragma {
