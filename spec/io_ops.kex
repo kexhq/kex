@@ -18,16 +18,16 @@ main do
   IO.printLine("")
 
   let path = "spec/io_scratch.txt"
-  File.delete(path)
+  FS.File.delete(path)
 
-  IO.printLine(File.exists?(path))
-  IO.printLine(File.write(path, "ab"))
-  IO.printLine(File.exists?(path))
-  IO.printLine(File.read(path))
-  File.append(path, "cd")
-  IO.printLine(File.read(path))
-  IO.printLine(File.lines(path))
-  IO.printLine(File.feed(path).take(1))
-  IO.printLine(File.delete(path))
-  IO.printLine(File.read(path))
+  IO.printLine(FS.File.exists?(path))
+  IO.printLine(FS.File.write(path, "ab"))
+  IO.printLine(FS.File.exists?(path))
+  IO.printLine(FS.File.read(path))
+  FS.File.append(path, "cd")
+  IO.printLine(FS.File.read(path))
+  IO.printLine(FS.File.lines(path))
+  IO.printLine(FS.File.feed(path).take(1))
+  IO.printLine(FS.File.delete(path))
+  IO.printLine(FS.File.read(path))
 end

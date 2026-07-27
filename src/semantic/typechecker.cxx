@@ -2192,6 +2192,10 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
             if (isStringType(argType) && isStringType(paramType)) return true;
             return false;
         }
+        // An unparameterized receiver declaration is the erased/wildcard
+        // form of the named type. For example, `make Range` methods apply to
+        // inferred `Range<Integer>` and `Range<Char>` values.
+        if (paramNamed->typeArgs.empty()) return true;
         if (argNamed->typeArgs.size() != paramNamed->typeArgs.size()) return false;
         for (size_t i = 0; i < paramNamed->typeArgs.size(); i++) {
             if (!argMatchesParam(argNamed->typeArgs[i], paramNamed->typeArgs[i])) return false;

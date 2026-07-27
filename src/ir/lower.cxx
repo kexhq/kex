@@ -667,6 +667,13 @@ struct Lowering {
                 auto noneThrow = std::make_unique<Expr>();
                 noneThrow->node = TryThrow{lit(LitKind::Atom, "none")};
                 noneClause.body = std::move(noneThrow);
+                // Native Optional-returning APIs may erase Just on success
+                // and return the payload directly. Static checking guarantees
+                // the operand is Optional/Result; preserve that ABI here.
+                auto erasedVar = fresh("_try_erased");
+                MatchClause erasedSuccessClause;
+                erasedSuccessClause.patterns.push_back(mkVarPat(erasedVar));
+                erasedSuccessClause.body = var(erasedVar);
 
                 Match m;
                 m.subjects.push_back(std::move(sAtom));
@@ -674,6 +681,7 @@ struct Lowering {
                 m.clauses.push_back(std::move(justClause));
                 m.clauses.push_back(std::move(errClause));
                 m.clauses.push_back(std::move(noneClause));
+                m.clauses.push_back(std::move(erasedSuccessClause));
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(m);
                 return wrapLets(binds, std::move(ex));

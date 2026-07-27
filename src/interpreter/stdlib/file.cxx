@@ -41,10 +41,9 @@ auto Evaluator::registerFileBuiltins() -> void {
         defineIntrinsic(name, std::move(fn));
     };
 
-    // File.open(path, mode) -> FileHandle  (raises on failure)
-    // File.open(path, mode, block) -> T?  (None if file doesn't exist)
+    // FS.File.open(path, mode) -> Result<FileHandle<R, W>, FileError>
     reg("File::open", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        if (args.size() < 2) return Value::none();
+        if (args.size() != 2) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
         const auto& path = pathStr->value;
@@ -64,8 +63,10 @@ auto Evaluator::registerFileBuiltins() -> void {
             auto flags = modeFlags(args[1]);
             fs = std::make_shared<std::fstream>(path, flags | std::ios::binary);
             if (!fs->is_open()) {
-                if (args.size() >= 3) return Value::none();
-                throw std::runtime_error("File.open: cannot open '" + path + "'");
+                auto fileError = std::make_shared<Value>();
+                fileError->data = VariantValue{
+                    "OpenFailed", "FileError", {Value::string(path)}, {}, {}};
+                return Value::error(fileError);
             }
         } else {
             fs = std::make_shared<std::fstream>();
@@ -74,14 +75,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto handle = std::make_shared<Value>();
         handle->data = FileHandleValue{fs, path};
 
-        if (args.size() >= 3) {
-            auto* fn = std::get_if<FunctionValue>(&args[2]->data);
-            if (!fn || !fn->native) return Value::none();
-            auto result = fn->native({handle});
-            if (fs->is_open()) fs->close();
-            return result;
-        }
-        return handle;
+        return Value::ok(handle);
     });
 
     // --- Text I/O (mirrors IO.getLine / IO.get / IO.printLine / IO.print) ---

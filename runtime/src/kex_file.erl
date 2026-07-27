@@ -7,7 +7,7 @@
 %% walker's m_mockFiles/m_mockDirs.
 -module(kex_file).
 -export([exists/1, lines/1, read/1, write/2, append/2, size/1, delete/1, feed/1,
-         open/2, open/3,
+         open/2,
          basename/1, dirname/1, extension/1, join/2, absolute/1,
          'file?'/1, 'directory?'/1, copy/2, rename/2,
          handle_getLine/1, handle_get/1,
@@ -164,34 +164,17 @@ rename(From, To) ->
 %% same eager list as lines/1.
 feed(Path) -> lines(Path).
 
-%% File.open(path, mode) -> FileHandle (crashes on failure)
+%% FS.File.open(path, mode) -> Result<FileHandle<R,W>, FileError>
 open(Path, Mode) ->
     case mock_content(Path) of
         undefined ->
             case file:open(pth(Path), mode_flags(Mode)) of
-                {ok, Dev} -> {'FileHandle', Dev, pth(Path)};
-                {error, Reason} ->
-                    error({file_open_error, pth(Path), Reason})
+                {ok, Dev} -> {'Ok', {'FileHandle', Dev, pth(Path)}};
+                {error, _Reason} -> {'Error', {'OpenFailed', pth(Path)}}
             end;
         _ ->
             prepare_mock_open(Path, Mode),
-            {'MockFileHandle', pth(Path)}
-    end.
-
-%% File.open(path, mode, block) -> T? (None if can't open)
-open(Path, Mode, Fun) ->
-    case mock_content(Path) of
-        undefined ->
-            case file:open(pth(Path), mode_flags(Mode)) of
-                {ok, Dev} ->
-                    try Fun({'FileHandle', Dev, pth(Path)})
-                    after file:close(Dev)
-                    end;
-                _ -> 'None'
-            end;
-        _ ->
-            prepare_mock_open(Path, Mode),
-            Fun({'MockFileHandle', pth(Path)})
+            {'Ok', {'MockFileHandle', pth(Path)}}
     end.
 
 prepare_mock_open(Path, 'Write') ->

@@ -4,18 +4,18 @@
 # Returns [lineCount, wordCount, byteCount] for a single file.
 # Missing files produce zeros rather than errors.
 foul wordCount(path: String) -> [Int] do
-  if !File.exists?(path)
+  if !FS.File.exists?(path)
     IO.printError("wc: ${path}: no such file")
     return [0, 0, 0]
   end
 
-  let lines = File.lines(path).or([])
+  let lines = FS.File.lines(path).or([])
 
   let lineCount = lines.count
   let words = lines.map do |line|
     line.split(" ").count { |w| !w.empty? }  # words per line
   end
-  let bytes = File.size(path).or(0)
+  let bytes = FS.File.size(path).or(0)
 
   [lineCount, words.sum, bytes]
 end

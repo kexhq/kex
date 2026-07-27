@@ -317,6 +317,13 @@ int main() {
             assertTrue(has(r, "FS.File.write"));
             assertTrue(has(r, "FS.File.exists?"));
         });
+        it("File. — removed top-level filesystem module", []() {
+            auto db = makePreludeDb();
+            auto r = simulate(db, "File.", 0, "File.");
+            assertTrue(!has(r, "File.read"));
+            assertTrue(!has(r, "File.write"));
+            assertTrue(!has(r, "File.open"));
+        });
         it("23. not split (B) — integer methods rewritten with literal prefix", []() {
             auto db = makePreludeDb();
             auto r = simulate(db, "23.", 0, "23.");

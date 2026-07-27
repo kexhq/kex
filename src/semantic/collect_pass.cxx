@@ -53,18 +53,31 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
 }
 
 auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
+    const std::string parentModule = m_currentModule;
+    const bool nameIsQualified =
+        !parentModule.empty() &&
+        mod.name.rfind(parentModule + ".", 0) == 0;
+    const std::string qualifiedModule =
+        parentModule.empty() || nameIsQualified
+            ? mod.name
+            : parentModule + "." + mod.name;
+
     // Register the module itself
     SymbolInfo moduleInfo;
-    moduleInfo.name = mod.name;
+    const auto separator = mod.name.rfind('.');
+    moduleInfo.name =
+        parentModule.empty() || separator == std::string::npos
+            ? mod.name
+            : mod.name.substr(separator + 1);
     moduleInfo.kind = SymbolKind::Module;
     moduleInfo.definition = mod.location;
-    moduleInfo.module = "";
+    moduleInfo.module = parentModule;
     moduleInfo.isFoul = mod.isFoul;
     moduleInfo.type = Type::unknown();
     m_state->symbols.push_back(std::move(moduleInfo));
 
     std::string savedModule = m_currentModule;
-    m_currentModule = mod.name;
+    m_currentModule = qualifiedModule;
 
     auto collectAnnotation = [&](const ast::TypeAnnotation& ann) {
         // If a FunctionDef with the same name already exists in this module,

@@ -1,5 +1,5 @@
 foul createTocFor(file_name: String) do
-  let lines = File.lines(file_name).or([])
+  let lines = FS.File.lines(file_name).or([])
   let heads = lines.filter(&.startsWith?("#"))
 
   IO.printLine("heads:")

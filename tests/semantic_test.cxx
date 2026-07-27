@@ -1622,13 +1622,23 @@ int main() {
         it("selects the FileHandle refinement from the exact open mode", []() {
             assertTrue(noErrors(
                 "main do\n"
-                "  let reader = FS.File.open(\"input.txt\", Read)\n"
+                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
                 "  reader.read()\n"
-                "  let writer = FS.File.open(\"output.txt\", Write)\n"
+                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
                 "  writer.write(\"ok\")\n"
-                "  let both = FS.File.open(\"both.txt\", ReadWrite)\n"
+                "  let both = FS.File.open(\"both.txt\", ReadWrite).try\n"
                 "  both.read()\n"
                 "  both.write(\"ok\")\n"
+                "end\n"
+            ));
+        });
+
+        it("types open as a Result containing the refined handle", []() {
+            assertTrue(noErrors(
+                "let accepts(value: Result<FileHandle<CannotRead, CanWrite>, "
+                "FileError>) = true\n"
+                "main do\n"
+                "  accepts(FS.File.open(\"output.txt\", Write))\n"
                 "end\n"
             ));
         });
@@ -1636,10 +1646,28 @@ int main() {
         it("rejects writing through a read-only FileHandle", []() {
             assertTrue(hasError(
                 "main do\n"
-                "  let reader = FS.File.open(\"input.txt\", Read)\n"
+                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
                 "  reader.write(\"no\")\n"
                 "end\n",
                 "FileHandle"
+            ));
+        });
+
+        it("rejects reading through a write-only FileHandle", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
+                "  writer.readLine()\n"
+                "end\n",
+                "FileHandle"
+            ));
+        });
+
+        it("allows an unparameterized receiver method on an inferred generic value", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  (1..3).items\n"
+                "end\n"
             ));
         });
 

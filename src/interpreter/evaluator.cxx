@@ -1812,8 +1812,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     throw TryException(Value::none());
                 }
             }
-            throw RuntimeError(".try called on non-Result/Option value: " + value->toString(),
-                               expr.location);
+            // Some native Optional-returning APIs erase Just on success and
+            // return the payload directly, while retaining None on failure.
+            // Semantic checking still rejects `.try` on a concrete non-Tryable
+            // type; this identity fallback preserves that native ABI.
+            return value;
         }
         else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
             try {

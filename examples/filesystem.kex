@@ -58,18 +58,18 @@ main do
   IO.printLine("\n=== FS.File.open mode capabilities ===")
 
   # Read exposes read operations, but not write operations.
-  let reader = FS.File.open(tmp, Read)
+  let reader = FS.File.open(tmp, Read).try
   let first = reader.readLine
   reader.close()
   IO.printLine("first line via handle: ${first.or("(none)")}")
 
   # Append exposes write operations, but not read operations.
-  let appender = FS.File.open(tmp, Append)
+  let appender = FS.File.open(tmp, Append).try
   appender.writeLine("Appended via handle.")
   appender.close()
 
   # ReadWrite exposes both sets.
-  let editable = FS.File.open(tmp, ReadWrite)
+  let editable = FS.File.open(tmp, ReadWrite).try
   IO.printLine("read-write handle sees ${editable.read().or("").count} chars")
   editable.writeLine("Written through ReadWrite.")
   editable.close()
