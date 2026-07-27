@@ -364,7 +364,7 @@ marked `foul` (see §14 Effect System):
 
 ```kex
 foul readConfig(path: String) do
-  return File.read(path)
+  return FS.File.read(path)
 end
 ```
 
@@ -947,7 +947,7 @@ side effects:
 let compute(x: Integer) = x * 2 + 1     # pure
 
 foul readConfig(path: String) do
-  return File.read(path)
+  return FS.File.read(path)
 end
 ```
 
@@ -958,7 +958,8 @@ Rules:
 - Modules may be marked `foul module`, making every member foul.
 - Guards in `match` must be pure — foul calls in guards are a compile error.
 
-`IO`, `File`, `Http`, `System`, `Task`, and `Process` operations are foul.
+`IO`, `FS.File`, `FS.Directory`, `Http`, `System`, `Task`, and `Process`
+operations are foul.
 Reading `ENV` is pure (it is an immutable snapshot).
 
 ---
@@ -1442,35 +1443,65 @@ it is **pure**.
 
 ### 23.13 File / Directory (`foul`)
 
-Top-level `File` and `Directory` modules provide filesystem operations. (Also
-available as `FS.File` / `FS.Directory` with a `FilePath` type.)
+Filesystem operations are available through the `FS.File` and `FS.Directory`
+modules. Paths use the `FilePath` type.
 
 **File:**
 
 | Function | Description |
 |---|---|
-| `File.read(path)` | `String?` — whole file or `None` |
-| `File.write(path, content)` | `Bool` — overwrite |
-| `File.append(path, content)` | `Bool` — append |
-| `File.lines(path)` | `[String]?` — lines |
-| `File.feed(path)` | `Stream<String>?` — lazy lines |
-| `File.exists?(path)`, `file?`, `directory?` | `Bool` |
-| `File.size(path)` | `Integer?` — bytes |
-| `File.delete(path)`, `copy(src, dst)`, `rename(src, dst)` | `Bool` |
-| `File.open(path, mode)` | `FileHandle` |
-| `File.open(path, mode) { fh -> T }` | `T?` — block form, auto-close |
-| `File.basename`, `dirname`, `extension`, `join`, `absolute` | Path ops |
+| `FS.File.read(path)` | `String?` — whole file or `None` |
+| `FS.File.write(path, content)` | `Bool` — overwrite |
+| `FS.File.append(path, content)` | `Bool` — append |
+| `FS.File.lines(path)` | `[String]?` — lines |
+| `FS.File.feed(path)` | `Stream<String>?` — lazy lines |
+| `FS.File.exists?(path)`, `file?`, `directory?` | `Bool` |
+| `FS.File.size(path)` | `Integer?` — bytes |
+| `FS.File.delete(path)`, `copy(src, dst)`, `rename(src, dst)` | `Bool` |
+| `FS.File.open(path, mode)` | Mode-specific `Result<FileHandle<R, W>, FileError>` |
+| `FS.File.basename`, `dirname`, `extension`, `join`, `absolute` | Path ops |
+
+`open` refines the handle capabilities from its mode:
+
+| Mode | Result |
+|---|---|
+| `Read` | `Result<FileHandle<CanRead, CannotWrite>, FileError>` |
+| `Write` | `Result<FileHandle<CannotRead, CanWrite>, FileError>` |
+| `Append` | `Result<FileHandle<CannotRead, CanWrite>, FileError>` |
+| `ReadWrite` | `Result<FileHandle<CanRead, CanWrite>, FileError>` |
+
+Use `.try` inside `trying` to unwrap the result without losing the capability
+information:
+
+```kex
+trying do
+  let file = FS.File.open("notes.txt", Read).try
+  let first = file.readLine
+  file.close
+  first
+rescue
+  OpenFailed(_) -> None
+end
+```
+
+Read methods are only available on `FileHandle<CanRead, W>`, and write methods
+are only available on `FileHandle<R, CanWrite>`. For example, calling
+`readLine` on a handle opened with `Write` is a compile-time error. Capabilities
+do not currently track whether a handle has been closed.
 
 **Directory:**
 
 | Function | Description |
 |---|---|
-| `Directory.create(path)`, `delete(path)`, `deleteAll(path)` | `Bool` |
-| `Directory.list(path)`, `files`, `directories` | `[String]?` |
-| `Directory.exists?`, `current`, `home` | Existence / paths |
+| `FS.Directory.create(path)`, `delete(path)`, `deleteAll(path)` | `Bool` |
+| `FS.Directory.list(path)`, `files`, `directories` | `[String]?` |
+| `FS.Directory.exists?`, `current`, `home` | Existence / paths |
 
-**FileHandle** methods: `getLine`, `get`, `readLine`, `printLine`, `print`,
-`write`, `read`, `eof?`, `feed`, `close`.
+**FileHandle** methods:
+
+- Read-capable: `getLine`, `get`, `readLine`, `read`, `eof?`, `atEnd?`, `feed`.
+- Write-capable: `printLine`, `print`, `writeLine`, `write`.
+- All handles: `close`.
 
 ### 23.14 Http (`foul`)
 

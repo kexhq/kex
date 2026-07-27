@@ -69,7 +69,7 @@ IO.printLine(safeHead([3, 4, 5]))
 IO.printLine(safeHead([]))
 
 # .try on None propagates
-let fromOption(val: Option<Int>) -> String do
+let fromOption(val: Optional<Int>) -> String do
   let n = val.try
   "got: ${n}"
 rescue

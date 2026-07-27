@@ -1581,14 +1581,129 @@ int main() {
             ));
         });
 
-        it("does not register make-block methods for call checking (implicit `this` receiver)", []() {
+        it("rejects a make-block method on the wrong receiver refinement", []() {
+            assertTrue(hasError(
+                "type HandleState = Open | Closed\n"
+                "type Handle<S>\n"
+                "make Handle<Open> do\n"
+                "  read :> String\n"
+                "  let read = \"ok\"\n"
+                "end\n"
+                "let misuse(handle: Handle<Closed>) = handle.read()\n",
+                "read"
+            ));
+        });
+
+        it("accepts a make-block method on its declared receiver refinement", []() {
             assertTrue(noErrors(
+                "type HandleState = Open | Closed\n"
+                "type Handle<S>\n"
+                "make Handle<Open> do\n"
+                "  read :> String\n"
+                "  let read = \"ok\"\n"
+                "end\n"
+                "let use(handle: Handle<Open>) = handle.read()\n"
+            ));
+        });
+
+        it("checks make-block method arguments outside the implementation", []() {
+            assertTrue(hasError(
                 "make Int do\n"
-                "  let describe(label: String) = label\n"
+                "  describe :> String -> String\n"
+                "  let describe(label) = label\n"
                 "end\n"
                 "main do\n"
-                "  let x = 5.describe(42)\n"
+                "  5.describe(42)\n"
+                "end\n",
+                "String"
+            ));
+        });
+
+        it("selects the FileHandle refinement from the exact open mode", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
+                "  reader.read()\n"
+                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
+                "  writer.write(\"ok\")\n"
+                "  let both = FS.File.open(\"both.txt\", ReadWrite).try\n"
+                "  both.read()\n"
+                "  both.write(\"ok\")\n"
                 "end\n"
+            ));
+        });
+
+        it("types open as a Result containing the refined handle", []() {
+            assertTrue(noErrors(
+                "let accepts(value: Result<FileHandle<CannotRead, CanWrite>, "
+                "FileError>) = true\n"
+                "main do\n"
+                "  accepts(FS.File.open(\"output.txt\", Write))\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects writing through a read-only FileHandle", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
+                "  reader.write(\"no\")\n"
+                "end\n",
+                "FileHandle"
+            ));
+        });
+
+        it("rejects reading through a write-only FileHandle", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
+                "  writer.readLine()\n"
+                "end\n",
+                "FileHandle"
+            ));
+        });
+
+        it("allows an unparameterized receiver method on an inferred generic value", []() {
+            assertTrue(noErrors(
+                "main do\n"
+                "  (1..3).items\n"
+                "end\n"
+            ));
+        });
+
+        it("preserves the inner Optional type through .try", []() {
+            assertTrue(hasError(
+                "let requireInteger(value: Integer) = value\n"
+                "main do\n"
+                "  trying do\n"
+                "    requireInteger(FS.File.read(\"input.txt\").try)\n"
+                "  rescue\n"
+                "    _ -> 0\n"
+                "  end\n"
+                "end\n",
+                "String"
+            ));
+        });
+
+        it("accepts .try on an explicitly annotated Optional", []() {
+            assertTrue(noErrors(
+                "let unwrap(value: Optional<Integer>) -> Integer do\n"
+                "  value.try\n"
+                "rescue return 0\n"
+                "end\n"
+            ));
+        });
+
+        it("rejects .try on a non-Tryable concrete value", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  trying do\n"
+                "    42.try\n"
+                "  rescue\n"
+                "    _ -> 0\n"
+                "  end\n"
+                "end\n",
+                "Result or Optional"
             ));
         });
 
@@ -2144,6 +2259,16 @@ int main() {
     });
 
     describe("let constructor pattern vs type mismatch", []() {
+        it("widens sibling nullary constructors to their parent ADT in lists", []() {
+            assertTrue(noErrors(
+                "type Comparison = Less | Equal | Greater\n"
+                "let render(value: Comparison) = value\n"
+                "main do\n"
+                "  [Less, Equal, Greater].each(&render)\n"
+                "end\n"
+            ));
+        });
+
         it("Ok pattern on Optional value errors", []() {
             assertTrue(hasError(
                 "main do\n"

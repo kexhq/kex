@@ -1,6 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
-           inspect/1, to_string/1, to_string_optional/1,
+           inspect/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0]).
@@ -130,6 +130,17 @@ inspect(X) ->
         false -> inspect_real(X)
     end.
 
+%% REPL-only inspection with the compiler's semantic type. Runtime tuples
+%% erase phantom parameters, so value_type_name/1 cannot recover typestate.
+inspect_typed('Kex.Unit', _Type) -> 'Kex.Unit';
+inspect_typed(ok, _Type) -> ok;
+inspect_typed(X, Type) ->
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
+              ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+              [inspect_string(X), Type]),
+    X.
+
 inspect_real(X) when is_integer(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~p" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -230,6 +241,10 @@ inspect_string(X) when is_atom(X) ->
         {0, _Owner} -> atom_to_list(X);
         _ -> ?GREEN ++ ":" ++ atom_to_list(X) ++ ?RESET
     end;
+inspect_string({'FileHandle', _Device, Path}) ->
+    "<FileHandle: " ++ inspect_string(Path) ++ ">";
+inspect_string({'MockFileHandle', Path}) ->
+    "<FileHandle: " ++ inspect_string(Path) ++ ">";
 inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
                        (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                         element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->

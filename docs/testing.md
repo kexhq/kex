@@ -51,7 +51,7 @@ using Test
 
 describe MyServer do
   before do
-    Mock.File.expect(:read, "config.toml", returns: Ok("port=8080"))
+    Mock.FS.File("config.toml", "port=8080")
   end
 end
 ```

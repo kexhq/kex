@@ -39,24 +39,24 @@ end
 
 describe("before and after hooks") do
   before do
-    Assert.none(File.read("body-artifact"))
+    Assert.none(FS.File.read("body-artifact"))
     Mock.FS.File("outer-hook", "outer")
   end
   after(:each) { Mock.FS.clear() }
 
   describe("nested hooks") do
     before(:each) do
-      Assert.equal(File.read("outer-hook").or(""), "outer")
+      Assert.equal(FS.File.read("outer-hook").or(""), "outer")
       Mock.FS.File("inner-hook", "inner")
     end
 
     it("runs setup from outer to inner") do
-      Assert.equal(File.read("inner-hook").or(""), "inner")
+      Assert.equal(FS.File.read("inner-hook").or(""), "inner")
       Mock.FS.File("body-artifact", "temporary")
     end
 
     it("runs teardown before the next test") do
-      Assert.none(File.read("body-artifact"))
+      Assert.none(FS.File.read("body-artifact"))
     end
   end
 end
@@ -68,19 +68,19 @@ describe("all hooks") do
   end
   after(:all) { Mock.FS.clear() }
 
-  before { Assert.equal(File.read("all-hook").or(""), "once") }
+  before { Assert.equal(FS.File.read("all-hook").or(""), "once") }
 
   it("keeps all setup for the first test") do
-    Assert.equal(File.read("all-hook").or(""), "once")
+    Assert.equal(FS.File.read("all-hook").or(""), "once")
   end
 
   it("keeps all setup for later tests") do
-    Assert.equal(File.read("all-hook").or(""), "once")
+    Assert.equal(FS.File.read("all-hook").or(""), "once")
   end
 end
 
 describe("teardown after failure") do
-  before { Assert.none(File.read("all-hook")) }
+  before { Assert.none(FS.File.read("all-hook")) }
   after { Mock.FS.clear() }
 
   it("fails intentionally") do
@@ -89,7 +89,7 @@ describe("teardown after failure") do
   end
 
   it("still ran teardown") do
-    Assert.none(File.read("failed-test-artifact"))
+    Assert.none(FS.File.read("failed-test-artifact"))
   end
 end
 

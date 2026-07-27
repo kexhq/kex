@@ -46,6 +46,7 @@ struct ImportedTraitConformance {
 struct ImportedADT {
     std::string name;
     std::vector<std::string> constructors;
+    std::unordered_map<std::string, int> constructorArities;
 };
 
 // Backend-neutral checked interface snapshot. Ordinary module exports retain

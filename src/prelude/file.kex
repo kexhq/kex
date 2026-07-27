@@ -1,13 +1,18 @@
+type FileHandle<R, W>
+
 module FS do
   type FilePath = String
   type FileModes = Read | Write | Append | ReadWrite
+  type ReadCapability = CanRead | CannotRead
+  type WriteCapability = CanWrite | CannotWrite
+  type FileError = OpenFailed(FilePath)
 
   foul module File do
-    open : FilePath -> FileModes -> FileHandle
+    open : FilePath -> Read -> Result<FileHandle<CanRead, CannotWrite>, FileError>
+    open : FilePath -> Write -> Result<FileHandle<CannotRead, CanWrite>, FileError>
+    open : FilePath -> Append -> Result<FileHandle<CannotRead, CanWrite>, FileError>
+    open : FilePath -> ReadWrite -> Result<FileHandle<CanRead, CanWrite>, FileError>
     let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
-
-    open : FilePath -> FileModes -> (FileHandle -> T) -> T?
-    let open(path, mode, block) = Kex.Intrinsic.File.open(path, mode, block)
 
     read : FilePath -> String?
     let read(path) = Kex.Intrinsic.File.read(path)
@@ -97,101 +102,7 @@ module FS do
   end
 end
 
-foul module File do
-  open : String -> FS.FileModes -> FileHandle
-  let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
-
-  open : String -> FS.FileModes -> (FileHandle -> X) -> X?
-  let open(path, mode, block) = Kex.Intrinsic.File.open(path, mode, block)
-
-  read : String -> String?
-  let read(path) = Kex.Intrinsic.File.read(path)
-
-  write : String -> String -> Bool
-  let write(path, content) = Kex.Intrinsic.File.write(path, content)
-
-  append : String -> String -> Bool
-  let append(path, content) = Kex.Intrinsic.File.append(path, content)
-
-  exists? : String -> Bool
-  let exists?(path) = Kex.Intrinsic.File.exists?(path)
-
-  file? : String -> Bool
-  let file?(path) = Kex.Intrinsic.File.file?(path)
-
-  directory? : String -> Bool
-  let directory?(path) = Kex.Intrinsic.File.directory?(path)
-
-  delete : String -> Bool
-  let delete(path) = Kex.Intrinsic.File.delete(path)
-
-  copy : String -> String -> Bool
-  let copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
-
-  rename : String -> String -> Bool
-  let rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
-
-  lines : String -> [String]?
-  let lines(path) = Kex.Intrinsic.File.lines(path)
-
-  feed : String -> Stream<String>?
-  let feed(path) = Kex.Intrinsic.File.feed(path)
-
-  size : String -> Integer?
-  let size(path) = Kex.Intrinsic.File.size(path)
-
-  basename : String -> String
-  let basename(path) = Kex.Intrinsic.File.basename(path)
-
-  dirname : String -> String
-  let dirname(path) = Kex.Intrinsic.File.dirname(path)
-
-  extension : String -> String
-  let extension(path) = Kex.Intrinsic.File.extension(path)
-
-  join : String -> String -> String
-  let join(a, b) = Kex.Intrinsic.File.join(a, b)
-
-  absolute : String -> String?
-  let absolute(path) = Kex.Intrinsic.File.absolute(path)
-end
-
-foul module Directory do
-  exists? : String -> Bool
-  let exists?(path) = Kex.Intrinsic.Directory.exists?(path)
-
-  directory? : String -> Bool
-  let directory?(path) = Kex.Intrinsic.Directory.directory?(path)
-
-  file? : String -> Bool
-  let file?(path) = Kex.Intrinsic.Directory.file?(path)
-
-  create : String -> Bool
-  let create(path) = Kex.Intrinsic.Directory.create(path)
-
-  delete : String -> Bool
-  let delete(path) = Kex.Intrinsic.Directory.delete(path)
-
-  deleteAll : String -> Bool
-  let deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
-
-  list : String -> [String]?
-  let list(path) = Kex.Intrinsic.Directory.list(path)
-
-  files : String -> [String]?
-  let files(path) = Kex.Intrinsic.Directory.files(path)
-
-  directories : String -> [String]?
-  let directories(path) = Kex.Intrinsic.Directory.directories(path)
-
-  current : String
-  let current = Kex.Intrinsic.Directory.current
-
-  home : String?
-  let home = Kex.Intrinsic.Directory.home
-end
-
-make FileHandle do
+make FileHandle<CanRead, W> do
   # Compatibility names matching IO-style handle operations.
   getLine :> String?
   let getLine = Kex.Intrinsic.FileHandle.getLine(this)
@@ -199,23 +110,11 @@ make FileHandle do
   get :> String?
   let get = Kex.Intrinsic.FileHandle.get(this)
 
-  printLine :> String -> Bool
-  let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
-
-  print :> String -> Bool
-  let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
-
   readLine :> String?
   let readLine = Kex.Intrinsic.FileHandle.readLine(this)
 
-  writeLine :> String -> Bool
-  let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
-
   read :> String?
   let read = Kex.Intrinsic.FileHandle.read(this)
-
-  write :> String -> Bool
-  let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
 
   eof? :> Bool
   let eof? = Kex.Intrinsic.FileHandle.eof?(this)
@@ -226,6 +125,23 @@ make FileHandle do
   feed :> Stream<String>?
   let feed = Kex.Intrinsic.FileHandle.feed(this)
 
+end
+
+make FileHandle<R, CanWrite> do
+  printLine :> String -> Bool
+  let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
+
+  print :> String -> Bool
+  let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
+
+  writeLine :> String -> Bool
+  let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
+
+  write :> String -> Bool
+  let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
+end
+
+make FileHandle<R, W> do
   close :> Void
   let close = Kex.Intrinsic.FileHandle.close(this)
 end

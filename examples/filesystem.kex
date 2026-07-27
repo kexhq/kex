@@ -1,15 +1,15 @@
 # Filesystem module demonstration
-# Covers File, Directory, FileHandle, and Mock.FS
+# Covers FS.File, FS.Directory, FileHandle, and Mock.FS
 
 # A simple log writer that appends timestamped entries.
 # Declared outside main so the spec can load it.
 foul writeLog(path: String, entry: String) -> Bool do
-  File.append(path, "[log] ${entry}\n")
+  FS.File.append(path, "[log] ${entry}\n")
 end
 
 # Count non-empty lines in a file.
 foul countLines(path: String) -> Int do
-  match File.lines(path) do
+  match FS.File.lines(path) do
     None       -> 0
     Just(ls)   -> ls.count { |l| !l.empty? }
     lines      -> lines.count { |l| !l.empty? }
@@ -22,21 +22,21 @@ main do
 
   let p = "/home/user/projects/app/src/main.kex"
   IO.printLine("path:      ${p}")
-  IO.printLine("basename:  ${File.basename(p)}")
-  IO.printLine("dirname:   ${File.dirname(p)}")
-  IO.printLine("extension: ${File.extension(p)}")
-  IO.printLine("join:      ${File.join("src", "utils.kex")}")
+  IO.printLine("basename:  ${FS.File.basename(p)}")
+  IO.printLine("dirname:   ${FS.File.dirname(p)}")
+  IO.printLine("extension: ${FS.File.extension(p)}")
+  IO.printLine("join:      ${FS.File.join("src", "utils.kex")}")
 
   # ── File read/write ─────────────────────────────────────────────────
   IO.printLine("\n=== File read / write ===")
 
-  let tmp = File.join(Directory.current(), "kex_demo_tmp.txt")
-  File.write(tmp, "Hello from Kex!\nLine two.\nLine three.\n")
+  let tmp = FS.File.join(FS.Directory.current(), "kex_demo_tmp.txt")
+  FS.File.write(tmp, "Hello from Kex!\nLine two.\nLine three.\n")
   IO.printLine("wrote to:  ${tmp}")
-  IO.printLine("exists?:   ${File.file?(tmp)}")
-  IO.printLine("size:      ${File.size(tmp).or(-1)} bytes")
+  IO.printLine("exists?:   ${FS.File.file?(tmp)}")
+  IO.printLine("size:      ${FS.File.size(tmp).or(-1)} bytes")
 
-  match File.read(tmp) do
+  match FS.File.read(tmp) do
     None    -> IO.printLine("(could not read)")
     content -> IO.printLine("content:\n${content}")
   end
@@ -44,73 +44,85 @@ main do
   # ── Lines and feed ──────────────────────────────────────────────────
   IO.printLine("=== Lines and stream ===")
 
-  let ls = File.lines(tmp).or([])
+  let ls = FS.File.lines(tmp).or([])
   IO.printLine("line count: ${ls.count}")
   ls.each { |l| IO.printLine("  > ${l}") }
 
   IO.printLine("first 2 via feed:")
-  match File.feed(tmp) do
+  match FS.File.feed(tmp) do
     None -> IO.printLine("  (unavailable)")
     s    -> s.take(2).each { |l| IO.printLine("  > ${l}") }
   end
 
-  # ── File.open resource block ────────────────────────────────────────
-  IO.printLine("\n=== File.open resource block ===")
+  # ── Mode-safe handles ───────────────────────────────────────────────
+  IO.printLine("\n=== FS.File.open mode capabilities ===")
 
-  let first = File.open(tmp, Read) do |f|
-    f.readLine
-  end
+  # Read exposes read operations, but not write operations.
+  let reader = FS.File.open(tmp, Read).try
+  let first = reader.readLine
+  reader.close()
   IO.printLine("first line via handle: ${first.or("(none)")}")
 
-  # Write through a handle
-  File.open(tmp, Append) do |f|
-    f.writeLine("Appended via handle.")
-  end
-  IO.printLine("after handle append, lines: ${File.lines(tmp).or([]).count}")
+  # Append exposes write operations, but not read operations.
+  let appender = FS.File.open(tmp, Append).try
+  appender.writeLine("Appended via handle.")
+  appender.close()
+
+  # ReadWrite exposes both sets.
+  let editable = FS.File.open(tmp, ReadWrite).try
+  IO.printLine("read-write handle sees ${editable.read().or("").count} chars")
+  editable.writeLine("Written through ReadWrite.")
+  editable.close()
+
+  # These are compile-time errors:
+  # reader.write("not allowed")
+  # appender.read()
+
+  IO.printLine("after handle writes, lines: ${FS.File.lines(tmp).or([]).count}")
 
   # ── Type predicates ─────────────────────────────────────────────────
   IO.printLine("\n=== Type predicates ===")
 
-  IO.printLine("tmp is file?:      ${File.file?(tmp)}")
-  IO.printLine("tmp is dir?:       ${File.directory?(tmp)}")
-  IO.printLine("/tmp is dir?:      ${Directory.directory?("/tmp")}")
-  IO.printLine("/tmp is file?:     ${Directory.file?("/tmp")}")
+  IO.printLine("tmp is file?:      ${FS.File.file?(tmp)}")
+  IO.printLine("tmp is dir?:       ${FS.File.directory?(tmp)}")
+  IO.printLine("/tmp is dir?:      ${FS.Directory.directory?("/tmp")}")
+  IO.printLine("/tmp is file?:     ${FS.Directory.file?("/tmp")}")
 
   # ── Copy, rename, delete ────────────────────────────────────────────
   IO.printLine("\n=== Copy / rename / delete ===")
 
-  let copy = File.join(Directory.current(), "kex_demo_copy.txt")
-  File.copy(tmp, copy)
-  IO.printLine("copied, copy exists?: ${File.file?(copy)}")
+  let copy = FS.File.join(FS.Directory.current(), "kex_demo_copy.txt")
+  FS.File.copy(tmp, copy)
+  IO.printLine("copied, copy exists?: ${FS.File.file?(copy)}")
 
-  let moved = File.join(Directory.current(), "kex_demo_moved.txt")
-  File.rename(copy, moved)
-  IO.printLine("renamed — copy gone?: ${!File.file?(copy)}")
-  IO.printLine("moved exists?:        ${File.file?(moved)}")
+  let moved = FS.File.join(FS.Directory.current(), "kex_demo_moved.txt")
+  FS.File.rename(copy, moved)
+  IO.printLine("renamed — copy gone?: ${!FS.File.file?(copy)}")
+  IO.printLine("moved exists?:        ${FS.File.file?(moved)}")
 
-  File.delete(tmp)
-  File.delete(moved)
+  FS.File.delete(tmp)
+  FS.File.delete(moved)
   IO.printLine("cleaned up")
 
   # ── Directory operations ─────────────────────────────────────────────
   IO.printLine("\n=== Directory operations ===")
 
-  let dir = File.join(Directory.current(), "kex_demo_dir")
-  Directory.create(dir)
-  IO.printLine("created dir:  ${Directory.directory?(dir)}")
+  let dir = FS.File.join(FS.Directory.current(), "kex_demo_dir")
+  FS.Directory.create(dir)
+  IO.printLine("created dir:  ${FS.Directory.directory?(dir)}")
 
-  File.write(File.join(dir, "a.txt"), "alpha")
-  File.write(File.join(dir, "b.txt"), "beta")
-  IO.printLine("files in dir: ${Directory.files(dir).or([])}")
-  IO.printLine("dirs in dir:  ${Directory.directories(dir).or([])}")
+  FS.File.write(FS.File.join(dir, "a.txt"), "alpha")
+  FS.File.write(FS.File.join(dir, "b.txt"), "beta")
+  IO.printLine("files in dir: ${FS.Directory.files(dir).or([])}")
+  IO.printLine("dirs in dir:  ${FS.Directory.directories(dir).or([])}")
 
-  let sub = File.join(dir, "sub")
-  Directory.create(sub)
-  IO.printLine("after mkdir sub, dirs: ${Directory.directories(dir).or([])}")
-  IO.printLine("current:      ${Directory.current()}")
+  let sub = FS.File.join(dir, "sub")
+  FS.Directory.create(sub)
+  IO.printLine("after mkdir sub, dirs: ${FS.Directory.directories(dir).or([])}")
+  IO.printLine("current:      ${FS.Directory.current()}")
 
-  Directory.deleteAll(dir)
-  IO.printLine("after deleteAll, dir gone?: ${!Directory.directory?(dir)}")
+  FS.Directory.deleteAll(dir)
+  IO.printLine("after deleteAll, dir gone?: ${!FS.Directory.directory?(dir)}")
 
   # ── Mock.FS — in-memory filesystem for tests ─────────────────────────
   IO.printLine("\n=== Mock.FS ===")
@@ -119,18 +131,18 @@ main do
   Mock.FS.Directory("cache")
   Mock.FS.File("cache/entry.bin", "\x00\x01\x02")
 
-  IO.printLine("mock file exists?:  ${File.file?("config.txt")}")
-  IO.printLine("real file exists?:  ${File.file?("does_not_exist.txt")}")
-  IO.printLine("mock dir exists?:   ${Directory.directory?("cache")}")
+  IO.printLine("mock file exists?:  ${FS.File.file?("config.txt")}")
+  IO.printLine("real file exists?:  ${FS.File.file?("does_not_exist.txt")}")
+  IO.printLine("mock dir exists?:   ${FS.Directory.directory?("cache")}")
 
-  let cfg = File.lines("config.txt").or([])
+  let cfg = FS.File.lines("config.txt").or([])
   IO.printLine("config lines: ${cfg}")
 
   writeLog("config.txt", "server started")
-  IO.printLine("after append, lines: ${File.lines("config.txt").or([]).count}")
+  IO.printLine("after append, lines: ${FS.File.lines("config.txt").or([]).count}")
 
-  IO.printLine("cache files: ${Directory.files("cache").or([])}")
+  IO.printLine("cache files: ${FS.Directory.files("cache").or([])}")
 
   Mock.FS.clear()
-  IO.printLine("after clear, config exists?: ${File.file?("config.txt")}")
+  IO.printLine("after clear, config exists?: ${FS.File.file?("config.txt")}")
 end

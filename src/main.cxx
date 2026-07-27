@@ -1427,6 +1427,10 @@ int main(int argc, char *argv[]) {
     // independent defs stay in source order.
     std::vector<std::pair<std::string, std::string>> topDefs;
     std::string localBinds; // let x = ... — re-emitted inside main do each eval
+    // Original local binding sources retained for semantic replay. Runtime
+    // replay uses process-dictionary lookups, which intentionally erase the
+    // source type and therefore cannot enforce typestate by itself.
+    std::vector<std::pair<std::string, std::string>> beamSemanticBinds;
     std::optional<std::string> pendingLine; // read-ahead during clause chaining
     int iteration = 0;
     std::vector<std::string> loadedBeamFiles; // .kex paths loaded via /load
@@ -1509,6 +1513,7 @@ int main(int argc, char *argv[]) {
       if (input == "/reset") {
         topDefs.clear();
         localBinds.clear();
+        beamSemanticBinds.clear();
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
         continue;
@@ -1754,17 +1759,75 @@ int main(int argc, char *argv[]) {
           // stashed in the process dictionary so subsequent evals
           // retrieve it (avoiding re-evaluation of side-effectful
           // expressions like Ets.new).
+          std::string semanticBindSource;
+          for (const auto &[name, binding] : beamSemanticBinds)
+            if (!isLocalLet || name != letVarName)
+              semanticBindSource += "  " + binding + "\n";
+          auto semanticSource = topDefsStr() + "main do\n" +
+                                semanticBindSource + "  " + source +
+                                "\nend\n";
+          kex::Lexer semanticLexer(semanticSource, "<repl>");
+          kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
+          auto semanticProgram = semanticParser.parseProgram();
+          for (const auto& f : loadedBeamFiles) {
+            auto fs = readFile(f);
+            kex::Lexer fl(std::move(fs), f);
+            kex::Parser fp(fl.tokenizeAll(), f);
+            auto fprog = fp.parseProgram();
+            for (auto& item : fprog.items)
+              if (!std::holds_alternative<
+                      std::unique_ptr<kex::ast::MainBlock>>(item))
+                semanticProgram.items.push_back(std::move(item));
+          }
+          auto semanticDeps = resolveBeamDeps(
+              semanticProgram, kex::standardLibraryModuleRoots());
+          (void)semanticDeps;
+          kex::semantic::Analyzer semanticAnalyzer(
+              &preludeSemanticInterfaces());
+          if (!semanticAnalyzer.analyze(semanticProgram)) {
+            for (const auto &diagnostic : semanticAnalyzer.diagnostics())
+              if (diagnostic.level ==
+                  kex::semantic::Diagnostic::Level::Error)
+                throw std::runtime_error(diagnostic.message);
+            throw std::runtime_error("semantic analysis failed");
+          }
+          std::optional<std::string> beamSemanticType;
+          for (auto item = semanticProgram.items.rbegin();
+               item != semanticProgram.items.rend(); ++item) {
+            auto *main =
+                std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&*item);
+            if (!main || !*main || (*main)->body.empty())
+              continue;
+            const auto *last = (*main)->body.back().get();
+            const kex::ast::Expr *typedExpr = last;
+            if (const auto *binding =
+                    std::get_if<kex::ast::LetExpr>(&last->kind);
+                binding && binding->value)
+              typedExpr = binding->value.get();
+            if (auto type = semanticAnalyzer.typeOf(typedExpr)) {
+              auto rendered = kex::semantic::typeToString(type);
+              if (rendered.find("FileHandle") != std::string::npos)
+                beamSemanticType = std::move(rendered);
+            }
+            break;
+          }
+          const auto inspectCall = [&](const std::string &expression) {
+            if (!beamSemanticType)
+              return "IO.inspect(" + expression + ")";
+            return "Kex.Intrinsic.IO.inspectTyped(" + expression + ", \"" +
+                   *beamSemanticType + "\")";
+          };
+
           std::string kexSource;
           if (isLocalLet) {
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
                         source + "\n" +
                         "  Erlang.Erlang.put(:kexrepl" + letVarName +
                         ", " + letVarName + ")\n" +
-                        "  IO.inspect(" + letVarName +
-                        ")\nend\n";
+                        "  " + inspectCall(letVarName) + "\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
-                        "  IO.inspect(" + source + ")\nend\n";
+                        "  " + inspectCall(source) + "\nend\n";
           }
 
           kex::Lexer lexer(kexSource);
@@ -1875,7 +1938,7 @@ int main(int argc, char *argv[]) {
                       << output;
           }
 
-          if (isLocalLet) {
+          if (isLocalLet && evalStatus == "ok") {
             const auto equals = source.find('=');
             const auto rhs = equals == std::string::npos
                 ? std::string::npos
@@ -1895,6 +1958,14 @@ int main(int argc, char *argv[]) {
               localBinds += "  let " + letVarName +
                             " = Erlang.Erlang.get(:kexrepl" +
                             letVarName + ")\n";
+            beamSemanticBinds.erase(
+                std::remove_if(
+                    beamSemanticBinds.begin(), beamSemanticBinds.end(),
+                    [&](const auto &binding) {
+                      return binding.first == letVarName;
+                    }),
+                beamSemanticBinds.end());
+            beamSemanticBinds.emplace_back(letVarName, source);
           }
         }
       } catch (const std::exception &e) {
@@ -1954,6 +2025,9 @@ int main(int argc, char *argv[]) {
     // Accumulated source of all top-level definitions typed in the REPL so
     // far, used to keep the SemanticDB index complete across multiple inputs.
     std::string replAccumSource;
+    // Local bindings are evaluated one input at a time, but their source is
+    // retained here so semantic analysis can infer the type of later inputs.
+    std::vector<std::pair<std::string, std::string>> replBindings;
     // Keep parsed programs alive so function closures can reference AST nodes
     std::vector<kex::ast::Program *> replPrograms;
     // A line read ahead while chaining function clauses that turned out
@@ -2205,7 +2279,9 @@ int main(int argc, char *argv[]) {
         return evaluator.execute(*program);
       };
 
-      auto showResult = [&](const kex::interpreter::ValuePtr &result) {
+      auto showResult = [&](const kex::interpreter::ValuePtr &result,
+                            const std::optional<std::string> &semanticType =
+                                std::nullopt) {
         if (result && !std::holds_alternative<kex::interpreter::UnitValue>(
                           result->data)) {
           std::cout << kex::color::apply(kex::color::gray) << "=> "
@@ -2215,7 +2291,7 @@ int main(int argc, char *argv[]) {
             std::cout << " " << kex::color::apply(kex::color::gray) << ":"
                       << kex::color::apply(kex::color::reset) << " "
                       << kex::color::apply(kex::color::cyan)
-                      << result->typeName()
+                      << (semanticType ? *semanticType : result->typeName())
                       << kex::color::apply(kex::color::reset);
           }
           std::cout << "\n";
@@ -2278,8 +2354,91 @@ int main(int argc, char *argv[]) {
           kex::Parser parser(std::move(tokens));
           auto *program = new kex::ast::Program(parser.parseProgram());
           replPrograms.push_back(program);
+
+          // A REPL `let` may intentionally shadow a previous binding. Keep
+          // its name so the semantic replay can replace, rather than
+          // redeclare, the old source.
+          std::optional<std::string> bindingName;
+          for (const auto &item : program->items) {
+            const auto *main =
+                std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
+            if (!main || !*main || (*main)->body.empty())
+              continue;
+            const auto *binding = std::get_if<kex::ast::LetExpr>(
+                &(*main)->body.back()->kind);
+            if (!binding || !binding->pattern)
+              continue;
+            if (const auto *variable =
+                    std::get_if<kex::ast::VarPattern>(
+                        &binding->pattern->kind))
+              bindingName = variable->name;
+          }
+
+          // Runtime values intentionally erase phantom typestate parameters.
+          // Analyze a parallel source containing prior REPL bindings so the
+          // displayed type is the source-level type rather than FileHandle.
+          std::optional<std::string> semanticType;
+          std::optional<std::string> semanticError;
+          try {
+            std::string bindingSource;
+            for (const auto &[name, binding] : replBindings)
+              if (!bindingName || name != *bindingName)
+                bindingSource += binding + "\n";
+            auto semanticSource = replAccumSource + "main do\n" +
+                                  bindingSource + source + "\nend\n";
+            kex::Lexer semanticLexer(semanticSource, "<repl>");
+            kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
+            auto semanticProgram = semanticParser.parseProgram();
+            kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
+            if (replAnalyzer.analyze(semanticProgram)) {
+              for (auto item = semanticProgram.items.rbegin();
+                   item != semanticProgram.items.rend(); ++item) {
+                auto *main = std::get_if<
+                    std::unique_ptr<kex::ast::MainBlock>>(&*item);
+                if (!main || !*main || (*main)->body.empty())
+                  continue;
+                const auto *last = (*main)->body.back().get();
+                const kex::ast::Expr *typedExpr = last;
+                if (const auto *binding =
+                        std::get_if<kex::ast::LetExpr>(&last->kind);
+                    binding && binding->value)
+                  typedExpr = binding->value.get();
+                if (auto type = replAnalyzer.typeOf(typedExpr)) {
+                  auto rendered = kex::semantic::typeToString(type);
+                  if (rendered.find("FileHandle") != std::string::npos)
+                    semanticType = std::move(rendered);
+                }
+                break;
+              }
+            } else {
+              for (const auto &diagnostic : replAnalyzer.diagnostics()) {
+                if (diagnostic.level !=
+                    kex::semantic::Diagnostic::Level::Error)
+                  continue;
+                semanticError = diagnostic.message;
+                break;
+              }
+            }
+          } catch (...) {
+            // Evaluation still works if an incomplete semantic history (for
+            // example a loaded file with a main block) cannot be re-parsed.
+          }
+
+          if (semanticError)
+            throw std::runtime_error(*semanticError);
+
           auto result = execProgram(program);
-          showResult(result);
+          showResult(result, semanticType);
+          if (bindingName) {
+            replBindings.erase(
+                std::remove_if(
+                    replBindings.begin(), replBindings.end(),
+                    [&](const auto &binding) {
+                      return binding.first == *bindingName;
+                    }),
+                replBindings.end());
+            replBindings.emplace_back(*bindingName, source);
+          }
         }
       } catch (const std::exception &e) {
         std::cerr << "  " << kex::color::apply(kex::color::red)
@@ -2898,20 +3057,41 @@ int main(int argc, char *argv[]) {
 
     if (summaryMode) {
       // Output the public API signatures of the file in Kex syntax.
-      // Walk the AST for TypeAnnotation + FunctionDef nodes; group by module.
-      std::string currentModule;
-      bool inModule = false;
-      auto closeModule = [&]() {
-        if (inModule) {
-          std::cout << "end\n";
-          inModule = false;
+      // Preserve nested namespaces so FS.File is not misrepresented as a
+      // separate top-level File module.
+      auto printAnnotation =
+          [&](const kex::ast::TypeAnnotation &annotation, size_t depth) {
+            std::cout << std::string(depth * 2, ' ')
+                      << (annotation.isFoul ? "foul " : "")
+                      << annotation.name << " : ";
+            if (annotation.type)
+              std::cout << typeExprToString(*annotation.type);
+            std::cout << "\n";
+          };
+      std::function<void(const kex::ast::ModuleDef &, size_t)> printModule;
+      printModule = [&](const kex::ast::ModuleDef &module, size_t depth) {
+        const auto indent = std::string(depth * 2, ' ');
+        const auto separator = module.name.rfind('.');
+        const auto displayName =
+            depth > 0 && separator != std::string::npos
+                ? module.name.substr(separator + 1)
+                : module.name;
+        std::cout << indent << (module.isFoul ? "foul " : "") << "module "
+                  << displayName << " do\n";
+        for (const auto &item : module.body) {
+          std::visit(
+              [&](const auto &ptr) {
+                using T = std::decay_t<decltype(*ptr)>;
+                if constexpr (std::is_same_v<T,
+                                             kex::ast::TypeAnnotation>)
+                  printAnnotation(*ptr, depth + 1);
+                else if constexpr (std::is_same_v<T,
+                                                  kex::ast::ModuleDef>)
+                  printModule(*ptr, depth + 1);
+              },
+              item);
         }
-      };
-      auto openModule = [&](const std::string &name, bool isFoul) {
-        closeModule();
-        std::cout << (isFoul ? "foul " : "") << "module " << name << " do\n";
-        inModule = true;
-        currentModule = name;
+        std::cout << indent << "end\n";
       };
 
       for (const auto &item : program.items) {
@@ -2919,35 +3099,13 @@ int main(int argc, char *argv[]) {
             [&](const auto &ptr) {
               using T = std::decay_t<decltype(*ptr)>;
               if constexpr (std::is_same_v<T, kex::ast::TypeAnnotation>) {
-                if (inModule)
-                  std::cout << "  ";
-                std::cout << (ptr->isFoul ? "foul " : "") << ptr->name << " : ";
-                if (ptr->type)
-                  std::cout << typeExprToString(*ptr->type);
-                std::cout << "\n";
+                printAnnotation(*ptr, 0);
               } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
-                openModule(ptr->name, ptr->isFoul);
-                for (const auto &mitem : ptr->body) {
-                  std::visit(
-                      [&](const auto &mptr) {
-                        using MT = std::decay_t<decltype(*mptr)>;
-                        if constexpr (std::is_same_v<
-                                          MT, kex::ast::TypeAnnotation>) {
-                          std::cout << "  " << (mptr->isFoul ? "foul " : "")
-                                    << mptr->name << " : ";
-                          if (mptr->type)
-                            std::cout << typeExprToString(*mptr->type);
-                          std::cout << "\n";
-                        }
-                      },
-                      mitem);
-                }
-                closeModule();
+                printModule(*ptr, 0);
               }
             },
             item);
       }
-      closeModule();
       return allOk ? 0 : 1;
     }
 

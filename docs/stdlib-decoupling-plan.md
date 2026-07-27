@@ -702,7 +702,7 @@ The direct `spec/fs.spec.kex` contract now passes all 36 cases on both the
 walker and BEAM. FileHandle's documented `readLine`, `writeLine`, `read`,
 `write`, `eof?`, and `close` methods are source-owned and backed by a qualified
 private intrinsic module. BEAM mock copy/rename, mocked-directory deletion,
-and mocked `File.open` now share the walker's in-memory behavior.
+and mocked `FS.File.open` now share the walker's in-memory behavior.
 
 `spec/prelude/{list,map,char,io,optional}.spec.kex` now reach full BEAM
 parity after three follow-up fixes. Record field accessors that collide

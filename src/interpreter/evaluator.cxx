@@ -877,15 +877,21 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
     // Inherit default methods from implemented traits.
     for (const auto& traitName : def.implements) {
         std::string prefix = traitName + "::";
+        std::vector<const ast::FunctionDef*> inheritedMethods;
         for (const auto& [key, fns] : m_functionDefs) {
             if (key.rfind(prefix, 0) != 0) continue; // doesn't start with prefix
             for (const auto* traitFn : fns) {
                 if (!traitFn) continue;
                 if (traitFn->clauses.empty() || traitFn->clauses[0].body.empty()) continue;
                 if (ownMethods.count({traitFn->name, arityOf(traitFn)})) continue;
-                execFunctionDef(*traitFn, typeName, true);
+                inheritedMethods.push_back(traitFn);
             }
         }
+        // execFunctionDef inserts into m_functionDefs. Do that only after
+        // traversal: inserting while iterating an unordered_map can rehash it,
+        // invalidating the iterator and silently dropping later trait methods.
+        for (const auto* traitFn : inheritedMethods)
+            execFunctionDef(*traitFn, typeName, true);
     }
 }
 
@@ -1812,8 +1818,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     throw TryException(Value::none());
                 }
             }
-            throw RuntimeError(".try called on non-Result/Option value: " + value->toString(),
-                               expr.location);
+            // Some native Optional-returning APIs erase Just on success and
+            // return the payload directly, while retaining None on failure.
+            // Semantic checking still rejects `.try` on a concrete non-Tryable
+            // type; this identity fallback preserves that native ABI.
+            return value;
         }
         else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
             try {

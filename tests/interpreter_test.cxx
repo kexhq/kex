@@ -1048,8 +1048,8 @@ int main() {
             std::filesystem::remove(path);
             auto result = run(
                 "main do\n"
-                "  File.write(\"" + path + "\", \"hello\")\n"
-                "  File.read(\"" + path + "\")\n"
+                "  FS.File.write(\"" + path + "\", \"hello\")\n"
+                "  FS.File.read(\"" + path + "\").or(\"\")\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
@@ -1059,16 +1059,16 @@ int main() {
         it("exists? reflects write and delete", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto before = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            auto before = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertFalse(std::get<BoolValue>(before->data).value);
 
-            run("main do\n  File.write(\"" + path + "\", \"x\")\nend\n");
-            auto afterWrite = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            run("main do\n  FS.File.write(\"" + path + "\", \"x\")\nend\n");
+            auto afterWrite = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertTrue(std::get<BoolValue>(afterWrite->data).value);
 
-            auto deleted = run("main do\n  File.delete(\"" + path + "\")\nend\n");
+            auto deleted = run("main do\n  FS.File.delete(\"" + path + "\")\nend\n");
             assertTrue(std::get<BoolValue>(deleted->data).value);
-            auto afterDelete = run("main do\n  File.exists?(\"" + path + "\")\nend\n");
+            auto afterDelete = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertFalse(std::get<BoolValue>(afterDelete->data).value);
         });
 
@@ -1077,22 +1077,64 @@ int main() {
             std::filesystem::remove(path);
             auto result = run(
                 "main do\n"
-                "  File.write(\"" + path + "\", \"a\")\n"
-                "  File.append(\"" + path + "\", \"b\")\n"
-                "  File.read(\"" + path + "\")\n"
+                "  FS.File.write(\"" + path + "\", \"a\")\n"
+                "  FS.File.append(\"" + path + "\", \"b\")\n"
+                "  FS.File.read(\"" + path + "\").or(\"\")\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("ab"));
             std::filesystem::remove(path);
         });
 
+        it("applies open modes to Mock.FS handles", []() {
+            auto result = run(
+                "main do\n"
+                "  Mock.FS.File(\"mock.txt\", \"old\")\n"
+                "  let writer = FS.File.open(\"mock.txt\", Write).try\n"
+                "  writer.write(\"new\")\n"
+                "  let appender = FS.File.open(\"mock.txt\", Append).try\n"
+                "  appender.write(\"!\")\n"
+                "  FS.File.read(\"mock.txt\").or(\"\")\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("new!"));
+        });
+
+        it("lets trying rescue an OpenFailed file result", []() {
+            auto result = run(
+                "main do\n"
+                "  trying do\n"
+                "    FS.File.open(\"/nonexistent/kex/path/xyz\", Read).try\n"
+                "    \"opened\"\n"
+                "  rescue\n"
+                "    OpenFailed(_) -> \"failed\"\n"
+                "  end\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("failed"));
+        });
+
         it("reading a nonexistent file returns None", []() {
-            auto result = run("main do\n  File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = run("main do\n  FS.File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertTrue(result->isNone());
         });
 
+        it("filesystem Optional success values are wrapped in Just", []() {
+            auto result = run(
+                "main do\n"
+                "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
+                "  let Just(content) = FS.File.read(\"wrapped.txt\")\n"
+                "  let handle = FS.File.open(\"wrapped.txt\", Read).try\n"
+                "  let Just(line) = handle.readLine\n"
+                "  content + line\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("hello\nhello"));
+        });
+
         it("deleting a nonexistent file returns false", []() {
-            auto result = run("main do\n  File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = run("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 
@@ -1101,8 +1143,8 @@ int main() {
             std::filesystem::remove(path);
             auto result = run(
                 "main do\n"
-                "  File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  File.lines(\"" + path + "\")\n"
+                "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
+                "  FS.File.lines(\"" + path + "\").or([])\n"
                 "end\n"
             );
             auto& list = std::get<ListValue>(result->data);
@@ -1117,8 +1159,8 @@ int main() {
             std::filesystem::remove(path);
             auto result = run(
                 "main do\n"
-                "  File.write(\"" + path + "\", \"a\\nb\")\n"
-                "  File.feed(\"" + path + "\").take(2)\n"
+                "  FS.File.write(\"" + path + "\", \"a\\nb\")\n"
+                "  FS.File.feed(\"" + path + "\").try.take(2)\n"
                 "end\n"
             );
             auto& list = std::get<ListValue>(result->data);
@@ -1129,7 +1171,7 @@ int main() {
         });
 
         it("feed on a nonexistent file returns None", []() {
-            auto result = run("main do\n  File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = run("main do\n  FS.File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertTrue(result->isNone());
         });
     });
@@ -1690,6 +1732,21 @@ int main() {
                 "main do Dog { name: \"rex\" }.shout end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("DOG: REX"));
+        });
+
+        it("inherits all trait defaults when registering them grows the function table", []() {
+            std::string source = "trait ManyDefaults do\n";
+            for (int i = 0; i < 64; ++i)
+                source += "  let value" + std::to_string(i) + " = "
+                    + std::to_string(i) + "\n";
+            source +=
+                "end\n"
+                "record DefaultTarget do end\n"
+                "make DefaultTarget, implement: ManyDefaults do end\n"
+                "main do DefaultTarget {}.value63 end\n";
+
+            auto result = run(source);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(63));
         });
 
         it("repeats Monoid values through the default method", []() {

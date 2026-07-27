@@ -170,6 +170,50 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        it("prints the source-level capability type of an open file", []() {
+            auto out = runRepl(
+                "Mock.FS.File(\"typed.txt\", \"\")\n"
+                "let f = FS.File.open(\"typed.txt\", Write)\n"
+                "f.try\n"
+                "let f = FS.File.open(\"typed.txt\", Write).try\n"
+                "f\n");
+            assertTrue(
+                out.find("FileHandle<CannotRead, CanWrite>") !=
+                    std::string::npos,
+                out);
+            assertTrue(out.find(": FileHandle\n") == std::string::npos, out);
+        });
+
+        it("does not execute readable methods on a write-only handle", []() {
+            auto out = runRepl(
+                "Mock.FS.File(\"typed.txt\", \"contents\")\n"
+                "let writer = FS.File.open(\"typed.txt\", Write).try\n"
+                "writer.readLine\n"
+                "writer.getLine\n"
+                "writer.read\n");
+            assertTrue(out.find("FileHandle<CannotRead, CanWrite>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("=> None : Optional") == std::string::npos,
+                       out);
+            assertTrue(out.find("=> \"\" : String") == std::string::npos,
+                       out);
+            assertTrue(out.find("error:") != std::string::npos, out);
+        });
+
+        it("renders filesystem Optional values with Just and None", []() {
+            auto out = runRepl(
+                "Mock.FS.File(\"optional.txt\", \"contents\")\n"
+                "FS.File.read(\"optional.txt\")\n"
+                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "reader.readLine\n"
+                "reader.readLine\n");
+            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
+        });
+
         it("acknowledges native definitions", []() {
             auto out = runRepl(
                 "let double(n) = n * 2\n"
@@ -246,7 +290,7 @@ int main() {
 
             auto out = runBeamFile(
                 "main(args) do\n"
-                "  IO.printLine(File.exists?(args.first.or(\"\")))\n"
+                "  IO.printLine(FS.File.exists?(args.first.or(\"\")))\n"
                 "end\n",
                 inputPath);
             std::remove(inputPath);
@@ -255,6 +299,51 @@ int main() {
     });
 
     describe("BEAM REPL — Kex Value Display", []() {
+        it("renders file results and typestates like the tree REPL", []() {
+            auto out = runBeamRepl(
+                "Mock.FS.File(\"typed.txt\", \"contents\")\n"
+                "let f = FS.File.open(\"typed.txt\", Write)\n"
+                "let opened = f.try\n"
+                "opened\n"
+                "opened.close\n");
+            assertTrue(
+                out.find("Ok(<FileHandle: \"typed.txt\">) : "
+                         "Result<FileHandle<CannotRead, CanWrite>, FileError>")
+                    != std::string::npos,
+                out);
+            assertTrue(
+                out.find("<FileHandle: \"typed.txt\"> : "
+                         "FileHandle<CannotRead, CanWrite>")
+                    != std::string::npos,
+                out);
+            assertTrue(out.find(": Tuple") == std::string::npos, out);
+            assertTrue(out.find(":MockFileHandle") == std::string::npos, out);
+        });
+
+        it("renders filesystem Optional values with Just and None", []() {
+            auto out = runBeamRepl(
+                "Mock.FS.File(\"optional.txt\", \"contents\")\n"
+                "FS.File.read(\"optional.txt\")\n"
+                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "reader.readLine\n"
+                "reader.readLine\n");
+            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
+        });
+
+        it("does not execute readable methods on a write-only handle", []() {
+            auto out = runBeamRepl(
+                "Mock.FS.File(\"typed.txt\", \"contents\")\n"
+                "let writer = FS.File.open(\"typed.txt\", Write).try\n"
+                "writer.readLine\n"
+                "writer.write(\"ok\")\n");
+            assertTrue(out.find("error:") != std::string::npos, out);
+            assertTrue(out.find("=> None : Option") == std::string::npos, out);
+            assertTrue(out.find("=> true : Bool") != std::string::npos, out);
+        });
+
         it("keeps loaded modules visible to later bindings", []() {
             char sourcePath[] = "/tmp/kex_beam_repl_load_test_XXXXXX.kex";
             int fd = mkstemps(sourcePath, 4);

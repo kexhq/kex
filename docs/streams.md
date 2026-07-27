@@ -68,7 +68,7 @@ r.map { |x| x * 2 }
 For IO resources that produce values over time:
 
 ```kex
-foul let lines: Feed<String> = File.feed("big.txt")
+foul let lines: Feed<String> = FS.File.feed("big.txt").or(Stream.empty)
 foul let messages: Feed<Message> = socket.feed
 foul let events: Feed<Event> = keyboard.feed
 ```
@@ -77,7 +77,7 @@ Feeds are consumed — once you read from them, the data is gone:
 
 ```kex
 foul do
-  let feed = File.feed("log.txt")
+  let feed = FS.File.feed("log.txt").or(Stream.empty)
   feed.each do |line|
     IO.printLine(line) if line.contains?("ERROR")
   end
