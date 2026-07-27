@@ -4,6 +4,7 @@
 #include "environment.hxx"
 #include "scheduler.hxx"
 #include "value.hxx"
+#include <chrono>
 #include <deque>
 #include <memory>
 #include <stdexcept>
@@ -49,6 +50,12 @@ private:
     SourceLocation m_location;
 };
 
+class EvaluationTimeout : public std::runtime_error {
+public:
+    EvaluationTimeout()
+        : std::runtime_error("compile-time evaluation timed out") {}
+};
+
 class Evaluator {
     // Scheduler needs direct access to eval/evalBody/matchPattern/
     // pushEnv/popEnv/m_env to run process bodies and implement
@@ -61,6 +68,14 @@ public:
     Evaluator();
 
     auto execute(const ast::Program& program) -> ValuePtr;
+    // Loads source declarations without executing an explicit main, then
+    // invokes one function under a cooperative wall-clock deadline. Used by
+    // compile-time tagged-literal validators; no result is spliced into code.
+    auto evaluateFunction(
+        const ast::Program& program,
+        const std::string& name,
+        std::vector<ValuePtr> args,
+        std::chrono::milliseconds timeout) -> ValuePtr;
     // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
     // shadows the native builtins. No-op if no configured or embedded prelude
@@ -111,6 +126,7 @@ private:
     using NamedArgs = std::vector<std::pair<std::string, ValuePtr>>;
     auto callFunction(const std::string& name, std::vector<ValuePtr> args,
                       NamedArgs namedArgs, SourceLocation loc) -> ValuePtr;
+    auto checkDeadline() const -> void;
     auto findNamedClause(const std::string& functionName,
                          const NamedArgs& namedArgs) const
         -> const ast::FunctionClause*;
@@ -210,6 +226,7 @@ private:
     std::vector<std::string> m_scriptArgs;
     bool m_replMode = false;
     bool m_preludeLoaded = false;
+    std::optional<std::chrono::steady_clock::time_point> m_deadline;
 
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;

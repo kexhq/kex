@@ -13,6 +13,7 @@
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
+#include "validation/tag_validator.hxx"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -1116,7 +1117,17 @@ auto runSemanticCheck(const kex::ast::Program &program,
   for (const auto &diag : analyzer.diagnostics())
     printDiag(diag);
 
-  return ok && dbOk;
+  bool validationOk = true;
+  if (ok && dbOk) {
+    for (const auto &diag :
+         kex::validation::validateTaggedLiterals(program, analyzer)) {
+      if (diag.level == kex::semantic::Diagnostic::Level::Error)
+        validationOk = false;
+      printDiag(diag);
+    }
+  }
+
+  return ok && dbOk && validationOk;
 }
 
 auto printAst(const kex::ast::Program &program) -> void {
@@ -3113,7 +3124,17 @@ int main(int argc, char *argv[]) {
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
 
-    bool allOk = ok && dbOk;
+    bool validationOk = true;
+    if (ok && dbOk) {
+      for (const auto &d :
+           kex::validation::validateTaggedLiterals(program, analyzer)) {
+        if (d.level == kex::semantic::Diagnostic::Level::Error)
+          validationOk = false;
+        allDiags.push_back(d);
+      }
+    }
+
+    bool allOk = ok && dbOk && validationOk;
 
     if (jsonOutput) {
       // Machine-readable JSON — one object per diagnostic

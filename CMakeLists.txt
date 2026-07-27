@@ -86,6 +86,7 @@ add_library(kex_lib
     src/semantic/resolve_pass.cxx
     src/module/resolver.cxx
     src/module/package_metadata.cxx
+    src/validation/tag_validator.cxx
     src/interpreter/value.cxx
     src/interpreter/environment.cxx
     src/interpreter/fiber.cxx
@@ -373,6 +374,11 @@ target_compile_definitions(semantic_test PRIVATE
     KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
 add_dependencies(semantic_test kex_prelude_beam)
 add_test(NAME semantic_test COMMAND semantic_test)
+
+add_executable(validation_test tests/validation_test.cxx)
+target_link_libraries(validation_test PRIVATE kex_lib)
+target_include_directories(validation_test PRIVATE tests)
+add_test(NAME validation_test COMMAND validation_test)
 
 add_executable(interpreter_test tests/interpreter_test.cxx)
 target_link_libraries(interpreter_test PRIVATE kex_lib)

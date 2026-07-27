@@ -29,6 +29,9 @@ let rawTag(parts: [String], values: [Any]) -> String do
   parts.first.or("")
 end
 
+# An optional pure companion validates raw tagged bodies during compilation.
+let validateRawTag(source: String) -> [Issue] = []
+
 let tagged = rawTag`tagged body`
 
 # `$` opts into interpolation. `$${` spells literal `${`.

@@ -1,0 +1,6 @@
+# Diagnostics returned by optional compile-time tagged-literal validators.
+# Byte offsets are zero-based and relative to the cooked literal body.
+type ByteSpan = At(Integer) | Between(Integer, Integer)
+
+type Issue = Fatal(ByteSpan?, String)
+  | Warn(ByteSpan?, String)

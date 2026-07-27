@@ -156,6 +156,35 @@ This calls `capture(["SELECT * FROM users WHERE id = ", ""], [userId])`.
 Values are passed in their original types; the tag decides whether to escape,
 bind, convert, or reject them.
 
+### Compile-Time Tag Validation
+
+A raw tag may have a pure companion named `validateTag`:
+
+```kex
+let query(parts: [String], values: [Any]) -> String =
+  parts.first.or("")
+
+let validateQuery(source: String) -> [Issue] do
+  if source.blank? then [Fatal(None, "query must not be empty")] else [] end
+end
+
+let users = query`SELECT * FROM users`
+```
+
+The convention is mechanical: `regex` uses `validateRegex`, `html` uses
+`validateHtml`, and `myTag` uses `validateMyTag`. The companion must have the
+pure signature `String -> [Issue]`. `Fatal` issues fail the build; `Warn`
+issues produce warnings.
+
+```kex
+type ByteSpan = At(Integer) | Between(Integer, Integer)
+type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)
+```
+
+Only raw tagged literals are checked. Interpolating tags and ordinary function
+calls remain runtime operations. Each validator invocation has a compiler-owned
+one-second timeout.
+
 ### Keywords
 
 ```

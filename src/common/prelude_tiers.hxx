@@ -11,10 +11,10 @@
 
 namespace kex {
 
-inline constexpr std::array<std::string_view, 12> kPreludeTier0 = {
+inline constexpr std::array<std::string_view, 13> kPreludeTier0 = {
     "algebra.kex", "console.kex", "errorable.kex", "io.kex",
     "kex.kex", "math.kex", "optional.kex", "process.kex",
-    "range.kex", "stream.kex", "system.kex", "test.kex",
+    "range.kex", "stream.kex", "system.kex", "test.kex", "validation.kex",
 };
 inline constexpr std::array<std::string_view, 8> kPreludeTier1 = {
     "blankable.kex", "env.kex", "http.kex", "number.kex",
