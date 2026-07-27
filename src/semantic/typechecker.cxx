@@ -1282,8 +1282,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto* optional = std::get_if<OptionalType>(&operand->kind))
                 return optional->inner;
             if (auto* named = std::get_if<NamedType>(&operand->kind);
-                named && named->name == "Result" && !named->typeArgs.empty())
-                return named->typeArgs[0];
+                named && !named->typeArgs.empty()) {
+                if (named->name == "Optional" || named->name == "Result")
+                    return named->typeArgs[0];
+            }
             if (std::holds_alternative<UnknownType>(operand->kind) ||
                 std::holds_alternative<TypeVar>(operand->kind))
                 return Type::unknown();
@@ -1590,9 +1592,28 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         if (!common.empty()) {
                             elemType = Type::named(common);
                         } else {
-                            error(expr.location,
-                                  "List elements must be the same type. Expected " +
-                                  typeToString(elemType) + ", got " + typeToString(t));
+                            // Sibling nullary constructors share their parent
+                            // ADT as a natural list element type. Preserve
+                            // constructor refinements for overload selection,
+                            // but widen `[Less, Equal, Greater]` to
+                            // `[Comparison]` instead of rejecting it.
+                            auto* lhs = std::get_if<NamedType>(&elemType->kind);
+                            auto* rhs = std::get_if<NamedType>(&t->kind);
+                            auto lhsOwner = lhs
+                                ? m_adtOfConstructor.find(lhs->name)
+                                : m_adtOfConstructor.end();
+                            auto rhsOwner = rhs
+                                ? m_adtOfConstructor.find(rhs->name)
+                                : m_adtOfConstructor.end();
+                            if (lhsOwner != m_adtOfConstructor.end() &&
+                                rhsOwner != m_adtOfConstructor.end() &&
+                                lhsOwner->second == rhsOwner->second) {
+                                elemType = Type::named(lhsOwner->second);
+                            } else {
+                                error(expr.location,
+                                      "List elements must be the same type. Expected " +
+                                      typeToString(elemType) + ", got " + typeToString(t));
+                            }
                         }
                     }
                 }

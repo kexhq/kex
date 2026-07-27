@@ -1685,6 +1685,15 @@ int main() {
             ));
         });
 
+        it("accepts .try on an explicitly annotated Optional", []() {
+            assertTrue(noErrors(
+                "let unwrap(value: Optional<Integer>) -> Integer do\n"
+                "  value.try\n"
+                "rescue return 0\n"
+                "end\n"
+            ));
+        });
+
         it("rejects .try on a non-Tryable concrete value", []() {
             assertTrue(hasError(
                 "main do\n"
@@ -2250,6 +2259,16 @@ int main() {
     });
 
     describe("let constructor pattern vs type mismatch", []() {
+        it("widens sibling nullary constructors to their parent ADT in lists", []() {
+            assertTrue(noErrors(
+                "type Comparison = Less | Equal | Greater\n"
+                "let render(value: Comparison) = value\n"
+                "main do\n"
+                "  [Less, Equal, Greater].each(&render)\n"
+                "end\n"
+            ));
+        });
+
         it("Ok pattern on Optional value errors", []() {
             assertTrue(hasError(
                 "main do\n"
