@@ -677,6 +677,52 @@ auto colorizeMessage(const std::string &msg) -> std::string {
   return out;
 }
 
+auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
+  bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+  std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
+            << ":" << diag.location.line << ":" << diag.location.column;
+  if (diag.endLocation) {
+    std::cerr << "-" << diag.endLocation->line << ":"
+              << diag.endLocation->column;
+  }
+  std::cerr << ":" << kex::color::apply(kex::color::reset) << " "
+            << kex::color::apply(kex::color::bold)
+            << (isError ? kex::color::apply(kex::color::red)
+                        : kex::color::apply(kex::color::magenta))
+            << (isError ? "error" : "warning") << ":"
+            << kex::color::apply(kex::color::reset) << " "
+            << colorizeMessage(diag.message) << "\n";
+
+  if (!diag.endLocation)
+    return;
+  auto source = readFile(std::string(diag.location.file));
+  if (source.empty())
+    return;
+  std::istringstream lines{source};
+  std::string line;
+  for (int current = 1;
+       current <= diag.location.line && std::getline(lines, line);
+       ++current) {
+    if (current != diag.location.line)
+      continue;
+    const auto start =
+        std::max(1, diag.location.column);
+    int finish = static_cast<int>(line.size()) + 1;
+    if (diag.endLocation->line == diag.location.line)
+      finish = std::max(start + 1, diag.endLocation->column);
+    const auto width = std::max(1, finish - start);
+    std::cerr << "  " << current << " | " << line << "\n"
+              << "    | " << std::string(static_cast<size_t>(start - 1), ' ')
+              << kex::color::apply(
+                     isError ? kex::color::red : kex::color::magenta)
+              << "^" << std::string(static_cast<size_t>(width - 1), '~')
+              << kex::color::apply(kex::color::reset) << "\n";
+    if (diag.endLocation->line != diag.location.line)
+      std::cerr << "    | ... through line " << diag.endLocation->line
+                << ", column " << diag.endLocation->column << "\n";
+  }
+}
+
 } // namespace
 
 // Convention: `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need
@@ -1084,19 +1130,6 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
 auto runSemanticCheck(const kex::ast::Program &program,
                       const std::string &filepath,
                       kex::semantic::Analyzer *retainedAnalyzer = nullptr) -> bool {
-  auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
-    bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-    std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
-              << ":" << diag.location.line << ":" << diag.location.column << ":"
-              << kex::color::apply(kex::color::reset) << " "
-              << kex::color::apply(kex::color::bold)
-              << (isError ? kex::color::apply(kex::color::red)
-                          : kex::color::apply(kex::color::magenta))
-              << (isError ? "error" : "warning") << ":"
-              << kex::color::apply(kex::color::reset) << " "
-              << colorizeMessage(diag.message) << "\n";
-  };
-
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
@@ -1107,7 +1140,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   for (const auto &diag : runDb.diagnosticsFor(filepath)) {
     if (diag.level == kex::semantic::Diagnostic::Level::Error)
       dbOk = false;
-    printDiag(diag);
+    printSemanticDiagnostic(diag);
   }
 
   // Pass 3+: existing Analyzer (purity, type checking)
@@ -1115,7 +1148,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
-    printDiag(diag);
+    printSemanticDiagnostic(diag);
 
   bool validationOk = true;
   if (ok && dbOk) {
@@ -1123,7 +1156,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
          kex::validation::validateTaggedLiterals(program, analyzer)) {
       if (diag.level == kex::semantic::Diagnostic::Level::Error)
         validationOk = false;
-      printDiag(diag);
+      printSemanticDiagnostic(diag);
     }
   }
 
@@ -3151,6 +3184,10 @@ int main(int argc, char *argv[]) {
                   << "    \"severity\": \"" << (isErr ? "error" : "warning")
                   << "\",\n"
                   << "    \"message\": \"" << jsonEscape(d.message) << "\"";
+        if (d.endLocation)
+          std::cout << ",\n"
+                    << "    \"end_line\": " << d.endLocation->line << ",\n"
+                    << "    \"end_column\": " << d.endLocation->column;
         if (!hint.empty())
           std::cout << ",\n    \"hint\": \"" << jsonEscape(hint) << "\"";
         std::cout << "\n  }" << (i + 1 < allDiags.size() ? "," : "") << "\n";
@@ -3214,20 +3251,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Normal colored output
-    auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
-      bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-      std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
-                << ":" << diag.location.line << ":" << diag.location.column
-                << ":" << kex::color::apply(kex::color::reset) << " "
-                << kex::color::apply(kex::color::bold)
-                << (isError ? kex::color::apply(kex::color::red)
-                            : kex::color::apply(kex::color::magenta))
-                << (isError ? "error" : "warning") << ":"
-                << kex::color::apply(kex::color::reset) << " "
-                << colorizeMessage(diag.message) << "\n";
-    };
     for (const auto &d : allDiags)
-      printDiag(d);
+      printSemanticDiagnostic(d);
 
     if (dumpTypes) {
       // Collect and sort by source location so output is readable

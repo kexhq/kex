@@ -181,6 +181,12 @@ type ByteSpan = At(Integer) | Between(Integer, Integer)
 type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)
 ```
 
+Byte spans use zero-based UTF-8 byte offsets in the cooked literal body.
+`Between(start, end)` has an exclusive end and is rendered as an underlined
+source range. JSON diagnostics include `end_line` and `end_column` when a range
+is present. Invalid or reversed spans are compile errors produced by the
+validator boundary.
+
 Only raw tagged literals are checked. Interpolating tags and ordinary function
 calls remain runtime operations. Each validator invocation has a compiler-owned
 one-second timeout.

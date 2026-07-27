@@ -99,6 +99,47 @@ int main() {
             assertEqual(diagnostics[0].location.column, 15);
         });
 
+        it("preserves Between as an exclusive source range", []() {
+            auto diagnostics = validateFile(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> [Issue] = "
+                "[Warn(Between(1, 3), \"ranged warning\")]\n"
+                "main do demo`abcde` end\n");
+            assertEqual(diagnostics.size(), size_t(1));
+            assertEqual(diagnostics[0].location.line, 5);
+            assertEqual(diagnostics[0].location.column, 15);
+            assertTrue(diagnostics[0].endLocation.has_value());
+            assertEqual(diagnostics[0].endLocation->line, 5);
+            assertEqual(diagnostics[0].endLocation->column, 17);
+        });
+
+        it("rejects reversed Between ranges", []() {
+            auto diagnostics = validate(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> [Issue] = "
+                "[Warn(Between(3, 1), \"bad range\")]\n"
+                "main do demo`abcde` end\n");
+            assertTrue(contains(
+                diagnostics,
+                semantic::Diagnostic::Level::Error,
+                "byte span outside the literal"));
+        });
+
+        it("rejects Between ranges past the literal", []() {
+            auto diagnostics = validate(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> [Issue] = "
+                "[Warn(Between(1, 6), \"bad range\")]\n"
+                "main do demo`abcde` end\n");
+            assertTrue(contains(
+                diagnostics,
+                semantic::Diagnostic::Level::Error,
+                "byte span outside the literal"));
+        });
+
         it("does nothing when the companion is absent", []() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "

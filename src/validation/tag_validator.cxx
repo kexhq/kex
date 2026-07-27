@@ -362,15 +362,33 @@ auto appendIssues(
         }
 
         std::optional<int64_t> offset;
+        std::optional<int64_t> endOffset;
         if (!issue->args[0]->isNone()) {
             auto* span = std::get_if<interpreter::VariantValue>(
                 &issue->args[0]->data);
-            if (span && span->tag == "At" && span->args.size() == 1)
+            if (span && span->tag == "At" && span->args.size() == 1) {
                 offset = integerValue(span->args[0]);
-            else if (span && span->tag == "Between" &&
-                     span->args.size() == 2)
+                if (!offset) {
+                    diagnostics.push_back({
+                        semantic::Diagnostic::Level::Error,
+                        use.expr->location,
+                        "Compile-time validator `" + validator +
+                            "` returned an invalid Issue byte span"});
+                    continue;
+                }
+            } else if (span && span->tag == "Between" &&
+                       span->args.size() == 2) {
                 offset = integerValue(span->args[0]);
-            else {
+                endOffset = integerValue(span->args[1]);
+                if (!offset || !endOffset) {
+                    diagnostics.push_back({
+                        semantic::Diagnostic::Level::Error,
+                        use.expr->location,
+                        "Compile-time validator `" + validator +
+                            "` returned an invalid Issue byte span"});
+                    continue;
+                }
+            } else {
                 diagnostics.push_back({
                     semantic::Diagnostic::Level::Error,
                     use.expr->location,
@@ -378,6 +396,18 @@ auto appendIssues(
                         "` returned an invalid Issue byte span"});
                 continue;
             }
+        }
+        const auto bodySize =
+            static_cast<int64_t>(use.literal->parts[0].size());
+        if ((offset && (*offset < 0 || *offset > bodySize)) ||
+            (endOffset &&
+             (*endOffset < *offset || *endOffset > bodySize))) {
+            diagnostics.push_back({
+                semantic::Diagnostic::Level::Error,
+                use.expr->location,
+                "Compile-time validator `" + validator +
+                    "` returned an Issue byte span outside the literal"});
+            continue;
         }
 
         auto* message =
@@ -390,12 +420,16 @@ auto appendIssues(
                     "` returned an Issue with a non-String message"});
             continue;
         }
-        diagnostics.push_back({
+        semantic::Diagnostic diagnostic{
             issue->tag == "Fatal"
                 ? semantic::Diagnostic::Level::Error
                 : semantic::Diagnostic::Level::Warning,
             sourceLocationForOffset(use, offset),
-            message->value});
+            message->value};
+        if (endOffset)
+            diagnostic.endLocation =
+                sourceLocationForOffset(use, endOffset);
+        diagnostics.push_back(std::move(diagnostic));
     }
 }
 
