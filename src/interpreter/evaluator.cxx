@@ -780,9 +780,14 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                         return result;
                     } catch (TryException& e) {
                         if (clause.rescue) {
-                            auto result = evalRescue(*clause.rescue, e.error(), funcDef->location);
-                            popEnv();
-                            return result;
+                            try {
+                                auto result = evalRescue(*clause.rescue, e.error(), funcDef->location);
+                                popEnv();
+                                return result;
+                            } catch (ReturnException& ret) {
+                                popEnv();
+                                return ret.value();
+                            }
                         }
                         popEnv();
                         // No rescue — propagate as return Error(e)
@@ -910,7 +915,11 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
         result = evalBody(block.body);
     } catch (TryException& e) {
         if (block.rescue) {
-            result = evalRescue(*block.rescue, e.error(), block.location);
+            try {
+                result = evalRescue(*block.rescue, e.error(), block.location);
+            } catch (ReturnException& ret) {
+                result = ret.value();
+            }
         } else {
             if (!m_replMode && !block.synthetic) popEnv();
             throw RuntimeError(".try failed with no rescue handler: " + e.error()->toString(),
@@ -1541,7 +1550,11 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         result = evalBody(*bodyPtr);
                     } catch (TryException& e) {
                         if (rescuePtr) {
-                            result = evalRescue(*rescuePtr, e.error(), {});
+                            try {
+                                result = evalRescue(*rescuePtr, e.error(), {});
+                            } catch (ReturnException& ret) {
+                                result = ret.value();
+                            }
                         } else {
                             m_env = prevEnv;
                             throw;

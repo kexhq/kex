@@ -459,13 +459,50 @@ struct Lowering {
                 return wrapLets(binds, std::move(ex));
             } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
                 std::vector<Binding> binds;
-                std::vector<ExprPtr> els;
-                for (const auto& el : n.elements) els.push_back(atomize(el, binds));
-                std::optional<ExprPtr> rest;
-                if (n.rest) rest = atomize(*n.rest, binds);
-                auto ex = std::make_unique<Expr>();
-                ex->node = MakeList{std::move(els), std::move(rest)};
-                return wrapLets(binds, std::move(ex));
+                bool hasSpreads = false;
+                for (const auto& el : n.elements)
+                    if (el && std::holds_alternative<ast::SpreadExpr>(el->kind)) { hasSpreads = true; break; }
+
+                if (!hasSpreads) {
+                    std::vector<ExprPtr> els;
+                    for (const auto& el : n.elements) els.push_back(atomize(el, binds));
+                    std::optional<ExprPtr> rest;
+                    if (n.rest) rest = atomize(*n.rest, binds);
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = MakeList{std::move(els), std::move(rest)};
+                    return wrapLets(binds, std::move(ex));
+                }
+                // [a, ...b, c, ...d] → lists:append([a], lists:append(b, [c | d]))
+                // Build segments: each run of non-spread elements forms a literal
+                // list, each spread is its own list. Concatenate with lists:append.
+                std::vector<ExprPtr> segments;
+                std::vector<ExprPtr> currentRun;
+                auto flushRun = [&]() {
+                    if (currentRun.empty()) return;
+                    auto lst = std::make_unique<Expr>();
+                    lst->node = MakeList{std::move(currentRun), std::nullopt};
+                    segments.push_back(std::move(lst));
+                    currentRun.clear();
+                };
+                for (const auto& el : n.elements) {
+                    if (el && std::holds_alternative<ast::SpreadExpr>(el->kind)) {
+                        flushRun();
+                        segments.push_back(lower(std::get<ast::SpreadExpr>(el->kind).inner));
+                    } else {
+                        currentRun.push_back(atomize(el, binds));
+                    }
+                }
+                flushRun();
+                // Fold right with lists:append
+                ExprPtr result = std::move(segments.back()); segments.pop_back();
+                while (!segments.empty()) {
+                    auto left = std::move(segments.back()); segments.pop_back();
+                    std::vector<ExprPtr> args;
+                    args.push_back(std::move(left));
+                    args.push_back(std::move(result));
+                    result = callE("lists", "append", 2, std::move(args));
+                }
+                return wrapLets(binds, std::move(result));
             } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
                 return lowerIf(n);
             } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
@@ -522,6 +559,7 @@ struct Lowering {
                 Lambda lam;
                 for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
                 lam.body = lowerBody(n.body);
+                if (n.rescue) lam.body = wrapWithTryCatch(std::move(lam.body), *n.rescue);
                 subst = snap;
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(lam);
@@ -610,25 +648,25 @@ struct Lowering {
                 std::vector<PatternPtr> okArgs; okArgs.push_back(mkVarPat(okVar));
                 okClause.patterns.push_back(mkConstructPat("Ok", std::move(okArgs)));
                 okClause.body = var(okVar);
-                // Error(e) -> return Error(e)
+                // Error(e) -> throw try error
                 MatchClause errClause;
                 std::vector<PatternPtr> errArgs; errArgs.push_back(mkVarPat(errVar));
                 errClause.patterns.push_back(mkConstructPat("Error", std::move(errArgs)));
-                auto retExpr = std::make_unique<Expr>();
-                retExpr->node = Return{mkConstruct("Error", one(var(errVar)))};
-                errClause.body = std::move(retExpr);
+                auto throwExpr = std::make_unique<Expr>();
+                throwExpr->node = TryThrow{var(errVar)};
+                errClause.body = std::move(throwExpr);
                 // Just(v) -> v
                 auto justVar = fresh("_try_just");
                 MatchClause justClause;
                 std::vector<PatternPtr> justArgs; justArgs.push_back(mkVarPat(justVar));
                 justClause.patterns.push_back(mkConstructPat("Just", std::move(justArgs)));
                 justClause.body = var(justVar);
-                // None -> return Error(none)
+                // None -> throw try error(none)
                 MatchClause noneClause;
                 noneClause.patterns.push_back(mkConstructPat("None", {}));
-                auto noneRet = std::make_unique<Expr>();
-                noneRet->node = Return{mkConstruct("Error", one(lit(LitKind::Atom, "none")))};
-                noneClause.body = std::move(noneRet);
+                auto noneThrow = std::make_unique<Expr>();
+                noneThrow->node = TryThrow{lit(LitKind::Atom, "none")};
+                noneClause.body = std::move(noneThrow);
 
                 Match m;
                 m.subjects.push_back(std::move(sAtom));
@@ -640,8 +678,12 @@ struct Lowering {
                 ex->node = std::move(m);
                 return wrapLets(binds, std::move(ex));
             } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
-                // TODO: full BEAM lowering for trying/rescue
-                throw LowerError("IR lower: trying/rescue blocks are not yet supported on BEAM");
+                TryCatch tc;
+                tc.body = lowerBody(n.body);
+                tc.clauses = lowerRescueClauses(n.rescue);
+                auto ex = std::make_unique<Expr>();
+                ex->node = std::move(tc);
+                return ex;
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());
@@ -1533,8 +1575,10 @@ struct Lowering {
         // string emitter resolves record field access and make-block methods
         // without needing types. Gated on localMethods so an UNPORTED builtin
         // (e.g. `.get`/`.map`) errors loudly instead of silently becoming a
-        // call to a function that doesn't exist.
-        if (localMethods.count(n.method) && !n.block) {
+        // call to a function that doesn't exist. A trailing block (`x.some { ...
+        // }`) is passed as the final argument — the block-typed parameter — to
+        // match the interpreter, which appends the evaluated block to the args.
+        if (localMethods.count(n.method)) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
@@ -1543,9 +1587,12 @@ struct Lowering {
             // positional ones in the common `method(Type, name: value)` form.
             for (const auto& [_, value] : n.namedArgs)
                 args.push_back(atomize(value, binds));
-            if (auto it = methodDefaults.find(n.method); it != methodDefaults.end())
+            if (n.block) {
+                args.push_back(atomize(*n.block, binds));
+            } else if (auto it = methodDefaults.find(n.method); it != methodDefaults.end()) {
                 for (size_t i = n.args.size(); i < it->second.size(); i++)
                     if (it->second[i]) args.push_back(atomize(*it->second[i], binds));
+            }
             int arity = static_cast<int>(args.size());
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.method, arity, std::move(args), false};
@@ -2113,6 +2160,10 @@ struct Lowering {
                 for (auto& s : nn.body) collectMutated(s, out);
             } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
                 for (auto& s : nn.body) collectMutated(s, out);
+            } else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+                for (auto& s : nn.body) collectMutated(s, out);
+                for (auto& cl : nn.rescue.clauses) collectMutated(cl.body, out);
+                for (auto& s : nn.rescue.catchAllBody) collectMutated(s, out);
             }
         }, e->kind);
     }
@@ -2249,6 +2300,50 @@ struct Lowering {
             return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); });
         if (auto* we2 = std::get_if<ast::WhileExpr>(&e->kind))
             return lowerLoopCore(we2->body, &we2->condition, false, [&]{ return cont(); });
+        if (auto* te = std::get_if<ast::TryingExpr>(&e->kind)) {
+            TryCatch tc;
+            auto snapBeforeTry = subst;
+            tc.body = lowerLoopBodyFrom(te->body, 0, loopFn, mutVars, onEnd);
+            // Restore subst so rescue clauses reference pre-try variable names
+            subst = snapBeforeTry;
+            auto& rescue = te->rescue;
+            if (rescue.isInlineReturn) {
+                MatchClause c;
+                c.patterns.push_back(wildPat());
+                auto retExpr = std::make_unique<Expr>();
+                retExpr->node = Return{lower(rescue.inlineReturnExpr)};
+                c.body = std::move(retExpr);
+                tc.clauses.push_back(std::move(c));
+            } else if (rescue.isCatchAll) {
+                MatchClause c;
+                if (rescue.catchAllParam.empty()) {
+                    c.patterns.push_back(wildPat());
+                } else {
+                    auto p = std::make_unique<Pattern>();
+                    p->kind = PatKind::Var;
+                    p->name = rescue.catchAllParam;
+                    subst[rescue.catchAllParam] = rescue.catchAllParam;
+                    c.patterns.push_back(std::move(p));
+                }
+                c.body = lowerLoopBodyFrom(rescue.catchAllBody, 0, loopFn, mutVars, onEnd);
+                tc.clauses.push_back(std::move(c));
+            } else {
+                for (const auto& clause : rescue.clauses) {
+                    MatchClause mc;
+                    if (!clause.patterns.empty())
+                        mc.patterns.push_back(lowerPattern(clause.patterns[0]));
+                    else
+                        mc.patterns.push_back(wildPat());
+                    mc.body = clause.body
+                        ? lowerLoopArmU(clause.body, loopFn, mutVars, [&]{ return cont(); })
+                        : cont();
+                    tc.clauses.push_back(std::move(mc));
+                }
+            }
+            auto ex = std::make_unique<Expr>();
+            ex->node = std::move(tc);
+            return ex;
+        }
         auto val = lower(e);
         return makeLet(fresh("S"), std::move(val), cont());
     }
@@ -2636,6 +2731,129 @@ struct Lowering {
         return makeLet(fresh("S"), std::move(val), std::move(rest));
     }
 
+    // ---- Rescue -----------------------------------------------------------
+    auto lowerRescueClauses(const ast::RescueBlock& rescue) -> std::vector<MatchClause> {
+        std::vector<MatchClause> out;
+        if (rescue.isInlineReturn) {
+            MatchClause c;
+            c.patterns.push_back(wildPat());
+            auto retExpr = std::make_unique<Expr>();
+            retExpr->node = Return{lower(rescue.inlineReturnExpr)};
+            c.body = std::move(retExpr);
+            out.push_back(std::move(c));
+        } else if (rescue.isCatchAll) {
+            MatchClause c;
+            if (rescue.catchAllParam.empty()) {
+                c.patterns.push_back(wildPat());
+            } else {
+                auto p = std::make_unique<Pattern>();
+                p->kind = PatKind::Var;
+                p->name = rescue.catchAllParam;
+                subst[rescue.catchAllParam] = rescue.catchAllParam;
+                c.patterns.push_back(std::move(p));
+            }
+            c.body = lowerBody(rescue.catchAllBody);
+            out.push_back(std::move(c));
+        } else {
+            for (const auto& clause : rescue.clauses) {
+                MatchClause mc;
+                if (!clause.patterns.empty()) {
+                    mc.patterns.push_back(lowerPattern(clause.patterns[0]));
+                } else {
+                    mc.patterns.push_back(wildPat());
+                }
+                mc.body = clause.body ? lower(clause.body) : lit(LitKind::Atom, "ok");
+                out.push_back(std::move(mc));
+            }
+        }
+        return out;
+    }
+
+    auto wrapWithTryCatch(ExprPtr body, const ast::RescueBlock& rescue) -> ExprPtr {
+        TryCatch tc;
+        tc.body = std::move(body);
+        tc.clauses = lowerRescueClauses(rescue);
+        auto ex = std::make_unique<Expr>();
+        ex->node = std::move(tc);
+        return ex;
+    }
+
+    // Does an uncaught `.try` failure escape this body? A TryThrow escapes
+    // unless it sits inside a TryCatch's body (which catches it). Nested
+    // lambdas are separate scopes, so their `.try`s don't count here.
+    static auto irHasEscapingTryThrow(const ExprPtr& e) -> bool {
+        if (!e) return false;
+        return std::visit([](const auto& n) -> bool {
+            using T = std::decay_t<decltype(n)>;
+            auto rec = [](const ExprPtr& c) { return irHasEscapingTryThrow(c); };
+            if constexpr (std::is_same_v<T, TryThrow>) return true;
+            else if constexpr (std::is_same_v<T, TryCatch>) {
+                // n.body's throws are caught here; only clause (rescue) bodies
+                // can still escape.
+                for (auto& c : n.clauses) if (rec(c.body)) return true;
+                return false;
+            }
+            else if constexpr (std::is_same_v<T, Lambda>) return false;
+            else if constexpr (std::is_same_v<T, Let>) return rec(n.value) || rec(n.body);
+            else if constexpr (std::is_same_v<T, Seq>) {
+                for (auto& x : n.exprs) if (rec(x)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, Match>) {
+                for (auto& s : n.subjects) if (rec(s)) return true;
+                for (auto& c : n.clauses) {
+                    if (c.guard && rec(*c.guard)) return true;
+                    if (rec(c.body)) return true;
+                }
+                return false;
+            }
+            else if constexpr (std::is_same_v<T, Intrinsic>) {
+                for (auto& a : n.args) if (rec(a)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, Call>) {
+                for (auto& a : n.args) if (rec(a)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, CallIndirect>) {
+                if (rec(n.callee)) return true;
+                for (auto& a : n.args) if (rec(a)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, Construct>) {
+                for (auto& a : n.args) if (rec(a)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, MakeTuple>) {
+                for (auto& a : n.elements) if (rec(a)) return true; return false;
+            }
+            else if constexpr (std::is_same_v<T, MakeList>) {
+                for (auto& a : n.elements) if (rec(a)) return true;
+                return n.rest && rec(*n.rest);
+            }
+            else if constexpr (std::is_same_v<T, FieldGet>) return rec(n.record);
+            else if constexpr (std::is_same_v<T, Return>) return rec(n.value);
+            else if constexpr (std::is_same_v<T, LetRec>)
+                return rec(n.funBody) || rec(n.contBody);
+            return false;
+        }, e->node);
+    }
+
+    // Wrap a rescue-less function body so an escaped `.try` failure becomes
+    // `return Error(e)` — matching the interpreter, which catches an unhandled
+    // TryException at the function boundary (evaluator.cxx execFunctionDef).
+    auto wrapPropagateTryError(ExprPtr body) -> ExprPtr {
+        TryCatch tc;
+        tc.body = std::move(body);
+        MatchClause c;
+        std::string en = fresh("_TryE");
+        auto p = std::make_unique<Pattern>();
+        p->kind = PatKind::Var; p->name = en;
+        c.patterns.push_back(std::move(p));
+        auto errCtor = std::make_unique<Expr>();
+        errCtor->node = Construct{"Error", one(var(en))};
+        c.body = std::move(errCtor);
+        tc.clauses.push_back(std::move(c));
+        auto ex = std::make_unique<Expr>();
+        ex->node = std::move(tc);
+        return ex;
+    }
+
     // ---- Function / program ----------------------------------------------
     // A single param → an IR pattern (var name or a destructuring pattern).
     auto lowerParam(const ast::Param& p) -> PatternPtr {
@@ -2710,6 +2928,8 @@ struct Lowering {
                     body = makeLet(it->first, std::move(it->second), std::move(body));
                 for (auto it = recordPatterns.rbegin(); it != recordPatterns.rend(); ++it)
                     body = wrapRecordPattern(it->first, *it->second, std::move(body));
+                if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
+                else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
                 fc.body = std::move(body);
                 def.clauses.push_back(std::move(fc));
             }
@@ -3441,6 +3661,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         p->name = node->params[0].name ? *node->params[0].name : "_args";
                         fc.params.push_back(std::move(p));
                     }
+                    if (node->rescue) body = L.wrapWithTryCatch(std::move(body), *node->rescue);
                     fc.body = L.withTestSummary(L.withDisplayInfo(std::move(body)));
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
@@ -3855,6 +4076,14 @@ auto rewriteModuleCalls(ExprPtr& expr,
             visit(node.value);
         } else if constexpr (std::is_same_v<T, LetRec>) {
             visit(node.funBody); visit(node.contBody);
+        } else if constexpr (std::is_same_v<T, TryThrow>) {
+            visit(node.error);
+        } else if constexpr (std::is_same_v<T, TryCatch>) {
+            visit(node.body);
+            for (auto& clause : node.clauses) {
+                if (clause.guard) visit(*clause.guard);
+                visit(clause.body);
+            }
         } else if constexpr (std::is_same_v<T, Receive>) {
             for (auto& clause : node.clauses) {
                 visit(clause.body);

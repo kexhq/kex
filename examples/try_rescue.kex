@@ -20,7 +20,7 @@ end
 
 # --- .try on Option ---
 
-let first(list: [Int]) -> String do
+let getFirst(list: [Int]) -> String do
   let val = trying do
     let head = list.first.try
     "found: ${head * 10}"
@@ -47,7 +47,7 @@ end
 
 # --- rescue return (inline shorthand) ---
 
-let safeFirst(items: [Int]) -> Int do
+let safeGetFirst(items: [Int]) -> Int do
   trying do
     items.first.try
   rescue return -1
@@ -83,16 +83,16 @@ main do
   IO.printLine(safeDivide(10, 2))
   IO.printLine(safeDivide(10, 0))
 
-  IO.printLine(first([42]))
-  IO.printLine(first([]))
+  IO.printLine(getFirst([42]))
+  IO.printLine(getFirst([]))
 
   let results = tryDivisions(100, [5, 0, 10])
   results.each do |r|
     IO.printLine(r)
   end
 
-  IO.printLine("first: ${safeFirst([10, 20, 30])}")
-  IO.printLine("first: ${safeFirst([])}")
+  IO.printLine("first: ${safeGetFirst([10, 20, 30])}")
+  IO.printLine("first: ${safeGetFirst([])}")
 
   IO.printLine(verboseDivide(10, 2))
   IO.printLine(verboseDivide(10, 0))

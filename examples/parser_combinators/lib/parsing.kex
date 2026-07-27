@@ -1,0 +1,94 @@
+# A small parser combinator library.
+#
+# `Parser` threads an immutable cursor (`input` + `pos`) through the parse.
+# Every primitive returns `Result<(value, Parser), ParseError>`: the value it
+# consumed plus the advanced parser, or a `ParseError`. Combinators build bigger
+# parsers out of smaller ones using `.try` to short-circuit on failure.
+#
+# Resolved as `Parsing` → `lib/parsing.kex` by convention; import it with
+# `using Parsing`.
+
+module Parsing
+
+type ParseError = Unexpected(String, Int) | NoMatch(Int)
+
+record Parser do
+  input : String
+  pos   : Int = 0
+end
+
+make Parser do
+  # The current character, or None at end of input.
+  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
+
+  # A new parser advanced one character.
+  let advance = Parser { input: @input, pos: @pos + 1 }
+
+  # The unconsumed tail of the input.
+  let remaining = @input.slice(@pos, @input.count)
+
+  # --- Primitives ---
+
+  # Consume one character satisfying `pred`, else fail.
+  let charWhen(pred: Char -> Bool) -> Result<(Char, Parser), ParseError> do
+    match this.peek do
+      Just(c) when pred(c) -> Ok((c, this.advance))
+      Just(c) -> Error(Unexpected("${c}", @pos))
+      None    -> Error(Unexpected("EOF", @pos))
+    end
+  end
+
+  # Consume exactly `expected`, else fail.
+  let char(expected: Char) -> Result<(Char, Parser), ParseError> do
+    this.charWhen { |c| c == expected }
+  end
+
+  # Skip a run of spaces (never fails).
+  let whiteSpaces -> Parser do
+    var p = this
+    while p.peek == Just(' ')
+      p = p.advance
+    end
+    p
+  end
+
+  # --- Combinators ---
+
+  # Apply `f` zero or more times, collecting results. Stops at the first
+  # failure and returns everything gathered so far (never fails).
+  let many(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) do
+    var results: [a] = []
+    var p = this
+    loop
+      trying do
+        let (v, p2) = f(p).try
+        results.push!(v)
+        p = p2
+      rescue return (results, p)
+      end
+    end
+  end
+
+  # Apply `f` one or more times. Fails if the first application fails.
+  let some(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) or! ParseError do
+    let (first, p) = f(this).try
+    let (rest, p2) = p.many(f)
+    Ok(([first, ...rest], p2))
+  end
+
+  # Try each alternative in order, returning the first that succeeds.
+  let choice(alts: [Parser -> Result<(a, Parser), ParseError>]) -> (a, Parser) or! ParseError do
+    var i = 0
+    loop
+      break if i >= alts.count
+      trying do
+        let f = alts.at(i)
+        let result = f(this).try
+        return Ok(result)
+      rescue
+        _ -> i = i + 1
+      end
+    end
+    Error(NoMatch(@pos))
+  end
+end

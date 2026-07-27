@@ -1,0 +1,85 @@
+# Parsing and evaluating simple arithmetic expressions like "3 + 42 * 5" with
+# the `Parsing` combinator library (lib/parsing.kex).
+#
+# The grammar lives here as the *application*: the reusable machinery — the
+# `Parser` cursor, `charWhen`/`whiteSpaces`, and the `many`/`some`/`choice`
+# combinators — is imported from `Parsing`. Each grammar rule is a plain
+# function taking a `Parser`, so `p.integer`, `p.operator`, and `p.expression`
+# read as UFCS calls. The parsed `Expr` tree is then run through `eval` to get
+# its integer value.
+
+using Parsing
+
+type Expr
+  = IntLit(Int)
+  | BinOp(String, Expr, Expr)
+
+# An integer literal: one or more digits after optional whitespace.
+let integer(p: Parser) -> (Expr, Parser) or! ParseError do
+  let p1 = p.whiteSpaces
+  let (digits, p2) = p1.some { |q| q.charWhen(&.digit?) }.try
+  let n = Integer.parse(digits.join(""))
+  match n do
+    Ok(v) -> Ok((IntLit(v), p2))
+    _     -> Error(Unexpected("not a number", p1.pos))
+  end
+end
+
+# A binary operator: one of + - *, after optional whitespace.
+let operator(p: Parser) -> (String, Parser) or! ParseError do
+  let p1 = p.whiteSpaces
+  p1.choice([
+    { |q| let (_, q2) = q.charWhen { |c| c == '+' }.try; Ok(("+", q2)) },
+    { |q| let (_, q2) = q.charWhen { |c| c == '-' }.try; Ok(("-", q2)) },
+    { |q| let (_, q2) = q.charWhen { |c| c == '*' }.try; Ok(("*", q2)) },
+  ])
+end
+
+# An expression: an integer, optionally followed by an operator and another
+# expression (right-associative — enough to show recursion).
+let expression(p: Parser) -> (Expr, Parser) or! ParseError do
+  let (left, p1) = p.integer.try
+  trying do
+    let (op, p2) = p1.operator.try
+    let (right, p3) = p2.expression.try
+    Ok((BinOp(op, left, right), p3))
+  rescue
+    _ -> Ok((left, p1))
+  end
+end
+
+let formatExpr(e: Expr) -> String do
+  match e do
+    IntLit(n)       -> "${n}"
+    BinOp(op, l, r) -> "(${formatExpr(l)} ${op} ${formatExpr(r)})"
+  end
+end
+
+let applyOp(op: String, a: Int, b: Int) -> Int do
+  match op do
+    "+" -> a + b
+    "-" -> a - b
+    "*" -> a * b
+    _   -> 0
+  end
+end
+
+# A tree-walking evaluator: fold the parsed Expr down to its integer value.
+let eval(e: Expr) -> Int do
+  match e do
+    IntLit(n)       -> n
+    BinOp(op, l, r) -> applyOp(op, eval(l), eval(r))
+  end
+end
+
+main do
+  let inputs = ["42", "3 + 5", "1 + 2 * 3", "10 - 7 + 2"]
+
+  inputs.each do |input|
+    let p = Parser { input: input }
+    match p.expression do
+      Ok((expr, _)) -> IO.printLine("${input} => ${formatExpr(expr)} = ${eval(expr)}")
+      Error(e)      -> IO.printLine("${input} => error: ${e}")
+    end
+  end
+end

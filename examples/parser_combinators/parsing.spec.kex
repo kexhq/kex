@@ -1,61 +1,7 @@
-type ParseError = Unexpected(String, Int) | NoMatch(Int)
+# Tests for the `Parsing` combinator library (lib/parsing.kex).
+# Run from this directory: `kex -r parsing.spec.kex` (also works with -R).
 
-record Parser do
-  input : String
-  pos   : Int = 0
-end
-
-make Parser do
-  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
-  let advance = Parser { input: @input, pos: @pos + 1 }
-  let remaining = @input.slice(@pos, @input.count)
-
-  let charWhen(pred: Char -> Bool) -> Result<(Char, Parser), ParseError> do
-    match this.peek do
-      Just(c) when pred(c) -> Ok((c, this.advance))
-      Just(c) -> Error(Unexpected("${c}", @pos))
-      None    -> Error(Unexpected("EOF", @pos))
-    end
-  end
-
-  let char(expected: Char) -> Result<(Char, Parser), ParseError> do
-    this.charWhen { |c| c == expected }
-  end
-
-  let many(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) do
-    var results: [a] = []
-    var p = this
-    loop
-      trying do
-        let (v, p2) = f(p).try
-        results.push!(v)
-        p = p2
-      rescue return (results, p)
-      end
-    end
-  end
-
-  let some(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) or! ParseError do
-    let (first, p) = f(this).try
-    let (rest, p2) = p.many(f)
-    Ok(([first, ...rest], p2))
-  end
-
-  let choice(alts: [Parser -> Result<(a, Parser), ParseError>]) -> (a, Parser) or! ParseError do
-    var i = 0
-    loop
-      break if i >= alts.count
-      trying do
-        let f = alts.at(i)
-        let result = f(this).try
-        return Ok(result)
-      rescue
-        _ -> i = i + 1
-      end
-    end
-    Error(NoMatch(@pos))
-  end
-end
+using Parsing
 
 describe("Parser combinators with .try/rescue") do
   describe("charWhen") do
@@ -84,14 +30,14 @@ describe("Parser combinators with .try/rescue") do
   describe("many") do
     it("collects zero matches") do
       let p = Parser { input: "abc" }
-      let (chars, p2) = p.many { |p| p.charWhen(&.digit?) }
+      let (chars, p2) = p.many { |q| q.charWhen(&.digit?) }
       assert(chars.count == 0)
       assert(p2.pos == 0)
     end
 
     it("collects multiple matches") do
       let p = Parser { input: "123abc" }
-      let (chars, p2) = p.many { |p| p.charWhen(&.digit?) }
+      let (chars, p2) = p.many { |q| q.charWhen(&.digit?) }
       assert(chars.count == 3)
       assert(chars.join("") == "123")
       assert(p2.pos == 3)
@@ -99,7 +45,7 @@ describe("Parser combinators with .try/rescue") do
 
     it("collects all matches to end") do
       let p = Parser { input: "xyz" }
-      let (chars, p2) = p.many { |p| p.charWhen(&.lower?) }
+      let (chars, p2) = p.many { |q| q.charWhen(&.lower?) }
       assert(chars.count == 3)
       assert(chars.join("") == "xyz")
       assert(p2.pos == 3)
@@ -109,7 +55,7 @@ describe("Parser combinators with .try/rescue") do
   describe("some") do
     it("succeeds with one or more matches") do
       let p = Parser { input: "42abc" }
-      let result = p.some { |p| p.charWhen(&.digit?) }
+      let result = p.some { |q| q.charWhen(&.digit?) }
       match result do
         Ok((digits, p2)) -> do
           assert(digits.join("") == "42")
@@ -121,7 +67,7 @@ describe("Parser combinators with .try/rescue") do
 
     it("fails with zero matches") do
       let p = Parser { input: "abc" }
-      let result = p.some { |p| p.charWhen(&.digit?) }
+      let result = p.some { |q| q.charWhen(&.digit?) }
       match result do
         Error(_) -> assert(true)
         _ -> assert(false)
@@ -133,8 +79,8 @@ describe("Parser combinators with .try/rescue") do
     it("returns first successful alternative") do
       let p = Parser { input: "+" }
       let result = p.choice([
-        { |p| p.char('+') },
-        { |p| p.char('-') },
+        { |q| q.char('+') },
+        { |q| q.char('-') },
       ])
       match result do
         Ok((c, _)) -> assert(c == '+')
@@ -145,8 +91,8 @@ describe("Parser combinators with .try/rescue") do
     it("tries alternatives in order") do
       let p = Parser { input: "-" }
       let result = p.choice([
-        { |p| p.char('+') },
-        { |p| p.char('-') },
+        { |q| q.char('+') },
+        { |q| q.char('-') },
       ])
       match result do
         Ok((c, _)) -> assert(c == '-')
@@ -157,8 +103,8 @@ describe("Parser combinators with .try/rescue") do
     it("fails when no alternative matches") do
       let p = Parser { input: "x" }
       let result = p.choice([
-        { |p| p.char('+') },
-        { |p| p.char('-') },
+        { |q| q.char('+') },
+        { |q| q.char('-') },
       ])
       match result do
         Error(NoMatch(_)) -> assert(true)
