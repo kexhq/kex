@@ -55,6 +55,9 @@ private:
     // contract rather than competing with body inference.
     auto registerDeclaredSignatures(const ast::Program& program) -> void;
     auto annotationToSignature(const ast::TypeAnnotation& ann) -> std::optional<Signature>;
+    auto registerMakeSignatures(const ast::Program& program) -> void;
+    auto registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void;
+    auto registerMakeSignature(const ast::MakeDef& def) -> void;
 
     // Pre-register provisional signatures (param types from inline annotations,
     // TypeVar result) for all non-annotation-declared FunctionDefs before any
@@ -154,6 +157,7 @@ private:
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
+    std::unordered_set<std::string> m_nullaryConstructors;
 
     // Record field types: typeName -> { fieldName -> TypePtr }.
     // Populated by a pre-pass over all RecordDefs so field access in method
@@ -182,6 +186,9 @@ private:
     // today, just not yet improved; that's call-graph SCC ordering,
     // phase 5b, not attempted here).
     std::unordered_map<std::string, std::vector<Signature>> m_userSignatures;
+    // Receiver-aware signatures declared inside `make T do` blocks. Their
+    // first parameter is the implicit receiver, matching UFCS call checking.
+    std::unordered_map<std::string, std::vector<Signature>> m_methodSignatures;
     // Checked interface attached to its exact syntax declaration. Unlike the
     // call-resolution table above, this preserves ownership when separate
     // modules or overload declarations reuse the same unqualified name.

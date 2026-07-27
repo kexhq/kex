@@ -31,6 +31,10 @@ auto TypeChecker::check(const ast::Program& program,
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_localModules.clear();
+    m_adtVariants.clear();
+    m_adtOfConstructor.clear();
+    m_nullaryConstructors.clear();
+    m_methodSignatures.clear();
     m_scopeStack.clear();
     pushScope();
 
@@ -58,8 +62,12 @@ auto TypeChecker::check(const ast::Program& program,
     if (m_importedInterfaces)
         for (const auto& adt : m_importedInterfaces->adts) {
             m_adtVariants[adt.name] = adt.constructors;
-            for (const auto& ctor : adt.constructors)
+            for (const auto& ctor : adt.constructors) {
                 m_adtOfConstructor[ctor] = adt.name;
+                auto arity = adt.constructorArities.find(ctor);
+                if (arity != adt.constructorArities.end() && arity->second == 0)
+                    m_nullaryConstructors.insert(ctor);
+            }
         }
 
     for (const auto& item : program.items) {
@@ -109,6 +117,7 @@ auto TypeChecker::check(const ast::Program& program,
             m_traits.registerImplementation(c.typeName, c.traitName);
     registerRecordFields(program);
     registerDeclaredSignatures(program);
+    registerMakeSignatures(program);
     preRegisterFunctionSigs(program);
 
     // Topological ordering: check functions whose callees are all known
@@ -297,6 +306,8 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
         auto name = extractConstructorName(variant);
         if (!name) return;  // not constructor-shaped — a type alias, skip entirely
         names.push_back(*name);
+        if (std::holds_alternative<ast::TypeName>(variant->kind))
+            m_nullaryConstructors.insert(*name);
     }
     if (names.empty()) return;
 
@@ -447,6 +458,58 @@ auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> voi
             // ordering, but guard for safety).
             sigs.insert(sigs.begin(), std::move(*sig));
         }
+    }
+}
+
+auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
+    if (!def.target) return;
+    std::unordered_map<std::string, TypePtr> targetVars;
+    auto receiver = resolveTypeExpr(*def.target, targetVars);
+
+    for (const auto& item : def.body) {
+        auto add = [&](const std::unique_ptr<ast::TypeAnnotation>& ann) {
+            if (!ann) return;
+            auto sig = annotationToSignature(*ann);
+            if (!sig) return;
+            sig->params.insert(sig->params.begin(), receiver);
+            m_methodSignatures[ann->name].push_back(std::move(*sig));
+        };
+        if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
+            add(*ann);
+        } else if (auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                   visibility && *visibility) {
+            for (const auto& visible : (*visibility)->items)
+                if (auto* ann =
+                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&visible))
+                    add(*ann);
+        }
+    }
+}
+
+auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void {
+    for (const auto& item : mod.body) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) registerMakeSignature(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerMakeSignaturesInModule(*node);
+            }
+        }, item);
+    }
+}
+
+auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
+    for (const auto& item : program.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) registerMakeSignature(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerMakeSignaturesInModule(*node);
+            }
+        }, item);
     }
 }
 
@@ -1206,6 +1269,59 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return Type::unknown();
             }
             return type;
+        }
+        else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            if (m_nullaryConstructors.contains(node.name))
+                return Type::named(node.name);
+            auto type = lookupVar(node.name);
+            return type ? type : Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            auto operand = resolve(
+                node.operand ? inferExpr(*node.operand) : Type::unknown());
+            if (auto* optional = std::get_if<OptionalType>(&operand->kind))
+                return optional->inner;
+            if (auto* named = std::get_if<NamedType>(&operand->kind);
+                named && named->name == "Result" && !named->typeArgs.empty())
+                return named->typeArgs[0];
+            if (std::holds_alternative<UnknownType>(operand->kind) ||
+                std::holds_alternative<TypeVar>(operand->kind))
+                return Type::unknown();
+            error(expr.location, "`.try` expects Result or Optional, got " +
+                  typeToString(operand));
+            return Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            auto result = resolve(inferBody(node.body));
+            auto merge = [&](TypePtr candidate) {
+                candidate = resolve(candidate);
+                bool resultPermissive =
+                    std::holds_alternative<UnknownType>(result->kind) ||
+                    std::holds_alternative<TypeVar>(result->kind) ||
+                    std::holds_alternative<VoidType>(result->kind);
+                bool candidatePermissive =
+                    std::holds_alternative<UnknownType>(candidate->kind) ||
+                    std::holds_alternative<TypeVar>(candidate->kind) ||
+                    std::holds_alternative<VoidType>(candidate->kind);
+                if (resultPermissive && !candidatePermissive) {
+                    result = candidate;
+                } else if (!resultPermissive && !candidatePermissive &&
+                           !argMatchesParam(candidate, result) &&
+                           !argMatchesParam(result, candidate)) {
+                    error(expr.location,
+                          "`trying` body returns " + typeToString(result) +
+                          " but rescue returns " + typeToString(candidate));
+                }
+            };
+            for (const auto& clause : node.rescue.clauses)
+                if (clause.body) merge(inferExpr(*clause.body));
+            if (!node.rescue.catchAllBody.empty())
+                merge(inferBody(node.rescue.catchAllBody));
+            // `rescue return` exits the enclosing function, so its expression
+            // does not participate in the trying-expression result type.
+            if (node.rescue.inlineReturnExpr)
+                inferExpr(*node.rescue.inlineReturnExpr);
+            return result;
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
@@ -2063,6 +2179,16 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
         if (!argNamed || argNamed->name != paramNamed->name) {
+            // A nullary ADT constructor is a refined value of its parent type:
+            // `Read` matches both the exact `Read` overload and a broader
+            // `FileModes` parameter, while `FileModes` does not match `Read`.
+            if (argNamed && argNamed->typeArgs.empty() &&
+                paramNamed->typeArgs.empty()) {
+                auto owner = m_adtOfConstructor.find(argNamed->name);
+                if (owner != m_adtOfConstructor.end() &&
+                    owner->second == paramNamed->name)
+                    return true;
+            }
             if (isStringType(argType) && isStringType(paramType)) return true;
             return false;
         }
@@ -2167,6 +2293,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                             const ast::MethodCall* methodCall) -> TypePtr {
     auto userIt = m_userSignatures.find(name);
     bool hasUser = (userIt != m_userSignatures.end());
+    auto methodIt = m_methodSignatures.find(name);
+    bool hasLocalMethods = isMethodCall && methodIt != m_methodSignatures.end();
+    bool hasReceiverRefinementConflict = false;
+    if (hasLocalMethods && !argTypes.empty()) {
+        auto actual = resolve(argTypes[0]);
+        for (const auto& sig : methodIt->second) {
+            if (sig.params.empty()) continue;
+            auto expected = resolve(sig.params[0]);
+            auto* actualNamed = std::get_if<NamedType>(&actual->kind);
+            auto* expectedNamed = std::get_if<NamedType>(&expected->kind);
+            if (actualNamed && expectedNamed &&
+                actualNamed->name == expectedNamed->name) {
+                if (!argMatchesParam(actual, expected))
+                    hasReceiverRefinementConflict = true;
+            }
+        }
+    }
 
     std::vector<const ImportedFunction*> importedFunctions;
     std::string qualifiedModule;
@@ -2206,6 +2349,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // precedence and prevents imported ownership from hijacking local calls.
     if (!qualifiedModule.empty() && m_localModules.contains(qualifiedModule))
         importedFunctions.clear();
+    if (isMethodCall && !argTypes.empty()) {
+        auto actual = resolve(argTypes[0]);
+        auto* actualNamed = std::get_if<NamedType>(&actual->kind);
+        if (actualNamed)
+            for (const auto* function : importedFunctions) {
+                if (function->signature.params.empty()) continue;
+                auto expected = resolve(function->signature.params[0]);
+                auto* expectedNamed = std::get_if<NamedType>(&expected->kind);
+                if (expectedNamed && expectedNamed->name == actualNamed->name &&
+                    !argMatchesParam(actual, expected)) {
+                    hasReceiverRefinementConflict = true;
+                    break;
+                }
+            }
+    }
 
     auto sameParams = [](const Signature& left, const Signature& right) {
         if (left.params.size() != right.params.size()) return false;
@@ -2241,8 +2399,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     std::vector<Signature> merged;
     const std::vector<Signature>* sigs = nullptr;
-    if (!importedSigs.empty()) {
+    // Calls made by ordinary user code should see the full local receiver
+    // interface. While checking a make block's own implementation bodies,
+    // retain the existing permissive behavior unless the receiver refinement
+    // itself is wrong; generic helper calls in those bodies are not yet
+    // sufficiently substituted to validate without false positives.
+    bool useLocalMethods = hasLocalMethods &&
+        (!m_inMakeBlock || hasReceiverRefinementConflict);
+    if (!importedSigs.empty() || useLocalMethods) {
         merged = importedSigs;
+        if (useLocalMethods)
+            merged.insert(merged.end(), methodIt->second.begin(), methodIt->second.end());
         if (hasUser)
             merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
         sigs = &merged;
@@ -2404,7 +2571,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!m_traits.hasConformances(receiverKey))
                 anyConstrainedFirstParam = false;
         }
-        if (!anyFirstParamPlausible && !anyConstrainedFirstParam) return Type::unknown();
+        if (!anyFirstParamPlausible && !anyConstrainedFirstParam &&
+            !hasReceiverRefinementConflict)
+            return Type::unknown();
     }
 
     std::vector<const Signature*> arityMatches;

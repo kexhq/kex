@@ -1086,6 +1086,21 @@ int main() {
             std::filesystem::remove(path);
         });
 
+        it("applies open modes to Mock.FS handles", []() {
+            auto result = run(
+                "main do\n"
+                "  Mock.FS.File(\"mock.txt\", \"old\")\n"
+                "  let writer = File.open(\"mock.txt\", Write)\n"
+                "  writer.write(\"new\")\n"
+                "  let appender = File.open(\"mock.txt\", Append)\n"
+                "  appender.write(\"!\")\n"
+                "  File.read(\"mock.txt\")\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("new!"));
+        });
+
         it("reading a nonexistent file returns None", []() {
             auto result = run("main do\n  File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertTrue(result->isNone());

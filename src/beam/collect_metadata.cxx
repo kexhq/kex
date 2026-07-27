@@ -378,14 +378,21 @@ void collectFromMakeDef(const kex::ast::MakeDef& md,
         addReceiverFunction(fd, receiverType, iface, meta, analysis);
         auto it = standaloneSigs.find(fd.name);
         if (it == standaloneSigs.end()) return;
-        auto& method = iface.methods.back();
+        auto method = std::move(iface.methods.back());
+        iface.methods.pop_back();
         size_t defParams = method.paramTypes.size();
+        bool added = false;
         for (const auto& sig : it->second) {
             if (!sig) continue;
             size_t sigParams = (sig->kind == KexiType::Func) ? sig->typeArgs.size() : 0;
-            if (sigParams == defParams)
-                patchMethodWithSig(method, sig);
+            if (sigParams == defParams) {
+                auto overload = method;
+                patchMethodWithSig(overload, sig);
+                iface.methods.push_back(std::move(overload));
+                added = true;
+            }
         }
+        if (!added) iface.methods.push_back(std::move(method));
     };
 
     std::unordered_set<std::string> seenImpls;
@@ -444,9 +451,15 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
             seenImpls.insert((*fd)->name);
             addReceiverFunction(**fd, receiverType, iface, meta, analysis);
             auto it = standaloneSigs.find((*fd)->name);
-            if (it != standaloneSigs.end())
-                for (const auto& sig : it->second)
-                    patchMethodWithSig(iface.methods.back(), sig);
+            if (it != standaloneSigs.end()) {
+                auto method = std::move(iface.methods.back());
+                iface.methods.pop_back();
+                for (const auto& sig : it->second) {
+                    auto overload = method;
+                    patchMethodWithSig(overload, sig);
+                    iface.methods.push_back(std::move(overload));
+                }
+            }
         }
     // Add pure signatures (methods declared but not defaulted in this
     // trait) as type-only methods — no methodOwnership entry.
@@ -531,9 +544,15 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
         collectFromFunctionDef(fd, iface, analysis);
         meta.publicExports.push_back(fd.name);
         auto it = standaloneSigs.find(fd.name);
-        if (it != standaloneSigs.end())
-            for (const auto& sig : it->second)
-                patchExportWithSig(iface.exports.back(), sig);
+        if (it != standaloneSigs.end()) {
+            auto exported = std::move(iface.exports.back());
+            iface.exports.pop_back();
+            for (const auto& sig : it->second) {
+                auto overload = exported;
+                patchExportWithSig(overload, sig);
+                iface.exports.push_back(std::move(overload));
+            }
+        }
     };
 
     for (const auto& item : body) {
@@ -577,9 +596,15 @@ void collectFromTopLevel(const kex::ast::Program& program,
         collectFromFunctionDef(fd, iface, analysis);
         meta.publicExports.push_back(fd.name);
         auto it = standaloneSigs.find(fd.name);
-        if (it != standaloneSigs.end())
-            for (const auto& sig : it->second)
-                patchExportWithSig(iface.exports.back(), sig);
+        if (it != standaloneSigs.end()) {
+            auto exported = std::move(iface.exports.back());
+            iface.exports.pop_back();
+            for (const auto& sig : it->second) {
+                auto overload = exported;
+                patchExportWithSig(overload, sig);
+                iface.exports.push_back(std::move(overload));
+            }
+        }
         if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 2)
             addReceiverFunction(fd, kexiUnknown(), iface, meta, analysis, true);
     };

@@ -1,0 +1,65 @@
+# Mode-safe file handles
+#
+# The mode passed to FS.File.open determines which methods the returned
+# FileHandle exposes. Mock.FS keeps this example self-contained.
+
+# Put capability requirements in helper signatures. Any readable handle can
+# call readAll; any writable handle can call writeText.
+foul readAll(file: FileHandle<CanRead, W>) -> String do
+  file.read().or("")
+end
+
+foul writeText(file: FileHandle<R, CanWrite>, text: String) -> Bool do
+  file.write(text)
+end
+
+# Typestate and error handling solve different problems. FS.File.read returns
+# Optional<String>; .try unwraps it, and trying supplies a recovery path.
+foul readOrMissing(path: String) -> String do
+  trying do
+    FS.File.read(path).try
+  rescue
+    _ -> "(missing)"
+  end
+end
+
+main do
+  Mock.FS.File("file_modes.txt", "first line\nsecond line\n")
+
+  # Read produces FileHandle<CanRead, CannotWrite>.
+  let reader = FS.File.open("file_modes.txt", Read)
+  IO.printLine("read: ${readAll(reader)}")
+  reader.close()
+
+  # This would be a compile-time error, both directly and through the helper:
+  # reader.write("not allowed")
+  # writeText(reader, "not allowed")
+
+  # Write produces FileHandle<CannotRead, CanWrite> and truncates the file.
+  let writer = FS.File.open("file_modes.txt", Write)
+  writeText(writer, "rewritten\n")
+  writer.close()
+
+  # This would also be a compile-time error:
+  # writer.read()
+  # readAll(writer)
+
+  # Append is write-only but preserves the existing contents.
+  let appender = FS.File.open("file_modes.txt", Append)
+  appender.writeLine("appended")
+  appender.close()
+
+  # ReadWrite exposes both sets of operations.
+  let editable = FS.File.open("file_modes.txt", ReadWrite)
+  IO.printLine("before edit: ${readAll(editable)}")
+  writeText(editable, "written through ReadWrite\n")
+  editable.close()
+
+  let finalReader = FS.File.open("file_modes.txt", Read)
+  IO.printLine("final: ${finalReader.read().or("")}")
+  finalReader.close()
+
+  IO.printLine(readOrMissing("does-not-exist.txt"))
+
+  Mock.FS.clear()
+end

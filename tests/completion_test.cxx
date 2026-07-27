@@ -310,12 +310,12 @@ int main() {
             assertTrue(!has(r, "[1,2,3].map"));
             assertTrue(!has(r, "List.map"));
         });
-        it("File. — module functions", []() {
+        it("FS.File. — canonical filesystem module functions", []() {
             auto db = makePreludeDb();
-            auto r = simulate(db, "File.", 0, "File.");
-            assertTrue(has(r, "File.read"));
-            assertTrue(has(r, "File.write"));
-            assertTrue(has(r, "File.exists?"));
+            auto r = simulate(db, "FS.File.", 0, "FS.File.");
+            assertTrue(has(r, "FS.File.read"));
+            assertTrue(has(r, "FS.File.write"));
+            assertTrue(has(r, "FS.File.exists?"));
         });
         it("23. not split (B) — integer methods rewritten with literal prefix", []() {
             auto db = makePreludeDb();

@@ -173,7 +173,9 @@ open(Path, Mode) ->
                 {error, Reason} ->
                     error({file_open_error, pth(Path), Reason})
             end;
-        _ -> {'MockFileHandle', pth(Path)}
+        _ ->
+            prepare_mock_open(Path, Mode),
+            {'MockFileHandle', pth(Path)}
     end.
 
 %% File.open(path, mode, block) -> T? (None if can't open)
@@ -187,8 +189,20 @@ open(Path, Mode, Fun) ->
                     end;
                 _ -> 'None'
             end;
-        _ -> Fun({'MockFileHandle', pth(Path)})
+        _ ->
+            prepare_mock_open(Path, Mode),
+            Fun({'MockFileHandle', pth(Path)})
     end.
+
+prepare_mock_open(Path, 'Write') ->
+    P = pth(Path),
+    put({kex_mock_file, P}, <<>>),
+    put({kex_mock_pos, P}, 0);
+prepare_mock_open(Path, 'Append') ->
+    P = pth(Path),
+    put({kex_mock_pos, P}, byte_size(mock_content(P)));
+prepare_mock_open(Path, _) ->
+    put({kex_mock_pos, pth(Path)}, 0).
 
 mode_flags('Read')      -> [read, binary];
 mode_flags('Write')     -> [write, binary];
@@ -219,11 +233,15 @@ handle_get(_) -> 'None'.
 %% printLine(content) → Bool (write + newline).
 handle_printLine({'FileHandle', Dev, _}, Content) ->
     file:write(Dev, [kex_io:to_string_bin(Content), $\n]) =:= ok;
+handle_printLine({'MockFileHandle', Path}, Content) ->
+    mock_append(Path, <<(kex_io:to_string_bin(Content))/binary, "\n">>);
 handle_printLine(_, _) -> false.
 
 %% print(content) → Bool (write, no newline).
 handle_print({'FileHandle', Dev, _}, Content) ->
     file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
+handle_print({'MockFileHandle', Path}, Content) ->
+    mock_append(Path, kex_io:to_string_bin(Content));
 handle_print(_, _) -> false.
 
 %% Binary/raw I/O.
@@ -244,7 +262,15 @@ read_rest(Dev, Acc) ->
 %% write(data) → Bool (raw write).
 handle_write({'FileHandle', Dev, _}, Content) ->
     file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
+handle_write({'MockFileHandle', Path}, Content) ->
+    mock_append(Path, kex_io:to_string_bin(Content));
 handle_write(_, _) -> false.
+
+mock_append(Path, Content) ->
+    P = pth(Path),
+    Existing = case mock_content(P) of undefined -> <<>>; Bin -> Bin end,
+    put({kex_mock_file, P}, <<Existing/binary, Content/binary>>),
+    true.
 
 %% Lifecycle.
 

@@ -332,6 +332,11 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                     return up->name;
                 return {};
             }();
+            if (receiverName == "File" || receiverName == "Directory") {
+                warning(expr.location,
+                    "'" + receiverName + "' is deprecated; use 'FS." +
+                    receiverName + "' instead");
+            }
             auto isModuleFoul = [&](const std::string& name) -> bool {
                 if (!m_importedInterfaces) return false;
                 auto it = m_importedInterfaces->modules.find(name);

@@ -641,11 +641,14 @@ auto KexiRegistry::buildSemanticInterfaces() const
         for (const auto& module : unit.modules)
             for (const auto& adt : module.chunk.metadata.adts) {
                 std::vector<std::string> ctors;
+                std::unordered_map<std::string, int> arities;
                 for (const auto& ctor : adt.constructors) {
                     adtConstructors[adt.name].push_back(ctor.name);
                     ctors.push_back(ctor.name);
+                    arities[ctor.name] = ctor.arity;
                 }
-                interfaces.adts.push_back({adt.name, std::move(ctors)});
+                interfaces.adts.push_back(
+                    {adt.name, std::move(ctors), std::move(arities)});
             }
 
     for (const auto& [_, unit] : m_units)

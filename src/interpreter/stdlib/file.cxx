@@ -6,15 +6,19 @@
 
 namespace kex::interpreter {
 
+static auto fileModeName(const ValuePtr& modeVal) -> std::string {
+    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) return atom->name;
+    if (auto* var = std::get_if<VariantValue>(&modeVal->data)) return var->tag;
+    return "Read";
+}
+
 // Helper: open mode from an Atom (Read/Write/Append/ReadWrite)
 static auto modeFlags(const ValuePtr& modeVal) -> std::ios::openmode {
     // A bare `Read`/`Append` mode is a nullary constructor — a VariantValue
     // (an AtomValue only via `:append`-style literals). Accept both; the
     // VariantValue case was a real bug: `File.open(p, Append)` fell through
     // to read-only and writes through the handle silently failed.
-    std::string name;
-    if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) name = atom->name;
-    else if (auto* var = std::get_if<VariantValue>(&modeVal->data)) name = var->tag;
+    auto name = fileModeName(modeVal);
     if (name == "Write")     return std::ios::out | std::ios::trunc;
     if (name == "Append")    return std::ios::out | std::ios::app;
     if (name == "ReadWrite") return std::ios::in  | std::ios::out;
@@ -48,6 +52,12 @@ auto Evaluator::registerFileBuiltins() -> void {
         // Check mock first: if mocked, create an in-memory-backed handle
         auto mockIt = m_mockFiles.find(path);
         bool isMocked = mockIt != m_mockFiles.end();
+        if (isMocked) {
+            auto mode = fileModeName(args[1]);
+            if (mode == "Write") mockIt->second.clear();
+            m_mockFiles["__mock_pos__" + path] =
+                mode == "Append" ? std::to_string(mockIt->second.size()) : "0";
+        }
 
         std::shared_ptr<std::fstream> fs;
         if (!isMocked) {
