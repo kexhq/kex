@@ -51,11 +51,14 @@ static std::string g_currentMakeTarget;
 // is tracked separately because it is Kex grammar rather than delimiter state.
 // This scanner deliberately ignores delimiters inside strings and comments.
 static auto replHasOpenDelimiter(const std::string &source) -> bool {
-  enum class Mode { Normal, DoubleString, Char, RawString, Comment };
+  enum class Mode {
+    Normal, DoubleString, Char, RawString, InterpolatedRawString, Comment
+  };
   Mode mode = Mode::Normal;
   int parens = 0;
   int brackets = 0;
   int braces = 0;
+  int interpolationBraces = 0;
 
   for (size_t i = 0; i < source.size(); i++) {
     char c = source[i];
@@ -85,11 +88,33 @@ static auto replHasOpenDelimiter(const std::string &source) -> bool {
             mode = Mode::Normal;
         }
         break;
+      case Mode::InterpolatedRawString:
+        if (c == '$' && i + 2 < source.size() &&
+            source[i + 1] == '$' && source[i + 2] == '{') {
+          i += 2;
+        } else if (c == '$' && i + 1 < source.size() &&
+                   source[i + 1] == '{') {
+          interpolationBraces++;
+          i++;
+        } else if (interpolationBraces > 0 && c == '{') {
+          interpolationBraces++;
+        } else if (interpolationBraces > 0 && c == '}') {
+          interpolationBraces--;
+        } else if (c == '`') {
+          if (i + 1 < source.size() && source[i + 1] == '`')
+            i++;
+          else
+            mode = Mode::Normal;
+        }
+        break;
       case Mode::Normal:
         if (c == '#') mode = Mode::Comment;
         else if (c == '"') mode = Mode::DoubleString;
         else if (c == '\'') mode = Mode::Char;
-        else if (c == '`') mode = Mode::RawString;
+        else if (c == '`')
+          mode = i > 0 && source[i - 1] == '$'
+                     ? Mode::InterpolatedRawString
+                     : Mode::RawString;
         else if (c == '(') parens++;
         else if (c == ')' && parens > 0) parens--;
         else if (c == '[') brackets++;
@@ -101,6 +126,7 @@ static auto replHasOpenDelimiter(const std::string &source) -> bool {
   }
 
   return mode == Mode::DoubleString || mode == Mode::RawString ||
+         mode == Mode::InterpolatedRawString || interpolationBraces > 0 ||
          parens > 0 || brackets > 0 || braces > 0;
 }
 

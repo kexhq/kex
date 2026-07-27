@@ -94,6 +94,7 @@ enum class TokenType {
     Float,
     String,
     RawString,      // `raw text`, multiline and non-interpolating
+    InterpolatedRawString, // $`text ${expr}`, multiline and interpolating
     Char,         // 'c'
     Atom,         // :identifier
 

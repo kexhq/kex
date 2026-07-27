@@ -969,6 +969,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::floating(std::stod(node.value));
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            if (!node.parts.empty()) {
+                std::string result;
+                for (size_t i = 0; i < node.parts.size(); i++) {
+                    result += node.parts[i];
+                    if (i < node.values.size() && node.values[i])
+                        result += eval(*node.values[i])->toString();
+                }
+                return Value::string(result);
+            }
             if (!node.interpolating) return Value::string(node.value);
             // Handle interpolation: find ${...} and evaluate in current scope
             std::string result;
@@ -1145,6 +1154,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 args.push_back(eval(**node.block));
             }
             return callFunction(node.name, std::move(args), std::move(namedArgs), expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            std::vector<ValuePtr> parts;
+            parts.reserve(node.parts.size());
+            for (const auto& part : node.parts)
+                parts.push_back(Value::string(part));
+            std::vector<ValuePtr> values;
+            values.reserve(node.values.size());
+            for (const auto& value : node.values)
+                values.push_back(value ? eval(*value) : Value::none());
+            return callFunction(
+                node.tag,
+                {Value::list(std::move(parts)), Value::list(std::move(values))},
+                {}, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.

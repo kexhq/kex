@@ -829,6 +829,39 @@ int main() {
             assertFalse(contains(out, "kex_io':'to_string'"), out);
             assertFalse(contains(out, "unicode':'characters_to_binary'"), out);
         });
+
+        it("lowers a raw tag to the uniform two-list ABI", []() {
+            auto out = emit(
+                "let rawTag(parts, values) = parts\n"
+                "main do\n"
+                "  rawTag`hello`\n"
+                "end\n");
+            assertTrue(contains(out, "apply 'rawTag'/2"), out);
+            assertTrue(contains(out, "#<104>(8,1"), out);
+            assertTrue(contains(out, "#<111>(8,1"), out);
+        });
+
+        it("lowers parser-level interpolating backticks", []() {
+            auto out = emit(
+                "main do\n"
+                "  $`answer: ${40 + 2}`\n"
+                "end\n");
+            assertTrue(contains(out, "kex_io':'to_string'"), out);
+            assertTrue(
+                contains(out, "unicode':'characters_to_binary'"), out);
+        });
+
+        it("passes raw values through an interpolating tag ABI", []() {
+            auto out = emit(
+                "let inspectTag(parts, values) = values\n"
+                "main do\n"
+                "  inspectTag$`answer: ${40 + 2}`\n"
+                "end\n");
+            assertTrue(contains(out, "apply 'inspectTag'/2"), out);
+            assertTrue(
+                contains(out, "kex_intrinsic_number':'add'"), out);
+            assertFalse(contains(out, "kex_io':'to_string'"), out);
+        });
     });
 
     describe("IR Core Erlang emitter — receiver-function dispatch", []() {

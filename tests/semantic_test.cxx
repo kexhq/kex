@@ -542,6 +542,42 @@ int main() {
         });
     });
 
+    describe("Semantic — Tagged Literals", []() {
+        it("accepts the [String] and [Any] tag ABI", []() {
+            assertTrue(noErrors(
+                "let rawTag(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "main do rawTag`hello` end\n"));
+        });
+
+        it("rejects a tag function with the wrong arity", []() {
+            assertTrue(hasError(
+                "let rawTag(source: String) -> String = source\n"
+                "main do rawTag`hello` end\n",
+                "expects"));
+        });
+
+        it("rejects a foul tag from a pure function", []() {
+            assertTrue(hasError(
+                "foul rawTag(parts, values) = parts\n"
+                "let build() = rawTag`hello`\n",
+                "foul tag"));
+        });
+
+        it("resolves names inside interpolating backticks", []() {
+            assertTrue(hasError(
+                "let render() = $`hello ${missing}`\n",
+                "Undefined"));
+        });
+
+        it("rejects foul calls inside interpolating backticks", []() {
+            assertTrue(hasError(
+                "foul readValue() = \"value\"\n"
+                "let render() = $`hello ${readValue()}`\n",
+                "foul function"));
+        });
+    });
+
     describe("Semantic — Type Checking (Operators)", []() {
         it("rejects Int + String", []() {
             assertTrue(hasError(

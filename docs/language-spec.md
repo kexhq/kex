@@ -78,7 +78,7 @@ consist of `[A-Z][A-Za-z0-9]*`.
 |---|---|---|
 | Integer | `42`, `1_000_000` | `Integer` (arbitrary precision, GMP) |
 | Float | `3.14`, `2.718_28` | `Float` |
-| String | `"hello"`, `"v: ${expr}"` | `String` |
+| String | `"hello"`, `"v: ${expr}"`, `` `raw` `` | `String` |
 | Char | `'a'`, `'0'`, `'\n'` | `Char` |
 | Bool | `true`, `false` | `Bool` |
 | Atom | `:ok`, `:error` | `Atom` |
@@ -98,6 +98,63 @@ IO.printLine("2 + 2 = ${2 + 2}")     # 2 + 2 = 4
 ```
 
 Escape sequences: `\n`, `\r`, `\t`, `\\`, `\$`, `\"`.
+
+### Raw Backtick Strings
+
+A backtick string is multiline and non-interpolating. Backslashes are always
+literal, `${...}` is ordinary text, and two consecutive backticks inside the
+body produce one literal backtick.
+
+```kex
+let pattern = `\d+`
+let text = `the syntax ${name} stays unchanged`
+let quoted = `a ``backtick```
+```
+
+When the opening backtick is followed immediately by a newline and the closing
+backtick sits on its own line, the exact whitespace prefix before the closing
+backtick is removed from every nonblank content line. The opening newline is
+omitted; the newline before the closing line remains.
+
+### Raw Tagged Literals
+
+An adjacent lower-case identifier tags a raw backtick string:
+
+```kex
+let firstPart(parts: [String], values: [Any]) -> String do
+  parts.first.or("")
+end
+
+let text = firstPart`raw body`
+```
+
+The tag is an ordinary function called as `tag(parts, values)`. A raw tagged
+literal supplies one string in `parts` and an empty `values` list. Whitespace
+between the identifier and opening backtick disables tagging, so
+`` firstPart `raw body` `` is two separate expressions.
+
+### Interpolating Backtick Strings
+
+A `$` before the opening backtick enables `${expression}` holes:
+
+```kex
+let name = "Ada"
+let greeting = $`Hello, ${name}!`
+```
+
+The parser stores the string parts and expression ASTs separately. Each value
+is converted to a string only when an untagged interpolating literal is
+evaluated. Write `$${` for literal `${`; backslashes remain fully literal.
+
+The same marker works with a tag:
+
+```kex
+let captured = capture$`SELECT * FROM users WHERE id = ${userId}`
+```
+
+This calls `capture(["SELECT * FROM users WHERE id = ", ""], [userId])`.
+Values are passed in their original types; the tag decides whether to escape,
+bind, convert, or reject them.
 
 ### Keywords
 
@@ -960,7 +1017,9 @@ Rules:
 
 `IO`, `FS.File`, `FS.Directory`, `Http`, `System`, `Task`, and `Process`
 operations are foul.
-Reading `ENV` is pure (it is an immutable snapshot).
+Reading global `ENV` is foul because it is ambient process input. `main` also
+receives the immutable environment snapshot as an explicit parameter; passing
+that map to a helper preserves purity.
 
 ---
 
@@ -1429,8 +1488,14 @@ ANSI styling constants (all become `""` under `--no-colors`): `Reset`, `Bold`,
 
 ### 23.12 ENV
 
-An immutable `Map<String, String>` snapshot of the process environment. Reading
-it is **pure**.
+An immutable `Map<String, String>` snapshot of the process environment. Access
+through the global `ENV` namespace is **foul** because it is an implicit input:
+the value can change between process launches without appearing in a function's
+arguments.
+
+`main(args, env)` receives the same snapshot as an ordinary map. Operations on
+that explicit value are pure, so pure helpers should accept `env` as a
+parameter.
 
 | Function | Description |
 |---|---|

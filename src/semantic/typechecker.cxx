@@ -148,6 +148,13 @@ auto TypeChecker::check(const ast::Program& program,
                     if (userFns.count(n.name)) out.insert(n.name);
                     for (const auto& a : n.args) if (a) collectCalls(*a, out);
                     if (n.block) collectCalls(**n.block, out);
+                } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                    for (const auto& value : n.values)
+                        if (value) collectCalls(*value, out);
+                } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                    if (userFns.count(n.tag)) out.insert(n.tag);
+                    for (const auto& value : n.values)
+                        if (value) collectCalls(*value, out);
                 } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                     if (userFns.count(n.method)) out.insert(n.method);
                     if (n.receiver) collectCalls(*n.receiver, out);
@@ -1249,6 +1256,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::float64();
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            for (const auto& value : node.values)
+                if (value) inferExpr(*value);
             return Type::string();
         }
         else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
@@ -1447,6 +1456,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return msgType;
             }
             return checkCall(node.name, argTypes, expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            for (const auto& value : node.values)
+                if (value) inferExpr(*value);
+            return checkCall(
+                node.tag,
+                {Type::list(Type::string()), Type::list(Type::unknown())},
+                expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             // Backend interop and the private intrinsic ABI are untyped until

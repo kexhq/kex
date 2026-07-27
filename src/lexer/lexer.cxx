@@ -157,9 +157,10 @@ auto Lexer::nextToken() -> Token {
         case '"': return lexString();
         case '\'': return lexChar();
         case '$':
-            if (peek() == '`')
-                return errorToken(
-                    "Interpolating backtick literals are not implemented yet");
+            if (peek() == '`') {
+                advance();
+                return lexRawString(true);
+            }
             return errorToken("Unexpected character: $");
 
         default:
@@ -323,9 +324,67 @@ auto Lexer::lexString() -> Token {
     return makeToken(TokenType::String, str);
 }
 
-auto Lexer::lexRawString() -> Token {
+auto Lexer::lexRawString(bool interpolating) -> Token {
     std::string raw;
+    enum class HoleMode { Normal, DoubleString, Char, RawString, Comment };
+    HoleMode holeMode = HoleMode::Normal;
+    int holeDepth = 0;
     while (!atEnd()) {
+        if (interpolating && holeDepth > 0) {
+            char c = peek();
+            if (holeMode == HoleMode::DoubleString) {
+                raw += advance();
+                if (c == '\\' && !atEnd()) raw += advance();
+                else if (c == '"') holeMode = HoleMode::Normal;
+                continue;
+            }
+            if (holeMode == HoleMode::Char) {
+                raw += advance();
+                if (c == '\\' && !atEnd()) raw += advance();
+                else if (c == '\'') holeMode = HoleMode::Normal;
+                continue;
+            }
+            if (holeMode == HoleMode::RawString) {
+                raw += advance();
+                if (c == '`') {
+                    if (!atEnd() && peek() == '`')
+                        raw += advance();
+                    else
+                        holeMode = HoleMode::Normal;
+                }
+                continue;
+            }
+            if (holeMode == HoleMode::Comment) {
+                raw += advance();
+                if (c == '\n') holeMode = HoleMode::Normal;
+                continue;
+            }
+
+            raw += advance();
+            if (c == '"') holeMode = HoleMode::DoubleString;
+            else if (c == '\'') holeMode = HoleMode::Char;
+            else if (c == '`') holeMode = HoleMode::RawString;
+            else if (c == '#') holeMode = HoleMode::Comment;
+            else if (c == '{') holeDepth++;
+            else if (c == '}') holeDepth--;
+            continue;
+        }
+
+        if (interpolating && peek() == '$' &&
+            m_pos + 2 < static_cast<int>(m_source.size()) &&
+            m_source[m_pos + 1] == '$' && m_source[m_pos + 2] == '{') {
+            raw += advance();
+            raw += advance();
+            raw += advance();
+            continue;
+        }
+        if (interpolating && peek() == '$' && peekNext() == '{') {
+            raw += advance();
+            raw += advance();
+            holeDepth = 1;
+            holeMode = HoleMode::Normal;
+            continue;
+        }
         if (peek() == '`') {
             // A doubled delimiter is one literal backtick. Backslashes never
             // participate in raw-literal escaping.
@@ -395,7 +454,10 @@ auto Lexer::lexRawString() -> Token {
                 }
             }
 
-            return makeToken(TokenType::RawString, std::move(raw));
+            return makeToken(
+                interpolating ? TokenType::InterpolatedRawString
+                              : TokenType::RawString,
+                std::move(raw));
         }
         raw += advance();
     }

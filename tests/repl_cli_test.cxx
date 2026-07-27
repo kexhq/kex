@@ -232,6 +232,16 @@ int main() {
                        out);
         });
 
+        it("continues interpolating backticks with an open hole", []() {
+            auto out = runRepl(
+                "$`answer: ${\n"
+                "  40 + 2\n"
+                "}`\n");
+            assertTrue(out.find("=> \"answer: 42\" : String") !=
+                           std::string::npos,
+                       out);
+        });
+
         it("continues expressions with open delimiters", []() {
             auto out = runRepl(
                 "(\n"

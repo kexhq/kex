@@ -28,7 +28,7 @@ private:
     auto lexIdentifier() -> Token;
     auto lexNumber() -> Token;
     auto lexString() -> Token;
-    auto lexRawString() -> Token;
+    auto lexRawString(bool interpolating = false) -> Token;
     auto lexChar() -> Token;
     auto lexAtom() -> Token;
     auto lexSpliceIdent() -> Token;

@@ -301,6 +301,10 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 }
             }
         }
+        else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            for (const auto& value : node.values)
+                if (value) resolveExpr(*value);
+        }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             // Uppercase names are constructors (Just, Ok, Error…) — the
             // TypeChecker validates them; skip undefined check here.
@@ -320,6 +324,18 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             for (const auto& [_, arg] : node.namedArgs)
                 if (arg) resolveExpr(*arg);
             if (node.block && *node.block) resolveExpr(**node.block);
+        }
+        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            if (!isKnown(node.tag)) {
+                auto hint = suggest(node.tag);
+                std::string msg = "Undefined tag: `" + node.tag + "`";
+                if (!hint.empty()) msg += " — did you mean `" + hint + "`?";
+                error(expr.location, msg);
+            } else {
+                recordRef(node.tag, expr.location);
+            }
+            for (const auto& value : node.values)
+                if (value) resolveExpr(*value);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             if (node.receiver) resolveExpr(*node.receiver);

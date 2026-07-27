@@ -1,6 +1,5 @@
-# Backtick strings — raw literals and multiline dedentation.
-# Tagged literals and `$`-marked interpolation are staged separately in
-# docs/strings-and-tags-plan.md.
+# Backtick strings — raw literals, multiline dedentation, interpolation,
+# and tags.
 
 # Backslashes, quotes, slashes, and `${...}` are ordinary text.
 let path = `C:\Users\akos\Devel`
@@ -24,6 +23,26 @@ let banner = `
   * * *
 `
 
+# A tag is an ordinary function with the uniform (parts, values) ABI.
+# Raw tags receive one part and no interpolated values.
+let rawTag(parts: [String], values: [Any]) -> String do
+  parts.first.or("")
+end
+
+let tagged = rawTag`tagged body`
+
+# `$` opts into interpolation. `$${` spells literal `${`.
+let language = "Kex"
+let greeting = $`Hello from ${language}!`
+let escapedInterpolation = $`The syntax is $${expression}.`
+
+# Tags receive interpolated values without converting them to strings.
+let captureTag(parts: [String], values: [Any]) do
+  (parts, values)
+end
+
+let captured = captureTag$`answer = ${40 + 2}`
+
 main(_args) do
   IO.printLine(path)
   IO.printLine(pattern)
@@ -32,4 +51,8 @@ main(_args) do
   IO.printLine(trailingSlash)
   IO.print(query)
   IO.print(banner)
+  IO.printLine(tagged)
+  IO.printLine(greeting)
+  IO.printLine(escapedInterpolation)
+  IO.inspect(captured)
 end

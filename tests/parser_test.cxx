@@ -78,6 +78,91 @@ int main() {
         });
     });
 
+    describe("Parser — Tagged Literals", []() {
+        it("keeps an adjacent raw tag as a dedicated AST node", []() {
+            auto program = parse("main do\n  csv`a,b`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            assertEqual(main->body.size(), size_t(1));
+            assertTrue(std::holds_alternative<ast::TaggedLiteral>(
+                main->body[0]->kind));
+            auto& tagged = std::get<ast::TaggedLiteral>(main->body[0]->kind);
+            assertEqual(tagged.tag, std::string("csv"));
+            assertEqual(tagged.parts.size(), size_t(1));
+            assertEqual(tagged.parts[0], std::string("a,b"));
+            assertEqual(tagged.values.size(), size_t(0));
+            assertFalse(tagged.interpolating);
+        });
+
+        it("requires byte adjacency between tag and body", []() {
+            auto program = parse("main do\n  csv `a,b`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            assertTrue(!main->body.empty());
+            assertFalse(std::holds_alternative<ast::TaggedLiteral>(
+                main->body[0]->kind));
+        });
+
+        it("parses interpolating backticks into parts and AST values", []() {
+            auto program = parse(
+                "main do\n  $`hello ${name}, ${1 + 2}!`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& literal =
+                std::get<ast::StringLiteral>(main->body[0]->kind);
+            assertEqual(literal.parts.size(), size_t(3));
+            assertEqual(literal.parts[0], std::string("hello "));
+            assertEqual(literal.parts[1], std::string(", "));
+            assertEqual(literal.parts[2], std::string("!"));
+            assertEqual(literal.values.size(), size_t(2));
+            assertTrue(std::holds_alternative<ast::Identifier>(
+                literal.values[0]->kind));
+            assertTrue(std::holds_alternative<ast::BinaryOp>(
+                literal.values[1]->kind));
+        });
+
+        it("parses interpolating tags into the parts and values ABI", []() {
+            auto program = parse(
+                "main do\n  html$`<p>${body}</p>`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& tagged =
+                std::get<ast::TaggedLiteral>(main->body[0]->kind);
+            assertTrue(tagged.interpolating);
+            assertEqual(tagged.parts.size(), size_t(2));
+            assertEqual(tagged.parts[0], std::string("<p>"));
+            assertEqual(tagged.parts[1], std::string("</p>"));
+            assertEqual(tagged.values.size(), size_t(1));
+        });
+
+        it("turns $${ into literal interpolation syntax", []() {
+            auto program = parse(
+                "main do\n  $`literal $${name}`\nend\n");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& literal =
+                std::get<ast::StringLiteral>(main->body[0]->kind);
+            assertEqual(literal.parts.size(), size_t(1));
+            assertEqual(
+                literal.parts[0], std::string("literal ${name}"));
+            assertTrue(literal.values.empty());
+        });
+
+        it("handles delimiters inside interpolation expressions", []() {
+            assertFalse(parseFails(
+                "main do\n"
+                "  $`values: ${\"{\"}, ${`raw`}`\n"
+                "end\n"));
+        });
+
+        it("rejects an unterminated interpolation hole", []() {
+            assertTrue(parseFails(
+                "main do\n"
+                "  $`value: ${name`\n"
+                "end\n"));
+        });
+    });
+
     describe("Parser — Exponentiation", []() {
         it("parses right-associative powers with the expected precedence", []() {
             assertTrue(!parseFails("main do\n  let x = -2 ^ 3 ^ 2 * 4\nend\n"));

@@ -57,6 +57,7 @@ module Parser do
     = LitInt(Int)
     | LitFloat(Float)
     | LitString(String)
+    | InterpolatedString([String], [Expression])
     | LitBool(Bool)
     | LitAtom(Atom)
     | LitNone
@@ -64,6 +65,7 @@ module Parser do
     | BinaryOp(Expression, String, Expression)
     | UnaryOp(String, Expression)
     | Call(Expression, [Expression])
+    | TaggedLiteral(String, [String], [Expression])
     | MethodCall(Expression, String, [Expression])
     | If(Expression, [Expression], [Expression]?)
     | Match(Expression, [Expression])

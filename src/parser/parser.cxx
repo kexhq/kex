@@ -1303,6 +1303,119 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     return expr;
 }
 
+auto Parser::parseInterpolatedBody(
+    const Token& token,
+    std::vector<std::string>& parts,
+    std::vector<ast::ExprPtr>& values) -> void {
+    const auto& body = token.value;
+    std::string part;
+    size_t i = 0;
+
+    auto interpolationError = [&](const std::string& message) -> void {
+        m_diagnostics.push_back({token.location, message});
+        throw ParseError{token.location, message};
+    };
+
+    while (i < body.size()) {
+        // `$${` is the one escape in an interpolating backtick body. It
+        // produces literal `${` without giving backslash any special role.
+        if (i + 2 < body.size() && body[i] == '$' &&
+            body[i + 1] == '$' && body[i + 2] == '{') {
+            part += "${";
+            i += 3;
+            continue;
+        }
+        if (i + 1 >= body.size() || body[i] != '$' || body[i + 1] != '{') {
+            part += body[i++];
+            continue;
+        }
+
+        parts.push_back(std::move(part));
+        part.clear();
+
+        enum class Mode { Normal, DoubleString, Char, RawString, Comment };
+        Mode mode = Mode::Normal;
+        int depth = 1;
+        size_t cursor = i + 2;
+        size_t close = std::string::npos;
+        while (cursor < body.size()) {
+            char c = body[cursor];
+            if (mode == Mode::DoubleString) {
+                if (c == '\\' && cursor + 1 < body.size()) cursor += 2;
+                else {
+                    if (c == '"') mode = Mode::Normal;
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::Char) {
+                if (c == '\\' && cursor + 1 < body.size()) cursor += 2;
+                else {
+                    if (c == '\'') mode = Mode::Normal;
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::RawString) {
+                if (c == '`') {
+                    if (cursor + 1 < body.size() && body[cursor + 1] == '`')
+                        cursor += 2;
+                    else {
+                        mode = Mode::Normal;
+                        cursor++;
+                    }
+                } else {
+                    cursor++;
+                }
+                continue;
+            }
+            if (mode == Mode::Comment) {
+                if (c == '\n') mode = Mode::Normal;
+                cursor++;
+                continue;
+            }
+
+            if (c == '"') mode = Mode::DoubleString;
+            else if (c == '\'') mode = Mode::Char;
+            else if (c == '`') mode = Mode::RawString;
+            else if (c == '#') mode = Mode::Comment;
+            else if (c == '{') depth++;
+            else if (c == '}' && --depth == 0) {
+                close = cursor;
+                break;
+            }
+            cursor++;
+        }
+
+        if (close == std::string::npos)
+            interpolationError("Unterminated interpolation in backtick literal");
+
+        auto inner = body.substr(i + 2, close - i - 2);
+        Lexer lexer(inner, m_filename);
+        auto tokens = lexer.tokenizeAll();
+        if (!tokens.empty() && tokens.front().type == TokenType::Error)
+            interpolationError(
+                "Invalid backtick interpolation: " + tokens.front().value);
+
+        Parser parser(std::move(tokens), m_filename);
+        ast::ExprPtr value;
+        try {
+            parser.skipNewlines();
+            value = parser.parseExpr();
+            parser.skipNewlines();
+        } catch (const ParseError& e) {
+            interpolationError(
+                "Invalid backtick interpolation: " + e.message);
+        }
+        if (!value || !parser.atEnd())
+            interpolationError(
+                "Backtick interpolation must contain exactly one expression");
+        values.push_back(std::move(value));
+        i = close + 1;
+    }
+    parts.push_back(std::move(part));
+}
+
 auto Parser::parsePrimary() -> ast::ExprPtr {
     auto loc = currentLocation();
     auto expr = std::make_unique<ast::Expr>();
@@ -1323,6 +1436,14 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     }
     if (check(TokenType::RawString)) {
         expr->kind = ast::StringLiteral{advance().value, false};
+        return expr;
+    }
+    if (check(TokenType::InterpolatedRawString)) {
+        auto body = advance();
+        ast::StringLiteral literal;
+        literal.interpolating = true;
+        parseInterpolatedBody(body, literal.parts, literal.values);
+        expr->kind = std::move(literal);
         return expr;
     }
     if (check(TokenType::Char)) {
@@ -1571,7 +1692,28 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     // Lower ident (variable or function call). `timeout` is a keyword only in
     // the receive-clause position; elsewhere it remains a valid source name.
     if (check(TokenType::LowerIdent) || check(TokenType::Timeout)) {
-        auto name = advance().value;
+        auto tagToken = advance();
+        auto name = tagToken.value;
+
+        // A raw tag is adjacency-sensitive: whitespace between the identifier
+        // and opening backtick makes these two ordinary expressions instead.
+        if ((check(TokenType::RawString) ||
+             check(TokenType::InterpolatedRawString)) &&
+            tagToken.endOffset == peek().startOffset) {
+            auto body = advance();
+            ast::TaggedLiteral tagged;
+            tagged.tag = name;
+            tagged.interpolating =
+                body.type == TokenType::InterpolatedRawString;
+            tagged.bodyStartOffset = body.startOffset;
+            tagged.bodyEndOffset = body.endOffset;
+            if (tagged.interpolating)
+                parseInterpolatedBody(body, tagged.parts, tagged.values);
+            else
+                tagged.parts.push_back(body.value);
+            expr->kind = std::move(tagged);
+            return expr;
+        }
 
         // Function call with parens
         if (match(TokenType::LParen)) {
@@ -2452,6 +2594,7 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     // Lambda: { expr }
     // Heuristic: if first token is string/ident followed by colon, it's a map
     if ((check(TokenType::String) || check(TokenType::RawString) ||
+         check(TokenType::InterpolatedRawString) ||
          check(TokenType::LowerIdent)) &&
         peekNext().type == TokenType::Colon) {
         auto expr = std::make_unique<ast::Expr>();
@@ -2985,6 +3128,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::Float:
         case TokenType::String:
         case TokenType::RawString:
+        case TokenType::InterpolatedRawString:
         case TokenType::Char:
         case TokenType::True:
         case TokenType::False:

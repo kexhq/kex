@@ -223,6 +223,8 @@ expr
   | expr DOT LOWER_IDENT BANG block              (* mutating call with block *)
   | expr DOT LOWER_IDENT BANG LPAREN args RPAREN block (* mutating call with args and block *)
   | LOWER_IDENT LPAREN args RPAREN               (* function call *)
+  | LOWER_IDENT ( RAW_STRING | INTERPOLATED_RAW_STRING )
+                                                   (* tagged literal; tokens must be byte-adjacent *)
   | LOWER_IDENT block                            (* function call with block *)
   | LOWER_IDENT LPAREN args RPAREN block         (* function call with args and block *)
   | UPPER_IDENT LBRACE record_init RBRACE        (* record construction *)
@@ -263,6 +265,7 @@ literal
   | FLOAT
   | STRING
   | RAW_STRING
+  | INTERPOLATED_RAW_STRING
   | TRUE
   | FALSE
   | NONE

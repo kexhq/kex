@@ -222,10 +222,22 @@ int main() {
             assertEqual(raw.endOffset, 17);
         });
 
-        it("reports interpolating backticks as a staged feature", []() {
+        it("tokenizes interpolating backticks", []() {
             auto tok = firstToken("$`hello ${name}`");
-            assertEqual(tok.type, TokenType::Error);
-            assertTrue(tok.value.find("not implemented") != std::string::npos);
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("hello ${name}"));
+        });
+
+        it("leaves doubled-dollar interpolation escapes for the parser", []() {
+            auto tok = firstToken("$`literal $${name}`");
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("literal $${name}"));
+        });
+
+        it("keeps nested backtick literals inside interpolation holes", []() {
+            auto tok = firstToken("$`value: ${`raw`}`");
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("value: ${`raw`}"));
         });
 
         it("reports an unterminated raw backtick string", []() {
