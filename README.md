@@ -186,7 +186,7 @@ Functions are pure unless marked `foul`. Pure code cannot call foul code, so sid
 let compute(x: Int) = x * 2 + 1
 
 foul readConfig(path: String) do
-  return File.read(path)
+  return FS.File.read(path)
 end
 
 # Compile error: pure code cannot call foul code.

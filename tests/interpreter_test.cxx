@@ -1734,6 +1734,21 @@ int main() {
             assertEqual(std::get<StringValue>(result->data).value, std::string("DOG: REX"));
         });
 
+        it("inherits all trait defaults when registering them grows the function table", []() {
+            std::string source = "trait ManyDefaults do\n";
+            for (int i = 0; i < 64; ++i)
+                source += "  let value" + std::to_string(i) + " = "
+                    + std::to_string(i) + "\n";
+            source +=
+                "end\n"
+                "record DefaultTarget do end\n"
+                "make DefaultTarget, implement: ManyDefaults do end\n"
+                "main do DefaultTarget {}.value63 end\n";
+
+            auto result = run(source);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(63));
+        });
+
         it("repeats Monoid values through the default method", []() {
             auto text = run("main do \"ha\".repeat(3) end\n");
             assertEqual(std::get<StringValue>(text->data).value,
