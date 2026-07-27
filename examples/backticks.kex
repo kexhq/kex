@@ -30,7 +30,7 @@ let rawTag(parts: [String], values: [Any]) -> String do
 end
 
 # An optional pure companion validates raw tagged bodies during compilation.
-let validateRawTag(source: String) -> [Issue] = []
+let validateRawTag(source: String) -> [TaggedValidation.Issue] = []
 
 let tagged = rawTag`tagged body`
 

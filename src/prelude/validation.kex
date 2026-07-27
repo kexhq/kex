@@ -1,6 +1,30 @@
 # Diagnostics returned by optional compile-time tagged-literal validators.
 # Byte offsets are zero-based and relative to the cooked literal body.
+module TaggedValidation
+
 type ByteSpan = At(Integer) | Between(Integer, Integer)
 
 type Issue = Fatal(ByteSpan?, String)
   | Warn(ByteSpan?, String)
+
+fatal : String -> Issue
+let fatal(message) = Fatal(None, message)
+
+fatalAt : Integer -> String -> Issue
+let fatalAt(offset, message) = Fatal(At(offset), message)
+
+fatalBetween : Integer -> Integer -> String -> Issue
+let fatalBetween(start, finish, message) do
+  Fatal(Between(start, finish), message)
+end
+
+warn : String -> Issue
+let warn(message) = Warn(None, message)
+
+warnAt : Integer -> String -> Issue
+let warnAt(offset, message) = Warn(At(offset), message)
+
+warnBetween : Integer -> Integer -> String -> Issue
+let warnBetween(start, finish, message) do
+  Warn(Between(start, finish), message)
+end

@@ -164,8 +164,12 @@ A raw tag may have a pure companion named `validateTag`:
 let query(parts: [String], values: [Any]) -> String =
   parts.first.or("")
 
-let validateQuery(source: String) -> [Issue] do
-  if source.blank? then [Fatal(None, "query must not be empty")] else [] end
+let validateQuery(source: String) -> [TaggedValidation.Issue] do
+  if source.blank? then
+    [TaggedValidation.fatal("query must not be empty")]
+  else
+    []
+  end
 end
 
 let users = query`SELECT * FROM users`
@@ -173,10 +177,12 @@ let users = query`SELECT * FROM users`
 
 The convention is mechanical: `regex` uses `validateRegex`, `html` uses
 `validateHtml`, and `myTag` uses `validateMyTag`. The companion must have the
-pure signature `String -> [Issue]`. `Fatal` issues fail the build; `Warn`
-issues produce warnings.
+pure signature `String -> [TaggedValidation.Issue]`. Fatal issues fail
+the build; warnings continue it.
 
 ```kex
+module TaggedValidation
+
 type ByteSpan = At(Integer) | Between(Integer, Integer)
 type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)
 ```
@@ -185,7 +191,11 @@ Byte spans use zero-based UTF-8 byte offsets in the cooked literal body.
 `Between(start, end)` has an exclusive end and is rendered as an underlined
 source range. JSON diagnostics include `end_line` and `end_column` when a range
 is present. Invalid or reversed spans are compile errors produced by the
-validator boundary.
+validator boundary. An absent span covers the whole literal. Issues are ordered
+by their starting position, with whole-literal issues last.
+
+`TaggedValidation` also provides `fatal`, `fatalAt`, `fatalBetween`,
+`warn`, `warnAt`, and `warnBetween` constructors for validator implementations.
 
 Only raw tagged literals are checked. Interpolating tags and ordinary function
 calls remain runtime operations. Each validator invocation has a compiler-owned

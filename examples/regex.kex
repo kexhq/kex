@@ -38,7 +38,8 @@ end
 
 # ─── Compile-time validation ─────────────────────────────────────────────────
 # Nothing about `regex` is special-cased in the compiler. Its optional companion
-# `validateRegex : String -> [Issue]` checks raw tagged bodies AT COMPILE TIME —
+# `validateRegex : String -> [TaggedValidation.Issue]` checks raw tagged
+# bodies AT COMPILE TIME —
 # the same convention used by `validateSql`, `validateHtml`, or a user's tag:
 #
 #   let bad = regex`(unclosed`     # compile error: unbalanced parenthesis

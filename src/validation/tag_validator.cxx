@@ -193,9 +193,31 @@ auto collect(
 auto exactValidatorSignature(
     const std::vector<const ast::FunctionDef*>& definitions,
     const semantic::Analyzer& analyzer) -> bool {
+    auto hasQualifiedIssueReturn =
+        [](const ast::FunctionDef& definition) {
+            for (const auto& clause : definition.clauses) {
+                if (!clause.returnAnnotation ||
+                    !*clause.returnAnnotation)
+                    return false;
+                auto* list = std::get_if<ast::ListType>(
+                    &(*clause.returnAnnotation)->kind);
+                if (!list || !list->element)
+                    return false;
+                auto* name = std::get_if<ast::TypeName>(
+                    &list->element->kind);
+                if (!name ||
+                    name->parts != std::vector<std::string>{
+                        "TaggedValidation", "Issue"})
+                    return false;
+            }
+            return !definition.clauses.empty();
+        };
+
     bool found = false;
     for (const auto* definition : definitions) {
-        if (!definition || definition->isFoul) return false;
+        if (!definition || definition->isFoul ||
+            !hasQualifiedIssueReturn(*definition))
+            return false;
         auto* signatures = analyzer.functionSignatures(definition);
         if (!signatures || signatures->empty()) return false;
         for (const auto& signature : *signatures) {
@@ -342,10 +364,17 @@ auto appendIssues(
             semantic::Diagnostic::Level::Error,
             use.expr->location,
             "Compile-time validator `" + validator +
-                "` must return [Issue], got " +
+                "` must return [TaggedValidation.Issue], got " +
                 (result ? result->typeName() : std::string{"nothing"})});
         return;
     }
+
+    struct PositionedDiagnostic {
+        semantic::Diagnostic diagnostic;
+        int64_t offset = 0;
+        bool wholeLiteral = false;
+    };
+    std::vector<PositionedDiagnostic> positioned;
 
     for (const auto& issueValue : list->elements) {
         auto* issue = issueValue
@@ -363,6 +392,7 @@ auto appendIssues(
 
         std::optional<int64_t> offset;
         std::optional<int64_t> endOffset;
+        bool wholeLiteral = issue->args[0]->isNone();
         if (!issue->args[0]->isNone()) {
             auto* span = std::get_if<interpreter::VariantValue>(
                 &issue->args[0]->data);
@@ -399,6 +429,10 @@ auto appendIssues(
         }
         const auto bodySize =
             static_cast<int64_t>(use.literal->parts[0].size());
+        if (wholeLiteral) {
+            offset = 0;
+            endOffset = bodySize;
+        }
         if ((offset && (*offset < 0 || *offset > bodySize)) ||
             (endOffset &&
              (*endOffset < *offset || *endOffset > bodySize))) {
@@ -429,8 +463,20 @@ auto appendIssues(
         if (endOffset)
             diagnostic.endLocation =
                 sourceLocationForOffset(use, endOffset);
-        diagnostics.push_back(std::move(diagnostic));
+        positioned.push_back(PositionedDiagnostic{
+            std::move(diagnostic), *offset, wholeLiteral});
     }
+
+    std::stable_sort(
+        positioned.begin(), positioned.end(),
+        [](const PositionedDiagnostic& left,
+           const PositionedDiagnostic& right) {
+            if (left.wholeLiteral != right.wholeLiteral)
+                return !left.wholeLiteral;
+            return left.offset < right.offset;
+        });
+    for (auto& item : positioned)
+        diagnostics.push_back(std::move(item.diagnostic));
 }
 
 } // namespace
@@ -465,12 +511,14 @@ auto validateTaggedLiterals(
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,
                 "Companion validator `" + companion +
-                    "` must be pure with signature String -> [Issue]"});
+                    "` must be pure with signature "
+                    "String -> [TaggedValidation.Issue]"});
             continue;
         }
 
         try {
             interpreter::Evaluator evaluator;
+            evaluator.loadPrelude();
             auto result = evaluator.evaluateFunction(
                 program,
                 companionKey,

@@ -73,8 +73,9 @@ const std::string TYPE_ERROR_SRC =
 const std::string RANGED_VALIDATION_SRC =
     "let demo(parts: [String], values: [Any]) -> String = "
     "parts.first.or(\"\")\n"
-    "let validateDemo(source: String) -> [Issue] = "
-    "[Warn(Between(1, 3), \"ranged warning\")]\n"
+    "let validateDemo(source: String) -> "
+    "[TaggedValidation.Issue] = "
+    "[TaggedValidation.warnBetween(1, 3, \"ranged warning\")]\n"
     "main do demo`abcde` end\n";
 
 } // namespace

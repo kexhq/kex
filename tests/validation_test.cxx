@@ -12,8 +12,18 @@ using namespace test;
 namespace {
 
 constexpr auto issueTypes =
-    "type ByteSpan = At(Integer) | Between(Integer, Integer)\n"
-    "type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)\n";
+    "module TaggedValidation do\n"
+    "  type ByteSpan = At(Integer) | Between(Integer, Integer)\n"
+    "  type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)\n"
+    "  let fatal(message) -> Issue = Fatal(None, message)\n"
+    "  let fatalAt(offset, message) -> Issue = Fatal(At(offset), message)\n"
+    "  let fatalBetween(start, finish, message) -> Issue = "
+    "Fatal(Between(start, finish), message)\n"
+    "  let warn(message) -> Issue = Warn(None, message)\n"
+    "  let warnAt(offset, message) -> Issue = Warn(At(offset), message)\n"
+    "  let warnBetween(start, finish, message) -> Issue = "
+    "Warn(Between(start, finish), message)\n"
+    "end\n";
 
 auto validate(
     const std::string& source,
@@ -65,8 +75,9 @@ int main() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Fatal(None, \"invalid demo literal\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.fatal(\"invalid demo literal\")]\n"
                 "main do demo`bad` end\n");
             assertTrue(contains(
                 diagnostics,
@@ -78,8 +89,10 @@ int main() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Warn(At(1), \"suspicious demo literal\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnAt("
+                "1, \"suspicious demo literal\")]\n"
                 "main do demo`okay` end\n");
             assertTrue(contains(
                 diagnostics,
@@ -91,11 +104,12 @@ int main() {
             auto diagnostics = validateFile(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Warn(At(1), \"positioned warning\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnAt(1, \"positioned warning\")]\n"
                 "main do demo`abc` end\n");
             assertEqual(diagnostics.size(), size_t(1));
-            assertEqual(diagnostics[0].location.line, 5);
+            assertEqual(diagnostics[0].location.line, 13);
             assertEqual(diagnostics[0].location.column, 15);
         });
 
@@ -103,23 +117,58 @@ int main() {
             auto diagnostics = validateFile(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Warn(Between(1, 3), \"ranged warning\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnBetween("
+                "1, 3, \"ranged warning\")]\n"
                 "main do demo`abcde` end\n");
             assertEqual(diagnostics.size(), size_t(1));
-            assertEqual(diagnostics[0].location.line, 5);
+            assertEqual(diagnostics[0].location.line, 13);
             assertEqual(diagnostics[0].location.column, 15);
             assertTrue(diagnostics[0].endLocation.has_value());
-            assertEqual(diagnostics[0].endLocation->line, 5);
+            assertEqual(diagnostics[0].endLocation->line, 13);
             assertEqual(diagnostics[0].endLocation->column, 17);
+        });
+
+        it("maps an absent span to the whole literal", []() {
+            auto diagnostics = validateFile(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warn(\"whole literal\")]\n"
+                "main do demo`abcde` end\n");
+            assertEqual(diagnostics.size(), size_t(1));
+            assertEqual(diagnostics[0].location.line, 13);
+            assertEqual(diagnostics[0].location.column, 14);
+            assertTrue(diagnostics[0].endLocation.has_value());
+            assertEqual(diagnostics[0].endLocation->line, 13);
+            assertEqual(diagnostics[0].endLocation->column, 19);
+        });
+
+        it("sorts positioned issues and puts whole-literal issues last", []() {
+            auto diagnostics = validate(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warn(\"whole\"), "
+                "TaggedValidation.warnAt(3, \"third\"), "
+                "TaggedValidation.warnAt(1, \"first\")]\n"
+                "main do demo`abcde` end\n");
+            assertEqual(diagnostics.size(), size_t(3));
+            assertEqual(diagnostics[0].message, std::string{"first"});
+            assertEqual(diagnostics[1].message, std::string{"third"});
+            assertEqual(diagnostics[2].message, std::string{"whole"});
         });
 
         it("rejects reversed Between ranges", []() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Warn(Between(3, 1), \"bad range\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnBetween(3, 1, \"bad range\")]\n"
                 "main do demo`abcde` end\n");
             assertTrue(contains(
                 diagnostics,
@@ -131,8 +180,9 @@ int main() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Warn(Between(1, 6), \"bad range\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnBetween(1, 6, \"bad range\")]\n"
                 "main do demo`abcde` end\n");
             assertTrue(contains(
                 diagnostics,
@@ -152,8 +202,9 @@ int main() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Fatal(None, \"must not run\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.fatal(\"must not run\")]\n"
                 "main do demo$`value ${42}` end\n");
             assertTrue(diagnostics.empty());
         });
@@ -161,8 +212,9 @@ int main() {
         it("does not validate ordinary function calls", []() {
             auto diagnostics = validate(
                 "let demo(source: String) -> String = source\n"
-                "let validateDemo(source: String) -> [Issue] = "
-                "[Fatal(None, \"must not run\")]\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.fatal(\"must not run\")]\n"
                 "main do demo(\"bad\") end\n");
             assertTrue(diagnostics.empty());
         });
@@ -172,8 +224,9 @@ int main() {
                 "module Demo do\n"
                 "  let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "  let validateDemo(source: String) -> [Issue] = "
-                "[Fatal(None, \"module validator ran\")]\n"
+                "  let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.fatal(\"module validator ran\")]\n"
                 "  let build() = demo`bad`\n"
                 "end\n");
             assertTrue(contains(
@@ -191,14 +244,15 @@ int main() {
             assertTrue(contains(
                 diagnostics,
                 semantic::Diagnostic::Level::Error,
-                "String -> [Issue]"));
+                "String -> [TaggedValidation.Issue]"));
         });
 
         it("bounds non-terminating validators", []() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] do\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] do\n"
                 "  loop\n"
                 "    next\n"
                 "  end\n"
@@ -215,7 +269,8 @@ int main() {
             auto diagnostics = validate(
                 "let demo(parts: [String], values: [Any]) -> String = "
                 "parts.first.or(\"\")\n"
-                "let validateDemo(source: String) -> [Issue] = "
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
                 "die(\"validator exploded\")\n"
                 "main do demo`bad` end\n");
             assertTrue(contains(
