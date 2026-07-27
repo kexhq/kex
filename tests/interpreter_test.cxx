@@ -1049,7 +1049,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"hello\")\n"
-                "  FS.File.read(\"" + path + "\")\n"
+                "  FS.File.read(\"" + path + "\").or(\"\")\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
@@ -1079,7 +1079,7 @@ int main() {
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\")\n"
                 "  FS.File.append(\"" + path + "\", \"b\")\n"
-                "  FS.File.read(\"" + path + "\")\n"
+                "  FS.File.read(\"" + path + "\").or(\"\")\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("ab"));
@@ -1094,7 +1094,7 @@ int main() {
                 "  writer.write(\"new\")\n"
                 "  let appender = FS.File.open(\"mock.txt\", Append).try\n"
                 "  appender.write(\"!\")\n"
-                "  FS.File.read(\"mock.txt\")\n"
+                "  FS.File.read(\"mock.txt\").or(\"\")\n"
                 "end\n"
             );
             assertEqual(std::get<StringValue>(result->data).value,
@@ -1120,6 +1120,19 @@ int main() {
             assertTrue(result->isNone());
         });
 
+        it("filesystem Optional success values are wrapped in Just", []() {
+            auto result = run(
+                "main do\n"
+                "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
+                "  let Just(content) = FS.File.read(\"wrapped.txt\")\n"
+                "  let handle = FS.File.open(\"wrapped.txt\", Read).try\n"
+                "  let Just(line) = handle.readLine\n"
+                "  content + line\n"
+                "end\n");
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("hello\nhello"));
+        });
+
         it("deleting a nonexistent file returns false", []() {
             auto result = run("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
@@ -1131,7 +1144,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  FS.File.lines(\"" + path + "\")\n"
+                "  FS.File.lines(\"" + path + "\").or([])\n"
                 "end\n"
             );
             auto& list = std::get<ListValue>(result->data);
@@ -1147,7 +1160,7 @@ int main() {
             auto result = run(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\")\n"
-                "  FS.File.feed(\"" + path + "\").take(2)\n"
+                "  FS.File.feed(\"" + path + "\").try.take(2)\n"
                 "end\n"
             );
             auto& list = std::get<ListValue>(result->data);

@@ -201,6 +201,19 @@ int main() {
             assertTrue(out.find("error:") != std::string::npos, out);
         });
 
+        it("renders filesystem Optional values with Just and None", []() {
+            auto out = runRepl(
+                "Mock.FS.File(\"optional.txt\", \"contents\")\n"
+                "FS.File.read(\"optional.txt\")\n"
+                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "reader.readLine\n"
+                "reader.readLine\n");
+            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
+        });
+
         it("acknowledges native definitions", []() {
             auto out = runRepl(
                 "let double(n) = n * 2\n"
@@ -305,6 +318,19 @@ int main() {
                 out);
             assertTrue(out.find(": Tuple") == std::string::npos, out);
             assertTrue(out.find(":MockFileHandle") == std::string::npos, out);
+        });
+
+        it("renders filesystem Optional values with Just and None", []() {
+            auto out = runBeamRepl(
+                "Mock.FS.File(\"optional.txt\", \"contents\")\n"
+                "FS.File.read(\"optional.txt\")\n"
+                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "reader.readLine\n"
+                "reader.readLine\n");
+            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+                           std::string::npos,
+                       out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
         });
 
         it("does not execute readable methods on a write-only handle", []() {

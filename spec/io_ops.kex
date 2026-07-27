@@ -5,9 +5,9 @@
 # false
 # true
 # true
-# ab
-# abcd
-# [abcd]
+# Just(ab)
+# Just(abcd)
+# Just([abcd])
 # [abcd]
 # true
 # None
@@ -27,7 +27,7 @@ main do
   FS.File.append(path, "cd")
   IO.printLine(FS.File.read(path))
   IO.printLine(FS.File.lines(path))
-  IO.printLine(FS.File.feed(path).take(1))
+  IO.printLine(FS.File.feed(path).or([]).take(1))
   IO.printLine(FS.File.delete(path))
   IO.printLine(FS.File.read(path))
 end

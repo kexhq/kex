@@ -111,13 +111,13 @@ auto Evaluator::registerFileBuiltins() -> void {
                 pos = end + 1;
             }
             setMockCursor(h->path, pos);
-            return Value::string(line);
+            return Value::just(Value::string(line));
         }
 
         if (!h->stream || !h->stream->is_open()) return Value::none();
         std::string line;
         if (!std::getline(*h->stream, line)) return Value::none();
-        return Value::string(line);
+        return Value::just(Value::string(line));
     });
 
     // handle.get -> String? (single character)
@@ -132,13 +132,13 @@ auto Evaluator::registerFileBuiltins() -> void {
             const auto& content = mockIt->second;
             if (pos >= content.size()) return Value::none();
             setMockCursor(h->path, pos + 1);
-            return Value::string(std::string(1, content[pos]));
+            return Value::just(Value::string(std::string(1, content[pos])));
         }
 
         if (!h->stream || !h->stream->is_open()) return Value::none();
         char c;
         if (!h->stream->get(c)) return Value::none();
-        return Value::string(std::string(1, c));
+        return Value::just(Value::string(std::string(1, c)));
     });
 
     // handle.printLine(msg) -> Bool
@@ -189,16 +189,17 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (mockIt != m_mockFiles.end()) {
             size_t pos = mockCursor(h->path);
             const auto& content = mockIt->second;
-            if (pos >= content.size()) return Value::string("");
+            if (pos >= content.size())
+                return Value::just(Value::string(""));
             auto remaining = content.substr(pos);
             setMockCursor(h->path, content.size());
-            return Value::string(remaining);
+            return Value::just(Value::string(remaining));
         }
 
         if (!h->stream || !h->stream->is_open()) return Value::none();
         std::ostringstream buf;
         buf << h->stream->rdbuf();
-        return Value::string(buf.str());
+        return Value::just(Value::string(buf.str()));
     });
 
     // handle.write(data) -> Bool
@@ -273,13 +274,14 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
         auto it = m_mockFiles.find(pathStr->value);
-        if (it != m_mockFiles.end()) return Value::string(it->second);
+        if (it != m_mockFiles.end())
+            return Value::just(Value::string(it->second));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::ostringstream buf;
         buf << file.rdbuf();
         if (file.bad()) return Value::none();
-        return Value::string(buf.str());
+        return Value::just(Value::string(buf.str()));
     });
 
     // File.write(path, content) -> Bool
@@ -393,14 +395,14 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!pathStr) return Value::none();
         auto mockIt = m_mockFiles.find(pathStr->value);
         if (mockIt != m_mockFiles.end())
-            return Value::list(splitLines(mockIt->second));
+            return Value::just(Value::list(splitLines(mockIt->second)));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::vector<ValuePtr> result;
         std::string line;
         while (std::getline(file, line)) result.push_back(Value::string(line));
         if (file.bad()) return Value::none();
-        return Value::list(std::move(result));
+        return Value::just(Value::list(std::move(result)));
     });
 
     // File.feed(path) -> Stream<String>?
@@ -427,7 +429,7 @@ auto Evaluator::registerFileBuiltins() -> void {
                 return Value::none();
             return Value::string((*lines)[index]);
         }, 0};
-        return stream;
+        return Value::just(stream);
     });
 
     // File.size(path) -> Int?
@@ -437,11 +439,12 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!pathStr) return Value::none();
         auto mockIt = m_mockFiles.find(pathStr->value);
         if (mockIt != m_mockFiles.end())
-            return Value::integer(static_cast<int64_t>(mockIt->second.size()));
+            return Value::just(
+                Value::integer(static_cast<int64_t>(mockIt->second.size())));
         std::error_code ec;
         auto sz = std::filesystem::file_size(pathStr->value, ec);
         if (ec) return Value::none();
-        return Value::integer(static_cast<int64_t>(sz));
+        return Value::just(Value::integer(static_cast<int64_t>(sz)));
     });
 
     // File.basename(path) -> String
@@ -487,7 +490,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto abs = std::filesystem::absolute(pathStr->value, ec);
         if (ec) return Value::none();
         auto canon = std::filesystem::weakly_canonical(abs, ec);
-        return Value::string(ec ? abs.string() : canon.string());
+        return Value::just(Value::string(ec ? abs.string() : canon.string()));
     });
 }
 
@@ -587,7 +590,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
                     d.find('/', prefix.size()) == std::string::npos)
                     entries.push_back(Value::string(std::filesystem::path(d).filename().string()));
             }
-            return Value::list(std::move(entries));
+            return Value::just(Value::list(std::move(entries)));
         }
 
         std::error_code ec;
@@ -599,7 +602,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> entries;
         for (auto& nm : names) entries.push_back(Value::string(nm));
-        return Value::list(std::move(entries));
+        return Value::just(Value::list(std::move(entries)));
     });
 
     // Directory.files(path) -> [String]?
@@ -617,7 +620,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
                 if (p.rfind(prefix, 0) == 0 && p.find('/', prefix.size()) == std::string::npos)
                     files.push_back(Value::string(std::filesystem::path(p).filename().string()));
             }
-            return Value::list(std::move(files));
+            return Value::just(Value::list(std::move(files)));
         }
 
         std::error_code ec;
@@ -630,7 +633,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> files;
         for (auto& nm : names) files.push_back(Value::string(nm));
-        return Value::list(std::move(files));
+        return Value::just(Value::list(std::move(files)));
     });
 
     // Directory.dirs(path) -> [String]?
@@ -649,7 +652,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
                     d.find('/', prefix.size()) == std::string::npos)
                     dirs.push_back(Value::string(std::filesystem::path(d).filename().string()));
             }
-            return Value::list(std::move(dirs));
+            return Value::just(Value::list(std::move(dirs)));
         }
 
         std::error_code ec;
@@ -662,7 +665,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         std::sort(names.begin(), names.end());
         std::vector<ValuePtr> dirs;
         for (auto& nm : names) dirs.push_back(Value::string(nm));
-        return Value::list(std::move(dirs));
+        return Value::just(Value::list(std::move(dirs)));
     });
 
     // Directory.current() -> String
@@ -675,7 +678,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     // Directory.home() -> String?
     reg("Directory::home", [](std::vector<ValuePtr>) -> ValuePtr {
         const char* home = std::getenv("HOME");
-        if (home) return Value::string(home);
+        if (home) return Value::just(Value::string(home));
         return Value::none();
     });
 }
