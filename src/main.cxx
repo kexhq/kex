@@ -1791,6 +1791,32 @@ int main(int argc, char *argv[]) {
                 throw std::runtime_error(diagnostic.message);
             throw std::runtime_error("semantic analysis failed");
           }
+          std::optional<std::string> beamSemanticType;
+          for (auto item = semanticProgram.items.rbegin();
+               item != semanticProgram.items.rend(); ++item) {
+            auto *main =
+                std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&*item);
+            if (!main || !*main || (*main)->body.empty())
+              continue;
+            const auto *last = (*main)->body.back().get();
+            const kex::ast::Expr *typedExpr = last;
+            if (const auto *binding =
+                    std::get_if<kex::ast::LetExpr>(&last->kind);
+                binding && binding->value)
+              typedExpr = binding->value.get();
+            if (auto type = semanticAnalyzer.typeOf(typedExpr)) {
+              auto rendered = kex::semantic::typeToString(type);
+              if (rendered.find("FileHandle") != std::string::npos)
+                beamSemanticType = std::move(rendered);
+            }
+            break;
+          }
+          const auto inspectCall = [&](const std::string &expression) {
+            if (!beamSemanticType)
+              return "IO.inspect(" + expression + ")";
+            return "Kex.Intrinsic.IO.inspectTyped(" + expression + ", \"" +
+                   *beamSemanticType + "\")";
+          };
 
           std::string kexSource;
           if (isLocalLet) {
@@ -1798,11 +1824,10 @@ int main(int argc, char *argv[]) {
                         source + "\n" +
                         "  Erlang.Erlang.put(:kexrepl" + letVarName +
                         ", " + letVarName + ")\n" +
-                        "  IO.inspect(" + letVarName +
-                        ")\nend\n";
+                        "  " + inspectCall(letVarName) + "\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
-                        "  IO.inspect(" + source + ")\nend\n";
+                        "  " + inspectCall(source) + "\nend\n";
           }
 
           kex::Lexer lexer(kexSource);
@@ -2380,7 +2405,7 @@ int main(int argc, char *argv[]) {
                   typedExpr = binding->value.get();
                 if (auto type = replAnalyzer.typeOf(typedExpr)) {
                   auto rendered = kex::semantic::typeToString(type);
-                  if (rendered != "unknown" && rendered != "?")
+                  if (rendered.find("FileHandle") != std::string::npos)
                     semanticType = std::move(rendered);
                 }
                 break;

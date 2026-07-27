@@ -286,6 +286,27 @@ int main() {
     });
 
     describe("BEAM REPL — Kex Value Display", []() {
+        it("renders file results and typestates like the tree REPL", []() {
+            auto out = runBeamRepl(
+                "Mock.FS.File(\"typed.txt\", \"contents\")\n"
+                "let f = FS.File.open(\"typed.txt\", Write)\n"
+                "let opened = f.try\n"
+                "opened\n"
+                "opened.close\n");
+            assertTrue(
+                out.find("Ok(<FileHandle: \"typed.txt\">) : "
+                         "Result<FileHandle<CannotRead, CanWrite>, FileError>")
+                    != std::string::npos,
+                out);
+            assertTrue(
+                out.find("<FileHandle: \"typed.txt\"> : "
+                         "FileHandle<CannotRead, CanWrite>")
+                    != std::string::npos,
+                out);
+            assertTrue(out.find(": Tuple") == std::string::npos, out);
+            assertTrue(out.find(":MockFileHandle") == std::string::npos, out);
+        });
+
         it("does not execute readable methods on a write-only handle", []() {
             auto out = runBeamRepl(
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"

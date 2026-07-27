@@ -1,6 +1,6 @@
 %% Kex.Intrinsic.IO — BEAM primitive backend for IO.* and System.* functions.
 -module(kex_intrinsic_io).
--export([printLine/1, print/1, putLine/1, put/1, inspect/1,
+-export([printLine/1, print/1, putLine/1, put/1, inspect/1, inspectTyped/2,
          printError/1, warn/1, warning/1, getLine/0, get/0,
          ioMockStart/0, ioMockStop/0, ioMockOutput/0, ioMockClear/0, ioMockInput/1]).
 
@@ -9,6 +9,7 @@ print(Msg)      -> kex_io:print(Msg).
 putLine(Msg)    -> kex_io:print_line(Msg).
 put(Msg)        -> kex_io:print(Msg).
 inspect(Val)    -> kex_io:inspect(Val).
+inspectTyped(Val, Type) -> kex_io:inspect_typed(Val, Type).
 printError(Msg) -> kex_io:print_error(Msg).
 warn(Msg)       -> kex_io:print_error(Msg).
 warning(Msg)    -> kex_io:print_error(Msg).
