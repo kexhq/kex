@@ -1,0 +1,61 @@
+# Backtick strings — raw literals, multiline dedentation, interpolation,
+# and tags.
+
+# Backslashes, quotes, slashes, and `${...}` are ordinary text.
+let path = `C:\Users\akos\Devel`
+let pattern = `\d{3}-\d{4}`
+let interpolationSyntax = `hello ${name}`
+
+# Double a backtick to include it. Backslashes never act as escapes.
+let quoted = `Kex calls these ``raw literals``.`
+let trailingSlash = `C:\temp\`
+
+# The exact whitespace before a closing backtick on its own line is removed
+# from every nonblank content line.
+let query = `
+    SELECT id, email
+    FROM users
+    WHERE active = true
+    `
+
+# A flush-left closing backtick preserves the content indentation.
+let banner = `
+  * * *
+`
+
+# A tag is an ordinary function with the uniform (parts, values) ABI.
+# Raw tags receive one part and no interpolated values.
+let rawTag(parts: [String], values: [Any]) -> String do
+  parts.first.or("")
+end
+
+# An optional pure companion validates raw tagged bodies during compilation.
+let validateRawTag(source: String) -> [TaggedValidation.Issue] = []
+
+let tagged = rawTag`tagged body`
+
+# `$` opts into interpolation. `$${` spells literal `${`.
+let language = "Kex"
+let greeting = $`Hello from ${language}!`
+let escapedInterpolation = $`The syntax is $${expression}.`
+
+# Tags receive interpolated values without converting them to strings.
+let captureTag(parts: [String], values: [Any]) do
+  (parts, values)
+end
+
+let captured = captureTag$`answer = ${40 + 2}`
+
+main(_args) do
+  IO.printLine(path)
+  IO.printLine(pattern)
+  IO.printLine(interpolationSyntax)
+  IO.printLine(quoted)
+  IO.printLine(trailingSlash)
+  IO.print(query)
+  IO.print(banner)
+  IO.printLine(tagged)
+  IO.printLine(greeting)
+  IO.printLine(escapedInterpolation)
+  IO.inspect(captured)
+end

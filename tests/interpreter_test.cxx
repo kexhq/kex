@@ -977,6 +977,73 @@ int main() {
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("double(21) = 42"));
         });
+
+        it("does not interpolate raw backtick strings", []() {
+            auto result = run(
+                "main do\n"
+                "  let name = \"World\"\n"
+                "  `Hello, ${name}!`\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("Hello, ${name}!"));
+        });
+
+        it("evaluates dedented multiline raw strings", []() {
+            auto result = run(
+                "main do\n"
+                "  `\n"
+                "    first\n"
+                "      second\n"
+                "    `\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("first\n  second\n"));
+        });
+
+        it("calls raw tags with one part and an empty values list", []() {
+            auto result = run(
+                "let rawTag(parts, values) = "
+                "(parts.first.or(\"\"), values.count)\n"
+                "main do\n"
+                "  rawTag`hello`\n"
+                "end\n"
+            );
+            assertEqual(result->toString(), std::string("(hello, 0)"));
+        });
+
+        it("evaluates parser-level interpolating backticks", []() {
+            auto result = run(
+                "let name = \"Ada\"\n"
+                "main do\n"
+                "  $`hello ${name}, ${20 + 22}!`\n"
+                "end\n");
+            assertEqual(
+                result->toString(), std::string("hello Ada, 42!"));
+        });
+
+        it("passes interpolated values to tags without stringifying", []() {
+            auto result = run(
+                "let inspectTag(parts, values) = (parts, values)\n"
+                "main do\n"
+                "  inspectTag$`left ${40 + 2} right`\n"
+                "end\n");
+            assertEqual(
+                result->toString(),
+                std::string("([left ,  right], [42])"));
+        });
+
+        it("keeps escaped interpolation syntax literal", []() {
+            auto result = run("main do\n  $`literal $${name}`\nend\n");
+            assertEqual(
+                result->toString(), std::string("literal ${name}"));
+        });
+
+        it("supports raw backticks inside interpolation expressions", []() {
+            auto result = run("main do\n  $`nested ${`raw`}`\nend\n");
+            assertEqual(result->toString(), std::string("nested raw"));
+        });
     });
 
     describe("Interpreter — IO", []() {

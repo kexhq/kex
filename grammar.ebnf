@@ -223,6 +223,10 @@ expr
   | expr DOT LOWER_IDENT BANG block              (* mutating call with block *)
   | expr DOT LOWER_IDENT BANG LPAREN args RPAREN block (* mutating call with args and block *)
   | LOWER_IDENT LPAREN args RPAREN               (* function call *)
+  | LOWER_IDENT ( RAW_STRING | INTERPOLATED_RAW_STRING )
+                                                   (* tagged literal; the identifier,
+                                                      optional $, and opening ` must
+                                                      be byte-adjacent *)
   | LOWER_IDENT block                            (* function call with block *)
   | LOWER_IDENT LPAREN args RPAREN block         (* function call with args and block *)
   | UPPER_IDENT LBRACE record_init RBRACE        (* record construction *)
@@ -262,6 +266,8 @@ literal
   = INTEGER
   | FLOAT
   | STRING
+  | RAW_STRING
+  | INTERPOLATED_RAW_STRING
   | TRUE
   | FALSE
   | NONE
@@ -500,6 +506,11 @@ STRING  = '"' string_content* '"' ;
 string_content = [^"$\\] | escape | interpolation ;
 escape = "\\" [nrt\\$"] ;
 interpolation = "$" "{" expr "}" ;
+RAW_STRING = "`" raw_string_content* "`" ;
+raw_string_content = "``" | [^`] ;
+INTERPOLATED_RAW_STRING =
+  "$`" ( "``" | "$${" | raw_string_interpolation | [^`] )* "`" ;
+raw_string_interpolation = "${" expr "}" ;
 
 (* Comments *)
 COMMENT = "#" [^\n]* ;

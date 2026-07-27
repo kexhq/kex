@@ -1,0 +1,112 @@
+# Regex — ASPIRATIONAL spec. Regexes are not implemented yet.
+# Sketches how the API reads under the testing DSL. See docs/regex-plan.md and
+# docs/strings-and-tags-plan.md. Auto-loads examples/regex.kex (.spec.kex convention).
+
+# kex: no-check
+
+using Regex
+
+describe("matching") do
+  it("capture returns Just(match) on a hit") do
+    match "abc123".capture(regex`\d+`) do
+      Just(m) -> assert(m.get(0, "") == "123")     # get(0) = whole match
+      None    -> assert(false)
+    end
+  end
+
+  it("capture returns None on a miss") do
+    assert("abc".capture(regex`\d+`) == None)
+  end
+
+  it("matches?/1 is a boolean shortcut") do
+    assert("a@b.co".matches?(regex`^\S+@\S+$`))
+    assert(!"nope".matches?(regex`^\S+@\S+$`))
+  end
+end
+
+describe("captures") do
+  it("positional groups by index") do
+    let m = "#4271".capture(regex`#(\d+)`).unwrap
+    assert(m.get(1) == Just("4271"))              # get without default -> String?
+  end
+
+  it("named groups by atom") do
+    let m = "2026-07-27".capture(regex`(?<y>\d{4})-(?<mo>\d{2})-(?<d>\d{2})`).unwrap
+    assert(m.get(:y, "")  == "2026")
+    assert(m.get(:mo, "") == "07")
+    assert(m.get(:d, "")  == "27")
+  end
+
+  it("absent optional group is None, not empty") do
+    let m = "x".capture(regex`x(?<opt>\d+)?`).unwrap
+    assert(m.get(:opt) == None)                   # didn't participate -> absent key
+  end
+end
+
+describe("bulk ops") do
+  it("scan returns every match") do
+    let all = "a1 b2 c3".scan(regex`\w\d`).map { |m| m.get(0, "") }
+    assert(all == ["a1", "b2", "c3"])
+  end
+
+  it("replace substitutes matches") do
+    assert("555-1234".replace(regex`\d`, "#") == "###-####")
+  end
+
+  it("split on a pattern") do
+    assert("a, b ,c".split(regex`\s*,\s*`) == ["a", "b", "c"])
+  end
+end
+
+describe("flags and equivalence") do
+  it("inline (?i) is caseless") do
+    assert("HELLO".matches?(regex`(?i)hello`))
+  end
+
+  it("tag form and ordinary call produce equivalent regexes") do
+    assert("x9".matches?(regex`\d`) == "x9".matches?(regex(`\d`)))
+  end
+end
+
+describe("literal semantics") do
+  it("backslash is literal inside a backtick body") do
+    # `\d` is two characters handed to the engine, not a lexer escape.
+    assert("7".matches?(regex`\d`))
+    assert(`\d`.size == 2)
+  end
+
+  it("a raw literal never interpolates") do
+    # ${ is plain text in a raw body — no escape needed for a price pattern.
+    assert("$12.50".matches?(regex`\$\d+\.\d{2}`))
+  end
+
+  it("the closing backtick sets the dedent margin") do
+    let stripped = `
+        a
+        b
+      `
+    assert(stripped == "  a\n  b\n")     # margin 6, so 2 spaces survive
+
+    let flush = `
+      a
+      b
+`
+    assert(flush == "      a\n      b\n") # margin 0, nothing stripped
+  end
+end
+
+describe("interpolation") do
+  it("values are quote-escaped, not spliced as pattern syntax") do
+    let dot = "a.c"
+    # `.` from the value is a literal dot, so it must not match "abc".
+    assert("a.c".matches?(regex$`^${dot}$`))
+    assert(!"abc".matches?(regex$`^${dot}$`))
+  end
+
+  it("$${ escapes a literal ${ in an interpolating body") do
+    let x = "1"
+    assert($`${x}`   == "1")             # a hole
+    assert($`$${x}`  == "${x}")          # escaped: no hole, x unused
+    assert(`$${x}`   == "$${x}")         # raw body: nothing is special at all
+  end
+end

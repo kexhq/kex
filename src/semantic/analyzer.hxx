@@ -3,6 +3,7 @@
 #include "../ast/ast.hxx"
 #include "symbol.hxx"
 #include "typechecker.hxx"
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -10,11 +11,20 @@
 
 namespace kex::semantic {
 
+struct DiagnosticNote {
+    SourceLocation location;
+    std::string message;
+};
+
 struct Diagnostic {
     enum class Level { Error, Warning };
     Level level;
     SourceLocation location;
     std::string message;
+    // Exclusive end position for ranged diagnostics. Point diagnostics leave
+    // this empty, preserving the existing line/column behavior.
+    std::optional<SourceLocation> endLocation = std::nullopt;
+    std::vector<DiagnosticNote> notes;
 };
 
 class Analyzer {

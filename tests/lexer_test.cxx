@@ -161,6 +161,91 @@ int main() {
             assertEqual(tok.type, TokenType::String);
             assertEqual(tok.value, std::string("cost: $5"));
         });
+
+        it("tokenizes raw backtick strings without backslash escapes", []() {
+            auto tok = firstToken(R"kex(`C:\Users\akos\regex\d+`)kex");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string(R"kex(C:\Users\akos\regex\d+)kex"));
+        });
+
+        it("keeps interpolation syntax literal in raw strings", []() {
+            auto tok = firstToken("`${name}`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("${name}"));
+        });
+
+        it("uses doubled backticks for a literal backtick", []() {
+            auto tok = firstToken("`tick `` here`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("tick ` here"));
+        });
+
+        it("allows raw strings to end in a backslash", []() {
+            auto tok = firstToken("`ends-with-\\`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("ends-with-\\"));
+        });
+
+        it("dedents multiline raw strings by the closing prefix", []() {
+            auto tok = firstToken(
+                "`\n"
+                "    first\n"
+                "      second\n"
+                "    `");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("first\n  second\n"));
+        });
+
+        it("preserves indentation when the closing backtick is flush left", []() {
+            auto tok = firstToken(
+                "`\n"
+                "  first\n"
+                "`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("  first\n"));
+        });
+
+        it("rejects content left of the closing margin", []() {
+            auto tok = firstToken(
+                "`\n"
+                "    first\n"
+                "  second\n"
+                "    `");
+            assertEqual(tok.type, TokenType::Error);
+        });
+
+        it("records token byte spans", []() {
+            auto tokens = tokenize("let value = `raw`");
+            auto& raw = tokens[3];
+            assertEqual(raw.type, TokenType::RawString);
+            assertEqual(raw.startOffset, 12);
+            assertEqual(raw.endOffset, 17);
+        });
+
+        it("tokenizes interpolating backticks", []() {
+            auto tok = firstToken("$`hello ${name}`");
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("hello ${name}"));
+        });
+
+        it("leaves doubled-dollar interpolation escapes for the parser", []() {
+            auto tok = firstToken("$`literal $${name}`");
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("literal $${name}"));
+        });
+
+        it("keeps nested backtick literals inside interpolation holes", []() {
+            auto tok = firstToken("$`value: ${`raw`}`");
+            assertEqual(tok.type, TokenType::InterpolatedRawString);
+            assertEqual(tok.value, std::string("value: ${`raw`}"));
+        });
+
+        it("reports an unterminated raw backtick string", []() {
+            auto tok = firstToken("`never closed");
+            assertEqual(tok.type, TokenType::Error);
+            assertTrue(tok.value.find("Unterminated backtick") !=
+                       std::string::npos);
+        });
     });
 
     describe("Lexer — Atoms", []() {

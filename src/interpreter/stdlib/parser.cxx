@@ -595,6 +595,18 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
         } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
             return Value::variant("LitFloat", "Parser.Expression", {Value::floating(std::stod(node.value))});
         } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            if (!node.parts.empty()) {
+                std::vector<ValuePtr> parts;
+                for (const auto& part : node.parts)
+                    parts.push_back(Value::string(part));
+                std::vector<ValuePtr> values;
+                for (const auto& value : node.values)
+                    values.push_back(convertExprPtr(value));
+                return Value::variant(
+                    "InterpolatedString", "Parser.Expression",
+                    {Value::list(std::move(parts)),
+                     Value::list(std::move(values))});
+            }
             return Value::variant("LitString", "Parser.Expression", {Value::string(node.value)});
         } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
             return Value::variant("LitBool", "Parser.Expression", {Value::boolean(node.value)});
@@ -624,6 +636,18 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
             return Value::variant("Call", "Parser.Expression", {
                 convertExpr(*target),
                 Value::list(std::move(args))
+            });
+        } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            std::vector<ValuePtr> parts;
+            for (const auto& part : node.parts)
+                parts.push_back(Value::string(part));
+            std::vector<ValuePtr> values;
+            for (const auto& value : node.values)
+                values.push_back(convertExprPtr(value));
+            return Value::variant("TaggedLiteral", "Parser.Expression", {
+                Value::string(node.tag),
+                Value::list(std::move(parts)),
+                Value::list(std::move(values))
             });
         } else if constexpr (std::is_same_v<T, ast::IfExpr>) {
             std::vector<ValuePtr> thenBody;
@@ -757,8 +781,10 @@ auto Evaluator::registerParserBuiltins() -> void {
                             "GuardedPattern"}) {
         m_variantParent[tag] = "Parser.PatternRef";
     }
-    for (const auto& tag : {"LitInt", "LitFloat", "LitString", "LitBool", "LitAtom",
+    for (const auto& tag : {"LitInt", "LitFloat", "LitString", "InterpolatedString",
+                            "LitBool", "LitAtom",
                             "LitNone", "Identifier", "BinaryOp", "UnaryOp", "Call",
+                            "TaggedLiteral",
                             "MethodCall", "If", "Match", "ListLit", "TupleLit", "Block",
                             "Lambda", "Let", "Var", "Assign", "Return", "Spread",
                             "TrailingIf", "While", "Loop", "RangeLit"}) {

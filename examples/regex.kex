@@ -1,0 +1,153 @@
+# Regex — ASPIRATIONAL. Regexes are not implemented yet.
+# This file is a design sketch to feel out the syntax/API before building it.
+# See docs/regex-plan.md (the Regex module) and docs/strings-and-tags-plan.md
+# (the backtick-string / tagged-literal machinery). Not wired into the harness.
+
+# kex: no-check
+
+using Regex
+
+# ─── Two spellings, one function ─────────────────────────────────────────────
+# The tag form eventually lowers to the ordinary two-argument tag ABI.
+
+let digits    = regex`\d+`            # tag form   — terse, inline
+let digits2   = regex(`\d+`)          # ordinary call over a raw String
+let words     = re`\w+`               # `re` is the short alias
+
+# Backtick body means no slash-escaping noise — compare to /https?:\/\/\S+/
+# Inside a backtick body `\` is fully literal: `\d` is two characters, not an
+# escape. A doubled backtick writes one literal backtick.
+let url = regex`https?://\S+`
+
+# A raw literal can't interpolate at all — `${` is just text, which is what a
+# currency pattern wants:
+let price = regex`\$\d+\.\d{2}`
+
+# Interpolation is opt-in with a `$` marker on the literal. Values are passed to
+# the tag separately from the literal parts, so `regex` quote-escapes them
+# (PCRE \Q…\E) — a value can never inject pattern syntax.
+let startsWith(word: String) -> Regex do
+  return regex$`^${word}\b`
+end
+
+# Computed pattern: `regex` is just a function, so any String works.
+# No separate `Regex.new` needed.
+let patternFor(word: String) -> Regex do
+  return regex("\\b${Regex.quote(word)}\\b")   # quote() escapes untrusted input
+end
+
+# ─── Compile-time validation ─────────────────────────────────────────────────
+# Nothing about `regex` is special-cased in the compiler. Its optional companion
+# `validateRegex : String -> [TaggedValidation.Issue]` checks raw tagged
+# bodies AT COMPILE TIME —
+# the same convention used by `validateSql`, `validateHtml`, or a user's tag:
+#
+#   let bad = regex`(unclosed`     # compile error: unbalanced parenthesis
+#                    ^             # caret points inside the literal
+#
+# An ordinary or computed call is validated at runtime instead —
+# `regex(userInput)` can still fail when the string is bad.
+#
+# Which regime you get is visible at the call site: raw `regex`…`` is always
+# compile-time checked when `validateRegex` is available; `regex$`…``
+# (interpolating) and ordinary calls are always runtime.
+
+# ─── Matching ────────────────────────────────────────────────────────────────
+# capture/2 returns Option<Match>. matches?/2 is the boolean predicate.
+# (`match` alone is a keyword — `match … do … end` — so the capturing call is
+#  named `capture`; `matches?` keeps the `?`-means-Bool convention.)
+#
+# Match is map-like: get(0) whole match, get(1..) positional, get(:name) named.
+# get returns String? — a group that didn't participate is an absent key (None).
+
+foul demoMatch do
+  match "order #4271 shipped".capture(regex`#(\d+)`) do
+    Just(m) -> IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
+    None    -> IO.printLine("no match")
+  end
+
+  # Boolean-only test when you don't need the captures.
+  if "hello@example.com".matches?(regex`^\S+@\S+\.\S+$`)
+    IO.printLine("looks like an email")
+  end
+end
+
+# ─── Named captures ──────────────────────────────────────────────────────────
+
+let dateRe = regex`(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})`
+
+let parseDate(s: String) -> { Atom: String }? do
+  return s.capture(dateRe).map do |m|
+    { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
+  end
+end
+
+# ─── Flags fold inline, PCRE-style (maps to Erlang `re` options) ─────────────
+
+let ci = regex`(?i)hello`             # caseless
+
+# Extended mode — multiline body pays off. The closing backtick's column sets
+# the dedent margin, so indenting it to match the code strips that indentation
+# from every line of the body (Java text blocks; Ruby's <<~ computes the margin
+# from the content instead, and gives you no say).
+let verbose = regex`(?x)
+    \d{3}   # area code
+    -
+    \d{4}   # local number
+  `
+
+# ─── Global matches, replace, split (UFCS pipelines) ─────────────────────────
+
+foul demoBulk do
+  let text = "cat=1, dog=2, bird=3"
+
+  # scan/2 returns every match as a list of Match.
+  let pairs = text.scan(regex`(\w+)=(\d+)`).map do |m|
+    (m.get(1, ""), m.get(2, "").toInt.or(0))
+  end
+  IO.printLine(pairs.inspect)         # [("cat", 1), ("dog", 2), ("bird", 3)]
+
+  # replace with a plain literal — no magic substitution syntax.
+  let masked = "call 555-1234 now".replace(regex`\d{3}-\d{4}`, "***-****")
+  IO.printLine(masked)                # call ***-**** now
+
+  # replace with a block — captures come from the Match, never $1/\1.
+  let normalized = "2026-7-4".replace(regex`(\d+)-(\d+)-(\d+)`) do |m|
+    "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
+  end
+  IO.printLine(normalized)            # 2026/7/4
+
+  # split/2 on a pattern.
+  let fields = "a, b ,c,  d".split(regex`\s*,\s*`)
+  IO.printLine(fields.inspect)        # ["a", "b", "c", "d"]
+end
+
+# ─── A real-ish use: parse a log line, guard with the match ──────────────────
+
+record LogLine do
+  level : String
+  msg   : String
+end
+
+let logRe = regex`^\[(?<level>\w+)\]\s+(?<msg>.+)$`
+
+let parseLog(line: String) -> LogLine? do
+  return line.capture(logRe).map do |m|
+    LogLine { level: m.get(:level, ""), msg: m.get(:msg, "") }
+  end
+end
+
+main(_args) do
+  demoMatch()
+  demoBulk()
+
+  match parseLog("[WARN] disk almost full") do
+    Just(entry) -> IO.printLine("${entry.level}: ${entry.msg}")   # WARN: disk almost full
+    None        -> IO.printLine("unparseable")
+  end
+
+  match parseDate("2026-07-27") do
+    Just(d) -> IO.printLine("y=${d.get(:year, "?")}")
+    None    -> IO.printLine("bad date")
+  end
+end

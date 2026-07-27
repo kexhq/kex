@@ -1,4 +1,5 @@
 #include "lexer.hxx"
+#include <algorithm>
 #include <unordered_map>
 
 namespace kex {
@@ -57,6 +58,7 @@ auto Lexer::nextToken() -> Token {
 
     m_tokenStartLine = m_line;
     m_tokenStartColumn = m_column;
+    m_tokenStartOffset = m_pos;
 
     char c = advance();
 
@@ -89,6 +91,7 @@ auto Lexer::nextToken() -> Token {
         case ']': return makeToken(TokenType::RBracket);
         case ',': return makeToken(TokenType::Comma);
         case '@': return makeToken(TokenType::At);
+        case '`': return lexRawString();
         case '?':
             return makeToken(TokenType::Question);
         case '/': return makeToken(TokenType::Slash);
@@ -153,6 +156,12 @@ auto Lexer::nextToken() -> Token {
 
         case '"': return lexString();
         case '\'': return lexChar();
+        case '$':
+            if (peek() == '`') {
+                advance();
+                return lexRawString(true);
+            }
+            return errorToken("Unexpected character: $");
 
         default:
             return errorToken(std::string("Unexpected character: ") + c);
@@ -315,6 +324,147 @@ auto Lexer::lexString() -> Token {
     return makeToken(TokenType::String, str);
 }
 
+auto Lexer::lexRawString(bool interpolating) -> Token {
+    std::string raw;
+    enum class HoleMode { Normal, DoubleString, Char, RawString, Comment };
+    HoleMode holeMode = HoleMode::Normal;
+    int holeDepth = 0;
+    while (!atEnd()) {
+        if (interpolating && holeDepth > 0) {
+            char c = peek();
+            if (holeMode == HoleMode::DoubleString) {
+                raw += advance();
+                if (c == '\\' && !atEnd()) raw += advance();
+                else if (c == '"') holeMode = HoleMode::Normal;
+                continue;
+            }
+            if (holeMode == HoleMode::Char) {
+                raw += advance();
+                if (c == '\\' && !atEnd()) raw += advance();
+                else if (c == '\'') holeMode = HoleMode::Normal;
+                continue;
+            }
+            if (holeMode == HoleMode::RawString) {
+                raw += advance();
+                if (c == '`') {
+                    if (!atEnd() && peek() == '`')
+                        raw += advance();
+                    else
+                        holeMode = HoleMode::Normal;
+                }
+                continue;
+            }
+            if (holeMode == HoleMode::Comment) {
+                raw += advance();
+                if (c == '\n') holeMode = HoleMode::Normal;
+                continue;
+            }
+
+            raw += advance();
+            if (c == '"') holeMode = HoleMode::DoubleString;
+            else if (c == '\'') holeMode = HoleMode::Char;
+            else if (c == '`') holeMode = HoleMode::RawString;
+            else if (c == '#') holeMode = HoleMode::Comment;
+            else if (c == '{') holeDepth++;
+            else if (c == '}') holeDepth--;
+            continue;
+        }
+
+        if (interpolating && peek() == '$' &&
+            m_pos + 2 < static_cast<int>(m_source.size()) &&
+            m_source[m_pos + 1] == '$' && m_source[m_pos + 2] == '{') {
+            raw += advance();
+            raw += advance();
+            raw += advance();
+            continue;
+        }
+        if (interpolating && peek() == '$' && peekNext() == '{') {
+            raw += advance();
+            raw += advance();
+            holeDepth = 1;
+            holeMode = HoleMode::Normal;
+            continue;
+        }
+        if (peek() == '`') {
+            // A doubled delimiter is one literal backtick. Backslashes never
+            // participate in raw-literal escaping.
+            if (peekNext() == '`') {
+                advance();
+                advance();
+                raw += '`';
+                continue;
+            }
+            advance(); // closing backtick
+
+            bool opensWithNewline = raw.starts_with("\n") ||
+                                    raw.starts_with("\r\n");
+            if (opensWithNewline) {
+                raw.erase(0, raw.starts_with("\r\n") ? 2 : 1);
+            }
+
+            // A closing delimiter on an otherwise-empty line contributes its
+            // exact leading whitespace as the dedent prefix. The prefix is
+            // syntax, not part of the resulting string; the preceding newline
+            // remains, so block-shaped literals end in '\n'.
+            auto lastNewline = raw.rfind('\n');
+            if (lastNewline != std::string::npos) {
+                std::string margin = raw.substr(lastNewline + 1);
+                bool closingOnOwnLine = std::all_of(
+                    margin.begin(), margin.end(),
+                    [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
+                if (closingOnOwnLine) {
+                    if (!margin.empty() && margin.back() == '\r')
+                        margin.pop_back();
+                    bool hasSpace = margin.find(' ') != std::string::npos;
+                    bool hasTab = margin.find('\t') != std::string::npos;
+                    if (hasSpace && hasTab)
+                        return errorToken(
+                            "Backtick literal closing margin cannot mix spaces and tabs");
+
+                    raw.erase(lastNewline + 1);
+                    if (!margin.empty()) {
+                        std::string dedented;
+                        size_t lineStart = 0;
+                        while (lineStart < raw.size()) {
+                            auto lineEnd = raw.find('\n', lineStart);
+                            bool hasNewline = lineEnd != std::string::npos;
+                            if (!hasNewline) lineEnd = raw.size();
+                            auto line = raw.substr(lineStart, lineEnd - lineStart);
+
+                            auto contentEnd = line.size();
+                            if (contentEnd > 0 && line[contentEnd - 1] == '\r')
+                                contentEnd--;
+                            bool blank = std::all_of(
+                                line.begin(), line.begin() + contentEnd,
+                                [](char c) { return c == ' ' || c == '\t'; });
+                            if (blank) {
+                                if (contentEnd < line.size()) dedented += '\r';
+                            } else if (line.starts_with(margin)) {
+                                dedented += line.substr(margin.size());
+                            } else {
+                                return errorToken(
+                                    "Backtick literal line is less indented than its closing margin");
+                            }
+
+                            if (hasNewline) dedented += '\n';
+                            lineStart = lineEnd + (hasNewline ? 1 : 0);
+                        }
+                        raw = std::move(dedented);
+                    }
+                }
+            }
+
+            return makeToken(
+                interpolating ? TokenType::InterpolatedRawString
+                              : TokenType::RawString,
+                std::move(raw));
+        }
+        raw += advance();
+    }
+
+    return errorToken("Unterminated backtick literal");
+}
+
 auto Lexer::lexChar() -> Token {
     if (atEnd()) return errorToken("Unterminated char literal");
 
@@ -361,15 +511,17 @@ auto Lexer::lexSpliceIdent() -> Token {
 }
 
 auto Lexer::makeToken(TokenType type) -> Token {
-    return Token{type, "", currentLocation()};
+    return Token{type, "", currentLocation(), m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::makeToken(TokenType type, std::string value) -> Token {
-    return Token{type, std::move(value), currentLocation()};
+    return Token{type, std::move(value), currentLocation(),
+                 m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::errorToken(std::string message) -> Token {
-    return Token{TokenType::Error, std::move(message), currentLocation()};
+    return Token{TokenType::Error, std::move(message), currentLocation(),
+                 m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::isLowerAlpha(char c) -> bool {

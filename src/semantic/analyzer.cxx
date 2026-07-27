@@ -298,6 +298,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 error(expr.location, "Undefined identifier: " + node.name);
             }
         }
+        else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            for (const auto& value : node.values)
+                if (value) analyzeExpr(*value);
+        }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             auto* sym = m_symbols.lookup(node.name);
             if (sym && sym->isFoul && !m_inFoulContext) {
@@ -311,6 +315,15 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 if (arg) analyzeExpr(*arg);
             }
             if (node.block) analyzeExpr(**node.block);
+        }
+        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            auto* sym = m_symbols.lookup(node.tag);
+            if (sym && sym->isFoul && !m_inFoulContext) {
+                error(expr.location,
+                    "Cannot call foul tag '" + node.tag + "' from pure context");
+            }
+            for (const auto& value : node.values)
+                if (value) analyzeExpr(*value);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             if (node.receiver) analyzeExpr(*node.receiver);
@@ -548,6 +561,15 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
                 for (const auto& [_, a] : n.namedArgs) if (a) walkExpr(*a, calls, hasFoulOp);
                 if (n.block) walkExpr(**n.block, calls, hasFoulOp);
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values)
+                    if (value) walkExpr(*value, calls, hasFoulOp);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                if (allFns.count(n.tag)) calls.insert(n.tag);
+                auto* sym = m_symbols.lookup(n.tag);
+                if (sym && sym->isFoul) hasFoulOp = true;
+                for (const auto& value : n.values)
+                    if (value) walkExpr(*value, calls, hasFoulOp);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 if (allFns.count(n.method)) calls.insert(n.method);
                 if (n.receiver) {
@@ -749,6 +771,20 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 }
                 for (const auto& a : n.args) if (a) checkGuard(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) checkGuard(*a);
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values) if (value) checkGuard(*value);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                auto* sym = m_symbols.lookup(n.tag);
+                if (sym && sym->isFoul) {
+                    error(e.location,
+                        "Cannot call foul tag '" + n.tag + "' in a guard");
+                } else if (m_transitivelyFoul.count(n.tag)) {
+                    error(e.location,
+                        "Cannot call tag '" + n.tag +
+                        "' in a guard: it transitively calls foul operations");
+                }
+                for (const auto& value : n.values)
+                    if (value) checkGuard(*value);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 if (n.receiver) {
                     auto receiverName = [&]() -> std::string {
@@ -805,6 +841,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 for (const auto& a : n.args) if (a) findGuards(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
                 if (n.block) findGuards(**n.block);
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values) if (value) findGuards(*value);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                for (const auto& value : n.values) if (value) findGuards(*value);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 if (n.receiver) findGuards(*n.receiver);
                 for (const auto& a : n.args) if (a) findGuards(*a);
@@ -922,6 +962,12 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                 for (const auto& a : n.args) if (a && hasFoulResolved(*a)) return true;
                 for (const auto& [_, a] : n.namedArgs) if (a && hasFoulResolved(*a)) return true;
                 if (n.block && hasFoulResolved(**n.block)) return true;
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values)
+                    if (value && hasFoulResolved(*value)) return true;
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                for (const auto& value : n.values)
+                    if (value && hasFoulResolved(*value)) return true;
             } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
                 if (n.left && hasFoulResolved(*n.left)) return true;
                 if (n.right && hasFoulResolved(*n.right)) return true;
@@ -1038,6 +1084,18 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                 }
                 for (const auto& a : n.args) if (a) checkGuard(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) checkGuard(*a);
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values) if (value) checkGuard(*value);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                auto* sym = m_symbols.lookup(n.tag);
+                bool symbolFoul = sym && sym->isFoul;
+                bool newlyFoul = m_transitivelyFoul.count(n.tag) && !priorFoul.count(n.tag);
+                if (newlyFoul && !symbolFoul) {
+                    error(e.location,
+                        "Cannot call tag '" + n.tag +
+                        "' in a guard: it transitively calls foul operations");
+                }
+                for (const auto& value : n.values) if (value) checkGuard(*value);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 auto it = resolved.find(&n);
                 if (it != resolved.end() && it->second.isFoul) {
@@ -1083,6 +1141,10 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
                 for (const auto& a : n.args) if (a) findGuards(*a);
                 for (const auto& [_, a] : n.namedArgs) if (a) findGuards(*a);
                 if (n.block) findGuards(**n.block);
+            } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                for (const auto& value : n.values) if (value) findGuards(*value);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                for (const auto& value : n.values) if (value) findGuards(*value);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 if (n.receiver) findGuards(*n.receiver);
                 for (const auto& a : n.args) if (a) findGuards(*a);

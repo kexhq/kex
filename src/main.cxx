@@ -13,6 +13,7 @@
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
 #include "semantic/db.hxx"
+#include "validation/tag_validator.hxx"
 #include <algorithm>
 #include <cctype>
 #include <filesystem>
@@ -46,6 +47,89 @@
 // Set to the type name while the user is typing inside a `make X do` block,
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
+
+// Lexical incompleteness shared by both REPLs. Block (`do`/`end`) continuation
+// is tracked separately because it is Kex grammar rather than delimiter state.
+// This scanner deliberately ignores delimiters inside strings and comments.
+static auto replHasOpenDelimiter(const std::string &source) -> bool {
+  enum class Mode {
+    Normal, DoubleString, Char, RawString, InterpolatedRawString, Comment
+  };
+  Mode mode = Mode::Normal;
+  int parens = 0;
+  int brackets = 0;
+  int braces = 0;
+  int interpolationBraces = 0;
+
+  for (size_t i = 0; i < source.size(); i++) {
+    char c = source[i];
+    switch (mode) {
+      case Mode::Comment:
+        if (c == '\n') mode = Mode::Normal;
+        break;
+      case Mode::DoubleString:
+        if (c == '\\' && i + 1 < source.size()) {
+          i++;
+        } else if (c == '"') {
+          mode = Mode::Normal;
+        }
+        break;
+      case Mode::Char:
+        if (c == '\\' && i + 1 < source.size()) {
+          i++;
+        } else if (c == '\'') {
+          mode = Mode::Normal;
+        }
+        break;
+      case Mode::RawString:
+        if (c == '`') {
+          if (i + 1 < source.size() && source[i + 1] == '`')
+            i++;
+          else
+            mode = Mode::Normal;
+        }
+        break;
+      case Mode::InterpolatedRawString:
+        if (c == '$' && i + 2 < source.size() &&
+            source[i + 1] == '$' && source[i + 2] == '{') {
+          i += 2;
+        } else if (c == '$' && i + 1 < source.size() &&
+                   source[i + 1] == '{') {
+          interpolationBraces++;
+          i++;
+        } else if (interpolationBraces > 0 && c == '{') {
+          interpolationBraces++;
+        } else if (interpolationBraces > 0 && c == '}') {
+          interpolationBraces--;
+        } else if (c == '`') {
+          if (i + 1 < source.size() && source[i + 1] == '`')
+            i++;
+          else
+            mode = Mode::Normal;
+        }
+        break;
+      case Mode::Normal:
+        if (c == '#') mode = Mode::Comment;
+        else if (c == '"') mode = Mode::DoubleString;
+        else if (c == '\'') mode = Mode::Char;
+        else if (c == '`')
+          mode = i > 0 && source[i - 1] == '$'
+                     ? Mode::InterpolatedRawString
+                     : Mode::RawString;
+        else if (c == '(') parens++;
+        else if (c == ')' && parens > 0) parens--;
+        else if (c == '[') brackets++;
+        else if (c == ']' && brackets > 0) brackets--;
+        else if (c == '{') braces++;
+        else if (c == '}' && braces > 0) braces--;
+        break;
+    }
+  }
+
+  return mode == Mode::DoubleString || mode == Mode::RawString ||
+         mode == Mode::InterpolatedRawString || interpolationBraces > 0 ||
+         parens > 0 || brackets > 0 || braces > 0;
+}
 
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
@@ -593,6 +677,63 @@ auto colorizeMessage(const std::string &msg) -> std::string {
   return out;
 }
 
+auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
+  bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
+  std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
+            << ":" << diag.location.line << ":" << diag.location.column;
+  if (diag.endLocation) {
+    std::cerr << "-" << diag.endLocation->line << ":"
+              << diag.endLocation->column;
+  }
+  std::cerr << ":" << kex::color::apply(kex::color::reset) << " "
+            << kex::color::apply(kex::color::bold)
+            << (isError ? kex::color::apply(kex::color::red)
+                        : kex::color::apply(kex::color::magenta))
+            << (isError ? "error" : "warning") << ":"
+            << kex::color::apply(kex::color::reset) << " "
+            << colorizeMessage(diag.message) << "\n";
+
+  if (diag.endLocation) {
+    auto source = readFile(std::string(diag.location.file));
+    if (!source.empty()) {
+      std::istringstream lines{source};
+      std::string line;
+      for (int current = 1;
+           current <= diag.location.line && std::getline(lines, line);
+           ++current) {
+        if (current != diag.location.line)
+          continue;
+        const auto start = std::max(1, diag.location.column);
+        int finish = static_cast<int>(line.size()) + 1;
+        if (diag.endLocation->line == diag.location.line)
+          finish = std::max(start + 1, diag.endLocation->column);
+        const auto width = std::max(1, finish - start);
+        std::cerr << "  " << current << " | " << line << "\n"
+                  << "    | "
+                  << std::string(static_cast<size_t>(start - 1), ' ')
+                  << kex::color::apply(
+                         isError ? kex::color::red : kex::color::magenta)
+                  << "^" << std::string(static_cast<size_t>(width - 1), '~')
+                  << kex::color::apply(kex::color::reset) << "\n";
+        if (diag.endLocation->line != diag.location.line)
+          std::cerr << "    | ... through line " << diag.endLocation->line
+                    << ", column " << diag.endLocation->column << "\n";
+      }
+    }
+  }
+
+  for (const auto &note : diag.notes) {
+    std::cerr << kex::color::apply(kex::color::gray)
+              << note.location.file << ":" << note.location.line << ":"
+              << note.location.column << ":"
+              << kex::color::apply(kex::color::reset) << " "
+              << kex::color::apply(kex::color::bold)
+              << kex::color::apply(kex::color::cyan) << "note:"
+              << kex::color::apply(kex::color::reset) << " "
+              << note.message << "\n";
+  }
+}
+
 } // namespace
 
 // Convention: `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need
@@ -1000,19 +1141,6 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
 auto runSemanticCheck(const kex::ast::Program &program,
                       const std::string &filepath,
                       kex::semantic::Analyzer *retainedAnalyzer = nullptr) -> bool {
-  auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
-    bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-    std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
-              << ":" << diag.location.line << ":" << diag.location.column << ":"
-              << kex::color::apply(kex::color::reset) << " "
-              << kex::color::apply(kex::color::bold)
-              << (isError ? kex::color::apply(kex::color::red)
-                          : kex::color::apply(kex::color::magenta))
-              << (isError ? "error" : "warning") << ":"
-              << kex::color::apply(kex::color::reset) << " "
-              << colorizeMessage(diag.message) << "\n";
-  };
-
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
@@ -1023,7 +1151,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   for (const auto &diag : runDb.diagnosticsFor(filepath)) {
     if (diag.level == kex::semantic::Diagnostic::Level::Error)
       dbOk = false;
-    printDiag(diag);
+    printSemanticDiagnostic(diag);
   }
 
   // Pass 3+: existing Analyzer (purity, type checking)
@@ -1031,9 +1159,19 @@ auto runSemanticCheck(const kex::ast::Program &program,
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
   for (const auto &diag : analyzer.diagnostics())
-    printDiag(diag);
+    printSemanticDiagnostic(diag);
 
-  return ok && dbOk;
+  bool validationOk = true;
+  if (ok && dbOk) {
+    for (const auto &diag :
+         kex::validation::validateTaggedLiterals(program, analyzer)) {
+      if (diag.level == kex::semantic::Diagnostic::Level::Error)
+        validationOk = false;
+      printSemanticDiagnostic(diag);
+    }
+  }
+
+  return ok && dbOk && validationOk;
 }
 
 auto printAst(const kex::ast::Program &program) -> void {
@@ -1662,12 +1800,12 @@ int main(int argc, char *argv[]) {
       // accepted as a broken standalone clause. Matches the tree-walker.
       std::string source = input;
       int dc = countBlocks(source);
-      while (dc > 0) {
+      while (dc > 0 || replHasOpenDelimiter(source)) {
         auto [cont, contOk] = readLine("  ...> ");
         if (!contOk)
           break;
         source += "\n" + cont;
-        dc += countBlocks(cont);
+        dc = countBlocks(source);
       }
       if (dc == 0) {
         if (auto name = clauseFuncName(source)) {
@@ -2215,13 +2353,13 @@ int main(int argc, char *argv[]) {
         g_currentMakeTarget =
             (sp != std::string::npos) ? rest.substr(0, sp) : rest;
       }
-      while (doCount > 0) {
+      while (doCount > 0 || replHasOpenDelimiter(source)) {
         auto [contLine, contOk] = readLine("...> ");
         if (!contOk)
           break;
         line = contLine;
         source += "\n" + line;
-        doCount += countBlocks(line);
+        doCount = implicitDo ? 1 + countBlocks(source) : countBlocks(source);
       }
 
       // If this line starts a function clause definition, keep reading
@@ -3030,7 +3168,17 @@ int main(int argc, char *argv[]) {
     for (const auto &d : analyzer.diagnostics())
       allDiags.push_back(d);
 
-    bool allOk = ok && dbOk;
+    bool validationOk = true;
+    if (ok && dbOk) {
+      for (const auto &d :
+           kex::validation::validateTaggedLiterals(program, analyzer)) {
+        if (d.level == kex::semantic::Diagnostic::Level::Error)
+          validationOk = false;
+        allDiags.push_back(d);
+      }
+    }
+
+    bool allOk = ok && dbOk && validationOk;
 
     if (jsonOutput) {
       // Machine-readable JSON — one object per diagnostic
@@ -3047,8 +3195,32 @@ int main(int argc, char *argv[]) {
                   << "    \"severity\": \"" << (isErr ? "error" : "warning")
                   << "\",\n"
                   << "    \"message\": \"" << jsonEscape(d.message) << "\"";
+        if (d.endLocation)
+          std::cout << ",\n"
+                    << "    \"end_line\": " << d.endLocation->line << ",\n"
+                    << "    \"end_column\": " << d.endLocation->column;
         if (!hint.empty())
           std::cout << ",\n    \"hint\": \"" << jsonEscape(hint) << "\"";
+        if (!d.notes.empty()) {
+          std::cout << ",\n    \"notes\": [\n";
+          for (size_t noteIndex = 0; noteIndex < d.notes.size();
+               ++noteIndex) {
+            const auto &note = d.notes[noteIndex];
+            std::cout << "      {\n"
+                      << "        \"file\": \""
+                      << jsonEscape(std::string(note.location.file))
+                      << "\",\n"
+                      << "        \"line\": " << note.location.line << ",\n"
+                      << "        \"column\": " << note.location.column
+                      << ",\n"
+                      << "        \"message\": \""
+                      << jsonEscape(note.message) << "\"\n"
+                      << "      }"
+                      << (noteIndex + 1 < d.notes.size() ? "," : "")
+                      << "\n";
+          }
+          std::cout << "    ]";
+        }
         std::cout << "\n  }" << (i + 1 < allDiags.size() ? "," : "") << "\n";
       }
       std::cout << "]\n";
@@ -3110,20 +3282,8 @@ int main(int argc, char *argv[]) {
     }
 
     // Normal colored output
-    auto printDiag = [&](const kex::semantic::Diagnostic &diag) {
-      bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
-      std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
-                << ":" << diag.location.line << ":" << diag.location.column
-                << ":" << kex::color::apply(kex::color::reset) << " "
-                << kex::color::apply(kex::color::bold)
-                << (isError ? kex::color::apply(kex::color::red)
-                            : kex::color::apply(kex::color::magenta))
-                << (isError ? "error" : "warning") << ":"
-                << kex::color::apply(kex::color::reset) << " "
-                << colorizeMessage(diag.message) << "\n";
-    };
     for (const auto &d : allDiags)
-      printDiag(d);
+      printSemanticDiagnostic(d);
 
     if (dumpTypes) {
       // Collect and sort by source location so output is readable

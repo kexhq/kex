@@ -78,7 +78,7 @@ consist of `[A-Z][A-Za-z0-9]*`.
 |---|---|---|
 | Integer | `42`, `1_000_000` | `Integer` (arbitrary precision, GMP) |
 | Float | `3.14`, `2.718_28` | `Float` |
-| String | `"hello"`, `"v: ${expr}"` | `String` |
+| String | `"hello"`, `"v: ${expr}"`, `` `raw` `` | `String` |
 | Char | `'a'`, `'0'`, `'\n'` | `Char` |
 | Bool | `true`, `false` | `Bool` |
 | Atom | `:ok`, `:error` | `Atom` |
@@ -98,6 +98,110 @@ IO.printLine("2 + 2 = ${2 + 2}")     # 2 + 2 = 4
 ```
 
 Escape sequences: `\n`, `\r`, `\t`, `\\`, `\$`, `\"`.
+
+### Raw Backtick Strings
+
+A backtick string is multiline and non-interpolating. Backslashes are always
+literal, `${...}` is ordinary text, and two consecutive backticks inside the
+body produce one literal backtick.
+
+```kex
+let pattern = `\d+`
+let text = `the syntax ${name} stays unchanged`
+let quoted = `a ``backtick```
+```
+
+When the opening backtick is followed immediately by a newline and the closing
+backtick sits on its own line, the exact whitespace prefix before the closing
+backtick is removed from every nonblank content line. The opening newline is
+omitted; the newline before the closing line remains.
+
+### Raw Tagged Literals
+
+An adjacent lower-case identifier tags a raw backtick string:
+
+```kex
+let firstPart(parts: [String], values: [Any]) -> String do
+  parts.first.or("")
+end
+
+let text = firstPart`raw body`
+```
+
+The tag is an ordinary function called as `tag(parts, values)`. A raw tagged
+literal supplies one string in `parts` and an empty `values` list. Whitespace
+between the identifier and opening backtick disables tagging, so
+`` firstPart `raw body` `` is two separate expressions.
+
+### Interpolating Backtick Strings
+
+A `$` before the opening backtick enables `${expression}` holes:
+
+```kex
+let name = "Ada"
+let greeting = $`Hello, ${name}!`
+```
+
+The parser stores the string parts and expression ASTs separately. Each value
+is converted to a string only when an untagged interpolating literal is
+evaluated. Write `$${` for literal `${`; backslashes remain fully literal.
+
+The same marker works with a tag:
+
+```kex
+let captured = capture$`SELECT * FROM users WHERE id = ${userId}`
+```
+
+This calls `capture(["SELECT * FROM users WHERE id = ", ""], [userId])`.
+Values are passed in their original types; the tag decides whether to escape,
+bind, convert, or reject them.
+
+### Compile-Time Tag Validation
+
+A raw tag may have a pure companion named `validateTag`:
+
+```kex
+let query(parts: [String], values: [Any]) -> String =
+  parts.first.or("")
+
+let validateQuery(source: String) -> [TaggedValidation.Issue] do
+  if source.blank? then
+    [TaggedValidation.fatal("query must not be empty")]
+  else
+    []
+  end
+end
+
+let users = query`SELECT * FROM users`
+```
+
+The convention is mechanical: `regex` uses `validateRegex`, `html` uses
+`validateHtml`, and `myTag` uses `validateMyTag`. The companion must have the
+pure signature `String -> [TaggedValidation.Issue]`. Fatal issues fail
+the build; warnings continue it.
+
+```kex
+module TaggedValidation
+
+type ByteSpan = At(Integer) | Between(Integer, Integer)
+type Issue = Fatal(ByteSpan?, String) | Warn(ByteSpan?, String)
+```
+
+Byte spans use zero-based UTF-8 byte offsets in the cooked literal body.
+`Between(start, end)` has an exclusive end and is rendered as an underlined
+source range. JSON diagnostics include `end_line` and `end_column` when a range
+is present. Invalid or reversed spans are compile errors produced by the
+validator boundary. An absent span covers the whole literal. Issues are ordered
+by their starting position, with whole-literal issues last.
+
+`TaggedValidation` also provides `fatal`, `fatalAt`, `fatalBetween`,
+`warn`, `warnAt`, and `warnBetween` constructors for validator implementations.
+
+Only raw tagged literals are checked. Interpolating tags and ordinary function
+calls remain runtime operations. Each validator invocation has a compiler-owned
+one-second timeout. If a validator crashes or times out, the primary diagnostic
+points to its definition and a note points to the tagged literal that triggered
+the evaluation.
 
 ### Keywords
 
@@ -960,7 +1064,9 @@ Rules:
 
 `IO`, `FS.File`, `FS.Directory`, `Http`, `System`, `Task`, and `Process`
 operations are foul.
-Reading `ENV` is pure (it is an immutable snapshot).
+Reading global `ENV` is foul because it is ambient process input. `main` also
+receives the immutable environment snapshot as an explicit parameter; passing
+that map to a helper preserves purity.
 
 ---
 
@@ -1429,8 +1535,14 @@ ANSI styling constants (all become `""` under `--no-colors`): `Reset`, `Bold`,
 
 ### 23.12 ENV
 
-An immutable `Map<String, String>` snapshot of the process environment. Reading
-it is **pure**.
+An immutable `Map<String, String>` snapshot of the process environment. Access
+through the global `ENV` namespace is **foul** because it is an implicit input:
+the value can change between process launches without appearing in a function's
+arguments.
+
+`main(args, env)` receives the same snapshot as an ordinary map. Operations on
+that explicit value are pure, so pure helpers should accept `env` as a
+parameter.
 
 | Function | Description |
 |---|---|

@@ -70,6 +70,24 @@ const std::string TYPE_ERROR_SRC =
     "  nums.filter { |x| x + 1 }\n"
     "end\n";
 
+const std::string RANGED_VALIDATION_SRC =
+    "let demo(parts: [String], values: [Any]) -> String = "
+    "parts.first.or(\"\")\n"
+    "let validateDemo(source: String) -> "
+    "[TaggedValidation.Issue] = "
+    "[TaggedValidation.warnBetween(1, 3, \"ranged warning\")]\n"
+    "main do demo`abcde` end\n";
+
+const std::string CRASHING_VALIDATION_SRC =
+    "let demo(parts: [String], values: [Any]) -> String = "
+    "parts.first.or(\"\")\n"
+    "let validateDemo(source: String) -> [TaggedValidation.Issue] do\n"
+    "  match source do\n"
+    "    \"never\" -> []\n"
+    "  end\n"
+    "end\n"
+    "main do demo`abcde` end\n";
+
 } // namespace
 
 int main() {
@@ -144,6 +162,62 @@ int main() {
             assertTrue(contains(out, "filter"), "missing function name: " + out);
             assertTrue(contains(out, "Integer"), "missing type name: " + out);
             assertTrue(contains(out, "->"), "missing arrow: " + out);
+        });
+
+        it("underlines compile-time validator ranges", []() {
+            auto path = writeTempSource(RANGED_VALIDATION_SRC);
+            auto out =
+                runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(
+                contains(out, ":3:15-3:17: warning: ranged warning"),
+                "missing exclusive range in diagnostic header: " + out);
+            assertTrue(
+                contains(out, "3 | main do demo`abcde` end"),
+                "missing ranged diagnostic source line: " + out);
+            assertTrue(contains(out, "^~"),
+                       "missing ranged diagnostic underline: " + out);
+        });
+
+        it("emits validator range endpoints in JSON", []() {
+            auto path = writeTempSource(RANGED_VALIDATION_SRC);
+            auto out = runKex({"--json", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "\"line\": 3"),
+                       "missing JSON start line: " + out);
+            assertTrue(contains(out, "\"column\": 15"),
+                       "missing JSON start column: " + out);
+            assertTrue(contains(out, "\"end_line\": 3"),
+                       "missing JSON end line: " + out);
+            assertTrue(contains(out, "\"end_column\": 17"),
+                       "missing JSON end column: " + out);
+        });
+
+        it("points validator crashes back to the triggering literal", []() {
+            auto path = writeTempSource(CRASHING_VALIDATION_SRC);
+            auto out =
+                runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, ":2:1: error: Compile-time validator "
+                                     "`validateDemo` crashed:"),
+                       "missing primary validator diagnostic: " + out);
+            assertTrue(contains(out, ":7:9: note: triggered by tagged literal "
+                                     "`demo`"),
+                       "missing triggering-literal note: " + out);
+        });
+
+        it("includes validator trigger notes in JSON", []() {
+            auto path = writeTempSource(CRASHING_VALIDATION_SRC);
+            auto out = runKex({"--json", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "\"notes\": ["),
+                       "missing JSON notes array: " + out);
+            assertTrue(contains(out, "\"line\": 7"),
+                       "missing JSON note line: " + out);
+            assertTrue(
+                contains(out, "\"message\": \"triggered by tagged literal "
+                              "`demo`\""),
+                "missing JSON note message: " + out);
         });
     });
 

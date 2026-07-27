@@ -221,6 +221,34 @@ int main() {
             assertTrue(out.find("=> defined double") != std::string::npos, out);
             assertTrue(out.find("=> defined Traffic") != std::string::npos, out);
         });
+
+        it("continues multiline raw backtick literals", []() {
+            auto out = runRepl(
+                "`\n"
+                "    hello\n"
+                "    `\n");
+            assertTrue(out.find("=> \"hello\n\" : String") !=
+                           std::string::npos,
+                       out);
+        });
+
+        it("continues interpolating backticks with an open hole", []() {
+            auto out = runRepl(
+                "$`answer: ${\n"
+                "  40 + 2\n"
+                "}`\n");
+            assertTrue(out.find("=> \"answer: 42\" : String") !=
+                           std::string::npos,
+                       out);
+        });
+
+        it("continues expressions with open delimiters", []() {
+            auto out = runRepl(
+                "(\n"
+                "  1 + 2\n"
+                ")\n");
+            assertTrue(out.find("=> 3 : Int") != std::string::npos, out);
+        });
     });
 
     describe("REPL CLI — Immutability", []() {

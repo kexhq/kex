@@ -447,6 +447,17 @@ int main() {
                 interfaces, "foul"));
         });
 
+        it("rejects ambient ENV access from a pure function", []() {
+            assertTrue(hasError(
+                "let home() = ENV.get(\"HOME\")\n",
+                "foul"));
+        });
+
+        it("allows pure access to an explicit environment map", []() {
+            assertTrue(noErrors(
+                "let home(env: {String: String}) = env.get(\"HOME\")\n"));
+        });
+
         it("allows Kex.Intrinsic calls from pure context", []() {
             assertTrue(noErrors(
                 "make Map<K, V> do\n"
@@ -528,6 +539,42 @@ int main() {
                 "  let y = 5 > 3\n"
                 "end\n"
             ));
+        });
+    });
+
+    describe("Semantic — Tagged Literals", []() {
+        it("accepts the [String] and [Any] tag ABI", []() {
+            assertTrue(noErrors(
+                "let rawTag(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "main do rawTag`hello` end\n"));
+        });
+
+        it("rejects a tag function with the wrong arity", []() {
+            assertTrue(hasError(
+                "let rawTag(source: String) -> String = source\n"
+                "main do rawTag`hello` end\n",
+                "expects"));
+        });
+
+        it("rejects a foul tag from a pure function", []() {
+            assertTrue(hasError(
+                "foul rawTag(parts, values) = parts\n"
+                "let build() = rawTag`hello`\n",
+                "foul tag"));
+        });
+
+        it("resolves names inside interpolating backticks", []() {
+            assertTrue(hasError(
+                "let render() = $`hello ${missing}`\n",
+                "Undefined"));
+        });
+
+        it("rejects foul calls inside interpolating backticks", []() {
+            assertTrue(hasError(
+                "foul readValue() = \"value\"\n"
+                "let render() = $`hello ${readValue()}`\n",
+                "foul function"));
         });
     });
 

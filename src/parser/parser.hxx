@@ -114,6 +114,10 @@ private:
 
     // Helpers
     auto parseBlock() -> std::optional<ast::ExprPtr>;
+    auto parseInterpolatedBody(
+        const Token& token,
+        std::vector<std::string>& parts,
+        std::vector<ast::ExprPtr>& values) -> void;
     auto parseMatchClause() -> ast::MatchClause;
     auto parseMatchClauseBody() -> ast::ExprPtr;
     auto isAtExprStart() const -> bool;

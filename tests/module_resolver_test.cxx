@@ -95,7 +95,10 @@ int main() {
             add(kex::kPreludeTier2);
 
             auto ordered = kex::orderPreludeSourcesByTier(manifest);
-            assertEqual(ordered.size(), size_t{26});
+            assertEqual(
+                ordered.size(),
+                kex::kPreludeTier0.size() + kex::kPreludeTier1.size() +
+                    kex::kPreludeTier2.size() + kex::kPreludeTier3.size());
             assertEqual(fs::path(ordered.front()).filename().string(),
                         std::string("algebra.kex"));
             assertEqual(fs::path(ordered[4]).filename().string(),

@@ -100,6 +100,50 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
     return lastResult;
 }
 
+auto Evaluator::evaluateFunction(
+    const ast::Program& program,
+    const std::string& name,
+    std::vector<ValuePtr> args,
+    std::chrono::milliseconds timeout) -> ValuePtr {
+    m_deadline = std::chrono::steady_clock::now() + timeout;
+    try {
+        for (const auto& item : program.items) {
+            checkDeadline();
+            execTopLevel(item);
+        }
+        resolvePendingExports();
+
+        // Process termination is meaningful at runtime but must become an
+        // ordinary validator crash during compilation, never terminate the
+        // compiler process.
+        auto blockedTermination = [](std::vector<ValuePtr>) -> ValuePtr {
+            throw std::runtime_error(
+                "process termination is not allowed during compile-time evaluation");
+        };
+        definePublic("die", blockedTermination);
+        defineIntrinsic("System::die", blockedTermination);
+        defineIntrinsic("System::exit", blockedTermination);
+
+        auto result = m_scheduler->runToCompletion(
+            [this, &name, &args]() mutable -> ValuePtr {
+                return callFunction(
+                    name, std::move(args), {}, SourceLocation{});
+            },
+            m_globalEnv);
+        m_deadline.reset();
+        return result;
+    } catch (...) {
+        m_deadline.reset();
+        throw;
+    }
+}
+
+auto Evaluator::checkDeadline() const -> void {
+    if (m_deadline &&
+        std::chrono::steady_clock::now() >= *m_deadline)
+        throw EvaluationTimeout{};
+}
+
 auto Evaluator::resolvePendingExports() -> void {
     while (!m_pendingExports.empty()) {
         auto pendingExports = std::move(m_pendingExports);
@@ -953,6 +997,7 @@ auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
 }
 
 auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
+    checkDeadline();
     return std::visit([this, &expr](const auto& node) -> ValuePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -969,6 +1014,16 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::floating(std::stod(node.value));
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            if (!node.parts.empty()) {
+                std::string result;
+                for (size_t i = 0; i < node.parts.size(); i++) {
+                    result += node.parts[i];
+                    if (i < node.values.size() && node.values[i])
+                        result += eval(*node.values[i])->toString();
+                }
+                return Value::string(result);
+            }
+            if (!node.interpolating) return Value::string(node.value);
             // Handle interpolation: find ${...} and evaluate in current scope
             std::string result;
             const auto& s = node.value;
@@ -1144,6 +1199,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 args.push_back(eval(**node.block));
             }
             return callFunction(node.name, std::move(args), std::move(namedArgs), expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+            std::vector<ValuePtr> parts;
+            parts.reserve(node.parts.size());
+            for (const auto& part : node.parts)
+                parts.push_back(Value::string(part));
+            std::vector<ValuePtr> values;
+            values.reserve(node.values.size());
+            for (const auto& value : node.values)
+                values.push_back(value ? eval(*value) : Value::none());
+            return callFunction(
+                node.tag,
+                {Value::list(std::move(parts)), Value::list(std::move(values))},
+                {}, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
             // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.
@@ -2107,6 +2176,7 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
 
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
+    checkDeadline();
     // BEAM-style reduction-counted auto-yield: placed at function-call
     // boundaries, the same kind of safe point BEAM itself uses, so a compute-bound process that never calls
     // `receive` still gives other processes a turn periodically.
@@ -2326,7 +2396,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 auto valueInt = asInteger(value);
                 return valueInt && *valueInt == mpz_class(pat.literal.value);
             }
-            if (pat.literal.type == TokenType::String) {
+            if (pat.literal.type == TokenType::String ||
+                pat.literal.type == TokenType::RawString) {
                 auto* sv = std::get_if<StringValue>(&value->data);
                 return sv && sv->value == pat.literal.value;
             }

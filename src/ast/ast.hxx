@@ -148,7 +148,12 @@ struct Pattern {
 
 struct IntLiteral { std::string value; };
 struct FloatLiteral { std::string value; };
-struct StringLiteral { std::string value; };
+struct StringLiteral {
+    std::string value;
+    bool interpolating = true;
+    std::vector<std::string> parts;
+    std::vector<ExprPtr> values;
+};
 struct CharLiteral { char value; };
 struct BoolLiteral { bool value; };
 struct NoneLiteral {};
@@ -172,6 +177,17 @@ struct FunctionCall {
     std::vector<ExprPtr> args;
     std::vector<std::pair<std::string, ExprPtr>> namedArgs;
     std::optional<ExprPtr> block;
+};
+
+// Kept distinct from FunctionCall until semantic analysis has resolved and
+// checked the tag ABI. Backends lower it to tag(parts, values) afterward.
+struct TaggedLiteral {
+    std::string tag;
+    std::vector<std::string> parts;
+    std::vector<ExprPtr> values;
+    bool interpolating = false;
+    int bodyStartOffset = -1;
+    int bodyEndOffset = -1;
 };
 
 struct RecordConstruction {
@@ -376,6 +392,7 @@ struct Expr {
         ThisExpr,
         MethodCall,
         FunctionCall,
+        TaggedLiteral,
         RecordConstruction,
         BinaryOp,
         UnaryOp,

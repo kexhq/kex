@@ -275,7 +275,9 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                if (n.value.find("${") != std::string::npos)
+                if (!n.parts.empty())
+                    return lowerParsedInterpolatedString(n.parts, n.values);
+                if (n.interpolating && n.value.find("${") != std::string::npos)
                     return lowerInterpolatedString(n.value);
                 return lit(LitKind::String, n.value);
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
@@ -585,6 +587,39 @@ struct Lowering {
                 return lowerReceive(n);
             } else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
                 return lowerFunctionCall(n);
+            } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
+                std::vector<ExprPtr> partItems;
+                for (const auto& part : n.parts) {
+                    partItems.push_back(lit(LitKind::String, part));
+                }
+                auto parts = std::make_unique<Expr>();
+                parts->node = MakeList{std::move(partItems), std::nullopt};
+
+                std::vector<ExprPtr> valueItems;
+                for (const auto& value : n.values) {
+                    if (value) valueItems.push_back(lower(value));
+                }
+                auto values = std::make_unique<Expr>();
+                values->node = MakeList{std::move(valueItems), std::nullopt};
+
+                std::vector<Binding> binds;
+                std::vector<ExprPtr> args;
+                args.push_back(atomize_ir(std::move(parts), binds));
+                args.push_back(atomize_ir(std::move(values), binds));
+                auto call = std::make_unique<Expr>();
+                if (knownFns.count(n.tag))
+                    call->node = Call{"", n.tag, 2, std::move(args), false};
+                else if (auto imp = moduleImports.find(n.tag);
+                         imp != moduleImports.end())
+                    call->node =
+                        Call{"", imp->second, 2, std::move(args), false};
+                else if (subst.count(n.tag))
+                    call->node = CallIndirect{
+                        var(currentName(n.tag)), std::move(args), false};
+                else
+                    return wrapLets(
+                        binds, runtimeError("Undefined function: " + n.tag));
+                return wrapLets(binds, std::move(call));
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 return lowerMethodCall(n);
             } else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
@@ -1676,6 +1711,27 @@ struct Lowering {
         return callE("unicode", "characters_to_binary", 1, one(std::move(lst)));
     }
 
+    auto lowerParsedInterpolatedString(
+        const std::vector<std::string>& stringParts,
+        const std::vector<ast::ExprPtr>& values) -> ExprPtr {
+        std::vector<ExprPtr> parts;
+        for (size_t i = 0; i < stringParts.size(); i++) {
+            if (!stringParts[i].empty())
+                parts.push_back(lit(LitKind::String, stringParts[i]));
+            if (i < values.size() && values[i])
+                parts.push_back(
+                    callE("kex_io", "to_string", 1, one(lower(values[i]))));
+        }
+        if (parts.empty()) return lit(LitKind::String, "");
+        if (parts.size() == 1 &&
+            std::holds_alternative<Lit>(parts[0]->node))
+            return std::move(parts[0]);
+        auto list = std::make_unique<Expr>();
+        list->node = MakeList{std::move(parts), std::nullopt};
+        return callE(
+            "unicode", "characters_to_binary", 1, one(std::move(list)));
+    }
+
     // ---- IR construction helpers -----------------------------------------
     auto litInt(long v) -> ExprPtr { return lit(LitKind::Int, std::to_string(v)); }
     auto one(ExprPtr a) -> std::vector<ExprPtr> {
@@ -1979,7 +2035,11 @@ struct Lowering {
                 switch (pn.literal.type) {
                     case TokenType::Integer: out->litKind = LitKind::Int; out->litText = pn.literal.value; break;
                     case TokenType::Float:   out->litKind = LitKind::Float; out->litText = pn.literal.value; break;
-                    case TokenType::String:  out->litKind = LitKind::String; out->litText = pn.literal.value; break;
+                    case TokenType::String:
+                    case TokenType::RawString:
+                        out->litKind = LitKind::String;
+                        out->litText = pn.literal.value;
+                        break;
                     case TokenType::Char:    out->litKind = LitKind::Char; out->litText = pn.literal.value; break;
                     case TokenType::True:    out->litKind = LitKind::Bool; out->litBool = true; break;
                     case TokenType::False:   out->litKind = LitKind::Bool; out->litBool = false; break;
