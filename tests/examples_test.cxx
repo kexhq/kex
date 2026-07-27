@@ -31,16 +31,21 @@ auto parseFile(const std::string& path) -> bool {
     }
 }
 
-auto runFile(const std::string& path) -> std::string {
+auto runFileWithRoots(const std::string& path,
+                      std::vector<std::string> roots) -> std::string {
     auto source = readFile(path);
     Lexer lexer(source, path);
     auto tokens = lexer.tokenizeAll();
     Parser parser(std::move(tokens), path);
     auto program = parser.parseProgram();
     Evaluator evaluator;
-    evaluator.setModuleRoots({"src/stdlib"});
+    evaluator.setModuleRoots(std::move(roots));
     evaluator.execute(program);
     return evaluator.output();
+}
+
+auto runFile(const std::string& path) -> std::string {
+    return runFileWithRoots(path, {"src/stdlib"});
 }
 
 // Like runFile, but reports success/failure instead of throwing — used to
@@ -105,6 +110,12 @@ int main() {
         it("proc_supervisor.kex", []() { assertTrue(parseFile("examples/proc_supervisor.kex")); });
         it("proc_task.kex", []() { assertTrue(parseFile("examples/proc_task.kex")); });
         it("processes.kex", []() { assertTrue(parseFile("examples/processes.kex")); });
+        it("parser_combinators/main.kex", []() {
+            assertTrue(parseFile("examples/parser_combinators/main.kex"));
+        });
+        it("parser_combinators/lib/parsing.kex", []() {
+            assertTrue(parseFile("examples/parser_combinators/lib/parsing.kex"));
+        });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -224,6 +235,23 @@ int main() {
             auto output = runFile("examples/stdlib_demo.kex");
             assertTrue(output.find("count evens: 5") != std::string::npos);
             assertTrue(output.find("count odds: 5") != std::string::npos);
+        });
+    });
+
+    describe("Examples — Run (parser_combinators)", []() {
+        // A multi-file module: main.kex imports the `Parsing` combinator
+        // library from lib/parsing.kex, resolved the same way the CLI does
+        // (a `lib` root beside the entry file).
+        auto runMain = []() {
+            return runFileWithRoots("examples/parser_combinators/main.kex",
+                                    {"examples/parser_combinators/lib", "src/stdlib"});
+        };
+        it("parses and evaluates arithmetic expressions", [runMain]() {
+            auto output = runMain();
+            assertTrue(output.find("42 => 42 = 42") != std::string::npos, output);
+            assertTrue(output.find("3 + 5 => (3 + 5) = 8") != std::string::npos, output);
+            assertTrue(output.find("1 + 2 * 3 => (1 + (2 * 3)) = 7") != std::string::npos, output);
+            assertTrue(output.find("10 - 7 + 2 => (10 - (7 + 2)) = 1") != std::string::npos, output);
         });
     });
 

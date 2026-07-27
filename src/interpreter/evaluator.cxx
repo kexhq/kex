@@ -778,6 +778,22 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                         auto result = evalBody(clause.body);
                         popEnv();
                         return result;
+                    } catch (TryException& e) {
+                        if (clause.rescue) {
+                            try {
+                                auto result = evalRescue(*clause.rescue, e.error(), funcDef->location);
+                                popEnv();
+                                return result;
+                            } catch (ReturnException& ret) {
+                                popEnv();
+                                return ret.value();
+                            }
+                        }
+                        popEnv();
+                        // No rescue — propagate as return Error(e)
+                        auto errorVal = std::make_shared<Value>();
+                        errorVal->data = VariantValue{"Error", "Result", {e.error()}, {}, {}};
+                        throw ReturnException(errorVal);
                     } catch (ReturnException& ret) {
                         popEnv();
                         return ret.value();
@@ -897,6 +913,18 @@ auto Evaluator::execMainBlock(const ast::MainBlock& block) -> ValuePtr {
     ValuePtr result;
     try {
         result = evalBody(block.body);
+    } catch (TryException& e) {
+        if (block.rescue) {
+            try {
+                result = evalRescue(*block.rescue, e.error(), block.location);
+            } catch (ReturnException& ret) {
+                result = ret.value();
+            }
+        } else {
+            if (!m_replMode && !block.synthetic) popEnv();
+            throw RuntimeError(".try failed with no rescue handler: " + e.error()->toString(),
+                               block.location);
+        }
     } catch (ReturnException& ret) {
         result = ret.value();
     } catch (const BreakException&) {
@@ -1315,7 +1343,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             std::vector<ValuePtr> elements;
             for (const auto& elem : node.elements) {
-                elements.push_back(elem ? eval(*elem) : Value::none());
+                if (elem) {
+                    if (auto* spread = std::get_if<ast::SpreadExpr>(&elem->kind)) {
+                        auto val = eval(*spread->inner);
+                        if (auto* list = std::get_if<ListValue>(&val->data)) {
+                            elements.insert(elements.end(), list->elements.begin(), list->elements.end());
+                        } else {
+                            elements.push_back(val);
+                        }
+                    } else {
+                        elements.push_back(eval(*elem));
+                    }
+                } else {
+                    elements.push_back(Value::none());
+                }
             }
             if (node.rest) {
                 auto tailVal = eval(**node.rest);
@@ -1482,8 +1523,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 paramNames.push_back(p.name);
             }
 
+            const ast::RescueBlock* rescuePtr = node.rescue ? &*node.rescue : nullptr;
             lambda->data = FunctionValue{"<lambda>",
-                [this, bodyPtr, paramNames, capturedEnv](std::vector<ValuePtr> args) -> ValuePtr {
+                [this, bodyPtr, paramNames, capturedEnv, rescuePtr](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
                     // If the lambda expects multiple params but receives a single
@@ -1506,6 +1548,17 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     // same reasoning as the MatchExpr/function-clause guards.
                     try {
                         result = evalBody(*bodyPtr);
+                    } catch (TryException& e) {
+                        if (rescuePtr) {
+                            try {
+                                result = evalRescue(*rescuePtr, e.error(), {});
+                            } catch (ReturnException& ret) {
+                                result = ret.value();
+                            }
+                        } else {
+                            m_env = prevEnv;
+                            throw;
+                        }
                     } catch (ReturnException& ret) {
                         result = ret.value();
                     } catch (...) {
@@ -1742,6 +1795,32 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 val = m_env->get(m_currentModule + "::" + node.name);
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            auto value = eval(*node.operand);
+            if (auto* var = std::get_if<VariantValue>(&value->data)) {
+                if (var->tag == "Ok" && !var->args.empty()) {
+                    return var->args[0];
+                }
+                if (var->tag == "Error" && !var->args.empty()) {
+                    throw TryException(var->args[0]);
+                }
+                if (var->tag == "Just" && !var->args.empty()) {
+                    return var->args[0];
+                }
+                if (var->tag == "None" || (var->tag == "Error" && var->args.empty())) {
+                    throw TryException(Value::none());
+                }
+            }
+            throw RuntimeError(".try called on non-Result/Option value: " + value->toString(),
+                               expr.location);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            try {
+                return evalBody(node.body);
+            } catch (TryException& e) {
+                return evalRescue(node.rescue, e.error(), expr.location);
+            }
         }
         else if constexpr (std::is_same_v<T, ast::ErrorNode>) {
             throw RuntimeError("Attempted to evaluate a parse error node: " + node.message,
@@ -2529,6 +2608,49 @@ auto Evaluator::popEnv() -> void {
         m_env = m_env->parent();
         m_importScopes.pop_back();
     }
+}
+
+auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
+                           SourceLocation loc) -> ValuePtr {
+    if (rescue.isInlineReturn) {
+        throw ReturnException(eval(*rescue.inlineReturnExpr));
+    }
+
+    if (rescue.isCatchAll) {
+        pushEnv();
+        if (!rescue.catchAllParam.empty()) {
+            m_env->define(rescue.catchAllParam, error);
+        }
+        auto result = evalBody(rescue.catchAllBody);
+        popEnv();
+        return result;
+    }
+
+    pushEnv();
+    for (const auto& clause : rescue.clauses) {
+        bool matched = false;
+        for (const auto& pattern : clause.patterns) {
+            if (matchPattern(*pattern, error)) {
+                matched = true;
+                break;
+            }
+        }
+        if (matched) {
+            if (clause.guard) {
+                auto guardVal = eval(**clause.guard);
+                if (auto* b = std::get_if<BoolValue>(&guardVal->data); b && !b->value) {
+                    continue;
+                }
+            }
+            auto result = eval(*clause.body);
+            popEnv();
+            return result;
+        }
+    }
+    popEnv();
+
+    // No clause matched — re-throw
+    throw TryException(error);
 }
 
 } // namespace kex::interpreter

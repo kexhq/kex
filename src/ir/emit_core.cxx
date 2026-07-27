@@ -69,8 +69,17 @@ struct Emitter {
                 return n.rest && hasReturn(*n.rest);
             } else if constexpr (std::is_same_v<T, Construct>) {
                 for (auto& a : n.args) if (hasReturn(a)) return true; return false;
+            } else if constexpr (std::is_same_v<T, TryCatch>) {
+                if (hasReturn(n.body)) return true;
+                for (auto& c : n.clauses) if (hasReturn(c.body)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, LetRec>) {
+                // Loops and guard continuations lower to a LetRec but stay in
+                // the SAME return scope: a `return` inside a loop escapes the
+                // enclosing function, so recurse into both bodies.
+                return hasReturn(n.funBody) || hasReturn(n.contBody);
             }
-            // Lambda/LetRec bodies are separate return scopes; leaves have none.
+            // Lambda bodies are a separate return scope; leaves have none.
             return false;
         }, e->node);
     }
@@ -313,6 +322,49 @@ struct Emitter {
                 if (m_returnThrows)
                     return "call 'erlang':'throw'({'kex_return', " + emit(n.value) + "})";
                 return emit(n.value);
+            } else if constexpr (std::is_same_v<T, TryThrow>) {
+                return "call 'erlang':'throw'({'kex_try_error', " + emit(n.error) + "})";
+            } else if constexpr (std::is_same_v<T, TryCatch>) {
+                std::string errVar = uniq("_TryErr");
+                std::string cls = uniq("_Cls"), rsn = uniq("_Rsn"), trc = uniq("_Trc");
+                std::string rv = uniq("_TryRV");
+                std::string trcAlias = uniq("_TrcA");
+                std::string c2 = uniq("_C"), r2 = uniq("_R"), tr2 = uniq("_Tr");
+
+                std::string body = emit(n.body);
+
+                std::string catchBody = "case " + errVar + " of\n";
+                for (size_t i = 0; i < n.clauses.size(); i++) {
+                    catchBody += "      " + emitPattern(*n.clauses[i].patterns[0]);
+                    catchBody += " when 'true' -> " + emit(n.clauses[i].body);
+                    if (i + 1 < n.clauses.size()) catchBody += "\n";
+                }
+                // The rescue patterns may not be exhaustive. A non-exhaustive
+                // `case` in a catch handler both mismatches the interpreter
+                // (which re-throws an unmatched error, evaluator.cxx evalRescue)
+                // and trips erlc's try-state checker (ambiguous_catch_try_state).
+                // Append an explicit catch-all that re-throws, unless a clause
+                // already catches everything.
+                bool exhaustive = false;
+                for (const auto& cl : n.clauses) {
+                    auto k = cl.patterns[0]->kind;
+                    if (k == PatKind::Var || k == PatKind::Wild) { exhaustive = true; break; }
+                }
+                if (!exhaustive) {
+                    std::string other = freshWild();
+                    catchBody += "\n      " + other + " when 'true' -> call 'erlang':'throw'({'kex_try_error', " + other + "})";
+                }
+                catchBody += "\n    end";
+
+                return "try\n    " + body + "\n"
+                       "of <" + rv + "> -> " + rv + "\n"
+                       "catch <" + cls + ", " + rsn + ", " + trc + "> ->\n"
+                       "  case <" + cls + ", " + rsn + ", " + trc + "> of\n"
+                       "    <'throw', {'kex_try_error', " + errVar + "}, " + trcAlias + "> when 'true' ->\n"
+                       "    " + catchBody + "\n"
+                       "    <" + c2 + ", " + r2 + ", " + tr2 + "> when 'true' -> primop 'raise'(" +
+                            trc + ", " + rsn + ")\n"
+                       "  end";
             } else {
                 return "call 'erlang':'error'('ir_unimplemented')";
             }

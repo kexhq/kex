@@ -451,6 +451,12 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
             m_loopScopes.push_back(LoopScope::Closure);
             analyzeBody(node.body);
+            if (node.rescue) {
+                for (const auto& clause : node.rescue->clauses)
+                    if (clause.body) analyzeExpr(*clause.body);
+                analyzeBody(node.rescue->catchAllBody);
+                if (node.rescue->inlineReturnExpr) analyzeExpr(*node.rescue->inlineReturnExpr);
+            }
             m_loopScopes.pop_back();
             m_symbols.popScope();
         }
@@ -500,6 +506,16 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
                 for (const auto& arg : group)
                     if (arg && !std::holds_alternative<ast::CurryPlaceholder>(arg->kind))
                         analyzeExpr(*arg);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            if (node.operand) analyzeExpr(*node.operand);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            analyzeBody(node.body);
+            for (const auto& clause : node.rescue.clauses)
+                if (clause.body) analyzeExpr(*clause.body);
+            analyzeBody(node.rescue.catchAllBody);
+            if (node.rescue.inlineReturnExpr) analyzeExpr(*node.rescue.inlineReturnExpr);
         }
         // Literals and other simple nodes need no analysis
     }, expr.kind);

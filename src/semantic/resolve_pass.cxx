@@ -446,6 +446,12 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             pushScope();
             for (const auto& p : node.params) defineLocal(p.name);
             resolveBody(node.body);
+            if (node.rescue) {
+                for (const auto& clause : node.rescue->clauses)
+                    if (clause.body) resolveExpr(*clause.body);
+                resolveBody(node.rescue->catchAllBody);
+                if (node.rescue->inlineReturnExpr) resolveExpr(*node.rescue->inlineReturnExpr);
+            }
             popScope();
         }
         else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
@@ -489,6 +495,16 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             resolveUsing(node.module, node.alias, node.onlyNames, node.exceptNames, expr.location);
             resolveBody(node.body);
             if (scoped) popScope();
+        }
+        else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            if (node.operand) resolveExpr(*node.operand);
+        }
+        else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            resolveBody(node.body);
+            for (const auto& clause : node.rescue.clauses)
+                if (clause.body) resolveExpr(*clause.body);
+            resolveBody(node.rescue.catchAllBody);
+            if (node.rescue.inlineReturnExpr) resolveExpr(*node.rescue.inlineReturnExpr);
         }
         // Literals, UpperIdentifier, ThisExpr, BreakExpr, NextExpr,
         // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve

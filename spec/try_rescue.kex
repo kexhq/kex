@@ -1,0 +1,93 @@
+# .try / rescue / trying
+# Tests error propagation and recovery
+
+# .try on Result
+let r1 = Ok(42)
+IO.printLine(r1.try)
+
+# .try on Option
+let o1 = Just("hello")
+IO.printLine(o1.try)
+
+# trying with rescue catch-all
+let v1 = trying do
+  let x = Error("oops").try
+  x
+rescue
+  _ -> "recovered"
+end
+IO.printLine(v1)
+
+# trying with pattern matching rescue
+type AppError = NotFound(String) | Timeout(Int)
+
+let v2 = trying do
+  let y = Error(NotFound("user")).try
+  y
+rescue
+  NotFound(name) -> "not found: ${name}"
+  Timeout(ms) -> "timeout: ${ms}"
+end
+IO.printLine(v2)
+
+# Function-level rescue with catch-all
+let safeDivide(a: Int, b: Int) -> String do
+  let result = if b == 0 then Error("division by zero") else Ok(a / b) end
+  "result: ${result.try}"
+rescue do |e|
+  "error: ${e}"
+end
+end
+
+IO.printLine(safeDivide(10, 2))
+IO.printLine(safeDivide(10, 0))
+
+# Function-level rescue with pattern matching
+let lookup(key: String) -> String do
+  let data = match key do
+    "name" -> Ok("Alice")
+    "age" -> Ok("30")
+    k -> Error(NotFound(k))
+  end
+  data.try
+rescue
+  NotFound(k) -> "unknown key: ${k}"
+end
+
+IO.printLine(lookup("name"))
+IO.printLine(lookup("age"))
+IO.printLine(lookup("email"))
+
+# rescue return on many combinator
+let safeHead(list: [Int]) -> Int do
+  let val = if list.count > 0 then Ok(list.at(0)) else Error("empty") end
+  val.try
+rescue return -1
+end
+
+IO.printLine(safeHead([3, 4, 5]))
+IO.printLine(safeHead([]))
+
+# .try on None propagates
+let fromOption(val: Option<Int>) -> String do
+  let n = val.try
+  "got: ${n}"
+rescue
+  _ -> "was none"
+end
+
+IO.printLine(fromOption(Just(7)))
+IO.printLine(fromOption(None))
+
+# Nested trying blocks
+let v3 = trying do
+  let inner = trying do
+    Error("inner fail").try
+  rescue
+    _ -> "inner caught"
+  end
+  inner
+rescue
+  _ -> "outer caught"
+end
+IO.printLine(v3)

@@ -156,6 +156,17 @@ struct Return {
     ExprPtr value;
 };
 
+// Throw a .try error for rescue to catch (distinct from Return).
+struct TryThrow {
+    ExprPtr error;
+};
+
+// trying do body rescue clauses end — catch TryThrow errors.
+struct TryCatch {
+    ExprPtr body;
+    std::vector<MatchClause> clauses;
+};
+
 // A selective `receive`. Each message is the wire tuple {'kex_msg', Payload,
 // Sender}; a clause matches Payload with `pattern` (and optional guard), with
 // `senderVar` bound to the sender pid. Emits Core Erlang's native `receive`.
@@ -185,7 +196,7 @@ struct LetRec {
 struct Expr {
     std::variant<
         Lit, Var, Intrinsic, Call, CallIndirect,
-        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, LetRec, Receive
+        Let, Seq, Match, Construct, MakeTuple, MakeList, FieldGet, Lambda, Return, TryThrow, TryCatch, LetRec, Receive
     > node;
 };
 

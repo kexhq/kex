@@ -1,0 +1,145 @@
+# Tests for the `Parsing` combinator library (lib/parsing.kex).
+# Run from this directory: `kex -r parsing.spec.kex` (also works with -R).
+
+using Parsing
+
+describe("Parser combinators with .try/rescue") do
+  describe("charWhen") do
+    it("succeeds on matching char") do
+      let p = Parser { input: "abc" }
+      let result = p.charWhen(&.lower?)
+      match result do
+        Ok((c, p2)) -> do
+          assert(c == 'a')
+          assert(p2.pos == 1)
+        end
+        _ -> assert(false)
+      end
+    end
+
+    it("fails on non-matching char") do
+      let p = Parser { input: "123" }
+      let result = p.charWhen(&.lower?)
+      match result do
+        Error(_) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe("many") do
+    it("collects zero matches") do
+      let p = Parser { input: "abc" }
+      let (chars, p2) = p.many { |q| q.charWhen(&.digit?) }
+      assert(chars.count == 0)
+      assert(p2.pos == 0)
+    end
+
+    it("collects multiple matches") do
+      let p = Parser { input: "123abc" }
+      let (chars, p2) = p.many { |q| q.charWhen(&.digit?) }
+      assert(chars.count == 3)
+      assert(chars.join("") == "123")
+      assert(p2.pos == 3)
+    end
+
+    it("collects all matches to end") do
+      let p = Parser { input: "xyz" }
+      let (chars, p2) = p.many { |q| q.charWhen(&.lower?) }
+      assert(chars.count == 3)
+      assert(chars.join("") == "xyz")
+      assert(p2.pos == 3)
+    end
+  end
+
+  describe("some") do
+    it("succeeds with one or more matches") do
+      let p = Parser { input: "42abc" }
+      let result = p.some { |q| q.charWhen(&.digit?) }
+      match result do
+        Ok((digits, p2)) -> do
+          assert(digits.join("") == "42")
+          assert(p2.pos == 2)
+        end
+        _ -> assert(false)
+      end
+    end
+
+    it("fails with zero matches") do
+      let p = Parser { input: "abc" }
+      let result = p.some { |q| q.charWhen(&.digit?) }
+      match result do
+        Error(_) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe("choice") do
+    it("returns first successful alternative") do
+      let p = Parser { input: "+" }
+      let result = p.choice([
+        { |q| q.char('+') },
+        { |q| q.char('-') },
+      ])
+      match result do
+        Ok((c, _)) -> assert(c == '+')
+        _ -> assert(false)
+      end
+    end
+
+    it("tries alternatives in order") do
+      let p = Parser { input: "-" }
+      let result = p.choice([
+        { |q| q.char('+') },
+        { |q| q.char('-') },
+      ])
+      match result do
+        Ok((c, _)) -> assert(c == '-')
+        _ -> assert(false)
+      end
+    end
+
+    it("fails when no alternative matches") do
+      let p = Parser { input: "x" }
+      let result = p.choice([
+        { |q| q.char('+') },
+        { |q| q.char('-') },
+      ])
+      match result do
+        Error(NoMatch(_)) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe(".try propagation") do
+    it("propagates Error to function-level rescue") do
+      let parseDigit(input: String) -> String do
+        let p = Parser { input: input }
+        let (c, _) = p.charWhen(&.digit?).try
+        "digit: ${c}"
+      rescue
+        _ -> "not a digit"
+      end
+
+      assert(parseDigit("5") == "digit: 5")
+      assert(parseDigit("x") == "not a digit")
+    end
+
+    it("propagates through nested .try calls") do
+      let parseTwoDigits(input: String) -> String do
+        let p = Parser { input: input }
+        let (d1, p2) = p.charWhen(&.digit?).try
+        let (d2, _) = p2.charWhen(&.digit?).try
+        "${d1}${d2}"
+      rescue
+        Unexpected(ch, pos) -> "unexpected ${ch} at ${pos}"
+      end
+
+      assert(parseTwoDigits("42") == "42")
+      assert(parseTwoDigits("4x") == "unexpected x at 1")
+      assert(parseTwoDigits("xy") == "unexpected x at 0")
+    end
+  end
+end
