@@ -1,0 +1,13 @@
+ok: \d+
+error at 9: missing closing parenthesis
+#4271 / 4271
+2026/07 = 2026
+did not participate: None
+matched empty: Just()
+zero-width whole match: Just()
+substring: true
+anchored:  false
+ucp: true
+a\.b\*c
+true
+false

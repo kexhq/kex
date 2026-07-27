@@ -31,8 +31,9 @@ let startsWith(word: String) -> Regex do
 end
 
 # Computed pattern: `regex` is just a function, so any String works.
-# No separate `Regex.new` needed.
-let patternFor(word: String) -> Regex do
+# No separate `Regex.new` needed. The call form returns Result — unlike the tag
+# form above, a computed pattern can fail, and the type says so.
+let patternFor(word: String) -> Result<Regex, RegexError> do
   return regex("\\b${Regex.quote(word)}\\b")   # quote() escapes untrusted input
 end
 
@@ -53,15 +54,15 @@ end
 # (interpolating) and ordinary calls are always runtime.
 
 # ─── Matching ────────────────────────────────────────────────────────────────
-# capture/2 returns Option<Match>. matches?/2 is the boolean predicate.
+# matches/2 returns Option<Match>. matches?/2 is the boolean predicate.
 # (`match` alone is a keyword — `match … do … end` — so the capturing call is
-#  named `capture`; `matches?` keeps the `?`-means-Bool convention.)
+#  named `matches`; `matches?` keeps the `?`-means-Bool convention.)
 #
 # Match is map-like: get(0) whole match, get(1..) positional, get(:name) named.
 # get returns String? — a group that didn't participate is an absent key (None).
 
 foul demoMatch do
-  match "order #4271 shipped".capture(regex`#(\d+)`) do
+  match "order #4271 shipped".matches(regex`#(\d+)`) do
     Just(m) -> IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
     None    -> IO.printLine("no match")
   end
@@ -77,7 +78,7 @@ end
 let dateRe = regex`(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})`
 
 let parseDate(s: String) -> { Atom: String }? do
-  return s.capture(dateRe).map do |m|
+  return s.matches(dateRe).map do |m|
     { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
   end
 end
@@ -132,7 +133,7 @@ end
 let logRe = regex`^\[(?<level>\w+)\]\s+(?<msg>.+)$`
 
 let parseLog(line: String) -> LogLine? do
-  return line.capture(logRe).map do |m|
+  return line.matches(logRe).map do |m|
     LogLine { level: m.get(:level, ""), msg: m.get(:msg, "") }
   end
 end

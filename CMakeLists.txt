@@ -98,6 +98,7 @@ add_library(kex_lib
     src/interpreter/stdlib/list.cxx
     src/interpreter/stdlib/string.cxx
     src/interpreter/stdlib/number.cxx
+    src/interpreter/stdlib/regex.cxx
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx
@@ -178,6 +179,34 @@ endif()
 
 target_include_directories(kex_lib SYSTEM PUBLIC ${GMP_INCLUDE})
 target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
+
+# PCRE2 backs the `Regex` module (src/stdlib/regex.kex). PCRE2 specifically,
+# not RE2 or std::regex: Erlang's `re` is built on PCRE, so this is the only
+# engine that gives the BEAM backend the same pattern *language* — see
+# docs/regex-plan.md's "Backend mapping". BSD-licensed, so unlike GMP above
+# there is no static/dynamic linking constraint here.
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Not yet built for wasm — see docs/regex-plan.md's open question on
+    # vendoring third_party/pcre2-wasm alongside gmp-wasm. Until that lands
+    # the wasm REPL builds without regex rather than failing to configure.
+    message(STATUS "PCRE2 not wired for wasm yet — Regex module unavailable")
+else()
+    find_library(PCRE2_LIB pcre2-8 HINTS /opt/homebrew/lib /usr/local/lib)
+    find_path(PCRE2_INCLUDE pcre2.h HINTS /opt/homebrew/include /usr/local/include)
+
+    if(NOT PCRE2_LIB OR NOT PCRE2_INCLUDE)
+        message(FATAL_ERROR
+            "PCRE2 (libpcre2-8) not found — required for the Regex module. "
+            "Install it (e.g. `brew install pcre2`) and re-run cmake.")
+    endif()
+
+    # PCRE2 requires the code-unit width to be chosen by the including
+    # translation unit; 8 means UTF-8 subjects, matching Kex's String
+    # representation and Erlang `re`'s binary subjects.
+    target_compile_definitions(kex_lib PRIVATE PCRE2_CODE_UNIT_WIDTH=8 KEX_HAVE_PCRE2=1)
+    target_include_directories(kex_lib SYSTEM PUBLIC ${PCRE2_INCLUDE})
+    target_link_libraries(kex_lib PUBLIC ${PCRE2_LIB})
+endif()
 
 # SHA-256 for KexI interface hashing: CommonCrypto on macOS, OpenSSL on Linux
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")

@@ -1,0 +1,65 @@
+# Regex — compiling, capturing, and the Match type.
+# `regex` returns Result because an arbitrary string may not be a valid
+# pattern; a Match keys captures by group number and by name.
+
+using Regex
+
+foul show(label, opt) do
+  match opt do
+    Just(v) -> IO.printLine("${label}: Just(${v})")
+    None    -> IO.printLine("${label}: None")
+  end
+end
+
+main do
+  # Compiling: Ok for a valid pattern, Error carrying position + message.
+  match regex("\\d+") do
+    Ok(re)   -> IO.printLine("ok: ${re.source}")
+    Error(_) -> IO.printLine("unexpected error")
+  end
+  match regex("(unclosed") do
+    Ok(_)    -> IO.printLine("unexpected ok")
+    Error(e) -> IO.printLine("error at ${e.position}: ${e.message}")
+  end
+
+  # Positional groups; 0 is the whole match.
+  match "order #4271 shipped".matches(regex("#(\\d+)").or(0)) do
+    Just(m) -> IO.printLine("${m.get(0, "")} / ${m.get(1, "")}")
+    None    -> IO.printLine("no match")
+  end
+
+  # A named group is reachable under BOTH its name and its number.
+  match "on 2026-07-28".matches(regex("(?<year>\\d{4})-(?<month>\\d{2})").or(0)) do
+    Just(m) -> IO.printLine("${m.get(:year, "?")}/${m.get(:month, "?")} = ${m.get(1, "?")}")
+    None    -> IO.printLine("no date")
+  end
+
+  # A group that did not participate is an absent key (None); a group that
+  # matched the empty string is present as Just(""). These must not collapse.
+  match "ac".matches(regex("(a)(b)?(c)").or(0)) do
+    Just(m) -> show("did not participate", m.get(2))
+    None    -> IO.printLine("no match")
+  end
+  match "ac".matches(regex("(a)(x*)(c)").or(0)) do
+    Just(m) -> show("matched empty", m.get(2))
+    None    -> IO.printLine("no match")
+  end
+
+  # A zero-width match is still a match, and group 0 is always present.
+  match "abc".matches(regex("x*").or(0)) do
+    Just(m) -> show("zero-width whole match", m.get(0))
+    None    -> IO.printLine("no match")
+  end
+
+  # matches? is unanchored — "does the pattern occur anywhere".
+  IO.printLine("substring: ${"xhellox".matches?(regex("hello").or(0))}")
+  IO.printLine("anchored:  ${"xhellox".matches?(regex("^hello$").or(0))}")
+
+  # Unicode/UCP is pinned on, so \d covers non-ASCII digits.
+  IO.printLine("ucp: ${"٤٢".matches?(regex("^\\d+$").or(0))}")
+
+  # quote escapes metacharacters so the text matches literally.
+  IO.printLine(Regex.quote("a.b*c"))
+  IO.printLine("a.b*c".matches?(regex(Regex.quote("a.b*c")).or(0)))
+  IO.printLine("aXbYc".matches?(regex(Regex.quote("a.b*c")).or(0)))
+end
