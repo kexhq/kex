@@ -977,6 +977,30 @@ int main() {
             );
             assertEqual(std::get<StringValue>(result->data).value, std::string("double(21) = 42"));
         });
+
+        it("does not interpolate raw backtick strings", []() {
+            auto result = run(
+                "main do\n"
+                "  let name = \"World\"\n"
+                "  `Hello, ${name}!`\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("Hello, ${name}!"));
+        });
+
+        it("evaluates dedented multiline raw strings", []() {
+            auto result = run(
+                "main do\n"
+                "  `\n"
+                "    first\n"
+                "      second\n"
+                "    `\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("first\n  second\n"));
+        });
     });
 
     describe("Interpreter — IO", []() {

@@ -819,6 +819,16 @@ int main() {
             auto out = emit("main do\n  let n = 42\n  \"${n}!\"\nend\n");
             assertTrue(contains(out, "unicode':'characters_to_binary'"), out);
         });
+
+        it("raw backtick strings bypass interpolation lowering", []() {
+            auto out = emit(
+                "main do\n"
+                "  let n = 42\n"
+                "  `value: ${n}`\n"
+                "end\n");
+            assertFalse(contains(out, "kex_io':'to_string'"), out);
+            assertFalse(contains(out, "unicode':'characters_to_binary'"), out);
+        });
     });
 
     describe("IR Core Erlang emitter — receiver-function dispatch", []() {

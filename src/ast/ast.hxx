@@ -148,7 +148,10 @@ struct Pattern {
 
 struct IntLiteral { std::string value; };
 struct FloatLiteral { std::string value; };
-struct StringLiteral { std::string value; };
+struct StringLiteral {
+    std::string value;
+    bool interpolating = true;
+};
 struct CharLiteral { char value; };
 struct BoolLiteral { bool value; };
 struct NoneLiteral {};

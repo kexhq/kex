@@ -93,6 +93,7 @@ enum class TokenType {
     Integer,
     Float,
     String,
+    RawString,      // `raw text`, multiline and non-interpolating
     Char,         // 'c'
     Atom,         // :identifier
 
@@ -112,6 +113,8 @@ struct Token {
     TokenType type;
     std::string value;
     SourceLocation location;
+    int startOffset = -1; // byte offset in the original UTF-8 source
+    int endOffset = -1;   // exclusive byte offset
 };
 
 auto tokenTypeName(TokenType type) -> std::string_view;

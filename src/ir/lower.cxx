@@ -275,7 +275,7 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                if (n.value.find("${") != std::string::npos)
+                if (n.interpolating && n.value.find("${") != std::string::npos)
                     return lowerInterpolatedString(n.value);
                 return lit(LitKind::String, n.value);
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
@@ -1979,7 +1979,11 @@ struct Lowering {
                 switch (pn.literal.type) {
                     case TokenType::Integer: out->litKind = LitKind::Int; out->litText = pn.literal.value; break;
                     case TokenType::Float:   out->litKind = LitKind::Float; out->litText = pn.literal.value; break;
-                    case TokenType::String:  out->litKind = LitKind::String; out->litText = pn.literal.value; break;
+                    case TokenType::String:
+                    case TokenType::RawString:
+                        out->litKind = LitKind::String;
+                        out->litText = pn.literal.value;
+                        break;
                     case TokenType::Char:    out->litKind = LitKind::Char; out->litText = pn.literal.value; break;
                     case TokenType::True:    out->litKind = LitKind::Bool; out->litBool = true; break;
                     case TokenType::False:   out->litKind = LitKind::Bool; out->litBool = false; break;

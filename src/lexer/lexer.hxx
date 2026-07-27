@@ -28,6 +28,7 @@ private:
     auto lexIdentifier() -> Token;
     auto lexNumber() -> Token;
     auto lexString() -> Token;
+    auto lexRawString() -> Token;
     auto lexChar() -> Token;
     auto lexAtom() -> Token;
     auto lexSpliceIdent() -> Token;
@@ -49,6 +50,7 @@ private:
     int m_column = 1;
     int m_tokenStartLine = 1;
     int m_tokenStartColumn = 1;
+    int m_tokenStartOffset = 0;
     int m_parenDepth = 0;
 };
 

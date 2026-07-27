@@ -47,6 +47,63 @@
 // so the completer can infer parameter types from pattern signatures.
 static std::string g_currentMakeTarget;
 
+// Lexical incompleteness shared by both REPLs. Block (`do`/`end`) continuation
+// is tracked separately because it is Kex grammar rather than delimiter state.
+// This scanner deliberately ignores delimiters inside strings and comments.
+static auto replHasOpenDelimiter(const std::string &source) -> bool {
+  enum class Mode { Normal, DoubleString, Char, RawString, Comment };
+  Mode mode = Mode::Normal;
+  int parens = 0;
+  int brackets = 0;
+  int braces = 0;
+
+  for (size_t i = 0; i < source.size(); i++) {
+    char c = source[i];
+    switch (mode) {
+      case Mode::Comment:
+        if (c == '\n') mode = Mode::Normal;
+        break;
+      case Mode::DoubleString:
+        if (c == '\\' && i + 1 < source.size()) {
+          i++;
+        } else if (c == '"') {
+          mode = Mode::Normal;
+        }
+        break;
+      case Mode::Char:
+        if (c == '\\' && i + 1 < source.size()) {
+          i++;
+        } else if (c == '\'') {
+          mode = Mode::Normal;
+        }
+        break;
+      case Mode::RawString:
+        if (c == '`') {
+          if (i + 1 < source.size() && source[i + 1] == '`')
+            i++;
+          else
+            mode = Mode::Normal;
+        }
+        break;
+      case Mode::Normal:
+        if (c == '#') mode = Mode::Comment;
+        else if (c == '"') mode = Mode::DoubleString;
+        else if (c == '\'') mode = Mode::Char;
+        else if (c == '`') mode = Mode::RawString;
+        else if (c == '(') parens++;
+        else if (c == ')' && parens > 0) parens--;
+        else if (c == '[') brackets++;
+        else if (c == ']' && brackets > 0) brackets--;
+        else if (c == '{') braces++;
+        else if (c == '}' && braces > 0) braces--;
+        break;
+    }
+  }
+
+  return mode == Mode::DoubleString || mode == Mode::RawString ||
+         parens > 0 || brackets > 0 || braces > 0;
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
@@ -1662,12 +1719,12 @@ int main(int argc, char *argv[]) {
       // accepted as a broken standalone clause. Matches the tree-walker.
       std::string source = input;
       int dc = countBlocks(source);
-      while (dc > 0) {
+      while (dc > 0 || replHasOpenDelimiter(source)) {
         auto [cont, contOk] = readLine("  ...> ");
         if (!contOk)
           break;
         source += "\n" + cont;
-        dc += countBlocks(cont);
+        dc = countBlocks(source);
       }
       if (dc == 0) {
         if (auto name = clauseFuncName(source)) {
@@ -2215,13 +2272,13 @@ int main(int argc, char *argv[]) {
         g_currentMakeTarget =
             (sp != std::string::npos) ? rest.substr(0, sp) : rest;
       }
-      while (doCount > 0) {
+      while (doCount > 0 || replHasOpenDelimiter(source)) {
         auto [contLine, contOk] = readLine("...> ");
         if (!contOk)
           break;
         line = contLine;
         source += "\n" + line;
-        doCount += countBlocks(line);
+        doCount = implicitDo ? 1 + countBlocks(source) : countBlocks(source);
       }
 
       // If this line starts a function clause definition, keep reading

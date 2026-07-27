@@ -969,6 +969,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::floating(std::stod(node.value));
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+            if (!node.interpolating) return Value::string(node.value);
             // Handle interpolation: find ${...} and evaluate in current scope
             std::string result;
             const auto& s = node.value;
@@ -2326,7 +2327,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 auto valueInt = asInteger(value);
                 return valueInt && *valueInt == mpz_class(pat.literal.value);
             }
-            if (pat.literal.type == TokenType::String) {
+            if (pat.literal.type == TokenType::String ||
+                pat.literal.type == TokenType::RawString) {
                 auto* sv = std::get_if<StringValue>(&value->data);
                 return sv && sv->value == pat.literal.value;
             }

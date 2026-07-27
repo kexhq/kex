@@ -63,6 +63,7 @@ auto runFileOk(const std::string& path) -> bool {
 int main() {
     describe("Examples — All Parse", []() {
         it("basics.kex", []() { assertTrue(parseFile("examples/basics.kex")); });
+        it("backticks.kex", []() { assertTrue(parseFile("examples/backticks.kex")); });
         it("closures.kex", []() { assertTrue(parseFile("examples/closures.kex")); });
         it("error_handling.kex", []() { assertTrue(parseFile("examples/error_handling.kex")); });
         it("generics.kex", []() { assertTrue(parseFile("examples/generics.kex")); });
@@ -123,6 +124,7 @@ int main() {
     // surfaces that. Every example is expected to run without throwing.
     describe("Examples — All Run", []() {
         it("basics.kex", []() { assertTrue(runFileOk("examples/basics.kex")); });
+        it("backticks.kex", []() { assertTrue(runFileOk("examples/backticks.kex")); });
         it("closures.kex", []() { assertTrue(runFileOk("examples/closures.kex")); });
         it("compiled_sql.kex", []() { assertTrue(runFileOk("examples/compiled_sql.kex")); });
         it("compiled_css.kex", []() { assertTrue(runFileOk("examples/compiled_css.kex")); });

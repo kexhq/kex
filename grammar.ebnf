@@ -262,6 +262,7 @@ literal
   = INTEGER
   | FLOAT
   | STRING
+  | RAW_STRING
   | TRUE
   | FALSE
   | NONE
@@ -500,6 +501,8 @@ STRING  = '"' string_content* '"' ;
 string_content = [^"$\\] | escape | interpolation ;
 escape = "\\" [nrt\\$"] ;
 interpolation = "$" "{" expr "}" ;
+RAW_STRING = "`" raw_string_content* "`" ;
+raw_string_content = "``" | [^`] ;
 
 (* Comments *)
 COMMENT = "#" [^\n]* ;

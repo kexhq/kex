@@ -737,7 +737,8 @@ auto Parser::parseParam() -> ast::Param {
 
     // Literal pattern (including negative numeric literals, e.g. -10)
     if (check(TokenType::Integer) || check(TokenType::Float) ||
-        check(TokenType::String) || check(TokenType::Char) ||
+        check(TokenType::String) || check(TokenType::RawString) ||
+        check(TokenType::Char) ||
         check(TokenType::True) || check(TokenType::False) ||
         check(TokenType::None) || check(TokenType::Atom) ||
         (check(TokenType::Minus) &&
@@ -1318,6 +1319,10 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     }
     if (check(TokenType::String)) {
         expr->kind = ast::StringLiteral{advance().value};
+        return expr;
+    }
+    if (check(TokenType::RawString)) {
+        expr->kind = ast::StringLiteral{advance().value, false};
         return expr;
     }
     if (check(TokenType::Char)) {
@@ -2446,7 +2451,8 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     // Map: { key: value, ... }
     // Lambda: { expr }
     // Heuristic: if first token is string/ident followed by colon, it's a map
-    if ((check(TokenType::String) || check(TokenType::LowerIdent)) &&
+    if ((check(TokenType::String) || check(TokenType::RawString) ||
+         check(TokenType::LowerIdent)) &&
         peekNext().type == TokenType::Colon) {
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;
@@ -2579,7 +2585,8 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 
     // Literals
     if (check(TokenType::Integer) || check(TokenType::Float) ||
-        check(TokenType::String) || check(TokenType::Char) ||
+        check(TokenType::String) || check(TokenType::RawString) ||
+        check(TokenType::Char) ||
         check(TokenType::True) || check(TokenType::False) ||
         check(TokenType::None) || check(TokenType::Atom)) {
         pattern->kind = ast::LiteralPattern{advance()};
@@ -2595,7 +2602,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
                 skipNewlines();
                 ast::FieldPattern field;
 
-                if (check(TokenType::String)) {
+                if (check(TokenType::String) || check(TokenType::RawString)) {
                     field.isStringKey = true;
                     field.name = advance().value;
                 } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
@@ -2977,6 +2984,7 @@ auto Parser::isAtExprStart() const -> bool {
         case TokenType::Integer:
         case TokenType::Float:
         case TokenType::String:
+        case TokenType::RawString:
         case TokenType::Char:
         case TokenType::True:
         case TokenType::False:

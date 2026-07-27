@@ -447,6 +447,17 @@ int main() {
                 interfaces, "foul"));
         });
 
+        it("rejects ambient ENV access from a pure function", []() {
+            assertTrue(hasError(
+                "let home() = ENV.get(\"HOME\")\n",
+                "foul"));
+        });
+
+        it("allows pure access to an explicit environment map", []() {
+            assertTrue(noErrors(
+                "let home(env: {String: String}) = env.get(\"HOME\")\n"));
+        });
+
         it("allows Kex.Intrinsic calls from pure context", []() {
             assertTrue(noErrors(
                 "make Map<K, V> do\n"

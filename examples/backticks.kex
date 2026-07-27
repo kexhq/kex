@@ -1,0 +1,35 @@
+# Backtick strings — raw literals and multiline dedentation.
+# Tagged literals and `$`-marked interpolation are staged separately in
+# docs/strings-and-tags-plan.md.
+
+# Backslashes, quotes, slashes, and `${...}` are ordinary text.
+let path = `C:\Users\akos\Devel`
+let pattern = `\d{3}-\d{4}`
+let interpolationSyntax = `hello ${name}`
+
+# Double a backtick to include it. Backslashes never act as escapes.
+let quoted = `Kex calls these ``raw literals``.`
+let trailingSlash = `C:\temp\`
+
+# The exact whitespace before a closing backtick on its own line is removed
+# from every nonblank content line.
+let query = `
+    SELECT id, email
+    FROM users
+    WHERE active = true
+    `
+
+# A flush-left closing backtick preserves the content indentation.
+let banner = `
+  * * *
+`
+
+main(_args) do
+  IO.printLine(path)
+  IO.printLine(pattern)
+  IO.printLine(interpolationSyntax)
+  IO.printLine(quoted)
+  IO.printLine(trailingSlash)
+  IO.print(query)
+  IO.print(banner)
+end
