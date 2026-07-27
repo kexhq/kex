@@ -693,33 +693,44 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
             << kex::color::apply(kex::color::reset) << " "
             << colorizeMessage(diag.message) << "\n";
 
-  if (!diag.endLocation)
-    return;
-  auto source = readFile(std::string(diag.location.file));
-  if (source.empty())
-    return;
-  std::istringstream lines{source};
-  std::string line;
-  for (int current = 1;
-       current <= diag.location.line && std::getline(lines, line);
-       ++current) {
-    if (current != diag.location.line)
-      continue;
-    const auto start =
-        std::max(1, diag.location.column);
-    int finish = static_cast<int>(line.size()) + 1;
-    if (diag.endLocation->line == diag.location.line)
-      finish = std::max(start + 1, diag.endLocation->column);
-    const auto width = std::max(1, finish - start);
-    std::cerr << "  " << current << " | " << line << "\n"
-              << "    | " << std::string(static_cast<size_t>(start - 1), ' ')
-              << kex::color::apply(
-                     isError ? kex::color::red : kex::color::magenta)
-              << "^" << std::string(static_cast<size_t>(width - 1), '~')
-              << kex::color::apply(kex::color::reset) << "\n";
-    if (diag.endLocation->line != diag.location.line)
-      std::cerr << "    | ... through line " << diag.endLocation->line
-                << ", column " << diag.endLocation->column << "\n";
+  if (diag.endLocation) {
+    auto source = readFile(std::string(diag.location.file));
+    if (!source.empty()) {
+      std::istringstream lines{source};
+      std::string line;
+      for (int current = 1;
+           current <= diag.location.line && std::getline(lines, line);
+           ++current) {
+        if (current != diag.location.line)
+          continue;
+        const auto start = std::max(1, diag.location.column);
+        int finish = static_cast<int>(line.size()) + 1;
+        if (diag.endLocation->line == diag.location.line)
+          finish = std::max(start + 1, diag.endLocation->column);
+        const auto width = std::max(1, finish - start);
+        std::cerr << "  " << current << " | " << line << "\n"
+                  << "    | "
+                  << std::string(static_cast<size_t>(start - 1), ' ')
+                  << kex::color::apply(
+                         isError ? kex::color::red : kex::color::magenta)
+                  << "^" << std::string(static_cast<size_t>(width - 1), '~')
+                  << kex::color::apply(kex::color::reset) << "\n";
+        if (diag.endLocation->line != diag.location.line)
+          std::cerr << "    | ... through line " << diag.endLocation->line
+                    << ", column " << diag.endLocation->column << "\n";
+      }
+    }
+  }
+
+  for (const auto &note : diag.notes) {
+    std::cerr << kex::color::apply(kex::color::gray)
+              << note.location.file << ":" << note.location.line << ":"
+              << note.location.column << ":"
+              << kex::color::apply(kex::color::reset) << " "
+              << kex::color::apply(kex::color::bold)
+              << kex::color::apply(kex::color::cyan) << "note:"
+              << kex::color::apply(kex::color::reset) << " "
+              << note.message << "\n";
   }
 }
 
@@ -3190,6 +3201,26 @@ int main(int argc, char *argv[]) {
                     << "    \"end_column\": " << d.endLocation->column;
         if (!hint.empty())
           std::cout << ",\n    \"hint\": \"" << jsonEscape(hint) << "\"";
+        if (!d.notes.empty()) {
+          std::cout << ",\n    \"notes\": [\n";
+          for (size_t noteIndex = 0; noteIndex < d.notes.size();
+               ++noteIndex) {
+            const auto &note = d.notes[noteIndex];
+            std::cout << "      {\n"
+                      << "        \"file\": \""
+                      << jsonEscape(std::string(note.location.file))
+                      << "\",\n"
+                      << "        \"line\": " << note.location.line << ",\n"
+                      << "        \"column\": " << note.location.column
+                      << ",\n"
+                      << "        \"message\": \""
+                      << jsonEscape(note.message) << "\"\n"
+                      << "      }"
+                      << (noteIndex + 1 < d.notes.size() ? "," : "")
+                      << "\n";
+          }
+          std::cout << "    ]";
+        }
         std::cout << "\n  }" << (i + 1 < allDiags.size() ? "," : "") << "\n";
       }
       std::cout << "]\n";

@@ -263,6 +263,12 @@ int main() {
                 diagnostics,
                 semantic::Diagnostic::Level::Error,
                 "timed out"));
+            assertEqual(diagnostics.size(), size_t(1));
+            assertEqual(diagnostics[0].notes.size(), size_t(1));
+            assertTrue(
+                diagnostics[0].notes[0].message.find(
+                    "triggered by tagged literal `demo`") !=
+                std::string::npos);
         });
 
         it("reports validator crashes against the companion", []() {
@@ -277,6 +283,15 @@ int main() {
                 diagnostics,
                 semantic::Diagnostic::Level::Error,
                 "crashed"));
+            assertEqual(diagnostics.size(), size_t(1));
+            assertEqual(diagnostics[0].notes.size(), size_t(1));
+            assertTrue(
+                diagnostics[0].notes[0].message.find(
+                    "triggered by tagged literal `demo`") !=
+                std::string::npos);
+            assertTrue(
+                diagnostics[0].notes[0].location.line >
+                diagnostics[0].location.line);
         });
     });
 

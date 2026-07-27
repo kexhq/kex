@@ -78,6 +78,16 @@ const std::string RANGED_VALIDATION_SRC =
     "[TaggedValidation.warnBetween(1, 3, \"ranged warning\")]\n"
     "main do demo`abcde` end\n";
 
+const std::string CRASHING_VALIDATION_SRC =
+    "let demo(parts: [String], values: [Any]) -> String = "
+    "parts.first.or(\"\")\n"
+    "let validateDemo(source: String) -> [TaggedValidation.Issue] do\n"
+    "  match source do\n"
+    "    \"never\" -> []\n"
+    "  end\n"
+    "end\n"
+    "main do demo`abcde` end\n";
+
 } // namespace
 
 int main() {
@@ -181,6 +191,33 @@ int main() {
                        "missing JSON end line: " + out);
             assertTrue(contains(out, "\"end_column\": 17"),
                        "missing JSON end column: " + out);
+        });
+
+        it("points validator crashes back to the triggering literal", []() {
+            auto path = writeTempSource(CRASHING_VALIDATION_SRC);
+            auto out =
+                runKex({"--no-colors", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, ":2:1: error: Compile-time validator "
+                                     "`validateDemo` crashed:"),
+                       "missing primary validator diagnostic: " + out);
+            assertTrue(contains(out, ":7:9: note: triggered by tagged literal "
+                                     "`demo`"),
+                       "missing triggering-literal note: " + out);
+        });
+
+        it("includes validator trigger notes in JSON", []() {
+            auto path = writeTempSource(CRASHING_VALIDATION_SRC);
+            auto out = runKex({"--json", "--check", path}, "");
+            std::remove(path.c_str());
+            assertTrue(contains(out, "\"notes\": ["),
+                       "missing JSON notes array: " + out);
+            assertTrue(contains(out, "\"line\": 7"),
+                       "missing JSON note line: " + out);
+            assertTrue(
+                contains(out, "\"message\": \"triggered by tagged literal "
+                              "`demo`\""),
+                "missing JSON note message: " + out);
         });
     });
 

@@ -199,7 +199,9 @@ by their starting position, with whole-literal issues last.
 
 Only raw tagged literals are checked. Interpolating tags and ordinary function
 calls remain runtime operations. Each validator invocation has a compiler-owned
-one-second timeout.
+one-second timeout. If a validator crashes or times out, the primary diagnostic
+points to its definition and a note points to the tagged literal that triggered
+the evaluation.
 
 ### Keywords
 

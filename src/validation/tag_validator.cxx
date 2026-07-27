@@ -526,18 +526,26 @@ auto validateTaggedLiterals(
                 timeout);
             appendIssues(result, use, companion, diagnostics);
         } catch (const interpreter::EvaluationTimeout&) {
-            diagnostics.push_back({
+            semantic::Diagnostic diagnostic{
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,
-                "Compile-time validator `" + companion +
+                "Compile-time validator `" + companionKey +
                     "` timed out after " +
-                    std::to_string(timeout.count()) + " ms"});
+                    std::to_string(timeout.count()) + " ms"};
+            diagnostic.notes.push_back({
+                use.expr->location,
+                "triggered by tagged literal `" + use.literal->tag + "`"});
+            diagnostics.push_back(std::move(diagnostic));
         } catch (const std::exception& error) {
-            diagnostics.push_back({
+            semantic::Diagnostic diagnostic{
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,
-                "Compile-time validator `" + companion +
-                    "` crashed: " + error.what()});
+                "Compile-time validator `" + companionKey +
+                    "` crashed: " + error.what()};
+            diagnostic.notes.push_back({
+                use.expr->location,
+                "triggered by tagged literal `" + use.literal->tag + "`"});
+            diagnostics.push_back(std::move(diagnostic));
         }
     }
     return diagnostics;
