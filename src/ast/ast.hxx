@@ -281,6 +281,19 @@ struct SpawnExpr {
     std::vector<ExprPtr> body;
 };
 
+struct TryExpr {
+    ExprPtr operand;
+};
+
+struct RescueBlock {
+    std::vector<MatchClause> clauses;
+    bool isCatchAll = false;
+    std::string catchAllParam;
+    std::vector<ExprPtr> catchAllBody;
+    bool isInlineReturn = false;
+    ExprPtr inlineReturnExpr;
+};
+
 struct LambdaParam {
     std::string name;
     std::optional<TypeExprPtr> type;
@@ -289,6 +302,7 @@ struct LambdaParam {
 struct Lambda {
     std::vector<LambdaParam> params;
     std::vector<ExprPtr> body;
+    std::optional<RescueBlock> rescue;
 };
 
 struct ShorthandLambda {
@@ -323,19 +337,6 @@ struct CurryExpr {
 
 struct BlockExpr {
     std::vector<ExprPtr> body;
-};
-
-struct TryExpr {
-    ExprPtr operand;
-};
-
-struct RescueBlock {
-    std::vector<MatchClause> clauses;
-    bool isCatchAll = false;
-    std::string catchAllParam;
-    std::vector<ExprPtr> catchAllBody;
-    bool isInlineReturn = false;
-    ExprPtr inlineReturnExpr;
 };
 
 struct TryingExpr {

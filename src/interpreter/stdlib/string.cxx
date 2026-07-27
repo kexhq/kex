@@ -64,6 +64,27 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
     });
 
+    regCharPredicate("letter?", "is_letter", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("letter? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("letter? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+    });
+
+    regCharPredicate("upper?", "is_upper", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("upper? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("upper? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(std::isupper(static_cast<unsigned char>(c->value)) != 0);
+    });
+
+    regCharPredicate("lower?", "is_lower", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) throw std::runtime_error("lower? expects a Char, got no argument");
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) throw std::runtime_error("lower? expects a Char, got " + args[0]->typeName());
+        return Value::boolean(std::islower(static_cast<unsigned char>(c->value)) != 0);
+    });
+
     regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);

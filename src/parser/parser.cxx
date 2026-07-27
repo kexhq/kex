@@ -2095,7 +2095,8 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
                     params.push_back(std::move(lp));
                 }
                 lambda->kind = ast::Lambda{
-                    std::move(params), std::move(funcDef->clauses[0].body)};
+                    std::move(params), std::move(funcDef->clauses[0].body),
+                    std::move(funcDef->clauses[0].rescue)};
             } else {
                 lambda->kind = ast::Lambda{{}, {}};
             }
@@ -2861,6 +2862,7 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
     if (match(TokenType::Rescue)) {
         skipNewlines();
         block->rescue = parseRescueBlock();
+        skipNewlines();
     }
 
     expect(TokenType::End, "Expected 'end' to close main block");

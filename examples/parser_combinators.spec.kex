@@ -1,0 +1,199 @@
+type ParseError = Unexpected(String, Int) | NoMatch(Int)
+
+record Parser do
+  input : String
+  pos   : Int = 0
+end
+
+make Parser do
+  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
+  let advance = Parser { input: @input, pos: @pos + 1 }
+  let remaining = @input.slice(@pos, @input.count)
+
+  let charWhen(pred: Char -> Bool) -> Result<(Char, Parser), ParseError> do
+    match this.peek do
+      Just(c) when pred(c) -> Ok((c, this.advance))
+      Just(c) -> Error(Unexpected("${c}", @pos))
+      None    -> Error(Unexpected("EOF", @pos))
+    end
+  end
+
+  let char(expected: Char) -> Result<(Char, Parser), ParseError> do
+    this.charWhen { |c| c == expected }
+  end
+
+  let many(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) do
+    var results: [a] = []
+    var p = this
+    loop
+      trying do
+        let (v, p2) = f(p).try
+        results.push!(v)
+        p = p2
+      rescue return (results, p)
+      end
+    end
+  end
+
+  let some(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) or! ParseError do
+    let (first, p) = f(this).try
+    let (rest, p2) = p.many(f)
+    Ok(([first, ...rest], p2))
+  end
+
+  let choice(alts: [Parser -> Result<(a, Parser), ParseError>]) -> (a, Parser) or! ParseError do
+    var i = 0
+    loop
+      break if i >= alts.count
+      trying do
+        let f = alts.at(i)
+        let result = f(this).try
+        return Ok(result)
+      rescue
+        _ -> i = i + 1
+      end
+    end
+    Error(NoMatch(@pos))
+  end
+end
+
+describe("Parser combinators with .try/rescue") do
+  describe("charWhen") do
+    it("succeeds on matching char") do
+      let p = Parser { input: "abc" }
+      let result = p.charWhen(&.lower?)
+      match result do
+        Ok((c, p2)) -> do
+          assert(c == 'a')
+          assert(p2.pos == 1)
+        end
+        _ -> assert(false)
+      end
+    end
+
+    it("fails on non-matching char") do
+      let p = Parser { input: "123" }
+      let result = p.charWhen(&.lower?)
+      match result do
+        Error(_) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe("many") do
+    it("collects zero matches") do
+      let p = Parser { input: "abc" }
+      let (chars, p2) = p.many { |p| p.charWhen(&.digit?) }
+      assert(chars.count == 0)
+      assert(p2.pos == 0)
+    end
+
+    it("collects multiple matches") do
+      let p = Parser { input: "123abc" }
+      let (chars, p2) = p.many { |p| p.charWhen(&.digit?) }
+      assert(chars.count == 3)
+      assert(chars.join("") == "123")
+      assert(p2.pos == 3)
+    end
+
+    it("collects all matches to end") do
+      let p = Parser { input: "xyz" }
+      let (chars, p2) = p.many { |p| p.charWhen(&.lower?) }
+      assert(chars.count == 3)
+      assert(chars.join("") == "xyz")
+      assert(p2.pos == 3)
+    end
+  end
+
+  describe("some") do
+    it("succeeds with one or more matches") do
+      let p = Parser { input: "42abc" }
+      let result = p.some { |p| p.charWhen(&.digit?) }
+      match result do
+        Ok((digits, p2)) -> do
+          assert(digits.join("") == "42")
+          assert(p2.pos == 2)
+        end
+        _ -> assert(false)
+      end
+    end
+
+    it("fails with zero matches") do
+      let p = Parser { input: "abc" }
+      let result = p.some { |p| p.charWhen(&.digit?) }
+      match result do
+        Error(_) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe("choice") do
+    it("returns first successful alternative") do
+      let p = Parser { input: "+" }
+      let result = p.choice([
+        { |p| p.char('+') },
+        { |p| p.char('-') },
+      ])
+      match result do
+        Ok((c, _)) -> assert(c == '+')
+        _ -> assert(false)
+      end
+    end
+
+    it("tries alternatives in order") do
+      let p = Parser { input: "-" }
+      let result = p.choice([
+        { |p| p.char('+') },
+        { |p| p.char('-') },
+      ])
+      match result do
+        Ok((c, _)) -> assert(c == '-')
+        _ -> assert(false)
+      end
+    end
+
+    it("fails when no alternative matches") do
+      let p = Parser { input: "x" }
+      let result = p.choice([
+        { |p| p.char('+') },
+        { |p| p.char('-') },
+      ])
+      match result do
+        Error(NoMatch(_)) -> assert(true)
+        _ -> assert(false)
+      end
+    end
+  end
+
+  describe(".try propagation") do
+    it("propagates Error to function-level rescue") do
+      let parseDigit(input: String) -> String do
+        let p = Parser { input: input }
+        let (c, _) = p.charWhen(&.digit?).try
+        "digit: ${c}"
+      rescue
+        _ -> "not a digit"
+      end
+
+      assert(parseDigit("5") == "digit: 5")
+      assert(parseDigit("x") == "not a digit")
+    end
+
+    it("propagates through nested .try calls") do
+      let parseTwoDigits(input: String) -> String do
+        let p = Parser { input: input }
+        let (d1, p2) = p.charWhen(&.digit?).try
+        let (d2, _) = p2.charWhen(&.digit?).try
+        "${d1}${d2}"
+      rescue
+        Unexpected(ch, pos) -> "unexpected ${ch} at ${pos}"
+      end
+
+      assert(parseTwoDigits("42") == "42")
+      assert(parseTwoDigits("4x") == "unexpected x at 1")
+      assert(parseTwoDigits("xy") == "unexpected x at 0")
+    end
+  end
+end

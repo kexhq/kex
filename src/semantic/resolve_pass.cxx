@@ -446,6 +446,12 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             pushScope();
             for (const auto& p : node.params) defineLocal(p.name);
             resolveBody(node.body);
+            if (node.rescue) {
+                for (const auto& clause : node.rescue->clauses)
+                    if (clause.body) resolveExpr(*clause.body);
+                resolveBody(node.rescue->catchAllBody);
+                if (node.rescue->inlineReturnExpr) resolveExpr(*node.rescue->inlineReturnExpr);
+            }
             popScope();
         }
         else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {

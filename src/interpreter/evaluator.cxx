@@ -1334,7 +1334,20 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             std::vector<ValuePtr> elements;
             for (const auto& elem : node.elements) {
-                elements.push_back(elem ? eval(*elem) : Value::none());
+                if (elem) {
+                    if (auto* spread = std::get_if<ast::SpreadExpr>(&elem->kind)) {
+                        auto val = eval(*spread->inner);
+                        if (auto* list = std::get_if<ListValue>(&val->data)) {
+                            elements.insert(elements.end(), list->elements.begin(), list->elements.end());
+                        } else {
+                            elements.push_back(val);
+                        }
+                    } else {
+                        elements.push_back(eval(*elem));
+                    }
+                } else {
+                    elements.push_back(Value::none());
+                }
             }
             if (node.rest) {
                 auto tailVal = eval(**node.rest);
@@ -1501,8 +1514,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 paramNames.push_back(p.name);
             }
 
+            const ast::RescueBlock* rescuePtr = node.rescue ? &*node.rescue : nullptr;
             lambda->data = FunctionValue{"<lambda>",
-                [this, bodyPtr, paramNames, capturedEnv](std::vector<ValuePtr> args) -> ValuePtr {
+                [this, bodyPtr, paramNames, capturedEnv, rescuePtr](std::vector<ValuePtr> args) -> ValuePtr {
                     auto prevEnv = m_env;
                     m_env = std::make_shared<Environment>(capturedEnv);
                     // If the lambda expects multiple params but receives a single
@@ -1525,6 +1539,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     // same reasoning as the MatchExpr/function-clause guards.
                     try {
                         result = evalBody(*bodyPtr);
+                    } catch (TryException& e) {
+                        if (rescuePtr) {
+                            result = evalRescue(*rescuePtr, e.error(), {});
+                        } else {
+                            m_env = prevEnv;
+                            throw;
+                        }
                     } catch (ReturnException& ret) {
                         result = ret.value();
                     } catch (...) {
@@ -2579,7 +2600,7 @@ auto Evaluator::popEnv() -> void {
 auto Evaluator::evalRescue(const ast::RescueBlock& rescue, const ValuePtr& error,
                            SourceLocation loc) -> ValuePtr {
     if (rescue.isInlineReturn) {
-        return eval(*rescue.inlineReturnExpr);
+        throw ReturnException(eval(*rescue.inlineReturnExpr));
     }
 
     if (rescue.isCatchAll) {

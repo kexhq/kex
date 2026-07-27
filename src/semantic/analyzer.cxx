@@ -451,6 +451,12 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
             m_loopScopes.push_back(LoopScope::Closure);
             analyzeBody(node.body);
+            if (node.rescue) {
+                for (const auto& clause : node.rescue->clauses)
+                    if (clause.body) analyzeExpr(*clause.body);
+                analyzeBody(node.rescue->catchAllBody);
+                if (node.rescue->inlineReturnExpr) analyzeExpr(*node.rescue->inlineReturnExpr);
+            }
             m_loopScopes.pop_back();
             m_symbols.popScope();
         }
