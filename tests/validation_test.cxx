@@ -34,7 +34,7 @@ auto validate(
     auto program = parser.parseProgram();
     semantic::Analyzer analyzer;
     if (!analyzer.analyze(program)) return analyzer.diagnostics();
-    return validation::validateTaggedLiterals(program, analyzer, timeout);
+    return validation::validateTaggedLiterals(program, analyzer, {}, timeout);
 }
 
 auto validateFile(const std::string& source)

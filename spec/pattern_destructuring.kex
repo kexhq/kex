@@ -1,0 +1,39 @@
+# Destructuring bindings and nested constructor patterns, on both backends.
+# `let Just(x) = ...` is a pattern binding, not a definition — the REPL used to
+# read it as defining a function named `Just`.
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+type Shape = Circle(Integer) | Rect(Integer, Integer)
+
+main do
+  # Simple constructor pattern.
+  let Just(value) = Just(42)
+  IO.printLine(value)
+
+  # Tuple pattern binds every name.
+  let (left, right) = (1, 2)
+  IO.printLine(left + right)
+
+  # Nested: a constructor inside a constructor.
+  let Just(Circle(radius)) = Just(Circle(7))
+  IO.printLine(radius)
+
+  # Multi-payload constructor.
+  let Rect(width, height) = Rect(3, 4)
+  IO.printLine(width * height)
+
+  # Record pattern by field name.
+  let { x: px, y: py } = Point { x: 5, y: 6 }
+  IO.printLine(px + py)
+
+  # A wrong-arity pattern simply fails to match in a `match` (no crash).
+  match Just(1) do
+    Circle(r) -> IO.printLine("circle ${r}")
+    Just(n)   -> IO.printLine("just ${n}")
+    _         -> IO.printLine("other")
+  end
+end

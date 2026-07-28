@@ -168,6 +168,7 @@ private:
     auto registerListBuiltins() -> void;
     auto registerStringBuiltins() -> void;
     auto registerNumberBuiltins() -> void;
+    auto registerRegexBuiltins() -> void;
     auto registerStreamBuiltins() -> void;
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;

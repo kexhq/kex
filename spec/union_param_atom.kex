@@ -1,0 +1,36 @@
+# A union-typed parameter must accept every member, from anywhere. `Atom` was
+# missing from the typechecker's primitive-name table, so the annotation
+# resolved to an unregistered named type while an atom literal infers the
+# primitive — same printed name, different kind. The result was the
+# self-contradictory "expects argument 2 to be Atom | Integer, but got Atom",
+# but only for calls outside `main`. Regression test for both backends.
+
+# NOTE: the field is `slots`, not `items` or `entries`. A user record field
+# whose name matches a prelude method (Range.items, Map.entries) is silently
+# routed to THAT method on BEAM instead of the field, failing at runtime with
+# if_clause/badmap — a separate pre-existing bug, avoided here so this spec
+# tests the union parameter it is about.
+record Holder do
+  slots : Map<Any, String>
+end
+
+make Holder do
+  pick :> (Atom | Integer) -> String
+  let pick(key) = this.slots.get(key, "none")
+end
+
+let byAtom(h: Holder) -> String do
+  return h.pick(:name)
+end
+
+let byInteger(h: Holder) -> String do
+  return h.pick(1)
+end
+
+main do
+  let h = Holder { slots: { name: "Ada" }.put(1, "first") }
+  IO.printLine(h.pick(:name))
+  IO.printLine(byAtom(h))
+  IO.printLine(byInteger(h))
+  IO.printLine(h.pick(:missing))
+end

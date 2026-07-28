@@ -194,6 +194,7 @@ spec-wasm: build-wasm
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then continue; fi; \
+		if grep -q "# kex: skip-wasm" "$$f" 2>/dev/null; then continue; fi; \
 		actual=$$(timeout 8 node $(WASM_BUILD_DIR)/kex.js $$kex_flags "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \

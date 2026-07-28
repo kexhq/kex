@@ -1,6 +1,6 @@
 #pragma once
 // KexI chunk: combined type interface + structural metadata for one Kex
-// module, stored as a custom BEAM chunk in ETF format. See docs/kexm-plan.md.
+// module, stored as a custom BEAM chunk in ETF format.
 #include "etf.hxx"
 #include "../module/package_metadata.hxx"
 #include <array>

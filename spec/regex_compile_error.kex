@@ -1,0 +1,19 @@
+# A malformed pattern in a tagged literal is a COMPILE error, not a runtime
+# failure — the compiler runs the module's `validateRegex` companion and maps
+# the engine's byte offset back onto the literal. Nothing about regex is
+# special-cased: the same `validate<Tag>` convention works for any tag.
+#
+# kex: check-only
+
+# kex: skip-wasm
+#
+# Skipped on the wasm build: it has no PCRE2 — building PCRE2 for wasm32 is a
+# vendored-dependency pipeline like gmp-wasm and is not done yet, so every
+# Regex call raises "Regex is unavailable in this build".
+
+using Regex
+
+main do
+  let bad = regex`(unclosed`
+  IO.printLine(bad.source)
+end

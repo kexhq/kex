@@ -157,6 +157,14 @@ private:
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
+    // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to
+    // reject a pattern that destructures the wrong number of values.
+    std::unordered_map<std::string, size_t> m_constructorArity;
+    // Make-block methods that carry a `:>` declaration. That declaration is
+    // authoritative, so the inferred signature of its `let` must not be
+    // registered alongside it as a second, permissive overload.
+    std::unordered_set<std::string> m_annotatedMethods;
+    auto checkPatternArity(const ast::Pattern& pattern) -> void;
     std::unordered_set<std::string> m_nullaryConstructors;
 
     // Record field types: typeName -> { fieldName -> TypePtr }.

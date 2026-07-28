@@ -67,6 +67,7 @@ int main() {
         it("closures.kex", []() { assertTrue(parseFile("examples/closures.kex")); });
         it("error_handling.kex", []() { assertTrue(parseFile("examples/error_handling.kex")); });
         it("generics.kex", []() { assertTrue(parseFile("examples/generics.kex")); });
+        it("regexes.kex", []() { assertTrue(parseFile("examples/regexes.kex")); });
         it("json_parser.kex", []() { assertTrue(parseFile("examples/json_parser.kex")); });
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
@@ -148,6 +149,7 @@ int main() {
         it("processes.kex", []() { assertTrue(runFileOk("examples/processes.kex")); });
         it("real_world.kex", []() { assertTrue(runFileOk("examples/real_world.kex")); });
         it("records.kex", []() { assertTrue(runFileOk("examples/records.kex")); });
+        it("regexes.kex", []() { assertTrue(runFileOk("examples/regexes.kex")); });
         it("stdlib_demo.kex", []() { assertTrue(runFileOk("examples/stdlib_demo.kex")); });
         it("test_union.kex", []() { assertTrue(runFileOk("examples/test_union.kex")); });
         it("types.kex", []() { assertTrue(runFileOk("examples/types.kex")); });

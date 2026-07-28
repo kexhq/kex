@@ -1,0 +1,23 @@
+# A constructor pattern that destructures the wrong number of values is a
+# COMPILE error. It used to reach the backends: the interpreter failed at
+# runtime with "pattern mismatch — expected Just", and BEAM emitted Core Erlang
+# that erlc rejected outright. A constructor's arity is known statically.
+#
+# kex: check-only
+
+record Pair do
+  a : Integer
+  b : Integer
+end
+
+main do
+  # ADT constructor: Just carries one value.
+  let Just(x, y) = Just(1)
+  # Locally defined record: Pair has two fields.
+  let Pair(only) = Pair { a: 1, b: 2 }
+  # Imported record: ParseError has five. Its field count crosses the
+  # interface boundary, so this is caught too rather than failing at runtime
+  # with `if_clause` on BEAM.
+  let Error(ParseError(err)) = Integer.parse("12x")
+  IO.printLine(x)
+end

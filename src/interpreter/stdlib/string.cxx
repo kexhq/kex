@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "regex_support.hxx"
 #include <cctype>
 #include <stdexcept>
 
@@ -137,6 +138,18 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
+
+        // A Regex separator dispatches to the regex engine, so `str.split(re)`
+        // and `str.split(",")` share this one UFCS name. Constructing a Regex
+        // requires `using Regex`, so this path is unreachable without it.
+        if (args.size() >= 2 && regexsupport::isRegex(args[1])) {
+            int64_t limit = 0;
+            if (args.size() >= 3)
+                if (auto* i = std::get_if<IntValue>(&args[2]->data)) limit = i->value;
+            if (auto fields = regexsupport::split(str->value, args[1], limit))
+                return Value::list(std::move(*fields));
+            return Value::list({});
+        }
 
         std::string sep = "";
         if (args.size() >= 2) {

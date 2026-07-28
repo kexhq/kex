@@ -1,21 +1,19 @@
-# Regex — ASPIRATIONAL spec. Regexes are not implemented yet.
-# Sketches how the API reads under the testing DSL. See docs/regex-plan.md and
-# docs/strings-and-tags-plan.md. Auto-loads examples/regex.kex (.spec.kex convention).
-
-# kex: no-check
+# Regex — how the API reads under the testing DSL. See src/stdlib/regex.kex,
+# examples/regexes.kex, and docs/strings-and-tags-plan.md (the tag machinery).
+# Backed by PCRE2 (interpreter) / Erlang `re` (BEAM).
 
 using Regex
 
 describe("matching") do
-  it("capture returns Just(match) on a hit") do
-    match "abc123".capture(regex`\d+`) do
+  it("matches returns Just(match) on a hit") do
+    match "abc123".matches(regex`\d+`) do
       Just(m) -> assert(m.get(0, "") == "123")     # get(0) = whole match
       None    -> assert(false)
     end
   end
 
-  it("capture returns None on a miss") do
-    assert("abc".capture(regex`\d+`) == None)
+  it("matches returns None on a miss") do
+    assert("abc".matches(regex`\d+`) == None)
   end
 
   it("matches?/1 is a boolean shortcut") do
@@ -26,20 +24,19 @@ end
 
 describe("captures") do
   it("positional groups by index") do
-    let m = "#4271".capture(regex`#(\d+)`).unwrap
-    assert(m.get(1) == Just("4271"))              # get without default -> String?
+    # get without a default returns String? — Just here, None if the group is absent.
+    assert("#4271".matches(regex`#(\d+)`).map { |m| m.get(1) } == Just(Just("4271")))
   end
 
   it("named groups by atom") do
-    let m = "2026-07-27".capture(regex`(?<y>\d{4})-(?<mo>\d{2})-(?<d>\d{2})`).unwrap
-    assert(m.get(:y, "")  == "2026")
-    assert(m.get(:mo, "") == "07")
-    assert(m.get(:d, "")  == "27")
+    let got = "2026-07-27".matches(regex`(?<y>\d{4})-(?<mo>\d{2})-(?<d>\d{2})`)
+      .map { |m| (m.get(:y, ""), m.get(:mo, ""), m.get(:d, "")) }
+    assert(got == Just(("2026", "07", "27")))
   end
 
   it("absent optional group is None, not empty") do
-    let m = "x".capture(regex`x(?<opt>\d+)?`).unwrap
-    assert(m.get(:opt) == None)                   # didn't participate -> absent key
+    # the group didn't participate -> absent key -> get returns None
+    assert("x".matches(regex`x(?<opt>\d+)?`).map { |m| m.get(:opt) } == Just(None))
   end
 end
 
@@ -64,7 +61,10 @@ describe("flags and equivalence") do
   end
 
   it("tag form and ordinary call produce equivalent regexes") do
-    assert("x9".matches?(regex`\d`) == "x9".matches?(regex(`\d`)))
+    match regex("\\d") do
+      Ok(re)   -> assert("x9".matches?(re) == "x9".matches?(regex`\d`))
+      Error(_) -> assert(false)
+    end
   end
 end
 
@@ -72,7 +72,7 @@ describe("literal semantics") do
   it("backslash is literal inside a backtick body") do
     # `\d` is two characters handed to the engine, not a lexer escape.
     assert("7".matches?(regex`\d`))
-    assert(`\d`.size == 2)
+    assert(`\d`.length == 2)
   end
 
   it("a raw literal never interpolates") do
@@ -103,10 +103,11 @@ describe("interpolation") do
     assert(!"abc".matches?(regex$`^${dot}$`))
   end
 
-  it("$${ escapes a literal ${ in an interpolating body") do
+  it("a doubled dollar escapes a literal interpolation marker") do
     let x = "1"
-    assert($`${x}`   == "1")             # a hole
-    assert($`$${x}`  == "${x}")          # escaped: no hole, x unused
-    assert(`$${x}`   == "$${x}")         # raw body: nothing is special at all
+    assert($`${x}` == "1")           # a hole -> value of x
+    assert($`$${x}` == `${x}`)       # escaped: literal ${x} (RHS is a raw backtick literal)
+    assert($`$${x}`.length == 4)     # ${x}  is 4 characters, x unused
+    assert(`$${x}`.length == 5)      # raw body: $${ is not special -> $${x}, 5 characters
   end
 end

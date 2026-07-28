@@ -469,5 +469,102 @@ int main() {
         });
     });
 
+    // Every case below is a bug that reached a user's terminal because the
+    // REPL paths had no coverage: module resolution, pattern-let bindings,
+    // record rendering, and `using` being announced as a definition.
+    describe("REPL CLI — opt-in modules and pattern lets", []() {
+        it("resolves an opt-in stdlib module in the tree REPL", []() {
+            // The tree REPL kept its default RELATIVE {"lib","src"} module
+            // roots, so `using Regex` failed with "Unknown module" while the
+            // same input worked in a script and in the BEAM REPL.
+            auto out = runRepl("using Regex\nregex(\"\\\\d+\")\n");
+            assertTrue(out.find("Unknown module") == std::string::npos, out);
+            assertTrue(out.find("Ok(Regex { source:") != std::string::npos, out);
+        });
+
+        it("announces `using` as an import, not a definition (BEAM)", []() {
+            auto out = runBeamRepl("using Regex\n");
+            assertTrue(out.find("using Regex") != std::string::npos, out);
+            assertTrue(out.find("defined Regex") == std::string::npos, out);
+        });
+
+        it("binds variables from a destructuring let in the tree REPL", []() {
+            // `let Just(x) = ...` was read as DEFINING a function named Just:
+            // the REPL echoed "defined Just", waited for more clauses, and the
+            // right-hand side's locals were gone by the time it re-ran.
+            auto out = runRepl(
+                "let opt = Just(42)\n"
+                "let Just(x) = opt\n"
+                "x\n");
+            assertTrue(out.find("defined Just") == std::string::npos, out);
+            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+            assertTrue(out.find("42") != std::string::npos, out);
+        });
+
+        it("binds variables from a destructuring let in the BEAM REPL", []() {
+            auto out = runBeamRepl(
+                "let opt = Just(42)\n"
+                "let Just(x) = opt\n"
+                "x\n");
+            assertTrue(out.find("defined Just") == std::string::npos, out);
+            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+            assertTrue(out.find("42") != std::string::npos, out);
+        });
+
+        it("keeps pattern-let bindings usable on later BEAM inputs", []() {
+            // The value was stored in the process dictionary but never
+            // replayed into the next input's scope, so `x` came back empty.
+            auto out = runBeamRepl(
+                "let Just(x) = Just(42)\n"
+                "x\n"
+                "x + 1\n");
+            assertTrue(out.find("43") != std::string::npos, out);
+        });
+
+        it("binds every name of a tuple pattern let", []() {
+            auto out = runRepl("let (a, b) = (1, 2)\na\nb\n");
+            assertTrue(out.find("Undefined identifier") == std::string::npos, out);
+        });
+    });
+
+    describe("BEAM REPL — record rendering", []() {
+        it("renders records by name, not as raw tagged tuples", []() {
+            // inspect_string/1 consulted only the VARIANT table, so every
+            // record (prelude ones included) printed as "(:ParseError, ...)".
+            auto out = runBeamRepl("Integer.parse(\"12x\")\n");
+            assertTrue(out.find("ParseError {") != std::string::npos, out);
+            assertTrue(out.find("(:ParseError") == std::string::npos, out);
+        });
+
+        it("reports a record's type by name, not Tuple", []() {
+            auto out = runBeamRepl("Integer.parse(\"12x\")\n");
+            assertTrue(out.find("Result<?, ParseError>") != std::string::npos, out);
+            assertTrue(out.find("Result<?, Tuple>") == std::string::npos, out);
+        });
+
+        it("still reports a genuine tuple as Tuple", []() {
+            auto out = runBeamRepl("(1, \"a\")\n");
+            assertTrue(out.find(": Tuple") != std::string::npos, out);
+        });
+    });
+
+    describe("CLI — inspect on both backends", []() {
+        it("supports postfix .inspect on BEAM", []() {
+            // A top-level prelude function was only registered for UFCS with
+            // >= 2 params, so the no-argument postfix form `x.inspect` failed
+            // with "Undefined method: inspect" on BEAM only.
+            auto beam = runBeamRepl("[1, 2].inspect\n");
+            assertTrue(beam.find("Undefined method") == std::string::npos, beam);
+            assertTrue(beam.find("[1, 2]") != std::string::npos, beam);
+        });
+
+        it("renders identically on both backends", []() {
+            auto tree = runRepl("{ \"a\": 1 }.inspect\n");
+            auto beam = runBeamRepl("{ \"a\": 1 }.inspect\n");
+            assertTrue(tree.find("{ \"a\": 1 }") != std::string::npos, tree);
+            assertTrue(beam.find("{ \"a\": 1 }") != std::string::npos, beam);
+        });
+    });
+
     return runAll();
 }

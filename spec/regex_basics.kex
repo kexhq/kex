@@ -1,0 +1,123 @@
+# Regex — compiling, capturing, and the Match type.
+# `regex` returns Result because an arbitrary string may not be a valid
+# pattern; a Match keys captures by group number and by name.
+
+# kex: skip-wasm
+#
+# Skipped on the wasm build: it has no PCRE2 — building PCRE2 for wasm32 is a
+# vendored-dependency pipeline like gmp-wasm and is not done yet, so every
+# Regex call raises "Regex is unavailable in this build".
+
+using Regex
+
+foul show(label, opt) do
+  match opt do
+    Just(v) -> IO.printLine("${label}: Just(${v})")
+    None    -> IO.printLine("${label}: None")
+  end
+end
+
+main do
+  # Compiling: Ok for a valid pattern, Error carrying position + message.
+  match regex("\\d+") do
+    Ok(re)   -> IO.printLine("ok: ${re.source}")
+    Error(_) -> IO.printLine("unexpected error")
+  end
+  match regex("(unclosed") do
+    Ok(_)    -> IO.printLine("unexpected ok")
+    # Only the position is asserted: the message is the engine's own text, and
+    # PCRE2 ("missing closing parenthesis") and Erlang re ("missing )") word it
+    # differently for the same pattern.
+    Error(e) -> IO.printLine("error at ${e.position}, empty message? ${e.message.empty?}")
+  end
+
+  # Positional groups; 0 is the whole match.
+  match "order #4271 shipped".matches(regex("#(\\d+)").or(0)) do
+    Just(m) -> IO.printLine("${m.get(0, "")} / ${m.get(1, "")}")
+    None    -> IO.printLine("no match")
+  end
+
+  # A named group is reachable under BOTH its name and its number.
+  match "on 2026-07-28".matches(regex("(?<year>\\d{4})-(?<month>\\d{2})").or(0)) do
+    Just(m) -> IO.printLine("${m.get(:year, "?")}/${m.get(:month, "?")} = ${m.get(1, "?")}")
+    None    -> IO.printLine("no date")
+  end
+
+  # A group that did not participate is an absent key (None); a group that
+  # matched the empty string is present as Just(""). These must not collapse.
+  match "ac".matches(regex("(a)(b)?(c)").or(0)) do
+    Just(m) -> show("did not participate", m.get(2))
+    None    -> IO.printLine("no match")
+  end
+  match "ac".matches(regex("(a)(x*)(c)").or(0)) do
+    Just(m) -> show("matched empty", m.get(2))
+    None    -> IO.printLine("no match")
+  end
+
+  # A zero-width match is still a match, and group 0 is always present.
+  match "abc".matches(regex("x*").or(0)) do
+    Just(m) -> show("zero-width whole match", m.get(0))
+    None    -> IO.printLine("no match")
+  end
+
+  # matches? is unanchored — "does the pattern occur anywhere".
+  IO.printLine("substring: ${"xhellox".matches?(regex("hello").or(0))}")
+  IO.printLine("anchored:  ${"xhellox".matches?(regex("^hello$").or(0))}")
+
+  # Unicode/UCP is pinned on, so \d covers non-ASCII digits.
+  IO.printLine("ucp: ${"٤٢".matches?(regex("^\\d+$").or(0))}")
+
+  # quote escapes metacharacters so the text matches literally.
+  IO.printLine(Regex.quote("a.b*c"))
+  IO.printLine("a.b*c".matches?(regex(Regex.quote("a.b*c")).or(0)))
+  IO.printLine("aXbYc".matches?(regex(Regex.quote("a.b*c")).or(0)))
+
+  # scan returns [Match] whether or not the pattern has groups, so adding a
+  # group never changes the type flowing out of it.
+  IO.printLine("a1b2".scan(regex("\\d").or(0)).count)
+  IO.printLine("cat=1, dog=2".scan(regex("(\\w+)=(\\d+)").or(0)).map do |m|
+    "${m.get(1, "")}:${m.get(2, "")}"
+  end.join("|"))
+  # Zero-width matches are reported, as in every engine: "" at each position.
+  IO.printLine("a1b2".scan(regex("\\d*").or(0)).count)
+
+  # replace is global (gsub, not sub); the replacement is literal, with no
+  # $1/\1 syntax — captures come from the block's Match instead.
+  IO.printLine("a-b-c".replace(regex("-").or(0), "+"))
+  IO.printLine("abc".replace(regex("x*").or(0), "-"))
+  IO.printLine("2026-7-4".replace(regex("(\\d+)-(\\d+)-(\\d+)").or(0)) do |m|
+    "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
+  end)
+
+  # split follows Ruby: trailing empties dropped, leading kept, captures
+  # interleaved, and a zero-width pattern splits into characters.
+  IO.printLine("a, b ,c".split(regex("\\s*,\\s*").or(0)).join("|"))
+  IO.printLine("a,b,,".split(regex(",").or(0)).join("|"))
+  IO.printLine(",a".split(regex(",").or(0)).join("|"))
+  IO.printLine("a1b2c".split(regex("(\\d)").or(0)).join("|"))
+  IO.printLine("abc".split(regex("").or(0)).join("|"))
+  # The limit form has its own name: the Regex module must not export `split`,
+  # or it would capture every .split call on BEAM (see src/stdlib/regex.kex).
+  IO.printLine(Regex.splitLimit("a,b,,", regex(",").or(0), -1).join("|"))
+  IO.printLine(Regex.splitLimit("a,b,c", regex(",").or(0), 2).join("|"))
+  # A String separator still takes the literal path.
+  IO.printLine("a,b,c".split(",").join("|"))
+
+  # The tag form: `` regex`...` `` lowers to the two-argument tag ABI and
+  # returns a BARE Regex, not a Result — a literal cannot fail to compile.
+  # Note `\d` here is one raw backslash: a backtick body escapes nothing.
+  let digits = regex`\d+`
+  IO.printLine("tag source: ${digits.source}")
+  IO.printLine("tag matches: ${"abc 123".matches?(digits)}")
+  match "order #4271".matches(regex`#(\d+)`) do
+    Just(m) -> IO.printLine("tag capture: ${m.get(1, "")}")
+    None    -> IO.printLine("no match")
+  end
+
+  # Interpolating tags escape their values per character, so a value
+  # contributes literal text and can never inject pattern syntax.
+  let word = "a.c"
+  IO.printLine("interpolated: ${regex$`^${word}`.source}")
+  IO.printLine("dot is literal: ${"abc".matches?(regex$`^${word}`)}")
+  IO.printLine("literal match:  ${"a.cx".matches?(regex$`^${word}`)}")
+end

@@ -65,8 +65,10 @@ auto TypeChecker::check(const ast::Program& program,
             for (const auto& ctor : adt.constructors) {
                 m_adtOfConstructor[ctor] = adt.name;
                 auto arity = adt.constructorArities.find(ctor);
-                if (arity != adt.constructorArities.end() && arity->second == 0)
-                    m_nullaryConstructors.insert(ctor);
+                if (arity != adt.constructorArities.end()) {
+                    m_constructorArity[ctor] = arity->second;
+                    if (arity->second == 0) m_nullaryConstructors.insert(ctor);
+                }
             }
         }
 
@@ -92,6 +94,11 @@ auto TypeChecker::check(const ast::Program& program,
     m_globals.set("Char", Type::charT());
     m_globals.set("String", Type::string());
     m_globals.set("Bool", Type::boolean());
+    // Without this, the annotation `Atom` resolved to an unregistered
+    // NamedType("Atom") while an atom literal infers PrimitiveType{Atom} —
+    // same printed name, different kind, so they never matched. The symptom
+    // was the self-contradictory "expects Atom | Integer, but got Atom".
+    m_globals.set("Atom", Type::atom());
     m_globals.set("Byte", Type::byte());
     m_globals.set("Int8", Type::int8());
     m_globals.set("Int16", Type::int16());
@@ -315,6 +322,11 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
         names.push_back(*name);
         if (std::holds_alternative<ast::TypeName>(variant->kind))
             m_nullaryConstructors.insert(*name);
+        // Payload arity: `None` is 0, `Just(T)` is 1, `Between(A, B)` is 2.
+        if (auto* gt = std::get_if<ast::GenericType>(&variant->kind))
+            m_constructorArity[*name] = gt->args.size();
+        else
+            m_constructorArity[*name] = 0;
     }
     if (names.empty()) return;
 
@@ -479,6 +491,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
             auto sig = annotationToSignature(*ann);
             if (!sig) return;
             sig->params.insert(sig->params.begin(), receiver);
+            m_annotatedMethods.insert(ann->name);
             m_methodSignatures[ann->name].push_back(std::move(*sig));
         };
         if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
@@ -549,12 +562,25 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // populated m_userSignatures for these and checkFunctionDef will use the
     // annotation as ground truth.
     if (m_annotationDeclared.count(def.name)) return;
-    // Skip if already pre-registered (e.g. multi-clause function — all clauses
-    // share the same def.name and the first call handles them all).
-    if (m_userSignatures.count(def.name)) return;
+    // A name may be pre-registered more than once: clauses of one definition
+    // share a def.name, but so do separate definitions that overload by arity
+    // (common for module functions, e.g. `let f(a)` and `let f(a, b)`).
+    // Skipping the name outright would leave every arity but the first
+    // invisible to calls checked before the definitions themselves are, so
+    // only arities already present are skipped.
+    auto existing = m_userSignatures.find(def.name);
+    const bool alreadyRegistered = existing != m_userSignatures.end();
+    auto hasArity = [&](size_t arity) {
+        if (!alreadyRegistered) return false;
+        return std::any_of(existing->second.begin(), existing->second.end(),
+                           [&](const Signature& signature) {
+                               return signature.params.size() == arity;
+                           });
+    };
 
     std::vector<Signature> provisional;
     for (const auto& clause : def.clauses) {
+        if (hasArity(clause.params.size())) continue;
         std::unordered_map<std::string, TypePtr> genericVars;
         std::vector<TypePtr> paramTypes;
         for (const auto& param : clause.params) {
@@ -563,7 +589,12 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         }
         provisional.push_back(Signature{def.name, std::move(paramTypes), freshTypeVar()});
     }
-    m_userSignatures[def.name] = std::move(provisional);
+    if (provisional.empty()) return;
+    if (alreadyRegistered)
+        for (auto& signature : provisional)
+            existing->second.push_back(std::move(signature));
+    else
+        m_userSignatures[def.name] = std::move(provisional);
 }
 
 auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void {
@@ -714,6 +745,56 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return Type::unknown();
         }
     }, typeExpr.kind);
+}
+
+// Rejects a constructor pattern that destructures the wrong number of values,
+// recursively. Without this, `let Just(a, b) = Just(1)` reached the backends:
+// the interpreter failed at runtime with "pattern mismatch — expected Just",
+// and BEAM emitted Core Erlang that erlc rejected outright. A constructor's
+// arity is known statically, so this belongs at compile time.
+auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
+    std::visit([this, &pattern](const auto& node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+            std::optional<size_t> expected;
+            std::string kind = "constructor";
+            if (auto it = m_constructorArity.find(node.name);
+                it != m_constructorArity.end()) {
+                expected = it->second;
+            } else if (auto record = m_recordFields.find(node.name);
+                       record != m_recordFields.end()) {
+                expected = record->second.size();
+                kind = "record";
+            } else if (m_importedInterfaces) {
+                auto imported = m_importedInterfaces->recordArities.find(node.name);
+                if (imported != m_importedInterfaces->recordArities.end()) {
+                    expected = imported->second;
+                    kind = "record";
+                }
+            }
+            // An unregistered name (imported/opaque) carries no arity to check.
+            if (expected && *expected != node.args.size())
+                error(pattern.location,
+                      "`" + node.name + "` " + kind + " takes " +
+                          std::to_string(*expected) + " value(s), but the "
+                          "pattern destructures " +
+                          std::to_string(node.args.size()));
+            for (const auto& arg : node.args)
+                if (arg) checkPatternArity(*arg);
+        } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            if (node.inner) checkPatternArity(*node.inner);
+        } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            for (const auto& field : node.fields)
+                if (field.pattern) checkPatternArity(**field.pattern);
+        } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            for (const auto& element : node.elements)
+                if (element) checkPatternArity(*element);
+            if (node.rest) checkPatternArity(**node.rest);
+        } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+            for (const auto& element : node.elements)
+                if (element) checkPatternArity(*element);
+        }
+    }, pattern.kind);
 }
 
 auto TypeChecker::bindPatternVars(const ast::Pattern& pat) -> void {
@@ -891,6 +972,53 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // param — checkCall's UFCS desugaring (receiver as argument 0) would
     // mis-count their arity, so they're checked (body inference still
     // runs above) but not registered for call-site checking.
+    // A make-block method defined with `let` (no `:>` annotation) still has to
+    // be visible as a local method: m_methodSignatures was populated ONLY from
+    // `:>` declarations, so `make Vec2 do let to(target) -> String? ... end`
+    // registered nothing and every `v.to(String)` call resolved to the prelude's
+    // generic `to` instead — on BEAM that lowered to `kex_prelude:to`, ignoring
+    // the module's own `to__Vec2`.
+    if (m_inMakeBlock && m_currentMakeType &&
+        !m_annotatedMethods.count(def.name)) {
+        // A method reaches its receiver implicitly through `this`, or as a
+        // first parameter that MATCHES the receiver: `let head(@[x | _])`,
+        // `let rangeStart(x.._)`. Only the implicit form needs a receiver
+        // prepended — doing it for the pattern form invents a wrong arity and
+        // makes `list.head` look like a 1-of-2 argument call. A plain named
+        // parameter (`let to(target)`) is an ordinary argument.
+        // A constructor pattern in first position is the type-selector idiom
+        // (`let to(String) -> String?`), an ARGUMENT naming the conversion
+        // target — not a receiver match like `@[x | _]` or `x.._`.
+        const bool firstParamIsReceiverMatch = [&] {
+            if (def.clauses.empty() || def.clauses[0].params.empty()) return false;
+            const auto& first = def.clauses[0].params[0];
+            if (!first.pattern) return false;
+            const auto& kind = (*first.pattern)->kind;
+            return !std::holds_alternative<ast::VarPattern>(kind) &&
+                   !std::holds_alternative<ast::ConstructorPattern>(kind);
+        }();
+        const bool receiverIsFirstParam = firstParamIsReceiverMatch;
+        auto& existing = m_methodSignatures[def.name];
+        for (const auto& signature : signatures) {
+            Signature withReceiver = signature;
+            if (!receiverIsFirstParam)
+                withReceiver.params.insert(withReceiver.params.begin(),
+                                           m_currentMakeType);
+            const bool duplicate =
+                std::any_of(existing.begin(), existing.end(),
+                            [&](const Signature& other) {
+                                if (other.params.size() != withReceiver.params.size())
+                                    return false;
+                                for (size_t i = 0; i < other.params.size(); i++)
+                                    if (!typesEqual(other.params[i],
+                                                    withReceiver.params[i]))
+                                        return false;
+                                return true;
+                            });
+            if (!duplicate) existing.push_back(std::move(withReceiver));
+        }
+    }
+
     if (!m_inMakeBlock) {
         // If a declared signature already exists, update its result type with
         // the inferred one (keeping declared params) and keep one entry.
@@ -1339,6 +1467,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
                 defineVar(varPat->name, valueType);
             } else if (node.pattern) {
+                checkPatternArity(*node.pattern);
                 // Reject constructor mismatches early, e.g.
                 //   let Ok(v) = parsePrefix(...)   when parsePrefix returns Optional
                 //   let Just(v) = parse(...)       when parse returns Result
@@ -1735,7 +1864,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     defineVar(*node.subjectBinding, subjectType);
                 }
                 for (const auto& pat : clause.patterns) {
-                    if (pat) bindPatternVars(*pat);
+                    if (pat) {
+                        checkPatternArity(*pat);
+                        bindPatternVars(*pat);
+                    }
                 }
                 if (clause.guard && *clause.guard) inferExpr(**clause.guard);
                 if (clause.body) {
@@ -2448,10 +2580,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // sufficiently substituted to validate without false positives.
     bool useLocalMethods = hasLocalMethods &&
         (!m_inMakeBlock || hasReceiverRefinementConflict);
+    // Local methods come FIRST. When a user type defines a method the prelude
+    // also provides and both signatures match, the user's is the more specific
+    // one. Ordering imported first let a GENERIC prelude signature win on type
+    // variables alone: `Map.get :> K -> V?` matched `someMatch.get(1)` and the
+    // call lowered to `kex_prelude:get`, while the 3-argument form (whose
+    // prelude counterpart did not match) correctly reached the local method —
+    // the same call site resolving two different ways by arity.
+    // A local method whose receiver does not match still simply isn't a match.
+    size_t localSigCount = 0;
     if (!importedSigs.empty() || useLocalMethods) {
-        merged = importedSigs;
-        if (useLocalMethods)
+        if (useLocalMethods) {
             merged.insert(merged.end(), methodIt->second.begin(), methodIt->second.end());
+            localSigCount = merged.size();
+        }
+        merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
         if (hasUser)
             merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
         sigs = &merged;
@@ -2718,12 +2861,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         if (methodCall && !importedFunctions.empty()) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;
+            // `merged` is importedSigs ++ local methods ++ user functions, so
+            // the winner's index says where it came from. When it came from a
+            // LOCAL make-block method, the call must not be bound to an
+            // imported target — doing so is how `b.get(0)` on a user record
+            // with its own `get` was lowered to `kex_prelude:get/2` and died
+            // at runtime, purely because the prelude also has a `get`.
+            bool winnerIsLocal = false;
             if (sigs == &merged) {
                 auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
-                if (selected < importedFunctions.size())
-                    resolved = importedFunctions[selected];
+                if (selected >= localSigCount &&
+                    selected - localSigCount < importedFunctions.size())
+                    resolved = importedFunctions[selected - localSigCount];
+                else
+                    winnerIsLocal = true;
             }
-            if (!resolved) {
+            if (!resolved && !winnerIsLocal) {
                 int matchedArity = static_cast<int>(matched.params.size());
                 for (const auto* candidate : importedFunctions) {
                     if (candidate->backendArity == matchedArity) {

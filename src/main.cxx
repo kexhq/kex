@@ -1164,7 +1164,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   bool validationOk = true;
   if (ok && dbOk) {
     for (const auto &diag :
-         kex::validation::validateTaggedLiterals(program, analyzer)) {
+         kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
       if (diag.level == kex::semantic::Diagnostic::Level::Error)
         validationOk = false;
       printSemanticDiagnostic(diag);
@@ -1238,6 +1238,48 @@ auto prebuiltRuntimeBeamDir() -> std::string {
     if (fs::exists(root / "kex_io.beam", ec)) return root.string();
   }
   return {};
+}
+
+// Every variable a pattern binds. `let x = ...` binds one, but
+// `let Just(x) = ...` / `let (a, b) = ...` bind through the pattern, and the
+// REPL has to remember those too or the names vanish on the next input.
+auto collectPatternNames(const kex::ast::Pattern &pattern,
+                         std::vector<std::string> &names) -> void {
+  std::visit(
+      [&](const auto &node) {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, kex::ast::VarPattern>) {
+          if (node.name != "_") names.push_back(node.name);
+        } else if constexpr (std::is_same_v<T, kex::ast::ConstructorPattern>) {
+          for (const auto &arg : node.args)
+            if (arg) collectPatternNames(*arg, names);
+        } else if constexpr (std::is_same_v<T, kex::ast::TuplePattern>) {
+          for (const auto &element : node.elements)
+            if (element) collectPatternNames(*element, names);
+        } else if constexpr (std::is_same_v<T, kex::ast::ListPattern>) {
+          for (const auto &element : node.elements)
+            if (element) collectPatternNames(*element, names);
+          if (node.rest) collectPatternNames(**node.rest, names);
+        }
+      },
+      pattern.kind);
+}
+
+// Names bound by a REPL input's trailing `let`, or empty if it is not one.
+auto replLetBoundNames(const std::string &source) -> std::vector<std::string> {
+  std::vector<std::string> names;
+  kex::Lexer lexer("main do\n" + source + "\nend\n");
+  kex::Parser parser(lexer.tokenizeAll());
+  auto program = parser.parseProgram();
+  if (!parser.diagnostics().empty()) return names;
+  for (const auto &item : program.items) {
+    const auto *main = std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
+    if (!main || !*main || (*main)->body.empty()) continue;
+    const auto *binding =
+        std::get_if<kex::ast::LetExpr>(&(*main)->body.back()->kind);
+    if (binding && binding->pattern) collectPatternNames(*binding->pattern, names);
+  }
+  return names;
 }
 
 auto printUsage(const char *progName) -> void {
@@ -1614,6 +1656,15 @@ int main(int argc, char *argv[]) {
         offset = 4;
       else
         return std::nullopt;
+      // `let Just(x) = ...` destructures a constructor pattern; it is not a
+      // function definition. Function names are lowercase, so an uppercase
+      // initial rules the clause reading out — otherwise the REPL treated the
+      // binding as defining a function named `Just`, waited for further
+      // clauses, and re-evaluated it later in a scope where the right-hand
+      // side's locals no longer existed ("Undefined identifier: a").
+      if (offset < s.size() && std::isupper((unsigned char)s[offset]))
+        return std::nullopt;
+
       size_t i = offset;
       while (i < s.size() && (std::isalnum((unsigned char)s[i]) || s[i] == '_'))
         i++;
@@ -1837,13 +1888,29 @@ int main(int argc, char *argv[]) {
       bool isFuncDef = false;
       bool isLocalLet = false;
       std::string letVarName;
+      std::vector<std::string> patternLetNames;
       {
         size_t off = std::string::npos;
         if (source.rfind("let ", 0) == 0)
           off = 4;
         else if (source.rfind("foul ", 0) == 0)
           off = 5;
-        if (off != std::string::npos) {
+        // `let Just(x) = ...` destructures a constructor pattern — it binds
+        // the pattern's variables, it does not define a function named `Just`.
+        // Function names are lowercase, so an uppercase initial rules the
+        // definition reading out. Without this the REPL announced "defined
+        // Just", kept the binding as a top-level definition, and re-evaluated
+        // it later in a scope where the right-hand side's locals were gone
+        // ("Undefined identifier: a").
+        const bool constructorPattern =
+            off != std::string::npos && off < source.size() &&
+            std::isupper((unsigned char)source[off]);
+        if (constructorPattern) {
+          // `let Just(x) = ...` binds through the pattern; persist each name.
+          patternLetNames = replLetBoundNames(source);
+          isLocalLet = !patternLetNames.empty();
+          if (!isLocalLet) isFuncDef = true;
+        } else if (off != std::string::npos) {
           auto parenPos = source.find('(', off);
           auto eqPos = source.find('=', off);
           bool hasParenBeforeEq =
@@ -1888,9 +1955,12 @@ int main(int argc, char *argv[]) {
               topDefs.end());
           topDefs.push_back({fname, source});
 
+          // `using M` is an import, not a definition — it is kept in topDefs
+          // so it persists across inputs, but saying "defined M" is wrong.
+          const bool isImport = source.rfind("using ", 0) == 0;
           std::cout << kex::color::apply(kex::color::gray) << "=> "
-                    << kex::color::apply(kex::color::reset) << "defined "
-                    << fname << "\n";
+                    << kex::color::apply(kex::color::reset)
+                    << (isImport ? "using " : "defined ") << fname << "\n";
         } else {
           // Expression or local let — compile and run on BEAM.
           // For local lets, the current binding is evaluated fresh and
@@ -1958,11 +2028,20 @@ int main(int argc, char *argv[]) {
 
           std::string kexSource;
           if (isLocalLet) {
+            std::string puts;
+            std::string shown = letVarName;
+            if (!patternLetNames.empty()) {
+              for (const auto &name : patternLetNames)
+                puts += "  Erlang.Erlang.put(:kexrepl" + name + ", " + name +
+                        ")\n";
+              shown = patternLetNames.front();
+            } else {
+              puts = "  Erlang.Erlang.put(:kexrepl" + letVarName + ", " +
+                     letVarName + ")\n";
+            }
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" +
-                        "  Erlang.Erlang.put(:kexrepl" + letVarName +
-                        ", " + letVarName + ")\n" +
-                        "  " + inspectCall(letVarName) + "\nend\n";
+                        source + "\n" + puts +
+                        "  " + inspectCall(shown) + "\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
                         "  " + inspectCall(source) + "\nend\n";
@@ -2090,20 +2169,28 @@ int main(int argc, char *argv[]) {
                  (source[rhs] == '{' &&
                   source.find_first_not_of(" \t", rhs + 1) != std::string::npos &&
                   source[source.find_first_not_of(" \t", rhs + 1)] == '|'));
+            // A destructuring let binds through its pattern, so every name it
+            // introduced has to be replayed, not just a single variable —
+            // otherwise `let Just(x) = ...` stored x but later inputs could
+            // not see it.
+            std::vector<std::string> replayNames =
+                patternLetNames.empty() ? std::vector<std::string>{letVarName}
+                                        : patternLetNames;
             if (isLambda)
               localBinds += "  " + source + "\n";
             else
-              localBinds += "  let " + letVarName +
-                            " = Erlang.Erlang.get(:kexrepl" +
-                            letVarName + ")\n";
+              for (const auto &name : replayNames)
+                localBinds += "  let " + name +
+                              " = Erlang.Erlang.get(:kexrepl" + name + ")\n";
             beamSemanticBinds.erase(
                 std::remove_if(
                     beamSemanticBinds.begin(), beamSemanticBinds.end(),
                     [&](const auto &binding) {
-                      return binding.first == letVarName;
+                      return std::find(replayNames.begin(), replayNames.end(),
+                                       binding.first) != replayNames.end();
                     }),
                 beamSemanticBinds.end());
-            beamSemanticBinds.emplace_back(letVarName, source);
+            beamSemanticBinds.emplace_back(replayNames.front(), source);
           }
         }
       } catch (const std::exception &e) {
@@ -2159,6 +2246,13 @@ int main(int argc, char *argv[]) {
 
     kex::interpreter::Evaluator evaluator;
     evaluator.setReplMode(true);
+    // Without this the evaluator keeps its default relative {"lib", "src"}
+    // roots, so `using Regex` (or any opt-in stdlib module) failed with
+    // "Unknown module" in the interpreter REPL while working both in scripts
+    // and in the BEAM REPL. There is no file being run, so resolution is
+    // anchored at the working directory plus the standard library roots.
+    evaluator.setModuleRoots(
+        moduleRootsFor((std::filesystem::current_path() / "<repl>").string()));
     std::string line;
     // Accumulated source of all top-level definitions typed in the REPL so
     // far, used to keep the SemanticDB index complete across multiple inputs.
@@ -2166,6 +2260,7 @@ int main(int argc, char *argv[]) {
     // Local bindings are evaluated one input at a time, but their source is
     // retained here so semantic analysis can infer the type of later inputs.
     std::vector<std::pair<std::string, std::string>> replBindings;
+
     // Keep parsed programs alive so function closures can reference AST nodes
     std::vector<kex::ast::Program *> replPrograms;
     // A line read ahead while chaining function clauses that turned out
@@ -2443,6 +2538,12 @@ int main(int argc, char *argv[]) {
         defOffset = 4;
       else if (source.substr(0, 5) == "foul ")
         defOffset = 5;
+      // An uppercase name after let/foul is a constructor pattern being
+      // destructured (`let Just(x) = ...`), not a function definition — see
+      // the matching guard in the BEAM branch above.
+      if (defOffset != std::string::npos && defOffset < source.size() &&
+          std::isupper((unsigned char)source[defOffset]))
+        defOffset = std::string::npos;
       if (defOffset != std::string::npos) {
         // It's a function def if: let/foul name( ... )  with parens before =
         auto parenPos = source.find('(', defOffset);
@@ -2497,6 +2598,7 @@ int main(int argc, char *argv[]) {
           // its name so the semantic replay can replace, rather than
           // redeclare, the old source.
           std::optional<std::string> bindingName;
+          std::vector<std::string> boundNames;
           for (const auto &item : program->items) {
             const auto *main =
                 std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
@@ -2506,10 +2608,12 @@ int main(int argc, char *argv[]) {
                 &(*main)->body.back()->kind);
             if (!binding || !binding->pattern)
               continue;
-            if (const auto *variable =
-                    std::get_if<kex::ast::VarPattern>(
-                        &binding->pattern->kind))
-              bindingName = variable->name;
+            std::vector<std::string> names;
+            collectPatternNames(*binding->pattern, names);
+            if (!names.empty()) {
+              bindingName = names.front();
+              boundNames = std::move(names);
+            }
           }
 
           // Runtime values intentionally erase phantom typestate parameters.
@@ -2572,7 +2676,8 @@ int main(int argc, char *argv[]) {
                 std::remove_if(
                     replBindings.begin(), replBindings.end(),
                     [&](const auto &binding) {
-                      return binding.first == *bindingName;
+                      return std::find(boundNames.begin(), boundNames.end(),
+                                       binding.first) != boundNames.end();
                     }),
                 replBindings.end());
             replBindings.emplace_back(*bindingName, source);
@@ -3171,7 +3276,7 @@ int main(int argc, char *argv[]) {
     bool validationOk = true;
     if (ok && dbOk) {
       for (const auto &d :
-           kex::validation::validateTaggedLiterals(program, analyzer)) {
+           kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
         if (d.level == kex::semantic::Diagnostic::Level::Error)
           validationOk = false;
         allDiags.push_back(d);
