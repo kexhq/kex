@@ -117,11 +117,11 @@ let text = myTag`raw body`
   tag decides whether to escape, bind, or reject them.
 - **Adjacency matters:** whitespace between the identifier and the backtick
   disables tagging — `` myTag `body` `` is two separate expressions.
-- **The tag must be a bare lower-case identifier.** It is *not* a method call and
-  cannot be module-qualified: `` Regex.regex`…` `` is **not** "the `regex` tag
-  from module `Regex`" — the parser reads it as member access `Regex.regex`
-  followed by a stray backtick string. Bring the tag into scope with
-  `using Regex` and write it bare: `` regex`…` `` (see `docs/regex.md`).
+- The tag identifier may be **bare** (`` regex`…` ``) or **module-qualified**
+  (`` Regex.regex`…` ``); both resolve to the same tag function and behave
+  identically. A qualifier must be a module path (a capitalised name or dotted
+  chain), so ordinary `value.method` access is never mistaken for a tag (see
+  `docs/regex.md`).
 
 ### Compile-time validation
 

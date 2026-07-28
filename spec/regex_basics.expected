@@ -31,3 +31,7 @@ tag capture: 4271
 interpolated: ^a\.c
 dot is literal: false
 literal match:  true
+qualified source: \d+
+qualified matches: true
+qualified alias:  true
+qualified interp: true

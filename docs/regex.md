@@ -42,6 +42,11 @@ let bad = regex`(`   # error: caret points inside the literal
 let url = re`https?://\S+`
 ```
 
+The tag may also be written **module-qualified** — `` Regex.regex`…` `` (and
+`` Regex.re`…` ``) behave exactly like the bare form: same tag, same
+compile-time validation, same bare-`Regex` result, on both backends. As with any
+`Regex.*` name, the module must be in scope (`using Regex`).
+
 ### Call form — `regex("…")` (returns `Result`)
 
 Use the call form when the pattern is a runtime string that might be invalid. It
@@ -196,8 +201,7 @@ Regex.splitLimit("a,b,,", regex`,`, -1)   # ["a", "b", "", ""]
   PCRE version, so it is never embedded in a distributed artifact.
 - **wasm build:** the in-browser build has no PCRE2, so every `Regex` call
   raises "Regex is unavailable in this build" (`docs/known-gaps.md`).
-- Qualifying the tag literal (`` Regex.regex`…` ``) currently misdispatches and
-  raises `Undefined variable: source` — use the bare `` regex`…` `` form
-  (`docs/known-gaps.md`).
+- Both the bare (`` regex`…` ``) and module-qualified (`` Regex.regex`…` ``)
+  tag spellings are supported and behave identically.
 
 See `examples/regexes.kex` for a runnable tour.
