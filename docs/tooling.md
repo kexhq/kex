@@ -2,12 +2,13 @@
 
 ## REPL
 
-Built-in interactive REPL (`kex -i` or `kex -R` with no file), foul by default:
+Built-in interactive REPL, foul by default. Both `kex -i` and `kex -R` with no
+file launch the same BEAM-backed REPL:
 
 ```
 $ kex -i
 
-Kex Interactive 0.2.0 — press Ctrl+C to exit (type /help ENTER for commands)
+Kex Interactive 0.3.0 (beam) — press Ctrl+C to exit (type /help ENTER for commands)
 
 kex> 1 + 2
 => 3 : Int
@@ -35,12 +36,15 @@ kex> name.
 REPL commands use a `/` prefix (use `/help` for the full list):
 
 ```
+kex> /help                # show all commands (also: /h)
 kex> /load myfile.kex     # load a module from file
 kex> /unload MyModule     # unload a previously loaded module
 kex> /reload              # reload all loaded modules
 kex> /reset               # clear all bindings
+kex> /set <opt>           # enable a feature
+kex> /unset <opt>         # disable a feature
 kex> /complete prefix     # show completions for a prefix
-kex> /exit                # exit (also: Ctrl+C)
+kex> /exit                # exit (also: /quit, /q, Ctrl+C)
 ```
 
 ## File Extension
@@ -52,7 +56,7 @@ kex> /exit                # exit (also: Ctrl+C)
 ```
 kex <file.kex>              # type-check and run (default)
 kex <file.kex> --no-check   # skip type checking and run directly
-kex -i                      # start interactive REPL (or `kex -R` for BEAM REPL)
+kex -i                      # start the interactive BEAM REPL (same as `kex -R` with no file)
 kex -c <file.kex>           # compile to BEAM via Core Erlang
 kex -R <file.kex>           # run on BEAM
 kex -C <file.kex>           # run semantic analysis only

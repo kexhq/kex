@@ -1,5 +1,7 @@
 # Compile-Time Expression Evaluation
 
+> 📋 **Design doc — not yet implemented.** `compiled do` blocks and compile-time `.emit()`/`.compile()` evaluation are not built yet.
+
 ## Summary
 
 Modules can define methods inside `compiled do...end` blocks, marking them as compile-time evaluable. When user code calls `.emit()` (or `.compile()`) on a method chain where that method was defined inside a `compiled` block, the compiler evaluates the entire chain at compile time. The result is spliced into the program as a literal value. Free variables from the enclosing runtime scope are auto-detected and become parameterized placeholders.

@@ -1,5 +1,11 @@
 # Modules and Visibility
 
+> **Status.** Module declaration, nesting, `private do`, `foul module`, and
+> qualified access all work in the interpreter. `using` is currently a **no-op**
+> in the interpreter (names are not actually brought into scope — see
+> `docs/testing.md`), and a full module system across BEAM modules is still in
+> progress.
+
 ## Module Declaration
 
 ```kex

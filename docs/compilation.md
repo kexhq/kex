@@ -1,19 +1,29 @@
 # Compilation
 
-## Target: WebAssembly First
+## Backends today
 
-Kex compiles to WASM as the primary target. This gives:
-- Runs everywhere (browser, server via WASI, edge)
-- Near-native performance
-- Sandboxed by default
+Kex runs two ways today:
 
-## Layered Backends
+- **Tree-walk interpreter** (default) — `kex file.kex`.
+- **BEAM** — a lowering IR (`src/ir/`) emits Core Erlang, which `erlc` turns
+  into `.beam`. `kex -c` compiles, `kex -R` runs on BEAM, `kex -e` emits
+  `.core` without invoking `erlc`. This backend is at full spec parity with the
+  interpreter.
 
-Future targets will be added as needed:
-- WASM (bare): basic IO
-- WASM + runtime: processes, scheduling
-- BEAM: full OTP-style distribution (potential future)
-- Native/LLVM: maximum performance (potential future)
+The interpreter is *also* compiled to WebAssembly via Emscripten to power the
+in-browser REPL (`web/index.html`) — note that this is the interpreter running
+in wasm, **not** Kex source compiled to wasm.
+
+## Layered backends (potential future)
+
+Directions considered but not built:
+- Compiling Kex source directly to WASM (bare: basic IO; + runtime: processes, scheduling)
+- Full OTP-style distribution on BEAM (multi-node)
+- Native/LLVM for maximum performance
+
+> The sections below (capability inference, pragmas, compiled metaprogramming)
+> describe intended design and are **not yet implemented** — `foul` tracking is
+> enforced at the semantic pass, but capability declarations are not read.
 
 ## Capability Requirements
 

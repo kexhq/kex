@@ -4,10 +4,17 @@
 
 Kex uses an Elixir-style process model with lightweight, isolated processes communicating via message passing.
 
+> **Status.** The process primitives — `spawn`, `receive`, `send`, `loop`, and
+> `Task` — are implemented and run on both the interpreter and the BEAM
+> backend (see `spec/process_spawn_receive.kex`). The *typed* process surface
+> (`Process<Message>` with a compile error on a mismatched `send`) and
+> `Supervisor` shown below are the intended design but are **not yet
+> enforced/implemented**; treat those sections as forward-looking.
+
 ## Spawning Processes
 
 ```kex
-foul let pid = spawn do
+foul pid = spawn do
   loop do
     receive do
       (:ping, sender) -> sender.send(:pong)
@@ -23,7 +30,7 @@ Processes declare what messages they accept:
 ```kex
 type CounterMessage = :increment | :reset | (:get, Process<Int>)
 
-foul let counter: Process<CounterMessage> = spawn do
+foul counter: Process<CounterMessage> = spawn do
   var state = 0
   loop do
     receive do
@@ -49,7 +56,7 @@ let dynamic: Process<Any> = spawn do ... end
 Imperative (var + loop):
 
 ```kex
-foul let counter = spawn do
+foul counter = spawn do
   var state = 0
   loop do
     receive do
@@ -62,7 +69,7 @@ end
 Functional (recursive):
 
 ```kex
-foul let counter = spawn do
+foul counter = spawn do
   let loop(state: Int) do
     receive do
       :increment -> loop(state + 1)
@@ -95,7 +102,7 @@ end
 ## Supervision
 
 ```kex
-foul let app = Supervisor.start(restart: :only_crashed) do
+foul app = Supervisor.start(restart: :only_crashed) do
   worker(Database, args: [config.db_url])
   worker(Cache)
   supervisor(restart: :all) do

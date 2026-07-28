@@ -25,7 +25,7 @@ end
 # Or with map/flatMap
 findUser(users, "alice")
   .map(&.name)
-  .unwrapOr("Unknown")
+  .or("Unknown")
 ```
 
 ## Result
@@ -54,7 +54,7 @@ end
 Chain `Result`/`Optional` computations with `flatMap`:
 
 ```kex
-foul let getUserEmail(id: Int) -> Result<String, AppError> do
+foul getUserEmail(id: Int) -> Result<String, AppError> do
   fetchUser(id).flatMap { |user| match user.email do
     Just(email) -> Ok(email)
     None -> Error(AppError(:no_email))

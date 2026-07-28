@@ -57,7 +57,7 @@ let countErrors(lines: [String]) -> Int do
 end
 
 # Foul — process state
-foul let counter = spawn do
+foul counter = spawn do
   var state = 0
   loop do
     receive do
