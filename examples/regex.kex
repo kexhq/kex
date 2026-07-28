@@ -58,12 +58,12 @@ end
 # (`match` alone is a keyword — `match … do … end` — so the capturing call is
 #  named `matches`; `matches?` keeps the `?`-means-Bool convention.)
 #
-# Match is map-like: get(0) whole match, get(1..) positional, get(:name) named.
-# get returns String? — a group that didn't participate is an absent key (None).
+# Match is map-like: group(0) whole match, group(1..) positional, group(:name)
+# named. Returns String? — a group that didn't participate is an absent key.
 
 foul demoMatch do
   match "order #4271 shipped".matches(regex`#(\d+)`) do
-    Just(m) -> IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
+    Just(m) -> IO.printLine("whole: ${m.group(0, "")}, id: ${m.group(1, "")}")   # whole: #4271, id: 4271
     None    -> IO.printLine("no match")
   end
 
@@ -79,7 +79,7 @@ let dateRe = regex`(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})`
 
 let parseDate(s: String) -> { Atom: String }? do
   return s.matches(dateRe).map do |m|
-    { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
+    { year: m.group(:year, ""), month: m.group(:month, ""), day: m.group(:day, "") }
   end
 end
 
@@ -104,7 +104,7 @@ foul demoBulk do
 
   # scan/2 returns every match as a list of Match.
   let pairs = text.scan(regex`(\w+)=(\d+)`).map do |m|
-    (m.get(1, ""), m.get(2, "").toInt.or(0))
+    (m.group(1, ""), m.group(2, "").toInt.or(0))
   end
   IO.printLine(pairs.inspect)         # [("cat", 1), ("dog", 2), ("bird", 3)]
 
@@ -114,7 +114,7 @@ foul demoBulk do
 
   # replace with a block — captures come from the Match, never $1/\1.
   let normalized = "2026-7-4".replace(regex`(\d+)-(\d+)-(\d+)`) do |m|
-    "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
+    "${m.group(1, "")}/${m.group(2, "")}/${m.group(3, "")}"
   end
   IO.printLine(normalized)            # 2026/7/4
 
@@ -134,7 +134,7 @@ let logRe = regex`^\[(?<level>\w+)\]\s+(?<msg>.+)$`
 
 let parseLog(line: String) -> LogLine? do
   return line.matches(logRe).map do |m|
-    LogLine { level: m.get(:level, ""), msg: m.get(:msg, "") }
+    LogLine { level: m.group(:level, ""), msg: m.group(:msg, "") }
   end
 end
 
@@ -148,7 +148,7 @@ main(_args) do
   end
 
   match parseDate("2026-07-27") do
-    Just(d) -> IO.printLine("y=${d.get(:year, "?")}")
+    Just(d) -> IO.printLine("y=${d.group(:year, "?")}")
     None    -> IO.printLine("bad date")
   end
 end

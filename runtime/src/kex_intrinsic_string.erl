@@ -22,6 +22,11 @@ chars(S) -> kex_intrinsic_list:as_list(S).
 
 %% No-sep split — break into individual 1-char Strings ("hi" → ["h","i"]).
 split(S) -> [<<C/utf8>> || C <- unicode:characters_to_list(S)].
+%% A Regex separator dispatches to the regex engine, so `str.split(re)` and
+%% `str.split(",")` share one UFCS name — mirroring the same branch in
+%% src/interpreter/stdlib/string.cxx. Constructing a Regex needs `using Regex`,
+%% so this clause is unreachable without it.
+split(S, {'Regex', _} = Regex) -> kex_intrinsic_regex:split(S, Regex, 0);
 split(S, Sep) -> string:split(S, Sep, all).
 
 'startsWith?'(S, Pre) ->
