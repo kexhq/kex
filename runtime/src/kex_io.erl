@@ -1,6 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
-           inspect/1, inspect_typed/2, to_string/1, to_string_optional/1,
+           inspect/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0]).
@@ -224,6 +224,19 @@ inspect_real(X) ->
 %% UFCS value.inspect() — return the colored representation as a String.
 inspect_value(X) -> unicode:characters_to_binary(inspect_string(X)).
 
+%% The same rendering as inspect_string/1 with the ANSI escapes removed, so a
+%% value can be turned into a plain String (Kex's `.inspect`) without keeping a
+%% second, drifting copy of the formatting rules.
+inspect_plain(X) -> strip_ansi(lists:flatten(inspect_string(X))).
+
+strip_ansi([]) -> [];
+strip_ansi([$\e, $[ | Rest]) -> strip_ansi(drop_until_m(Rest));
+strip_ansi([C | Rest]) -> [C | strip_ansi(Rest)].
+
+drop_until_m([]) -> [];
+drop_until_m([$m | Rest]) -> Rest;
+drop_until_m([_ | Rest]) -> drop_until_m(Rest).
+
 inspect_string(X) when is_binary(X) ->
     ?GREEN ++ "\"" ++ unicode:characters_to_list(X) ++ "\"" ++ ?RESET;
 inspect_string(X) when is_integer(X) -> ?YELL ++ integer_to_list(X) ++ ?RESET;
@@ -251,7 +264,28 @@ inspect_string(X) when is_tuple(X), tuple_size(X) >= 1,
     [Tag | Args] = tuple_to_list(X),
     atom_to_list(Tag) ++ "(" ++
         lists:flatten(lists:join(", ", [inspect_string(A) || A <- Args])) ++ ")";
-inspect_string(X) when is_tuple(X) ->
+%% A record renders as `Tag { field: value, … }`, the same shape to_string/1
+%% already produced — inspect_string/1 consulted only the VARIANT table, so
+%% every record (prelude ones included, e.g. ParseError) fell through to the
+%% raw tuple form showing its type tag as an atom.
+inspect_string(X) when is_tuple(X), tuple_size(X) >= 2,
+                       is_atom(element(1, X)) ->
+    Tag = element(1, X),
+    Arity = tuple_size(X) - 1,
+    Records = persistent_term:get(kex_display_records, #{}),
+    case maps:get(Tag, Records, undefined) of
+        Fields when is_list(Fields), length(Fields) =:= Arity ->
+            Pairs = lists:sort(lists:zip([atom_to_list(F) || F <- Fields],
+                                         lists:seq(2, tuple_size(X)))),
+            Body = [F ++ ": " ++ inspect_string(element(I, X)) || {F, I} <- Pairs],
+            ?CYAN ++ atom_to_list(Tag) ++ ?RESET ++
+                " { " ++ lists:flatten(lists:join(", ", Body)) ++ " }";
+        _ -> inspect_tuple_string(X)
+    end;
+inspect_string(X) when is_tuple(X) -> inspect_tuple_string(X);
+inspect_string(X) -> unicode:characters_to_list(to_string(X)).
+
+inspect_tuple_string(X) ->
     Tag = element(1, X),
     Arity = tuple_size(X) - 1,
     case variant_metadata(Tag) of
@@ -259,8 +293,7 @@ inspect_string(X) when is_tuple(X) ->
         _ ->
             "(" ++ lists:flatten(lists:join(", ",
                 [inspect_string(E) || E <- tuple_to_list(X)])) ++ ")"
-    end;
-inspect_string(X) -> unicode:characters_to_list(to_string(X)).
+    end.
 
 nullary_type_name(X) ->
     case variant_metadata(X) of
@@ -308,7 +341,17 @@ value_type_name(X) when is_tuple(X) ->
     Arity = tuple_size(X) - 1,
     case variant_metadata(Tag) of
         {Arity, Owner} -> atom_to_list(Owner);
-        _ -> "Tuple"
+        _ ->
+            %% A record is a tagged tuple whose tag and field count match a
+            %% registered layout; its type is the tag. Without this the REPL
+            %% reported the lowered representation ("Tuple", or
+            %% "Result<?, Tuple>") for every record.
+            Records = persistent_term:get(kex_display_records, #{}),
+            case is_atom(Tag) andalso maps:get(Tag, Records, undefined) of
+                Fields when is_list(Fields), length(Fields) =:= Arity ->
+                    atom_to_list(Tag);
+                _ -> "Tuple"
+            end
     end;
 value_type_name(X) when is_atom(X) -> "Atom";
 value_type_name(_) -> "Any".
