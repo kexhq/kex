@@ -605,7 +605,12 @@ void collectFromTopLevel(const kex::ast::Program& program,
                 iface.exports.push_back(std::move(overload));
             }
         }
-        if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 2)
+        // A top-level prelude function is also reachable through UFCS, with its
+        // first parameter as the receiver. One parameter is enough — that is
+        // the no-argument postfix form (`x.inspect`), which was previously
+        // excluded by requiring two and so failed with "Undefined method" on
+        // BEAM while working in the interpreter.
+        if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 1)
             addReceiverFunction(fd, kexiUnknown(), iface, meta, analysis, true);
     };
 

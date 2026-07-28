@@ -87,6 +87,22 @@ let validateRegex(source: String) -> [TaggedValidation.Issue] do
   end
 end
 
+# +re+ is a short alias for +regex+ — a second name bound to the same two
+# functions, not a lexer synonym, so every property of +regex+ (escaping,
+# backend mapping, error shape) applies to it unchanged.
+#
+# @example
+#   re`https?://\S+`     # tag form
+#   re("\\d+")             # call form -> Result
+let re(source) = regex(source)
+let re(parts, values) = regex(parts, values)
+
+# Companion validator for the `re` tag, delegating to validateRegex. The
+# compiler finds it by the same `validate<Tag>` convention.
+let validateRe(source: String) -> [TaggedValidation.Issue] do
+  return validateRegex(source)
+end
+
 # Escapes every regex metacharacter in +s+, so the result matches +s+
 # literally. Escapes per character rather than wrapping in `\Q...\E`, which a
 # value containing `\E` would break out of.

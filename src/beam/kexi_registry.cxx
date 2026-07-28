@@ -653,6 +653,11 @@ auto KexiRegistry::buildSemanticInterfaces() const
 
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
+            for (const auto& record : module.chunk.metadata.records)
+                interfaces.recordArities[record.name] = record.fields.size();
+
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules)
             for (const auto& c : module.chunk.metadata.traitConformances) {
                 interfaces.traitConformances.push_back({c.typeName, c.traitName});
                 if (auto it = adtConstructors.find(c.typeName);

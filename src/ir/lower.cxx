@@ -46,6 +46,11 @@ struct Lowering {
     // receiver-first" fallback; any other `.method` is an unported builtin and
     // must error, not silently become a call to a nonexistent function.
     std::unordered_set<std::string> localMethods;
+    // "name/arity" for every locally defined method, including the receiver.
+    // A UFCS call may only take the local path when a local definition exists
+    // at that arity — otherwise it emits `apply 'get'/3` for a function that
+    // was never defined (the make block only had get/2), which erlc rejects.
+    std::unordered_set<std::string> localMethodArities;
     // Make-method trailing defaults, indexed by explicit parameter position.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
     // Cross-type method-name collisions: a method name → the make-block type
@@ -1551,11 +1556,23 @@ struct Lowering {
             return ret(callE("", imported->second, arity, std::move(args)));
         }
 
+        // A local method only claims the call when it is defined at THIS
+        // arity; otherwise the external/prelude receiver function handles it.
+        // `this.map.get(k, default)` inside a `make Box do get(key) ... end`
+        // block used to compile to a local get/3 that was never defined.
+        const int ufcsArity =
+            static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
+            (n.block ? 1 : 0);
+        const bool localArityExists =
+            localMethodArities.empty() ||
+            localMethodArities.count(m + "/" + std::to_string(ufcsArity)) > 0;
+
         // External receiver functions take priority over prelude for UFCS.
         // The registry includes only package-declared provider modules here;
         // ordinary module exports never become receiver functions implicitly.
         if (externalModules
-            && (!localMethods.count(m) || preferExternalReceivers)) {
+            && (!localMethods.count(m) || !localArityExists
+                || preferExternalReceivers)) {
             auto found = externalModules->receiverFunctions.find(m);
             if (found != externalModules->receiverFunctions.end()) {
                 int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
@@ -1621,7 +1638,13 @@ struct Lowering {
         // call to a function that doesn't exist. A trailing block (`x.some { ...
         // }`) is passed as the final argument — the block-typed parameter — to
         // match the interpreter, which appends the evaluated block to the args.
-        if (localMethods.count(n.method)) {
+        // Only take the local path when a local definition exists at THIS
+        // arity. `this.map.get(k, default)` inside a `make Box do get(key) ...`
+        // block otherwise compiled to a local get/3 that was never defined,
+        // because the name alone matched. Falling through lets the prelude's
+        // receiver function (Map.get here) handle it, which is what the
+        // interpreter already does.
+        if (localMethods.count(n.method) && localArityExists) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
             args.push_back(rv());
@@ -1829,6 +1852,12 @@ struct Lowering {
     }
     // A single-clause match binding `pattern` against `subject`, continuing
     // with `body` — used for `let (a, b) = expr` destructuring.
+    // Single-clause destructuring (`let Just(x) = ...`, for-loop item patterns,
+    // fold state patterns). Every caller treats a non-match as an error, which
+    // is what the interpreter reports as "pattern mismatch" — so emit that
+    // explicitly. Without a catch-all the emitted `case` has no fallback, and
+    // Core Erlang's compiler crashes on the implicit failure with an internal
+    // error in beam_core_to_ssa rather than producing a runnable module.
     auto makeMatch1(ExprPtr subject, PatternPtr pattern, ExprPtr body) -> ExprPtr {
         Match m;
         m.subjects.push_back(std::move(subject));
@@ -1836,6 +1865,12 @@ struct Lowering {
         mc.patterns.push_back(std::move(pattern));
         mc.body = std::move(body);
         m.clauses.push_back(std::move(mc));
+        MatchClause fallback;
+        auto wild = std::make_unique<Pattern>();
+        wild->kind = PatKind::Wild;
+        fallback.patterns.push_back(std::move(wild));
+        fallback.body = runtimeError("pattern mismatch");
+        m.clauses.push_back(std::move(fallback));
         auto e = std::make_unique<Expr>();
         e->node = std::move(m);
         return e;
@@ -3464,6 +3499,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
+        if (!fd.clauses.empty())
+            L.localMethodArities.insert(
+                fd.name + "/" + std::to_string(fd.clauses[0].params.size()));
         if (!fd.clauses.empty()) {
             std::vector<std::string> pnames;
             for (const auto& p : fd.clauses[0].params)
@@ -3496,6 +3534,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             definedFns.insert(fd->name);
+            if (!fd->clauses.empty()) {
+                // A make-block method reaches its receiver one of two ways:
+                // implicitly through `this` (params exclude it), or as its
+                // first pattern parameter (`let rangeStart(x.._)`,
+                // `let startsWith_(@['_' | rest])`). Both spellings are legal,
+                // and which one is in play is not decidable here, so record
+                // both candidate arities — the guard's job is only to reject
+                // an arity that exists NOWHERE locally.
+                const auto params = fd->clauses[0].params.size();
+                L.localMethodArities.insert(fd->name + "/" + std::to_string(params));
+                L.localMethodArities.insert(fd->name + "/" + std::to_string(params + 1));
+            }
             const std::string& mn = fd->name;
             if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
                 L.overloadedOps.insert(mn);
@@ -3632,6 +3682,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (L.externalModules &&
             L.externalModules->receiverFunctions.count(field)) continue;
         L.localMethods.insert(field);
+        L.localMethodArities.insert(field + "/1");
     }
 
     // Buffer consecutive same-name top-level functions so they group into one

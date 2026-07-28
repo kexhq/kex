@@ -1,0 +1,28 @@
+# A `using`-imported module that overloads by arity must expose EVERY arity,
+# including to calls inside other functions. Pre-registration used to skip a
+# name it had already seen, so only the first arity was visible to a call
+# checked before the definitions themselves — `f("x", "y")` inside a function
+# failed with "`f` expects 1 argument(s), got 2" while the same call in `main`
+# worked. Regression test for both backends.
+
+module M do
+  let f(a) = "one:${a}"
+  let f(a, b) = "two:${a}${b}"
+end
+
+using M
+
+let fromFunction() -> String do
+  return f("x", "y")
+end
+
+let bothArities() -> String do
+  return "${f("solo")} / ${f("x", "y")}"
+end
+
+main do
+  IO.printLine(f("solo"))
+  IO.printLine(f("x", "y"))
+  IO.printLine(fromFunction())
+  IO.printLine(bothArities())
+end

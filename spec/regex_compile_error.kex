@@ -1,0 +1,13 @@
+# A malformed pattern in a tagged literal is a COMPILE error, not a runtime
+# failure — the compiler runs the module's `validateRegex` companion and maps
+# the engine's byte offset back onto the literal. Nothing about regex is
+# special-cased: the same `validate<Tag>` convention works for any tag.
+#
+# kex: check-only
+
+using Regex
+
+main do
+  let bad = regex`(unclosed`
+  IO.printLine(bad.source)
+end

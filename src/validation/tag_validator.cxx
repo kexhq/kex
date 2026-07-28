@@ -1,6 +1,9 @@
 #include "tag_validator.hxx"
 
 #include "../interpreter/evaluator.hxx"
+#include "../lexer/lexer.hxx"
+#include "../module/resolver.hxx"
+#include "../parser/parser.hxx"
 #include "../semantic/types.hxx"
 #include <algorithm>
 #include <cctype>
@@ -188,6 +191,78 @@ auto collect(
             }
         }, item);
     }
+}
+
+// A `using`-imported module, parsed and kept alive so the AST pointers in
+// `functions` stay valid for as long as validation runs.
+struct ImportedModule {
+    // unique_ptr, not a bare string: the vector holding these reallocates, and
+    // parsed locations reference the buffer.
+    std::unique_ptr<std::string> source;
+    std::unique_ptr<ast::Program> program;
+    Functions functions;
+    // The module is analyzed on its own so its companion's signature can be
+    // checked — the caller's analyzer only knows the user program.
+    std::unique_ptr<semantic::Analyzer> analyzer;
+};
+
+// Collects the module names a program imports with `using`, ignoring foreign
+// namespaces (Erlang./Elixir./Gleam.), which have no Kex source to parse.
+auto usingModuleNames(const ast::Program& program) -> std::vector<std::string> {
+    std::vector<std::string> names;
+    auto add = [&](const ast::TypeName& typeName) {
+        std::string name;
+        for (size_t i = 0; i < typeName.parts.size(); i++) {
+            if (i) name += ".";
+            name += typeName.parts[i];
+        }
+        if (!module::Resolver::isForeignNamespace(name))
+            names.push_back(std::move(name));
+    };
+    auto scanBody = [&](auto& self, const std::vector<ast::ModuleItem>& body)
+        -> void {
+        for (const auto& item : body) {
+            if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+                if (*block) add((*block)->module);
+            if (auto* def = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*def) self(self, (*def)->body);
+        }
+    };
+    for (const auto& item : program.items) {
+        if (auto* block = std::get_if<std::unique_ptr<ast::UsingBlock>>(&item))
+            if (*block) add((*block)->module);
+        if (auto* def = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+            if (*def) scanBody(scanBody, (*def)->body);
+    }
+    return names;
+}
+
+auto loadUsingModules(
+    const ast::Program& program,
+    const std::vector<std::string>& roots) -> std::vector<ImportedModule> {
+    std::vector<ImportedModule> modules;
+    module::Resolver resolver(roots);
+    for (const auto& name : usingModuleNames(program)) {
+        auto resolved = resolver.resolve(name);
+        if (!resolved) continue;
+
+        std::ifstream input{resolved->path};
+        if (!input) continue;
+        std::stringstream buffer;
+        buffer << input.rdbuf();
+
+        ImportedModule module;
+        module.source = std::make_unique<std::string>(buffer.str());
+        Lexer lexer(*module.source, resolved->path);
+        Parser parser(lexer.tokenizeAll(), resolved->path);
+        auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
+        // A module that does not parse is reported by the normal pipeline;
+        // silently skipping it here avoids duplicate diagnostics.
+        if (!parser.diagnostics().empty()) continue;
+        module.program = std::move(parsed);
+        modules.push_back(std::move(module));
+    }
+    return modules;
 }
 
 auto exactValidatorSignature(
@@ -484,29 +559,81 @@ auto appendIssues(
 auto validateTaggedLiterals(
     const ast::Program& program,
     const semantic::Analyzer& analyzer,
+    const std::vector<std::string>& moduleRoots,
     std::chrono::milliseconds timeout)
     -> std::vector<semantic::Diagnostic> {
     Functions functions;
     std::vector<TagUse> uses;
     collect(program, functions, uses);
 
+    // Tags defined in a `using`-imported module are validated too. Their
+    // definitions live in another file, so each module is parsed here and kept
+    // alive for the duration — `functions` holds raw AST pointers into it, and
+    // the companion is evaluated against that module's own program (which is
+    // self-contained: it can reach the prelude and intrinsics, which is all a
+    // validator is allowed to use anyway, being pure).
+    std::vector<ImportedModule> imported;
+    if (!moduleRoots.empty() && !uses.empty())
+        imported = loadUsingModules(program, moduleRoots);
+    for (auto& module : imported)
+        if (module.program) {
+            std::vector<TagUse> ignored;
+            collect(*module.program, module.functions, ignored);
+            module.analyzer = std::make_unique<semantic::Analyzer>();
+            module.analyzer->analyze(*module.program);
+        }
+
     std::vector<semantic::Diagnostic> diagnostics;
     for (const auto& use : uses) {
         if (!use.literal || use.literal->interpolating ||
             use.literal->parts.size() != 1)
             continue;
-
-        const auto tagKey = qualified(use.scope, use.literal->tag);
-        if (!functions.contains(tagKey))
-            continue; // precompiled/imported source: no local companion data
+        const std::string subject = use.literal->parts[0];
 
         const auto companion = companionName(use.literal->tag);
         const auto companionKey = qualified(use.scope, companion);
-        auto found = functions.find(companionKey);
-        if (found == functions.end())
+
+        // Prefer a program-local definition; fall back to an imported module's.
+        const ast::Program* home = &program;
+        const Functions* scope = &functions;
+        std::string moduleCompanionKey;
+        const ImportedModule* matchedModule = nullptr;
+        if (!functions.contains(qualified(use.scope, use.literal->tag))) {
+            // A module file collects its functions under its own scope
+            // ("Regex::regex"), while the tag at the use site is unqualified
+            // ("regex") — `using` brought it into scope. Match on the trailing
+            // segment, and remember the qualified key for evaluation.
+            const Functions* fromModule = nullptr;
+            for (const auto& module : imported) {
+                for (const auto& [key, definitions] : module.functions) {
+                    const auto bare = key.substr(key.rfind("::") == std::string::npos
+                                                     ? 0 : key.rfind("::") + 2);
+                    if (bare != use.literal->tag) continue;
+                    const auto prefix =
+                        key.size() > bare.size() ? key.substr(0, key.size() - bare.size())
+                                                 : std::string{};
+                    if (!module.functions.contains(prefix + companion)) continue;
+                    fromModule = &module.functions;
+                    home = module.program.get();
+                    moduleCompanionKey = prefix + companion;
+                    matchedModule = &module;
+                    break;
+                }
+                if (fromModule) break;
+            }
+            if (!fromModule)
+                continue; // precompiled source, or no companion anywhere
+            scope = fromModule;
+        }
+
+        auto found = scope->find(
+            scope == &functions ? companionKey : moduleCompanionKey);
+        if (found == scope->end())
             continue;
 
-        if (!exactValidatorSignature(found->second, analyzer)) {
+        const auto& signatureSource =
+            matchedModule ? *matchedModule->analyzer : analyzer;
+        if (!exactValidatorSignature(found->second, signatureSource)) {
             diagnostics.push_back({
                 semantic::Diagnostic::Level::Error,
                 found->second.front()->location,
@@ -520,9 +647,9 @@ auto validateTaggedLiterals(
             interpreter::Evaluator evaluator;
             evaluator.loadPrelude();
             auto result = evaluator.evaluateFunction(
-                program,
-                companionKey,
-                {interpreter::Value::string(use.literal->parts[0])},
+                *home,
+                scope == &functions ? companionKey : moduleCompanionKey,
+                {interpreter::Value::string(subject)},
                 timeout);
             appendIssues(result, use, companion, diagnostics);
         } catch (const interpreter::EvaluationTimeout&) {

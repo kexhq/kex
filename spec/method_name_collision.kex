@@ -1,0 +1,22 @@
+# A user type may define a method whose name the prelude also uses. The BEAM
+# lowering must pick a local method by NAME AND ARITY, and leave other
+# receivers to the prelude — otherwise `b.get(0)` compiled to `kex_prelude:get`
+# (dying at runtime), while `this.slots.get(k, d)` inside the make block
+# compiled to a local `get/3` that was never defined (erlc failure).
+
+record Box do
+  slots : Map<Any, String>
+end
+
+make Box do
+  get :> Integer -> String
+  let get(key) = this.slots.get(key, "none")
+end
+
+main do
+  let b = Box { slots: { "x": "1" } }
+  IO.printLine(b.get(0))
+  # The prelude's Map.get must still work for an ordinary map.
+  IO.printLine({ "k": "7" }.get("k", "0"))
+  IO.printLine({ "k": "7" }.get("missing", "0"))
+end

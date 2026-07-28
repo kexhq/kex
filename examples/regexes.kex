@@ -1,17 +1,20 @@
-# Regex — ASPIRATIONAL. Regexes are not implemented yet.
-# This file is a design sketch to feel out the syntax/API before building it.
-# See docs/regex-plan.md (the Regex module) and docs/strings-and-tags-plan.md
-# (the backtick-string / tagged-literal machinery). Not wired into the harness.
-
-# kex: no-check
+# Regex — matching, capturing, replacing and splitting with PCRE patterns.
+#
+# (Named regexes.kex, not regex.kex: a source file named `regex.kex` in the
+# same directory resolves as module `Regex` and shadows the stdlib one, so
+# `using Regex` would find this file instead.)
+# Backed by PCRE2 in the interpreter and Erlang's `re` on BEAM: the same
+# pattern language on both. See docs/regex-plan.md for the design decisions.
 
 using Regex
 
-# ─── Two spellings, one function ─────────────────────────────────────────────
-# The tag form eventually lowers to the ordinary two-argument tag ABI.
+# ─── Two spellings, differing in what they promise ───────────────────────────
+# The tag form is compile-time validated, so it returns a bare Regex. The call
+# form takes any String, so it returns Result — that difference is the reason
+# both exist.
 
-let digits    = regex`\d+`            # tag form   — terse, inline
-let digits2   = regex(`\d+`)          # ordinary call over a raw String
+let digits    = regex`\d+`            # tag form  -> Regex
+let digits2   = regex("\\d+")          # call form -> Result<Regex, RegexError>
 let words     = re`\w+`               # `re` is the short alias
 
 # Backtick body means no slash-escaping noise — compare to /https?:\/\/\S+/
@@ -43,8 +46,10 @@ end
 # bodies AT COMPILE TIME —
 # the same convention used by `validateSql`, `validateHtml`, or a user's tag:
 #
-#   let bad = regex`(unclosed`     # compile error: unbalanced parenthesis
-#                    ^             # caret points inside the literal
+#   let bad = regex`(unclosed`     # compile error: missing closing parenthesis
+#                            ^     # caret points inside the literal
+#
+# This is real: see spec/regex_compile_error.kex.
 #
 # An ordinary or computed call is validated at runtime instead —
 # `regex(userInput)` can still fail when the string is bad.
@@ -91,11 +96,17 @@ let ci = regex`(?i)hello`             # caseless
 # the dedent margin, so indenting it to match the code strips that indentation
 # from every line of the body (Java text blocks; Ruby's <<~ computes the margin
 # from the content instead, and gives you no say).
-let verbose = regex`(?x)
+let verbose = regex`
+    (?x)
     \d{3}   # area code
     -
     \d{4}   # local number
-  `
+    `
+
+# ─── Zero-width matches follow the engines ───────────────────────────────────
+# Reported, never filtered — the same as Ruby, Python, JS and Erlang.
+#   "a1b2".scan(regex`\d*`)      -> 5 matches (the empty ones included)
+#   "abc".replace(regex`x*`, "-") -> "-a-b-c-"
 
 # ─── Global matches, replace, split (UFCS pipelines) ─────────────────────────
 
@@ -104,7 +115,7 @@ foul demoBulk do
 
   # scan/2 returns every match as a list of Match.
   let pairs = text.scan(regex`(\w+)=(\d+)`).map do |m|
-    (m.group(1, ""), m.group(2, "").toInt.or(0))
+    (m.group(1, ""), Integer.parse(m.group(2, "")).or(0))
   end
   IO.printLine(pairs.inspect)         # [("cat", 1), ("dog", 2), ("bird", 3)]
 
@@ -118,9 +129,11 @@ foul demoBulk do
   end
   IO.printLine(normalized)            # 2026/7/4
 
-  # split/2 on a pattern.
+  # split on a pattern — Ruby's semantics (trailing empties dropped, leading
+  # kept, capture groups interleaved). The limit form is Regex.splitLimit.
   let fields = "a, b ,c,  d".split(regex`\s*,\s*`)
   IO.printLine(fields.inspect)        # ["a", "b", "c", "d"]
+  IO.printLine(Regex.splitLimit("a,b,c", regex`,`, 2).inspect)   # ["a", "b,c"]
 end
 
 # ─── A real-ish use: parse a log line, guard with the match ──────────────────
@@ -148,7 +161,11 @@ main(_args) do
   end
 
   match parseDate("2026-07-27") do
-    Just(d) -> IO.printLine("y=${d.group(:year, "?")}")
+    Just(d) -> IO.printLine("y=${d.get(:year, "?")}")
     None    -> IO.printLine("bad date")
   end
+
+  # The interpolated value was escaped, so `.` matches a literal dot only.
+  let dotted = startsWith("a.c")
+  IO.printLine("quoted: ${"a.c!".matches?(dotted)} ${"abc!".matches?(dotted)}")
 end

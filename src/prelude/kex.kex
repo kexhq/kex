@@ -14,3 +14,15 @@ foul module Kex do
     let list = Kex.Intrinsic.Kex.featureList()
   end
 end
+
+# Returns the pretty-printed representation of any value — the same form the
+# REPL echoes. Universal: reachable on every type through UFCS.
+#
+# @param value [A]
+# @return [String]
+#
+# @example
+#   [1, 2].inspect          # => "[1, 2]"
+#   { a: 1 }.inspect        # => "{ a: 1 }"
+#   Just("hi").inspect      # => "Just(\"hi\")"
+let inspect(value) = Kex.Intrinsic.Kex.inspect(value)

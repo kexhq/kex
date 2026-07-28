@@ -31,6 +31,15 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     // Kex.backend and Kex.Feature.* are source-owned. These implementations
     // are reachable only through the private Kex.Intrinsic.Kex boundary.
+    // inspect(value) -> String — the pretty-printed representation, exposed as
+    // an intrinsic (not only as a public native) so the prelude can declare it
+    // once and BOTH backends resolve the same name. Previously `.inspect` was
+    // interpreter-only and failed with "Undefined method: inspect" on BEAM.
+    defineIntrinsic("Kex::inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::string("()");
+        return Value::string(args[0]->inspect());
+    });
+
     defineIntrinsic("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         return makeVariant("Interpreter");
     });

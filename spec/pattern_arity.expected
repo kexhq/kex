@@ -1,0 +1,3 @@
+spec/pattern_arity.kex:15:7: error: `Just` constructor takes 1 value(s), but the pattern destructures 2
+spec/pattern_arity.kex:17:7: error: `Pair` record takes 2 value(s), but the pattern destructures 1
+spec/pattern_arity.kex:21:13: error: `ParseError` record takes 5 value(s), but the pattern destructures 1

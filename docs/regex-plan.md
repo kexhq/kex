@@ -459,6 +459,27 @@ That special case belongs to `String.split`, not the regex overload, and Kex
 should not replicate the magic-single-space rule at all; `` split(regex`\s+`) ``
 with its leading `""` is the honest behavior.
 
+**`split` shares `String`'s UFCS name — implementation note.** Unlike `matches`,
+`scan`, and `replace`, `split` already exists on `String`
+(`split :> String -> [String]`, `src/prelude/string.kex:82`), so `s.split(re)`
+resolves to *that* method, not to `Regex`'s. Rather than rename, the native
+`String::split` dispatches on its argument: a `Regex` separator is handed to the
+regex engine, a `String` separator keeps the literal behavior. This does not
+leak the module into the prelude — a `Regex` can only be built through
+`using Regex`, so the branch is unreachable without it.
+
+The limit form does not fit through that name, since `String.split` is declared
+with a single separator parameter: **`Regex.split(s, re, 2)` must be called
+qualified.** Fixing this properly needs `String.split`'s signature to admit
+`String | Regex`, which in turn needs the `Regex` *type* (not its functions)
+visible to the prelude — a real design question, deferred rather than hacked.
+
+> **Checker gap found while implementing this.** Before the dispatch existed,
+> `"a, b ,c".split(someRegex)` **type-checked** and silently returned
+> `["a", ",", " ", "b", …]` — `String::split` fell through to its empty-separator
+> path and split into characters. A record argument where `String` is declared
+> should be a type error and was not. Independent of regex; worth its own fix.
+
 **BEAM mapping.** Erlang `re:split/3` is close but not identical: it keeps
 trailing empties by default (Ruby's default is `re:split`'s `trim` option) and
 takes `{parts, N}` where Ruby takes a positive limit. Both are option-level
@@ -659,6 +680,90 @@ would populate `:year` with `07`. Since named groups are also numbered, the
 safer construction is to build `Match` from the numbered `index` results and use
 `namelist` only to map each name onto its group *number*.
 
+### Naming is constrained by BEAM module routing — learned while implementing
+
+**On BEAM, a module in scope via `using` captures a method name for _every_
+receiver.** Every `.name(…)` call in the program lowers to
+`call 'Kex.Regex':'name'(…)` once `using Regex` is present — regardless of what
+the receiver actually is. The interpreter resolves by receiver type instead, so
+the two backends disagree, and the BEAM behaviour is the binding constraint.
+
+Consequences, each verified by a crash before it was designed around:
+
+| Name | What happened | Resolution |
+|---|---|---|
+| `Match.get` | `using Regex` made a plain `someMap.get(k)` fail with `function_clause` — the Match clause captured every `get`. | Accessor is **`group`**, not `get`. Also matches Python's `m.group(1)` and Java's `matcher.group(1)`. |
+| `Regex.split` | Exporting `split` routed `"a,b".split(",")` and even the no-argument `"hi".split` into this module. | The module **must not export `split`**. `s.split(re)` works via `String.split`'s dispatch; the limit form is `Regex.splitLimit(s, re, n)`. |
+| `RegexError` `implement: Errorable` | A `message` method alongside the `message` field made `e.message` dispatch to the method — `undef` on BEAM. | No trait implementation; a bare `message` field, exactly as `ParseError` does. Nothing in the tree implements `Errorable`. |
+
+The general rule this yields, worth applying to any future opt-in module: **an
+opt-in module may not export a name the prelude already defines as a method on
+another type** until BEAM dispatch is receiver-aware. `matches`, `matches?`,
+`scan`, and `replace` are safe precisely because `String` defines none of them.
+
+**`Match.group` vs `get` — two of the three blockers are now fixed.** The plan
+specifies map-like access, so `m.get(0)` / `m[0]` (indexing lowers to `.get`)
+are what users reach for. Making a user type define a method the prelude also
+defines needed two fixes, both landed and covered by
+`spec/method_name_collision.kex`:
+
+- **Typechecker.** A method call whose winning signature is a *local* make-block
+  method was still bound to an imported function by guessing on arity, so
+  `b.get(0)` on a user record with its own `get` was lowered to
+  `kex_prelude:get/2`. `merged` is `imported ++ local ++ user`, so the winner's
+  index already says where it came from; the guess now only runs when the
+  origin is genuinely unknown.
+- **Lowering.** A local method claimed a UFCS call by NAME alone, so
+  `this.slots.get(k, d)` inside `make Box do get(key) ... end` compiled to a
+  local `get/3` that was never defined (erlc failure). The local path now
+  requires a local definition at that name *and arity*; otherwise the prelude
+  receiver function handles it. Note a make-block method reaches its receiver
+  either implicitly through `this` or as its first pattern parameter
+  (`let rangeStart(x.._)`), so both candidate arities are recorded — assuming
+  only the implicit form broke `spec/range.kex` and `spec/my_starts_with.kex`.
+
+**The accessor is `group` — decided, not a stopgap.** It matches Python's
+`m.group(1)` and Java's `matcher.group(1)`, reads correctly for a capture
+group, and sidesteps the defect below entirely. `m.captures[0]` remains
+available for indexed access. Should `Match.get` ever become viable, adding it
+alongside `group` is additive; the name is not blocking anything.
+
+**What would be needed for `Match.get`/`m[0]`,** recorded so the diagnosis is
+not lost: `Match`
+defines `get/1` *and* `get/2`, so inside the make block `this.captures.get(key)`
+has the same name **and arity** as the method being defined. Name+arity cannot
+separate them — only the receiver's type can. Routing the body through
+`Kex.Intrinsic.Map.get` to dodge UFCS did not help either: `m.get(1)` then works
+but `m.get(1, "?")` returns `None` on the interpreter and `if_clause` on BEAM, so
+multi-arity make-block method dispatch is itself defective, in *both* backends.
+That is a third, independent defect and the remaining prerequisite for
+`Match.get` and `m[0]`.
+
+**A field-name collision worth its own fix.** A user record field whose name
+matches a prelude *method* is silently routed to that method on BEAM instead of
+the field: `makeAccessors` skips generating the local accessor when a prelude
+receiver function shares the name (`src/ir/lower.cxx`, the `rest` comment), so
+`record Holder do items : Map<Any, String> end` compiles `h.items` to
+`kex_prelude:items/1` — `Range.items` — and dies at runtime with `if_clause`.
+`entries` hits `Map.entries` the same way (`badmap`). The interpreter is
+unaffected. Found while writing `spec/union_param_atom.kex`, which therefore
+names its field `slots`.
+
+**Two pre-existing gaps found on the way, neither regex-specific:**
+
+- **`.inspect` is not implemented on BEAM at all** — `["a","b"].inspect` fails
+  with `Undefined method: inspect`. The spec uses `join` instead so it can run
+  on both backends.
+- **`"hi".split` (no-argument) crashes the interpreter** with a corrupted error
+  message, suggesting a memory bug. Reproduces with no `using Regex` present and
+  with the regex dispatch removed, and BEAM handles it correctly — so it is an
+  interpreter-only, pre-existing defect in the no-argument `String.split` path.
+
+**Error text differs between engines and must not be asserted on.** For
+`(unclosed`, PCRE2 says "missing closing parenthesis" while Erlang `re` says
+"missing )". The *position* agrees (both 9). Specs assert the position and that
+a message exists, never its wording.
+
 ### Interpolation safety
 
 When a `regex` body interpolates (`` regex$`^${prefix}\d+` ``), the spliced value
@@ -733,18 +838,86 @@ Nothing regex-specific exists yet — no `Regex` module, no PCRE2 dependency.
      `validation::validateTaggedLiterals(program, analyzer, timeout = 1s)` in
      `src/validation/tag_validator.{hxx,cxx}` implements the companion-lookup
      convention and timeout-bounded pure evaluation that step 5 needs.
-2. **`Regex` module + `Match` type** — `regex(String) -> Result<Regex,
-   RegexError>` (settle the tag-unwrap sub-decision here), `Regex.quote`,
-   and `Match` (map-like: `get(Int|Atom) -> String?`, `get(k, default)`).
+2. ✅ **`Regex` module + `Match` type** — *done.* `src/stdlib/regex.kex`
+   (opt-in via `using Regex`, NOT the prelude — `src/prelude/` is always
+   loaded). `regex(String) -> Result<Regex, RegexError>`, `Regex.quote`, and
+   `Match` with `group(Int|Atom)` / `group(k, default)`. The tag-unwrap
+   sub-decision is still open, since the tag form is not built yet.
 3. **String ops** — `capture`, `matches?`, `scan`, `replace` (literal + block),
    `split`, as functions in `Regex`/prelude reachable via UFCS.
-4. **Backends** — interpreter engine (see Backend mapping) + BEAM `re:compile`/
-   `re:run`; keep both semantically aligned, spec-tested like the rest.
-5. **`validateRegex`** — check raw tagged patterns at compile time;
-   runtime-compile (cached) otherwise. Requires the
-   compile-time-evaluation facility from the strings & tags plan.
-6. **Tag form + `re` alias** — only after tagged literals land as their own
-   feature; pure sugar over step 2's call.
+4. ✅ **Backends** — *done.* Interpreter on PCRE2
+   (`src/interpreter/stdlib/regex.cxx`) + BEAM on `re`
+   (`runtime/src/kex_intrinsic_regex.erl`). `spec/regex_basics.kex` produces
+   byte-identical output on both (`make spec-beam` counts it as matching).
+5. ✅ **`validateRegex`** — *done.* A malformed `` regex`(unclosed` `` is now a
+   **compile error** with the caret inside the literal
+   (`spec/regex_compile_error.kex`). Nothing regex-specific was added to the
+   compiler; two general gaps in the tag-validator had to be closed first:
+   - **Imported tags were skipped.** `collect()` gathered only functions defined
+     in the user program, so any tag from a `using` module — `regex`, or a
+     third-party `sql`/`html` — silently skipped validation. The validator now
+     takes `moduleRoots`, parses the `using` modules, and looks the tag and its
+     companion up there too. A module file collects under its own scope
+     (`Regex::regex`), so the lookup matches on the trailing segment.
+   - **The companion's signature could not be checked.** `exactValidatorSignature`
+     asks the caller's `Analyzer`, which knows nothing about an imported
+     module's functions. Each imported module is now analyzed on its own and
+     that analyzer answers for its companions.
+
+   Note the validator reads the **clause's inline return annotation**, so a
+   companion must be written `let validateX(s: String) -> [TaggedValidation.Issue]`.
+   A separate `validateX : String -> [TaggedValidation.Issue]` signature line is
+   rejected — worth knowing, since it fails with a confusing "must be pure with
+   signature" error.
+
+   **Open conflict — interpolating tags.** This plan decided that
+   `` regex$`^${x}` `` returns a bare `Regex` (cannot fail), justified by
+   validating the author-written skeleton at compile time. The tag subsystem
+   **deliberately does not do that**: it skips any literal with `interpolating`
+   set, and `tests/validation_test.cxx` enforces it with a test named "does not
+   invoke companions for interpolating tags". So today:
+
+   ```kex
+   regex$`(^${word}`   # type says it cannot fail; actually raises at runtime
+   ```
+
+   Skeleton validation was implemented (join the parts with an inert
+   placeholder, validate that, report at the literal since the cooked-offset
+   map only reconstructs raw bodies) and **reverted** — it works, but it
+   changes a cross-cutting rule for every tag, which is the strings & tags
+   plan's call, not this one's. Resolving it means either lifting that rule, or
+   revisiting the bare-`Regex` return type for interpolating tags.
+
+6. ✅ **Tag form** — *done.* `` regex`\d+` `` and `` regex$`^${x}` `` both work,
+   returning a bare `Regex`; interpolated values are escaped per character
+   (verified: `` regex$`^${"a.c"}` `` yields `^a\.c`, so `"abc"` does not
+   match). Implemented on both backends (`Regex::tag` / `kex_intrinsic_regex:tag/2`).
+
+   **Two typechecker bugs surfaced and were fixed here** — both looked like
+   BEAM limitations at first, and neither actually was. `-R` merges imported
+   module source into the program before checking (`resolveBeamDeps`), which is
+   why it hit them while the interpreter path did not:
+
+   - **Multi-arity module functions lost every arity but the first.**
+     `preRegisterFunctionDef` skipped a name it had already seen, so with
+     `let f(a)` and `let f(a, b)` in a module, only arity 1 was visible to calls
+     checked before the definitions themselves — hence ``regex` expects
+     1 argument(s), got 2`` for the two-argument tag ABI. It now skips only
+     arities already registered and appends the rest. Reproducible with no
+     regex involved: a local `module M` with `f/1` and `f/2`, called from inside
+     a function, failed on *both* backends.
+   - **`Atom` was not registered as a primitive type name.** The annotation
+     `Atom` fell through to an unregistered `NamedType("Atom")` while an atom
+     literal infers `PrimitiveType{Atom}` — same printed name, different kind,
+     so they never matched. The symptom was the self-contradictory
+     ``group` expects argument 2 to be Atom | Integer, but got Atom`.
+     `m_globals` now maps `Atom` like every other primitive, which is what
+     makes the `Match.group` union parameter this plan specified actually work
+     outside `main`.
+
+   ✅ The **`re` alias** is done — a second name bound to the same two
+   functions, plus `validateRe` delegating to `validateRegex`. Verified on both
+   backends: `` re`https?://\S+` `` and `re("\\d+")`.
 
 ## Open questions
 

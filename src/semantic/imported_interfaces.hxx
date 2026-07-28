@@ -58,6 +58,10 @@ struct ImportedInterfaces {
         receiverFunctions;
     std::vector<ImportedTraitConformance> traitConformances;
     std::vector<ImportedADT> adts;
+    // Field count per imported record, so a pattern that destructures the
+    // wrong number of them is a compile error rather than an opaque runtime
+    // failure (`if_clause` on BEAM).
+    std::unordered_map<std::string, size_t> recordArities;
     std::vector<TraitDef> traits;
 };
 
