@@ -35,6 +35,7 @@ private:
     // Top-level
     auto checkTopLevel(const ast::TopLevelItem& item) -> void;
     auto checkModule(const ast::ModuleDef& mod) -> void;
+    auto checkUsingBlock(const ast::UsingBlock& block) -> void;
 
     // ADT registry (sum types with a known, closed constructor set), for
     // match exhaustiveness checking. Populated in a pass over the whole
@@ -115,6 +116,7 @@ private:
     // `Module::name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
+    auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
 
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
@@ -146,6 +148,19 @@ private:
     std::vector<Diagnostic>* m_diagnostics = nullptr;
     TypeEnv m_globals;
     std::vector<TypeEnv> m_scopeStack;
+    struct ImportSelection {
+        std::string module;
+        std::vector<std::string> onlyNames;
+        std::vector<std::string> exceptNames;
+    };
+    std::vector<std::vector<ImportSelection>> m_importScopeStack;
+    std::vector<ImportSelection> m_declarationImports;
+    std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>>
+        m_functionImports;
+    std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>>
+        m_makeImports;
+    std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
+        m_mainImports;
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;

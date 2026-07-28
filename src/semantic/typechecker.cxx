@@ -36,7 +36,68 @@ auto TypeChecker::check(const ast::Program& program,
     m_nullaryConstructors.clear();
     m_methodSignatures.clear();
     m_scopeStack.clear();
+    m_importScopeStack.clear();
+    m_declarationImports.clear();
+    m_functionImports.clear();
+    m_makeImports.clear();
+    m_mainImports.clear();
     pushScope();
+
+    auto selectionFor = [](const ast::UsingBlock& block) {
+        ImportSelection selection;
+        for (size_t i = 0; i < block.module.parts.size(); ++i) {
+            if (i) selection.module += ".";
+            selection.module += block.module.parts[i];
+        }
+        selection.onlyNames = block.onlyNames;
+        selection.exceptNames = block.exceptNames;
+        return selection;
+    };
+    std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>)>
+        collectModuleImports;
+    collectModuleImports = [&](const ast::ModuleDef& module,
+                               std::vector<ImportSelection> active) {
+        for (const auto& item : module.body) {
+            std::visit([&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    if (node && node->body.empty())
+                        active.push_back(selectionFor(*node));
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (node) m_functionImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                    if (node) m_makeImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) collectModuleImports(*node, active);
+                }
+            }, item);
+        }
+    };
+    std::vector<ImportSelection> topLevelImports;
+    for (const auto& item : program.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                if (node && node->body.empty())
+                    topLevelImports.push_back(selectionFor(*node));
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                if (node) m_functionImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) m_makeImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                if (node) m_mainImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectModuleImports(*node, topLevelImports);
+            }
+        }, item);
+    }
 
     std::function<void(const ast::ModuleDef&)> collectLocalModule =
         [&](const ast::ModuleDef& mod) {
@@ -700,6 +761,8 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 args.push_back(arg ? resolveTypeExpr(*arg, genericVars) : Type::unknown());
             }
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
+            if (name == "Optional" && args.size() == 1)
+                return Type::optional(args[0]);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -848,6 +911,8 @@ auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
             checkMakeDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
             checkMainBlock(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+            checkUsingBlock(*node);
         }
     }, item);
 }
@@ -863,13 +928,38 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
                 checkMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 checkModule(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                checkUsingBlock(*node);
             }
         }, item);
     }
     popScope();
 }
 
+auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
+    ImportSelection selection;
+    for (size_t i = 0; i < block.module.parts.size(); ++i) {
+        if (i) selection.module += ".";
+        selection.module += block.module.parts[i];
+    }
+    selection.onlyNames = block.onlyNames;
+    selection.exceptNames = block.exceptNames;
+    if (block.body.empty()) {
+        if (!m_importScopeStack.empty())
+            m_importScopeStack.back().push_back(std::move(selection));
+        return;
+    }
+    pushScope();
+    m_importScopeStack.back().push_back(std::move(selection));
+    inferBody(block.body);
+    popScope();
+}
+
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_functionImports.find(&def);
+        imports != m_functionImports.end())
+        m_declarationImports = imports->second;
     // A "declared" signature is one from a standalone TypeAnnotation
     // (`fact : Integer -> Integer`) — tracked in m_annotationDeclared.
     // Pre-registered provisional sigs (for forward-reference/recursion) are
@@ -1040,9 +1130,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
         }
     }
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
+        m_declarationImports = imports->second;
     pushScope();
     bool wasInMakeBlock = m_inMakeBlock;
     auto prevMakeType = m_currentMakeType;
@@ -1068,6 +1162,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     popScope();
 
     checkTraitImplementation(def);
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
@@ -1118,6 +1213,9 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
 }
 
 auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_mainImports.find(&block); imports != m_mainImports.end())
+        m_declarationImports = imports->second;
     if (!block.synthetic) pushScope();
     for (size_t i = 0; i < block.params.size(); i++) {
         const auto& param = block.params[i];
@@ -1133,6 +1231,7 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
     }
     inferBody(block.body);
     if (!block.synthetic) popScope();
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr {
@@ -1159,7 +1258,8 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
         functions != m_importedInterfaces->receiverFunctions.end())
         for (const auto& function : functions->second)
-            result.push_back(function.signature);
+            if (importedFunctionVisible(function))
+                result.push_back(function.signature);
     for (const auto& [_, module] : m_importedInterfaces->modules) {
         if (!module.automaticImport) continue;
         if (auto functions = module.exports.find(name);
@@ -1168,6 +1268,33 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
                 result.push_back(function.signature);
     }
     return result;
+}
+
+auto TypeChecker::importedFunctionVisible(
+    const ImportedFunction& function) const -> bool {
+    if (function.sourceModule.empty()) return true;
+    if (m_importedInterfaces) {
+        if (auto module = m_importedInterfaces->modules.find(function.sourceModule);
+            module != m_importedInterfaces->modules.end() &&
+            module->second.automaticImport)
+            return true;
+    }
+    auto selected = [&](const ImportSelection& import) {
+        if (import.module != function.sourceModule) return false;
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(),
+                      function.sourceName) == import.onlyNames.end())
+            return false;
+        return std::find(import.exceptNames.begin(), import.exceptNames.end(),
+                         function.sourceName) == import.exceptNames.end();
+    };
+    if (std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
+                    selected))
+        return true;
+    for (const auto& scope : m_importScopeStack)
+        if (std::any_of(scope.begin(), scope.end(), selected))
+            return true;
+    return false;
 }
 
 auto TypeChecker::resolveBlockHints(const std::string& name,
@@ -1412,6 +1539,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return Type::named(node.name);
             auto type = lookupVar(node.name);
             return type ? type : Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+            ImportSelection selection;
+            for (size_t i = 0; i < node.module.parts.size(); ++i) {
+                if (i) selection.module += ".";
+                selection.module += node.module.parts[i];
+            }
+            selection.onlyNames = node.onlyNames;
+            selection.exceptNames = node.exceptNames;
+            if (node.body.empty()) {
+                if (!m_importScopeStack.empty())
+                    m_importScopeStack.back().push_back(std::move(selection));
+                return Type::unit();
+            }
+            pushScope();
+            m_importScopeStack.back().push_back(std::move(selection));
+            auto bodyType = inferBody(node.body);
+            popScope();
+            return bodyType;
         }
         else if constexpr (std::is_same_v<T, ast::TryExpr>) {
             auto operand = resolve(
@@ -2501,7 +2647,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    importedFunctions.push_back(&function);
+                    if (importedFunctionVisible(function))
+                        importedFunctions.push_back(&function);
         } else {
             for (const auto& [_, module] : m_importedInterfaces->modules) {
                 if (!module.automaticImport) continue;
@@ -2515,7 +2662,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    importedFunctions.push_back(&function);
+                    if (importedFunctionVisible(function))
+                        importedFunctions.push_back(&function);
         }
     }
     // A module declared in the current compilation unit shadows a package
@@ -2735,8 +2883,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // receivers outside of make blocks (m_currentMakeType is empty),
     // imported interfaces are authoritative and a mismatch is a real
     // type error.
-    if (!argTypes.empty() && (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
-                              (isMethodCall && !hasUser && m_currentMakeType &&
+    if (isMethodCall && !argTypes.empty() &&
+        (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
+                              (!hasUser && m_currentMakeType &&
                                (std::holds_alternative<PrimitiveType>(argTypes[0]->kind) ||
                                 std::holds_alternative<SizedIntType>(argTypes[0]->kind))))) {
         bool anyFirstParamPlausible = false;
@@ -2986,11 +3135,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
 auto TypeChecker::pushScope() -> void {
     m_scopeStack.emplace_back();
+    m_importScopeStack.emplace_back();
 }
 
 auto TypeChecker::popScope() -> void {
     if (!m_scopeStack.empty()) {
         m_scopeStack.pop_back();
+        m_importScopeStack.pop_back();
     }
 }
 

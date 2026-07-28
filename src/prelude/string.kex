@@ -79,7 +79,7 @@ make String, implement: Enumerable, Foldable do
   # @example
   #   "a,b,c".split(",")   # => ["a", "b", "c"]
   #   "hi".split           # => ["h", "i"]
-  split :> String -> [String]
+  split :> (String | Regex) -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)

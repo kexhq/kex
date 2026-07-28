@@ -15,6 +15,11 @@ struct ImportedFunction {
     // Source parameter names excluding the receiver for receiver functions.
     std::vector<std::string> paramNames;
     Signature signature;
+    // Source module that owns this export. Receiver functions are copied into
+    // a name-indexed table, so retaining ownership here is what lets semantic
+    // analysis apply lexical `using` policy instead of making every opt-in
+    // module globally visible.
+    std::string sourceModule;
 };
 
 struct ImportedModuleInterface {

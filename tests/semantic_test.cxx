@@ -6,6 +6,7 @@
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
 #include "../src/common/prelude_interfaces.hxx"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -831,6 +832,61 @@ int main() {
             interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
             assertTrue(hasErrorWithInterfaces(
                 "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+        });
+
+        it("keeps opt-in receiver functions behind lexical using", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface opt;
+            opt.sourceModule = "Opt";
+            opt.automaticImport = false;
+            interfaces.modules["Opt"] = std::move(opt);
+
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.sourceModule = "Opt";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            interfaces.receiverFunctions["doubled"].push_back(
+                std::move(doubled));
+
+            assertFalse(hasErrorWithInterfaces(
+                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+            assertTrue(hasErrorWithInterfaces(
+                "using Opt\nmain do \"wrong\".doubled end\n",
+                interfaces, "doubled"));
+            assertTrue(hasErrorWithInterfaces(
+                "using Opt, only: [doubled]\n"
+                "let bad() = \"wrong\".doubled\n",
+                interfaces, "doubled"));
+            assertFalse(hasErrorWithInterfaces(
+                "using Opt, except: [doubled]\n"
+                "main do \"wrong\".doubled end\n",
+                interfaces, "doubled"));
+        });
+
+        it("registers Regex as an opt-in typed stdlib module", []() {
+            const auto& interfaces = preludeInterfaces();
+            auto regex = interfaces.modules.find("Regex");
+            assertTrue(regex != interfaces.modules.end());
+            assertFalse(regex->second.automaticImport);
+            assertTrue(regex->second.exports.count("regex") > 0);
+            assertTrue(regex->second.exports.count("replace") > 0);
+
+            auto replace = interfaces.receiverFunctions.find("replace");
+            assertTrue(replace != interfaces.receiverFunctions.end());
+            assertTrue(std::any_of(
+                replace->second.begin(), replace->second.end(),
+                [](const auto& function) {
+                    return function.sourceModule == "Regex";
+                }));
+        });
+
+        it("infers the typed result of a using-imported regex tag", []() {
+            assertTrue(hasError(
+                "using Regex\n"
+                "let needsString(value: String) = value\n"
+                "main do needsString(regex`\\\\d+`) end\n",
+                "needsString"));
         });
 
         it("retains the exact imported receiver target selected by type", []() {

@@ -119,13 +119,15 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
 }
 
 auto importedFunction(const KexiExport& exported,
-                      const std::string& backendModule)
+                      const std::string& backendModule,
+                      const std::string& sourceModule)
     -> kex::semantic::ImportedFunction {
     kex::semantic::ImportedFunction result;
     result.sourceName = exported.name;
     result.backendFunction = exported.beamFunction;
     result.backendModule = backendModule;
     result.backendArity = exported.beamArity;
+    result.sourceModule = sourceModule;
     result.paramNames = exported.paramNames;
     TypeVarMap vars;
     std::vector<kex::semantic::TypePtr> params;
@@ -137,13 +139,15 @@ auto importedFunction(const KexiExport& exported,
 }
 
 auto importedReceiverFunction(const KexiMethod& receiver,
-                              const std::string& backendModule)
+                              const std::string& backendModule,
+                              const std::string& sourceModule)
     -> kex::semantic::ImportedFunction {
     kex::semantic::ImportedFunction result;
     result.sourceName = receiver.name;
     result.backendFunction = receiver.beamFunction;
     result.backendModule = backendModule;
     result.backendArity = receiver.beamArity;
+    result.sourceModule = sourceModule;
     result.paramNames = receiver.paramNames;
     TypeVarMap vars;
     auto receiverSemType = semanticType(receiver.receiverType, vars);
@@ -177,7 +181,7 @@ auto importedTrait(const KexiTraitDef& trait,
                 required.isFoul});
             continue;
         }
-        auto imported = importedReceiverFunction(*method, {});
+        auto imported = importedReceiverFunction(*method, {}, {});
         auto params = std::move(imported.signature.params);
         if (!params.empty()) params.erase(params.begin());
         result.requiredMethods.push_back(kex::semantic::Signature{
@@ -609,7 +613,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
             imported.isFoul = module.chunk.metadata.isFoul;
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
-                    importedFunction(exported, module.beamAtom));
+                    importedFunction(exported, module.beamAtom, sourceModule));
             for (const auto& trait : module.chunk.metadata.traitDefs)
                 interfaces.traits.push_back(
                     importedTrait(trait, module.chunk.typeInterface));
@@ -628,7 +632,9 @@ auto KexiRegistry::buildSemanticInterfaces() const
                 for (const auto& receiver : module.chunk.typeInterface.methods) {
                     if (receiver.typeOnly) continue;
                     interfaces.receiverFunctions[receiver.name].push_back(
-                        importedReceiverFunction(receiver, module.beamAtom));
+                        importedReceiverFunction(
+                            receiver, module.beamAtom,
+                            module.chunk.metadata.sourceModule));
                 }
             }
     }

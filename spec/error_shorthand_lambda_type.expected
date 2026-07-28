@@ -2,5 +2,5 @@ spec/error_shorthand_lambda_type.kex:3:25: error: `split` expects argument 1 to 
 
 split : String -> [String]
 
-split : String -> String -> [String]
+split : String -> String | Regex -> [String]
 Aborted: fix type errors before running (use --no-check to skip).
