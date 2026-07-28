@@ -84,6 +84,19 @@ make String, implement: Enumerable, Foldable do
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 
+  # Replaces every literal occurrence of +pattern+. An empty pattern matches
+  # at every character boundary, including both ends.
+  #
+  # @param pattern [String]
+  # @param replacement [String]
+  # @return [String]
+  #
+  # @example
+  #   "a-b-c".replace("-", "+")   # => "a+b+c"
+  #   "abc".replace("", "-")      # => "-a-b-c-"
+  replace :> String -> String -> String
+  let replace(pattern, replacement) = Kex.Intrinsic.String.replace(this, pattern, replacement)
+
   # Removes leading and trailing whitespace.
   #
   # @return [String]

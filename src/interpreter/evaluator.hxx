@@ -135,8 +135,15 @@ private:
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
-    auto resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+    auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
+                           const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
+    auto registerRuntimeSignature(const ast::TypeAnnotation& annotation,
+                                  const std::string& scope,
+                                  bool implicitReceiver) -> void;
+    auto runtimeTypeMatches(const ValuePtr& value,
+                            const ast::TypeExpr& type) const -> bool;
+    auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
@@ -204,6 +211,12 @@ private:
     std::unique_ptr<Scheduler> m_scheduler;
     std::string m_output;
     std::unordered_map<std::string, std::vector<const ast::FunctionDef*>> m_functionDefs;
+    struct RuntimeSignature {
+        std::string receiverType;
+        std::vector<const ast::TypeExpr*> params;
+    };
+    std::unordered_map<std::string, std::vector<RuntimeSignature>>
+        m_runtimeSignatures;
     std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;

@@ -1,0 +1,14 @@
+record DispatchBox do
+  value : Integer
+end
+
+make DispatchBox do
+  let render(suffix: String) = "${this.value}${suffix}"
+  let render(addend: Integer) = "${this.value + addend}"
+end
+
+main do
+  let box = DispatchBox { value: 40 }
+  IO.printLine(box.render("!"))
+  IO.printLine(box.render(2))
+end

@@ -1658,6 +1658,40 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             auto leftType = node.left ? inferExpr(*node.left) : Type::unknown();
             auto rightType = node.right ? inferExpr(*node.right) : Type::unknown();
+            const auto operatorName = [&]() -> std::string {
+                switch (node.op) {
+                    case TokenType::Plus: return "+";
+                    case TokenType::Minus: return "-";
+                    case TokenType::Star: return "*";
+                    case TokenType::Slash: return "/";
+                    case TokenType::Percent: return "%";
+                    case TokenType::Caret: return "^";
+                    case TokenType::EqEq: return "==";
+                    case TokenType::NotEq: return "!=";
+                    case TokenType::LessThan: return "<";
+                    case TokenType::GreaterThan: return ">";
+                    case TokenType::LessEq: return "<=";
+                    case TokenType::GreaterEq: return ">=";
+                    default: return "";
+                }
+            }();
+            // Operators share make-method signatures with UFCS. Prefer a
+            // matching receiver/RHS overload, but leave ordinary operators on
+            // the builtin inference path when no local signature applies.
+            if (!operatorName.empty()) {
+                if (auto found = m_methodSignatures.find(operatorName);
+                    found != m_methodSignatures.end()) {
+                    for (const auto& signature : found->second) {
+                        if (signature.params.size() != size_t(2)) continue;
+                        if (!argMatchesParam(leftType, signature.params[0]) ||
+                            !argMatchesParam(rightType, signature.params[1]))
+                            continue;
+                        return checkCall(
+                            operatorName, {leftType, rightType}, expr.location,
+                            /*isMethodCall=*/true);
+                    }
+                }
+            }
             return inferBinaryOp(node.op, leftType, rightType, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
@@ -3007,7 +3041,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
-        if (methodCall && !importedFunctions.empty()) {
+        if (methodCall) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;
             // `merged` is importedSigs ++ local methods ++ user functions, so
@@ -3017,9 +3051,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // with its own `get` was lowered to `kex_prelude:get/2` and died
             // at runtime, purely because the prelude also has a `get`.
             bool winnerIsLocal = false;
+            bool winnerIsMakeMethod = false;
             if (sigs == &merged) {
                 auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
-                if (selected >= localSigCount &&
+                if (selected < localSigCount) {
+                    winnerIsLocal = true;
+                    winnerIsMakeMethod = true;
+                } else if (selected >= localSigCount &&
                     selected - localSigCount < importedFunctions.size())
                     resolved = importedFunctions[selected - localSigCount];
                 else
@@ -3042,6 +3080,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->signature.isFoul,
                     resolved->paramNames,
                 };
+            } else if (winnerIsMakeMethod) {
+                ResolvedCallTarget target;
+                target.backendFunction = name;
+                target.backendArity = static_cast<int>(matched.params.size());
+                target.passesReceiver = true;
+                target.isFoul = matched.isFoul;
+                for (const auto& param : matched.params)
+                    target.localDispatchTypes.push_back(
+                        typeToString(resolve(param)));
+                m_resolvedCalls[methodCall] = std::move(target);
             }
         }
         // Propagate the param types back to any TypeVar arguments so that
@@ -3065,6 +3113,62 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 const auto& param = matched.params[i];
                 if (!typeContainsVar(param)) unifyVar(tv->id, param);
             }
+        }
+        // Instantiate interface-level generic placeholders in the result from
+        // the actual arguments. For example,
+        // `Result<X, E>.or : X -> X` called on `Result<Regex, RegexError>`
+        // must return Regex; leaking the table placeholder made a following
+        // overloaded call silently select a same-arity target for any type.
+        std::unordered_map<int, TypePtr> genericSubst;
+        std::function<void(const TypePtr&, const TypePtr&)> bindGenerics =
+            [&](const TypePtr& pattern, const TypePtr& actual) {
+                if (!pattern || !actual) return;
+                if (auto* tv = std::get_if<TypeVar>(&pattern->kind);
+                    tv && tv->id < 0) {
+                    genericSubst.try_emplace(tv->id, resolve(actual));
+                    return;
+                }
+                if (auto* pn = std::get_if<NamedType>(&pattern->kind)) {
+                    auto* an = std::get_if<NamedType>(&actual->kind);
+                    if (!an || pn->name != an->name ||
+                        pn->typeArgs.size() != an->typeArgs.size()) return;
+                    for (size_t i = 0; i < pn->typeArgs.size(); i++)
+                        bindGenerics(pn->typeArgs[i], an->typeArgs[i]);
+                } else if (auto* pl = std::get_if<ListType>(&pattern->kind)) {
+                    if (auto* al = std::get_if<ListType>(&actual->kind))
+                        bindGenerics(pl->element, al->element);
+                } else if (auto* pm = std::get_if<MapType>(&pattern->kind)) {
+                    if (auto* am = std::get_if<MapType>(&actual->kind)) {
+                        bindGenerics(pm->key, am->key);
+                        bindGenerics(pm->value, am->value);
+                    }
+                } else if (auto* po = std::get_if<OptionalType>(&pattern->kind)) {
+                    if (auto* ao = std::get_if<OptionalType>(&actual->kind))
+                        bindGenerics(po->inner, ao->inner);
+                } else if (auto* pt = std::get_if<TupleType>(&pattern->kind)) {
+                    auto* at = std::get_if<TupleType>(&actual->kind);
+                    if (!at || pt->elements.size() != at->elements.size()) return;
+                    for (size_t i = 0; i < pt->elements.size(); i++)
+                        bindGenerics(pt->elements[i], at->elements[i]);
+                } else if (auto* pf = std::get_if<FuncType>(&pattern->kind)) {
+                    auto* af = std::get_if<FuncType>(&actual->kind);
+                    if (!af || pf->params.size() != af->params.size()) return;
+                    for (size_t i = 0; i < pf->params.size(); i++)
+                        bindGenerics(pf->params[i], af->params[i]);
+                    bindGenerics(pf->result, af->result);
+                }
+            };
+        for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++)
+            bindGenerics(matched.params[i], resolve(argTypes[i]));
+
+        // Keep structured generic results under the existing gradual typing
+        // behavior for now (`map : ... -> [B]`, for example). The dispatch
+        // bug requires only the direct payload-returning form used by
+        // Optional/Result `or`.
+        if (auto* resultVar = std::get_if<TypeVar>(&matched.result->kind);
+            resultVar && resultVar->id < 0) {
+            if (auto it = genericSubst.find(resultVar->id);
+                it != genericSubst.end()) return it->second;
         }
         return matched.result;
     }

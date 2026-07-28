@@ -966,6 +966,25 @@ int main() {
             assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
         });
 
+        it("mangles local argument overloads with slash signatures", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            auto out = emitWithResolvedCalls(
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(s: String) = s\n"
+                "  let render(n: Integer) = \"${n}\"\n"
+                "end\n"
+                "main do\n"
+                "  let b = Box { value: 1 }\n"
+                "  b.render(\"!\")\n"
+                "  b.render(2)\n"
+                "end\n",
+                interfaces);
+            assertTrue(contains(out, "'render/Box,String'/2"), out);
+            assertTrue(contains(out, "'render/Box,Integer'/2"), out);
+            assertFalse(contains(out, "render__Box"), out);
+        });
+
         it("orders named args for the receiver target selected by semantics", []() {
             kex::semantic::ImportedInterfaces interfaces;
             kex::semantic::ImportedFunction scaled;

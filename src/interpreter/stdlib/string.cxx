@@ -1,5 +1,6 @@
 #include "../evaluator.hxx"
 #include "regex_support.hxx"
+#include <algorithm>
 #include <cctype>
 #include <stdexcept>
 
@@ -168,6 +169,50 @@ auto Evaluator::registerStringBuiltins() -> void {
             parts.push_back(Value::string(str->value.substr(start)));
         }
         return Value::list(std::move(parts));
+    });
+
+    defineIntrinsic("String::replace", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.size() < 3) return Value::string("");
+        auto* source = std::get_if<StringValue>(&args[0]->data);
+        auto* pattern = std::get_if<StringValue>(&args[1]->data);
+        auto* replacement = std::get_if<StringValue>(&args[2]->data);
+        if (!source || !pattern || !replacement) return Value::string("");
+
+        std::string result;
+        if (pattern->value.empty()) {
+            // Ruby-style empty-pattern replacement: insert at every Unicode
+            // scalar boundary, including before the first and after the last.
+            result.reserve(source->value.size() +
+                           replacement->value.size() * (source->value.size() + 1));
+            result += replacement->value;
+            for (size_t offset = 0; offset < source->value.size();) {
+                const auto lead =
+                    static_cast<unsigned char>(source->value[offset]);
+                size_t width = lead < 0x80 ? 1
+                             : (lead & 0xE0) == 0xC0 ? 2
+                             : (lead & 0xF0) == 0xE0 ? 3
+                             : (lead & 0xF8) == 0xF0 ? 4
+                             : 1;
+                width = std::min(width, source->value.size() - offset);
+                result.append(source->value, offset, width);
+                result += replacement->value;
+                offset += width;
+            }
+            return Value::string(std::move(result));
+        }
+
+        size_t start = 0;
+        while (true) {
+            auto match = source->value.find(pattern->value, start);
+            if (match == std::string::npos) {
+                result.append(source->value, start);
+                break;
+            }
+            result.append(source->value, start, match - start);
+            result += replacement->value;
+            start = match + pattern->value.size();
+        }
+        return Value::string(std::move(result));
     });
 
     defineIntrinsic("String::trim", [](std::vector<ValuePtr> args) -> ValuePtr {

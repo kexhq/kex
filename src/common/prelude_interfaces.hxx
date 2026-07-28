@@ -205,6 +205,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
 
     std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
 
+    auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
+        return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
+    };
+
     auto annotationToSignature = [&typeAliases](const ast::TypeAnnotation& ann,
                                     kex::semantic::TypePtr selfType,
                                     std::unordered_map<std::string, kex::semantic::TypePtr> vars = {})
@@ -227,7 +231,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         ifn.signature = sig;
         ifn.sourceModule = mod;
         if (directBackendOwnership) {
-            ifn.backendModule = mod;
+            ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
             ifn.backendArity = static_cast<int>(sig.params.size());
         }
@@ -240,7 +244,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         ifn.signature = sig;
         ifn.sourceModule = mod;
         if (directBackendOwnership) {
-            ifn.backendModule = mod;
+            ifn.backendModule = backendModuleFor(mod);
             ifn.backendFunction = sig.name;
             ifn.backendArity = static_cast<int>(sig.params.size());
         }
@@ -305,7 +309,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             [&](const ast::ModuleDef& mod) {
             ifaces.modules[mod.name].sourceModule = mod.name;
             ifaces.modules[mod.name].backendModule =
-                directBackendOwnership ? mod.name : "";
+                backendModuleFor(mod.name);
             ifaces.modules[mod.name].automaticImport = automaticImport;
             ifaces.modules[mod.name].isFoul = mod.isFoul;
             for (const auto& item : mod.body) {

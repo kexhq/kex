@@ -2926,10 +2926,17 @@ int main(int argc, char *argv[]) {
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
       // functions visible before names such as `times` are resolved.
-      if (mode == "compile" && !skipCheck) {
+      if (mode == "compile" || mode == "emit-core") {
         compileAnalysis = std::make_unique<kex::semantic::Analyzer>(
             &preludeSemanticInterfaces());
-        if (!runSemanticCheck(program, filepath, compileAnalysis.get())) {
+        // `--no-check` suppresses diagnostics and lets invalid programs
+        // continue, but overload resolution still has to run: lowering needs
+        // the exact selected target even when errors are non-gating.
+        const bool gatingAnalysis = mode == "compile" && !skipCheck;
+        const bool analysisOk = gatingAnalysis
+            ? runSemanticCheck(program, filepath, compileAnalysis.get())
+            : compileAnalysis->analyze(program);
+        if (gatingAnalysis && !analysisOk) {
           std::cerr << kex::color::apply(kex::color::bold)
                     << kex::color::apply(kex::color::magenta)
                     << "Aborted:" << kex::color::apply(kex::color::reset)

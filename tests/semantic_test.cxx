@@ -889,6 +889,37 @@ int main() {
                 "needsString"));
         });
 
+        it("selects String.replace over Regex.replace for literal patterns", []() {
+            Lexer lexer(
+                "using Regex\n"
+                "main do \"a-b\".replace(\"-\", \"+\") end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            assertEqual(analyzer.resolvedCalls().size(), size_t(1));
+            const auto& target = analyzer.resolvedCalls().begin()->second;
+            assertEqual(target.backendModule, std::string("kex_prelude"));
+            assertEqual(target.backendFunction, std::string("replace"));
+        });
+
+        it("preserves a generic Result payload for overload selection", []() {
+            Lexer lexer(
+                "using Regex\n"
+                "main do \"a-b\".replace(regex(\"-\").or(0), \"+\") end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            assertTrue(analyzer.resolvedCalls().size() >= size_t(2));
+            bool foundRegexReplace = false;
+            for (const auto& [_, target] : analyzer.resolvedCalls())
+                if (target.backendModule == "Kex.Regex" &&
+                    target.backendFunction == "replace")
+                    foundRegexReplace = true;
+            assertTrue(foundRegexReplace);
+        });
+
         it("retains the exact imported receiver target selected by type", []() {
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedFunction integerTarget;
@@ -2439,6 +2470,35 @@ int main() {
                 "let len(x) = 0\n"
                 "main do IO.printLine(len(\"hi\")) end\n"
             ));
+        });
+
+        it("records exact local make-method overload signatures", []() {
+            Lexer lexer(
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(s: String) = s\n"
+                "  let render(n: Integer) = \"${n}\"\n"
+                "end\n"
+                "main do\n"
+                "  let b = Box { value: 1 }\n"
+                "  b.render(\"!\")\n"
+                "  b.render(2)\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            bool stringTarget = false;
+            bool integerTarget = false;
+            for (const auto& [_, target] : analyzer.resolvedCalls()) {
+                if (target.backendFunction != "render" ||
+                    target.localDispatchTypes.size() != size_t(2))
+                    continue;
+                stringTarget |= target.localDispatchTypes[1] == "String";
+                integerTarget |= target.localDispatchTypes[1] == "Integer";
+            }
+            assertTrue(stringTarget);
+            assertTrue(integerTarget);
         });
     });
 
