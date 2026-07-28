@@ -1,1 +1,1 @@
-spec/regex_compile_error.kex:11:28: error: missing closing parenthesis
+spec/regex_compile_error.kex:17:28: error: missing closing parenthesis

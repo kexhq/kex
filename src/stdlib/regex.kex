@@ -118,20 +118,20 @@ let quote(s) = Kex.Intrinsic.Regex.quote(s)
 # +Match+ is the result of a successful match. It behaves like a map keyed by
 # both group number (+0+ is the whole match) and group name (+:year+), but is a
 # named type so it can grow spans and surrounding context later without
-# breaking existing +group+ call sites.
+# breaking existing +get+ call sites.
 #
-# A group that did not participate is an absent key, so +group+ returns +None+ —
+# A group that did not participate is an absent key, so +get+ returns +None+ —
 # distinct from a group that matched the empty string, which returns +Just("")+.
 record Match do
   captures : Map<Any, String>
 end
 
-# NOTE: the accessor is +group+, not +get+. A `make` block on a user type that
+# NOTE: the accessor is +get+, not +get+. A `make` block on a user type that
 # defines a method name the prelude also uses breaks that name's dispatch for
 # every OTHER type on the BEAM backend — with `get` here, merely saying
 # `using Regex` made a plain `someMap.get(k)` fail with function_clause.
-# `group` also matches Python's `m.group(1)` and Java's `matcher.group(1)`.
-# See docs/regex-plan.md, "Match accessor is `group`".
+# `get` also matches Python's `m.get(1)` and Java's `matcher.get(1)`.
+# See docs/regex-plan.md, "Match accessor is `get`".
 
 make Match do
   # Returns the captured text for a group, by number or by name.
@@ -140,19 +140,19 @@ make Match do
   # @return [String?]
   #
   # @example
-  #   m.group(0)      # whole match
-  #   m.group(1)      # first positional group
-  #   m.group(:year)  # named group
-  group :> (Atom | Integer) -> String?
-  let group(key) = this.captures.get(key)
+  #   m.get(0)      # whole match
+  #   m.get(1)      # first positional group
+  #   m.get(:year)  # named group
+  get :> (Atom | Integer) -> String?
+  let get(key) = Kex.Intrinsic.Map.get(this.captures, key)
 
   # Returns the captured text for a group, or +default+ if the group is absent.
   #
   # @param key [Atom | Int]
   # @param default [String]
   # @return [String]
-  group :> (Atom | Integer) -> String -> String
-  let group(key, default) = this.captures.get(key, default)
+  get :> (Atom | Integer) -> String -> String
+  let get(key, default) = Kex.Intrinsic.Map.getWithDefault(this.captures, key, default)
 end
 
 # Finds the first occurrence of +re+ anywhere in +s+. Unanchored — anchor with
@@ -189,7 +189,7 @@ let matches?(s, re) = Kex.Intrinsic.Regex.matches?(s, re)
 # @return [[Match]]
 #
 # @example
-#   "cat=1, dog=2".scan(re).map do |m| m.group(1, "") end
+#   "cat=1, dog=2".scan(re).map do |m| m.get(1, "") end
 scan : String -> Regex -> [Match]
 let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 
@@ -204,7 +204,7 @@ let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 #
 # @example
 #   "a-b-c".replace(re, "+")                       # => "a+b+c"
-#   "2026-7-4".replace(re) do |m| m.group(1, "") end
+#   "2026-7-4".replace(re) do |m| m.get(1, "") end
 replace : String -> Regex -> String -> String
 let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement)
 

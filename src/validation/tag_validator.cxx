@@ -196,9 +196,13 @@ auto collect(
 // A `using`-imported module, parsed and kept alive so the AST pointers in
 // `functions` stay valid for as long as validation runs.
 struct ImportedModule {
-    // unique_ptr, not a bare string: the vector holding these reallocates, and
-    // parsed locations reference the buffer.
+    // unique_ptr, not bare strings: the vector holding these reallocates, and
+    // parsed locations reference BOTH buffers — SourceLocation::file is a
+    // std::string_view, so the path must outlive every diagnostic that cites
+    // it, not just the parse. (A loop-local path produced diagnostics with a
+    // garbled filename; it only showed up on the wasm build.)
     std::unique_ptr<std::string> source;
+    std::unique_ptr<std::string> path;
     std::unique_ptr<ast::Program> program;
     Functions functions;
     // The module is analyzed on its own so its companion's signature can be
@@ -253,8 +257,9 @@ auto loadUsingModules(
 
         ImportedModule module;
         module.source = std::make_unique<std::string>(buffer.str());
-        Lexer lexer(*module.source, resolved->path);
-        Parser parser(lexer.tokenizeAll(), resolved->path);
+        module.path = std::make_unique<std::string>(resolved->path);
+        Lexer lexer(*module.source, *module.path);
+        Parser parser(lexer.tokenizeAll(), *module.path);
         auto parsed = std::make_unique<ast::Program>(parser.parseProgram());
         // A module that does not parse is reported by the normal pipeline;
         // silently skipping it here avoids duplicate diagnostics.

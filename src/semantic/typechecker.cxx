@@ -2580,10 +2580,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // sufficiently substituted to validate without false positives.
     bool useLocalMethods = hasLocalMethods &&
         (!m_inMakeBlock || hasReceiverRefinementConflict);
+    // Local methods come FIRST. When a user type defines a method the prelude
+    // also provides and both signatures match, the user's is the more specific
+    // one. Ordering imported first let a GENERIC prelude signature win on type
+    // variables alone: `Map.get :> K -> V?` matched `someMatch.get(1)` and the
+    // call lowered to `kex_prelude:get`, while the 3-argument form (whose
+    // prelude counterpart did not match) correctly reached the local method —
+    // the same call site resolving two different ways by arity.
+    // A local method whose receiver does not match still simply isn't a match.
+    size_t localSigCount = 0;
     if (!importedSigs.empty() || useLocalMethods) {
-        merged = importedSigs;
-        if (useLocalMethods)
+        if (useLocalMethods) {
             merged.insert(merged.end(), methodIt->second.begin(), methodIt->second.end());
+            localSigCount = merged.size();
+        }
+        merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
         if (hasUser)
             merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
         sigs = &merged;
@@ -2859,8 +2870,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             bool winnerIsLocal = false;
             if (sigs == &merged) {
                 auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
-                if (selected < importedFunctions.size())
-                    resolved = importedFunctions[selected];
+                if (selected >= localSigCount &&
+                    selected - localSigCount < importedFunctions.size())
+                    resolved = importedFunctions[selected - localSigCount];
                 else
                     winnerIsLocal = true;
             }

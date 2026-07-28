@@ -2,6 +2,12 @@
 # `regex` returns Result because an arbitrary string may not be a valid
 # pattern; a Match keys captures by group number and by name.
 
+# kex: skip-wasm
+#
+# Skipped on the wasm build: it has no PCRE2 (see docs/regex-plan.md — building
+# PCRE2 for wasm32 is a vendored-dependency pipeline like gmp-wasm, not yet
+# done), so every Regex call raises "Regex is unavailable in this build".
+
 using Regex
 
 foul show(label, opt) do
@@ -27,30 +33,30 @@ main do
 
   # Positional groups; 0 is the whole match.
   match "order #4271 shipped".matches(regex("#(\\d+)").or(0)) do
-    Just(m) -> IO.printLine("${m.group(0, "")} / ${m.group(1, "")}")
+    Just(m) -> IO.printLine("${m.get(0, "")} / ${m.get(1, "")}")
     None    -> IO.printLine("no match")
   end
 
   # A named group is reachable under BOTH its name and its number.
   match "on 2026-07-28".matches(regex("(?<year>\\d{4})-(?<month>\\d{2})").or(0)) do
-    Just(m) -> IO.printLine("${m.group(:year, "?")}/${m.group(:month, "?")} = ${m.group(1, "?")}")
+    Just(m) -> IO.printLine("${m.get(:year, "?")}/${m.get(:month, "?")} = ${m.get(1, "?")}")
     None    -> IO.printLine("no date")
   end
 
   # A group that did not participate is an absent key (None); a group that
   # matched the empty string is present as Just(""). These must not collapse.
   match "ac".matches(regex("(a)(b)?(c)").or(0)) do
-    Just(m) -> show("did not participate", m.group(2))
+    Just(m) -> show("did not participate", m.get(2))
     None    -> IO.printLine("no match")
   end
   match "ac".matches(regex("(a)(x*)(c)").or(0)) do
-    Just(m) -> show("matched empty", m.group(2))
+    Just(m) -> show("matched empty", m.get(2))
     None    -> IO.printLine("no match")
   end
 
   # A zero-width match is still a match, and group 0 is always present.
   match "abc".matches(regex("x*").or(0)) do
-    Just(m) -> show("zero-width whole match", m.group(0))
+    Just(m) -> show("zero-width whole match", m.get(0))
     None    -> IO.printLine("no match")
   end
 
@@ -70,7 +76,7 @@ main do
   # group never changes the type flowing out of it.
   IO.printLine("a1b2".scan(regex("\\d").or(0)).count)
   IO.printLine("cat=1, dog=2".scan(regex("(\\w+)=(\\d+)").or(0)).map do |m|
-    "${m.group(1, "")}:${m.group(2, "")}"
+    "${m.get(1, "")}:${m.get(2, "")}"
   end.join("|"))
   # Zero-width matches are reported, as in every engine: "" at each position.
   IO.printLine("a1b2".scan(regex("\\d*").or(0)).count)
@@ -80,7 +86,7 @@ main do
   IO.printLine("a-b-c".replace(regex("-").or(0), "+"))
   IO.printLine("abc".replace(regex("x*").or(0), "-"))
   IO.printLine("2026-7-4".replace(regex("(\\d+)-(\\d+)-(\\d+)").or(0)) do |m|
-    "${m.group(1, "")}/${m.group(2, "")}/${m.group(3, "")}"
+    "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
   end)
 
   # split follows Ruby: trailing empties dropped, leading kept, captures
@@ -104,7 +110,7 @@ main do
   IO.printLine("tag source: ${digits.source}")
   IO.printLine("tag matches: ${"abc 123".matches?(digits)}")
   match "order #4271".matches(regex`#(\d+)`) do
-    Just(m) -> IO.printLine("tag capture: ${m.group(1, "")}")
+    Just(m) -> IO.printLine("tag capture: ${m.get(1, "")}")
     None    -> IO.printLine("no match")
   end
 

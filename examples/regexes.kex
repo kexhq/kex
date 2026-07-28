@@ -68,7 +68,7 @@ end
 
 foul demoMatch do
   match "order #4271 shipped".matches(regex`#(\d+)`) do
-    Just(m) -> IO.printLine("whole: ${m.group(0, "")}, id: ${m.group(1, "")}")   # whole: #4271, id: 4271
+    Just(m) -> IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
     None    -> IO.printLine("no match")
   end
 
@@ -84,7 +84,7 @@ let dateRe = regex`(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})`
 
 let parseDate(s: String) -> { Atom: String }? do
   return s.matches(dateRe).map do |m|
-    { year: m.group(:year, ""), month: m.group(:month, ""), day: m.group(:day, "") }
+    { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
   end
 end
 
@@ -115,7 +115,7 @@ foul demoBulk do
 
   # scan/2 returns every match as a list of Match.
   let pairs = text.scan(regex`(\w+)=(\d+)`).map do |m|
-    (m.group(1, ""), Integer.parse(m.group(2, "")).or(0))
+    (m.get(1, ""), Integer.parse(m.get(2, "")).or(0))
   end
   IO.printLine(pairs.inspect)         # [("cat", 1), ("dog", 2), ("bird", 3)]
 
@@ -125,7 +125,7 @@ foul demoBulk do
 
   # replace with a block — captures come from the Match, never $1/\1.
   let normalized = "2026-7-4".replace(regex`(\d+)-(\d+)-(\d+)`) do |m|
-    "${m.group(1, "")}/${m.group(2, "")}/${m.group(3, "")}"
+    "${m.get(1, "")}/${m.get(2, "")}/${m.get(3, "")}"
   end
   IO.printLine(normalized)            # 2026/7/4
 
@@ -146,8 +146,10 @@ end
 let logRe = regex`^\[(?<level>\w+)\]\s+(?<msg>.+)$`
 
 let parseLog(line: String) -> LogLine? do
-  return line.matches(logRe).map do |m|
-    LogLine { level: m.group(:level, ""), msg: m.group(:msg, "") }
+  match line.matches(logRe) do
+    Just(m) -> return Just(LogLine { level: m.get(:level, ""),
+                                     msg: m.get(:msg, "") })
+    None    -> return None
   end
 end
 

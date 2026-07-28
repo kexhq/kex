@@ -295,7 +295,39 @@ inline auto sourcePreludeSemanticInterfaces()
             }
         };
 
+        // ADT constructor arities and record field counts, so a pattern that
+        // destructures the wrong number of values is rejected here too. The
+        // BEAM-artifact path gets these from KexI metadata; without collecting
+        // them from source as well, the same program type-checks differently
+        // on the wasm build, which has no prebuilt artifacts.
+        auto collectArities = [&](const auto& item) {
+            if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
+                if (!*td || !(*td)->variants) return;
+                kex::semantic::ImportedADT adt;
+                adt.name = (*td)->name;
+                for (const auto& variant : *(*td)->variants) {
+                    if (!variant) continue;
+                    if (const auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
+                        if (tn->parts.size() != 1) continue;
+                        adt.constructors.push_back(tn->parts[0]);
+                        adt.constructorArities[tn->parts[0]] = 0;
+                    } else if (const auto* gt =
+                                   std::get_if<ast::GenericType>(&variant->kind)) {
+                        if (gt->name.parts.size() != 1) continue;
+                        adt.constructors.push_back(gt->name.parts[0]);
+                        adt.constructorArities[gt->name.parts[0]] =
+                            static_cast<int>(gt->args.size());
+                    }
+                }
+                if (!adt.constructors.empty()) ifaces.adts.push_back(std::move(adt));
+            } else if (const auto* rd =
+                           std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+                if (*rd) ifaces.recordArities[(*rd)->name] = (*rd)->fields.size();
+            }
+        };
+
         for (const auto& item : program.items) {
+            collectArities(item);
             if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*make) collectMakeAnnotations(**make);
             } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {

@@ -701,45 +701,40 @@ opt-in module may not export a name the prelude already defines as a method on
 another type** until BEAM dispatch is receiver-aware. `matches`, `matches?`,
 `scan`, and `replace` are safe precisely because `String` defines none of them.
 
-**`Match.group` vs `get` — two of the three blockers are now fixed.** The plan
-specifies map-like access, so `m.get(0)` / `m[0]` (indexing lowers to `.get`)
-are what users reach for. Making a user type define a method the prelude also
-defines needed two fixes, both landed and covered by
-`spec/method_name_collision.kex`:
+**`Match.get` works — the accessor is `get`, as originally specified.** Both
+`m.get(0)` / `m.get(:year, "?")` and `m[0]` (indexing lowers to `.get`) resolve
+correctly on both backends, and a plain `Map`'s `get` is unaffected. Three fixes
+were needed, all general rather than regex-specific:
 
-- **Typechecker.** A method call whose winning signature is a *local* make-block
-  method was still bound to an imported function by guessing on arity, so
-  `b.get(0)` on a user record with its own `get` was lowered to
-  `kex_prelude:get/2`. `merged` is `imported ++ local ++ user`, so the winner's
-  index already says where it came from; the guess now only runs when the
-  origin is genuinely unknown.
-- **Lowering.** A local method claimed a UFCS call by NAME alone, so
-  `this.slots.get(k, d)` inside `make Box do get(key) ... end` compiled to a
-  local `get/3` that was never defined (erlc failure). The local path now
-  requires a local definition at that name *and arity*; otherwise the prelude
-  receiver function handles it. Note a make-block method reaches its receiver
-  either implicitly through `this` or as its first pattern parameter
-  (`let rangeStart(x.._)`), so both candidate arities are recorded — assuming
-  only the implicit form broke `spec/range.kex` and `spec/my_starts_with.kex`.
+- **Local methods must outrank imported ones when both match.** The candidate
+  list put imported signatures first, so the prelude's *generic*
+  `Map.get :> K -> V?` matched `someMatch.get(1)` on type variables alone. The
+  same call site then resolved two different ways by arity: the 2-argument form
+  went to `kex_prelude:get`, the 3-argument form (whose prelude counterpart did
+  not match) correctly reached the local method.
+- **Make-block `let` methods must register a signature.** `m_methodSignatures`
+  was filled only from `:>` declarations, so a method written as a plain `let`
+  was invisible to resolution.
+- **Local method calls must match on name AND arity**, so an unrelated receiver
+  falls through to the prelude instead of a nonexistent local function.
 
-**The accessor is `group` — decided, not a stopgap.** It matches Python's
-`m.group(1)` and Java's `matcher.group(1)`, reads correctly for a capture
-group, and sidesteps the defect below entirely. `m.captures[0]` remains
-available for indexed access. Should `Match.get` ever become viable, adding it
-alongside `group` is additive; the name is not blocking anything.
+The body calls `Kex.Intrinsic.Map.get` directly rather than
+`this.captures.get(key)`: inside the block that UFCS call has the same name and
+arity as the method being defined, so it resolves to the method itself and
+recurses. That is the one sharp edge of naming a method after a prelude one.
 
-**What would be needed for `Match.get`/`m[0]`,** recorded so the diagnosis is
-not lost: `Match`
-defines `get/1` *and* `get/2`, so inside the make block `this.captures.get(key)`
-has the same name **and arity** as the method being defined. Name+arity cannot
-separate them — only the receiver's type can. Routing the body through
-`Kex.Intrinsic.Map.get` to dodge UFCS did not help either: `m.get(1)` then works
-but `m.get(1, "?")` returns `None` on the interpreter and `if_clause` on BEAM, so
-multi-arity make-block method dispatch is itself defective, in *both* backends.
-That is a third, independent defect and the remaining prerequisite for
-`Match.get` and `m[0]`.
+**Known fragility.** In a position where the receiver's type is not inferable,
+`m.get(:name, "")` can still resolve against another `get` overload
+(`List.get :> [A] -> Integer -> A?`) and fail with "expects argument 2 to be
+Integer, but got Atom". It surfaced once, in `examples/regexes.kex`'s
+`.map do |m| ... end` block, and every minimal reproduction of that same shape
+resolved fine — so the boundary is not characterized. Block parameters cannot
+be annotated (`|m: Match|` is a syntax error), so the workaround is a `match`
+binding. A unique name like `group` would not have this failure mode; `get` was
+kept because it is the map-like interface the type presents and it enables
+`m[0]`.
 
-**A field-name collision worth its own fix.** A user record field whose name
+**A field-name collision worth its own fix.****A field-name collision worth its own fix.** A user record field whose name
 matches a prelude *method* is silently routed to that method on BEAM instead of
 the field: `makeAccessors` skips generating the local accessor when a prelude
 receiver function shares the name (`src/ir/lower.cxx`, the `rest` comment), so
