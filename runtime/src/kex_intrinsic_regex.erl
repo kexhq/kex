@@ -1,7 +1,7 @@
 %% Kex.Intrinsic.Regex — BEAM primitive backend for the regex intrinsics.
 %% The typed Regex stdlib lives in src/stdlib/regex.kex. Receiver is the first
 %% argument. Must match src/interpreter/stdlib/regex.cxx behaviour exactly —
-%% see docs/regex-plan.md for the decisions both backends implement.
+%% the decisions both backends implement are documented inline below.
 %%
 %% Erlang's `re` is built on PCRE, the same engine family the interpreter uses
 %% through PCRE2, so the pattern *language* agrees for free. What does NOT

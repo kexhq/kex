@@ -4,7 +4,7 @@
 # same directory resolves as module `Regex` and shadows the stdlib one, so
 # `using Regex` would find this file instead.)
 # Backed by PCRE2 in the interpreter and Erlang's `re` on BEAM: the same
-# pattern language on both. See docs/regex-plan.md for the design decisions.
+# pattern language on both.
 
 using Regex
 

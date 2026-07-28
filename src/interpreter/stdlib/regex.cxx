@@ -15,8 +15,8 @@ namespace {
 
 // Compiled patterns are cached by source text and never freed: a program's
 // distinct pattern set is bounded by its source, and `Regex` values carry only
-// their source string (see docs/regex-plan.md — a compiled pattern must not be
-// embeddable in a .kexo artifact, so the source is the identity). The mutex
+// their source string: a compiled pattern bakes in the host's PCRE version and
+// must not be embeddable in a .kexo artifact, so the source is the identity. The mutex
 // guards against concurrent access from scheduler fibers on separate threads.
 std::unordered_map<std::string, pcre2_code*> g_patternCache;
 std::mutex g_patternCacheMutex;
@@ -169,8 +169,7 @@ auto nextCharBoundary(const std::string& subject, size_t offset) -> size_t {
 // One step of a global iteration. Returns false when no further match exists.
 // `nextStart` implements the report-then-advance rule every engine uses: an
 // empty match advances one character so iteration terminates. Empty matches
-// are reported, not skipped — see docs/regex-plan.md ("Zero-width matches
-// follow the engines").
+// are reported, not skipped, matching Ruby/Python/JS and Erlang's re.
 auto matchAt(pcre2_code* code, const std::string& subject, size_t start,
              pcre2_match_data* matchData, size_t& matchStart, size_t& matchEnd,
              size_t& nextStart, int& groupCount) -> bool {
@@ -328,7 +327,7 @@ auto Evaluator::registerRegexBuiltins() -> void {
     // not a Result: a literal is validated at compile time by validateRegex, so
     // it cannot fail. Interpolated values are escaped per character, so they
     // contribute text and never pattern syntax — which is what keeps the bare
-    // return type honest. See docs/regex-plan.md.
+    // return type honest.
     defineIntrinsic("Regex::tag", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::record("Regex", {{"source", Value::string("")}});
         auto* parts = std::get_if<ListValue>(&args[0]->data);

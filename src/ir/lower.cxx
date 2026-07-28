@@ -4138,8 +4138,7 @@ auto lowerProgramTiered(
     // lowerProgram's by construction and the two paths cannot drift apart.
     // The bounds only validate the tier partition for now; they become
     // load-bearing when tiers compile to separate units and cross-tier
-    // receiver calls must route through imported interfaces (see
-    // docs/stdlib-decoupling-plan.md, step 4).
+    // receiver calls must route through imported interfaces.
     for (size_t t = 0; t < 4; t++)
         if (tierBounds[t] > tierBounds[t + 1])
             throw LowerError("IR lower: non-monotonic prelude tier bounds");

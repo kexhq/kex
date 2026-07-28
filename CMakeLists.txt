@@ -183,12 +183,13 @@ target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 # PCRE2 backs the `Regex` module (src/stdlib/regex.kex). PCRE2 specifically,
 # not RE2 or std::regex: Erlang's `re` is built on PCRE, so this is the only
 # engine that gives the BEAM backend the same pattern *language* — see
-# docs/regex-plan.md's "Backend mapping". BSD-licensed, so unlike GMP above
+# the same pattern language. BSD-licensed, so unlike GMP above
 # there is no static/dynamic linking constraint here.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # Not yet built for wasm — see docs/regex-plan.md's open question on
-    # vendoring third_party/pcre2-wasm alongside gmp-wasm. Until that lands
-    # the wasm REPL builds without regex rather than failing to configure.
+    # Not yet built for wasm: that needs a vendored third_party/pcre2-wasm
+    # pipeline alongside gmp-wasm (static build, PCRE2_SUPPORT_JIT=OFF since
+    # wasm has no JIT, PCRE2_SUPPORT_UNICODE=ON to back UTF/UCP). Until that
+    # lands the wasm REPL builds without regex rather than failing to configure.
     message(STATUS "PCRE2 not wired for wasm yet — Regex module unavailable")
 else()
     find_library(PCRE2_LIB pcre2-8 HINTS /opt/homebrew/lib /usr/local/lib)
