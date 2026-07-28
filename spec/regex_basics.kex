@@ -120,4 +120,11 @@ main do
   IO.printLine("interpolated: ${regex$`^${word}`.source}")
   IO.printLine("dot is literal: ${"abc".matches?(regex$`^${word}`)}")
   IO.printLine("literal match:  ${"a.cx".matches?(regex$`^${word}`)}")
+
+  # Module-qualified tag literals behave exactly like the bare form — same tag,
+  # same compile-time validation, same bare-Regex result — on both backends.
+  IO.printLine("qualified source: ${Regex.regex`\d+`.source}")
+  IO.printLine("qualified matches: ${"abc 123".matches?(Regex.regex`\d+`)}")
+  IO.printLine("qualified alias:  ${"see http://x.io".matches?(Regex.re`https?://\S+`)}")
+  IO.printLine("qualified interp: ${"a.cx".matches?(Regex.regex$`^${word}`)}")
 end

@@ -83,7 +83,7 @@ explicitly unwrap, pattern-match, or propagate that result.
 ```kex
 # Match on this (@ prefix)
 make [A] do
-  let first(@[]) = Nothing
+  let first(@[]) = None
   let first(@[x | _]) = Just(x)
 end
 

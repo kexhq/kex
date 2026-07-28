@@ -442,15 +442,20 @@ grammar.ebnf    Formal grammar specification
 
 ## Compiler Development
 
-The compiler is written in C++20 with no external dependencies beyond the standard library and optional readline.
+The compiler is written in C++20. Required dependency: GMP (arbitrary-precision
+`Integer`). Optional: readline (nicer REPL) and PCRE2 (regex in the
+interpreter — the BEAM backend uses Erlang's `re` instead).
 
 Source flows through:
 
 ```text
-Lexer -> Parser -> AST -> Analyzer -> Evaluator
+Lexer -> Parser -> AST -> Analyzer -> ┬─ Evaluator (tree-walk interpreter, default)
+                                      └─ IR -> Core Erlang -> BEAM
 ```
 
-The current evaluator is a tree-walk interpreter. There is no bytecode or IR yet.
+The default runner is a tree-walk interpreter. There is also a lowering IR
+(`src/ir/`) that emits Core Erlang for the BEAM backend (`kex -c` / `-R` /
+`-e`); it matches the interpreter at full spec parity.
 
 Key implementation choices:
 
@@ -464,6 +469,8 @@ Key implementation choices:
 Working today:
 
 - Lexer, parser, AST, semantic analysis, and tree-walk evaluation
+- BEAM backend: lowering IR → Core Erlang codegen (`kex -c`/`-R`/`-e`), at full spec parity with the interpreter
+- Process primitives (`spawn`, `receive`, `send`, `loop`, `Task`) on both the interpreter and BEAM
 - Records, sum types, functions, lambdas, pattern matching, destructuring
 - Lists, maps, ranges, streams, strings, chars, numbers, optional values, result values
 - UFCS, `make` dispatch, `to` conversion convention, operator overloading
@@ -480,8 +487,9 @@ Working today:
 
 Planned or incomplete:
 
-- Bytecode VM or WASM codegen
-- Full process/actor runtime
+- Compiling Kex itself to WASM (today only the interpreter is compiled to wasm, for the in-browser REPL)
+- Typed processes (`Process<Message>`) and supervision (`Supervisor`) beyond the current primitives
+- `.kexo` binary IR / distribution format and a full module system across BEAM modules
 - `is?` / `as` type introspection and explicit conversion
 - Namespace/import resolution beyond `using` blocks
 - Compiled metaprogramming beyond the parser/design sketch

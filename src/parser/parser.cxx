@@ -1173,6 +1173,23 @@ auto Parser::parsePostfix() -> ast::ExprPtr {
     return parsePostfixTail(parsePrimary());
 }
 
+// A module path is a bare `Module` or a dotted chain of capitalised segments
+// (`A.B.C`), which the postfix parser represents as nested `MethodCall`s with
+// upper-case method names, no arguments, and no block. Used to decide whether
+// `X.tag`body`` is a module-qualified tagged literal rather than member access.
+static auto isModulePathExpr(const ast::Expr* e) -> bool {
+    if (!e) return false;
+    if (std::holds_alternative<ast::UpperIdentifier>(e->kind)) return true;
+    if (auto* mc = std::get_if<ast::MethodCall>(&e->kind)) {
+        if (!mc->args.empty() || !mc->namedArgs.empty() || mc->block ||
+            mc->mutating || mc->method.empty() ||
+            !(mc->method[0] >= 'A' && mc->method[0] <= 'Z'))
+            return false;
+        return isModulePathExpr(mc->receiver.get());
+    }
+    return false;
+}
+
 auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     while (true) {
         // Skip newlines if followed by . (method chaining across lines)
@@ -1200,7 +1217,37 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
             if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent)) {
                 error("Expected method or module name after '.'");
             }
-            auto method = advance().value;
+            auto methodTok = advance();
+            auto method = methodTok.value;
+
+            // Module-qualified tagged literal: `Regex.regex`\d+`` behaves
+            // exactly like the bare `regex`\d+`` — same tag (`regex`, resolved
+            // in scope), same compile-time validation, same result. Requires
+            // adjacency (no space before the backtick) and a module-path
+            // receiver, so ordinary `mod.method` access is untouched.
+            if (methodTok.type == TokenType::LowerIdent &&
+                (check(TokenType::RawString) ||
+                 check(TokenType::InterpolatedRawString)) &&
+                methodTok.endOffset == peek().startOffset &&
+                isModulePathExpr(expr.get())) {
+                auto body = advance();
+                auto tagExpr = std::make_unique<ast::Expr>();
+                tagExpr->location = expr->location;
+                ast::TaggedLiteral tagged;
+                tagged.tag = method;
+                tagged.interpolating =
+                    body.type == TokenType::InterpolatedRawString;
+                tagged.bodyStartOffset = body.startOffset;
+                tagged.bodyEndOffset = body.endOffset;
+                if (tagged.interpolating)
+                    parseInterpolatedBody(body, tagged.parts, tagged.values);
+                else
+                    tagged.parts.push_back(body.value);
+                tagExpr->kind = std::move(tagged);
+                expr = std::move(tagExpr);
+                continue;
+            }
+
             bool mutating = match(TokenType::Bang);
 
             auto call = std::make_unique<ast::Expr>();

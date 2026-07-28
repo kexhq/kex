@@ -95,7 +95,7 @@ No changes to `map`'s signature needed — it accepts any closure. Purity is che
 Traits can declare foul methods:
 
 ```kex
-trait Serializable for: This do
+trait Serializable do
   foul save : (path: String) -> Result<Void, Error>
   foul load : (path: String) -> This
 end
@@ -116,11 +116,11 @@ Traits declare type contracts. They use type signatures (`:`) for required metho
 ### Syntax
 
 ```kex
-trait Printable for: This do
+trait Printable do
   toString : () -> String
 end
 
-trait Monad for: F<_> do
+trait Monad<F> do
   wrap : (value: A) -> F<A>
   flatMap : (f: A -> F<B>) -> F<B>
   let map(f: A -> B) -> F<B> =
@@ -159,7 +159,7 @@ end
 - `This` — the implementing type (type-level). Used in trait signatures to refer to the concrete type.
 
 ```kex
-trait Cloneable for: This do
+trait Cloneable do
   clone : (this) -> This
 end
 
@@ -172,7 +172,14 @@ end
 
 ## Higher-Kinded Types (HKTs)
 
-Kex supports abstracting over type constructors via `F<_>`.
+> **Forward-looking.** HKTs (`F<_>`), the `Monad`/`Functor` traits above, and
+> foul trait methods describe the intended design. They are **not yet
+> implemented** — `trait` today is `trait Name (<params>)? do … end` with no
+> `for:` clause and no `<_>` hole. The concrete traits that work today are
+> covered in `docs/types.md` (`Comparable`, `Equatable`, `Enumerable`,
+> `Foldable`).
+
+Kex is intended to support abstracting over type constructors via `F<_>`.
 
 - `Option` is a type constructor — it has a "hole" (`Option<_>`).
 - `Int` is a complete type — no hole, can't be used where `F<_>` is expected.

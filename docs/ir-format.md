@@ -1,5 +1,7 @@
 # Kex IR Format (`.kexo`)
 
+> 📋 **Design doc — not yet implemented.** The lowering IR exists in `src/ir/` but only emits Core Erlang; the `.kexo` binary distribution format described here is not built.
+
 ## Context
 
 Kex needs a binary intermediate representation to serve as the canonical distribution artifact for packages. This enables:

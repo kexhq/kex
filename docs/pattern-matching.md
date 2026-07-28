@@ -91,7 +91,7 @@ Inside `make` blocks, `@` matches the structure of `this`:
 
 ```kex
 make [A] do
-  let first(@[]) = Nothing
+  let first(@[]) = None
   let first(@[x | _]) = Just(x)
 end
 ```

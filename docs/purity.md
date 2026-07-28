@@ -9,7 +9,7 @@ Kex tracks side effects via the `foul` keyword. Everything is pure by default.
 let compute(x: Int) = x * 2 + 1
 
 # Foul — does IO
-foul let readConfig(path: String) -> Result<String, IOError> do
+foul readConfig(path: String) -> Result<String, IOError> do
   return IO.read(path)
 end
 ```
@@ -26,7 +26,7 @@ end
 
 ```kex
 # Per function
-foul let log(msg: String) = IO.printLine(msg)
+foul log(msg: String) = IO.printLine(msg)
 
 # Per block
 foul do
@@ -46,7 +46,7 @@ end
 `var` that persists across `receive` cycles is foul (long-lived mutable state):
 
 ```kex
-foul let counter = spawn do
+foul counter = spawn do
   var state = 0       # foul — persists across receives
   loop do
     receive do
