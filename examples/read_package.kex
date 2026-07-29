@@ -1,0 +1,28 @@
+foul readPackageJson(path: String) -> Result<Map<String, Any>, JSON.Error> do
+  let file = FS.File.open(path, FS.Read).try
+  let content = file.read.or("")
+
+  return JSON.parse(content)
+end
+
+main(args) do
+  let file_name = args.first.or("./packages/kex/package.json")
+
+  let unknown = "<unknown>"
+  match readPackageJson(file_name) do
+    Ok(json) -> do
+      let name = json["name"].or(unknown)
+      let desc = json["description"].or(unknown)
+      let license = json["license"].or(unknown)
+
+      IO.printLine("Package:")
+      IO.printLine("\tName: ${name}")
+      IO.printLine("\tDescription: ${desc}")
+      IO.printLine("\tLicense: ${license}")
+    end
+    Error(err) -> do
+      IO.printError("Something wrong with this file: '${file_name}'")
+      IO.printError(err)
+    end
+  end
+end
