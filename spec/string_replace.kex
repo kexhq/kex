@@ -1,0 +1,6 @@
+main do
+  IO.printLine("a-b-c".replace("-", "+"))
+  IO.printLine("abc".replace("", "-"))
+  IO.printLine("éx".replace("", "-"))
+  IO.printLine("unchanged".replace("missing", "x"))
+end

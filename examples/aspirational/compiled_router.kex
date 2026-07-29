@@ -1,3 +1,4 @@
+# kex: no-check
 # Compiled Router — Sinatra-style
 #
 # Routes are declared with `get`, `post`, etc. directly.

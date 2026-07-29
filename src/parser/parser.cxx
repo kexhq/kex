@@ -2290,9 +2290,10 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
                 }
                 lambda->kind = ast::Lambda{
                     std::move(params), std::move(funcDef->clauses[0].body),
+                    std::move(funcDef->clauses[0].returnAnnotation),
                     std::move(funcDef->clauses[0].rescue)};
             } else {
-                lambda->kind = ast::Lambda{{}, {}};
+                lambda->kind = ast::Lambda{{}, {}, std::nullopt, std::nullopt};
             }
 
             expr->kind = ast::LetExpr{std::move(pat), std::move(lambda)};
@@ -2424,7 +2425,8 @@ auto Parser::parseLambda() -> ast::ExprPtr {
         }
         expect(TokenType::RBrace, "Expected '}' to close lambda");
 
-        expr->kind = ast::Lambda{std::move(params), std::move(body)};
+        expr->kind = ast::Lambda{
+            std::move(params), std::move(body), std::nullopt, std::nullopt};
         return expr;
     }
 
@@ -2456,7 +2458,8 @@ auto Parser::parseLambda() -> ast::ExprPtr {
         }
         expect(TokenType::End, "Expected 'end' to close do block");
 
-        expr->kind = ast::Lambda{std::move(params), std::move(body)};
+        expr->kind = ast::Lambda{
+            std::move(params), std::move(body), std::nullopt, std::nullopt};
         return expr;
     }
 
@@ -2528,7 +2531,8 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
             body.push_back(std::move(chained));
             expr = std::make_unique<ast::Expr>();
             expr->location = body.front()->location;
-            expr->kind = ast::Lambda{std::move(params), std::move(body)};
+            expr->kind = ast::Lambda{
+                std::move(params), std::move(body), std::nullopt, std::nullopt};
         }
         return expr;
     }
@@ -2632,7 +2636,8 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
         }
         expect(TokenType::RBrace, "Expected '}'");
 
-        expr->kind = ast::Lambda{std::move(params), std::move(body)};
+        expr->kind = ast::Lambda{
+            std::move(params), std::move(body), std::nullopt, std::nullopt};
         return expr;
     }
 
@@ -2688,7 +2693,8 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     }
     expect(TokenType::RBrace, "Expected '}'");
 
-    expr->kind = ast::Lambda{{}, std::move(body)};
+    expr->kind = ast::Lambda{
+        {}, std::move(body), std::nullopt, std::nullopt};
     return expr;
 }
 

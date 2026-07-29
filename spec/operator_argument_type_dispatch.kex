@@ -1,0 +1,14 @@
+record OperatorBox do
+  value : Integer
+end
+
+make OperatorBox do
+  let +(suffix: String) -> String = "${@value}${suffix}"
+  let +(amount: Integer) -> Integer = @value + amount
+end
+
+main do
+  let box = OperatorBox { value: 40 }
+  IO.printLine(box + "!")
+  IO.printLine(box + 2)
+end

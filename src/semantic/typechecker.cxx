@@ -35,8 +35,72 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
     m_methodSignatures.clear();
+    m_overloadPurity.clear();
+    m_scopedDeclaredSignatures.clear();
+    m_currentModulePath.clear();
     m_scopeStack.clear();
+    m_importScopeStack.clear();
+    m_declarationImports.clear();
+    m_functionImports.clear();
+    m_makeImports.clear();
+    m_mainImports.clear();
     pushScope();
+
+    auto selectionFor = [](const ast::UsingBlock& block) {
+        ImportSelection selection;
+        for (size_t i = 0; i < block.module.parts.size(); ++i) {
+            if (i) selection.module += ".";
+            selection.module += block.module.parts[i];
+        }
+        selection.onlyNames = block.onlyNames;
+        selection.exceptNames = block.exceptNames;
+        return selection;
+    };
+    std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>)>
+        collectModuleImports;
+    collectModuleImports = [&](const ast::ModuleDef& module,
+                               std::vector<ImportSelection> active) {
+        for (const auto& item : module.body) {
+            std::visit([&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                    if (node && node->body.empty())
+                        active.push_back(selectionFor(*node));
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                    if (node) m_functionImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                    if (node) m_makeImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                    if (node) collectModuleImports(*node, active);
+                }
+            }, item);
+        }
+    };
+    std::vector<ImportSelection> topLevelImports;
+    for (const auto& item : program.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                if (node && node->body.empty())
+                    topLevelImports.push_back(selectionFor(*node));
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                if (node) m_functionImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) m_makeImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
+                if (node) m_mainImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectModuleImports(*node, topLevelImports);
+            }
+        }, item);
+    }
 
     std::function<void(const ast::ModuleDef&)> collectLocalModule =
         [&](const ast::ModuleDef& mod) {
@@ -462,20 +526,62 @@ auto TypeChecker::annotationToSignature(const ast::TypeAnnotation& ann) -> std::
 }
 
 auto TypeChecker::registerDeclaredSignatures(const ast::Program& program) -> void {
-    for (const auto& item : program.items) {
-        if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
-            if (!*ann) continue;
-            auto sig = annotationToSignature(**ann);
-            if (!sig) continue;
-            // Declared annotation wins — stored first so checkFunctionDef
-            // can find it and verify the body against the declared type.
-            m_annotationDeclared.insert((*ann)->name);
-            m_annotationArities[(*ann)->name].insert(sig->params.size());
-            auto& sigs = m_userSignatures[(*ann)->name];
-            // Insert declared sig at front, replacing any same-arity inferred
-            // one that was somehow already there (shouldn't happen in pre-pass
-            // ordering, but guard for safety).
-            sigs.insert(sigs.begin(), std::move(*sig));
+    auto add = [&](const ast::TypeAnnotation& ann, const std::string& modulePath) {
+        auto sig = annotationToSignature(ann);
+        if (!sig) return;
+        // Declared annotation wins — stored first so checkFunctionDef
+        // can find it and verify the body against the declared type.
+        m_annotationDeclared.insert(ann.name);
+        const auto key = modulePath + "\n" + ann.name;
+        m_annotationArities[key].insert(sig->params.size());
+        m_scopedDeclaredSignatures[key].push_back(*sig);
+        auto& sigs = m_userSignatures[ann.name];
+        // Insert declared sig at front, replacing any same-arity inferred
+        // one that was somehow already there (shouldn't happen in pre-pass
+        // ordering, but guard for safety).
+        sigs.insert(sigs.begin(), std::move(*sig));
+    };
+    for (const auto& item : program.items)
+        if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+            ann && *ann)
+            add(**ann, "");
+        else if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                 mod && *mod)
+            registerDeclaredSignaturesInModule(**mod);
+}
+
+auto TypeChecker::registerDeclaredSignaturesInModule(
+    const ast::ModuleDef& mod, const std::string& parentPath) -> void {
+    const auto modulePath =
+        parentPath.empty() ? mod.name : parentPath + "." + mod.name;
+    auto add = [this, &modulePath](
+                   const ast::TypeAnnotation& ann, bool exposeUnqualified) {
+        auto sig = annotationToSignature(ann);
+        if (!sig) return;
+        m_annotationDeclared.insert(ann.name);
+        const auto key = modulePath + "\n" + ann.name;
+        m_annotationArities[key].insert(sig->params.size());
+        m_scopedDeclaredSignatures[key].push_back(*sig);
+        if (exposeUnqualified)
+            m_userSignatures[ann.name].insert(
+                m_userSignatures[ann.name].begin(), std::move(*sig));
+    };
+    for (const auto& item : mod.body) {
+        if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+            ann && *ann) {
+            add(**ann, true);
+        } else if (auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                   visibility && *visibility) {
+            for (const auto& visible : (*visibility)->items)
+                if (auto* ann =
+                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&visible);
+                    ann && *ann)
+                    add(**ann, false);
+        } else if (auto* nested =
+                       std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+                   nested && *nested) {
+            registerDeclaredSignaturesInModule(**nested, modulePath);
         }
     }
 }
@@ -546,6 +652,16 @@ auto TypeChecker::preRegisterFunctionSigs(const ast::Program& program) -> void {
                         using MT = std::decay_t<decltype(mn)>;
                         if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
                             if (mn) preRegisterFunctionDef(*mn);
+                        } else if constexpr (std::is_same_v<
+                                                 MT,
+                                                 std::unique_ptr<ast::VisibilityBlock>>) {
+                            if (!mn) return;
+                            for (const auto& visible : mn->items)
+                                if (auto* def =
+                                        std::get_if<std::unique_ptr<ast::FunctionDef>>(
+                                            &visible);
+                                    def && *def)
+                                    preRegisterFunctionDef(**def);
                         }
                     }, modItem);
                 }
@@ -700,6 +816,8 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 args.push_back(arg ? resolveTypeExpr(*arg, genericVars) : Type::unknown());
             }
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
+            if (name == "Optional" && args.size() == 1)
+                return Type::optional(args[0]);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -797,14 +915,17 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
     }, pattern.kind);
 }
 
-auto TypeChecker::bindPatternVars(const ast::Pattern& pat) -> void {
-    std::visit([this](const auto& node) {
+auto TypeChecker::bindPatternVars(
+    const ast::Pattern& pat, TypePtr expected) -> void {
+    expected = expected ? resolve(expected) : nullptr;
+    std::visit([this, &expected](const auto& node) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            if (node.name != "_") defineVar(node.name, freshTypeVar());
+            if (node.name != "_")
+                defineVar(node.name, expected ? expected : freshTypeVar());
         }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
-            if (node.inner) bindPatternVars(*node.inner);
+            if (node.inner) bindPatternVars(*node.inner, expected);
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
             for (const auto& arg : node.args) {
@@ -812,21 +933,44 @@ auto TypeChecker::bindPatternVars(const ast::Pattern& pat) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            const std::unordered_map<std::string, TypePtr>* fields = nullptr;
+            if (expected)
+                if (auto* named = std::get_if<NamedType>(&expected->kind))
+                    if (auto found = m_recordFields.find(named->name);
+                        found != m_recordFields.end())
+                        fields = &found->second;
             for (const auto& field : node.fields) {
-                if (field.pattern) bindPatternVars(**field.pattern);
-                else if (!field.isStringKey) defineVar(field.name, freshTypeVar());
+                TypePtr fieldType;
+                if (fields)
+                    if (auto found = fields->find(field.name);
+                        found != fields->end())
+                        fieldType = found->second;
+                if (field.pattern)
+                    bindPatternVars(**field.pattern, fieldType);
+                else if (!field.isStringKey)
+                    defineVar(field.name,
+                              fieldType ? fieldType : freshTypeVar());
             }
         }
         else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            TypePtr elementType;
+            if (expected)
+                if (auto* list = std::get_if<ListType>(&expected->kind))
+                    elementType = list->element;
             for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem);
+                if (elem) bindPatternVars(*elem, elementType);
             }
-            if (node.rest) bindPatternVars(**node.rest);
+            if (node.rest) bindPatternVars(**node.rest, expected);
         }
         else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
-            for (const auto& elem : node.elements) {
-                if (elem) bindPatternVars(*elem);
-            }
+            const TupleType* tuple = expected
+                ? std::get_if<TupleType>(&expected->kind) : nullptr;
+            for (size_t i = 0; i < node.elements.size(); ++i)
+                if (node.elements[i])
+                    bindPatternVars(
+                        *node.elements[i],
+                        tuple && i < tuple->elements.size()
+                            ? tuple->elements[i] : nullptr);
         }
         else if constexpr (std::is_same_v<T, ast::RangePattern>) {
             // (x..y) in a match clause binds x and y as variables.
@@ -848,11 +992,17 @@ auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
             checkMakeDef(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
             checkMainBlock(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+            checkUsingBlock(*node);
         }
     }, item);
 }
 
 auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
+    auto previousModulePath = m_currentModulePath;
+    m_currentModulePath = previousModulePath.empty()
+        ? mod.name
+        : previousModulePath + "." + mod.name;
     pushScope();
     for (const auto& item : mod.body) {
         std::visit([this](const auto& node) {
@@ -863,23 +1013,93 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
                 checkMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 checkModule(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
+                checkUsingBlock(*node);
+            } else if constexpr (std::is_same_v<
+                                     T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (!node) return;
+                for (const auto& visible : node->items) {
+                    std::visit([this](const auto& member) {
+                        using M = std::decay_t<decltype(member)>;
+                        if constexpr (std::is_same_v<
+                                          M, std::unique_ptr<ast::FunctionDef>>) {
+                            if (member) checkFunctionDef(*member);
+                        } else if constexpr (std::is_same_v<
+                                                 M, std::unique_ptr<ast::MakeDef>>) {
+                            if (member) checkMakeDef(*member);
+                        } else if constexpr (std::is_same_v<
+                                                 M, std::unique_ptr<ast::UsingBlock>>) {
+                            if (member) checkUsingBlock(*member);
+                        }
+                    }, visible);
+                }
             }
         }, item);
     }
     popScope();
+    m_currentModulePath = std::move(previousModulePath);
+}
+
+auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
+    ImportSelection selection;
+    for (size_t i = 0; i < block.module.parts.size(); ++i) {
+        if (i) selection.module += ".";
+        selection.module += block.module.parts[i];
+    }
+    selection.onlyNames = block.onlyNames;
+    selection.exceptNames = block.exceptNames;
+    if (block.body.empty()) {
+        if (!m_importScopeStack.empty())
+            m_importScopeStack.back().push_back(std::move(selection));
+        return;
+    }
+    pushScope();
+    m_importScopeStack.back().push_back(std::move(selection));
+    inferBody(block.body);
+    popScope();
 }
 
 auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_functionImports.find(&def);
+        imports != m_functionImports.end())
+        m_declarationImports = imports->second;
+    const auto purityKey = m_currentModulePath + "\n" + def.name;
+    if (auto [purity, inserted] =
+            m_overloadPurity.emplace(purityKey, def.isFoul);
+        !inserted && purity->second != def.isFoul) {
+        error(def.location,
+              "Overloads of `" + def.name +
+              "` must all have the same purity");
+    }
     // A "declared" signature is one from a standalone TypeAnnotation
     // (`fact : Integer -> Integer`) — tracked in m_annotationDeclared.
     // Pre-registered provisional sigs (for forward-reference/recursion) are
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
+    const auto scopedDeclared = m_scopedDeclaredSignatures.find(purityKey);
+    const bool hasDeclaredContracts =
+        scopedDeclared != m_scopedDeclaredSignatures.end();
     auto* declared = [&]() -> const Signature* {
-        if (!m_annotationDeclared.count(def.name)) return nullptr;
-        auto it = m_userSignatures.find(def.name);
-        if (it != m_userSignatures.end() && !it->second.empty()) return &it->second[0];
-        return nullptr;
+        if (!hasDeclaredContracts) return nullptr;
+        // A lone declaration is still the contract even when its arity is
+        // wrong; checkFunctionDef then emits the established annotation/body
+        // diagnostics instead of silently treating it as unrelated.
+        if (scopedDeclared->second.size() == 1)
+            return &scopedDeclared->second.front();
+        const auto arity = def.clauses.empty()
+            ? size_t(0) : def.clauses.front().params.size();
+        const Signature* match = nullptr;
+        for (const auto& signature : scopedDeclared->second) {
+            if (signature.params.size() != arity) continue;
+            // Several same-arity contracts describe a runtime overload set
+            // implemented by one permissive body (for example FS.File.open
+            // by mode). No single contract may type that body; preserve all
+            // call-site signatures without choosing one arbitrarily.
+            if (match) return nullptr;
+            match = &signature;
+        }
+        return match;
     }();
 
     // Resolve inline return type annotation (-> Type on the function def line),
@@ -916,12 +1136,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 defineVar(*param.name, paramType);
             }
             if (param.pattern) {
-                bindPatternVars(**param.pattern);
+                bindPatternVars(**param.pattern, paramType);
             }
         }
         if (declared && declared->params.size() != clause.params.size()) {
             bool hasMatchingAnnotation = false;
-            auto it = m_annotationArities.find(def.name);
+            auto it = m_annotationArities.find(purityKey);
             if (it != m_annotationArities.end()) {
                 hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
             }
@@ -961,7 +1181,8 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         };
         auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
                           ? effectiveReturnType : resolve(bodyType);
-        signatures.push_back(Signature{def.name, std::move(paramTypes), resultType});
+        signatures.push_back(
+            Signature{def.name, std::move(paramTypes), resultType, def.isFoul});
     }
 
     // Preserve the checked declaration interface before the signatures are
@@ -1022,10 +1243,25 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     if (!m_inMakeBlock) {
         // If a declared signature already exists, update its result type with
         // the inferred one (keeping declared params) and keep one entry.
-        if (declared) {
+        if (hasDeclaredContracts) {
             auto& sigs = m_userSignatures[def.name];
             // Replace the placeholder declared sig with the fully-checked one.
-            if (!signatures.empty()) sigs[0] = signatures[0];
+            if (declared && !signatures.empty()) {
+                auto placeholder = std::find_if(
+                    sigs.begin(), sigs.end(), [&](const Signature& candidate) {
+                        if (candidate.params.size() != declared->params.size())
+                            return false;
+                        for (size_t i = 0; i < candidate.params.size(); ++i)
+                            if (!typesEqual(candidate.params[i],
+                                            declared->params[i]))
+                                return false;
+                        return true;
+                    });
+                if (placeholder != sigs.end())
+                    *placeholder = signatures[0];
+                else
+                    sigs.push_back(signatures[0]);
+            }
         } else {
             if (m_checkedFunctions.count(def.name)) {
                 // Additional `let f(...)` with the same name: append to the
@@ -1040,9 +1276,13 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
         }
     }
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_makeImports.find(&def); imports != m_makeImports.end())
+        m_declarationImports = imports->second;
     pushScope();
     bool wasInMakeBlock = m_inMakeBlock;
     auto prevMakeType = m_currentMakeType;
@@ -1068,6 +1308,7 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     popScope();
 
     checkTraitImplementation(def);
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
@@ -1118,6 +1359,9 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
 }
 
 auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
+    auto savedDeclarationImports = m_declarationImports;
+    if (auto imports = m_mainImports.find(&block); imports != m_mainImports.end())
+        m_declarationImports = imports->second;
     if (!block.synthetic) pushScope();
     for (size_t i = 0; i < block.params.size(); i++) {
         const auto& param = block.params[i];
@@ -1133,6 +1377,7 @@ auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
     }
     inferBody(block.body);
     if (!block.synthetic) popScope();
+    m_declarationImports = std::move(savedDeclarationImports);
 }
 
 auto TypeChecker::inferBody(const std::vector<ast::ExprPtr>& body) -> TypePtr {
@@ -1159,7 +1404,8 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
         functions != m_importedInterfaces->receiverFunctions.end())
         for (const auto& function : functions->second)
-            result.push_back(function.signature);
+            if (importedFunctionVisible(function))
+                result.push_back(function.signature);
     for (const auto& [_, module] : m_importedInterfaces->modules) {
         if (!module.automaticImport) continue;
         if (auto functions = module.exports.find(name);
@@ -1170,13 +1416,50 @@ auto TypeChecker::importedCandidateSignatures(const std::string& name) const
     return result;
 }
 
+auto TypeChecker::importedFunctionVisible(
+    const ImportedFunction& function) const -> bool {
+    if (function.sourceModule.empty()) return true;
+    if (m_importedInterfaces) {
+        if (auto module = m_importedInterfaces->modules.find(function.sourceModule);
+            module != m_importedInterfaces->modules.end() &&
+            module->second.automaticImport)
+            return true;
+    }
+    auto selected = [&](const ImportSelection& import) {
+        if (import.module != function.sourceModule) return false;
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(),
+                      function.sourceName) == import.onlyNames.end())
+            return false;
+        return std::find(import.exceptNames.begin(), import.exceptNames.end(),
+                         function.sourceName) == import.exceptNames.end();
+    };
+    if (std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
+                    selected))
+        return true;
+    for (const auto& scope : m_importScopeStack)
+        if (std::any_of(scope.begin(), scope.end(), selected))
+            return true;
+    return false;
+}
+
 auto TypeChecker::resolveBlockHints(const std::string& name,
-                                     const std::vector<TypePtr>& nonBlockArgTypes) -> std::vector<TypePtr> {
+                                     const std::vector<TypePtr>& nonBlockArgTypes,
+                                     bool isMethodCall) -> std::vector<TypePtr> {
     auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = nullptr;
-    auto userIt = m_userSignatures.find(name);
-    if (userIt != m_userSignatures.end()) sigs = &userIt->second;
-    if (!sigs && imported.empty()) return {};
+    if (auto scoped = m_scopedDeclaredSignatures.find(
+            m_currentModulePath + "\n" + name);
+        !m_currentModulePath.empty() &&
+        scoped != m_scopedDeclaredSignatures.end())
+        sigs = &scoped->second;
+    else if (auto user = m_userSignatures.find(name);
+             user != m_userSignatures.end())
+        sigs = &user->second;
+    auto methodIt = isMethodCall ? m_methodSignatures.find(name)
+                                 : m_methodSignatures.end();
+    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end())
+        return {};
 
     auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
         if (sig.params.size() != nonBlockArgTypes.size() + 1) return {};
@@ -1213,6 +1496,11 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
         return hints;
     };
 
+    if (methodIt != m_methodSignatures.end())
+        for (const auto& sig : methodIt->second) {
+            auto hints = hintsFrom(sig);
+            if (!hints.empty()) return hints;
+        }
     for (const auto& sig : imported) {
         auto hints = hintsFrom(sig);
         if (!hints.empty()) return hints;
@@ -1227,12 +1515,22 @@ auto TypeChecker::resolveBlockHints(const std::string& name,
 
 auto TypeChecker::resolveArgHints(const std::string& name,
                                    const std::vector<TypePtr>& argTypes,
-                                   size_t slArgIdx) -> std::vector<TypePtr> {
+                                   size_t slArgIdx,
+                                   bool isMethodCall) -> std::vector<TypePtr> {
     auto imported = importedCandidateSignatures(name);
     const std::vector<Signature>* sigs = nullptr;
-    auto userIt = m_userSignatures.find(name);
-    if (userIt != m_userSignatures.end()) sigs = &userIt->second;
-    if (!sigs && imported.empty()) return {};
+    if (auto scoped = m_scopedDeclaredSignatures.find(
+            m_currentModulePath + "\n" + name);
+        !m_currentModulePath.empty() &&
+        scoped != m_scopedDeclaredSignatures.end())
+        sigs = &scoped->second;
+    else if (auto user = m_userSignatures.find(name);
+             user != m_userSignatures.end())
+        sigs = &user->second;
+    auto methodIt = isMethodCall ? m_methodSignatures.find(name)
+                                 : m_methodSignatures.end();
+    if (!sigs && imported.empty() && methodIt == m_methodSignatures.end())
+        return {};
 
     auto hintsFrom = [&](const Signature& sig) -> std::vector<TypePtr> {
         if (sig.params.size() != argTypes.size()) return {};
@@ -1273,6 +1571,11 @@ auto TypeChecker::resolveArgHints(const std::string& name,
         return hints;
     };
 
+    if (methodIt != m_methodSignatures.end())
+        for (const auto& sig : methodIt->second) {
+            auto hints = hintsFrom(sig);
+            if (!hints.empty()) return hints;
+        }
     for (const auto& sig : imported) {
         auto hints = hintsFrom(sig);
         if (!hints.empty()) return hints;
@@ -1296,9 +1599,12 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         }
         pushScope();
         std::vector<TypePtr> paramTypes;
+        std::unordered_map<std::string, TypePtr> genericVars;
         for (size_t i = 0; i < lam->params.size(); i++) {
             TypePtr pt;
-            if (i < hintParams.size()) {
+            if (lam->params[i].type) {
+                pt = resolveTypeExpr(**lam->params[i].type, genericVars);
+            } else if (i < hintParams.size()) {
                 auto hint = resolve(hintParams[i]);
                 if (!std::holds_alternative<TypeVar>(hint->kind) &&
                     !std::holds_alternative<UnknownType>(hint->kind)) {
@@ -1313,8 +1619,17 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             if (lam->params[i].name != "_") defineVar(lam->params[i].name, pt);
         }
         auto bodyType = inferBody(lam->body);
+        auto resultType = resolve(bodyType);
+        if (lam->returnAnnotation) {
+            auto declared = resolveTypeExpr(**lam->returnAnnotation, genericVars);
+            if (!std::holds_alternative<UnknownType>(resultType->kind) &&
+                !std::holds_alternative<TypeVar>(resultType->kind) &&
+                !argMatchesParam(resultType, declared))
+                typeMismatch(blockExpr.location, declared, resultType);
+            resultType = declared;
+        }
         popScope();
-        return Type::func(std::move(paramTypes), resolve(bodyType));
+        return Type::func(std::move(paramTypes), resultType);
     }
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
         if (sl->kind == ast::ShorthandLambda::Kind::Function && hintParams.size() > 1) {
@@ -1328,7 +1643,9 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                      std::holds_alternative<UnknownType>(pt->kind))
                         ? freshTypeVar() : pt);
             }
-            auto resultType = checkCall(sl->name, paramTypes, blockExpr.location, true);
+            auto resultType = checkCall(
+                sl->name, paramTypes, blockExpr.location,
+                /*isMethodCall=*/false);
             return Type::func(std::move(paramTypes), resolve(resultType));
         }
         TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
@@ -1337,7 +1654,9 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             paramType = freshTypeVar();
         TypePtr resultType;
         if (sl->kind == ast::ShorthandLambda::Kind::Function) {
-            resultType = checkCall(sl->name, {paramType}, blockExpr.location, true);
+            resultType = checkCall(
+                sl->name, {paramType}, blockExpr.location,
+                /*isMethodCall=*/false);
         } else {
             // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
             std::vector<TypePtr> callArgs = {paramType};
@@ -1412,6 +1731,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 return Type::named(node.name);
             auto type = lookupVar(node.name);
             return type ? type : Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
+            ImportSelection selection;
+            for (size_t i = 0; i < node.module.parts.size(); ++i) {
+                if (i) selection.module += ".";
+                selection.module += node.module.parts[i];
+            }
+            selection.onlyNames = node.onlyNames;
+            selection.exceptNames = node.exceptNames;
+            if (node.body.empty()) {
+                if (!m_importScopeStack.empty())
+                    m_importScopeStack.back().push_back(std::move(selection));
+                return Type::unit();
+            }
+            pushScope();
+            m_importScopeStack.back().push_back(std::move(selection));
+            auto bodyType = inferBody(node.body);
+            popScope();
+            return bodyType;
         }
         else if constexpr (std::is_same_v<T, ast::TryExpr>) {
             auto operand = resolve(
@@ -1512,6 +1850,44 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             auto leftType = node.left ? inferExpr(*node.left) : Type::unknown();
             auto rightType = node.right ? inferExpr(*node.right) : Type::unknown();
+            const auto operatorName = [&]() -> std::string {
+                switch (node.op) {
+                    case TokenType::Plus: return "+";
+                    case TokenType::Minus: return "-";
+                    case TokenType::Star: return "*";
+                    case TokenType::Slash: return "/";
+                    case TokenType::Percent: return "%";
+                    case TokenType::Caret: return "^";
+                    case TokenType::EqEq: return "==";
+                    case TokenType::NotEq: return "!=";
+                    case TokenType::LessThan: return "<";
+                    case TokenType::GreaterThan: return ">";
+                    case TokenType::LessEq: return "<=";
+                    case TokenType::GreaterEq: return ">=";
+                    default: return "";
+                }
+            }();
+            // Operators share make-method signatures with UFCS. Prefer a
+            // matching receiver/RHS overload, but leave ordinary operators on
+            // the builtin inference path when no local signature applies.
+            if (!operatorName.empty()) {
+                auto receiver = resolve(leftType);
+                const bool concreteReceiver =
+                    !std::holds_alternative<TypeVar>(receiver->kind) &&
+                    !std::holds_alternative<UnknownType>(receiver->kind);
+                if (auto found = m_methodSignatures.find(operatorName);
+                    concreteReceiver && found != m_methodSignatures.end()) {
+                    for (const auto& signature : found->second) {
+                        if (signature.params.size() != size_t(2)) continue;
+                        if (!argMatchesParam(leftType, signature.params[0]) ||
+                            !argMatchesParam(rightType, signature.params[1]))
+                            continue;
+                        return checkCall(
+                            operatorName, {leftType, rightType}, expr.location,
+                            /*isMethodCall=*/true);
+                    }
+                }
+            }
             return inferBinaryOp(node.op, leftType, rightType, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
@@ -1538,13 +1914,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
             std::vector<TypePtr> argTypes;
-            // First pass: infer concrete args; record ShorthandLambda positions.
-            std::vector<size_t> slPositions;
+            // First pass: infer concrete args; defer lambdas with parameters
+            // until the selected signature can provide contextual types.
+            std::vector<std::pair<size_t, size_t>> contextualLambdas;
             for (size_t i = 0; i < node.args.size(); i++) {
+                const auto* lambda = node.args[i]
+                    ? std::get_if<ast::Lambda>(&node.args[i]->kind) : nullptr;
                 if (node.args[i] &&
-                    std::holds_alternative<ast::ShorthandLambda>(node.args[i]->kind)) {
+                    (std::holds_alternative<ast::ShorthandLambda>(
+                         node.args[i]->kind) ||
+                     (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
-                    slPositions.push_back(i);
+                    contextualLambdas.emplace_back(i, i);
                 } else {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
@@ -1552,10 +1933,10 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             for (const auto& [_, arg] : node.namedArgs) {
                 argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
             }
-            // Second pass: infer ShorthandLambda args with type hints from sig.
-            for (size_t rawIdx : slPositions) {
-                auto hints = resolveArgHints(node.name, argTypes, rawIdx);
-                argTypes[rawIdx] = inferBlock(*node.args[rawIdx], hints);
+            // Second pass: infer lambdas with parameter hints from the signature.
+            for (const auto& [argIdx, rawIdx] : contextualLambdas) {
+                auto hints = resolveArgHints(node.name, argTypes, argIdx);
+                argTypes[argIdx] = inferBlock(*node.args[rawIdx], hints);
             }
             if (node.block) {
                 auto hints = resolveBlockHints(node.name, argTypes);
@@ -1667,13 +2048,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             std::vector<TypePtr> argTypes;
             if (!isNamespaceCall)
                 argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
-            // First pass: infer concrete args; record ShorthandLambda positions.
-            std::vector<size_t> slPositions;
+            // First pass: infer concrete args; defer lambdas with parameters
+            // until the selected receiver signature can provide context.
+            std::vector<std::pair<size_t, size_t>> contextualLambdas;
             for (size_t i = 0; i < node.args.size(); i++) {
+                const auto* lambda = node.args[i]
+                    ? std::get_if<ast::Lambda>(&node.args[i]->kind) : nullptr;
                 if (node.args[i] &&
-                    std::holds_alternative<ast::ShorthandLambda>(node.args[i]->kind)) {
+                    (std::holds_alternative<ast::ShorthandLambda>(
+                         node.args[i]->kind) ||
+                     (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
-                    slPositions.push_back(isNamespaceCall ? i : 1 + i);
+                    contextualLambdas.emplace_back(
+                        isNamespaceCall ? i : 1 + i, i);
                 } else {
                     argTypes.push_back(node.args[i] ? inferExpr(*node.args[i]) : Type::unknown());
                 }
@@ -1681,13 +2068,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             for (const auto& [_, arg] : node.namedArgs) {
                 argTypes.push_back(arg ? inferExpr(*arg) : Type::unknown());
             }
-            // Second pass: infer ShorthandLambda args with type hints from sig.
-            for (size_t argIdx : slPositions) {
-                auto hints = resolveArgHints(callName, argTypes, argIdx);
-                argTypes[argIdx] = inferBlock(*node.args[argIdx - 1], hints);
+            // Second pass: infer lambdas with parameter hints from the signature.
+            for (const auto& [argIdx, rawIdx] : contextualLambdas) {
+                auto hints = resolveArgHints(
+                    callName, argTypes, argIdx, /*isMethodCall=*/!isNamespaceCall);
+                argTypes[argIdx] = inferBlock(*node.args[rawIdx], hints);
             }
             if (node.block) {
-                auto hints = resolveBlockHints(callName, argTypes);
+                auto hints = resolveBlockHints(
+                    callName, argTypes, /*isMethodCall=*/!isNamespaceCall);
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
@@ -1904,16 +2293,29 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             }
             pushScope();
             std::vector<TypePtr> paramTypes;
+            std::unordered_map<std::string, TypePtr> genericVars;
             for (const auto& param : node.params) {
-                auto pt = freshTypeVar();
+                auto pt = param.type
+                    ? resolveTypeExpr(**param.type, genericVars)
+                    : freshTypeVar();
                 paramTypes.push_back(pt);
                 if (param.name != "_") defineVar(param.name, pt);
             }
             auto bodyType = inferBody(node.body);
+            auto resultType = resolve(bodyType);
+            if (node.returnAnnotation) {
+                auto declared =
+                    resolveTypeExpr(**node.returnAnnotation, genericVars);
+                if (!std::holds_alternative<UnknownType>(resultType->kind) &&
+                    !std::holds_alternative<TypeVar>(resultType->kind) &&
+                    !argMatchesParam(resultType, declared))
+                    typeMismatch(expr.location, declared, resultType);
+                resultType = declared;
+            }
             popScope();
             // Resolve param types after body inference — body may have constrained them.
             for (auto& pt : paramTypes) pt = resolve(pt);
-            return Type::func(std::move(paramTypes), resolve(bodyType));
+            return Type::func(std::move(paramTypes), resultType);
         }
         else if constexpr (std::is_same_v<T, ast::SpawnExpr>) {
             pushScope();
@@ -2026,8 +2428,39 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 arity = 2;
             } else {
                 auto usit = m_userSignatures.find(node.name);
-                if (usit != m_userSignatures.end() && !usit->second.empty())
+                if (usit != m_userSignatures.end() && !usit->second.empty()) {
+                    if (node.argGroups.empty()) {
+                        std::vector<const Signature*> distinct;
+                        for (const auto& signature : usit->second) {
+                            bool duplicate = std::any_of(
+                                distinct.begin(), distinct.end(),
+                                [&](const Signature* other) {
+                                    if (other->params.size() !=
+                                        signature.params.size())
+                                        return false;
+                                    for (size_t i = 0;
+                                         i < signature.params.size(); ++i)
+                                        if (!typesEqual(
+                                                other->params[i],
+                                                signature.params[i]))
+                                            return false;
+                                    return true;
+                                });
+                            if (!duplicate) distinct.push_back(&signature);
+                        }
+                        if (distinct.size() > 1) {
+                            std::string message =
+                                "Cannot reference overloaded function `" +
+                                node.name +
+                                "` without disambiguating arguments";
+                            for (const auto* signature : distinct)
+                                message += "\n\n" +
+                                    displaySignature(node.name, *signature);
+                            error(expr.location, message);
+                        }
+                    }
                     arity = static_cast<int>(usit->second[0].params.size());
+                }
             }
 
             // Remaining params = explicit placeholders + unfilled arity slots.
@@ -2319,29 +2752,28 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (auto* paramFn = std::get_if<FuncType>(&paramType->kind)) {
         auto* argFn = std::get_if<FuncType>(&argType->kind);
         if (!argFn) return isPermissive(argType);
-        if (argFn->params.size() == paramFn->params.size()) {
-            for (size_t i = 0; i < paramFn->params.size(); i++) {
-                if (!argMatchesParam(argFn->params[i], paramFn->params[i])) return false;
+        // `(A) -> (B) -> C` and `(A, B) -> C` are the same callable shape
+        // in Kex. Normalize both sides before comparing so a multi-parameter
+        // lambda matches a curried source annotation (and vice versa).
+        auto flatten = [](const TypePtr& type) {
+            std::pair<std::vector<TypePtr>, TypePtr> result{{}, type};
+            auto current = type;
+            while (auto* fn = std::get_if<FuncType>(&current->kind)) {
+                result.first.insert(
+                    result.first.end(), fn->params.begin(), fn->params.end());
+                current = fn->result;
             }
-            // Void as the expected return means "result discarded" — accept any body type.
-            if (isUnitLike(paramFn->result)) return true;
-            return argMatchesParam(argFn->result, paramFn->result);
-        }
-        // Curried arg: `(A) -> (B) -> C` matches `(A, B) -> C`.
-        // Haskell-style annotations write multi-arg callbacks as `B -> A -> B`;
-        // compiled package interfaces use multi-param FuncType.
-        if (argFn->params.size() == 1 && paramFn->params.size() > 1) {
-            if (auto* inner = std::get_if<FuncType>(&argFn->result->kind)) {
-                if (inner->params.size() == paramFn->params.size() - 1) {
-                    if (!argMatchesParam(argFn->params[0], paramFn->params[0])) return false;
-                    for (size_t i = 0; i < inner->params.size(); i++) {
-                        if (!argMatchesParam(inner->params[i], paramFn->params[i + 1])) return false;
-                    }
-                    return argMatchesParam(inner->result, paramFn->result);
-                }
-            }
-        }
-        return false;
+            result.second = current;
+            return result;
+        };
+        auto [argParams, argResult] = flatten(argType);
+        auto [paramParams, paramResult] = flatten(paramType);
+        if (argParams.size() != paramParams.size()) return false;
+        for (size_t i = 0; i < paramParams.size(); i++)
+            if (!argMatchesParam(argParams[i], paramParams[i])) return false;
+        // Void as the expected return means "result discarded" — accept any body type.
+        if (isUnitLike(paramResult)) return true;
+        return argMatchesParam(argResult, paramResult);
     }
     // NamedType with type args — e.g. `Range<Number>` param vs `Range<Integer>` arg.
     // Recurse into type arguments structurally so the inner types get the same
@@ -2465,10 +2897,49 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
 auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
                             SourceLocation loc, bool isMethodCall,
                             const ast::MethodCall* methodCall) -> TypePtr {
-    auto userIt = m_userSignatures.find(name);
-    bool hasUser = (userIt != m_userSignatures.end());
+    // A local function binding (`let f(x) ...` inside an expression block)
+    // is represented as a FuncType variable rather than a top-level
+    // FunctionDef signature. Resolve it before consulting global overloads.
+    if (!isMethodCall && name.find("::") == std::string::npos) {
+        auto local = lookupVar(name);
+        auto resolvedLocal = local ? resolve(local) : nullptr;
+        if (resolvedLocal)
+            if (auto* function = std::get_if<FuncType>(&resolvedLocal->kind)) {
+                if (function->params.size() != argTypes.size()) {
+                    error(loc, "`" + name + "` expects " +
+                        std::to_string(function->params.size()) +
+                        " argument(s), got " + std::to_string(argTypes.size()));
+                    return function->result;
+                }
+                for (size_t i = 0; i < argTypes.size(); ++i)
+                    if (!argMatchesParam(argTypes[i], function->params[i]))
+                        typeMismatch(loc, function->params[i], argTypes[i]);
+                return function->result;
+            }
+    }
+    const std::vector<Signature>* userSignatures = nullptr;
+    if (auto scoped = m_scopedDeclaredSignatures.find(
+            m_currentModulePath + "\n" + name);
+        !m_currentModulePath.empty() &&
+        scoped != m_scopedDeclaredSignatures.end())
+        userSignatures = &scoped->second;
+    else if (auto user = m_userSignatures.find(name);
+             user != m_userSignatures.end())
+        userSignatures = &user->second;
+    bool hasUser = userSignatures != nullptr;
     auto methodIt = m_methodSignatures.find(name);
     bool hasLocalMethods = isMethodCall && methodIt != m_methodSignatures.end();
+    // A known record field is not an unrelated imported zero-argument
+    // method with the same spelling (`Version.patch` vs HTTP.patch).
+    if (isMethodCall && !hasLocalMethods && argTypes.size() == 1) {
+        auto receiver = resolve(argTypes.front());
+        if (auto* named = std::get_if<NamedType>(&receiver->kind))
+            if (auto record = m_recordFields.find(named->name);
+                record != m_recordFields.end())
+                if (auto field = record->second.find(name);
+                    field != record->second.end())
+                    return field->second;
+    }
     bool hasReceiverRefinementConflict = false;
     if (hasLocalMethods && !argTypes.empty()) {
         auto actual = resolve(argTypes[0]);
@@ -2501,7 +2972,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    importedFunctions.push_back(&function);
+                    if (importedFunctionVisible(function))
+                        importedFunctions.push_back(&function);
         } else {
             for (const auto& [_, module] : m_importedInterfaces->modules) {
                 if (!module.automaticImport) continue;
@@ -2515,7 +2987,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (auto functions = m_importedInterfaces->receiverFunctions.find(name);
                 functions != m_importedInterfaces->receiverFunctions.end())
                 for (const auto& function : functions->second)
-                    importedFunctions.push_back(&function);
+                    if (importedFunctionVisible(function))
+                        importedFunctions.push_back(&function);
         }
     }
     // A module declared in the current compilation unit shadows a package
@@ -2596,10 +3069,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
         merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
         if (hasUser)
-            merged.insert(merged.end(), userIt->second.begin(), userIt->second.end());
+            merged.insert(
+                merged.end(), userSignatures->begin(), userSignatures->end());
         sigs = &merged;
     } else if (hasUser) {
-        sigs = &userIt->second;
+        sigs = userSignatures;
     }
     if (!sigs) {
         // Record field access: `user.name` desugars to checkCall("name", [User]).
@@ -2735,8 +3209,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // receivers outside of make blocks (m_currentMakeType is empty),
     // imported interfaces are authoritative and a mismatch is a real
     // type error.
-    if (!argTypes.empty() && (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
-                              (isMethodCall && !hasUser && m_currentMakeType &&
+    if (isMethodCall && !argTypes.empty() &&
+        (std::holds_alternative<NamedType>(argTypes[0]->kind) ||
+                              (!hasUser && m_currentMakeType &&
                                (std::holds_alternative<PrimitiveType>(argTypes[0]->kind) ||
                                 std::holds_alternative<SizedIntType>(argTypes[0]->kind))))) {
         bool anyFirstParamPlausible = false;
@@ -2780,8 +3255,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // 5c: Pick the most-specific full match when there are several.
     // Specificity per param: concrete named/list/func type (2) > trait-constrained (1) > TypeVar/Unknown (0).
     // A signature A dominates B if A >= B at every position and > at least one.
-    // If no unique winner exists, fall back to the first match (preserves previous behavior for
-    // untyped overloads like pattern-clause functions where all params are TypeVars).
+    // Concrete ties between explicitly overlapping union/constrained signatures
+    // are ambiguous. Unknown/generic clause sets retain deterministic fallback,
+    // and identical signatures remain ordinary multi-clause functions.
     if (fullMatches.size() > 1) {
         auto paramSpec = [](const TypePtr& p) -> int {
             if (std::holds_alternative<TypeVar>(p->kind) ||
@@ -2799,18 +3275,73 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             }
             return aWins;
         };
-        const Signature* best = nullptr;
+        std::vector<const Signature*> undominated;
         for (const auto* cand : fullMatches) {
             bool dominated = false;
             for (const auto* other : fullMatches) {
                 if (other == cand) continue;
                 if (dominates(other, cand)) { dominated = true; break; }
             }
-            if (!dominated) {
-                if (!best) { best = cand; }
-                // Multiple undominated candidates: ambiguous, keep first
-            }
+            if (!dominated) undominated.push_back(cand);
         }
+        std::vector<const Signature*> distinct;
+        for (const auto* candidate : undominated) {
+            bool duplicate = std::any_of(
+                distinct.begin(), distinct.end(),
+                [&](const Signature* other) {
+                    if (other->params.size() != candidate->params.size())
+                        return false;
+                    for (size_t i = 0; i < candidate->params.size(); ++i)
+                        if (!typesEqual(
+                                other->params[i], candidate->params[i]))
+                            return false;
+                    return true;
+                });
+            if (!duplicate) distinct.push_back(candidate);
+        }
+        const Signature* best =
+            undominated.empty() ? fullMatches.front() : undominated.front();
+        const bool concreteArguments = std::all_of(
+            argTypes.begin(), argTypes.end(),
+            [&](const TypePtr& argument) {
+                auto resolved = resolve(argument);
+                return !std::holds_alternative<TypeVar>(resolved->kind) &&
+                    !std::holds_alternative<UnknownType>(resolved->kind);
+            });
+        bool typedCandidates = false;
+        for (size_t left = 0;
+             left < distinct.size() && !typedCandidates; ++left)
+            for (size_t right = left + 1;
+                 right < distinct.size() && !typedCandidates; ++right)
+                for (size_t i = 0;
+                     i < distinct[left]->params.size(); ++i) {
+                    const auto& a = distinct[left]->params[i];
+                    const auto& b = distinct[right]->params[i];
+                    if (typesEqual(a, b)) continue;
+                    const bool explicitOverlap =
+                        (std::holds_alternative<UnionType>(a->kind) &&
+                         std::holds_alternative<UnionType>(b->kind)) ||
+                        (std::holds_alternative<ConstrainedType>(a->kind) &&
+                         std::holds_alternative<ConstrainedType>(b->kind));
+                    if (explicitOverlap) {
+                        typedCandidates = true;
+                        break;
+                    }
+                }
+        if (distinct.size() > 1 && concreteArguments && typedCandidates) {
+            std::string message =
+                "Ambiguous overload for `" + name + "`; candidates:";
+            for (const auto* candidate : distinct)
+                message += "\n\n" + displaySignature(name, *candidate);
+            error(loc, message);
+        }
+        // An unconstrained shorthand receiver (for example `&.kilo`) can
+        // match several concrete receiver overloads. Picking the first one
+        // would permanently specialize the closure to declaration order;
+        // keep its intermediate result permissive until the surrounding
+        // method chain or a call site supplies a concrete receiver.
+        if (distinct.size() > 1 && !concreteArguments && isMethodCall)
+            return Type::unknown();
         if (best) {
             // Rebuild fullMatches with best first so the code below uses it
             std::vector<const Signature*> reordered = {best};
@@ -2858,7 +3389,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
-        if (methodCall && !importedFunctions.empty()) {
+        if (methodCall) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;
             // `merged` is importedSigs ++ local methods ++ user functions, so
@@ -2868,9 +3399,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             // with its own `get` was lowered to `kex_prelude:get/2` and died
             // at runtime, purely because the prelude also has a `get`.
             bool winnerIsLocal = false;
+            bool winnerIsMakeMethod = false;
             if (sigs == &merged) {
                 auto selected = static_cast<size_t>(fullMatches[0] - merged.data());
-                if (selected >= localSigCount &&
+                if (selected < localSigCount) {
+                    winnerIsLocal = true;
+                    winnerIsMakeMethod = true;
+                } else if (selected >= localSigCount &&
                     selected - localSigCount < importedFunctions.size())
                     resolved = importedFunctions[selected - localSigCount];
                 else
@@ -2893,6 +3428,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->signature.isFoul,
                     resolved->paramNames,
                 };
+            } else if (winnerIsMakeMethod) {
+                ResolvedCallTarget target;
+                target.backendFunction = name;
+                target.backendArity = static_cast<int>(matched.params.size());
+                target.passesReceiver = true;
+                target.isFoul = matched.isFoul;
+                for (const auto& param : matched.params)
+                    target.localDispatchTypes.push_back(
+                        typeToString(resolve(param)));
+                m_resolvedCalls[methodCall] = std::move(target);
             }
         }
         // Propagate the param types back to any TypeVar arguments so that
@@ -2916,6 +3461,62 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 const auto& param = matched.params[i];
                 if (!typeContainsVar(param)) unifyVar(tv->id, param);
             }
+        }
+        // Instantiate interface-level generic placeholders in the result from
+        // the actual arguments. For example,
+        // `Result<X, E>.or : X -> X` called on `Result<Regex, RegexError>`
+        // must return Regex; leaking the table placeholder made a following
+        // overloaded call silently select a same-arity target for any type.
+        std::unordered_map<int, TypePtr> genericSubst;
+        std::function<void(const TypePtr&, const TypePtr&)> bindGenerics =
+            [&](const TypePtr& pattern, const TypePtr& actual) {
+                if (!pattern || !actual) return;
+                if (auto* tv = std::get_if<TypeVar>(&pattern->kind);
+                    tv && tv->id < 0) {
+                    genericSubst.try_emplace(tv->id, resolve(actual));
+                    return;
+                }
+                if (auto* pn = std::get_if<NamedType>(&pattern->kind)) {
+                    auto* an = std::get_if<NamedType>(&actual->kind);
+                    if (!an || pn->name != an->name ||
+                        pn->typeArgs.size() != an->typeArgs.size()) return;
+                    for (size_t i = 0; i < pn->typeArgs.size(); i++)
+                        bindGenerics(pn->typeArgs[i], an->typeArgs[i]);
+                } else if (auto* pl = std::get_if<ListType>(&pattern->kind)) {
+                    if (auto* al = std::get_if<ListType>(&actual->kind))
+                        bindGenerics(pl->element, al->element);
+                } else if (auto* pm = std::get_if<MapType>(&pattern->kind)) {
+                    if (auto* am = std::get_if<MapType>(&actual->kind)) {
+                        bindGenerics(pm->key, am->key);
+                        bindGenerics(pm->value, am->value);
+                    }
+                } else if (auto* po = std::get_if<OptionalType>(&pattern->kind)) {
+                    if (auto* ao = std::get_if<OptionalType>(&actual->kind))
+                        bindGenerics(po->inner, ao->inner);
+                } else if (auto* pt = std::get_if<TupleType>(&pattern->kind)) {
+                    auto* at = std::get_if<TupleType>(&actual->kind);
+                    if (!at || pt->elements.size() != at->elements.size()) return;
+                    for (size_t i = 0; i < pt->elements.size(); i++)
+                        bindGenerics(pt->elements[i], at->elements[i]);
+                } else if (auto* pf = std::get_if<FuncType>(&pattern->kind)) {
+                    auto* af = std::get_if<FuncType>(&actual->kind);
+                    if (!af || pf->params.size() != af->params.size()) return;
+                    for (size_t i = 0; i < pf->params.size(); i++)
+                        bindGenerics(pf->params[i], af->params[i]);
+                    bindGenerics(pf->result, af->result);
+                }
+            };
+        for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++)
+            bindGenerics(matched.params[i], resolve(argTypes[i]));
+
+        // Keep structured generic results under the existing gradual typing
+        // behavior for now (`map : ... -> [B]`, for example). The dispatch
+        // bug requires only the direct payload-returning form used by
+        // Optional/Result `or`.
+        if (auto* resultVar = std::get_if<TypeVar>(&matched.result->kind);
+            resultVar && resultVar->id < 0) {
+            if (auto it = genericSubst.find(resultVar->id);
+                it != genericSubst.end()) return it->second;
         }
         return matched.result;
     }
@@ -2986,11 +3587,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
 auto TypeChecker::pushScope() -> void {
     m_scopeStack.emplace_back();
+    m_importScopeStack.emplace_back();
 }
 
 auto TypeChecker::popScope() -> void {
     if (!m_scopeStack.empty()) {
         m_scopeStack.pop_back();
+        m_importScopeStack.pop_back();
     }
 }
 

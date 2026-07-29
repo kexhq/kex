@@ -1,0 +1,7 @@
+# kex: no-check
+let choose(value: Integer | String) = 1
+let choose(value: Integer | Bool) = 2
+
+main do
+  IO.printLine(choose(1))
+end

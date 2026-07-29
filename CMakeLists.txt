@@ -23,6 +23,25 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten" AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    execute_process(
+        COMMAND "${CMAKE_CXX_COMPILER}" --version
+        OUTPUT_VARIABLE KEX_EMSCRIPTEN_VERSION_OUTPUT
+        ERROR_VARIABLE KEX_EMSCRIPTEN_VERSION_ERROR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_STRIP_TRAILING_WHITESPACE)
+    if(NOT KEX_EMSCRIPTEN_VERSION_OUTPUT MATCHES
+            "Emscripten.* 5\\.0\\.7([ -]|$)")
+        string(REGEX MATCH "^[^\r\n]*" KEX_EMSCRIPTEN_VERSION_LINE
+            "${KEX_EMSCRIPTEN_VERSION_OUTPUT}")
+        message(FATAL_ERROR
+            "Kex's WASM fiber backend requires Emscripten 5.0.7; detected: "
+            "${KEX_EMSCRIPTEN_VERSION_LINE}\n"
+            "Activate emsdk 5.0.7 and configure a fresh WASM build directory. "
+            "See third_party/gmp-wasm/README.md.")
+    endif()
+endif()
+
 # Must come before add_library(kex_lib ...) below, not just before the
 # executables that link it — add_compile_options()/add_link_options() only
 # affect targets declared AFTER they're called. Placing these after
@@ -400,9 +419,14 @@ add_test(NAME module_resolver_test COMMAND module_resolver_test)
 add_executable(semantic_test tests/semantic_test.cxx)
 target_link_libraries(semantic_test PRIVATE kex_lib)
 target_include_directories(semantic_test PRIVATE tests)
-target_compile_definitions(semantic_test PRIVATE
-    KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
-add_dependencies(semantic_test kex_prelude_beam)
+if(TARGET kex_prelude_beam)
+    target_compile_definitions(semantic_test PRIVATE
+        KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+    add_dependencies(semantic_test kex_prelude_beam)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_compile_definitions(semantic_test PRIVATE KEX_RUNTIME_BEAM_DIR="")
+    target_link_options(semantic_test PRIVATE -sNODERAWFS=1)
+endif()
 add_test(NAME semantic_test COMMAND semantic_test)
 
 add_executable(validation_test tests/validation_test.cxx)

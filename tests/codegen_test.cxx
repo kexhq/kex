@@ -966,6 +966,47 @@ int main() {
             assertFalse(contains(out, "call 'Kex.Strings':'describe_string'"), out);
         });
 
+        it("mangles local argument overloads with slash signatures", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            auto out = emitWithResolvedCalls(
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(s: String) = s\n"
+                "  let render(n: Integer) = \"${n}\"\n"
+                "end\n"
+                "main do\n"
+                "  let b = Box { value: 1 }\n"
+                "  b.render(\"!\")\n"
+                "  b.render(2)\n"
+                "end\n",
+                interfaces);
+            assertTrue(contains(out, "'render/Box,String'/2"), out);
+            assertTrue(contains(out, "'render/Box,Integer'/2"), out);
+            assertFalse(contains(out, "render__Box"), out);
+        });
+
+        it("keeps dotted module members distinct from slash overloads", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            auto out = emitWithResolvedCalls(
+                "module A.B do\n"
+                "  let render(value: String) = value\n"
+                "end\n"
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(value: String) = value\n"
+                "  let render(value: Integer) = \"${value}\"\n"
+                "end\n"
+                "main do\n"
+                "  let box = Box { value: 1 }\n"
+                "  A.B.render(\"module\")\n"
+                "  box.render(\"method\")\n"
+                "end\n",
+                interfaces);
+            assertTrue(contains(out, "'A.B.render'/1"), out);
+            assertTrue(contains(out, "'render/Box,String'/2"), out);
+            assertFalse(contains(out, "A__B__render"), out);
+        });
+
         it("orders named args for the receiver target selected by semantics", []() {
             kex::semantic::ImportedInterfaces interfaces;
             kex::semantic::ImportedFunction scaled;

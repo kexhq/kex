@@ -1,0 +1,22 @@
+make String do
+  let greet() = "Hello, ${this}!"
+end
+
+let addSomeExclamations(str: String) do
+  "!!${str}!"
+end
+
+main do
+  let a = "John".greet
+  let b = greet("John")
+
+  let c = a.addSomeExclamations
+  let d = addSomeExclamations(b)
+
+  IO.printLine(a)
+  IO.printLine(b)
+  IO.printLine(c)
+  IO.printLine(d)
+  IO.printLine(a == b)
+  IO.printLine(c == d)
+end

@@ -35,6 +35,7 @@ private:
     // Top-level
     auto checkTopLevel(const ast::TopLevelItem& item) -> void;
     auto checkModule(const ast::ModuleDef& mod) -> void;
+    auto checkUsingBlock(const ast::UsingBlock& block) -> void;
 
     // ADT registry (sum types with a known, closed constructor set), for
     // match exhaustiveness checking. Populated in a pass over the whole
@@ -54,6 +55,8 @@ private:
     // before function bodies are checked so the annotation acts as a declared
     // contract rather than competing with body inference.
     auto registerDeclaredSignatures(const ast::Program& program) -> void;
+    auto registerDeclaredSignaturesInModule(
+        const ast::ModuleDef& mod, const std::string& parentPath = "") -> void;
     auto annotationToSignature(const ast::TypeAnnotation& ann) -> std::optional<Signature>;
     auto registerMakeSignatures(const ast::Program& program) -> void;
     auto registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void;
@@ -72,7 +75,8 @@ private:
     // record fields, nested constructor/list/tuple args) in the current
     // scope as a fresh type var — mirrors how checkFunctionDef already
     // treats untyped params, just recursing into pattern structure.
-    auto bindPatternVars(const ast::Pattern& pat) -> void;
+    auto bindPatternVars(
+        const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
     auto registerTraits(const ast::Program& program) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
@@ -102,19 +106,22 @@ private:
     // and resolve any negative-ID generic placeholders against the actual arg
     // types. Returns the resolved block param types, or empty if not found.
     auto resolveBlockHints(const std::string& name,
-                           const std::vector<TypePtr>& nonBlockArgTypes) -> std::vector<TypePtr>;
-    // Like resolveBlockHints but for an inline ShorthandLambda at a specific arg index.
+                           const std::vector<TypePtr>& nonBlockArgTypes,
+                           bool isMethodCall = false) -> std::vector<TypePtr>;
+    // Like resolveBlockHints but for an inline lambda at a specific arg index.
     // Returns the FuncType param hints for that position, applying generic substitution
     // from the other (already-known) arg types.
     auto resolveArgHints(const std::string& name,
                          const std::vector<TypePtr>& argTypes,
-                         size_t slArgIdx) -> std::vector<TypePtr>;
+                         size_t slArgIdx,
+                         bool isMethodCall = false) -> std::vector<TypePtr>;
 
     // Signatures of `name` visible through the imported package interfaces:
     // receiver functions for bare names, qualified module exports for
     // `Module::name`, and automatic-import module exports otherwise.
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
+    auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
 
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
@@ -146,6 +153,19 @@ private:
     std::vector<Diagnostic>* m_diagnostics = nullptr;
     TypeEnv m_globals;
     std::vector<TypeEnv> m_scopeStack;
+    struct ImportSelection {
+        std::string module;
+        std::vector<std::string> onlyNames;
+        std::vector<std::string> exceptNames;
+    };
+    std::vector<std::vector<ImportSelection>> m_importScopeStack;
+    std::vector<ImportSelection> m_declarationImports;
+    std::unordered_map<const ast::FunctionDef*, std::vector<ImportSelection>>
+        m_functionImports;
+    std::unordered_map<const ast::MakeDef*, std::vector<ImportSelection>>
+        m_makeImports;
+    std::unordered_map<const ast::MainBlock*, std::vector<ImportSelection>>
+        m_mainImports;
     int m_nextTypeVar = 0;
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
@@ -183,6 +203,11 @@ private:
     // forward-reference/recursion support) are NOT in this set, so they
     // don't accidentally gate body param-type overrides.
     std::set<std::string> m_annotationDeclared;
+    // Exact lexical owner -> declared contracts. The unqualified call table
+    // remains separate; this map prevents `A.get`'s annotation from being
+    // used to validate `B.get` merely because their source names coincide.
+    std::unordered_map<std::string, std::vector<Signature>>
+        m_scopedDeclaredSignatures;
 
     // Per-clause signatures for top-level/module-level user functions,
     // built as each FunctionDef is checked — so a call to a function
@@ -206,6 +231,11 @@ private:
     // real checkFunctionDef call. Subsequent calls for the same name append
     // rather than replace, building the overload set incrementally.
     std::set<std::string> m_checkedFunctions;
+    // Purity is a property of an overload set, not an individual candidate:
+    // dispatch must never decide whether a call is foul.
+    std::unordered_map<std::string, bool> m_overloadPurity;
+    // Lexical module qualification keeps same-named overload sets independent.
+    std::string m_currentModulePath;
     std::unordered_map<std::string, std::set<size_t>> m_annotationArities;
     bool m_inMakeBlock = false;
     // The complete receiver type of the current `make X do` block, used for

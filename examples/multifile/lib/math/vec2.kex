@@ -7,8 +7,8 @@ end
 
 let add(a, b) = Vec2 { x: a.x + b.x, y: a.y + b.y }
 
-let scale(v, s) = Vec2 { x: v.x * s, y: v.y * s }
+let scaleVec(v, s) = Vec2 { x: v.x * s, y: v.y * s }
 
-let length(v) = (v.x * v.x + v.y * v.y).sqrt()
+let vecLength(v) = (v.x * v.x + v.y * v.y).sqrt()
 
 let dot(a, b) = a.x * b.x + a.y * b.y

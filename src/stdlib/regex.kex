@@ -205,7 +205,7 @@ let scan(s, re) = Kex.Intrinsic.Regex.scan(s, re)
 # @example
 #   "a-b-c".replace(re, "+")                       # => "a+b+c"
 #   "2026-7-4".replace(re) do |m| m.get(1, "") end
-replace : String -> Regex -> String -> String
+replace : String -> Regex -> (String | (Match -> String)) -> String
 let replace(s, re, replacement) = Kex.Intrinsic.Regex.replace(s, re, replacement)
 
 # Splits +s+ on +re+, following Ruby's semantics: trailing empty fields are

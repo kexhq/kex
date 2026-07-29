@@ -94,7 +94,8 @@ auto runBeamRepl(const std::string& input) -> std::string {
     return stripAnsi(result);
 }
 
-auto runBeamFile(const std::string& source, const std::string& argument) -> std::string {
+auto runBeamFile(const std::string& source, const std::string& argument,
+                 bool noCheck = false) -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
     int fd = mkstemps(sourcePath, 4);
     assertTrue(fd >= 0, "mkstemps should create a Kex source file");
@@ -104,7 +105,8 @@ auto runBeamFile(const std::string& source, const std::string& argument) -> std:
     }
     close(fd);
 
-    std::string cmd = std::string(KEX_BINARY_PATH) + " -R " + sourcePath + " " + argument + " 2>&1";
+    std::string cmd = std::string(KEX_BINARY_PATH) + " -R " +
+        (noCheck ? "--no-check " : "") + sourcePath + " " + argument + " 2>&1";
     std::string result;
     FILE* pipe = popen(cmd.c_str(), "r");
     if (pipe) {
@@ -486,6 +488,17 @@ int main() {
             auto out = runBeamRepl("using Regex\n");
             assertTrue(out.find("using Regex") != std::string::npos, out);
             assertTrue(out.find("defined Regex") == std::string::npos, out);
+        });
+
+        it("retains argument-type dispatch under BEAM --no-check", []() {
+            auto out = runBeamFile(
+                "using Regex\n"
+                "main do\n"
+                "  IO.printLine(\"a-b-c\".replace(\"-\", \"+\"))\n"
+                "  IO.printLine(\"a1b2\".replace(regex`\\d`, \"#\"))\n"
+                "end\n",
+                "", true);
+            assertEqual(out, std::string("a+b+c\na#b#\n"));
         });
 
         it("binds variables from a destructuring let in the tree REPL", []() {

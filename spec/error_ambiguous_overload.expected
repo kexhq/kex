@@ -1,0 +1,6 @@
+spec/error_ambiguous_overload.kex:5:16: error: Ambiguous overload for `choose`; candidates:
+
+choose : Integer | String -> Integer
+
+choose : Integer | Bool -> Integer
+Aborted: fix type errors before running (use --no-check to skip).

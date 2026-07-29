@@ -334,6 +334,8 @@ auto Evaluator::execTopLevel(const ast::TopLevelItem& item) -> void {
             execCompiledBlock(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
             execUsingBlock(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+            registerRuntimeSignature(*node, "", false);
         }
     }, item);
 }
@@ -468,6 +470,8 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 execUsingBlock(*node, mod.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
                 m_pendingExports.push_back({mod.name, node.get()});
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                registerRuntimeSignature(*node, mod.name, false);
             }
         }, item);
     }
@@ -647,8 +651,9 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
                 execRecordDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 execUsingBlock(*node, typeScope);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                registerRuntimeSignature(*node, typeScope, hasImplicitReceiver);
             }
-            // TypeAnnotation: semantic-only, nothing to execute.
         }, item);
     }
     if (!prefix.empty()) {
@@ -733,6 +738,18 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
             ~ModuleScopeGuard() { current = std::move(saved); }
         } guard{m_currentModule, m_currentModule};
         if (!moduleScope.empty()) m_currentModule = moduleScope;
+        std::set<std::string> typedSignatures;
+        for (const auto* candidateDef : m_functionDefs.at(regName))
+            for (const auto& candidateClause : candidateDef->clauses) {
+                std::string signature;
+                for (const auto& param : candidateClause.params) {
+                    signature += "|";
+                    signature += param.type && *param.type
+                        ? runtimeTypeKey(**param.type) : "*";
+                }
+                typedSignatures.insert(std::move(signature));
+            }
+        const bool dispatchByParamType = typedSignatures.size() > 1;
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
                 pushEnv();
@@ -787,6 +804,12 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 for (size_t i = 0; i < clause.params.size(); i++) {
                     const auto& param = clause.params[i];
                     if ((i + argOffset) < args.size()) {
+                        if (dispatchByParamType && param.type && *param.type &&
+                            !runtimeTypeMatches(
+                                args[i + argOffset], **param.type)) {
+                            matched = false;
+                            break;
+                        }
                         if (param.pattern && *param.pattern) {
                             if (!matchPattern(**param.pattern, args[i + argOffset])) {
                                 matched = false;
@@ -914,6 +937,8 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
                 execFunctionDef(*node, typeName, true);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 execVisibilityBlock(*node, typeName, true);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
+                registerRuntimeSignature(*node, typeName, true);
             }
         }, item);
     }
@@ -1394,7 +1419,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
 
-            auto mangledName = resolveMethodName(receiver, node.method);
+            auto mangledName = resolveMethodName(receiver, node.method, &args);
 
             // For mutating calls, reassign back
             if (node.mutating) {
@@ -1981,7 +2006,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         default: break;
     }
     if (!opSymbol.empty()) {
-        auto methodName = resolveMethodName(left, opSymbol);
+        std::vector<ValuePtr> operatorArgs{left, right};
+        auto methodName = resolveMethodName(left, opSymbol, &operatorArgs);
         if (methodName != opSymbol) {
             return callFunction(methodName, {left, right}, {}, loc);
         }
@@ -2202,7 +2228,7 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     // (`xs.map(f)`). Once a public native alias is removed, route the call to
     // the source-owned receiver method selected from argument zero.
     if (!val && !args.empty() && name.find("::") == std::string::npos) {
-        auto methodName = resolveMethodName(args[0], name);
+        auto methodName = resolveMethodName(args[0], name, &args);
         if (methodName != name) {
             lookupName = std::move(methodName);
             val = m_env->get(lookupName);
@@ -2328,11 +2354,167 @@ auto Evaluator::receiverArgumentOffset(const std::string& functionName,
     return parent != m_variantParent.end() && scope == parent->second ? 1 : 0;
 }
 
-auto Evaluator::resolveMethodName(const ValuePtr& receiver, const std::string& method) const
+auto Evaluator::registerRuntimeSignature(
+    const ast::TypeAnnotation& annotation,
+    const std::string& scope,
+    bool implicitReceiver) -> void {
+    RuntimeSignature signature;
+    if (implicitReceiver) signature.receiverType = scope;
+    const ast::TypeExpr* current = annotation.type.get();
+    while (current) {
+        auto* function = std::get_if<ast::FunctionType>(&current->kind);
+        if (!function) break;
+        if (function->param) signature.params.push_back(function->param.get());
+        current = function->result.get();
+    }
+    auto name = scope.empty()
+        ? annotation.name
+        : scope + "::" + annotation.name;
+    m_runtimeSignatures[name].push_back(std::move(signature));
+}
+
+auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
+                                   const ast::TypeExpr& type) const -> bool {
+    return std::visit([&](const auto& node) -> bool {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::TypeName>) {
+            if (node.parts.empty()) return true;
+            const auto& expected = node.parts.back();
+            if (expected == "Any" ||
+                (expected.size() == 1 &&
+                 std::isupper(static_cast<unsigned char>(expected[0]))))
+                return true;
+            auto actual = dispatchTypeName(value);
+            if (actual == expected) return true;
+            if (auto parent = m_variantParent.find(actual);
+                parent != m_variantParent.end() && parent->second == expected)
+                return true;
+            return expected == "Int" && actual == "Integer";
+        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
+            if (node.name.parts.empty()) return true;
+            const auto& expected = node.name.parts.back();
+            auto actual = dispatchTypeName(value);
+            if (expected == "Optional")
+                return actual == "None" || actual == "Just" ||
+                       (m_variantParent.contains(actual) &&
+                        m_variantParent.at(actual) == "Optional");
+            return actual == expected ||
+                (m_variantParent.contains(actual) &&
+                 m_variantParent.at(actual) == expected);
+        } else if constexpr (std::is_same_v<T, ast::FunctionType> ||
+                             std::is_same_v<T, ast::BlockType>) {
+            return value && std::holds_alternative<FunctionValue>(value->data);
+        } else if constexpr (std::is_same_v<T, ast::ListType>) {
+            if (!value) return false;
+            if (std::holds_alternative<ListValue>(value->data)) return true;
+            if (node.element) {
+                if (auto* element =
+                        std::get_if<ast::TypeName>(&node.element->kind);
+                    element && !element->parts.empty() &&
+                    element->parts.back() == "Char")
+                    return std::holds_alternative<StringValue>(value->data);
+            }
+            return false;
+        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
+            return value && std::holds_alternative<TupleValue>(value->data);
+        } else if constexpr (std::is_same_v<T, ast::MapType>) {
+            return value && std::holds_alternative<MapValue>(value->data);
+        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            return (node.left && runtimeTypeMatches(value, *node.left)) ||
+                   (node.right && runtimeTypeMatches(value, *node.right));
+        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+            auto actual = dispatchTypeName(value);
+            return actual == "None" || actual == "Just" ||
+                   (m_variantParent.contains(actual) &&
+                    m_variantParent.at(actual) == "Optional");
+        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
+            return value && std::holds_alternative<AtomValue>(value->data);
+        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+            return true;
+        } else {
+            return true;
+        }
+    }, type.kind);
+}
+
+auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
+    return std::visit([&](const auto& node) -> std::string {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::TypeName>) {
+            return node.parts.empty() ? "*" : node.parts.back();
+        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
+            std::string out =
+                node.name.parts.empty() ? "*" : node.name.parts.back();
+            out += "<";
+            for (size_t i = 0; i < node.args.size(); i++) {
+                if (i) out += ",";
+                out += node.args[i] ? runtimeTypeKey(*node.args[i]) : "*";
+            }
+            return out + ">";
+        } else if constexpr (std::is_same_v<T, ast::ListType>) {
+            return "[" +
+                (node.element ? runtimeTypeKey(*node.element) : "*") + "]";
+        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+            return (node.inner ? runtimeTypeKey(*node.inner) : "*") + "?";
+        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            return (node.left ? runtimeTypeKey(*node.left) : "*") + "|" +
+                (node.right ? runtimeTypeKey(*node.right) : "*");
+        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+            return node.name;
+        } else {
+            return std::to_string(type.kind.index());
+        }
+    }, type.kind);
+}
+
+auto Evaluator::resolveMethodName(const ValuePtr& receiver,
+                                  const std::string& method,
+                                  const std::vector<ValuePtr>* args) const
     -> std::string {
     auto receiverType = dispatchTypeName(receiver);
     if (receiverType.empty()) return method;
     auto typed = receiverType + "::" + method;
+
+    if (args) {
+        auto matches = [&](const std::string& candidate) {
+            auto found = m_runtimeSignatures.find(candidate);
+            if (found == m_runtimeSignatures.end()) return false;
+            for (const auto& signature : found->second) {
+                const auto expectedSize =
+                    signature.params.size() +
+                    (signature.receiverType.empty() ? 0 : 1);
+                if (expectedSize != args->size()) continue;
+                size_t offset = 0;
+                if (!signature.receiverType.empty()) {
+                    if (receiverType != signature.receiverType) continue;
+                    offset = 1;
+                }
+                bool allMatch = true;
+                for (size_t i = 0; i < signature.params.size(); ++i)
+                    if (!runtimeTypeMatches((*args)[i + offset],
+                                            *signature.params[i])) {
+                        allMatch = false;
+                        break;
+                    }
+                if (allMatch) return true;
+            }
+            return false;
+        };
+
+        const bool typedMatches = matches(typed);
+        std::string imported;
+        for (auto scope = m_importScopes.rbegin();
+             scope != m_importScopes.rend(); ++scope) {
+            auto origin = scope->find(method);
+            if (origin == scope->end()) continue;
+            auto candidate = origin->second.module + "::" + method;
+            if (matches(candidate)) imported = std::move(candidate);
+            break;
+        }
+        if (!imported.empty() && !typedMatches) return imported;
+        if (typedMatches) return typed;
+    }
+
     if (m_env->get(typed)) return typed;
 
     // A variant value is tagged with its constructor while methods are

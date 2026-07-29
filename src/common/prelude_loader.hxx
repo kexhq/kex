@@ -97,6 +97,24 @@ inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
     return roots;
 }
 
+// Returns the first available opt-in standard-library source set. This mirrors
+// preludeSourceFiles(): installed layouts win over development fallbacks, and
+// a module is never indexed twice merely because both layouts exist.
+inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
+    for (const auto& root : standardLibraryModuleRoots()) {
+        std::error_code ec;
+        std::vector<std::string> files;
+        for (const auto& entry : std::filesystem::directory_iterator(root, ec))
+            if (entry.path().extension() == ".kex")
+                files.push_back(entry.path().string());
+        if (!ec && !files.empty()) {
+            std::sort(files.begin(), files.end());
+            return files;
+        }
+    }
+    return {};
+}
+
 inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
     const auto candidate = std::filesystem::path(filePath).lexically_normal();
     const auto files = preludeSourceFiles();

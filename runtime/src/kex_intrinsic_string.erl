@@ -4,7 +4,7 @@
 %% representation); the typed string stdlib lives in the Kex prelude
 %% (src/prelude/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
--export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, chars/1,
+-export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
@@ -28,6 +28,16 @@ split(S) -> [<<C/utf8>> || C <- unicode:characters_to_list(S)].
 %% so this clause is unreachable without it.
 split(S, {'Regex', _} = Regex) -> kex_intrinsic_regex:split(S, Regex, 0);
 split(S, Sep) -> string:split(S, Sep, all).
+
+%% Global literal replacement. Empty pattern follows Ruby's boundary
+%% semantics: "abc".replace("", "-") => "-a-b-c-".
+replace(S, <<>>, Replacement) ->
+    Chars = unicode:characters_to_list(S),
+    iolist_to_binary(
+      [Replacement,
+       [[unicode:characters_to_binary([C]), Replacement] || C <- Chars]]);
+replace(S, Pattern, Replacement) ->
+    binary:replace(S, Pattern, Replacement, [global]).
 
 'startsWith?'(S, Pre) ->
     Sz = byte_size(Pre),

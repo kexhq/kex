@@ -63,6 +63,17 @@ jobs:
           git clone https://github.com/emscripten-core/emsdk.git
           cd emsdk && ./emsdk install 5.0.7 && ./emsdk activate 5.0.7
 
+      # Each Actions `run` step starts a fresh shell. Sourcing emsdk_env.sh
+      # while building GMP/configuring CMake therefore does not make emcmake
+      # available to the later `make test-wasm` and `make spec-wasm` steps.
+      # Activate on cache hits too, then persist the tool directories through
+      # GITHUB_PATH for every remaining step in this job.
+      - name: Activate emsdk
+        run: |
+          ./emsdk/emsdk activate 5.0.7
+          echo "${GITHUB_WORKSPACE}/emsdk" >> "${GITHUB_PATH}"
+          echo "${GITHUB_WORKSPACE}/emsdk/upstream/emscripten" >> "${GITHUB_PATH}"
+
       # GMP built for wasm32 from source — no prebuilt wasm GMP exists via
       # Emscripten's port system or Homebrew, and third_party/gmp-wasm's
       # include/lib are gitignored (build artifacts, not vendored — see that

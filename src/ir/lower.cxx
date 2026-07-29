@@ -13,6 +13,115 @@ namespace kex::ir {
 
 namespace {
 
+// Backend-local symbol construction lives here so every producer and reader
+// changes together. Dots identify qualified/module membership; slash
+// introduces a receiver/argument overload signature.
+auto mangleQualifiedMember(const std::string& scope,
+                           const std::string& member) -> std::string {
+    return scope + "." + member;
+}
+
+auto mangleReceiverImplementation(const std::string& method,
+                                  const std::string& receiverType)
+    -> std::string {
+    return method + "/" + receiverType;
+}
+
+auto mangleReceiverSignature(const std::string& method,
+                             const std::vector<std::string>& dispatchTypes)
+    -> std::string {
+    std::string out = method + "/";
+    for (size_t i = 0; i < dispatchTypes.size(); i++) {
+        if (i) out += ",";
+        out += dispatchTypes[i];
+    }
+    return out;
+}
+
+auto receiverImplementationPrefix(const std::string& method) -> std::string {
+    return method + "/";
+}
+
+auto mangleModulePath(const std::string& path) -> std::string {
+    return path;
+}
+
+auto mangleModuleMember(const std::string& path,
+                        const std::string& member) -> std::string {
+    return mangleQualifiedMember(mangleModulePath(path), member);
+}
+
+auto renderDispatchType(const ast::TypeExpr& type) -> std::string {
+    return std::visit([](const auto& node) -> std::string {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::TypeName>) {
+            return node.parts.empty() ? "Any" : node.parts.back();
+        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
+            std::string out =
+                node.name.parts.empty() ? "Any" : node.name.parts.back();
+            out += "<";
+            for (size_t i = 0; i < node.args.size(); i++) {
+                if (i) out += ", ";
+                out += node.args[i] ? renderDispatchType(*node.args[i]) : "Any";
+            }
+            return out + ">";
+        } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
+            return "(" +
+                (node.param ? renderDispatchType(*node.param) : "Any") +
+                ") -> " +
+                (node.result ? renderDispatchType(*node.result) : "Any");
+        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
+            std::string out = "(";
+            for (size_t i = 0; i < node.elements.size(); i++) {
+                if (i) out += ", ";
+                out += node.elements[i]
+                    ? renderDispatchType(*node.elements[i]) : "Any";
+            }
+            return out + ")";
+        } else if constexpr (std::is_same_v<T, ast::ListType>) {
+            auto element =
+                node.element ? renderDispatchType(*node.element) : "Any";
+            return element == "Char" ? "String" : "[" + element + "]";
+        } else if constexpr (std::is_same_v<T, ast::MapType>) {
+            return "{" +
+                (node.key ? renderDispatchType(*node.key) : "Any") + ": " +
+                (node.value ? renderDispatchType(*node.value) : "Any") + "}";
+        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            return (node.left ? renderDispatchType(*node.left) : "Any") +
+                " | " +
+                (node.right ? renderDispatchType(*node.right) : "Any");
+        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+            return (node.inner ? renderDispatchType(*node.inner) : "Any") + "?";
+        } else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            return "Block<" +
+                (node.inner ? renderDispatchType(*node.inner) : "Any") + ">";
+        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
+            return "Atom";
+        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+            return node.name;
+        }
+        return "Any";
+    }, type.kind);
+}
+
+auto methodDispatchTypes(const ast::FunctionDef& function,
+                         const std::string& receiverType)
+    -> std::vector<std::string> {
+    std::vector<std::string> types{receiverType};
+    if (function.clauses.empty()) return types;
+    for (const auto& param : function.clauses.front().params)
+        types.push_back(param.type && *param.type
+            ? renderDispatchType(**param.type)
+            : "Any");
+    return types;
+}
+
+auto localOverloadKey(const std::string& method,
+                      const std::string& receiverType,
+                      size_t arity) -> std::string {
+    return method + "\n" + receiverType + "\n" + std::to_string(arity);
+}
+
 // A pending `let name = value in ...` binding, accumulated while lowering a
 // compound expression's operands into ANF, then wrapped (outermost-first)
 // around the consuming expression.
@@ -55,11 +164,21 @@ struct Lowering {
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
     // Cross-type method-name collisions: a method name → the make-block type
     // names that define it, in order. When more than one type defines the
-    // same name, each type's version is emitted mangled (`name__Type`) and a
+    // same name, each type's version is emitted mangled (`name/Type`) and a
     // dispatcher under the bare name selects at runtime on the receiver's tag
     // (element 1). Mirrors the string emitter's collision handling.
     std::unordered_map<std::string, std::vector<std::string>> methodOwners;
     std::unordered_set<std::string> collidingMethods;
+    // Same receiver + name + BEAM arity, but distinct checked parameter
+    // signatures. These implementations need their full signature in the
+    // local symbol rather than the receiver-only collision spelling.
+    std::unordered_set<std::string> argumentOverloadedMethods;
+    // Local overload key -> (emitted exact symbol, receiver-first dispatch
+    // types). Operators use this to build a guarded bare-symbol dispatcher;
+    // named calls select the exact symbol directly from semantic analysis.
+    std::unordered_map<std::string,
+        std::vector<std::pair<std::string, std::vector<std::string>>>>
+        argumentOverloadSignatures;
     // Operator symbols overloaded by a make block (`make T do let +(o) ...`).
     // The corresponding binary-op Intrinsic then dispatches at runtime: a
     // tuple (record) receiver → the user's `'+'/2`, otherwise the builtin.
@@ -93,6 +212,10 @@ struct Lowering {
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
+    // Receiver type of the make block currently being lowered. Record field
+    // names are not globally unique, so `this.field` must select the layout
+    // owned by this type rather than the first same-named field in the file.
+    std::string currentMakeType;
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
@@ -1054,21 +1177,46 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
+        const bool thisReceiver =
+            std::holds_alternative<ast::ThisExpr>(n.receiver->kind) ||
+            (std::holds_alternative<ast::Identifier>(n.receiver->kind) &&
+             std::get<ast::Identifier>(n.receiver->kind).name == "this");
+        if (thisReceiver && n.args.empty() && n.namedArgs.empty() &&
+            !n.block && fieldAccessors.count(n.method)) {
+            const auto& candidates = fieldAccessors.at(n.method);
+            auto selected = std::find_if(
+                candidates.begin(), candidates.end(),
+                [&](const auto& candidate) {
+                    return candidate.first == currentMakeType;
+                });
+            if (selected != candidates.end())
+                return callE("erlang", "element", 2,
+                    two(litInt(selected->second), lower(n.receiver)));
+        }
         if (resolvedCalls) {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
             bool localTypeShadows = false;
             if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
                 localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
+            if (auto* id = std::get_if<ast::Identifier>(&n.receiver->kind))
+                localTypeShadows = id->name == "this";
+            if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
+                localTypeShadows = true;
             auto resolved = resolvedCalls->find(&n);
-            // `using Units.Data` can intentionally provide a more-specific
-            // UFCS overload than a prelude receiver with the same spelling.
-            // Resolve that lexical import below instead of freezing the
-            // prelude target selected before dependency sources were merged.
-            bool importedUfcs = !std::holds_alternative<ast::UpperIdentifier>(
-                n.receiver->kind) && moduleImports.count(n.method);
+            // Semantic analysis has already applied lexical `using` policy
+            // and argument-type specificity. Once it names an imported
+            // target, source-import priority must not override that choice.
+            // Prelude self-compilation is the one exception: its analyzer is
+            // intentionally backed by the previous prebuilt interface while
+            // lowering the replacement artifact, so its source imports are
+            // newer than those resolved targets.
+            bool stalePreludeTarget = preferExternalReceivers &&
+                !std::holds_alternative<ast::UpperIdentifier>(
+                    n.receiver->kind) &&
+                moduleImports.count(n.method);
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
-                !importedUfcs) {
+                !stalePreludeTarget) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -1109,10 +1257,23 @@ struct Lowering {
                         args.push_back(atomize(arg, binds));
                     if (n.block) args.push_back(atomize(*n.block, binds));
                 }
+                auto backendFunction = resolved->second.backendFunction;
+                if (!resolved->second.localDispatchTypes.empty()) {
+                    auto exact = mangleReceiverSignature(
+                        backendFunction,
+                        resolved->second.localDispatchTypes);
+                    auto byReceiver = mangleReceiverImplementation(
+                        backendFunction,
+                        resolved->second.localDispatchTypes.front());
+                    if (knownFns.count(exact))
+                        backendFunction = std::move(exact);
+                    else if (knownFns.count(byReceiver))
+                        backendFunction = std::move(byReceiver);
+                }
                 return wrapLets(
                     binds,
                     callE(resolved->second.backendModule,
-                          resolved->second.backendFunction,
+                          backendFunction,
                           resolved->second.backendArity,
                           std::move(args)));
             }
@@ -1433,7 +1594,8 @@ struct Lowering {
             // `method` is a local function/make-method. If that method has an
             // implicit `this`, pass a placeholder receiver (the type tag).
             if (knownTypes.count(uid->name) && localMethods.count(n.method)) {
-                std::string mangled = uid->name + "__" + n.method;
+                std::string mangled =
+                    mangleQualifiedMember(uid->name, n.method);
                 std::string callName = knownFns.count(mangled) ? mangled : n.method;
                 std::vector<ExprPtr> callArgs;
                 if (implicitThisMethods.count(callName))
@@ -3153,7 +3315,10 @@ struct Lowering {
                         if (auto* tp = std::get_if<ast::ThisPattern>(&(*cl.params[0].pattern)->kind))
                             if (tp->inner && std::holds_alternative<ast::ListPattern>(tp->inner->kind))
                                 listReceiver = true;
+        auto previousMakeType = currentMakeType;
+        currentMakeType = typeName;
         auto def = lowerFunctionGroup(group, receiverPattern ? "" : "this");
+        currentMakeType = std::move(previousMakeType);
         // An implicit method on a record still needs to constrain its receiver
         // in Core Erlang. Without this guard, a method such as
         // `Measure.to(String)` becomes a catch-all `to/2` clause and shadows
@@ -3162,8 +3327,12 @@ struct Lowering {
             for (auto& clause : def.clauses)
                 clause.guard = typeGuard(typeName, var("this"));
         if (listReceiver) def = coerceListReceiver(std::move(def));
-        if (collidingMethods.count(first.name) && !typeName.empty())
-            def.name = first.name + "__" + typeName;
+        if (argumentOverloadedMethods.count(
+                localOverloadKey(first.name, typeName, def.arity)))
+            def.name = mangleReceiverSignature(
+                first.name, methodDispatchTypes(first, typeName));
+        else if (collidingMethods.count(first.name) && !typeName.empty())
+            def.name = mangleReceiverImplementation(first.name, typeName);
         return def;
     }
 
@@ -3228,6 +3397,42 @@ struct Lowering {
                                      two(litInt(1), vRef.get())),
                                lit(LitKind::Atom, ty)))));
     }
+
+    auto makeArgumentDispatcher(
+        const std::string& name, int arity,
+        const std::vector<std::pair<std::string, std::vector<std::string>>>&
+            overloads) -> FunDef {
+        FunDef def;
+        def.name = name;
+        def.arity = arity;
+        for (const auto& [target, types] : overloads) {
+            if (static_cast<int>(types.size()) != arity) continue;
+            FunClause clause;
+            std::vector<ExprPtr> forwarded;
+            ExprPtr guard;
+            for (int i = 0; i < arity; ++i) {
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = "_a" + std::to_string(i);
+                clause.params.push_back(std::move(param));
+                forwarded.push_back(var("_a" + std::to_string(i)));
+                auto next = typeGuard(
+                    types[static_cast<size_t>(i)],
+                    var("_a" + std::to_string(i)));
+                guard = guard
+                    ? callE("erlang", "and", 2,
+                            two(std::move(guard), std::move(next)))
+                    : std::move(next);
+            }
+            clause.guard = std::move(guard);
+            auto body = std::make_unique<Expr>();
+            body->node = Call{"", target, arity, std::move(forwarded), false};
+            clause.body = std::move(body);
+            def.clauses.push_back(std::move(clause));
+        }
+        return def;
+    }
+
     auto makeDispatcher(const std::string& name, int arity,
                         const std::vector<std::string>& owners) -> FunDef {
         FunDef def; def.name = name; def.arity = arity;
@@ -3312,7 +3517,9 @@ struct Lowering {
                     std::vector<ExprPtr> args;
                     for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
                     auto call = std::make_unique<Expr>();
-                    call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                    call->node = Call{"",
+                        mangleReceiverImplementation(name, ty),
+                        arity, std::move(args), false};
                     mc.body = std::move(call);
                     m.clauses.push_back(std::move(mc));
                 }
@@ -3335,7 +3542,9 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
                 auto call = std::make_unique<Expr>();
-                call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                call->node = Call{"",
+                    mangleReceiverImplementation(name, ty),
+                    arity, std::move(args), false};
                 mc.body = std::move(call);
                 m.clauses.push_back(std::move(mc));
             } else {
@@ -3348,7 +3557,9 @@ struct Lowering {
                 std::vector<ExprPtr> args;
                 for (int i = 0; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
                 auto call = std::make_unique<Expr>();
-                call->node = Call{"", name + "__" + ty, arity, std::move(args), false};
+                call->node = Call{"",
+                    mangleReceiverImplementation(name, ty),
+                    arity, std::move(args), false};
                 mc.body = std::move(call);
                 m.clauses.push_back(std::move(mc));
             }
@@ -3370,7 +3581,9 @@ struct Lowering {
             args.push_back(callE("kex_intrinsic_list", "as_list", 1, one(var("_a0"))));
             for (int i = 1; i < arity; i++) args.push_back(var("_a" + std::to_string(i)));
             auto call = std::make_unique<Expr>();
-            call->node = Call{"", name + "__List", arity, std::move(args), false};
+            call->node = Call{"",
+                mangleReceiverImplementation(name, "List"),
+                arity, std::move(args), false};
             mc.body = std::move(call);
             m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
@@ -3488,7 +3701,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (rd.staticBlock)
             for (const auto& sf : rd.staticBlock->functions)
                 if (sf) {
-                    definedFns.insert(rd.name + "__" + sf->name);
+                    definedFns.insert(
+                        mangleQualifiedMember(rd.name, sf->name));
                     staticMethodNames.insert(sf->name);
                 }
     };
@@ -3531,6 +3745,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preMake = [&](const ast::MakeDef& md) {
         std::string typeName = Lowering::simpleTypeName(md.target);
+        std::unordered_map<std::string,
+            std::map<std::string, std::vector<std::string>>>
+            signaturesByNameAndArity;
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             definedFns.insert(fd->name);
@@ -3545,6 +3762,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 const auto params = fd->clauses[0].params.size();
                 L.localMethodArities.insert(fd->name + "/" + std::to_string(params));
                 L.localMethodArities.insert(fd->name + "/" + std::to_string(params + 1));
+                auto dispatchTypes = methodDispatchTypes(*fd, typeName);
+                const auto signature =
+                    mangleReceiverSignature(fd->name, dispatchTypes);
+                signaturesByNameAndArity[
+                    fd->name + "/" + std::to_string(beamArity(fd))]
+                        .emplace(signature, std::move(dispatchTypes));
             }
             const std::string& mn = fd->name;
             if (!mn.empty() && !std::isalnum(static_cast<unsigned char>(mn[0])) && mn[0] != '_')
@@ -3572,18 +3795,29 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         // Inherited trait defaults count as this type's methods too.
         for (const auto* fd : inheritedDefaults(md)) collectMethod(fd);
+        for (const auto& [nameAndArity, signatures] : signaturesByNameAndArity) {
+            if (signatures.size() < 2) continue;
+            auto slash = nameAndArity.rfind('/');
+            if (slash == std::string::npos) continue;
+            const auto method = nameAndArity.substr(0, slash);
+            const auto arity = static_cast<size_t>(
+                std::stoul(nameAndArity.substr(slash + 1)));
+            L.argumentOverloadedMethods.insert(
+                localOverloadKey(method, typeName, arity));
+            auto& recorded = L.argumentOverloadSignatures[
+                localOverloadKey(method, typeName, arity)];
+            for (const auto& [signature, dispatchTypes] : signatures) {
+                definedFns.insert(signature);
+                recorded.push_back({signature, dispatchTypes});
+            }
+        }
     };
     std::function<void(const ast::ModuleDef&)> preModule;
     preModule = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
-        const std::string mangledPrefix = [&] {
-            std::string out;
-            for (char c : path) out += c == '.' ? "__" : std::string(1, c);
-            return out;
-        }();
         auto preModuleFn = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
-            const std::string emitted = mangledPrefix + "__" + fd->name;
+            const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
@@ -3713,7 +3947,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     for (const auto& sf : node->staticBlock->functions) {
                         if (!sf) continue;
                         std::vector<const ast::FunctionDef*> tmp{sf.get()};
-                        std::string mangled = node->name + "__" + sf->name;
+                        std::string mangled =
+                            mangleQualifiedMember(node->name, sf->name);
                         mod.functions.push_back(L.lowerFunctionGroup(tmp, "", mangled));
                     }
                 }
@@ -3724,7 +3959,19 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 auto flushM = [&]{ if (!mgrp.empty()) { mod.functions.push_back(L.lowerMakeGroup(mgrp, typeName)); mgrp.clear(); } };
                 auto pushFn = [&](const ast::FunctionDef* fd) {
                     if (!fd) return;
-                    if (!mgrp.empty() && (mgrp.front()->name != fd->name || beamArity(mgrp.front()) != beamArity(fd))) flushM();
+                    bool differentOverload = false;
+                    if (!mgrp.empty() &&
+                        L.argumentOverloadedMethods.count(localOverloadKey(
+                            fd->name, typeName, beamArity(fd)))) {
+                        differentOverload =
+                            methodDispatchTypes(*mgrp.front(), typeName) !=
+                            methodDispatchTypes(*fd, typeName);
+                    }
+                    if (!mgrp.empty() &&
+                        (mgrp.front()->name != fd->name ||
+                         beamArity(mgrp.front()) != beamArity(fd) ||
+                         differentOverload))
+                        flushM();
                     mgrp.push_back(fd);
                 };
                 for (const auto& bi : node->body) {
@@ -4016,14 +4263,32 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         mod.hasMain = true; mod.mainArity = 0;
     }
 
+    // Operators do not have a MethodCall node from which lowering can consume
+    // the semantic winner. Keep the readable exact implementations, and make
+    // the bare operator a small receiver/RHS-type dispatcher.
+    for (const auto& [key, overloads] : L.argumentOverloadSignatures) {
+        auto firstBreak = key.find('\n');
+        auto lastBreak = key.rfind('\n');
+        if (firstBreak == std::string::npos || firstBreak == lastBreak)
+            continue;
+        auto name = key.substr(0, firstBreak);
+        if (name.empty() ||
+            std::isalnum(static_cast<unsigned char>(name.front())) ||
+            name.front() == '_')
+            continue;
+        auto arity = std::stoi(key.substr(lastBreak + 1));
+        mod.functions.push_back(
+            L.makeArgumentDispatcher(name, arity, overloads));
+    }
+
     // Cross-type collision dispatchers (bare name → runtime-type dispatch).
     // Generated PER ARITY, including only the owner types that actually have a
-    // `name__Type/arity` variant — a method can be overloaded by arity across
+    // `name/Type` variant at that BEAM arity — a method can be overloaded by arity across
     // types (e.g. `count/1` on List vs `count/2` on List+Map), and one dispatcher
     // per arity avoids referencing a variant that doesn't exist.
     for (const auto& name : L.collidingMethods) {
         std::map<int, std::vector<std::string>> ownersByArity;
-        std::string prefix = name + "__";
+        std::string prefix = receiverImplementationPrefix(name);
         for (const auto& fn : mod.functions)
             if (fn.name.rfind(prefix, 0) == 0)
                 ownersByArity[fn.arity].push_back(fn.name.substr(prefix.size()));
@@ -4042,7 +4307,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 FunDef merged; merged.name = name; merged.arity = arity;
                 for (size_t i = 0; i < mod.functions.size(); ) {
                     auto& f = mod.functions[i];
-                    std::string prefix = name + "__";
+                    std::string prefix = receiverImplementationPrefix(name);
                     if (f.name.rfind(prefix, 0) == 0 && f.arity == arity) {
                         for (auto& c : f.clauses)
                             merged.clauses.push_back(std::move(c));
@@ -4256,10 +4521,10 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         const auto& path = module.name;
         if (seenModulePaths.insert(path).second)
             modulePaths.push_back(path);
-        std::string prefix;
-        for (char c : path) prefix += c == '.' ? "__" : std::string(1, c);
         auto add = [&](const ast::FunctionDef* fn, bool exported) {
-            if (fn) definitions[prefix + "__" + fn->name] = {path, fn->name, exported};
+            if (fn)
+                definitions[mangleModuleMember(path, fn->name)] =
+                    {path, fn->name, exported};
         };
         auto addMake = [&](const ast::MakeDef* mk) {
             if (!mk) return;
@@ -4268,14 +4533,21 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                 if (!fd) return;
                 if (!definitions.count(fd->name))
                     definitions[fd->name] = {path, fd->name, true};
-                // A make method is emitted as `method__Type` when the same
+                // A make method is emitted as `method/Type` when the same
                 // method name has implementations for multiple receiver
                 // types. Keep that generated name in its declaring module;
                 // otherwise module-local calls get mistaken for flat/global
                 // functions and point at `kex_<stem>` on BEAM.
                 if (!typeName.empty())
-                    definitions[fd->name + "__" + typeName] =
-                        {path, fd->name + "__" + typeName, true};
+                    definitions[mangleReceiverImplementation(
+                        fd->name, typeName)] =
+                        {path, mangleReceiverImplementation(
+                            fd->name, typeName), true};
+                if (!typeName.empty()) {
+                    auto exact = mangleReceiverSignature(
+                        fd->name, methodDispatchTypes(*fd, typeName));
+                    definitions[exact] = {path, exact, true};
+                }
             };
             for (const auto& mi : mk->body) {
                 if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi))

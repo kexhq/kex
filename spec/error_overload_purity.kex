@@ -1,0 +1,6 @@
+let process(value: String) = value
+foul process(value: Integer) = IO.printLine(value)
+
+main do
+  process("ok")
+end

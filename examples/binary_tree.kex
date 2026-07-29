@@ -50,7 +50,7 @@ module BinaryTree do
     let transform(@Empty, _) = Empty
     let transform(@Node(value, left, right), f) = Node(f(value), left.transform(f), right.transform(f))
 
-    fold :> (X, (Integer, X, X) -> X) -> X
+    fold :> X -> (Integer -> X -> X -> X) -> X
     let fold(@Empty, emptyValue, _) = emptyValue
     let fold(@Node(value, left, right), emptyValue, combine) do
       return combine(value, left.fold(emptyValue, combine), right.fold(emptyValue, combine))

@@ -16,6 +16,8 @@ cat:1|dog:2
 5
 a+b+c
 -a-b-c-
+a+b+c
+-a-b-c-
 2026/7/4
 a|b|c
 a|b

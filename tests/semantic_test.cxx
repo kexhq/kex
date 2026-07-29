@@ -6,6 +6,7 @@
 #include "../src/semantic/types.hxx"
 #include "../src/semantic/traits.hxx"
 #include "../src/common/prelude_interfaces.hxx"
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 
@@ -831,6 +832,105 @@ int main() {
             interfaces.receiverFunctions["doubled"].push_back(std::move(doubled));
             assertTrue(hasErrorWithInterfaces(
                 "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+        });
+
+        it("keeps opt-in receiver functions behind lexical using", []() {
+            semantic::ImportedInterfaces interfaces;
+            semantic::ImportedModuleInterface opt;
+            opt.sourceModule = "Opt";
+            opt.automaticImport = false;
+            interfaces.modules["Opt"] = std::move(opt);
+
+            semantic::ImportedFunction doubled;
+            doubled.sourceName = "doubled";
+            doubled.sourceModule = "Opt";
+            doubled.signature = {"doubled", {semantic::Type::integer()},
+                                 semantic::Type::integer()};
+            interfaces.receiverFunctions["doubled"].push_back(
+                std::move(doubled));
+
+            assertFalse(hasErrorWithInterfaces(
+                "main do \"wrong\".doubled end\n", interfaces, "doubled"));
+            assertTrue(hasErrorWithInterfaces(
+                "using Opt\nmain do \"wrong\".doubled end\n",
+                interfaces, "doubled"));
+            assertTrue(hasErrorWithInterfaces(
+                "using Opt, only: [doubled]\n"
+                "let bad() = \"wrong\".doubled\n",
+                interfaces, "doubled"));
+            assertFalse(hasErrorWithInterfaces(
+                "using Opt, except: [doubled]\n"
+                "main do \"wrong\".doubled end\n",
+                interfaces, "doubled"));
+        });
+
+        it("registers Regex as an opt-in typed stdlib module", []() {
+            const auto& interfaces = preludeInterfaces();
+            auto regex = interfaces.modules.find("Regex");
+            assertTrue(regex != interfaces.modules.end());
+            assertFalse(regex->second.automaticImport);
+            assertTrue(regex->second.exports.count("regex") > 0);
+            assertTrue(regex->second.exports.count("replace") > 0);
+
+            auto replace = interfaces.receiverFunctions.find("replace");
+            assertTrue(replace != interfaces.receiverFunctions.end());
+            assertTrue(std::any_of(
+                replace->second.begin(), replace->second.end(),
+                [](const auto& function) {
+                    return function.sourceModule == "Regex";
+                }));
+        });
+
+        it("source fallback preserves overloaded prelude receiver methods", []() {
+            const auto interfaces = sourcePreludeSemanticInterfaces();
+            const auto maps = interfaces.receiverFunctions.find("map");
+            const auto filters = interfaces.receiverFunctions.find("filter");
+            assertTrue(maps != interfaces.receiverFunctions.end());
+            assertTrue(filters != interfaces.receiverFunctions.end());
+            assertTrue(maps->second.size() >= size_t(3));
+            assertTrue(filters->second.size() >= size_t(3));
+            assertTrue(interfaces.modules.at("List").automaticImport);
+            assertTrue(interfaces.modules.at("String").automaticImport);
+            assertTrue(interfaces.modules.at("Stream").automaticImport);
+        });
+
+        it("infers the typed result of a using-imported regex tag", []() {
+            assertTrue(hasError(
+                "using Regex\n"
+                "let needsString(value: String) = value\n"
+                "main do needsString(regex`\\\\d+`) end\n",
+                "needsString"));
+        });
+
+        it("selects String.replace over Regex.replace for literal patterns", []() {
+            Lexer lexer(
+                "using Regex\n"
+                "main do \"a-b\".replace(\"-\", \"+\") end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            assertEqual(analyzer.resolvedCalls().size(), size_t(1));
+            const auto& target = analyzer.resolvedCalls().begin()->second;
+            assertEqual(target.backendModule, std::string("kex_prelude"));
+            assertEqual(target.backendFunction, std::string("replace"));
+        });
+
+        it("preserves a generic Result payload for overload selection", []() {
+            Lexer lexer(
+                "using Regex\n"
+                "main do \"a-b\".replace(regex(\"-\").or(0), \"+\") end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            assertTrue(analyzer.resolvedCalls().size() >= size_t(2));
+            bool foundRegexReplace = false;
+            for (const auto& [_, target] : analyzer.resolvedCalls())
+                if (target.backendModule == "Kex.Regex" &&
+                    target.backendFunction == "replace")
+                    foundRegexReplace = true;
+            assertTrue(foundRegexReplace);
         });
 
         it("retains the exact imported receiver target selected by type", []() {
@@ -1796,6 +1896,71 @@ int main() {
     });
 
     describe("Semantic — standalone type annotations", []() {
+        it("applies declarations inside module visibility blocks", []() {
+            assertTrue(noErrors(
+                "module Text do\n"
+                "  private do\n"
+                "    repeat : String -> Integer -> String\n"
+                "    let repeat(text, n) = "
+                    "if n == 0 then \"\" else text + repeat(text, n - 1) end\n"
+                "  end\n"
+                "  let pad(text) = repeat(\" \", 2) + text\n"
+                "end\n"
+            ));
+        });
+
+        it("propagates annotated list element types into clause patterns", []() {
+            assertTrue(noErrors(
+                "sort : [Integer] -> [Integer]\n"
+                "let sort([]) = []\n"
+                "let sort([pivot | rest]) = "
+                    "sort(rest.filter { |value| value < pivot })\n"
+            ));
+        });
+
+        it("prefers a known record field over an imported method collision", []() {
+            assertTrue(noErrors(
+                "using HTTP\n"
+                "record Version do\n"
+                "  patch : Integer\n"
+                "end\n"
+                "main do\n"
+                "  let version = Version { patch: 1 }\n"
+                "  IO.printLine(version.patch)\n"
+                "end\n"
+            ));
+        });
+
+        it("applies module-owned annotations and contextual callback types", []() {
+            assertTrue(noErrors(
+                "module Trees do\n"
+                "  type Tree = Empty | Node(Integer, Tree, Tree)\n"
+                "  make Tree do\n"
+                "    insert :> Integer -> Tree\n"
+                "    let insert(@Empty, value) = Node(value, Empty, Empty)\n"
+                "    let insert(@Node(current, left, right), value) = "
+                    "Node(current, left, right)\n"
+                "    transform :> (Integer -> Integer) -> Tree\n"
+                "    let transform(@Empty, _) = Empty\n"
+                "    let transform(@Node(value, left, right), f) = "
+                    "Node(f(value), left, right)\n"
+                "    fold :> X -> (Integer -> X -> X -> X) -> X\n"
+                "    let fold(@Empty, emptyValue, _) = emptyValue\n"
+                "    let fold(@Node(value, _, _), emptyValue, combine) = "
+                    "combine(value, emptyValue, emptyValue)\n"
+                "  end\n"
+                "  fromList : [Integer] -> Tree\n"
+                "  let fromList(values) = values.reduce(Empty) { |tree, value| "
+                    "tree.insert(value) }\n"
+                "end\n"
+                "main do\n"
+                "  let tree = Trees.fromList([1, 2, 3])\n"
+                "  tree.transform({ |n| n * 2 })\n"
+                "  tree.fold(0, { |value, left, right| value + left + right })\n"
+                "end\n"
+            ));
+        });
+
         it("accepts a function whose body matches the declared return type", []() {
             assertTrue(noErrors(
                 "add : Int -> Int -> Int\n"
@@ -1830,6 +1995,25 @@ int main() {
     });
 
     describe("Semantic — type aliases", []() {
+        it("preserves typed local function params and returns through &capture", []() {
+            auto diagnostics = check(
+                "type Handler = Integer -> Integer\n"
+                "main do\n"
+                "  let wrap(handler: Handler) -> Handler do\n"
+                "    return { |n| handler(n) }\n"
+                "  end\n"
+                "  let middleware = &wrap\n"
+                "  let wrapped = middleware({ |n| n })\n"
+                "  wrapped(1)\n"
+                "end\n"
+            );
+            std::string errors;
+            for (const auto& diagnostic : diagnostics)
+                if (diagnostic.level == semantic::Diagnostic::Level::Error)
+                    errors += diagnostic.message + "\n";
+            assertTrue(errors.empty(), errors);
+        });
+
         it("resolves a type alias in a param annotation", []() {
             // `type Level = :debug | :info` should make `level: Level`
             // accept an Atom argument without a type error.
@@ -2383,6 +2567,65 @@ int main() {
                 "let len(x) = 0\n"
                 "main do IO.printLine(len(\"hi\")) end\n"
             ));
+        });
+
+        it("rejects distinct equally-specific overloads", []() {
+            assertTrue(hasError(
+                "let choose(value: Integer | String) = 1\n"
+                "let choose(value: Integer | Bool) = 2\n"
+                "main do IO.printLine(choose(1)) end\n",
+                "Ambiguous overload for `choose`"
+            ));
+        });
+
+        it("rejects a bare first-class reference to an overload set", []() {
+            assertTrue(hasError(
+                "let render(value: Integer) = \"${value}\"\n"
+                "let render(value: String) = value\n"
+                "main do\n"
+                "  let renderer = ~render\n"
+                "  IO.printLine(renderer(1))\n"
+                "end\n",
+                "Cannot reference overloaded function `render`"
+            ));
+        });
+
+        it("requires every overload to share purity", []() {
+            assertTrue(hasError(
+                "let process(value: String) = value\n"
+                "foul process(value: Integer) = IO.printLine(value)\n"
+                "main do process(\"ok\") end\n",
+                "Overloads of `process` must all have the same purity"
+            ));
+        });
+
+        it("records exact local make-method overload signatures", []() {
+            Lexer lexer(
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(s: String) = s\n"
+                "  let render(n: Integer) = \"${n}\"\n"
+                "end\n"
+                "main do\n"
+                "  let b = Box { value: 1 }\n"
+                "  b.render(\"!\")\n"
+                "  b.render(2)\n"
+                "end\n");
+            Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            semantic::Analyzer analyzer(&preludeInterfaces());
+            assertTrue(analyzer.analyze(program));
+            bool stringTarget = false;
+            bool integerTarget = false;
+            for (const auto& [_, target] : analyzer.resolvedCalls()) {
+                if (target.backendFunction != "render" ||
+                    target.localDispatchTypes.size() != size_t(2))
+                    continue;
+                stringTarget |= target.localDispatchTypes[1] == "String";
+                integerTarget |= target.localDispatchTypes[1] == "Integer";
+            }
+            assertTrue(stringTarget);
+            assertTrue(integerTarget);
         });
     });
 

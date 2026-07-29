@@ -150,6 +150,17 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
         else if constexpr (std::is_same_v<T, ast::OptionalType>) {
             return Type::optional(node.inner ? resolveSourceType(*node.inner, vars, aliases) : Type::unknown());
         }
+        else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            std::vector<kex::semantic::TypePtr> members;
+            members.push_back(node.left
+                ? resolveSourceType(*node.left, vars, aliases)
+                : Type::unknown());
+            members.push_back(node.right
+                ? resolveSourceType(*node.right, vars, aliases)
+                : Type::unknown());
+            return std::make_shared<Type>(
+                Type{kex::semantic::UnionType{std::move(members)}});
+        }
         else { return Type::unknown(); }
     }, expr.kind);
 }
@@ -186,11 +197,17 @@ inline auto flattenFunctionType(kex::semantic::TypePtr type,
 // Source-based fallback for builds without prebuilt BEAM artifacts (wasm).
 // Parses prelude .kex sources, resolves type annotations into Signatures,
 // and builds ImportedInterfaces with real type information.
-inline auto sourcePreludeSemanticInterfaces()
+inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles,
+                                     bool automaticImport,
+                                     bool directBackendOwnership)
     -> kex::semantic::ImportedInterfaces {
     kex::semantic::ImportedInterfaces ifaces;
 
     std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
+
+    auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
+        return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
+    };
 
     auto annotationToSignature = [&typeAliases](const ast::TypeAnnotation& ann,
                                     kex::semantic::TypePtr selfType,
@@ -212,6 +229,12 @@ inline auto sourcePreludeSemanticInterfaces()
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
+        ifn.sourceModule = mod;
+        if (directBackendOwnership) {
+            ifn.backendModule = backendModuleFor(mod);
+            ifn.backendFunction = sig.name;
+            ifn.backendArity = static_cast<int>(sig.params.size());
+        }
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
     };
     auto addReceiverSig = [&](const std::string& mod,
@@ -219,11 +242,17 @@ inline auto sourcePreludeSemanticInterfaces()
         kex::semantic::ImportedFunction ifn;
         ifn.sourceName = sig.name;
         ifn.signature = sig;
+        ifn.sourceModule = mod;
+        if (directBackendOwnership) {
+            ifn.backendModule = backendModuleFor(mod);
+            ifn.backendFunction = sig.name;
+            ifn.backendArity = static_cast<int>(sig.params.size());
+        }
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
         ifaces.receiverFunctions[sig.name].push_back(ifn);
     };
 
-    for (const auto& filePath : preludeSourceFiles()) {
+    for (const auto& filePath : sourceFiles) {
         std::ifstream input(filePath);
         if (!input) continue;
         std::string src((std::istreambuf_iterator<char>(input)),
@@ -247,6 +276,10 @@ inline auto sourcePreludeSemanticInterfaces()
 
         auto collectMakeAnnotations = [&](const ast::MakeDef& make) {
             auto typeName = makeTargetName(make);
+            auto& module = ifaces.modules[typeName];
+            module.sourceModule = typeName;
+            module.backendModule = backendModuleFor(typeName);
+            module.automaticImport = automaticImport;
             kex::semantic::TypePtr selfType;
             std::unordered_map<std::string, kex::semantic::TypePtr> tvars;
             if (make.target)
@@ -279,13 +312,21 @@ inline auto sourcePreludeSemanticInterfaces()
         std::function<void(const ast::ModuleDef&)> collectModule =
             [&](const ast::ModuleDef& mod) {
             ifaces.modules[mod.name].sourceModule = mod.name;
-            ifaces.modules[mod.name].automaticImport = true;
+            ifaces.modules[mod.name].backendModule =
+                backendModuleFor(mod.name);
+            ifaces.modules[mod.name].automaticImport = automaticImport;
             ifaces.modules[mod.name].isFoul = mod.isFoul;
             for (const auto& item : mod.body) {
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) ifaces.modules[mod.name].exports.try_emplace((*fn)->name);
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) addModuleSig(mod.name, annotationToSignature(**ann, nullptr));
+                    if (*ann) {
+                        auto sig = annotationToSignature(**ann, nullptr);
+                        if (directBackendOwnership && !sig.params.empty())
+                            addReceiverSig(mod.name, sig);
+                        else
+                            addModuleSig(mod.name, sig);
+                    }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
                     if (*make) collectMakeAnnotations(**make);
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
@@ -342,6 +383,45 @@ inline auto sourcePreludeSemanticInterfaces()
     return ifaces;
 }
 
+inline auto sourcePreludeSemanticInterfaces()
+    -> kex::semantic::ImportedInterfaces {
+    return sourceSemanticInterfaces(preludeSourceFiles(), true, false);
+}
+
+inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
+                                    kex::semantic::ImportedInterfaces extra)
+    -> kex::semantic::ImportedInterfaces {
+    for (auto& [name, module] : extra.modules) {
+        auto [it, inserted] = base.modules.try_emplace(name, std::move(module));
+        if (inserted) continue;
+        for (auto& [exportName, functions] : module.exports) {
+            auto& destination = it->second.exports[exportName];
+            destination.insert(destination.end(),
+                               std::make_move_iterator(functions.begin()),
+                               std::make_move_iterator(functions.end()));
+        }
+    }
+    for (auto& [name, functions] : extra.receiverFunctions) {
+        auto& destination = base.receiverFunctions[name];
+        destination.insert(destination.end(),
+                           std::make_move_iterator(functions.begin()),
+                           std::make_move_iterator(functions.end()));
+    }
+    base.traitConformances.insert(
+        base.traitConformances.end(),
+        std::make_move_iterator(extra.traitConformances.begin()),
+        std::make_move_iterator(extra.traitConformances.end()));
+    base.adts.insert(base.adts.end(),
+                     std::make_move_iterator(extra.adts.begin()),
+                     std::make_move_iterator(extra.adts.end()));
+    for (auto& [name, arity] : extra.recordArities)
+        base.recordArities.try_emplace(name, arity);
+    base.traits.insert(base.traits.end(),
+                       std::make_move_iterator(extra.traits.begin()),
+                       std::make_move_iterator(extra.traits.end()));
+    return base;
+}
+
 // Build the ImportedInterfaces snapshot from the prebuilt prelude beam in
 // `runtimeDir`. Cached per process; safe to call from any thread after
 // first construction. Falls back to source-based extraction when no
@@ -349,8 +429,12 @@ inline auto sourcePreludeSemanticInterfaces()
 inline auto preludeSemanticInterfaces(const std::string& runtimeDir)
     -> const kex::semantic::ImportedInterfaces& {
     static const auto cached = [&]() -> kex::semantic::ImportedInterfaces {
-        if (runtimeDir.empty()) return sourcePreludeSemanticInterfaces();
-        return preludeRegistry(runtimeDir).buildSemanticInterfaces();
+        auto interfaces = runtimeDir.empty()
+            ? sourcePreludeSemanticInterfaces()
+            : preludeRegistry(runtimeDir).buildSemanticInterfaces();
+        auto stdlib = sourceSemanticInterfaces(
+            standardLibrarySourceFiles(), false, true);
+        return mergeSemanticInterfaces(std::move(interfaces), std::move(stdlib));
     }();
     return cached;
 }

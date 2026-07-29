@@ -83,6 +83,9 @@ main do
 
   # replace is global (gsub, not sub); the replacement is literal, with no
   # $1/\1 syntax — captures come from the block's Match instead.
+  # The String overload remains selected even while Regex is in lexical scope.
+  IO.printLine("a-b-c".replace("-", "+"))
+  IO.printLine("abc".replace("", "-"))
   IO.printLine("a-b-c".replace(regex("-").or(0), "+"))
   IO.printLine("abc".replace(regex("x*").or(0), "-"))
   IO.printLine("2026-7-4".replace(regex("(\\d+)-(\\d+)-(\\d+)").or(0)) do |m|

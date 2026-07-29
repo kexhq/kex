@@ -318,6 +318,7 @@ struct LambdaParam {
 struct Lambda {
     std::vector<LambdaParam> params;
     std::vector<ExprPtr> body;
+    std::optional<TypeExprPtr> returnAnnotation;
     std::optional<RescueBlock> rescue;
 };
 

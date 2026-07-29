@@ -15,6 +15,11 @@ struct ImportedFunction {
     // Source parameter names excluding the receiver for receiver functions.
     std::vector<std::string> paramNames;
     Signature signature;
+    // Source module that owns this export. Receiver functions are copied into
+    // a name-indexed table, so retaining ownership here is what lets semantic
+    // analysis apply lexical `using` policy instead of making every opt-in
+    // module globally visible.
+    std::string sourceModule;
 };
 
 struct ImportedModuleInterface {
@@ -36,6 +41,11 @@ struct ResolvedCallTarget {
     // Source parameter names excluding the receiver when passesReceiver is
     // true; otherwise names all function parameters.
     std::vector<std::string> paramNames;
+    // For a make-block winner compiled in the current unit, lowering chooses
+    // the local implementation name. The full checked signature keeps
+    // same-receiver, same-name/arity overloads distinct without teaching the
+    // semantic layer about backend symbol spelling.
+    std::vector<std::string> localDispatchTypes;
 };
 
 struct ImportedTraitConformance {
