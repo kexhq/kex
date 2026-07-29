@@ -181,6 +181,18 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        it("accepts indentation before persisted let bindings", []() {
+            const std::string input =
+                "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"
+                "source\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(
+                    out.find("unimplemented expr node") == std::string::npos,
+                    out);
+                assertTrue(out.find("\"name\"") != std::string::npos, out);
+            }
+        });
+
         it("prints the source-level capability type of an open file", []() {
             auto out = runRepl(
                 "using FS\n"

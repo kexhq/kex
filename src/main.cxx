@@ -154,6 +154,19 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   return source.substr(off, end - off);
 }
 
+// Readline preserves whitespace typed or pasted before the first token. Kex's
+// parser accepts that indentation, but the REPL classifies definitions before
+// parsing them; comparing the raw line against "let ", "using ", etc. made an
+// indented definition fall through to expression lowering. Only indentation
+// outside the first token is removed—continuation-line and literal contents
+// remain untouched.
+static auto replTrimLeadingIndent(std::string source) -> std::string {
+  const auto first = source.find_first_not_of(" \t");
+  if (first == std::string::npos) return {};
+  source.erase(0, first);
+  return source;
+}
+
 // Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
 // embedded `'` via the standard close-quote/escaped-literal-quote/reopen
 // idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
@@ -1730,6 +1743,7 @@ int main(int argc, char *argv[]) {
           break;
         input = l;
       }
+      input = replTrimLeadingIndent(std::move(input));
       if (input.empty())
         continue;
       if (kex::isReplExit(input))
@@ -2391,6 +2405,7 @@ int main(int argc, char *argv[]) {
       }
       if (!ok)
         break;
+      input = replTrimLeadingIndent(std::move(input));
       line = input;
       if (kex::isReplExit(line))
         break;
