@@ -1,3 +1,4 @@
+# kex: no-check
 # TCP chat server — sketch of a `serving` construct: a process whose
 # message-handling methods are declared with `slot`, typed. There's no
 # hand-written message ADT — each slot's name and parameter types

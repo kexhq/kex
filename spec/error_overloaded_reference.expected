@@ -1,0 +1,6 @@
+spec/error_overloaded_reference.kex:5:18: error: Cannot reference overloaded function `render` without disambiguating arguments
+
+render : Integer -> String
+
+render : String -> String
+Aborted: fix type errors before running (use --no-check to skip).

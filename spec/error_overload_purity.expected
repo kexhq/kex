@@ -1,0 +1,2 @@
+spec/error_overload_purity.kex:2:6: error: Overloads of `process` must all have the same purity
+Aborted: fix type errors before running (use --no-check to skip).

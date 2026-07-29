@@ -985,6 +985,28 @@ int main() {
             assertFalse(contains(out, "render__Box"), out);
         });
 
+        it("keeps dotted module members distinct from slash overloads", []() {
+            kex::semantic::ImportedInterfaces interfaces;
+            auto out = emitWithResolvedCalls(
+                "module A.B do\n"
+                "  let render(value: String) = value\n"
+                "end\n"
+                "record Box do value : Integer end\n"
+                "make Box do\n"
+                "  let render(value: String) = value\n"
+                "  let render(value: Integer) = \"${value}\"\n"
+                "end\n"
+                "main do\n"
+                "  let box = Box { value: 1 }\n"
+                "  A.B.render(\"module\")\n"
+                "  box.render(\"method\")\n"
+                "end\n",
+                interfaces);
+            assertTrue(contains(out, "'A.B.render'/1"), out);
+            assertTrue(contains(out, "'render/Box,String'/2"), out);
+            assertFalse(contains(out, "A__B__render"), out);
+        });
+
         it("orders named args for the receiver target selected by semantics", []() {
             kex::semantic::ImportedInterfaces interfaces;
             kex::semantic::ImportedFunction scaled;

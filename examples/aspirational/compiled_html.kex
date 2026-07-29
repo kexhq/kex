@@ -1,3 +1,4 @@
+# kex: no-check
 # Compiled HTML — type-safe templates with compile-time optimization
 #
 # The Html module defines element constructors inside `compiled do...end`.

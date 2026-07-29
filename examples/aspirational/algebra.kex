@@ -1,3 +1,4 @@
+# kex: no-check
 # Algebraic traits — Monoid and Group
 #
 # These aren't in the prelude, but show how Kex's trait system

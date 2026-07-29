@@ -1,0 +1,7 @@
+let render(value: Integer) = "${value}"
+let render(value: String) = value
+
+main do
+  let renderer = ~render
+  IO.printLine(renderer(1))
+end

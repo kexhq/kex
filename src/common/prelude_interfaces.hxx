@@ -276,6 +276,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
 
         auto collectMakeAnnotations = [&](const ast::MakeDef& make) {
             auto typeName = makeTargetName(make);
+            auto& module = ifaces.modules[typeName];
+            module.sourceModule = typeName;
+            module.backendModule = backendModuleFor(typeName);
+            module.automaticImport = automaticImport;
             kex::semantic::TypePtr selfType;
             std::unordered_map<std::string, kex::semantic::TypePtr> tvars;
             if (make.target)

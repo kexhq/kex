@@ -35,6 +35,7 @@ end
 # Privacy: internal helpers hidden, public API exposed
 module StringUtils do
   private do
+    repeat : String -> Integer -> String
     let repeat(s, n) do
       match n do
         0 -> ""
@@ -43,7 +44,7 @@ module StringUtils do
     end
   end
 
-  let padLeft(s, width) do
+  let padLeft(s: String, width: Integer) -> String do
     let padding = width - s.length
     match padding > 0 do
       true -> repeat(" ", padding) + s
@@ -51,7 +52,7 @@ module StringUtils do
     end
   end
 
-  let padRight(s, width) do
+  let padRight(s: String, width: Integer) -> String do
     let padding = width - s.length
     match padding > 0 do
       true -> s + repeat(" ", padding)

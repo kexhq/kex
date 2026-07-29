@@ -51,11 +51,11 @@ test: build
 # locally per that README, or see .github/workflows/ci.yml for how CI
 # builds and caches it).
 build-wasm:
-	@emcmake cmake -B $(WASM_BUILD_DIR) 2>/dev/null | tail -1
+	@emcmake cmake -B $(WASM_BUILD_DIR)
 	@cmake --build $(WASM_BUILD_DIR)
 
 # Only interpreter_test is run here — it's the suite this project has
-# actually verified passes under wasm (145/145, matching the native suite)
+# actually verified passes under wasm (187/187, matching the native suite)
 # throughout the process-model/wasm work; the CLI-driving test binaries
 # (repl_cli_test, color_cli_test) shell out to a native `kex` executable
 # path that doesn't exist in a wasm build, so they're a native-only concern.

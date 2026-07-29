@@ -2,14 +2,14 @@
 make [X] do
   # This refers to [X], while this would refer to the instance
   # If not specified make implicitly passes this : This
-  head : This -> X?
+  head :> X?
 
   # We can pattern match on this via @. This means match on
   # the empty list itself:
   let head(@[]) = None
   let head(@[x|_]) = Just(x)
 
-  tail : This -> This
+  tail :> This
   let tail(@[]) = []
   let tail(@[_|xs]) = xs
 end
