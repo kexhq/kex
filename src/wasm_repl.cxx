@@ -90,11 +90,9 @@ KexReplSession* kex_repl_create() {
     // discovered stdlib roots before evaluating REPL input; do the same here
     // so `using Units.SI` and other source-module imports resolve in wasm.
     session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
-    // "/prelude" is embedded into MEMFS at build time by the kex_repl_wasm
-    // target's `--preload-file src/prelude@/prelude` link option (see
-    // CMakeLists.txt) — the wasm equivalent of KEX_PRELUDE_DIR, a real
-    // filesystem path on native.
-    kex::loadPrelude(session->replDb, "/prelude");
+    // The unified stdlib is embedded into MEMFS at /stdlib. Its prelude.kex
+    // manifest selects the files indexed automatically.
+    kex::loadPrelude(session->replDb, "/stdlib");
     return session;
 }
 

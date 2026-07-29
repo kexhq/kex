@@ -3,6 +3,8 @@
 # Failing assertions mark the enclosing `it` failed without aborting the
 # rest of the suite; nesting is purely organizational (indentation only).
 
+using FS
+
 describe("assert") do
   it("passes silently on a truthy value") do
     assert(true)

@@ -1,4 +1,6 @@
 # Console and file IO
+using FS
+
 # Expected output:
 # hello
 # hi

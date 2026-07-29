@@ -20,6 +20,10 @@ struct ImportedFunction {
     // analysis apply lexical `using` policy instead of making every opt-in
     // module globally visible.
     std::string sourceModule;
+    // ADT constructors are represented as ordinary module exports so
+    // qualified access follows the same visibility and backend-routing rules
+    // as constants and functions.
+    bool isConstructor = false;
 };
 
 struct ImportedModuleInterface {

@@ -379,6 +379,7 @@ int main() {
 
         it("allows pure receiver call in guard", []() {
             assertTrue(noErrors(
+                "using FS\n"
                 "main do\n"
                 "  match \"hello\" do\n"
                 "    s when s.count > 0 -> s\n"
@@ -879,6 +880,38 @@ int main() {
                 [](const auto& function) {
                     return function.sourceModule == "Regex";
                 }));
+        });
+
+        it("registers FS constructors as opt-in module exports", []() {
+            const auto& interfaces = preludeInterfaces();
+            const auto fs = interfaces.modules.find("FS");
+            assertTrue(fs != interfaces.modules.end());
+            assertFalse(fs->second.automaticImport);
+            const auto read = fs->second.exports.find("Read");
+            assertTrue(read != fs->second.exports.end());
+            assertTrue(std::any_of(
+                read->second.begin(), read->second.end(),
+                [](const auto& function) {
+                    return function.isConstructor &&
+                           function.signature.params.empty() &&
+                           semantic::typeToString(
+                               function.signature.result) == "Read";
+                }));
+
+            assertTrue(noErrors(
+                "main do FS.Read end\n"));
+            assertTrue(noErrors(
+                "using FS\nmain do Read end\n"));
+        });
+
+        it("keeps qualified uppercase constants typed as constants", []() {
+            assertTrue(noErrors(
+                "let needsFloat(value: Float) = value\n"
+                "let needsString(value: String) = value\n"
+                "main do\n"
+                "  needsFloat(Math.PI)\n"
+                "  needsString(Console.Green)\n"
+                "end\n"));
         });
 
         it("source fallback preserves overloaded prelude receiver methods", []() {
@@ -1768,12 +1801,13 @@ int main() {
 
         it("selects the FileHandle refinement from the exact open mode", []() {
             assertTrue(noErrors(
+                "using FS\n"
                 "main do\n"
-                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
+                "  let reader = FS.File.open(\"input.txt\", FS.Read).try\n"
                 "  reader.read()\n"
-                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
+                "  let writer = FS.File.open(\"output.txt\", FS.Write).try\n"
                 "  writer.write(\"ok\")\n"
-                "  let both = FS.File.open(\"both.txt\", ReadWrite).try\n"
+                "  let both = FS.File.open(\"both.txt\", FS.ReadWrite).try\n"
                 "  both.read()\n"
                 "  both.write(\"ok\")\n"
                 "end\n"
@@ -1784,16 +1818,18 @@ int main() {
             assertTrue(noErrors(
                 "let accepts(value: Result<FileHandle<CannotRead, CanWrite>, "
                 "FileError>) = true\n"
+                "using FS\n"
                 "main do\n"
-                "  accepts(FS.File.open(\"output.txt\", Write))\n"
+                "  accepts(FS.File.open(\"output.txt\", FS.Write))\n"
                 "end\n"
             ));
         });
 
         it("rejects writing through a read-only FileHandle", []() {
             assertTrue(hasError(
+                "using FS\n"
                 "main do\n"
-                "  let reader = FS.File.open(\"input.txt\", Read).try\n"
+                "  let reader = FS.File.open(\"input.txt\", FS.Read).try\n"
                 "  reader.write(\"no\")\n"
                 "end\n",
                 "FileHandle"
@@ -1802,8 +1838,9 @@ int main() {
 
         it("rejects reading through a write-only FileHandle", []() {
             assertTrue(hasError(
+                "using FS\n"
                 "main do\n"
-                "  let writer = FS.File.open(\"output.txt\", Write).try\n"
+                "  let writer = FS.File.open(\"output.txt\", FS.Write).try\n"
                 "  writer.readLine()\n"
                 "end\n",
                 "FileHandle"
@@ -1821,6 +1858,7 @@ int main() {
         it("preserves the inner Optional type through .try", []() {
             assertTrue(hasError(
                 "let requireInteger(value: Integer) = value\n"
+                "using FS\n"
                 "main do\n"
                 "  trying do\n"
                 "    requireInteger(FS.File.read(\"input.txt\").try)\n"

@@ -1,7 +1,7 @@
 %% Kex.Intrinsic.List — BEAM primitive backend for the list intrinsics.
 %%
 %% The ONLY place Core Erlang list BIFs are named for the stdlib. The typed
-%% list stdlib lives in the Kex prelude (src/prelude/list.kex), which calls
+%% list stdlib lives in src/stdlib/list.kex, which calls
 %% `Kex.Intrinsic.List.<fn>`; the compiler maps that module path to a plain
 %% cross-module call here. Adding a primitive is a one-line function.
 -module(kex_intrinsic_list).

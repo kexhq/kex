@@ -76,7 +76,8 @@ public:
         const std::string& name,
         std::vector<ValuePtr> args,
         std::chrono::milliseconds timeout) -> ValuePtr;
-    // Parse src/prelude/*.kex (MainBlocks dropped) once into a shared AST and
+    // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
+    // once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
     // shadows the native builtins. No-op if no configured or embedded prelude
     // source root is available. Idempotent per Evaluator instance.
@@ -91,12 +92,14 @@ public:
 private:
     // Top-level
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
-    auto execModule(const ast::ModuleDef& mod) -> void;
+    auto execModule(const ast::ModuleDef& mod,
+                    const std::string& parentModule = "") -> void;
     auto execFunctionDef(const ast::FunctionDef& def,
                          const std::string& typeScope = "",
                          bool hasImplicitReceiver = false) -> void;
     auto execMakeDef(const ast::MakeDef& def) -> void;
-    auto execTypeDef(const ast::TypeDef& def) -> void;
+    auto execTypeDef(const ast::TypeDef& def,
+                     const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
     auto execCompiledBlock(const ast::CompiledBlock& block) -> void;

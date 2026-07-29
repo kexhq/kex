@@ -42,6 +42,10 @@ public:
         -> const std::vector<Signature>*;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto referencedModules() const
+        -> const std::unordered_set<std::string>& {
+        return m_checker.referencedModules();
+    }
 
 private:
     // Top-level declarations

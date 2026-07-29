@@ -38,7 +38,7 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineIntrinsic("List::at", std::move(at));
 
     // Kex.Intrinsic.String.chars — the string's characters as a [Char].
-    // Backs the prelude's String `chars` (src/prelude/string.kex).
+    // Backs the prelude's String `chars` (src/stdlib/string.kex).
     defineIntrinsic("String::chars", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);

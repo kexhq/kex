@@ -833,6 +833,13 @@ int main() {
             assertEqual(main->body.size(), size_t(1));
         });
 
+        it("parses uppercase atoms in a list", []() {
+            assertFalse(parseFails(
+                "main do\n"
+                "  let modules = [:Math, :List, :String]\n"
+                "end\n"));
+        });
+
         it("parses map literal", []() {
             auto program = parse("main do\n  let x = { \"a\": 1, \"b\": 2 }\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);

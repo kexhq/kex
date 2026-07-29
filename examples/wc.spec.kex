@@ -1,6 +1,8 @@
 # kex: no-check
 # Specs for wc.kex — exercises wordCount and sumCounts via Mock.FS.
 
+using FS
+
 describe("wordCount") do
   it("counts lines, words, and bytes") do
     Mock.FS.File("a.txt", "hello world\nfoo bar baz\n")

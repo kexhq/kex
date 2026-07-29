@@ -1,4 +1,5 @@
 #include "lower.hxx"
+#include "../common/type_def_utils.hxx"
 #include "../lexer/token.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -3726,12 +3727,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     };
     auto preType = [&](const ast::TypeDef& td) {
         if (!td.variants) return;
-        // Transparent type alias: single bare TypeName (e.g. `type FilePath = String`)
-        // — skip variant-tag registration entirely.
-        if (td.variants->size() == 1) {
-            auto* tn = std::get_if<ast::TypeName>(&(*td.variants)[0]->kind);
-            if (tn) return;
-        }
+        if (kex::isTransparentTypeAlias(td)) return;
         for (const auto& v : *td.variants) {
             auto t = Lowering::simpleTypeName(v);
             if (t.empty()) continue;
@@ -3743,6 +3739,31 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             L.variantOwner[t] = td.name;
         }
     };
+    auto moduleConstructorDef =
+        [&](const kex::TypeConstructorInfo& constructor,
+            const std::string& modulePath) {
+            FunDef def;
+            def.name =
+                mangleModuleMember(modulePath, constructor.name);
+            def.arity = static_cast<int>(constructor.arity);
+            FunClause clause;
+            std::vector<ExprPtr> args;
+            for (size_t i = 0; i < constructor.arity; ++i) {
+                const auto name = "_constructor_arg_" +
+                    std::to_string(i);
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = name;
+                clause.params.push_back(std::move(param));
+                args.push_back(var(name));
+            }
+            auto body = std::make_unique<Expr>();
+            body->node =
+                Construct{constructor.name, std::move(args)};
+            clause.body = std::move(body);
+            def.clauses.push_back(std::move(clause));
+            return def;
+        };
     auto preMake = [&](const ast::MakeDef& md) {
         std::string typeName = Lowering::simpleTypeName(md.target);
         std::unordered_map<std::string,
@@ -3827,6 +3848,22 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 L.fnParamNames[path + "." + fd->name] = std::move(pnames);
             }
         };
+        auto preModuleType = [&](const ast::TypeDef* td) {
+            if (!td) return;
+            preType(*td);
+            if (auto constructors = kex::typeConstructors(*td))
+                for (const auto& constructor : *constructors) {
+                    const auto emitted =
+                        mangleModuleMember(path, constructor.name);
+                    definedFns.insert(emitted);
+                    L.moduleFunctions[path + "." +
+                                      constructor.name] = emitted;
+                    L.fnParamNames[path + "." +
+                                   constructor.name] =
+                        std::vector<std::string>(
+                            constructor.arity);
+                }
+        };
         for (const auto& item : module.body) {
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                 preModuleFn(fd->get());
@@ -3835,7 +3872,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*md) preMake(**md);
             } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
-                if (*td) preType(**td);
+                preModuleType(td->get());
             } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
                 if (*cb) for (const auto& ci : (*cb)->items) {
                     if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci))
@@ -3850,9 +3887,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
             }
             else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-                if (*vb) for (const auto& vi : (*vb)->items)
+                if (*vb) for (const auto& vi : (*vb)->items) {
                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                         preModuleFn(vfd->get());
+                    else if (auto* vtd =
+                                 std::get_if<std::unique_ptr<ast::TypeDef>>(
+                                     &vi))
+                        preModuleType(vtd->get());
+                }
             } else if (auto* ed = std::get_if<std::unique_ptr<ast::ExportDecl>>(&item)) {
                 if (*ed) {
                     std::string srcMod;
@@ -4115,6 +4157,35 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 if (bare.find('.') == std::string::npos)
                                     L.moduleImports[bare] = val;
                             }
+                        auto emitType = [&](const ast::TypeDef* td) {
+                            if (!td || !td->variants) return;
+                            if (auto constructors =
+                                    kex::typeConstructors(*td))
+                                for (const auto& constructor :
+                                     *constructors)
+                                    mod.functions.push_back(
+                                        moduleConstructorDef(
+                                            constructor, m.name));
+                            if (kex::isTransparentTypeAlias(*td))
+                                return;
+                            std::vector<std::string> tags;
+                            for (const auto& variant :
+                                 *td->variants) {
+                                auto tag =
+                                    Lowering::simpleTypeName(
+                                        variant);
+                                if (tag.empty()) continue;
+                                tags.push_back(tag);
+                                if (std::holds_alternative<
+                                        ast::TypeName>(
+                                        variant->kind))
+                                    L.nullaryVariantTags.insert(
+                                        tag);
+                            }
+                            if (!tags.empty())
+                                L.typeVariantTags[td->name] =
+                                    std::move(tags);
+                        };
                         for (const auto& bi : m.body) {
                             if (auto* ub = std::get_if<std::unique_ptr<ast::UsingBlock>>(&bi)) {
                                 if (!*ub) continue;
@@ -4146,9 +4217,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             } else if (auto* mfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&bi)) {
                                 push(mfd->get());
                             } else if (auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&bi)) {
-                                if (*vb) for (const auto& vi : (*vb)->items)
+                                if (*vb) for (const auto& vi : (*vb)->items) {
                                     if (auto* vfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                                         push(vfd->get());
+                                    else if (auto* vtd =
+                                                 std::get_if<
+                                                     std::unique_ptr<
+                                                         ast::TypeDef>>(
+                                                     &vi)) {
+                                        flush();
+                                        emitType(vtd->get());
+                                    }
+                                }
                             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&bi)) {
                                 flush();
                                 emitMake(mk->get());
@@ -4167,26 +4247,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             } else if (std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&bi) ||
                                        std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
                                 if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&bi)) {
-                                    if (*td && (*td)->variants) {
-                                        // Skip transparent type aliases (single bare TypeName).
-                                        bool transparentAlias =
-                                            (*td)->variants->size() == 1 &&
-                                            std::holds_alternative<ast::TypeName>(
-                                                (*(*td)->variants)[0]->kind);
-                                        if (!transparentAlias) {
-                                            std::vector<std::string> tags;
-                                            for (const auto& v : *(*td)->variants) {
-                                                auto t = Lowering::simpleTypeName(v);
-                                                if (!t.empty()) {
-                                                    tags.push_back(t);
-                                                    if (std::holds_alternative<ast::TypeName>(v->kind))
-                                                        L.nullaryVariantTags.insert(t);
-                                                }
-                                            }
-                                            if (!tags.empty())
-                                                L.typeVariantTags[(*td)->name] = std::move(tags);
-                                        }
-                                    }
+                                    flush();
+                                    emitType(td->get());
                                 }
                             } else {
                                 flush();
@@ -4564,16 +4626,34 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                 if (!definitions.count(field.name))
                     definitions[field.name] = {path, field.name, true};
         };
+        auto addType = [&](const ast::TypeDef* td, bool exported) {
+            if (!td) return;
+            if (auto constructors = kex::typeConstructors(*td))
+                for (const auto& constructor : *constructors)
+                    definitions[mangleModuleMember(
+                        path, constructor.name)] = {
+                        path, constructor.name, exported};
+        };
         for (const auto& item : module.body) {
             if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) add(fn->get(), true);
             else if (auto* visibility = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
-                if (*visibility) for (const auto& entry : (*visibility)->items)
+                if (*visibility) for (const auto& entry : (*visibility)->items) {
                     if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
                         add(fn->get(), (*visibility)->isPublic);
+                    else if (auto* td =
+                                 std::get_if<std::unique_ptr<
+                                     ast::TypeDef>>(&entry))
+                        addType(td->get(),
+                                (*visibility)->isPublic);
+                }
             } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 addMake(mk->get());
             } else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 addRecord(rd->get());
+            } else if (auto* td =
+                           std::get_if<std::unique_ptr<ast::TypeDef>>(
+                               &item)) {
+                addType(td->get(), true);
             } else if (auto* child = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*child) collect(**child);
             }

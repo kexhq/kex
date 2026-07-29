@@ -1,6 +1,8 @@
 # Filesystem module demonstration
 # Covers FS.File, FS.Directory, FileHandle, and Mock.FS
 
+using FS
+
 # A simple log writer that appends timestamped entries.
 # Declared outside main so the spec can load it.
 foul writeLog(path: String, entry: String) -> Bool do
@@ -58,18 +60,18 @@ main do
   IO.printLine("\n=== FS.File.open mode capabilities ===")
 
   # Read exposes read operations, but not write operations.
-  let reader = FS.File.open(tmp, Read).try
+  let reader = FS.File.open(tmp, FS.Read).try
   let first = reader.readLine
   reader.close()
   IO.printLine("first line via handle: ${first.or("(none)")}")
 
   # Append exposes write operations, but not read operations.
-  let appender = FS.File.open(tmp, Append).try
+  let appender = FS.File.open(tmp, FS.Append).try
   appender.writeLine("Appended via handle.")
   appender.close()
 
   # ReadWrite exposes both sets.
-  let editable = FS.File.open(tmp, ReadWrite).try
+  let editable = FS.File.open(tmp, FS.ReadWrite).try
   IO.printLine("read-write handle sees ${editable.read().or("").count} chars")
   editable.writeLine("Written through ReadWrite.")
   editable.close()

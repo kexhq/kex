@@ -2,27 +2,26 @@
 #include "../evaluator.hxx"
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <sstream>
 
 namespace kex::interpreter {
 
-static auto fileModeName(const ValuePtr& modeVal) -> std::string {
+static auto fileModeName(const ValuePtr& modeVal)
+    -> std::optional<std::string> {
     if (auto* atom = std::get_if<AtomValue>(&modeVal->data)) return atom->name;
     if (auto* var = std::get_if<VariantValue>(&modeVal->data)) return var->tag;
-    return "Read";
+    return std::nullopt;
 }
 
-// Helper: open mode from an Atom (Read/Write/Append/ReadWrite)
-static auto modeFlags(const ValuePtr& modeVal) -> std::ios::openmode {
-    // A bare `Read`/`Append` mode is a nullary constructor — a VariantValue
-    // (an AtomValue only via `:append`-style literals). Accept both; the
-    // VariantValue case was a real bug: `File.open(p, Append)` fell through
-    // to read-only and writes through the handle silently failed.
-    auto name = fileModeName(modeVal);
+// Translate the stdlib's declared file-mode variants at the runtime boundary.
+static auto modeFlags(const std::string& name)
+    -> std::optional<std::ios::openmode> {
     if (name == "Write")     return std::ios::out | std::ios::trunc;
     if (name == "Append")    return std::ios::out | std::ios::app;
     if (name == "ReadWrite") return std::ios::in  | std::ios::out;
-    return std::ios::in;
+    if (name == "Read")      return std::ios::in;
+    return std::nullopt;
 }
 
 // Helper: split a string into lines (no trailing newline per line)
@@ -47,21 +46,24 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
         const auto& path = pathStr->value;
+        const auto mode = fileModeName(args[1]);
+        if (!mode) return Value::none();
+        const auto flags = modeFlags(*mode);
+        if (!flags) return Value::none();
 
         // Check mock first: if mocked, create an in-memory-backed handle
         auto mockIt = m_mockFiles.find(path);
         bool isMocked = mockIt != m_mockFiles.end();
         if (isMocked) {
-            auto mode = fileModeName(args[1]);
-            if (mode == "Write") mockIt->second.clear();
+            if (*mode == "Write") mockIt->second.clear();
             m_mockFiles["__mock_pos__" + path] =
-                mode == "Append" ? std::to_string(mockIt->second.size()) : "0";
+                *mode == "Append" ? std::to_string(mockIt->second.size()) : "0";
         }
 
         std::shared_ptr<std::fstream> fs;
         if (!isMocked) {
-            auto flags = modeFlags(args[1]);
-            fs = std::make_shared<std::fstream>(path, flags | std::ios::binary);
+            fs = std::make_shared<std::fstream>(
+                path, *flags | std::ios::binary);
             if (!fs->is_open()) {
                 auto fileError = std::make_shared<Value>();
                 fileError->data = VariantValue{

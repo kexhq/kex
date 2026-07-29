@@ -12,7 +12,7 @@ using kex::semantic::SemanticDB;
 
 static auto makePreludeDb() -> SemanticDB {
     SemanticDB db;
-    std::filesystem::path dir = "src/prelude";
+    std::filesystem::path dir = "src/stdlib";
     std::error_code ec;
     for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
         if (entry.path().extension() != ".kex") continue;

@@ -6,9 +6,9 @@ endif()
 
 file(REMOVE_RECURSE "${KEX_ARTIFACT_TEST_DIR}")
 file(MAKE_DIRECTORY "${KEX_ARTIFACT_TEST_DIR}")
-file(COPY "${KEX_SOURCE_DIR}/src/prelude"
+file(COPY "${KEX_SOURCE_DIR}/src/stdlib"
     DESTINATION "${KEX_ARTIFACT_TEST_DIR}")
-set(test_source_dir "${KEX_ARTIFACT_TEST_DIR}/prelude")
+set(test_source_dir "${KEX_ARTIFACT_TEST_DIR}/stdlib")
 set(test_runtime_dir "${KEX_ARTIFACT_TEST_DIR}/runtime")
 file(MAKE_DIRECTORY "${test_runtime_dir}")
 file(WRITE "${test_runtime_dir}/Kex.Obsolete.beam" "stale")

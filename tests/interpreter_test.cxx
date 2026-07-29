@@ -19,6 +19,10 @@ auto run(const std::string& source) -> ValuePtr {
     return evaluator.execute(program);
 }
 
+auto runFS(const std::string& source) -> ValuePtr {
+    return run("using FS\n" + source);
+}
+
 auto runOutput(const std::string& source) -> std::string {
     Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
@@ -73,6 +77,86 @@ int main() {
                 "end\n"
             );
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
+        it("keeps module ADT constructors qualified until using", []() {
+            auto qualified = run(
+                "module Modes do\n"
+                "  type OpenMode = Read | Write\n"
+                "end\n"
+                "main do Modes.Read end\n");
+            const auto& mode = std::get<VariantValue>(qualified->data);
+            assertEqual(mode.tag, std::string("Read"));
+            assertEqual(mode.parentType, std::string("OpenMode"));
+
+            bool rejectedBare = false;
+            try {
+                run(
+                    "module Modes do\n"
+                    "  type OpenMode = Read | Write\n"
+                    "end\n"
+                    "main do Read end\n");
+            } catch (const RuntimeError& error) {
+                rejectedBare =
+                    std::string(error.what()).find("Undefined identifier: Read") !=
+                    std::string::npos;
+            }
+            assertTrue(rejectedBare,
+                       "module constructor leaked into the global scope");
+
+            auto imported = run(
+                "module Modes do\n"
+                "  type OpenMode = Read | Write\n"
+                "end\n"
+                "using Modes\n"
+                "main do Read end\n");
+            assertEqual(std::get<VariantValue>(imported->data).tag,
+                        std::string("Read"));
+        });
+
+        it("honors visibility for module ADT constructors", []() {
+            auto publicConstructor = run(
+                "module Modes do\n"
+                "  public do\n"
+                "    type OpenMode = Read | Write\n"
+                "  end\n"
+                "end\n"
+                "using Modes\n"
+                "main do Read end\n");
+            assertEqual(
+                std::get<VariantValue>(
+                    publicConstructor->data).tag,
+                std::string("Read"));
+
+            bool rejectedPrivate = false;
+            try {
+                run(
+                    "module Secrets do\n"
+                    "  private do\n"
+                    "    type SecretMode = Hidden | Other\n"
+                    "  end\n"
+                    "end\n"
+                    "main do Secrets.Hidden end\n");
+            } catch (const RuntimeError& error) {
+                rejectedPrivate =
+                    std::string(error.what()).find(
+                        "cannot access private name `Hidden`") !=
+                    std::string::npos;
+            }
+            assertTrue(rejectedPrivate);
+        });
+
+        it("does not export an alias target as a constructor", []() {
+            auto result = run(
+                "module Paths do\n"
+                "  type FilePath = String\n"
+                "end\n"
+                "using Paths\n"
+                "main do String end\n");
+            assertFalse(
+                std::holds_alternative<VariantValue>(
+                    result->data),
+                "using a module alias must not replace String");
         });
 
         it("does not treat an extra module overload argument as a receiver", []() {
@@ -1113,7 +1197,7 @@ int main() {
         it("writes and reads a file", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"hello\")\n"
                 "  FS.File.read(\"" + path + "\").or(\"\")\n"
@@ -1126,23 +1210,23 @@ int main() {
         it("exists? reflects write and delete", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto before = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
+            auto before = runFS("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertFalse(std::get<BoolValue>(before->data).value);
 
-            run("main do\n  FS.File.write(\"" + path + "\", \"x\")\nend\n");
-            auto afterWrite = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
+            runFS("main do\n  FS.File.write(\"" + path + "\", \"x\")\nend\n");
+            auto afterWrite = runFS("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertTrue(std::get<BoolValue>(afterWrite->data).value);
 
-            auto deleted = run("main do\n  FS.File.delete(\"" + path + "\")\nend\n");
+            auto deleted = runFS("main do\n  FS.File.delete(\"" + path + "\")\nend\n");
             assertTrue(std::get<BoolValue>(deleted->data).value);
-            auto afterDelete = run("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
+            auto afterDelete = runFS("main do\n  FS.File.exists?(\"" + path + "\")\nend\n");
             assertFalse(std::get<BoolValue>(afterDelete->data).value);
         });
 
         it("appends to a file", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\")\n"
                 "  FS.File.append(\"" + path + "\", \"b\")\n"
@@ -1154,12 +1238,12 @@ int main() {
         });
 
         it("applies open modes to Mock.FS handles", []() {
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  Mock.FS.File(\"mock.txt\", \"old\")\n"
-                "  let writer = FS.File.open(\"mock.txt\", Write).try\n"
+                "  let writer = FS.File.open(\"mock.txt\", FS.Write).try\n"
                 "  writer.write(\"new\")\n"
-                "  let appender = FS.File.open(\"mock.txt\", Append).try\n"
+                "  let appender = FS.File.open(\"mock.txt\", FS.Append).try\n"
                 "  appender.write(\"!\")\n"
                 "  FS.File.read(\"mock.txt\").or(\"\")\n"
                 "end\n"
@@ -1169,10 +1253,10 @@ int main() {
         });
 
         it("lets trying rescue an OpenFailed file result", []() {
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  trying do\n"
-                "    FS.File.open(\"/nonexistent/kex/path/xyz\", Read).try\n"
+                "    FS.File.open(\"/nonexistent/kex/path/xyz\", FS.Read).try\n"
                 "    \"opened\"\n"
                 "  rescue\n"
                 "    OpenFailed(_) -> \"failed\"\n"
@@ -1183,16 +1267,16 @@ int main() {
         });
 
         it("reading a nonexistent file returns None", []() {
-            auto result = run("main do\n  FS.File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = runFS("main do\n  FS.File.read(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertTrue(result->isNone());
         });
 
         it("filesystem Optional success values are wrapped in Just", []() {
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
                 "  let Just(content) = FS.File.read(\"wrapped.txt\")\n"
-                "  let handle = FS.File.open(\"wrapped.txt\", Read).try\n"
+                "  let handle = FS.File.open(\"wrapped.txt\", FS.Read).try\n"
                 "  let Just(line) = handle.readLine\n"
                 "  content + line\n"
                 "end\n");
@@ -1201,14 +1285,14 @@ int main() {
         });
 
         it("deleting a nonexistent file returns false", []() {
-            auto result = run("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = runFS("main do\n  FS.File.delete(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 
         it("lines materializes a list of lines", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
                 "  FS.File.lines(\"" + path + "\").or([])\n"
@@ -1224,7 +1308,7 @@ int main() {
         it("feed wraps file lines in a stream", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
-            auto result = run(
+            auto result = runFS(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\")\n"
                 "  FS.File.feed(\"" + path + "\").try.take(2)\n"
@@ -1238,7 +1322,7 @@ int main() {
         });
 
         it("feed on a nonexistent file returns None", []() {
-            auto result = run("main do\n  FS.File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
+            auto result = runFS("main do\n  FS.File.feed(\"/nonexistent/kex/path/xyz\")\nend\n");
             assertTrue(result->isNone());
         });
     });

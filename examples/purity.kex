@@ -1,3 +1,5 @@
+using FS
+
 let compute(x: Int) = x * 2 + 1     # pure
 
 foul readConfig(path: String) do

@@ -143,8 +143,7 @@ target_include_directories(kex_lib PUBLIC src)
 # no _NSGetExecutablePath) so bake the source path in at compile time.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_compile_definitions(kex_lib PUBLIC
-        KEX_PRELUDE_DIR="${CMAKE_SOURCE_DIR}/src/prelude"
-        KEX_STDLIB_MODULE_DIR="${CMAKE_SOURCE_DIR}/src/stdlib")
+        KEX_STDLIB_DIR="${CMAKE_SOURCE_DIR}/src/stdlib")
 endif()
 
 # GMP backs the arbitrary-precision `Integer` default (see
@@ -286,27 +285,26 @@ endif()
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     install(TARGETS kex RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
-    install(DIRECTORY src/prelude/
-        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/prelude
-        FILES_MATCHING PATTERN "*.kex")
     install(DIRECTORY src/stdlib/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/stdlib
         FILES_MATCHING PATTERN "*.kex")
 endif()
 
 # ── Kex stdlib artifact unit ─────────────────────────────────────────────
-# The stdlib is written in Kex (src/prelude/*.kex) and compiled into a
+# The prelude manifest selects standard-library sources from src/stdlib and is
+# compiled into a
 # kex_prelude.beam entry plus Kex.* companion modules. They are placed beside
 # the runtime beams so BEAM runs put the unit on the -pa path and lazy-load it
 # on first use. Built by the freshly-built kex binary (Kex → Core Erlang →
 # beam), so it depends on `kex` and the intrinsic beams it calls.
 if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
-    file(GLOB KEX_PRELUDE_SRC CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
+    file(GLOB_RECURSE KEX_STDLIB_SRC CONFIGURE_DEPENDS
+        "${CMAKE_SOURCE_DIR}/src/stdlib/*.kex")
     add_custom_command(
         OUTPUT ${KEX_PRELUDE_BEAM}
         COMMAND $<TARGET_FILE:kex> --build-prelude ${KEX_RUNTIME_BEAM_DIR}
-        DEPENDS kex ${KEX_PRELUDE_SRC} ${KEX_RUNTIME_BEAMS}
+        DEPENDS kex ${KEX_STDLIB_SRC} ${KEX_RUNTIME_BEAMS}
         COMMENT "Prebuilding Kex prelude (kex_prelude.beam)"
         VERBATIM
     )
@@ -360,36 +358,36 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         -sEXPORT_NAME=createKexReplModule
         -sEXPORTED_FUNCTIONS=_kex_version,_kex_repl_banner,_kex_repl_create,_kex_repl_destroy,_kex_repl_eval,_kex_repl_last_result,_kex_repl_complete,_malloc,_free
         -sEXPORTED_RUNTIME_METHODS=ccall,cwrap,UTF8ToString,stringToUTF8,lengthBytesUTF8
-        # Embeds src/prelude/*.kex into MEMFS at "/prelude" so the wasm
-        # REPL's SemanticDB can index the same prelude the native REPL does
-        # for tab completion (see src/common/prelude_loader.hxx) — wasm has
-        # no native installation filesystem.
+        # Embeds the unified stdlib into MEMFS. `prelude.kex` selects the
+        # automatic subset; opt-in modules resolve from the same root.
         # Keep each flag and its mapped path together. CMake otherwise
         # de-duplicates the repeated --preload-file flag, leaving the second
         # path as a bogus linker input.
-        "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/prelude@/prelude"
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
     )
 endif()
 
 enable_testing()
 
-# Type-check all .kex files under src/prelude/ using `kex --check`.
+# Parse, type-check, and lower the exact source set selected by prelude.kex.
 # Run with: cmake --build build --target check-prelude
-file(GLOB PRELUDE_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/src/prelude/*.kex")
+set(KEX_PRELUDE_MANIFEST "${CMAKE_SOURCE_DIR}/src/stdlib/prelude.kex")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${KEX_PRELUDE_MANIFEST}")
+file(GLOB_RECURSE KEX_PRELUDE_CHECK_DEPS CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/stdlib/*.kex")
+set(KEX_PRELUDE_CHECK_DIR
+    "${CMAKE_BINARY_DIR}/prelude-check")
 add_custom_target(check-prelude
     COMMAND ${CMAKE_COMMAND} -E echo "Checking prelude..."
-    DEPENDS kex
+    COMMAND ${CMAKE_COMMAND} -E make_directory
+        "${KEX_PRELUDE_CHECK_DIR}"
+    COMMAND $<TARGET_FILE:kex> --build-prelude
+        "${KEX_PRELUDE_CHECK_DIR}"
+    DEPENDS kex ${KEX_PRELUDE_CHECK_DEPS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    VERBATIM
 )
-foreach(src IN LISTS PRELUDE_SOURCES)
-    cmake_path(GET src FILENAME fname)
-    add_custom_command(TARGET check-prelude POST_BUILD
-        COMMAND $<TARGET_FILE:kex> --check ${src}
-        COMMENT "  ${fname}"
-        VERBATIM
-    )
-endforeach()
 
 add_executable(beam_test tests/beam_test.cxx)
 target_link_libraries(beam_test PRIVATE kex_lib)

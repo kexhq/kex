@@ -4,6 +4,8 @@
 # Pure path-manipulation functions (basename, dirname, etc.) are tested
 # directly since they have no side effects.
 
+using FS
+
 describe("File — path functions") do
   it("basename strips the directory") do
     assert(FS.File.basename("src/main.kex") == "main.kex")
@@ -151,7 +153,7 @@ describe("FS.File.open — typed Result (mocked)") do
 
   it("try unwraps a readable handle") do
     Mock.FS.File("lines.txt", "first\nsecond")
-    let f = FS.File.open("lines.txt", Read).try
+    let f = FS.File.open("lines.txt", FS.Read).try
     let line = f.readLine
     f.close()
     assert(line.or("") == "first")
@@ -159,7 +161,7 @@ describe("FS.File.open — typed Result (mocked)") do
 
   it("returns OpenFailed when the path does not exist") do
     let message = trying do
-      FS.File.open("/no/such/kex_test_xyz.txt", Read).try
+      FS.File.open("/no/such/kex_test_xyz.txt", FS.Read).try
       "opened"
     rescue
       OpenFailed(_) -> "failed"
@@ -169,7 +171,7 @@ describe("FS.File.open — typed Result (mocked)") do
 
   it("handle.eof? is false before end and true after all content is read") do
     Mock.FS.File("eof.txt", "line")
-    let f = FS.File.open("eof.txt", Read).try
+    let f = FS.File.open("eof.txt", FS.Read).try
     assert(!f.eof?)
     f.read
     assert(f.eof?)

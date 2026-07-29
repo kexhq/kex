@@ -1,5 +1,6 @@
 #include "evaluator.hxx"
 #include "../common/prelude_loader.hxx"
+#include "../common/type_def_utils.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include "../parser/parser.hxx"
@@ -15,6 +16,10 @@ Evaluator::Evaluator() {
     m_globalEnv = std::make_shared<Environment>();
     m_intrinsicEnv = std::make_shared<Environment>();
     m_env = m_globalEnv;
+    for (auto& root : kex::standardLibraryModuleRoots())
+        if (std::find(m_moduleRoots.begin(), m_moduleRoots.end(), root) ==
+            m_moduleRoots.end())
+            m_moduleRoots.push_back(std::move(root));
     // Owns every process for this Evaluator's whole lifetime — there is
     // no "outside of a process" execution mode, matching BEAM, so this
     // always exists rather than being created lazily on first
@@ -391,14 +396,22 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
     if (scoped) popEnv();
 }
 
-auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
+auto Evaluator::execModule(const ast::ModuleDef& mod,
+                           const std::string& parentModule) -> void {
+    const bool alreadyQualified =
+        !parentModule.empty() &&
+        mod.name.rfind(parentModule + ".", 0) == 0;
+    const auto moduleName =
+        parentModule.empty() || alreadyQualified
+            ? mod.name
+            : parentModule + "." + mod.name;
     // Publish the module shell before its body so a dependency cycle can see
     // already-known module identity while definitions are still registering.
-    m_moduleRegistry.try_emplace(mod.name, ModuleEntry{});
+    m_moduleRegistry.try_emplace(moduleName, ModuleEntry{});
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
-        std::visit([&publicNames, &privateNames, &mod](const auto& node) {
+        std::visit([&publicNames, &privateNames, &moduleName](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 publicNames.insert(node->name);
@@ -406,10 +419,14 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 publicNames.insert(node->name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 publicNames.insert(node->name);
+                if (auto constructors = kex::typeConstructors(*node))
+                    for (const auto& constructor : *constructors)
+                        publicNames.insert(constructor.name);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 auto shortName = node->name;
-                auto prefixLen = mod.name.size() + 1;
-                if (shortName.size() > prefixLen && shortName.rfind(mod.name + ".", 0) == 0)
+                auto prefixLen = moduleName.size() + 1;
+                if (shortName.size() > prefixLen &&
+                    shortName.rfind(moduleName + ".", 0) == 0)
                     shortName = shortName.substr(prefixLen);
                 publicNames.insert(shortName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
@@ -421,8 +438,14 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                             std::get_if<std::unique_ptr<ast::RecordDef>>(&visible))
                         (node->isPublic ? publicNames : privateNames).insert((*record)->name);
                     else if (const auto* typeDef =
-                            std::get_if<std::unique_ptr<ast::TypeDef>>(&visible))
+                            std::get_if<std::unique_ptr<ast::TypeDef>>(&visible)) {
                         (node->isPublic ? publicNames : privateNames).insert((*typeDef)->name);
+                        if (auto constructors =
+                                kex::typeConstructors(**typeDef))
+                            for (const auto& constructor : *constructors)
+                                (node->isPublic ? publicNames : privateNames)
+                                    .insert(constructor.name);
+                    }
                 }
             }
         }, item);
@@ -433,10 +456,10 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
         return function && function->native && !m_functionDefs.contains(name);
     };
     for (const auto& item : mod.body) {
-        std::visit([this, &mod, &hasPublicNative](const auto& node) {
+        std::visit([this, &moduleName, &hasPublicNative](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                auto nativeName = mod.name + "::" + node->name;
+                auto nativeName = moduleName + "::" + node->name;
                 // Only an explicit PUBLIC native binding may own a public
                 // module slot. A same-named private intrinsic is the runtime
                 // target of the Kex wrapper, not a reason to suppress it.
@@ -445,33 +468,33 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
                 bool hasNative = hasPublicNative(nativeName);
                 if (!hasNative && nativeName.find('.') != std::string::npos) {
                     std::string alt;
-                    for (char c : mod.name)
+                    for (char c : moduleName)
                         alt += (c == '.') ? "::" : std::string(1, c);
                     const auto altName = alt + "::" + node->name;
                     hasNative = hasPublicNative(altName);
                 }
                 if (!hasNative)
-                    execFunctionDef(*node, mod.name);
+                    execFunctionDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                execModule(*node);
+                execModule(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                execTypeDef(*node);
+                execTypeDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                execRecordDef(*node, mod.name);
+                execRecordDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                execVisibilityBlock(*node, mod.name);
+                execVisibilityBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
                 execTraitDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
                 execCompiledBlock(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
-                execUsingBlock(*node, mod.name);
+                execUsingBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
-                m_pendingExports.push_back({mod.name, node.get()});
+                m_pendingExports.push_back({moduleName, node.get()});
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
-                registerRuntimeSignature(*node, mod.name, false);
+                registerRuntimeSignature(*node, moduleName, false);
             }
         }, item);
     }
@@ -479,34 +502,34 @@ auto Evaluator::execModule(const ast::ModuleDef& mod) -> void {
     ModuleEntry entry;
     entry.isFoul = mod.isFoul;
     entry.privateNames = std::move(privateNames);
-    entry.submodules = std::move(m_moduleRegistry[mod.name].submodules);
-    const auto prefix = mod.name + "::";
+    entry.submodules = std::move(m_moduleRegistry[moduleName].submodules);
+    const auto prefix = moduleName + "::";
     for (const auto& name : publicNames) {
         const auto qualified = prefix + name;
         if (auto value = m_env->get(qualified))
             entry.exports.emplace(name, std::move(value));
     }
-    m_moduleRegistry[mod.name] = std::move(entry);
+    m_moduleRegistry[moduleName] = std::move(entry);
 
     // Make each segment of a qualified module path available to the existing
     // namespace dispatcher. For `Http.Router.get()`, `Http` resolves to a
     // ModuleValue and `Http::Router` resolves to the nested ModuleValue.
-    size_t dot = mod.name.find('.');
+    size_t dot = moduleName.find('.');
     if (dot == std::string::npos) {
         // Preserve public constants that deliberately share a namespace name
         // (notably the ENV Map). This is public binding ownership, not an
         // intrinsic capability check.
-        auto existing = m_env->get(mod.name);
+        auto existing = m_env->get(moduleName);
         if (!existing || std::holds_alternative<ModuleValue>(existing->data))
-            m_env->define(mod.name, Value::module(mod.name));
+            m_env->define(moduleName, Value::module(moduleName));
     } else {
-        const auto parent = mod.name.substr(0, dot);
+        const auto parent = moduleName.substr(0, dot);
         m_env->define(parent, Value::module(parent));
         while (dot != std::string::npos) {
-            const auto next = mod.name.find('.', dot + 1);
-            const auto child = mod.name.substr(dot + 1, next - dot - 1);
-            const auto qualified = mod.name.substr(0, next);
-            const auto owner = mod.name.substr(0, dot);
+            const auto next = moduleName.find('.', dot + 1);
+            const auto child = moduleName.substr(dot + 1, next - dot - 1);
+            const auto qualified = moduleName.substr(0, next);
+            const auto owner = moduleName.substr(0, dot);
             m_env->define(owner + "::" + child, Value::module(qualified));
             auto& parentEntry = m_moduleRegistry[owner];
             parentEntry.submodules[child] = qualified;
@@ -555,7 +578,8 @@ auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block) -> void {
     }
 }
 
-auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
+auto Evaluator::execTypeDef(const ast::TypeDef& def,
+                            const std::string& moduleScope) -> void {
     if (def.staticBlock) {
         // Static constructors/constants are namespaced under the type
         // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
@@ -576,10 +600,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
     // `type FilePath = String`) — they declare a name for an existing
     // type rather than introducing new variant constructors.
     if (def.variants) {
-        if (def.variants->size() == 1) {
-            auto* tn = std::get_if<ast::TypeName>(&(*def.variants)[0]->kind);
-            if (tn) return;
-        }
+        if (kex::isTransparentTypeAlias(def)) return;
         for (const auto& variant : *def.variants) {
             if (!variant) continue;
             std::string variantName;
@@ -598,7 +619,10 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
             m_variantParent[variantName] = def.name;
 
             if (arity == 0) {
-                m_env->define(variantName, Value::variant(variantName, def.name));
+                const auto binding = moduleScope.empty()
+                    ? variantName : moduleScope + "::" + variantName;
+                m_env->define(binding,
+                              Value::variant(variantName, def.name));
                 continue;
             }
             auto val = std::make_shared<Value>();
@@ -610,7 +634,9 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def) -> void {
                     }
                     return Value::variant(variantName, defName, std::move(varArgs));
                 }};
-            m_env->define(variantName, val);
+            const auto binding = moduleScope.empty()
+                ? variantName : moduleScope + "::" + variantName;
+            m_env->define(binding, val);
         }
     }
 }
@@ -646,7 +672,7 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                execTypeDef(*node);
+                execTypeDef(*node, typeScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 execRecordDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
@@ -1279,10 +1305,79 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // This must run before eval(*node.receiver) to avoid the throw.
             std::string namespaceName;
             bool isNamespaceCall = false;
+            std::function<std::optional<std::string>(const ast::Expr&)>
+                qualifiedPath;
+            qualifiedPath = [&](const ast::Expr& receiver)
+                -> std::optional<std::string> {
+                if (auto* root =
+                        std::get_if<ast::UpperIdentifier>(
+                            &receiver.kind))
+                    return root->name;
+                auto* segment =
+                    std::get_if<ast::MethodCall>(&receiver.kind);
+                if (!segment || !segment->receiver ||
+                    !segment->args.empty() ||
+                    !segment->namedArgs.empty() || segment->block)
+                    return std::nullopt;
+                auto parent = qualifiedPath(*segment->receiver);
+                return parent
+                    ? std::optional<std::string>{
+                          *parent + "." + segment->method}
+                    : std::nullopt;
+            };
             if (node.receiver) {
+                if (auto path = qualifiedPath(*node.receiver);
+                    path && path->find('.') != std::string::npos) {
+                    if (m_moduleRegistry.contains(*path)) {
+                        namespaceName = *path;
+                        isNamespaceCall = true;
+                    } else {
+                        module::Resolver resolver(m_moduleRoots);
+                        if (resolver.resolve(*path, m_currentModule)) {
+                            try {
+                                namespaceName = ensureModuleLoaded(
+                                    *path, expr.location,
+                                    m_currentModule);
+                                isNamespaceCall = true;
+                            } catch (const RuntimeError& error) {
+                                if (std::string(error.what()).find(
+                                        "Resolved file does not define module ")
+                                    == std::string::npos)
+                                    throw;
+                            }
+                        }
+                    }
+                }
+            }
+            if (!isNamespaceCall && node.receiver) {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
-                    if (!isKnownVariant && !m_env->get(upperIdent->name)) {
+                    auto existing = m_env->get(upperIdent->name);
+                    module::Resolver resolver(m_moduleRoots);
+                    const bool sourceModuleExists =
+                        resolver.resolve(upperIdent->name,
+                                         m_currentModule).has_value();
+                    if (existing &&
+                        std::holds_alternative<ModuleValue>(
+                            existing->data)) {
+                        namespaceName =
+                            std::get<ModuleValue>(existing->data).name;
+                        isNamespaceCall = true;
+                    } else if (
+                        (m_moduleRegistry.contains(upperIdent->name) ||
+                         sourceModuleExists) &&
+                        (!existing ||
+                         std::holds_alternative<VariantValue>(
+                             existing->data))) {
+                        namespaceName =
+                            m_moduleRegistry.contains(upperIdent->name)
+                                ? upperIdent->name
+                                : ensureModuleLoaded(
+                                      upperIdent->name, expr.location,
+                                      m_currentModule);
+                        isNamespaceCall = true;
+                    } else if (!isKnownVariant &&
+                               !existing) {
                         auto resolved = (!m_currentModule.empty())
                             ? m_env->get(m_currentModule + "::" + upperIdent->name) : ValuePtr{};
                         if (resolved && std::holds_alternative<ModuleValue>(resolved->data)) {
@@ -1356,6 +1451,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     mangled = alt + "::" + node.method;
                 }
                 if (auto target = m_env->get(mangled)) {
+                    if (node.args.empty() && node.namedArgs.empty() &&
+                        !node.block &&
+                        !std::holds_alternative<FunctionValue>(target->data))
+                        return target;
                     if (node.args.empty() && node.namedArgs.empty() && !node.block
                         && std::holds_alternative<ModuleValue>(target->data))
                         return target;

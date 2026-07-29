@@ -17,6 +17,7 @@ int main() {
     fs::create_directories(base / "lib/http");
     fs::create_directories(base / "src/http");
     fs::create_directories(base / "prelude");
+    fs::create_directories(base / "prelude/extra");
     {
         std::ofstream libFile(base / "lib/http/router.kex");
         libFile << "module Http.Router\n";
@@ -29,7 +30,22 @@ int main() {
         containerFile.close();
         std::ofstream(base / "prelude/z.kex") << "module Z\n";
         std::ofstream(base / "prelude/a.kex") << "module A\n";
+        std::ofstream(base / "prelude/prelude.kex")
+            << "using Z\nusing A\n";
+        std::ofstream(base / "prelude/optional.kex")
+            << "module OptionalLibrary\n";
+        std::ofstream(base / "prelude/extra/deep.kex")
+            << "module Extra.Deep\n";
         std::ofstream(base / "prelude/ignored.txt") << "not kex\n";
+        fs::create_directories(base / "bad_manifest");
+        std::ofstream(base / "bad_manifest/prelude.kex")
+            << "using Good\nthis is not a manifest entry\n";
+        std::ofstream(base / "bad_manifest/good.kex") << "module Good\n";
+        fs::create_directories(base / "duplicate_manifest");
+        std::ofstream(base / "duplicate_manifest/prelude.kex")
+            << "using Good\nusing Good\n";
+        std::ofstream(base / "duplicate_manifest/good.kex")
+            << "module Good\n";
     }
 
     describe("Module resolver", [&]() {
@@ -68,7 +84,7 @@ int main() {
     });
 
     describe("Prelude source discovery", [&]() {
-        it("prefers KEX_STDLIB_DIR and returns sorted Kex sources", [&]() {
+        it("prefers KEX_STDLIB_DIR and follows its prelude manifest", [&]() {
             std::optional<std::string> previous;
             if (const char* value = std::getenv("KEX_STDLIB_DIR")) previous = value;
             setenv("KEX_STDLIB_DIR", (base / "prelude").c_str(), 1);
@@ -79,8 +95,26 @@ int main() {
             else unsetenv("KEX_STDLIB_DIR");
 
             assertEqual(files.size(), size_t{2});
-            assertEqual(files[0], (base / "prelude/a.kex").string());
-            assertEqual(files[1], (base / "prelude/z.kex").string());
+            assertEqual(files[0], (base / "prelude/z.kex").string());
+            assertEqual(files[1], (base / "prelude/a.kex").string());
+        });
+
+        it("discovers nested opt-in stdlib sources recursively", [&]() {
+            std::optional<std::string> previous;
+            if (const char* value = std::getenv("KEX_STDLIB_DIR"))
+                previous = value;
+            setenv("KEX_STDLIB_DIR", (base / "prelude").c_str(), 1);
+
+            const auto files = kex::standardLibrarySourceFiles();
+
+            if (previous) setenv("KEX_STDLIB_DIR", previous->c_str(), 1);
+            else unsetenv("KEX_STDLIB_DIR");
+
+            assertEqual(files.size(), size_t{2});
+            assertEqual(files[0],
+                        (base / "prelude/extra/deep.kex").string());
+            assertEqual(files[1],
+                        (base / "prelude/optional.kex").string());
         });
 
         it("orders the complete stdlib manifest by compilation tier", [&]() {
@@ -112,7 +146,7 @@ int main() {
             assertEqual(groups[2].size(), kex::kPreludeTier2.size());
             assertEqual(groups[3].size(), kex::kPreludeTier3.size());
             assertEqual(fs::path(groups[2].back()).filename().string(),
-                        std::string("file.kex"));
+                        std::string("filehandle.kex"));
 
             manifest.push_back((base / "manifest/undeclared.kex").string());
             bool rejected = false;
@@ -123,6 +157,34 @@ int main() {
                            std::string::npos;
             }
             assertTrue(rejected, "undeclared stdlib source should be rejected");
+        });
+
+        it("rejects malformed prelude manifest entries", [&]() {
+            bool rejected = false;
+            try {
+                (void)kex::preludeFilesFromRoot(
+                    base / "bad_manifest");
+            } catch (const std::runtime_error& error) {
+                rejected =
+                    std::string(error.what()).find(
+                        "expected a bare `using Module.Name` entry") !=
+                    std::string::npos;
+            }
+            assertTrue(rejected);
+        });
+
+        it("rejects duplicate prelude imports", [&]() {
+            bool rejected = false;
+            try {
+                (void)kex::preludeFilesFromRoot(
+                    base / "duplicate_manifest");
+            } catch (const std::runtime_error& error) {
+                rejected =
+                    std::string(error.what()).find(
+                        "duplicate prelude import") !=
+                    std::string::npos;
+            }
+            assertTrue(rejected);
         });
     });
 

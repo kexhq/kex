@@ -1,0 +1,44 @@
+type FileHandle<R, W>
+
+make FileHandle<CanRead, W> do
+  # Compatibility names matching IO-style handle operations.
+  getLine :> String?
+  let getLine = Kex.Intrinsic.FileHandle.getLine(this)
+
+  get :> String?
+  let get = Kex.Intrinsic.FileHandle.get(this)
+
+  readLine :> String?
+  let readLine = Kex.Intrinsic.FileHandle.readLine(this)
+
+  read :> String?
+  let read = Kex.Intrinsic.FileHandle.read(this)
+
+  eof? :> Bool
+  let eof? = Kex.Intrinsic.FileHandle.eof?(this)
+
+  atEnd? :> Bool
+  let atEnd? = Kex.Intrinsic.FileHandle.atEnd?(this)
+
+  feed :> Stream<String>?
+  let feed = Kex.Intrinsic.FileHandle.feed(this)
+end
+
+make FileHandle<R, CanWrite> do
+  printLine :> String -> Bool
+  let printLine(content) = Kex.Intrinsic.FileHandle.printLine(this, content)
+
+  print :> String -> Bool
+  let print(content) = Kex.Intrinsic.FileHandle.print(this, content)
+
+  writeLine :> String -> Bool
+  let writeLine(content) = Kex.Intrinsic.FileHandle.writeLine(this, content)
+
+  write :> String -> Bool
+  let write(content) = Kex.Intrinsic.FileHandle.write(this, content)
+end
+
+make FileHandle<R, W> do
+  close :> Void
+  let close = Kex.Intrinsic.FileHandle.close(this)
+end

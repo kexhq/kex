@@ -1,5 +1,6 @@
 #include "typechecker.hxx"
 #include "analyzer.hxx"
+#include "../common/type_def_utils.hxx"
 #include <functional>
 #include <set>
 #include <unordered_set>
@@ -30,7 +31,9 @@ auto TypeChecker::check(const ast::Program& program,
     m_diagnostics = &diagnostics;
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
+    m_referencedModules.clear();
     m_localModules.clear();
+    m_moduleConstructors.clear();
     m_adtVariants.clear();
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
@@ -372,12 +375,7 @@ auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     if (!def.variants) return;
 
-    // Transparent type alias: `type FilePath = String` — single bare TypeName
-    // with no variants to register, skip exhaustiveness tracking entirely.
-    if (def.variants->size() == 1) {
-        auto* tn = std::get_if<ast::TypeName>(&(*def.variants)[0]->kind);
-        if (tn) return;
-    }
+    if (kex::isTransparentTypeAlias(def)) return;
 
     std::vector<std::string> names;
     for (const auto& variant : *def.variants) {
@@ -402,12 +400,31 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
 
 auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
     for (const auto& item : mod.body) {
-        std::visit([this](const auto& node) {
+        std::visit([this, &mod](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                registerAdt(*node);
+                if (!node) return;
+                if (auto constructors = kex::typeConstructors(*node))
+                    for (const auto& constructor : *constructors)
+                        m_moduleConstructors[mod.name][constructor.name] = {
+                            node->name, constructor.arity, true};
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                registerAdtsInModule(*node);
+                if (node) registerAdtsInModule(*node);
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (!node) return;
+                for (const auto& visible : node->items)
+                    if (const auto* type =
+                            std::get_if<std::unique_ptr<ast::TypeDef>>(
+                                &visible);
+                        type && *type)
+                        if (auto constructors =
+                                kex::typeConstructors(**type))
+                            for (const auto& constructor : *constructors)
+                                m_moduleConstructors[mod.name]
+                                                    [constructor.name] = {
+                                    (*type)->name, constructor.arity,
+                                    node->isPublic};
             }
         }, item);
     }
@@ -1425,14 +1442,27 @@ auto TypeChecker::importedFunctionVisible(
             module->second.automaticImport)
             return true;
     }
+    return moduleMemberImported(function.sourceModule, function.sourceName);
+}
+
+auto TypeChecker::moduleMemberImported(const std::string& module,
+                                       const std::string& member) const -> bool {
     auto selected = [&](const ImportSelection& import) {
-        if (import.module != function.sourceModule) return false;
+        if (module != import.module &&
+            module.rfind(import.module + ".", 0) != 0)
+            return false;
+        auto selectedMember = member;
+        if (module.size() > import.module.size()) {
+            const auto rest = module.substr(import.module.size() + 1);
+            const auto dot = rest.find('.');
+            selectedMember = rest.substr(0, dot);
+        }
         if (!import.onlyNames.empty() &&
             std::find(import.onlyNames.begin(), import.onlyNames.end(),
-                      function.sourceName) == import.onlyNames.end())
+                      selectedMember) == import.onlyNames.end())
             return false;
         return std::find(import.exceptNames.begin(), import.exceptNames.end(),
-                         function.sourceName) == import.exceptNames.end();
+                         selectedMember) == import.exceptNames.end();
     };
     if (std::any_of(m_declarationImports.begin(), m_declarationImports.end(),
                     selected))
@@ -1729,6 +1759,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
             if (m_nullaryConstructors.contains(node.name))
                 return Type::named(node.name);
+            for (const auto& [module, constructors] : m_moduleConstructors) {
+                auto constructor = constructors.find(node.name);
+                if (constructor != constructors.end() &&
+                    constructor->second.arity == 0 &&
+                    moduleMemberImported(module, node.name))
+                    return Type::named(node.name);
+            }
+            if (m_importedInterfaces)
+                for (const auto& [_, module] :
+                     m_importedInterfaces->modules)
+                    if (auto exports = module.exports.find(node.name);
+                        exports != module.exports.end())
+                        for (const auto& function : exports->second)
+                            if (function.isConstructor &&
+                                function.signature.params.empty() &&
+                                importedFunctionVisible(function))
+                                return function.signature.result;
             auto type = lookupVar(node.name);
             return type ? type : Type::unknown();
         }
@@ -1976,6 +2023,47 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // Local module constructors use the same namespace syntax as
+            // module constants. Imported constructors are ordinary typed
+            // module exports and continue through checkCall below.
+            if (node.args.empty() && node.namedArgs.empty() && !node.block &&
+                node.receiver) {
+                std::function<std::optional<std::string>(const ast::Expr&)>
+                    localModulePath;
+                localModulePath = [&](const ast::Expr& receiver)
+                    -> std::optional<std::string> {
+                    if (const auto* root =
+                            std::get_if<ast::UpperIdentifier>(
+                                &receiver.kind))
+                        return root->name;
+                    const auto* segment =
+                        std::get_if<ast::MethodCall>(&receiver.kind);
+                    if (!segment || !segment->receiver ||
+                        !segment->args.empty() ||
+                        !segment->namedArgs.empty() || segment->block)
+                        return std::nullopt;
+                    auto parent = localModulePath(*segment->receiver);
+                    return parent
+                        ? std::optional<std::string>{
+                              *parent + "." + segment->method}
+                        : std::nullopt;
+                };
+                if (auto path = localModulePath(*node.receiver)) {
+                    if (auto module = m_moduleConstructors.find(*path);
+                        module != m_moduleConstructors.end())
+                        if (auto constructor =
+                                module->second.find(node.method);
+                            constructor != module->second.end()) {
+                            if (!constructor->second.isPublic &&
+                                m_currentModulePath != *path)
+                                error(expr.location,
+                                      "cannot access private name `" +
+                                          node.method + "` from " + *path);
+                            return Type::named(node.method);
+                        }
+                }
+            }
+
             // Backend interop and the private intrinsic ABI are untyped until
             // the intrinsic declaration interface supplies their signatures.
             // Never resolve these against same-named public stdlib functions.
@@ -2034,6 +2122,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             };
             auto importedPath = node.receiver
                 ? importedModulePath(*node.receiver) : std::nullopt;
+            if (importedPath && m_importedInterfaces &&
+                m_importedInterfaces->modules.count(*importedPath))
+                m_referencedModules.insert(*importedPath);
             bool isImportedNamespace = importedPath && m_importedInterfaces &&
                 m_importedInterfaces->modules.count(*importedPath) > 0;
             bool isNamespaceCall = node.receiver &&
@@ -2781,9 +2872,9 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
         if (!argNamed || argNamed->name != paramNamed->name) {
-            // A nullary ADT constructor is a refined value of its parent type:
-            // `Read` matches both the exact `Read` overload and a broader
-            // `FileModes` parameter, while `FileModes` does not match `Read`.
+            // A nullary ADT constructor is a refined value of its parent
+            // type. This relationship comes from the ADT registry rather
+            // than from any constructor spelling.
             if (argNamed && argNamed->typeArgs.empty() &&
                 paramNamed->typeArgs.empty()) {
                 auto owner = m_adtOfConstructor.find(argNamed->name);

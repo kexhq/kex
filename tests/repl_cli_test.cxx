@@ -129,14 +129,23 @@ int main() {
             char rootTemplate[] = "/tmp/kex_installed_cli_test_XXXXXX";
             const auto root = fs::path(mkdtemp(rootTemplate));
             const auto binDir = root / "bin";
-            const auto preludeDir = root / "share/kex/prelude";
+            const auto stdlibDir = root / "share/kex/stdlib";
             const auto runtimeDir = root / "share/kex/runtime";
             fs::create_directories(binDir);
-            fs::create_directories(preludeDir);
+            fs::create_directories(stdlibDir);
             fs::create_directories(runtimeDir);
             fs::copy_file(KEX_BINARY_PATH, binDir / "kex");
-            for (const auto& source : kex::preludeSourceFiles())
-                fs::copy_file(source, preludeDir / fs::path(source).filename());
+            for (const auto& source :
+                 fs::recursive_directory_iterator("src/stdlib"))
+                if (source.is_regular_file() &&
+                    source.path().extension() == ".kex") {
+                    const auto relative =
+                        fs::relative(source.path(), "src/stdlib");
+                    fs::create_directories(
+                        (stdlibDir / relative).parent_path());
+                    fs::copy_file(source.path(),
+                                  stdlibDir / relative);
+                }
             const auto buildRuntime = fs::path(KEX_BINARY_PATH).parent_path() / "runtime/beam";
             for (const auto& artifact : fs::directory_iterator(buildRuntime))
                 if (artifact.path().extension() == ".beam")
@@ -174,10 +183,11 @@ int main() {
 
         it("prints the source-level capability type of an open file", []() {
             auto out = runRepl(
+                "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"\")\n"
-                "let f = FS.File.open(\"typed.txt\", Write)\n"
+                "let f = FS.File.open(\"typed.txt\", FS.Write)\n"
                 "f.try\n"
-                "let f = FS.File.open(\"typed.txt\", Write).try\n"
+                "let f = FS.File.open(\"typed.txt\", FS.Write).try\n"
                 "f\n");
             assertTrue(
                 out.find("FileHandle<CannotRead, CanWrite>") !=
@@ -188,8 +198,9 @@ int main() {
 
         it("does not execute readable methods on a write-only handle", []() {
             auto out = runRepl(
+                "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"
-                "let writer = FS.File.open(\"typed.txt\", Write).try\n"
+                "let writer = FS.File.open(\"typed.txt\", FS.Write).try\n"
                 "writer.readLine\n"
                 "writer.getLine\n"
                 "writer.read\n");
@@ -207,7 +218,7 @@ int main() {
             auto out = runRepl(
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
-                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
                 "reader.readLine\n"
                 "reader.readLine\n");
             assertTrue(out.find("Just(\"contents\") : Option<String>") !=
@@ -319,6 +330,7 @@ int main() {
             close(fd);
 
             auto out = runBeamFile(
+                "using FS\n"
                 "main(args) do\n"
                 "  IO.printLine(FS.File.exists?(args.first.or(\"\")))\n"
                 "end\n",
@@ -331,8 +343,9 @@ int main() {
     describe("BEAM REPL — Kex Value Display", []() {
         it("renders file results and typestates like the tree REPL", []() {
             auto out = runBeamRepl(
+                "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"
-                "let f = FS.File.open(\"typed.txt\", Write)\n"
+                "let f = FS.File.open(\"typed.txt\", FS.Write)\n"
                 "let opened = f.try\n"
                 "opened\n"
                 "opened.close\n");
@@ -354,7 +367,7 @@ int main() {
             auto out = runBeamRepl(
                 "Mock.FS.File(\"optional.txt\", \"contents\")\n"
                 "FS.File.read(\"optional.txt\")\n"
-                "let reader = FS.File.open(\"optional.txt\", Read).try\n"
+                "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
                 "reader.readLine\n"
                 "reader.readLine\n");
             assertTrue(out.find("Just(\"contents\") : Option<String>") !=
@@ -365,8 +378,9 @@ int main() {
 
         it("does not execute readable methods on a write-only handle", []() {
             auto out = runBeamRepl(
+                "using FS\n"
                 "Mock.FS.File(\"typed.txt\", \"contents\")\n"
-                "let writer = FS.File.open(\"typed.txt\", Write).try\n"
+                "let writer = FS.File.open(\"typed.txt\", FS.Write).try\n"
                 "writer.readLine\n"
                 "writer.write(\"ok\")\n");
             assertTrue(out.find("error:") != std::string::npos, out);
@@ -395,11 +409,15 @@ int main() {
 
         it("keeps imported unit modules and lambda bindings live across reloads", []() {
             auto out = runBeamRepl(
+                "Units.Data.B\n"
                 "using Units.SI\n"
                 "3.kilo.watt.to(String)\n"
                 "let kilowatts = &.kilo.watt.to(String)\n"
                 "kilowatts(54)\n"
                 "kilowatts(99)\n");
+            assertTrue(out.find("=> B : DataUnit") !=
+                           std::string::npos,
+                       out);
             assertTrue(out.find("\"3000.0 W\"") != std::string::npos, out);
             assertTrue(out.find("\"54000.0 W\"") != std::string::npos, out);
             assertTrue(out.find("\"99000.0 W\"") != std::string::npos, out);

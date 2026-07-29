@@ -1,0 +1,34 @@
+# The prelude is the automatically visible part of the standard library.
+#
+# Keep this file declarative: each bare `using` names a sibling stdlib source
+# file. The toolchain expands these imports in order when it builds or loads
+# the prelude. Libraries absent from this list (for example FS and Regex) stay
+# available through an explicit `using`.
+
+using Algebra
+using Blankable
+using Console
+using Enumerable
+using Env
+using Errorable
+using Evaluator
+using FileHandle
+using HTTP
+using IO
+using Kex
+using List
+using Map
+using Math
+using Number
+using Optional
+using Parser
+using Process
+using Range
+using Stream
+using String
+using System
+using Test
+using TaggedValidation
+using Truthyable
+using Units
+using WebServer

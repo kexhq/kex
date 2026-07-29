@@ -3,6 +3,8 @@
 # The mode passed to FS.File.open determines which methods the returned
 # FileHandle exposes. Mock.FS keeps this example self-contained.
 
+using FS
+
 # Put capability requirements in helper signatures. Any readable handle can
 # call readAll; any writable handle can call writeText.
 foul readAll(file: FileHandle<CanRead, W>) -> String do
@@ -17,7 +19,7 @@ end
 # specialized handle, and `trying` supplies a recovery path.
 foul readOrMissing(path: String) -> String do
   trying do
-    let file = FS.File.open(path, Read).try
+    let file = FS.File.open(path, FS.Read).try
     let content = readAll(file)
     file.close()
     content
@@ -30,7 +32,7 @@ main do
   Mock.FS.File("file_modes.txt", "first line\nsecond line\n")
 
   # Read produces FileHandle<CanRead, CannotWrite>.
-  let reader = FS.File.open("file_modes.txt", Read).try
+  let reader = FS.File.open("file_modes.txt", FS.Read).try
   IO.printLine("read: ${readAll(reader)}")
   reader.close()
 
@@ -39,7 +41,7 @@ main do
   # writeText(reader, "not allowed")
 
   # Write produces FileHandle<CannotRead, CanWrite> and truncates the file.
-  let writer = FS.File.open("file_modes.txt", Write).try
+  let writer = FS.File.open("file_modes.txt", FS.Write).try
   writeText(writer, "rewritten\n")
   writer.close()
 
@@ -48,17 +50,17 @@ main do
   # readAll(writer)
 
   # Append is write-only but preserves the existing contents.
-  let appender = FS.File.open("file_modes.txt", Append).try
+  let appender = FS.File.open("file_modes.txt", FS.Append).try
   appender.writeLine("appended")
   appender.close()
 
   # ReadWrite exposes both sets of operations.
-  let editable = FS.File.open("file_modes.txt", ReadWrite).try
+  let editable = FS.File.open("file_modes.txt", FS.ReadWrite).try
   IO.printLine("before edit: ${readAll(editable)}")
   writeText(editable, "written through ReadWrite\n")
   editable.close()
 
-  let finalReader = FS.File.open("file_modes.txt", Read).try
+  let finalReader = FS.File.open("file_modes.txt", FS.Read).try
   IO.printLine("final: ${finalReader.read().or("")}")
   finalReader.close()
 

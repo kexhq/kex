@@ -30,6 +30,10 @@ public:
         -> const std::vector<Signature>*;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto referencedModules() const
+        -> const std::unordered_set<std::string>& {
+        return m_referencedModules;
+    }
 
 private:
     // Top-level
@@ -122,6 +126,8 @@ private:
     auto importedCandidateSignatures(const std::string& name) const
         -> std::vector<Signature>;
     auto importedFunctionVisible(const ImportedFunction& function) const -> bool;
+    auto moduleMemberImported(const std::string& module,
+                              const std::string& member) const -> bool;
 
     // Binary operator type resolution
     auto inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr& right,
@@ -170,9 +176,18 @@ private:
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    std::unordered_set<std::string> m_referencedModules;
     // Source module identities declared by the current compilation unit.
     // Local modules take precedence over package interfaces with the same name.
     std::unordered_set<std::string> m_localModules;
+    struct ModuleConstructor {
+        std::string typeName;
+        size_t arity = 0;
+        bool isPublic = true;
+    };
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, ModuleConstructor>>
+        m_moduleConstructors;
 
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;

@@ -41,6 +41,7 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     addExport("Process", "Kex.Process", "register", "register", 2);
     addExport("Process", "Kex.Process", "whereis", "whereis", 1);
     addExport("System", "Kex.System", "exit", "exit", 1);
+    addExport("Math", "Kex.Math", "PI", "PI", 0);
     addExport("Task", "Kex.Task", "start", "start", 1);
     addExport("Task", "Kex.Task", "awaitAll", "awaitAll", 1);
     addExport("Mock.FS", "Kex.Mock.FS", "File", "File", 2);
@@ -1466,6 +1467,36 @@ int main() {
             while (!actual.empty() && (actual.back() == '\n' || actual.back() == '\r'))
                 actual.pop_back();
             assertEqual(actual, std::string("42"), "double(21) should print 42");
+        });
+
+        it("preserves qualified uppercase constants on BEAM", [&erlcAvailable]() {
+            if (!erlcAvailable()) return;
+            auto out = emit(
+                "main do IO.printLine(Math.PI) end\n",
+                "e2e_math_pi");
+            std::ofstream file("/tmp/kex_e2e_math_pi.core");
+            file << out;
+            file.close();
+            int compileResult = std::system(
+                "erlc +from_core -pa runtime/beam -o /tmp "
+                "/tmp/kex_e2e_math_pi.core > /dev/null 2>&1");
+            assertEqual(compileResult, 0,
+                        "erlc should compile Math.PI");
+            FILE* pipe = popen(
+                "erl -noshell -pa runtime/beam -pa /tmp "
+                "-eval 'kex_e2e_math_pi:main(), halt()'",
+                "r");
+            assertTrue(pipe != nullptr, "popen succeeded");
+            char buffer[256] = {};
+            fgets(buffer, sizeof(buffer), pipe);
+            pclose(pipe);
+            std::string actual(buffer);
+            while (!actual.empty() &&
+                   (actual.back() == '\n' ||
+                    actual.back() == '\r'))
+                actual.pop_back();
+            assertTrue(actual.rfind("3.14159", 0) == 0,
+                       "Math.PI must remain numeric on BEAM");
         });
     });
 

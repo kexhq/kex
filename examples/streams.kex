@@ -1,5 +1,7 @@
 # Streams (pure, lazy) and Feeds (foul, stateful)
 
+using FS
+
 # Pure streams — infinite lazy sequences
 let naturals = Stream.Sequence(from: 0) { |n| n + 1 }
 let evens = Stream.Sequence(from: 0) { |n| n + 2 }
@@ -36,7 +38,7 @@ foul module FileReader do
   end
 
   let processWithStream(path: String) -> Result<[String], IOError> do
-    let handle = FS.File.open(path, Read).try
+    let handle = FS.File.open(path, FS.Read).try
     let lines = handle.feed
     let errors = lines
       .filter(&.contains?("ERROR"))

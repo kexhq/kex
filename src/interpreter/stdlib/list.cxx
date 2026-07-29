@@ -156,7 +156,7 @@ auto Evaluator::registerListBuiltins() -> void {
     });
 
     // Kex.Intrinsic.Range.items — the range's elements as a real list.
-    // Backs the prelude's Range `items` (src/prelude/range.kex).
+    // Backs the prelude's Range `items` (src/stdlib/range.kex).
     defineIntrinsic("Range::items", [rangeToList](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))

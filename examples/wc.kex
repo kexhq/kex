@@ -1,6 +1,8 @@
 # Word count — mimics wc(1).
 # Usage: kex examples/wc.kex file1 file2 ...
 
+using FS
+
 # Returns [lineCount, wordCount, byteCount] for a single file.
 # Missing files produce zeros rather than errors.
 foul wordCount(path: String) -> [Int] do

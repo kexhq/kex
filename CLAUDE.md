@@ -39,7 +39,7 @@ make test-wasm    # + runs the interpreter test suite via Node
   - `src/interpreter/` — tree-walk interpreter, fiber/scheduler process runtime, stdlib (stdlib/)
   - `src/ir/` — lowering IR + IR→Core Erlang emitter (ir.hxx, lower, emit_core)
   - `src/common/` — shared helpers (color, completion, prelude_loader)
-  - `src/prelude/` — prelude `.kex` sources
+  - `src/stdlib/` — standard-library `.kex` sources; `prelude.kex` selects the automatically visible subset
   - `src/main.cxx` — CLI entry point
 
 ## Code Style

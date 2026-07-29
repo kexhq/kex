@@ -5,6 +5,7 @@
 #include "../parser/parser.hxx"
 #include "../semantic/imported_interfaces.hxx"
 #include "prelude_loader.hxx"
+#include "type_def_utils.hxx"
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -55,7 +56,7 @@ inline auto preludeRegistry(const std::string& runtimeDir)
         if (!errors.empty())
             throw std::runtime_error("invalid prebuilt standard library: " +
                                      errors.front().message);
-        const auto files = preludeSourceFiles();
+        const auto files = standardLibraryArtifactSourceFiles();
         if (files.empty())
             throw std::runtime_error(
                 "invalid prebuilt standard library: source package is missing");
@@ -274,11 +275,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             return "";
         };
 
-        auto collectMakeAnnotations = [&](const ast::MakeDef& make) {
+        auto collectMakeAnnotations = [&](const ast::MakeDef& make,
+                                          const std::string& owner = "") {
             auto typeName = makeTargetName(make);
-            auto& module = ifaces.modules[typeName];
-            module.sourceModule = typeName;
-            module.backendModule = backendModuleFor(typeName);
+            const auto sourceModule = owner.empty() ? typeName : owner;
+            auto& module = ifaces.modules[sourceModule];
+            module.sourceModule = sourceModule;
+            module.backendModule = backendModuleFor(sourceModule);
             module.automaticImport = automaticImport;
             kex::semantic::TypePtr selfType;
             std::unordered_map<std::string, kex::semantic::TypePtr> tvars;
@@ -286,13 +289,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 selfType = resolveSourceType(*make.target, tvars);
             for (const auto& item : make.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) addReceiverSig(typeName, annotationToSignature(**ann, selfType, tvars));
+                    if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) ifaces.modules[typeName].exports.try_emplace((*fn)->name);
                 if (const auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
                     if (*vb) for (const auto& vi : (*vb)->items) {
                         if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&vi))
-                            if (*ann) addReceiverSig(typeName, annotationToSignature(**ann, selfType, tvars));
+                            if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
                         if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                             if (*fn) ifaces.modules[typeName].exports.try_emplace((*fn)->name);
                     }
@@ -300,12 +303,57 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         };
 
         auto collectTypeAlias = [&](const ast::TypeDef& td) {
-            if (td.variants && td.variants->size() == 1 && (*td.variants)[0]) {
+            if (kex::isTransparentTypeAlias(td)) {
                 std::unordered_map<std::string, kex::semantic::TypePtr> noVars;
                 auto resolved = resolveSourceType(*(*td.variants)[0], noVars, &typeAliases);
                 if (!std::holds_alternative<kex::semantic::NamedType>(resolved->kind) ||
                     std::get<kex::semantic::NamedType>(resolved->kind).name != td.name)
                     typeAliases[td.name] = resolved;
+            }
+        };
+
+        auto collectModuleConstructors = [&](const std::string& moduleName,
+                                             const ast::TypeDef& td) {
+            auto constructors = kex::typeConstructors(td);
+            if (!constructors) return;
+            for (const auto& constructor : *constructors) {
+                kex::semantic::ImportedFunction function;
+                function.sourceName = constructor.name;
+                function.sourceModule = moduleName;
+                function.isConstructor = true;
+                function.signature.name = constructor.name;
+                function.signature.result =
+                    kex::semantic::Type::named(constructor.name);
+                if (td.variants)
+                    for (const auto& variant : *td.variants) {
+                        const auto* generic =
+                            variant
+                            ? std::get_if<ast::GenericType>(
+                                  &variant->kind)
+                            : nullptr;
+                        if (!generic || generic->name.parts.empty() ||
+                            generic->name.parts.back() != constructor.name)
+                            continue;
+                        std::unordered_map<std::string,
+                                           kex::semantic::TypePtr>
+                            vars;
+                        for (const auto& arg : generic->args)
+                            function.signature.params.push_back(
+                                resolveSourceType(*arg, vars,
+                                                  &typeAliases));
+                        break;
+                    }
+                if (directBackendOwnership) {
+                    function.backendModule =
+                        backendModuleFor(moduleName);
+                    function.backendFunction = constructor.name;
+                    function.backendArity =
+                        static_cast<int>(
+                            function.signature.params.size());
+                }
+                ifaces.modules[moduleName]
+                    .exports[constructor.name]
+                    .push_back(std::move(function));
             }
         };
 
@@ -328,11 +376,30 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                             addModuleSig(mod.name, sig);
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
-                    if (*make) collectMakeAnnotations(**make);
+                    if (*make) collectMakeAnnotations(**make, mod.name);
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
                     if (*nested) collectModule(**nested);
                 if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item))
-                    if (*td) collectTypeAlias(**td);
+                    if (*td) {
+                        collectTypeAlias(**td);
+                        collectModuleConstructors(mod.name, **td);
+                    }
+                if (const auto* visibility =
+                        std::get_if<std::unique_ptr<
+                            ast::VisibilityBlock>>(&item);
+                    visibility && *visibility &&
+                    (*visibility)->isPublic)
+                    for (const auto& visible :
+                         (*visibility)->items) {
+                        if (const auto* td =
+                                std::get_if<std::unique_ptr<
+                                    ast::TypeDef>>(&visible);
+                            td && *td) {
+                            collectTypeAlias(**td);
+                            collectModuleConstructors(mod.name,
+                                                      **td);
+                        }
+                    }
             }
         };
 

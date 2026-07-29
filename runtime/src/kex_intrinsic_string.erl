@@ -2,7 +2,7 @@
 %% A Kex String is a UTF-8 binary; a Char is a bare codepoint integer. Thin
 %% wrappers over the `string`/`unicode` BIFs (which preserve the binary
 %% representation); the typed string stdlib lives in the Kex prelude
-%% (src/prelude/string.kex). Receiver is the first argument.
+%% (src/stdlib/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2]).

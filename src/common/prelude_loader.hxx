@@ -2,11 +2,16 @@
 
 #include "../semantic/db.hxx"
 #include <algorithm>
+#include <cctype>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <optional>
+#include <stdexcept>
 #include <sstream>
 #include <string>
+#include <string_view>
+#include <unordered_set>
 #include <vector>
 #if defined(__APPLE__)
 #include <mach-o/dyld.h>
@@ -35,43 +40,15 @@ inline auto executableDirectory() -> std::filesystem::path {
     return {};
 }
 
-// Returns the first available prelude source set in deterministic order.
-// Native builds search beside the executable for installed and development
-// layouts; wasm embeds the same files at /prelude. Keeping discovery here
-// prevents consumers from baking fallback and ordering rules into the compiler.
-inline auto preludeSourceFiles() -> std::vector<std::string> {
-    std::vector<std::string> roots;
+// All standard-library sources share one root. `prelude.kex` is the manifest
+// that selects the automatically visible subset; every other module remains
+// opt-in through `using`.
+inline auto standardLibraryRootCandidates()
+    -> std::vector<std::filesystem::path> {
+    std::vector<std::filesystem::path> candidates;
     if (const char* configured = std::getenv("KEX_STDLIB_DIR");
         configured && *configured)
-        roots.emplace_back(configured);
-    if (const auto executableDir = executableDirectory(); !executableDir.empty()) {
-        roots.push_back((executableDir / "../share/kex/prelude").lexically_normal().string());
-        roots.push_back((executableDir / "../src/prelude").lexically_normal().string());
-    }
-#ifdef KEX_PRELUDE_DIR
-    roots.emplace_back(KEX_PRELUDE_DIR);
-#endif
-    roots.emplace_back("/prelude");
-
-    for (const auto& root : roots) {
-        std::error_code ec;
-        std::vector<std::string> files;
-        for (const auto& entry : std::filesystem::directory_iterator(root, ec))
-            if (entry.path().extension() == ".kex")
-                files.push_back(entry.path().string());
-        if (!ec && !files.empty()) {
-            std::sort(files.begin(), files.end());
-            return files;
-        }
-    }
-    return {};
-}
-
-// Ordinary standard-library modules are opt-in through `using`, unlike the
-// prelude. Return every available module root in preference order so project
-// roots can be placed before these by the caller.
-inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
-    std::vector<std::filesystem::path> candidates;
+        candidates.emplace_back(configured);
     if (const char* configured = std::getenv("KEX_LIBRARY_DIR");
         configured && *configured)
         candidates.emplace_back(configured);
@@ -81,38 +58,153 @@ inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
         candidates.push_back(
             (executableDir / "../src/stdlib").lexically_normal());
     }
+#ifdef KEX_STDLIB_DIR
+    candidates.emplace_back(KEX_STDLIB_DIR);
+#endif
 #ifdef KEX_STDLIB_MODULE_DIR
     candidates.emplace_back(KEX_STDLIB_MODULE_DIR);
 #endif
     candidates.emplace_back("/stdlib");
 
-    std::vector<std::string> roots;
+    std::vector<std::filesystem::path> roots;
     for (const auto& candidate : candidates) {
         std::error_code ec;
         if (!std::filesystem::is_directory(candidate, ec) || ec) continue;
-        const auto normalized = candidate.lexically_normal().string();
+        const auto normalized = candidate.lexically_normal();
         if (std::find(roots.begin(), roots.end(), normalized) == roots.end())
             roots.push_back(normalized);
     }
     return roots;
 }
 
+inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
+    std::vector<std::string> roots;
+    for (const auto& root : standardLibraryRootCandidates())
+        roots.push_back(root.string());
+    return roots;
+}
+
+inline auto preludeManifestPath(const std::filesystem::path& root)
+    -> std::optional<std::filesystem::path> {
+    auto manifest = root / "prelude.kex";
+    std::error_code ec;
+    if (std::filesystem::is_regular_file(manifest, ec) && !ec) return manifest;
+    return std::nullopt;
+}
+
+inline auto preludeFilesFromRoot(const std::filesystem::path& root)
+    -> std::vector<std::string> {
+    auto manifest = preludeManifestPath(root);
+    if (!manifest) return {};
+
+    std::ifstream input(*manifest);
+    if (!input)
+        throw std::runtime_error("cannot read prelude manifest: " +
+                                 manifest->string());
+    std::vector<std::string> files;
+    std::unordered_set<std::string> importedModules;
+    std::string line;
+    size_t lineNumber = 0;
+    while (std::getline(input, line)) {
+        ++lineNumber;
+        const auto first = line.find_first_not_of(" \t");
+        if (first == std::string::npos || line[first] == '#') continue;
+        constexpr std::string_view prefix = "using ";
+        auto fail = [&](const std::string& message) {
+            throw std::runtime_error(
+                manifest->string() + ":" +
+                std::to_string(lineNumber) + ": " + message);
+        };
+        if (line.compare(first, prefix.size(), prefix) != 0)
+            fail("expected a bare `using Module.Name` entry");
+        auto module = line.substr(first + prefix.size());
+        const auto last = module.find_last_not_of(" \t\r");
+        module.resize(last == std::string::npos ? 0 : last + 1);
+        if (module.empty() || module.find_first_of(" ,") != std::string::npos)
+            fail("expected exactly one module name after `using`");
+        if (!importedModules.insert(module).second)
+            fail("duplicate prelude import: " + module);
+
+        std::filesystem::path relative;
+        std::stringstream segments(module);
+        std::string segment;
+        while (std::getline(segments, segment, '.')) {
+            if (segment.empty() ||
+                !std::isupper(
+                    static_cast<unsigned char>(segment.front())) ||
+                !std::all_of(
+                    segment.begin(), segment.end(),
+                    [](unsigned char c) {
+                        return std::isalnum(c) || c == '_';
+                    }))
+                fail("invalid module name: " + module);
+            std::transform(segment.begin(), segment.end(), segment.begin(),
+                           [](unsigned char c) {
+                               return static_cast<char>(std::tolower(c));
+                           });
+            relative /= segment;
+        }
+        relative += ".kex";
+        auto source = root / relative;
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(source, ec) || ec)
+            throw std::runtime_error(
+                "prelude imports missing standard-library source: " +
+                module + " (" + source.string() + ")");
+        files.push_back(source.string());
+    }
+    return files;
+}
+
+// Returns the sources imported by the first available `prelude.kex` manifest.
+// Manifest order is preserved because it is the declaration order users see.
+inline auto preludeSourceFiles() -> std::vector<std::string> {
+    for (const auto& root : standardLibraryRootCandidates()) {
+        if (preludeManifestPath(root))
+            return preludeFilesFromRoot(root);
+    }
+    return {};
+}
+
 // Returns the first available opt-in standard-library source set. This mirrors
-// preludeSourceFiles(): installed layouts win over development fallbacks, and
-// a module is never indexed twice merely because both layouts exist.
+// preludeSourceFiles(), excluding both the manifest and everything it imports.
 inline auto standardLibrarySourceFiles() -> std::vector<std::string> {
-    for (const auto& root : standardLibraryModuleRoots()) {
+    for (const auto& rootString : standardLibraryModuleRoots()) {
+        const auto root = std::filesystem::path(rootString);
+        if (!preludeManifestPath(root)) continue;
         std::error_code ec;
         std::vector<std::string> files;
-        for (const auto& entry : std::filesystem::directory_iterator(root, ec))
-            if (entry.path().extension() == ".kex")
+        std::unordered_set<std::string> automatic;
+        for (const auto& path : preludeFilesFromRoot(root))
+            automatic.insert(
+                std::filesystem::path(path).lexically_normal().string());
+        for (const auto& entry :
+             std::filesystem::recursive_directory_iterator(root, ec))
+            if (entry.path().extension() == ".kex" &&
+                entry.path().filename() != "prelude.kex" &&
+                !automatic.contains(entry.path().lexically_normal().string()))
                 files.push_back(entry.path().string());
-        if (!ec && !files.empty()) {
+        if (!ec) {
             std::sort(files.begin(), files.end());
             return files;
         }
     }
     return {};
+}
+
+// Sources compiled into the installed stdlib artifact: the manifest-selected
+// prelude plus opt-in modules stored directly at the stdlib root. Nested
+// library modules remain independently loadable source dependencies.
+inline auto standardLibraryArtifactSourceFiles()
+    -> std::vector<std::string> {
+    auto files = preludeSourceFiles();
+    if (files.empty()) return {};
+    const auto root =
+        std::filesystem::path(files.front()).parent_path();
+    for (const auto& source : standardLibrarySourceFiles())
+        if (std::filesystem::path(source).parent_path() == root)
+            files.push_back(source);
+    return files;
 }
 
 inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
@@ -123,18 +215,14 @@ inline auto isPreludeSourceFile(const std::string& filePath) -> bool {
     });
 }
 
-// Indexes every `.kex` file directly inside an explicit directory into `db`.
-// The wasm REPL uses this form for its embedded /prelude tree; native callers
-// use loadDiscoveredPrelude below so they share the standard discovery order.
+// Indexes the prelude selected by an explicit stdlib root into `db`.
 inline auto loadPrelude(kex::semantic::SemanticDB& db, const std::string& dir) -> void {
-    std::error_code ec;
-    for (const auto& entry : std::filesystem::directory_iterator(dir, ec)) {
-        if (entry.path().extension() != ".kex") continue;
-        std::ifstream file(entry.path());
+    for (const auto& filePath : preludeFilesFromRoot(dir)) {
+        std::ifstream file(filePath);
         if (!file.is_open()) continue;
         std::ostringstream contents;
         contents << file.rdbuf();
-        db.updateFile(entry.path().string(), contents.str());
+        db.updateFile(filePath, contents.str());
     }
 }
 

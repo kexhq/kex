@@ -111,7 +111,13 @@ auto SemanticDB::exportsFor(const std::string& moduleName) const -> std::vector<
 auto SemanticDB::hasModule(const std::string& moduleName) const -> bool {
     for (const auto& [_, state] : m_files)
         for (const auto& symbol : state.symbols)
-            if (symbol.kind == SymbolKind::Module && symbol.name == moduleName) return true;
+            if (symbol.kind == SymbolKind::Module) {
+                const auto qualified =
+                    symbol.module.empty()
+                        ? symbol.name
+                        : symbol.module + "." + symbol.name;
+                if (qualified == moduleName) return true;
+            }
     return false;
 }
 
@@ -131,8 +137,13 @@ auto SemanticDB::isModuleLoading(const std::string& moduleName,
         auto it = m_files.find(path);
         if (it == m_files.end()) continue;
         for (const auto& sym : it->second.symbols)
-            if (sym.kind == SymbolKind::Module && sym.name == moduleName)
-                return true;
+            if (sym.kind == SymbolKind::Module) {
+                const auto qualified =
+                    sym.module.empty()
+                        ? sym.name
+                        : sym.module + "." + sym.name;
+                if (qualified == moduleName) return true;
+            }
     }
     return false;
 }

@@ -4,8 +4,7 @@ BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
-STDLIBDIR ?= $(PREFIX)/share/kex/prelude
-KEXLIBDIR ?= $(PREFIX)/share/kex/stdlib
+STDLIBDIR ?= $(PREFIX)/share/kex/stdlib
 
 WASM_BUILD_DIR = build-wasm
 
@@ -278,23 +277,20 @@ install:
 	@test -x "$(KEX)" || { echo "Missing $(KEX). Run 'make build' first."; exit 1; }
 	@mkdir -p "$(BINDIR)"
 	@mkdir -p "$(STDLIBDIR)"
-	@mkdir -p "$(KEXLIBDIR)"
 	@install -m 755 "$(KEX)" "$(BINDIR)/kex"
-	@install -m 644 src/prelude/*.kex "$(STDLIBDIR)/"
-	@cp -R src/stdlib/. "$(KEXLIBDIR)/"
+	@cp -R src/stdlib/. "$(STDLIBDIR)/"
 	@if [ -d "$(BUILD_DIR)/runtime/beam" ]; then \
 		mkdir -p "$(PREFIX)/share/kex/runtime"; \
 		install -m 644 "$(BUILD_DIR)"/runtime/beam/*.beam "$(PREFIX)/share/kex/runtime/"; \
 	fi
-	@echo "Installed kex to $(BINDIR), prelude to $(STDLIBDIR), and modules to $(KEXLIBDIR)"
+	@echo "Installed kex to $(BINDIR) and standard library to $(STDLIBDIR)"
 
 uninstall:
 	@rm -f "$(BINDIR)/kex"
-	@rm -f "$(STDLIBDIR)"/*.kex
-	@rm -rf "$(KEXLIBDIR)"
+	@rm -rf "$(STDLIBDIR)"
 	@rm -f "$(PREFIX)/share/kex/runtime"/*.beam
 	@rmdir "$(STDLIBDIR)" 2>/dev/null || true
-	@echo "Removed kex from $(BINDIR), prelude from $(STDLIBDIR), and modules from $(KEXLIBDIR)"
+	@echo "Removed kex from $(BINDIR) and standard library from $(STDLIBDIR)"
 
 clean:
 	@rm -rf "$(BUILD_DIR)" "$(WASM_BUILD_DIR)" packages/kex/dist

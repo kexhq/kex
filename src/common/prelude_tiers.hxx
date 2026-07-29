@@ -14,14 +14,15 @@ namespace kex {
 inline constexpr std::array<std::string_view, 13> kPreludeTier0 = {
     "algebra.kex", "console.kex", "errorable.kex", "io.kex",
     "kex.kex", "math.kex", "optional.kex", "process.kex",
-    "range.kex", "stream.kex", "system.kex", "test.kex", "validation.kex",
+    "range.kex", "stream.kex", "system.kex", "test.kex",
+    "taggedvalidation.kex",
 };
 inline constexpr std::array<std::string_view, 8> kPreludeTier1 = {
     "blankable.kex", "env.kex", "http.kex", "number.kex",
-    "parser.kex", "string.kex", "truthyable.kex", "web_server.kex",
+    "parser.kex", "string.kex", "truthyable.kex", "webserver.kex",
 };
 inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
-    "enumerable.kex", "evaluator.kex", "file.kex",
+    "enumerable.kex", "evaluator.kex", "filehandle.kex",
 };
 inline constexpr std::array<std::string_view, 3> kPreludeTier3 = {
     "list.kex", "map.kex", "units.kex",

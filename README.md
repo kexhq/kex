@@ -394,7 +394,7 @@ make parse          # Parse all examples
 make repl           # Start the interactive REPL
 make run F=file     # Run a .kex file (type-checks first; use --no-check to skip)
 make check F=file         # Run semantic analysis only
-make check-prelude        # Type-check all src/prelude/*.kex files
+make check-prelude        # Type-check the sources selected by src/stdlib/prelude.kex
 make install              # Install build/kex to /usr/local/bin/kex
 make uninstall      # Remove the installed binary
 make clean          # Remove build artifacts
@@ -430,7 +430,7 @@ src/
   ast/          AST node types
   semantic/     Scope resolution, purity checking, type checking
   interpreter/  Tree-walk interpreter
-  prelude/      Kex-language specs for the built-in prelude (documented with RDoc-style comments)
+  stdlib/       Kex standard library; prelude.kex selects the automatically visible subset
   main.cxx      CLI entry point
 
 examples/       Language showcase files

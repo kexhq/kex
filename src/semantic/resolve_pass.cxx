@@ -184,6 +184,60 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
             context.resize(dot);
         }
     }
+
+    // Packaged and prelude-derived interfaces may be available without a
+    // corresponding source module in the resolver roots. `using` still has
+    // to introduce their exported names for this pass, just as it does for a
+    // source-backed module.
+    if ((!m_db || !m_db->hasModule(resolved)) && m_imports) {
+        auto imported = m_imports->modules.find(requested);
+        if (imported != m_imports->modules.end()) {
+            const auto& exports = imported->second.exports;
+            for (const auto& name : onlyNames)
+                if (!exports.count(name))
+                    error(loc, "module " + requested + " has no name `" + name + "`");
+
+            const bool explicitImport = !onlyNames.empty();
+            for (const auto& [name, _] : exports) {
+                if (!onlyNames.empty()
+                    && std::find(onlyNames.begin(), onlyNames.end(), name)
+                        == onlyNames.end())
+                    continue;
+                if (std::find(exceptNames.begin(), exceptNames.end(), name)
+                    != exceptNames.end())
+                    continue;
+
+                ImportOrigin* previous = nullptr;
+                for (auto it = m_importScopes.rbegin();
+                     it != m_importScopes.rend();
+                     ++it) {
+                    if (auto found = it->find(name); found != it->end()) {
+                        previous = &found->second;
+                        break;
+                    }
+                }
+                if (previous && previous->module != requested) {
+                    if (explicitImport && !previous->explicitImport) {
+                        *previous = {requested, true};
+                    } else if (!explicitImport && previous->explicitImport) {
+                        continue;
+                    } else {
+                        error(loc, "ambiguous name `" + name
+                                   + "`, imported from both `"
+                                   + previous->module + "` and `" + requested
+                                   + "`");
+                        continue;
+                    }
+                } else if (!previous) {
+                    m_importScopes.back()[name] =
+                        {requested, explicitImport};
+                }
+                defineLocal(name);
+            }
+            if (alias) defineLocal(*alias);
+            return;
+        }
+    }
     if (!m_db || !m_db->hasModule(resolved)) {
         warning(loc, "module not found in source roots: " + requested);
         return;
@@ -301,15 +355,24 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 }
             }
         }
+        else if constexpr (std::is_same_v<T, ast::UpperIdentifier>) {
+            if (!isKnown(node.name)) {
+                auto hint = suggest(node.name);
+                std::string msg =
+                    "Undefined constructor or type: `" + node.name + "`";
+                if (!hint.empty())
+                    msg += " — did you mean `" + hint + "`?";
+                error(expr.location, msg);
+            } else {
+                recordRef(node.name, expr.location);
+            }
+        }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
             for (const auto& value : node.values)
                 if (value) resolveExpr(*value);
         }
         else if constexpr (std::is_same_v<T, ast::FunctionCall>) {
-            // Uppercase names are constructors (Just, Ok, Error…) — the
-            // TypeChecker validates them; skip undefined check here.
-            if (!node.name.empty()
-                    && std::islower(static_cast<unsigned char>(node.name[0]))) {
+            if (!node.name.empty()) {
                 if (!isKnown(node.name)) {
                     auto hint = suggest(node.name);
                     std::string msg = "Undefined function: `" + node.name + "`";
@@ -338,7 +401,16 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 if (value) resolveExpr(*value);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
-            if (node.receiver) resolveExpr(*node.receiver);
+            if (node.receiver) {
+                // An uppercase receiver is a qualified namespace root, not a
+                // bare constructor reference. Module/member validation is
+                // handled by the typechecker from source/import metadata.
+                // This structural rule also covers foreign namespaces
+                // without reserving any particular spelling here.
+                if (!std::holds_alternative<ast::UpperIdentifier>(
+                        node.receiver->kind))
+                    resolveExpr(*node.receiver);
+            }
             for (const auto& arg : node.args)
                 if (arg) resolveExpr(*arg);
             for (const auto& [_, arg] : node.namedArgs)
@@ -522,7 +594,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             resolveBody(node.rescue.catchAllBody);
             if (node.rescue.inlineReturnExpr) resolveExpr(*node.rescue.inlineReturnExpr);
         }
-        // Literals, UpperIdentifier, ThisExpr, BreakExpr, NextExpr,
+        // Literals, ThisExpr, BreakExpr, NextExpr,
         // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve
     }, expr.kind);
 }
@@ -578,6 +650,11 @@ auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void
 }
 
 auto ResolvePass::isKnown(const std::string& name) const -> bool {
+    // Names brought into scope by `using` remain valid even though their
+    // definitions live in another module.
+    for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
+        if (it->count(name)) return true;
+    }
     // Local scope stack (innermost first)
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it) {
         if (it->count(name)) return true;
@@ -597,7 +674,16 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
             if (auto it = m_imports->modules.find(mod); it != m_imports->modules.end())
                 if (it->second.exports.count(fn)) return true;
         } else {
+            // Module names are valid namespace roots in qualified
+            // expressions, regardless of whether their members are imported
+            // unqualified.
+            if (m_imports->modules.count(name)) return true;
             if (m_imports->receiverFunctions.count(name)) return true;
+            for (const auto& adt : m_imports->adts)
+                if (std::find(adt.constructors.begin(),
+                              adt.constructors.end(),
+                              name) != adt.constructors.end())
+                    return true;
             for (const auto& [_, mod] : m_imports->modules) {
                 if (!mod.automaticImport) continue;
                 if (mod.exports.count(name)) return true;

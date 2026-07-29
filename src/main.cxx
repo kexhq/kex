@@ -806,11 +806,13 @@ auto collectUsingModules(const kex::ast::Program &program) -> std::vector<std::s
 
 struct LoadedDep {
   std::unique_ptr<std::string> source;
+  std::unique_ptr<std::string> path;
   std::unique_ptr<kex::ast::Program> program;
 };
 
 auto resolveBeamDeps(kex::ast::Program &program,
-                     const std::vector<std::string> &roots)
+                     const std::vector<std::string> &roots,
+                     const std::unordered_set<std::string> &qualifiedModules = {})
     -> std::vector<LoadedDep> {
   std::vector<LoadedDep> deps;
   std::unordered_set<std::string> loaded;
@@ -818,18 +820,23 @@ auto resolveBeamDeps(kex::ast::Program &program,
 
   std::function<void(const kex::ast::Program &)> resolve =
       [&](const kex::ast::Program &prog) {
-    for (const auto &modName : collectUsingModules(prog)) {
+    auto modules = collectUsingModules(prog);
+    modules.insert(modules.end(),
+                   qualifiedModules.begin(), qualifiedModules.end());
+    for (const auto &modName : modules) {
       auto resolved = resolver.resolve(modName);
       if (!resolved) continue;
       if (!loaded.insert(resolved->path).second) continue;
 
-      auto src = std::make_unique<std::string>(readFile(resolved->path));
-      kex::Lexer lexer(std::string(*src), resolved->path);
-      kex::Parser parser(lexer.tokenizeAll(), resolved->path);
+      auto path = std::make_unique<std::string>(resolved->path);
+      auto src = std::make_unique<std::string>(readFile(*path));
+      kex::Lexer lexer(std::string(*src), *path);
+      kex::Parser parser(lexer.tokenizeAll(), *path);
       auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
       if (parser.diagnostics().empty()) {
         resolve(*depProg);
-        deps.push_back({std::move(src), std::move(depProg)});
+        deps.push_back(
+            {std::move(src), std::move(path), std::move(depProg)});
       }
     }
   };
@@ -1022,6 +1029,18 @@ auto compilePreludeCore(const std::string &dir,
     return false;
   }
   auto tierGroups = kex::groupPreludeSourcesByTier(files);
+  const auto stdlibRoot =
+      std::filesystem::path(files.front()).parent_path();
+  auto optInFiles = kex::standardLibrarySourceFiles();
+  optInFiles.erase(
+      std::remove_if(
+          optInFiles.begin(), optInFiles.end(),
+          [&](const auto &file) {
+            return std::filesystem::path(file).parent_path() !=
+                   stdlibRoot;
+          }),
+      optInFiles.end());
+  files.insert(files.end(), optInFiles.begin(), optInFiles.end());
   // Track item index boundaries per tier: tierBounds[t] = index of first
   // item belonging to tier t.  tierBounds[4] = total item count.
   std::array<size_t, 5> tierBounds{};
@@ -1035,6 +1054,14 @@ auto compilePreludeCore(const std::string &dir,
         if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
           merged.items.push_back(std::move(item));
     }
+  }
+  for (const auto &f : optInFiles) {
+    kex::Lexer lex(readFile(f), f);
+    kex::Parser parser(lex.tokenizeAll(), f);
+    auto prog = parser.parseProgram();
+    for (auto &item : prog.items)
+      if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+        merged.items.push_back(std::move(item));
   }
   tierBounds[4] = merged.items.size();
   try {
@@ -1097,12 +1124,24 @@ auto compilePreludeCore(const std::string &dir,
       }
       builtModules->push_back(std::move(built));
     }
+    const auto automaticInterfaces =
+        kex::sourcePreludeSemanticInterfaces();
     for (size_t i = 1; i < builtModules->size(); i++) {
       kex::beam::KexiCompanion companion;
       companion.beamAtom = (*builtModules)[i].emitted.moduleName;
       companion.relativePath = companion.beamAtom + ".beam";
       (*builtModules)[0].interface.metadata.companions.push_back(
           std::move(companion));
+      const auto& sourceModule =
+          (*builtModules)[i].interface.metadata.sourceModule;
+      const auto automatic =
+          automaticInterfaces.modules.find(sourceModule);
+      if (!sourceModule.empty() &&
+          automatic != automaticInterfaces.modules.end() &&
+          automatic->second.automaticImport)
+        (*builtModules)[0]
+            .interface.metadata.package.automaticImports.push_back(
+                sourceModule);
     }
   } catch (const kex::ir::LowerError &e) {
     std::cerr << "error: prelude: " << e.what() << "\n";
@@ -1331,7 +1370,7 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
-      // Compile the Kex prelude (src/prelude/*.kex) into kex_prelude.core +
+      // Compile the sources selected by src/stdlib/prelude.kex into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
       {"build-prelude", required_argument, nullptr, 1001},
@@ -1987,9 +2026,10 @@ int main(int argc, char *argv[]) {
                       std::unique_ptr<kex::ast::MainBlock>>(item))
                 semanticProgram.items.push_back(std::move(item));
           }
-          auto semanticDeps = resolveBeamDeps(
-              semanticProgram, kex::standardLibraryModuleRoots());
-          (void)semanticDeps;
+          // Installed stdlib modules already have a typed source interface.
+          // Keep them external here: merging their source into the replay
+          // would make the local module shell shadow that interface and erase
+          // refined results such as FileHandle<CannotRead, CanWrite>.
           kex::semantic::Analyzer semanticAnalyzer(
               &preludeSemanticInterfaces());
           if (!semanticAnalyzer.analyze(semanticProgram)) {
@@ -2070,11 +2110,27 @@ int main(int argc, char *argv[]) {
             }
           }
           // Source-module imports in a REPL expression need the same
-          // dependency expansion as `kex -R file.kex`.  Without this,
-          // `using Units.SI` parses but its postfix functions are never
-          // lowered into the transient session module.
+          // dependency expansion as `kex -R file.kex`, for both `using` and
+          // qualified access such as `Units.SI.Meter`.
+          kex::semantic::Analyzer replDependencyAnalysis(
+              &preludeSemanticInterfaces());
+          (void)replDependencyAnalysis.analyze(program);
+          auto replQualifiedModules =
+              replDependencyAnalysis.referencedModules();
+          for (auto it = replQualifiedModules.begin();
+               it != replQualifiedModules.end();) {
+            const auto imported =
+                preludeSemanticInterfaces().modules.find(*it);
+            if (imported !=
+                    preludeSemanticInterfaces().modules.end() &&
+                imported->second.automaticImport)
+              it = replQualifiedModules.erase(it);
+            else
+              ++it;
+          }
           auto replDeps = resolveBeamDeps(
-              program, kex::standardLibraryModuleRoots());
+              program, kex::standardLibraryModuleRoots(),
+              replQualifiedModules);
           (void)replDeps;
           auto extMods = mergeExternalModules(
               preludeExternalModules(), kexiRegistry.buildExternalModules());
@@ -2555,7 +2611,8 @@ int main(int argc, char *argv[]) {
       }
       if (source.substr(0, 7) == "module " || source.substr(0, 5) == "type " ||
           source.substr(0, 7) == "record " || source.substr(0, 5) == "make " ||
-          source.substr(0, 12) == "foul module ") {
+          source.substr(0, 12) == "foul module " ||
+          source.substr(0, 6) == "using ") {
         isFuncDef = true;
       }
 
@@ -2582,8 +2639,10 @@ int main(int argc, char *argv[]) {
           replAccumSource += source + "\n";
           replDb.updateFile("<repl>", replAccumSource);
           g_currentMakeTarget.clear(); // block is complete
+          const bool isImport = source.rfind("using ", 0) == 0;
           std::cout << kex::color::apply(kex::color::gray) << "=> "
-                    << kex::color::apply(kex::color::reset) << "defined "
+                    << kex::color::apply(kex::color::reset)
+                    << (isImport ? "using " : "defined ")
                     << replDefinitionName(source) << "\n";
         } else {
           // Wrap in main for expression evaluation
@@ -2856,8 +2915,9 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
-    std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
-    if (mode == "compile" || mode == "emit-core") {
+  std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
+  std::vector<LoadedDep> beamDeps;
+  if (mode == "compile" || mode == "emit-core") {
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
       std::string tempDir;
@@ -2916,11 +2976,29 @@ int main(int argc, char *argv[]) {
       }
 
       // Cross-file dependency resolution: walk `using` statements,
-      // resolve module files, parse them, and merge into the program
-      // so the IR lowering sees all definitions.
+      // and metadata-resolved qualified module references, parse their source
+      // files, and merge them into the program so IR lowering sees every
+      // definition without making qualified members lexically imported.
       {
-        auto deps = resolveBeamDeps(program, moduleRootsFor(filepath));
-        (void)deps;
+        kex::semantic::Analyzer dependencyAnalysis(
+            &preludeSemanticInterfaces());
+        (void)dependencyAnalysis.analyze(program);
+        auto qualifiedModules =
+            dependencyAnalysis.referencedModules();
+        for (auto it = qualifiedModules.begin();
+             it != qualifiedModules.end();) {
+          const auto imported =
+              preludeSemanticInterfaces().modules.find(*it);
+          if (imported !=
+                  preludeSemanticInterfaces().modules.end() &&
+              imported->second.automaticImport)
+            it = qualifiedModules.erase(it);
+          else
+            ++it;
+        }
+        beamDeps = resolveBeamDeps(
+            program, moduleRootsFor(filepath),
+            qualifiedModules);
       }
 
       // Type-check the same dependency-expanded program that lowering will

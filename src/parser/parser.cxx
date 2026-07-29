@@ -1514,6 +1514,15 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         expr->kind = ast::AtomLiteral{advance().value};
         return expr;
     }
+    // Uppercase atoms (`:Math`) are lexed as ':' + UpperIdent so a map
+    // separator immediately followed by an uppercase value remains
+    // unambiguous to the lexer. In expression position the pair is an atom.
+    if (check(TokenType::Colon) &&
+        peekNext().type == TokenType::UpperIdent) {
+        advance();
+        expr->kind = ast::AtomLiteral{advance().value};
+        return expr;
+    }
 
     // this
     if (match(TokenType::This)) {

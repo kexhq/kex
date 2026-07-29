@@ -138,7 +138,7 @@ auto Evaluator::registerMapBuiltins() -> void {
 
     // Map HOFs (empty?, each, map, filter, reject, any?, all?, find,
     // mapValues, mapKeys) are provided by the Kex prelude (Enumerable trait
-    // + Map overrides in src/prelude/map.kex) built on entries/fromEntries/
+    // + Map overrides in src/stdlib/map.kex) built on entries/fromEntries/
     // reduce — no native versions needed. `count` stays below: the prelude
     // calls it as Kex.Intrinsic.Map.count.
 
