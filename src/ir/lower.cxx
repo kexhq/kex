@@ -2480,8 +2480,18 @@ struct Lowering {
         if (std::holds_alternative<ast::BreakExpr>(e->kind)) return stateExpr(mutVars);
         if (std::holds_alternative<ast::NextExpr>(e->kind)) return tailCall(loopFn, mutVars);
         if (auto* ti = std::get_if<ast::TrailingIf>(&e->kind))
-            if (auto ctrl = loopControl(ti->expr, loopFn, mutVars))
-                return matchBool(lower(ti->condition), std::move(ctrl), cont());
+            if (auto ctrl = loopControl(ti->expr, loopFn, mutVars)) {
+                // The condition must be lowered against the subst in effect
+                // HERE: cont() lowers the rest of the loop body, which
+                // rebinds mutated vars to fresh SSA names. Passing both as
+                // arguments to matchBool() leaves them unsequenced, and a
+                // compiler that evaluates right-to-left (gcc on x86_64) then
+                // renders the condition with names bound later in the body —
+                // an unbound variable in the emitted Core Erlang.
+                auto c = lower(ti->condition);
+                auto rest = cont();
+                return matchBool(std::move(c), std::move(ctrl), std::move(rest));
+            }
         if (auto* ae = std::get_if<ast::AssignExpr>(&e->kind)) {
             auto val = lower(ae->value);
             std::string nv = fresh(ae->name); subst[ae->name] = nv;
@@ -2527,8 +2537,11 @@ struct Lowering {
             // `return X if cond` (ReturnExpr wrapping a TrailingIf): return
             // only when cond holds, otherwise fall through to the rest.
             if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
+                // Sequenced for the same reason as the TrailingIf case above.
+                auto c = lower(ti->condition);
                 auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
-                return matchBool(lower(ti->condition), std::move(retX), cont());
+                auto rest = cont();
+                return matchBool(std::move(c), std::move(retX), std::move(rest));
             }
             auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
         }
@@ -2624,12 +2637,18 @@ struct Lowering {
         if (std::holds_alternative<ast::BreakExpr>(arm->kind)) return stateExpr(mutVars);
         if (std::holds_alternative<ast::NextExpr>(arm->kind)) return tailCall(loopFn, mutVars);
         if (auto* ti = std::get_if<ast::TrailingIf>(&arm->kind))
-            if (auto ctrl = loopControl(ti->expr, loopFn, mutVars))
-                return matchBool(lower(ti->condition), std::move(ctrl), armEnd());
+            if (auto ctrl = loopControl(ti->expr, loopFn, mutVars)) {
+                // armEnd() rebinds mutated vars — lower the condition first.
+                auto c = lower(ti->condition);
+                auto rest = armEnd();
+                return matchBool(std::move(c), std::move(ctrl), std::move(rest));
+            }
         if (auto* re = std::get_if<ast::ReturnExpr>(&arm->kind)) {
             if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
+                auto c = lower(ti->condition);
                 auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
-                return matchBool(lower(ti->condition), std::move(retX), armEnd());
+                auto rest = armEnd();
+                return matchBool(std::move(c), std::move(retX), std::move(rest));
             }
             auto ex = std::make_unique<Expr>(); ex->node = Return{lower(re->value)}; return ex;
         }
@@ -2930,10 +2949,15 @@ struct Lowering {
                         };
                         ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
                                                      : stateExpr(mutVars);
-                        for (auto it2 = ie->elifs.rbegin(); it2 != ie->elifs.rend(); ++it2)
-                            elseP = matchBool(lower(it2->first), branch(it2->second),
+                        for (auto it2 = ie->elifs.rbegin(); it2 != ie->elifs.rend(); ++it2) {
+                            auto ec = lower(it2->first);
+                            auto eb = branch(it2->second);
+                            elseP = matchBool(std::move(ec), std::move(eb),
                                               std::move(elseP));
-                        caseE = matchBool(lower(ie->condition), branch(ie->thenBody),
+                        }
+                        auto cc = lower(ie->condition);
+                        auto cb = branch(ie->thenBody);
+                        caseE = matchBool(std::move(cc), std::move(cb),
                                           std::move(elseP));
                     } else {
                         std::vector<ExprPtr> subjects;
@@ -2985,9 +3009,11 @@ struct Lowering {
         // unconditionally — wrong). Mirrors the loop-body handling.
         if (auto* re = std::get_if<ast::ReturnExpr>(&e->kind); re && !isLast) {
             if (auto* ti = std::get_if<ast::TrailingIf>(&re->value->kind)) {
+                // lowerBodyFrom() rebinds mutated vars — sequence it last.
+                auto c = lower(ti->condition);
                 auto retX = std::make_unique<Expr>(); retX->node = Return{lower(ti->expr)};
-                return matchBool(lower(ti->condition), std::move(retX),
-                                 lowerBodyFrom(body, i + 1));
+                auto rest = lowerBodyFrom(body, i + 1);
+                return matchBool(std::move(c), std::move(retX), std::move(rest));
             }
         }
 
