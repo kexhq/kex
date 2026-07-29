@@ -1,5 +1,5 @@
 -module(kex_intrinsic_kex).
--export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1]).
+-export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, kind/1]).
 
 backend() -> 'Beam'.
 
@@ -18,3 +18,17 @@ backend() -> 'Beam'.
 %% --no-colors, which is the mode golden specs run in.
 inspect(Value) ->
     unicode:characters_to_binary(kex_io:inspect_plain(Value)).
+
+%% Broad language-level categories for source-owned libraries handling Any.
+kind('None') -> none;
+kind(true) -> bool;
+kind(false) -> bool;
+kind(Value) when is_integer(Value) -> integer;
+kind(Value) when is_float(Value) -> float;
+kind(Value) when is_binary(Value) -> string;
+kind(Value) when is_list(Value) -> list;
+kind(Value) when is_map(Value) -> map;
+kind({'Char', _}) -> char;
+kind(Value) when is_atom(Value) -> atom;
+kind(Value) when is_tuple(Value) -> tuple;
+kind(_) -> other.

@@ -10,14 +10,6 @@ using Parsing
 
 module JSON do
 
-type Value
-  = Null
-  | Boolean(Bool)
-  | Number(Number)
-  | StringValue(String)
-  | Array([Value])
-  | Object({String: Value})
-
 type Error
   = UnexpectedCharacter(String, Integer)
   | UnexpectedEnd(Integer)
@@ -29,11 +21,11 @@ type Error
   | TrailingInput(Integer)
   | UnknownOption(Atom)
 
-parse : String -> Result<Value, Error>
-let parse(text: String) -> Result<Value, Error> = parseWithOptions(text, {})
+parse : String -> Result<Any, Error>
+let parse(text: String) -> Result<Any, Error> = parseWithOptions(text, {})
 
-parse : String -> {Atom: Bool} -> Result<Value, Error>
-let parse(text: String, options: {Atom: Bool}) -> Result<Value, Error> = parseWithOptions(text, options)
+parse : String -> {Atom: Bool} -> Result<Any, Error>
+let parse(text: String, options: {Atom: Bool}) -> Result<Any, Error> = parseWithOptions(text, options)
 
 private do
   # Camel-case atom literals are represented by map-field syntax today.
@@ -41,7 +33,7 @@ private do
   # constant or option-name special case.
   let allowCommentsKey = Kex.Intrinsic.Map.keys({ allowComments: false }).at(0)
 
-  let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Value, Error> do
+  let parseWithOptions(text: String, options: {Atom: Bool}) -> Result<Any, Error> do
     let optionError = validateOptions(options)
     if optionError != None
       let Just(error) = optionError
@@ -57,22 +49,23 @@ private do
   end
 end
 
-stringify : Value -> String
-let stringify(value: Value) -> String do
-  match value do
-    Null -> return "null"
-    Boolean(true) -> return "true"
-    Boolean(false) -> return "false"
-    Number(number) -> return "${number}"
-    StringValue(string) -> return encodeString(string)
-    Array(values) -> return "[${values.map(&stringify).join(",")}]"
-    Object(values) -> do
-      let fields = values.entries.map do |entry|
+stringify : Any -> String
+let stringify(value: Any) -> String do
+  match Kex.Intrinsic.Kex.kind(value) do
+    :none -> return "null"
+    :bool -> return value then "true" else "false"
+    :integer -> return "${value}"
+    :float -> return "${value}"
+    :string -> return encodeString(value)
+    :list -> return "[${value.map(&stringify).join(",")}]"
+    :map -> do
+      let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
         let (key, item) = entry
         "${encodeString(key)}:${stringify(item)}"
       end
       return "{${fields.join(",")}}"
     end
+    _ -> return "null"
   end
 end
 
@@ -122,13 +115,13 @@ private do
     return current
   end
 
-  let parseValue(cursor: Input, allowComments: Bool) -> Result<(Value, Input), Error> do
+  let parseValue(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
     let current = skipIgnored(cursor, allowComments).try
     match current.peek do
       None -> return Error(UnexpectedEnd(current.pos))
-      Just('n') -> return parseLiteral(current, "null", Null)
-      Just('t') -> return parseLiteral(current, "true", Boolean(true))
-      Just('f') -> return parseLiteral(current, "false", Boolean(false))
+      Just('n') -> return parseLiteral(current, "null", None)
+      Just('t') -> return parseLiteral(current, "true", true)
+      Just('f') -> return parseLiteral(current, "false", false)
       Just('"') -> return parseString(current)
       Just('[') -> return parseArray(current, allowComments)
       Just('{') -> return parseObject(current, allowComments)
@@ -138,7 +131,7 @@ private do
     end
   end
 
-  let parseLiteral(cursor: Input, literal: String, value: Value) -> Result<(Value, Input), Error> do
+  let parseLiteral(cursor: Input, literal: String, value: Any) -> Result<(Any, Input), Error> do
     var current = cursor
     var index = 0
     while index < literal.count
@@ -151,9 +144,9 @@ private do
     return Ok((value, current))
   end
 
-  let parseString(cursor: Input) -> Result<(Value, Input), Error> do
+  let parseString(cursor: Input) -> Result<(Any, Input), Error> do
     let (value, advanced) = parseStringText(cursor).try
-    return Ok((StringValue(value), advanced))
+    return Ok((value, advanced))
   end
 
   let parseStringText(cursor: Input) -> Result<(String, Input), Error> do
@@ -244,16 +237,16 @@ private do
     return None
   end
 
-  let parseArray(cursor: Input, allowComments: Bool) -> Result<(Value, Input), Error> do
+  let parseArray(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
     var current = skipIgnored(cursor.advance, allowComments).try
-    var values: [Value] = []
-    return Ok((Array(values), current.advance)) if current.peek == Just(']')
+    var values: [Any] = []
+    return Ok((values, current.advance)) if current.peek == Just(']')
     loop
       let (value, afterValue) = parseValue(current, allowComments).try
       values.push!(value)
       current = skipIgnored(afterValue, allowComments).try
       match current.peek do
-        Just(']') -> return Ok((Array(values), current.advance))
+        Just(']') -> return Ok((values, current.advance))
         Just(',') -> do
           current = skipIgnored(current.advance, allowComments).try
           return Error(UnexpectedCharacter("]", current.pos)) if current.peek == Just(']')
@@ -264,10 +257,10 @@ private do
     end
   end
 
-  let parseObject(cursor: Input, allowComments: Bool) -> Result<(Value, Input), Error> do
+  let parseObject(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
     var current = skipIgnored(cursor.advance, allowComments).try
-    var values: {String: Value} = {}
-    return Ok((Object(values), current.advance)) if current.peek == Just('}')
+    var values: {String: Any} = {}
+    return Ok((values, current.advance)) if current.peek == Just('}')
     loop
       return Error(UnexpectedCharacter("expected object key", current.pos)) if current.peek != Just('"')
       let (key, afterKey) = parseStringText(current).try
@@ -278,7 +271,7 @@ private do
       values = Kex.Intrinsic.Map.put(values, key, value)
       current = skipIgnored(afterValue, allowComments).try
       match current.peek do
-        Just('}') -> return Ok((Object(values), current.advance))
+        Just('}') -> return Ok((values, current.advance))
         Just(',') -> do
           current = skipIgnored(current.advance, allowComments).try
           return Error(UnexpectedCharacter("}", current.pos)) if current.peek == Just('}')
@@ -289,7 +282,7 @@ private do
     end
   end
 
-  let parseNumber(cursor: Input) -> Result<(Value, Input), Error> do
+  let parseNumber(cursor: Input) -> Result<(Any, Input), Error> do
     let start = cursor.pos
     var current = cursor
     var chars: [Char] = []
@@ -309,8 +302,8 @@ private do
       end
       Just(c) when c >= '1' && c <= '9' -> do
         while match current.peek do Just(d) -> d.digit? _ -> false end
-          let Just(digit) = current.peek
-          chars.push!(digit)
+          let Just(integerDigit) = current.peek
+          chars.push!(integerDigit)
           current = current.advance
         end
       end
@@ -324,8 +317,8 @@ private do
       current = current.advance
       return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) -> !d.digit? _ -> true end
       while match current.peek do Just(d) -> d.digit? _ -> false end
-        let Just(digit) = current.peek
-        chars.push!(digit)
+        let Just(fractionDigit) = current.peek
+        chars.push!(fractionDigit)
         current = current.advance
       end
     end
@@ -342,8 +335,8 @@ private do
       end
       return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) -> !d.digit? _ -> true end
       while match current.peek do Just(d) -> d.digit? _ -> false end
-        let Just(digit) = current.peek
-        chars.push!(digit)
+        let Just(exponentDigit) = current.peek
+        chars.push!(exponentDigit)
         current = current.advance
       end
     end
@@ -351,12 +344,12 @@ private do
     let source = chars.join("")
     if floating
       match Float.parse(source) do
-        Ok(value) -> return Ok((Number(value), current))
+        Ok(value) -> return Ok((value, current))
         Error(_) -> return Error(InvalidNumber(source, start))
       end
     end
     match Integer.parse(source) do
-      Ok(value) -> return Ok((Number(value), current))
+      Ok(value) -> return Ok((value, current))
       Error(_) -> return Error(InvalidNumber(source, start))
     end
   end

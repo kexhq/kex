@@ -513,6 +513,17 @@ int main() {
             assertEqual(runBeamFile(source, ""), std::string("{\"x\":1}\n"));
         });
 
+        it("accesses parsed JSON values in the BEAM REPL", []() {
+            auto out = runBeamRepl(
+                "let source = `{ \"active\": true }`\n"
+                "let config = JSON.parse(source)\n"
+                "config.try[\"active\"]\n"
+                "config.try[\"missing\"]\n");
+            assertTrue(out.find("if_clause") == std::string::npos, out);
+            assertTrue(out.find("Just(true)") != std::string::npos, out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
+        });
+
         it("exposes parser combinators on BEAM", []() {
             const std::string source =
                 "using Parsing\n"
