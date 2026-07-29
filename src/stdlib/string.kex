@@ -196,6 +196,10 @@ make Char do
   space? :> Bool
   let space? = Kex.Intrinsic.Char.is_space(this)
 
+  # Returns this character's numeric codepoint.
+  codepoint :> Integer
+  let codepoint = Kex.Intrinsic.Char.codepoint(this)
+
   # Returns +true+ if the character falls within the given range (inclusive).
   #
   # @param range [Range<Char>]
@@ -206,4 +210,11 @@ make Char do
   #   'B'.in?('a'..'z')   # => false
   in? :> Range<Char> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
+end
+
+module String do
+  # Constructs a one-codepoint UTF-8 string. Surrogates and values outside
+  # the Unicode scalar range return None.
+  fromCodepoint : Integer -> String?
+  let fromCodepoint(value) = Kex.Intrinsic.String.fromCodepoint(value)
 end

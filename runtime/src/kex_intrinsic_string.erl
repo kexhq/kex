@@ -5,7 +5,7 @@
 %% (src/stdlib/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
-          'startsWith?'/2, 'endsWith?'/2, 'contains?'/2]).
+          'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
 %% ('h'.upperCase → 'H').
@@ -19,6 +19,12 @@ trim(S)      -> string:trim(S).
 
 %% chars/1 — the string's characters as a real [Char] (tagged tuples).
 chars(S) -> kex_intrinsic_list:as_list(S).
+
+fromCodepoint(Value)
+  when is_integer(Value), Value >= 0, Value =< 16#10ffff,
+       not (Value >= 16#d800 andalso Value =< 16#dfff) ->
+    {'Just', unicode:characters_to_binary([Value])};
+fromCodepoint(_) -> 'None'.
 
 %% No-sep split — break into individual 1-char Strings ("hi" → ["h","i"]).
 split(S) -> [<<C/utf8>> || C <- unicode:characters_to_list(S)].

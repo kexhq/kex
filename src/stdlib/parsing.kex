@@ -1,0 +1,88 @@
+# Parser combinators for user-defined text formats.
+#
+# An Input is immutable: successful parsers return the parsed value together
+# with an advanced cursor. Failure leaves the caller free to try an alternative.
+module Parsing
+
+type ParseError = Unexpected(String, Integer) | NoMatch(Integer)
+
+record Input do
+  input : String
+  pos   : Integer = 0
+end
+
+make Input do
+  let peek = @pos < @input.count then Just(@input.at(@pos)) else None
+
+  let peekAt(offset: Integer) -> Char? do
+    let index = @pos + offset
+    return None if index < 0 || index >= @input.count
+    return Just(@input.at(index))
+  end
+
+  let atEnd? = @pos >= @input.count
+
+  let advance = Input { input: @input, pos: @pos + 1 }
+
+  let advanceBy(count: Integer) -> Input = Input { input: @input, pos: @pos + count }
+
+  let remaining = @input.chars.drop(@pos).join("")
+
+  let charWhen(pred: Char -> Bool) -> Result<(Char, Input), ParseError> do
+    match this.peek do
+      Just(c) when pred(c) -> Ok((c, this.advance))
+      Just(c) -> Error(Unexpected("${c}", @pos))
+      None -> Error(Unexpected("EOF", @pos))
+    end
+  end
+
+  let char(expected: Char) -> Result<(Char, Input), ParseError> do
+    this.charWhen { |c| c == expected }
+  end
+
+  let whiteSpaces -> Input do
+    var cursor = this
+    loop
+      break if cursor.peek == None
+      let Just(c) = cursor.peek
+      break if !c.space?
+      cursor = cursor.advance
+    end
+    return cursor
+  end
+
+  let many(f: Input -> Result<(a, Input), ParseError>) -> ([a], Input) do
+    var results: [a] = []
+    var p = this
+    loop
+      trying do
+        let (value, advanced) = f(p).try
+        return (results, p) if advanced.pos == p.pos
+        results.push!(value)
+        p = advanced
+      rescue return (results, p)
+      end
+    end
+  end
+
+  let some(f: Input -> Result<(a, Input), ParseError>) -> ([a], Input) or! ParseError do
+    let (first, p) = f(this).try
+    let (rest, advanced) = p.many(f)
+    Ok(([first, ...rest], advanced))
+  end
+
+  let choice(alts: [Input -> Result<(a, Input), ParseError>]) -> (a, Input) or! ParseError do
+    var index = 0
+    loop
+      break if index >= alts.count
+      trying do
+        let f = alts.at(index)
+        let result = f(this).try
+        return Ok(result)
+      rescue
+        _ -> index = index + 1
+      end
+    end
+    Error(NoMatch(@pos))
+  end
+end

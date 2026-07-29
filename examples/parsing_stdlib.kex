@@ -1,0 +1,10 @@
+# The parser combinators are an opt-in standard-library module.
+using Parsing
+
+main do
+  let input = Input { input: "123abc" }
+  match input.some { |cursor| cursor.charWhen(&.digit?) } do
+    Ok((digits, rest)) -> IO.printLine("${digits.join("")}|${rest.remaining}")
+    Error(error) -> IO.printLine("parse error: ${error}")
+  end
+end

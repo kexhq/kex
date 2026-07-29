@@ -1,0 +1,67 @@
+using JSON
+
+describe("JSON") do
+  it("parses strict JSON values") do
+    assert(JSON.parse("null") == Ok(Null))
+    assert(JSON.parse("true") == Ok(Boolean(true)))
+    assert(JSON.parse("-12") == Ok(Number(-12)))
+    assert(JSON.parse("1.25e2") == Ok(Number(125.0)))
+    assert(JSON.parse("[1,\"two\",false]") ==
+      Ok(Array([Number(1), StringValue("two"), Boolean(false)])))
+    assert(JSON.parse("{\"name\":\"Kex\"}") ==
+      Ok(Object({ "name": StringValue("Kex") })))
+  end
+
+  it("is strict by default") do
+    assert(!JSON.parse("// comment\nnull").ok?)
+    assert(!JSON.parse("{/* comment */\"x\":1}").ok?)
+    let verticalTab = String.fromCodepoint(11).or("")
+    assert(!JSON.parse("${verticalTab}null").ok?)
+  end
+
+  it("accepts line and block comments when enabled") do
+    let options = { allowComments: true }
+    assert(JSON.parse("// heading\nnull", options: options) == Ok(Null))
+    assert(JSON.parse("{/* key */\"x\":1// value\n}", options: options) ==
+      Ok(Object({ "x": Number(1) })))
+  end
+
+  it("does not treat comment markers inside strings as comments") do
+    let source = "{\"url\":\"https://kex.dev/a/*b*/\"}"
+    assert(JSON.parse(source, options: { allowComments: true }) ==
+      Ok(Object({ "url": StringValue("https://kex.dev/a/*b*/") })))
+  end
+
+  it("rejects malformed input and unknown options") do
+    assert(!JSON.parse("01").ok?)
+    assert(!JSON.parse("1.").ok?)
+    assert(!JSON.parse("[1,]").ok?)
+    assert(!JSON.parse("{} trailing").ok?)
+    assert(JSON.parse("null", options: { unknown: true }) ==
+      Error(UnknownOption(:unknown)))
+  end
+
+  it("decodes unicode escapes and surrogate pairs") do
+    assert(JSON.parse("\"\\u03bb\"") == Ok(StringValue("λ")))
+    assert(JSON.parse("\"\\ud83d\\ude80\"") == Ok(StringValue("🚀")))
+    assert(JSON.parse("\"λ🚀\"") == Ok(StringValue("λ🚀")))
+    assert(JSON.stringify(StringValue("λ🚀")) == "\"λ🚀\"")
+    assert(!JSON.parse("\"\\ud83d\"").ok?)
+  end
+
+  it("handles backspace and form-feed escapes") do
+    let controls = String.fromCodepoint(8).or("") + String.fromCodepoint(12).or("")
+    assert(JSON.parse("\"\\b\\f\"") == Ok(StringValue(controls)))
+    assert(JSON.stringify(StringValue(controls)) == "\"\\b\\f\"")
+  end
+
+  it("serializes strict JSON") do
+    let value = Object({
+      "message": StringValue("hello\n\"Kex\""),
+      "enabled": Boolean(true),
+      "items": Array([Null, Number(2)])
+    })
+    assert(JSON.stringify(value) ==
+      "{\"enabled\":true,\"items\":[null,2],\"message\":\"hello\\n\\\"Kex\\\"\"}")
+  end
+end

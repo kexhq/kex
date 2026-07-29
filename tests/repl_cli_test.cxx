@@ -489,6 +489,31 @@ int main() {
         });
     });
 
+    describe("CLI — opt-in JSON and Parsing stdlib", []() {
+        it("parses commented JSON and serializes it on BEAM", []() {
+            const std::string source =
+                "using JSON\n"
+                "main do\n"
+                "  let Ok(value) = JSON.parse(\"{/*c*/\\\"x\\\":1}\", "
+                "options: { allowComments: true })\n"
+                "  IO.printLine(JSON.stringify(value))\n"
+                "end\n";
+            assertEqual(runBeamFile(source, ""), std::string("{\"x\":1}\n"));
+        });
+
+        it("exposes parser combinators on BEAM", []() {
+            const std::string source =
+                "using Parsing\n"
+                "main do\n"
+                "  let input = Input { input: \"12x\" }\n"
+                "  let Ok((digits, rest)) = "
+                "input.some { |p| p.charWhen(&.digit?) }\n"
+                "  IO.printLine(\"${digits.join(\"\")}|${rest.remaining}\")\n"
+                "end\n";
+            assertEqual(runBeamFile(source, ""), std::string("12|x\n"));
+        });
+    });
+
     // Every case below is a bug that reached a user's terminal because the
     // REPL paths had no coverage: module resolution, pattern-let bindings,
     // record rendering, and `using` being announced as a definition.
