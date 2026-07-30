@@ -135,6 +135,58 @@ int main() {
             assertEqual(types[1], TokenType::DotDot);
             assertEqual(types[2], TokenType::Integer);
         });
+
+        // Radix literals carry their decimal spelling, so everything
+        // downstream (the evaluator, literal patterns, Core Erlang emission)
+        // only ever sees base 10.
+        it("tokenizes hexadecimal literals", []() {
+            assertEqual(firstToken("0xff").value, std::string("255"));
+            assertEqual(firstToken("0xff").type, TokenType::Integer);
+            assertEqual(firstToken("0xAAF23").value, std::string("700195"));
+            assertEqual(firstToken("0XFF").value, std::string("255"));
+            assertEqual(firstToken("0xDEAD_BEEF").value, std::string("3735928559"));
+        });
+
+        it("tokenizes binary and octal literals", []() {
+            assertEqual(firstToken("0b1011").value, std::string("11"));
+            assertEqual(firstToken("0B1111_0000").value, std::string("240"));
+            assertEqual(firstToken("0o755").value, std::string("493"));
+            assertEqual(firstToken("0O10").value, std::string("8"));
+        });
+
+        it("lexes radix literals beyond int64", []() {
+            assertEqual(firstToken("0xFFFFFFFFFFFFFFFFFF").value,
+                        std::string("4722366482869645213695"));
+        });
+
+        it("rejects radix literals with no digits or bad digits", []() {
+            assertEqual(firstToken("0x").type, TokenType::Error);
+            assertEqual(firstToken("0b12").type, TokenType::Error);
+            assertEqual(firstToken("0o88").type, TokenType::Error);
+        });
+
+        // Normalized to a form both std::stod and Erlang accept: a fraction
+        // part is required before the exponent, and `E` is lowercased.
+        it("tokenizes float exponents", []() {
+            assertEqual(firstToken("3e22").type, TokenType::Float);
+            assertEqual(firstToken("3e22").value, std::string("3.0e22"));
+            assertEqual(firstToken("345e-22").value, std::string("345.0e-22"));
+            assertEqual(firstToken("1.5E3").value, std::string("1.5e3"));
+            assertEqual(firstToken("2.5e+2").value, std::string("2.5e+2"));
+            assertEqual(firstToken("1_0e1_0").value, std::string("10.0e10"));
+        });
+
+        it("only starts an exponent when a well-formed one follows", []() {
+            // `2e` is an integer followed by an identifier, not a float.
+            auto types = tokenTypes("2e");
+            assertEqual(types.size(), size_t(2));
+            assertEqual(types[0], TokenType::Integer);
+            assertEqual(types[1], TokenType::LowerIdent);
+
+            auto each = tokenTypes("2.each");
+            assertEqual(each[0], TokenType::Integer);
+            assertEqual(each[1], TokenType::Dot);
+        });
     });
 
     describe("Lexer — Strings", []() {

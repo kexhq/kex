@@ -1,2 +1,2 @@
 spec/error_toplevel_implicit_this.kex:4:1: error: ':>' (implicit-This signature) is only valid inside 'make T do ... end' — use ':' at top level instead
-Aborted: fix syntax errors before running.
+Aborted: 1 syntax error — fix before running.

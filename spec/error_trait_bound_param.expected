@@ -1,4 +1,4 @@
 spec/error_trait_bound_param.kex:15:16: error: `showDescription` expects argument 1 to be Describable, but got Animal
 
 showDescription : Describable -> String
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

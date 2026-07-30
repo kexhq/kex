@@ -1,0 +1,103 @@
+# Bits — bitwise operations on Integer.
+#
+# Integers are arbitrary precision and negatives behave as infinite-precision
+# two's complement. That is GMP's model on the walker and Erlang's model on
+# BEAM, so both backends agree here with no special casing — which is the main
+# thing these cases are pinning down.
+
+describe("Bits — logical operations") do
+  it("computes and/or/xor") do
+    assert(Bits.and(0b1100, 0b1010) == 0b1000)
+    assert(Bits.or(0b1100, 0b1010) == 0b1110)
+    assert(Bits.xor(0b1100, 0b1010) == 0b0110)
+    assert(Bits.and(0xff, 0x0f) == 15)
+  end
+
+  it("complements against an unbounded width, not a machine word") do
+    assert(Bits.not(0) == -1)
+    assert(Bits.not(5) == -6)
+    assert(Bits.not(Bits.not(42)) == 42)
+  end
+
+  it("treats a negative as infinite two's complement") do
+    assert(Bits.and(-1, 255) == 255)
+    assert(Bits.or(-5, 3) == -5)
+    assert(Bits.xor(-5, 3) == -8)
+  end
+end
+
+describe("Bits — shifts") do
+  it("shifts left and right") do
+    assert(Bits.shiftLeft(1, 8) == 256)
+    assert(Bits.shiftLeft(1, 0) == 1)
+    assert(Bits.shiftRight(256, 8) == 1)
+    assert(Bits.shiftRight(1, 4) == 0)
+  end
+
+  it("propagates the sign shifting right") do
+    assert(Bits.shiftRight(-8, 1) == -4)
+    assert(Bits.shiftRight(-1, 10) == -1)
+    assert(Bits.shiftLeft(-1, 3) == -8)
+  end
+
+  it("shifts past the machine word without overflowing") do
+    assert(Bits.shiftLeft(1, 100) == 1267650600228229401496703205376)
+    assert(Bits.shiftRight(Bits.shiftLeft(1, 100), 100) == 1)
+  end
+end
+
+describe("Bits — individual bits") do
+  it("tests a bit") do
+    assert(Bits.test?(0b1000, 3))
+    assert(!Bits.test?(0b1000, 0))
+    # Every bit of -1 is set, at any position.
+    assert(Bits.test?(-1, 0))
+    assert(Bits.test?(-1, 500))
+  end
+
+  it("sets, clears and toggles") do
+    assert(Bits.set(0, 3) == 8)
+    assert(Bits.set(0b1000, 3) == 0b1000)
+    assert(Bits.clear(0b1111, 0) == 14)
+    assert(Bits.clear(0b1110, 0) == 0b1110)
+    assert(Bits.toggle(0b1010, 0) == 11)
+    assert(Bits.toggle(Bits.toggle(0b1010, 2), 2) == 0b1010)
+  end
+end
+
+describe("Bits — counting") do
+  it("counts set bits") do
+    assert(Bits.count(0) == 0)
+    assert(Bits.count(0b1011) == 3)
+    assert(Bits.count(255) == 8)
+    assert(Bits.count(Bits.shiftLeft(1, 100)) == 1)
+  end
+
+  it("measures the bits needed to represent a value") do
+    assert(Bits.width(0) == 0)
+    assert(Bits.width(1) == 1)
+    assert(Bits.width(255) == 8)
+    assert(Bits.width(256) == 9)
+    assert(Bits.width(Bits.shiftLeft(1, 100)) == 101)
+  end
+end
+
+# The failures below raise rather than returning a sentinel. Both backends
+# produce the same message, so the golden pins the text too.
+describe("Bits — rejected input") do
+  it("rejects a negative shift distance") do
+    assert(Bits.shiftLeft(1, -1) == 0)
+  end
+
+  it("rejects a negative bit index") do
+    assert(Bits.test?(1, -1))
+  end
+
+  it("has no bit count for a negative value") do
+    assert(Bits.count(-1) == 0)
+  end
+
+  it("has no width for a negative value") do
+    assert(Bits.width(-1) == 0)
+  end
+end

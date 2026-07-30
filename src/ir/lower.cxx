@@ -3265,19 +3265,72 @@ struct Lowering {
     // `kex_prelude:rest/1`. When a field sits at the same position in
     // every record that has it, one element/2 call suffices; otherwise
     // dispatch on the record tag.
+    // Colliding with an IMPORTED receiver function used to suppress the field
+    // accessor outright, which left `box.rest` calling the prelude's `rest/1`
+    // — a dispatcher with no clause for a record, so it died with `if_clause`
+    // on BEAM while the walker read the field just fine. Instead the accessor
+    // is emitted and falls through to the import, so `box.rest` and
+    // `[1,2,3].rest` both work.
+    //
+    // Returns the imported function to fall through to, or nullptr when the
+    // name does not collide. Sets `blocked` when the collision cannot be
+    // forwarded (no 1-arity form), in which case no accessor is emitted and
+    // the name is left to the import — the old behavior. lowerProgram's
+    // localMethods seeding asks the same question, so both must agree on
+    // whether an accessor exists.
+    auto fieldAccessorDelegate(const std::string& field, bool& blocked) const
+        -> const ExternalModules::ReceiverFunction* {
+        blocked = false;
+        if (!externalModules) return nullptr;
+        auto ext = externalModules->receiverFunctions.find(field);
+        if (ext == externalModules->receiverFunctions.end()) return nullptr;
+        for (const auto& candidate : ext->second)
+            if (candidate.beamArity == 1) return &candidate;
+        blocked = true;
+        return nullptr;
+    }
+
     auto makeAccessors(const std::unordered_set<std::string>& definedFns) -> std::vector<FunDef> {
         std::vector<FunDef> out;
         for (const auto& [field, entries] : fieldAccessors) {
+            // A local function of this name owns the symbol; its dispatcher
+            // carries the record clauses instead (see appendFieldClauses).
             if (definedFns.count(field)) continue;
-            if (externalModules &&
-                externalModules->receiverFunctions.count(field)) continue;
+
+            bool blocked = false;
+            const auto* delegate = fieldAccessorDelegate(field, blocked);
+            if (blocked) continue;
+
             FunDef def; def.name = field; def.arity = 1;
             FunClause fc;
             auto rp = std::make_unique<Pattern>(); rp->kind = PatKind::Var; rp->name = "_rec";
             fc.params.push_back(std::move(rp));
             bool allSame = std::all_of(entries.begin(), entries.end(),
                 [&](const auto& e){ return e.second == entries[0].second; });
-            if (allSame) {
+            if (delegate) {
+                // Match the record tags this field belongs to; anything else
+                // is the imported function's receiver.
+                Match m;
+                m.subjects.push_back(var("_rec"));
+                for (const auto& [recName, pos] : entries) {
+                    MatchClause mc;
+                    auto gv = std::make_unique<Pattern>();
+                    gv->kind = PatKind::Var; gv->name = "_fv";
+                    mc.patterns.push_back(std::move(gv));
+                    mc.guard = typeGuard(recName, var("_fv"));
+                    mc.body = callE("erlang", "element", 2, two(litInt(pos), var("_rec")));
+                    m.clauses.push_back(std::move(mc));
+                }
+                MatchClause fallback;
+                auto wild = std::make_unique<Pattern>();
+                wild->kind = PatKind::Var; wild->name = "_other";
+                fallback.patterns.push_back(std::move(wild));
+                fallback.body = callE(delegate->moduleAtom, delegate->beamFunction,
+                                      1, one(var("_rec")));
+                m.clauses.push_back(std::move(fallback));
+                auto e = std::make_unique<Expr>(); e->node = std::move(m);
+                fc.body = std::move(e);
+            } else if (allSame) {
                 fc.body = callE("erlang", "element", 2, two(litInt(entries[0].second), var("_rec")));
             } else {
                 Match m;
@@ -3614,11 +3667,38 @@ struct Lowering {
             mc.body = std::move(call);
             m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
+        appendFieldClauses(name, arity, m);
         auto body = std::make_unique<Expr>();
         body->node = std::move(m);
         fc.body = std::move(body);
         def.clauses.push_back(std::move(fc));
         return def;
+    }
+
+    // A record field can share its name with a receiver method — `rest` is a
+    // field of the prelude's ParseError and a method on List/String. The
+    // standalone `'rest'/1` accessor is suppressed in that case (makeAccessors)
+    // because it would shadow the method and send `[1,2,3].rest` to a tuple
+    // read, which leaves the dispatcher as the only `rest/1` in the module.
+    // Without these clauses it has no arm matching a record, so `err.rest`
+    // died with `if_clause` on BEAM while working fine in the walker.
+    //
+    // Appended last so a genuine method for the receiver's type always wins;
+    // these only catch records that would otherwise fall off the end.
+    auto appendFieldClauses(const std::string& name, int arity, Match& m) -> void {
+        if (arity != 1) return;
+        auto it = fieldAccessors.find(name);
+        if (it == fieldAccessors.end()) return;
+        for (const auto& [recordName, position] : it->second) {
+            MatchClause mc;
+            auto gv = std::make_unique<Pattern>();
+            gv->kind = PatKind::Var; gv->name = "_fv";
+            mc.patterns.push_back(std::move(gv));
+            mc.guard = typeGuard(recordName, var("_fv"));
+            mc.body = callE("erlang", "element", 2,
+                            two(litInt(position), var("_a0")));
+            m.clauses.push_back(std::move(mc));
+        }
     }
 };
 
@@ -3981,8 +4061,9 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // makeAccessors) so it must not appear as a local method either.
     for (const auto& [field, entries] : L.fieldAccessors) {
         (void)entries;
-        if (L.externalModules &&
-            L.externalModules->receiverFunctions.count(field)) continue;
+        bool blocked = false;
+        L.fieldAccessorDelegate(field, blocked);
+        if (blocked) continue;
         L.localMethods.insert(field);
         L.localMethodArities.insert(field + "/1");
     }
@@ -4589,6 +4670,34 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
     };
     std::unordered_map<std::string, Definition> definitions;
     if (externalRecords) {
+        // Every field name this program's own records declare. Routing one of
+        // those to the owner module would hand `myRecord.value` to the
+        // prelude's `value/1`, whose clauses only cover the records IT knows —
+        // an `if_clause` crash on BEAM for a record it has never heard of.
+        // The locally emitted accessor already dispatches on external layouts
+        // too (collectRecordLayout feeds fieldAccessors), so keeping it local
+        // serves both.
+        std::unordered_set<std::string> localRecordFields;
+        std::function<void(const ast::RecordDef&)> noteRecord =
+            [&](const ast::RecordDef& rd) {
+                for (const auto& field : rd.fields) localRecordFields.insert(field.name);
+            };
+        std::function<void(const ast::ModuleDef&)> scanModule;
+        auto scanItems = [&](const auto& items, auto&& self) -> void {
+            for (const auto& item : items) {
+                if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
+                    if (*rd) noteRecord(**rd);
+                } else if (auto* md = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*md) scanModule(**md);
+                }
+            }
+            (void)self;
+        };
+        scanModule = [&](const ast::ModuleDef& module) {
+            scanItems(module.body, scanItems);
+        };
+        scanItems(prog.items, scanItems);
+
         for (const auto& record : *externalRecords) {
             if (record.moduleAtom.empty()) continue;
             for (const auto& field : record.fields) {
@@ -4598,6 +4707,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                 if (field != "unit" && field != "canonical" && field != "value" &&
                     field != "conversionFactor" && field != "dimension" && field != "notation")
                     continue;
+                if (localRecordFields.count(field)) continue;
                 definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
             }
         }

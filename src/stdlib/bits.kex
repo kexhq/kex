@@ -1,0 +1,146 @@
+# The +Bits+ module provides bitwise operations on +Integer+.
+#
+# Integers are arbitrary precision, and a negative one behaves as if it were
+# written in infinite-precision two's complement — so +Bits.not(0)+ is +-1+ and
+# +Bits.and(-1, 255)+ is +255+, with no word size to overflow. Shifts and bit
+# indices count from bit 0 (the least significant bit).
+module Bits do
+  # Bitwise AND of +a+ and +b+.
+  #
+  # @param a [Integer]
+  # @param b [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.and(0b1100, 0b1010)   # => 0b1000
+  #   Bits.and(0xff, 0x0f)       # => 15
+  and : Integer -> Integer -> Integer
+  let and(a, b) = Kex.Intrinsic.Bits.and(a, b)
+
+  # Bitwise OR of +a+ and +b+.
+  #
+  # @param a [Integer]
+  # @param b [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.or(0b1100, 0b1010)   # => 0b1110
+  or : Integer -> Integer -> Integer
+  let or(a, b) = Kex.Intrinsic.Bits.or(a, b)
+
+  # Bitwise exclusive OR of +a+ and +b+.
+  #
+  # @param a [Integer]
+  # @param b [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.xor(0b1100, 0b1010)   # => 0b0110
+  xor : Integer -> Integer -> Integer
+  let xor(a, b) = Kex.Intrinsic.Bits.xor(a, b)
+
+  # Bitwise complement of +a+. Every integer is signed and unbounded, so this
+  # is always +-(a + 1)+ rather than a width-dependent mask.
+  #
+  # @param a [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.not(0)   # => -1
+  #   Bits.not(5)   # => -6
+  not : Integer -> Integer
+  let not(a) = Kex.Intrinsic.Bits.not(a)
+
+  # Shifts +n+ left by +by+ bits. Raises if +by+ is negative.
+  #
+  # @param n [Integer]
+  # @param by [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.shiftLeft(1, 8)   # => 256
+  shiftLeft : Integer -> Integer -> Integer
+  let shiftLeft(n, by) = Kex.Intrinsic.Bits.shiftLeft(n, by)
+
+  # Shifts +n+ right by +by+ bits, propagating the sign — the result of
+  # shifting a negative number stays negative. Raises if +by+ is negative.
+  #
+  # @param n [Integer]
+  # @param by [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.shiftRight(256, 8)   # => 1
+  #   Bits.shiftRight(-8, 1)    # => -4
+  shiftRight : Integer -> Integer -> Integer
+  let shiftRight(n, by) = Kex.Intrinsic.Bits.shiftRight(n, by)
+
+  # True when the bit at +index+ of +n+ is set. Raises if +index+ is negative.
+  #
+  # @param n [Integer]
+  # @param index [Integer]
+  # @return [Bool]
+  #
+  # @example
+  #   Bits.test?(0b1000, 3)   # => true
+  #   Bits.test?(0b1000, 0)   # => false
+  test? : Integer -> Integer -> Bool
+  let test?(n, index) = Kex.Intrinsic.Bits.test?(n, index)
+
+  # +n+ with the bit at +index+ set. Raises if +index+ is negative.
+  #
+  # @param n [Integer]
+  # @param index [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.set(0, 3)   # => 8
+  set : Integer -> Integer -> Integer
+  let set(n, index) = Kex.Intrinsic.Bits.set(n, index)
+
+  # +n+ with the bit at +index+ cleared. Raises if +index+ is negative.
+  #
+  # @param n [Integer]
+  # @param index [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.clear(0b1111, 0)   # => 14
+  clear : Integer -> Integer -> Integer
+  let clear(n, index) = Kex.Intrinsic.Bits.clear(n, index)
+
+  # +n+ with the bit at +index+ flipped. Raises if +index+ is negative.
+  #
+  # @param n [Integer]
+  # @param index [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.toggle(0b1010, 0)   # => 11
+  toggle : Integer -> Integer -> Integer
+  let toggle(n, index) = Kex.Intrinsic.Bits.toggle(n, index)
+
+  # Number of set bits in +n+ (population count). A negative value has
+  # infinitely many under two's complement, so this raises for one.
+  #
+  # @param n [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.count(0b1011)   # => 3
+  count : Integer -> Integer
+  let count(n) = Kex.Intrinsic.Bits.count(n)
+
+  # Number of bits needed to represent +n+, i.e. the position of its highest
+  # set bit plus one. Zero needs none. Raises for a negative value.
+  #
+  # @param n [Integer]
+  # @return [Integer]
+  #
+  # @example
+  #   Bits.width(0)     # => 0
+  #   Bits.width(255)   # => 8
+  #   Bits.width(256)   # => 9
+  width : Integer -> Integer
+  let width(n) = Kex.Intrinsic.Bits.width(n)
+end

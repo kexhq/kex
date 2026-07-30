@@ -138,6 +138,11 @@ module Integer do
   parse : String -> Result<Integer, ParseError>
   let parse(s) = Kex.Intrinsic.Integer.parse(s)
 
+  # Parses +s+ in base +radix+ (2..36), e.g. +Integer.parse("ff", radix: 16)+.
+  # Digits above 9 are accepted in either case.
+  parse : String -> Integer -> Result<Integer, ParseError>
+  let parse(s, radix: Integer) = Kex.Intrinsic.Integer.parse(s, radix)
+
   parsePrefix : String -> (Integer, String)?
   let parsePrefix(s) = Kex.Intrinsic.Integer.parsePrefix(s)
 end

@@ -135,8 +135,12 @@ int main() {
                     kex::kPreludeTier2.size() + kex::kPreludeTier3.size());
             assertEqual(fs::path(ordered.front()).filename().string(),
                         std::string("algebra.kex"));
-            assertEqual(fs::path(ordered[4]).filename().string(),
-                        std::string("kex.kex"));
+            // Tier 0 comes first, in its declared order — checked against that
+            // declaration rather than a literal index, so adding a tier-0
+            // source does not need this line edited to stay meaningful.
+            for (size_t i = 0; i < kex::kPreludeTier0.size(); i++)
+                assertEqual(fs::path(ordered[i]).filename().string(),
+                            std::string(kex::kPreludeTier0[i]));
             assertEqual(fs::path(ordered.back()).filename().string(),
                         std::string("units.kex"));
 

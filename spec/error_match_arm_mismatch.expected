@@ -1,2 +1,2 @@
 spec/error_match_arm_mismatch.kex:3:3: error: Match arm type mismatch: expected String but arm returns Integer
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

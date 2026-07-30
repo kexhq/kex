@@ -1,4 +1,4 @@
 spec/predicate_type_errors.kex:7:30: error: `digit?` expects argument 1 to be Char, but got String
 
 digit? : Char -> Bool
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

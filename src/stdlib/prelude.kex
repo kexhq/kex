@@ -6,6 +6,7 @@
 # available through an explicit `using`.
 
 using Algebra
+using Bits
 using Blankable
 using Console
 using Enumerable

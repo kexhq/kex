@@ -1,0 +1,21 @@
+Bits — logical operations
+  ✓ computes and/or/xor
+  ✓ complements against an unbounded width, not a machine word
+  ✓ treats a negative as infinite two's complement
+Bits — shifts
+  ✓ shifts left and right
+  ✓ propagates the sign shifting right
+  ✓ shifts past the machine word without overflowing
+Bits — individual bits
+  ✓ tests a bit
+  ✓ sets, clears and toggles
+Bits — counting
+  ✓ counts set bits
+  ✓ measures the bits needed to represent a value
+Bits — rejected input
+  ✗ rejects a negative shift distance: Bits.shiftLeft: bit position cannot be negative
+  ✗ rejects a negative bit index: Bits.test?: bit position cannot be negative
+  ✗ has no bit count for a negative value: Bits.count is undefined for a negative Integer
+  ✗ has no width for a negative value: Bits.width is undefined for a negative Integer
+
+10 passed, 4 failed

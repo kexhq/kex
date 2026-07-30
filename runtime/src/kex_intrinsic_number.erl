@@ -87,11 +87,46 @@ toInteger(N)  -> erlang:trunc(N).
 parse_error(S, Position, Value, Message, Rest) ->
     {'ParseError', S, Position, Value, Message, Rest}.
 
+%% string:to_float/1 requires a fraction part, so it rejects "1e10" — text the
+%% Kex lexer accepts as a float literal, and which the walker's std::stod
+%% parses fine. Splice in the ".0" so both backends accept exactly the float
+%% texts the language's own grammar defines. The rewrite only ever inserts
+%% characters *before* the exponent, so a Rest returned by the normalized
+%% parse is still a suffix of the original and the trailing-character
+%% positions below stay correct.
+exp_normalized(S) when is_binary(S) ->
+    unicode:characters_to_binary(exp_normalized(unicode:characters_to_list(S)));
+exp_normalized(S) ->
+    case bare_mantissa_exponent(S, []) of
+        {Mantissa, Exponent} -> Mantissa ++ ".0" ++ Exponent;
+        none -> S
+    end.
+
+%% {Mantissa, "e" ++ Rest} when S is digits (with an optional sign) followed
+%% by a well-formed exponent and no ".", else none. Mirrors the lexer's rule
+%% for when `e` starts an exponent at all.
+bare_mantissa_exponent([C | T], Acc) when C >= $0, C =< $9 ->
+    bare_mantissa_exponent(T, [C | Acc]);
+bare_mantissa_exponent([C | T], []) when C =:= $+; C =:= $- ->
+    bare_mantissa_exponent(T, [C]);
+bare_mantissa_exponent([E | T], Acc) when E =:= $e; E =:= $E ->
+    case has_digit(Acc) andalso starts_exponent(T) of
+        true -> {lists:reverse(Acc), [E | T]};
+        false -> none
+    end;
+bare_mantissa_exponent(_, _) -> none.
+
+starts_exponent([C | T]) when C =:= $+; C =:= $- -> starts_exponent(T);
+starts_exponent([D | _]) when D >= $0, D =< $9 -> true;
+starts_exponent(_) -> false.
+
+has_digit(L) -> lists:any(fun(C) -> C >= $0 andalso C =< $9 end, L).
+
 %% Float.parse(s) -> Ok(Float) | Error(ParseError). Full match returns bare
 %% Ok(Flt). Partial (trailing) returns Error(ParseError{value, rest, ...}).
 %% A bare integer like "5" is accepted (to_integer fallback).
 float_parse(S) when is_binary(S) ->
-    case string:to_float(S) of
+    case string:to_float(exp_normalized(S)) of
         {Flt, <<>>} -> {'Ok', Flt};
         {Flt, Rest} when is_float(Flt) ->
             {'Error', parse_error(S, byte_size(S) - byte_size(Rest), Flt,
@@ -106,7 +141,7 @@ float_parse(S) when is_binary(S) ->
             end
     end;
 float_parse(S) ->
-    case string:to_float(S) of
+    case string:to_float(exp_normalized(S)) of
         {Flt, ""} -> {'Ok', Flt};
         {Flt, Rest} when is_float(Flt) ->
             {'Error', parse_error(unicode:characters_to_binary(S),
@@ -130,7 +165,7 @@ float_parse(S) ->
 %% Float.parsePrefix(s) -> Just({Float, Rest}) | none. Parses a leading float
 %% (or bare integer promoted to float), returning a proper Optional tuple.
 float_parse_prefix(S) when is_binary(S) ->
-    case string:to_float(S) of
+    case string:to_float(exp_normalized(S)) of
         {Flt, Rest} when is_float(Flt) -> {'Just', {Flt, Rest}};
         _ ->
             case string:to_integer(S) of

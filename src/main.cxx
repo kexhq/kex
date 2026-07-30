@@ -131,6 +131,31 @@ static auto replHasOpenDelimiter(const std::string &source) -> bool {
          parens > 0 || brackets > 0 || braces > 0;
 }
 
+// Parser accumulates syntax errors instead of throwing, so every REPL path
+// that parses user input has to ask for them. Without this the REPL evaluated
+// whatever partial AST came back and printed its result: `1 + ,1` answered
+// `None : Optional` rather than naming the stray comma, and the BEAM REPL
+// printed nothing at all. Throwing routes the message through the same
+// handler the REPL already uses for evaluation errors.
+static auto throwOnParseErrors(const kex::Parser &parser) -> void {
+  const auto &diagnostics = parser.diagnostics();
+  if (diagnostics.empty()) return;
+  std::string message;
+  for (const auto &diagnostic : diagnostics) {
+    // Each continuation line re-prints the caller's prefix so multiple
+    // syntax errors read as a list rather than one run-on message.
+    if (!message.empty()) message += "\n  error: ";
+    message += diagnostic.message;
+  }
+  throw std::runtime_error(message);
+}
+
+// "3 type errors" / "1 type error" — the count is what makes a long
+// fix-compile-repeat loop legible: it shows whether the last edit helped.
+static auto errorCountPhrase(int count, const char *kind) -> std::string {
+  return std::to_string(count) + " " + kind + (count == 1 ? " error" : " errors");
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
@@ -1113,7 +1138,7 @@ auto compilePreludeCore(const std::string &dir,
         kex::beam::CollectOptions options;
         options.unitId = "kex_prelude";
         options.moduleAtom = built.emitted.moduleName;
-        options.moduleName = "Prelude";
+        options.moduleName = std::string(kex::semantic::kFileLevelPreludeModule);
         options.collectTopLevel = true;
         options.flattenModules = true;
         options.role = kex::beam::KexiModuleRole::Entry;
@@ -1121,8 +1146,10 @@ auto compilePreludeCore(const std::string &dir,
         built.interface = kex::beam::collectMetadata(merged, options);
         built.interface.metadata.package.id = "kex.stdlib";
         built.interface.metadata.package.unitIds = {"kex_prelude"};
-        built.interface.metadata.package.receiverProviders = {"Prelude"};
-        built.interface.metadata.package.automaticImports = {"Prelude"};
+        built.interface.metadata.package.receiverProviders = {
+            std::string(kex::semantic::kFileLevelPreludeModule)};
+        built.interface.metadata.package.automaticImports = {
+            std::string(kex::semantic::kFileLevelPreludeModule)};
         built.interface.sourceHash = kex::preludeSourceHash(files);
       } else {
         kex::beam::CollectOptions options;
@@ -1190,10 +1217,18 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
 // like an undefined function as a raw, un-Kex-like Core Erlang compile
 // error ("unbound variable 'UndefinedFunctionCall' in main/0") instead of
 // this backend-agnostic diagnostic. Returns false if there were any errors.
+// `errorCount`, when given, receives the number of error-level diagnostics
+// reported — the abort message quotes it so a long compile shows progress as
+// the count comes down, rather than just repeating "fix type errors".
 auto runSemanticCheck(const kex::ast::Program &program,
                       const std::string &filepath,
                       kex::semantic::Analyzer *retainedAnalyzer = nullptr,
-                      const std::string &extraDeclFile = "") -> bool {
+                      const std::string &extraDeclFile = "",
+                      int *errorCount = nullptr) -> bool {
+  int errors = 0;
+  auto countError = [&](const kex::semantic::Diagnostic &diag) {
+    if (diag.level == kex::semantic::Diagnostic::Level::Error) errors++;
+  };
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
@@ -1210,6 +1245,7 @@ auto runSemanticCheck(const kex::ast::Program &program,
   for (const auto &diag : runDb.diagnosticsFor(filepath)) {
     if (diag.level == kex::semantic::Diagnostic::Level::Error)
       dbOk = false;
+    countError(diag);
     printSemanticDiagnostic(diag);
   }
 
@@ -1217,8 +1253,10 @@ auto runSemanticCheck(const kex::ast::Program &program,
   kex::semantic::Analyzer localAnalyzer(&preludeSemanticInterfaces());
   auto &analyzer = retainedAnalyzer ? *retainedAnalyzer : localAnalyzer;
   bool ok = analyzer.analyze(program);
-  for (const auto &diag : analyzer.diagnostics())
+  for (const auto &diag : analyzer.diagnostics()) {
+    countError(diag);
     printSemanticDiagnostic(diag);
+  }
 
   bool validationOk = true;
   if (ok && dbOk) {
@@ -1226,10 +1264,12 @@ auto runSemanticCheck(const kex::ast::Program &program,
          kex::validation::validateTaggedLiterals(program, analyzer, moduleRootsFor(filepath))) {
       if (diag.level == kex::semantic::Diagnostic::Level::Error)
         validationOk = false;
+      countError(diag);
       printSemanticDiagnostic(diag);
     }
   }
 
+  if (errorCount) *errorCount = errors;
   return ok && dbOk && validationOk;
 }
 
@@ -1856,6 +1896,7 @@ int main(int argc, char *argv[]) {
           kex::Lexer lex(std::move(src), filePath);
           kex::Parser parser(lex.tokenizeAll(), filePath);
           parser.parseProgram();
+          throwOnParseErrors(parser);
           loadedBeamFiles.push_back(filePath);
           std::cout << "  loaded " << filePath << "\n";
         } catch (const std::exception& e) {
@@ -2002,7 +2043,8 @@ int main(int argc, char *argv[]) {
           kex::Lexer lexer(check);
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
-          parser.parseProgram(); // throws on syntax error
+          parser.parseProgram();
+          throwOnParseErrors(parser);
 
           std::string fname = replDefinitionName(source);
 
@@ -2087,6 +2129,19 @@ int main(int argc, char *argv[]) {
                    *beamSemanticType + "\")";
           };
 
+          // Validate the input on its own before it is wrapped. Wrapping it as
+          // `IO.inspect(<source>)` can turn a syntax error into a well-formed
+          // argument list — `1,2` became `IO.inspect(1,2)`, which parses as a
+          // two-argument call and only failed later on BEAM as an opaque
+          // `undef`. Checking it inside a bare `main` is what the walker REPL
+          // effectively does, so both report the same syntax error.
+          {
+            kex::Lexer checkLexer("main do\n" + source + "\nend\n");
+            kex::Parser checkParser(checkLexer.tokenizeAll());
+            checkParser.parseProgram();
+            throwOnParseErrors(checkParser);
+          }
+
           std::string kexSource;
           if (isLocalLet) {
             std::string puts;
@@ -2112,6 +2167,7 @@ int main(int argc, char *argv[]) {
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
           auto program = parser.parseProgram();
+          throwOnParseErrors(parser);
           // Merge non-MainBlock items from files loaded via /load so their
           // definitions (function defs, make blocks, records, types) are
           // visible to every subsequent REPL input. Re-read on each session
@@ -2467,6 +2523,7 @@ int main(int argc, char *argv[]) {
           // prompt; a stack-local Program leaves those pointers dangling as
           // soon as /load returns.
           auto *prog = new kex::ast::Program(parser.parseProgram());
+          throwOnParseErrors(parser);
           replPrograms.push_back(prog);
           evaluator.execute(*prog);
           replAccumSource += readFile(filePath) + "\n";
@@ -2654,6 +2711,7 @@ int main(int argc, char *argv[]) {
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
           auto *program = new kex::ast::Program(parser.parseProgram());
+          throwOnParseErrors(parser);
           replPrograms.push_back(program);
           execProgram(program);
           // Accumulate and re-index so all prior definitions stay
@@ -2673,6 +2731,7 @@ int main(int argc, char *argv[]) {
           auto tokens = lexer.tokenizeAll();
           kex::Parser parser(std::move(tokens));
           auto *program = new kex::ast::Program(parser.parseProgram());
+          throwOnParseErrors(parser);
           replPrograms.push_back(program);
 
           // A REPL `let` may intentionally shadow a previous binding. Keep
@@ -2925,8 +2984,10 @@ int main(int argc, char *argv[]) {
       }
       std::cerr << kex::color::apply(kex::color::bold)
                 << kex::color::apply(kex::color::magenta)
-                << "Aborted:" << kex::color::apply(kex::color::reset)
-                << " fix syntax errors before "
+                << "Aborted:" << kex::color::apply(kex::color::reset) << " "
+                << errorCountPhrase(static_cast<int>(parser.diagnostics().size()),
+                                    "syntax")
+                << " — fix before "
                 << (mode == "run" || compileRun ? "running" : "compiling")
                 << ".\n";
       return 1;
@@ -3033,14 +3094,16 @@ int main(int argc, char *argv[]) {
         // continue, but overload resolution still has to run: lowering needs
         // the exact selected target even when errors are non-gating.
         const bool gatingAnalysis = mode == "compile" && !skipCheck;
+        int typeErrors = 0;
         const bool analysisOk = gatingAnalysis
-            ? runSemanticCheck(program, filepath, compileAnalysis.get())
+            ? runSemanticCheck(program, filepath, compileAnalysis.get(), "",
+                               &typeErrors)
             : compileAnalysis->analyze(program);
         if (gatingAnalysis && !analysisOk) {
           std::cerr << kex::color::apply(kex::color::bold)
                     << kex::color::apply(kex::color::magenta)
-                    << "Aborted:" << kex::color::apply(kex::color::reset)
-                    << " fix type errors before "
+                    << "Aborted:" << kex::color::apply(kex::color::reset) << " "
+                    << errorCountPhrase(typeErrors, "type") << " — fix before "
                     << (compileRun ? "running" : "compiling")
                     << " (use --no-check to skip).\n";
           return 1;
@@ -3338,12 +3401,15 @@ int main(int argc, char *argv[]) {
     }
 
     if (mode == "run" && !skipCheck) {
-      if (!runSemanticCheck(program, filepath, nullptr, specBaseFile)) {
+      int typeErrors = 0;
+      if (!runSemanticCheck(program, filepath, nullptr, specBaseFile,
+                            &typeErrors)) {
         std::cerr
             << kex::color::apply(kex::color::bold)
             << kex::color::apply(kex::color::magenta)
-            << "Aborted:" << kex::color::apply(kex::color::reset)
-            << " fix type errors before running (use --no-check to skip).\n";
+            << "Aborted:" << kex::color::apply(kex::color::reset) << " "
+            << errorCountPhrase(typeErrors, "type")
+            << " — fix before running (use --no-check to skip).\n";
         return 1;
       }
     }

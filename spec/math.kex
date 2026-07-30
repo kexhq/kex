@@ -12,7 +12,13 @@ main do
   IO.printLine(Math.log(8.0, 2.0)) # log base 2
   IO.printLine(Math.hypot(3.0, 4.0))
   IO.printLine(Math.pow(2.0, 10.0))
-  IO.printLine(Math.cbrt(27.0))
+  # Rounded on purpose. IEEE-754 requires sqrt to be correctly rounded but
+  # says nothing about cbrt, so libm implementations disagree in the last bit:
+  # macOS returns exactly 3.0 here, glibc returns 3.0000000000000004. Printing
+  # the raw Float would make this golden pass on one platform and fail on the
+  # other. Every other line below is either exact or a correctly-rounded
+  # operation, so only this one needs it.
+  IO.printLine(Math.cbrt(27.0).round)
   IO.printLine(Math.exp(0.0))
   IO.printLine(Math.sqrt(2))       # Int args coerce to Float
 end

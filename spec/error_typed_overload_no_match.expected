@@ -3,4 +3,4 @@ spec/error_typed_overload_no_match.kex:6:16: error: `process` expects argument 1
 process : Integer -> Integer
 
 process : String -> String
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

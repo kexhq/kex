@@ -1,0 +1,5 @@
+a raising zero-arg auto-call
+  ✗ reports the error instead of yielding the function value: spec/zero_arg_autocall_error.spec.kex:12:7: runtime error: Division by zero
+  ✓ still auto-calls the ones that succeed
+
+1 passed, 1 failed

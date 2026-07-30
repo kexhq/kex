@@ -17,6 +17,7 @@ public:
 private:
     auto peek() const -> char;
     auto peekNext() const -> char;
+    auto peekAt(int offset) const -> char;
     auto advance() -> char;
     auto atEnd() const -> bool;
     auto match(char expected) -> bool;
@@ -41,6 +42,7 @@ private:
     static auto isUpperAlpha(char c) -> bool;
     static auto isAlpha(char c) -> bool;
     static auto isDigit(char c) -> bool;
+    static auto isHexDigit(char c) -> bool;
     static auto isIdentChar(char c) -> bool;
 
     std::string m_source;
