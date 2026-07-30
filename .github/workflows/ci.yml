@@ -7,16 +7,37 @@ on:
     branches: ["**"]
 
 jobs:
+  # Both platforms, because they genuinely disagree. libm is only required to
+  # correctly round some operations (sqrt, the arithmetic operators); for the
+  # rest — cbrt among them — macOS and glibc differ in the last bit, and float
+  # display prints the shortest text that round-trips, so such a difference
+  # reaches the golden files. Linux-only CI meant a macOS-passing spec could
+  # still break on push (and vice versa), with nothing local able to catch it.
   test:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Report both platforms rather than cancelling the sibling on the first
+      # failure: when they diverge, the interesting information is precisely
+      # which one differs and how.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+
+      # cmake ships with the macOS runner image. No OpenSSL here: CMakeLists
+      # uses CommonCrypto for SHA-256 on Apple. PCRE2 is explicit because,
+      # unlike the Linux image, it is not preinstalled.
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gmp pcre2 boost erlang readline
 
       - name: Build
         run: cmake -B build -G "Unix Makefiles" && cmake --build build
