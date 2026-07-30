@@ -66,3 +66,60 @@ describe("Monoid — List") do
     assert([1, 2].repeat(0) == [])
   end
 end
+
+describe("Monoid — Ordering") do
+  it("identity is Equal") do
+    assert(Equal.combine(Less) == Less)
+    assert(Less.combine(Equal) == Less)
+    assert(Equal.identity == Equal)
+  end
+
+  it("combine keeps the first decisive comparison") do
+    assert(Less.combine(Greater) == Less)
+    assert(Greater.combine(Less) == Greater)
+    assert(Equal.combine(Equal) == Equal)
+  end
+
+  it("combine is associative") do
+    assert(Less.combine(Equal).combine(Greater)
+             == Less.combine(Equal.combine(Greater)))
+    assert(Equal.combine(Greater).combine(Less)
+             == Equal.combine(Greater.combine(Less)))
+  end
+
+  it("repeat is driven by identity and combine") do
+    assert(Less.repeat(3) == Less)
+    assert(Equal.repeat(0) == Equal)
+  end
+end
+
+describe("Ordering — reverse") do
+  it("swaps Less and Greater and fixes Equal") do
+    assert(Less.reverse == Greater)
+    assert(Greater.reverse == Less)
+    assert(Equal.reverse == Equal)
+  end
+
+  it("is its own inverse") do
+    assert(Less.reverse.reverse == Less)
+    assert(Equal.reverse.reverse == Equal)
+  end
+end
+
+describe("Ordering — thenBy") do
+  it("uses the tie-breaker only when Equal") do
+    assert(Equal.thenBy { Greater } == Greater)
+    assert(Less.thenBy { Greater } == Less)
+    assert(Greater.thenBy { Less } == Greater)
+  end
+
+  it("does not evaluate the block once the order is decided") do
+    var ran = false
+    let result = Less.thenBy do
+      ran = true
+      Greater
+    end
+    assert(result == Less)
+    assert(!ran)
+  end
+end

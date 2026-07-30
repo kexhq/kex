@@ -94,6 +94,40 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(std::isspace(static_cast<unsigned char>(c->value)) != 0);
     });
 
+    defineIntrinsic("Char::codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        auto* c = std::get_if<CharValue>(&args[0]->data);
+        if (!c) return Value::integer(0);
+        return Value::integer(static_cast<unsigned char>(c->value));
+    });
+
+    defineIntrinsic("String::fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* value = std::get_if<IntValue>(&args[0]->data);
+        if (!value) return Value::none();
+        const auto cp = value->value;
+        if (cp < 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff))
+            return Value::none();
+
+        std::string result;
+        if (cp <= 0x7f) {
+            result.push_back(static_cast<char>(cp));
+        } else if (cp <= 0x7ff) {
+            result.push_back(static_cast<char>(0xc0 | (cp >> 6)));
+            result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else if (cp <= 0xffff) {
+            result.push_back(static_cast<char>(0xe0 | (cp >> 12)));
+            result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        } else {
+            result.push_back(static_cast<char>(0xf0 | (cp >> 18)));
+            result.push_back(static_cast<char>(0x80 | ((cp >> 12) & 0x3f)));
+            result.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3f)));
+            result.push_back(static_cast<char>(0x80 | (cp & 0x3f)));
+        }
+        return Value::just(Value::string(std::move(result)));
+    });
+
     defineIntrinsic("String::startsWith?", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::boolean(false);
         auto* str = std::get_if<StringValue>(&args[0]->data);

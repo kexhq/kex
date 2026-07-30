@@ -1,5 +1,8 @@
 # kex: run-beam
 # spawn + receive round-trip using |sender| binding.
+
+type Msg = Ping | Pong
+
 main do
   let server = spawn do
     receive do |sender|

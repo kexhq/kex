@@ -1,0 +1,92 @@
+# if let — the binder must be a real, analyzable value in the then-body.
+#
+# spec/if_let.kex already covers which branch runs. It does NOT cover this:
+# every one of its uses of a binder is inside a string interpolation
+# ("got ${n}"), and interpolation contents are not walked by the semantic
+# analyzer. So an analyzer that never brought the binder into scope still
+# passed the whole suite, and the failure only showed up the first time a
+# program used a binder as a bare expression.
+#
+# Every use below is therefore deliberately UNinterpolated: bare argument,
+# UFCS receiver, operand, index target, field access, right-hand side of a
+# let, capture inside a lambda, and scrutinee of a nested match. Do not
+# "tidy" these into ${...} — that is exactly what defeats the test.
+#
+# Expected output:
+# 43
+# 42
+# 84
+# ruby
+# 3.0
+# 7
+# 10
+# 100
+# inner 5
+# elif-ok
+# 9
+
+record Point do
+  x : Float
+  y : Float
+end
+
+main do
+  # Bare binder as a call argument.
+  if let Just(n) = Just(43)
+    IO.printLine(n)
+  end
+
+  # UFCS receiver, and as an operand in arithmetic.
+  if let Just(n) = Just(42)
+    IO.printLine(n.to(String).or("?"))
+    IO.printLine(n * 2)
+  end
+
+  # Index target: binder holds a Map.
+  let conf = { lang: "ruby" }
+  let cfg = Just(conf)
+  if let Just(m) = cfg
+    IO.printLine(m[:lang].or("none"))
+  end
+
+  # Field access on a record binder.
+  let pt0 = Point { x: 3.0, y: 4.0 }
+  let origin = Just(pt0)
+  if let Just(pt) = origin
+    IO.printLine(pt.x)
+  end
+
+  # Right-hand side of a let inside the body, then used again.
+  if let Ok(v) = Ok(7)
+    let doubled = v
+    IO.printLine(doubled)
+  end
+
+  # Tuple pattern — both binders bare.
+  if let Just((a, b)) = Just((10, 100))
+    IO.printLine(a)
+    IO.printLine(b)
+  end
+
+  # Nested if let: inner body sees both binders.
+  if let Just(outer) = Just(Just(5))
+    if let Just(inner) = outer
+      IO.printLine("inner " + inner.to(String).or("?"))
+    end
+  end
+
+  # An if let that also carries elif/else arms.
+  if let Just(k) = Just(1)
+    IO.printLine("elif-ok") if k == 1
+  elif false
+    IO.printLine("nope")
+  else
+    IO.printLine("nope")
+  end
+
+  # Captured by a lambda declared inside the body.
+  if let Ok(base) = Ok(4)
+    let add = { |d| base + d }
+    IO.printLine(add(5))
+  end
+end

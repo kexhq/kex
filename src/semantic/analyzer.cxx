@@ -381,7 +381,16 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::IfExpr>) {
             if (node.condition) analyzeExpr(*node.condition);
-            analyzeBody(node.thenBody);
+            if (node.letPattern) {
+                // `if let Pattern = expr` — the pattern's bindings are in
+                // scope only for the then-body, mirroring resolve_pass.cxx.
+                m_symbols.pushScope(m_inFoulContext);
+                bindPatternVars(*node.letPattern, expr.location);
+                analyzeBody(node.thenBody);
+                m_symbols.popScope();
+            } else {
+                analyzeBody(node.thenBody);
+            }
             for (const auto& [cond, body] : node.elifs) {
                 if (cond) analyzeExpr(*cond);
                 analyzeBody(body);

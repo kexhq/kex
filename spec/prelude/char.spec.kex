@@ -44,3 +44,11 @@ describe("Char — in?") do
     assert(!('0'.in?('a'..'z')))
   end
 end
+
+describe("Char — codepoint") do
+  it("returns the Unicode codepoint") do
+    assert('A'.codepoint == 65)
+    assert('0'.codepoint == 48)
+    assert('\n'.codepoint == 10)
+  end
+end

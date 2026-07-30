@@ -1,0 +1,181 @@
+using Parsing
+
+let twoDigitsForSpec(input: Input) -> (String, Input) or! ParseError do
+  let (first, afterFirst) = input.charWhen(&.digit?).try
+  let (second, afterSecond) = afterFirst.charWhen(&.digit?).try
+  Ok(("${first}${second}", afterSecond))
+end
+
+describe("Parsing.Input") do
+  it("starts at position zero and exposes its remaining input") do
+    let input = Input { input: "abc" }
+
+    assert(input.pos == 0)
+    assert(input.peek == Just('a'))
+    assert(input.remaining == "abc")
+    assert(!input.atEnd?)
+  end
+
+  it("peeks relative to the current position without advancing") do
+    let input = Input { input: "abc", pos: 1 }
+
+    assert(input.peekAt(-1) == Just('a'))
+    assert(input.peekAt(0) == Just('b'))
+    assert(input.peekAt(1) == Just('c'))
+    assert(input.peekAt(2) == None)
+  end
+
+  it("advances immutably") do
+    let input = Input { input: "abcd" }
+    let one = input.advance
+    let three = one.advanceBy(2)
+
+    assert(input.pos == 0)
+    assert(one.pos == 1)
+    assert(one.remaining == "bcd")
+    assert(three.pos == 3)
+    assert(three.peek == Just('d'))
+  end
+
+  it("detects end of input") do
+    let input = Input { input: "a", pos: 1 }
+
+    assert(input.atEnd?)
+    assert(input.peek == None)
+    assert(input.remaining == "")
+  end
+
+  it("skips whitespace") do
+    let input = Input { input: " \t\nabc" }.whiteSpaces
+
+    assert(input.pos == 3)
+    assert(input.remaining == "abc")
+  end
+end
+
+describe("Parsing primitive parsers") do
+  it("charWhen consumes a matching character") do
+    let input = Input { input: "abc" }
+
+    match input.charWhen(&.lower?) do
+      Ok((char, advanced)) -> do
+        assert(char == 'a')
+        assert(advanced.pos == 1)
+      end
+      _ -> assert(false)
+    end
+  end
+
+  it("charWhen reports the character and position on mismatch") do
+    assert(
+      Input { input: "123" }.charWhen(&.lower?) ==
+        Error(Unexpected("1", 0))
+    )
+    assert(
+      Input { input: "", pos: 0 }.charWhen(&.digit?) ==
+        Error(Unexpected("EOF", 0))
+    )
+  end
+
+  it("char consumes only the expected character") do
+    let input = Input { input: "+-" }
+
+    assert(input.char('-') == Error(Unexpected("+", 0)))
+    match input.char('+') do
+      Ok((char, advanced)) -> do
+        assert(char == '+')
+        assert(advanced.remaining == "-")
+      end
+      _ -> assert(false)
+    end
+  end
+end
+
+describe("Parsing combinators") do
+  it("many accepts zero matches") do
+    let input = Input { input: "abc" }
+    let (digits, advanced) = input.many { |p| p.charWhen(&.digit?) }
+
+    assert(digits == [])
+    assert(advanced.pos == 0)
+  end
+
+  it("many consumes all consecutive matches") do
+    let input = Input { input: "123abc" }
+    let (digits, advanced) = input.many { |p| p.charWhen(&.digit?) }
+
+    assert(digits.join("") == "123")
+    assert(advanced.remaining == "abc")
+  end
+
+  it("many stops if a parser succeeds without consuming input") do
+    let input = Input { input: "abc" }
+    let (values, advanced) = input.many { |p| Ok(("same", p)) }
+
+    assert(values == [])
+    assert(advanced.pos == 0)
+  end
+
+  it("some requires at least one match") do
+    let input = Input { input: "42abc" }
+
+    match input.some { |p| p.charWhen(&.digit?) } do
+      Ok((digits, advanced)) -> do
+        assert(digits.join("") == "42")
+        assert(advanced.remaining == "abc")
+      end
+      _ -> assert(false)
+    end
+
+    assert(
+      Input { input: "abc" }.some { |p| p.charWhen(&.digit?) } ==
+        Error(Unexpected("a", 0))
+    )
+  end
+
+  it("choice returns the first successful alternative") do
+    let alternatives = [
+      { |p| p.char('+') },
+      { |p| p.char('-') }
+    ]
+
+    match Input { input: "-" }.choice(alternatives) do
+      Ok((char, advanced)) -> do
+        assert(char == '-')
+        assert(advanced.atEnd?)
+      end
+      _ -> assert(false)
+    end
+  end
+
+  it("choice reports NoMatch when every alternative fails") do
+    let alternatives = [
+      { |p| p.char('+') },
+      { |p| p.char('-') }
+    ]
+
+    assert(
+      Input { input: "x" }.choice(alternatives) ==
+        Error(NoMatch(0))
+    )
+  end
+
+  it("rescue-less .try propagates parser errors from Result functions") do
+    match twoDigitsForSpec(Input { input: "42x" }) do
+      Ok((digits, advanced)) -> do
+        assert(digits == "42")
+        assert(advanced.pos == 2)
+        assert(advanced.remaining == "x")
+      end
+      _ -> assert(false)
+    end
+
+    match twoDigitsForSpec(Input { input: "4x" }) do
+      Error(Unexpected(char, pos)) -> do
+        assert(char == "x")
+        assert(pos == 1)
+      end
+      _ -> assert(false)
+    end
+  end
+end

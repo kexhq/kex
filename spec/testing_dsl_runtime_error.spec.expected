@@ -1,0 +1,5 @@
+it survives more than just failed asserts
+  ✗ catches an ordinary runtime error too, not just assert failures: spec/testing_dsl_runtime_error.spec.kex:15:12: runtime error: Undefined variable: doesNotExist
+  ✓ still runs after the previous test errored
+
+1 passed, 1 failed

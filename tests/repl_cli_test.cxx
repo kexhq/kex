@@ -181,6 +181,18 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        it("accepts indentation before persisted let bindings", []() {
+            const std::string input =
+                "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"
+                "source\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(
+                    out.find("unimplemented expr node") == std::string::npos,
+                    out);
+                assertTrue(out.find("\"name\"") != std::string::npos, out);
+            }
+        });
+
         it("prints the source-level capability type of an open file", []() {
             auto out = runRepl(
                 "using FS\n"
@@ -486,6 +498,42 @@ int main() {
             auto beam = runBeamFile(source, "");
             assertTrue(interpreter.find(expected) != std::string::npos, interpreter);
             assertTrue(beam.find(expected) != std::string::npos, beam);
+        });
+    });
+
+    describe("CLI — opt-in JSON and Parsing stdlib", []() {
+        it("parses commented JSON and serializes it on BEAM", []() {
+            const std::string source =
+                "using JSON\n"
+                "main do\n"
+                "  let Ok(value) = JSON.parse(\"{/*c*/\\\"x\\\":1}\", "
+                "options: { allowComments: true })\n"
+                "  IO.printLine(JSON.stringify(value))\n"
+                "end\n";
+            assertEqual(runBeamFile(source, ""), std::string("{\"x\":1}\n"));
+        });
+
+        it("accesses parsed JSON values in the BEAM REPL", []() {
+            auto out = runBeamRepl(
+                "let source = `{ \"active\": true }`\n"
+                "let config = JSON.parse(source)\n"
+                "config.try[\"active\"]\n"
+                "config.try[\"missing\"]\n");
+            assertTrue(out.find("if_clause") == std::string::npos, out);
+            assertTrue(out.find("Just(true)") != std::string::npos, out);
+            assertTrue(out.find("None : Option") != std::string::npos, out);
+        });
+
+        it("exposes parser combinators on BEAM", []() {
+            const std::string source =
+                "using Parsing\n"
+                "main do\n"
+                "  let input = Input { input: \"12x\" }\n"
+                "  let Ok((digits, rest)) = "
+                "input.some { |p| p.charWhen(&.digit?) }\n"
+                "  IO.printLine(\"${digits.join(\"\")}|${rest.remaining}\")\n"
+                "end\n";
+            assertEqual(runBeamFile(source, ""), std::string("12|x\n"));
         });
     });
 

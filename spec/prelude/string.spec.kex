@@ -120,6 +120,20 @@ describe("String — conversion") do
   end
 end
 
+describe("String — fromCodepoint") do
+  it("constructs a one-codepoint UTF-8 string") do
+    assert(String.fromCodepoint(65) == Just("A"))
+    assert(String.fromCodepoint(955) == Just("λ"))
+    assert(String.fromCodepoint(128640) == Just("🚀"))
+  end
+
+  it("rejects values outside the Unicode scalar range") do
+    assert(String.fromCodepoint(-1) == None)
+    assert(String.fromCodepoint(55296) == None)
+    assert(String.fromCodepoint(1114112) == None)
+  end
+end
+
 describe("String — second and third") do
   it("second returns the second character") do
     assert("abc".second == Just('b'))

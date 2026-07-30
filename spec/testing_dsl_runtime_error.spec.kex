@@ -1,0 +1,21 @@
+# kex: no-check
+# An ordinary runtime error inside `it` is caught and reported as a failed
+# test, and the suite keeps going — the same treatment a failed assert gets.
+#
+# This lives in its own file for a reason. The expected output below records
+# the error's SOURCE LOCATION, so the line number of the `assert` is part of
+# the golden file. Kept in testing_dsl.spec.kex it silently broke whenever
+# anything was inserted above it (adding a single `using` line was enough,
+# and the resulting failure looked like an unrelated regression). Isolating
+# it means only edits to these few lines can invalidate the expectation — and
+# if you do add a line above, regenerate the .expected.
+
+describe("it survives more than just failed asserts") do
+  it("catches an ordinary runtime error too, not just assert failures") do
+    assert(doesNotExist == 1)
+  end
+
+  it("still runs after the previous test errored") do
+    assert(true)
+  end
+end

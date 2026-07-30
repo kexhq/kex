@@ -650,6 +650,10 @@ auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void
 }
 
 auto ResolvePass::isKnown(const std::string& name) const -> bool {
+    // The language's own primitive type vocabulary. A bare type name is a
+    // legal value in a type-directed call (`n.to(Integer)`), and primitives
+    // have no declaration in any source file for the lookups below to find.
+    if (isPrimitiveTypeName(name)) return true;
     // Names brought into scope by `using` remain valid even though their
     // definitions live in another module.
     for (auto it = m_importScopes.rbegin(); it != m_importScopes.rend(); ++it) {
@@ -679,6 +683,9 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
             // unqualified.
             if (m_imports->modules.count(name)) return true;
             if (m_imports->receiverFunctions.count(name)) return true;
+            // Any type declared by the imported sources — ADT, record, or a
+            // constructor-less alias like `type List<X> = [X]`.
+            if (m_imports->typeNames.count(name)) return true;
             for (const auto& adt : m_imports->adts)
                 if (std::find(adt.constructors.begin(),
                               adt.constructors.end(),

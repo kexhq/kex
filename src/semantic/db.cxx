@@ -15,7 +15,9 @@ const std::vector<Diagnostic> SemanticDB::s_emptyDiagnostics;
 const std::vector<SymbolInfo> SemanticDB::s_emptySymbols;
 const std::vector<std::string> SemanticDB::s_emptyPaths;
 
-auto SemanticDB::updateFile(const std::string& path, std::string source) -> void {
+auto SemanticDB::updateFile(const std::string& path, std::string source,
+                            const std::vector<std::string>& companionDeclFiles)
+    -> void {
     FileState& state = m_files[path];
     state.path = path;
     state.version++;
@@ -43,6 +45,28 @@ auto SemanticDB::updateFile(const std::string& path, std::string source) -> void
         fatalParseError = noTokens && !parser.diagnostics().empty();
     }
     if (fatalParseError) return;
+
+    // Companion declarations (see the header): parse each and prepend
+    // everything except its `main` block, so the collect/resolve passes below
+    // treat them as part of this file's unit. Parse diagnostics from a
+    // companion are dropped — it is checked on its own when run directly.
+    for (const auto& companion : companionDeclFiles) {
+        std::ifstream input(companion, std::ios::binary);
+        if (!input) continue;
+        std::string companionSource((std::istreambuf_iterator<char>(input)),
+                                    std::istreambuf_iterator<char>());
+        Lexer companionLexer(std::move(companionSource), companion);
+        Parser companionParser(companionLexer.tokenizeAll(), companion);
+        auto companionAst = companionParser.parseProgram();
+
+        std::vector<ast::TopLevelItem> merged;
+        merged.reserve(companionAst.items.size() + state.ast.items.size());
+        for (auto& item : companionAst.items)
+            if (!std::holds_alternative<std::unique_ptr<ast::MainBlock>>(item))
+                merged.push_back(std::move(item));
+        for (auto& item : state.ast.items) merged.push_back(std::move(item));
+        state.ast.items = std::move(merged);
+    }
 
     // Pass 1: collect all top-level names
     CollectPass collect;

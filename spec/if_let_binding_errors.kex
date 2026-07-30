@@ -1,0 +1,44 @@
+# if let — the binder's scope is exactly the then-body, and the analyzer
+# must enforce both halves of that.
+#
+# The companion runtime spec (spec/if_let_binding_scope.kex) proves the
+# binder IS usable in the then-body. This one proves the checker is actually
+# looking: that it rejects the binder outside the then-body, and that it
+# still catches genuinely undefined names inside it. Without this half, an
+# analyzer that simply skipped the then-body entirely — never binding the
+# pattern and never checking anything — would pass the positive spec.
+#
+# examples/read_package.kex originally shipped with the `else`-branch
+# mistake below, and nothing caught it.
+#
+# kex: check-only
+
+main do
+  # The binder does not escape into the else branch: `if let` binds only on
+  # the matching path, so there is no `json` here.
+  if let Ok(json) = Integer.parse("1")
+    IO.printLine("ok")
+  else
+    IO.printError(json)
+  end
+
+  # Nor does it outlive the if.
+  if let Just(n) = Just(1)
+    IO.printLine("ok")
+  end
+  IO.printLine(n)
+
+  # An elif condition is evaluated when the pattern did NOT match, so the
+  # binder is not in scope there either.
+  if let Just(a) = Just(1)
+    IO.printLine("ok")
+  elif a == 1
+    IO.printLine("nope")
+  end
+
+  # The then-body is still checked normally: a genuinely undefined name is
+  # an error even though a binder is in scope alongside it.
+  if let Just(v) = Just(1)
+    IO.printLine(v + nosuchthing)
+  end
+end

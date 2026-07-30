@@ -3,6 +3,7 @@
 #include "traits.hxx"
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::semantic {
@@ -76,6 +77,13 @@ struct ImportedInterfaces {
     // wrong number of them is a compile error rather than an opaque runtime
     // failure (`if_clause` on BEAM).
     std::unordered_map<std::string, size_t> recordArities;
+    // Every type NAME the imported sources declare: ADTs, records, and
+    // constructor-less aliases such as `type List<X> = [X]`. `adts` only
+    // carries types that have constructors, and it is indexed by those
+    // constructors, so it cannot answer "is `List` a declared type?" — which
+    // name resolution needs, because a bare type name is a legal value in a
+    // type-directed call like `xs.to(List)`.
+    std::unordered_set<std::string> typeNames;
     std::vector<TraitDef> traits;
 };
 

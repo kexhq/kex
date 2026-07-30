@@ -69,6 +69,7 @@ int main() {
         it("generics.kex", []() { assertTrue(parseFile("examples/generics.kex")); });
         it("regexes.kex", []() { assertTrue(parseFile("examples/regexes.kex")); });
         it("json_parser.kex", []() { assertTrue(parseFile("examples/json_parser.kex")); });
+        it("json_stdlib.kex", []() { assertTrue(parseFile("examples/json_stdlib.kex")); });
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(parseFile("examples/mutating.kex")); });
@@ -118,6 +119,9 @@ int main() {
         it("parser_combinators/lib/parsing.kex", []() {
             assertTrue(parseFile("examples/parser_combinators/lib/parsing.kex"));
         });
+        it("parsing_stdlib.kex", []() {
+            assertTrue(parseFile("examples/parsing_stdlib.kex"));
+        });
     });
 
     // Parsing is not enough to catch regressions like a stdlib function
@@ -163,6 +167,14 @@ int main() {
             // static `parse` (see registerIntegerBuiltins's Float::parse).
             auto output = runFile("examples/json_parser.kex");
             assertTrue(output.find("Parsed: JsonObject(") != std::string::npos, output);
+        });
+        it("json_stdlib.kex", []() {
+            auto output = runFile("examples/json_stdlib.kex");
+            assertEqual(output, std::string("{\"active\":true,\"name\":\"Kex\"}\n"));
+        });
+        it("parsing_stdlib.kex", []() {
+            auto output = runFile("examples/parsing_stdlib.kex");
+            assertEqual(output, std::string("123|abc\n"));
         });
         it("testing.kex", []() {
             // Rewritten to use real, parenthesized describe/it/assert

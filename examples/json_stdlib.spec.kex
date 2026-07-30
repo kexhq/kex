@@ -1,0 +1,79 @@
+using JSON
+
+describe("JSON") do
+  it("parses strict JSON values") do
+    assert(JSON.parse("null") == Ok(None))
+    assert(JSON.parse("true") == Ok(true))
+    assert(JSON.parse("-12") == Ok(-12))
+    assert(JSON.parse("1.25e2") == Ok(125.0))
+    let values = JSON.parse("[1,\"two\",false]").try
+    assert(values[0] == 1)
+    assert(values[1] == "two")
+    assert(values[2] == false)
+    assert(JSON.parse("{\"name\":\"Kex\"}") ==
+      Ok({ "name": "Kex" }))
+  end
+
+  it("returns ordinary Kex maps and lists") do
+    let config = JSON.parse("{\"active\":true,\"items\":[1]}").try
+    assert(config["active"] == Just(true))
+    assert(config["missing"] == None)
+    assert(config["items"] == Just([1]))
+  end
+
+  it("is strict by default") do
+    assert(!JSON.parse("// comment\nnull").ok?)
+    assert(!JSON.parse("{/* comment */\"x\":1}").ok?)
+    let verticalTab = String.fromCodepoint(11).or("")
+    assert(!JSON.parse("${verticalTab}null").ok?)
+  end
+
+  it("accepts line and block comments when enabled") do
+    let options = { allowComments: true }
+    assert(JSON.parse("// heading\nnull", options: options) == Ok(None))
+    assert(JSON.parse("{/* key */\"x\":1// value\n}", options: options) ==
+      Ok({ "x": 1 }))
+  end
+
+  it("does not treat comment markers inside strings as comments") do
+    let source = "{\"url\":\"https://kex.dev/a/*b*/\"}"
+    assert(JSON.parse(source, options: { allowComments: true }) ==
+      Ok({ "url": "https://kex.dev/a/*b*/" }))
+  end
+
+  it("rejects malformed input and unknown options") do
+    assert(!JSON.parse("01").ok?)
+    assert(!JSON.parse("1.").ok?)
+    assert(!JSON.parse("[1,]").ok?)
+    assert(!JSON.parse("{} trailing").ok?)
+    assert(JSON.parse("null", options: { unknown: true }) ==
+      Error(UnknownOption(:unknown)))
+  end
+
+  it("decodes unicode escapes and surrogate pairs") do
+    assert(JSON.parse("\"\\u03bb\"") == Ok("λ"))
+    assert(JSON.parse("\"\\ud83d\\ude80\"") == Ok("🚀"))
+    assert(JSON.parse("\"λ🚀\"") == Ok("λ🚀"))
+    assert(JSON.stringify("λ🚀") == "\"λ🚀\"")
+    assert(!JSON.parse("\"\\ud83d\"").ok?)
+  end
+
+  it("handles backspace and form-feed escapes") do
+    let controls = String.fromCodepoint(8).or("") + String.fromCodepoint(12).or("")
+    assert(JSON.parse("\"\\b\\f\"") == Ok(controls))
+    assert(JSON.stringify(controls) == "\"\\b\\f\"")
+  end
+
+  it("serializes strict JSON") do
+    var items: [Any] = []
+    items.push!(None)
+    items.push!(2)
+    let value = {
+      "message": "hello\n\"Kex\"",
+      "enabled": true,
+      "items": items
+    }
+    assert(JSON.stringify(value) ==
+      "{\"enabled\":true,\"items\":[null,2],\"message\":\"hello\\n\\\"Kex\\\"\"}")
+  end
+end

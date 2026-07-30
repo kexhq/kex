@@ -1,0 +1,119 @@
+using JSON
+
+describe("JSON.parse") do
+  it("parses every strict JSON value category into native Kex values") do
+    assert(JSON.parse("null") == Ok(None))
+    assert(JSON.parse("true") == Ok(true))
+    assert(JSON.parse("false") == Ok(false))
+    assert(JSON.parse("-12") == Ok(-12))
+    assert(JSON.parse("1.25e2") == Ok(125.0))
+    assert(JSON.parse("\"Kex\"") == Ok("Kex"))
+    let array = JSON.parse("[1,\"two\",false]").try
+    assert(array[0] == 1)
+    assert(array[1] == "two")
+    assert(array[2] == false)
+    assert(JSON.parse("{\"name\":\"Kex\"}") == Ok({ "name": "Kex" }))
+  end
+
+  it("returns ordinary maps and lists that use their normal APIs") do
+    let config = JSON.parse(
+      "{\"active\":true,\"items\":[1]}"
+    ).try
+
+    assert(config["active"] == Just(true))
+    assert(config["missing"] == None)
+    assert(config["items"] == Just([1]))
+  end
+
+  it("takes no options for strict JSON") do
+    assert(JSON.parse("{\"name\":\"Kex\"}") == Ok({ "name": "Kex" }))
+    assert(!JSON.parse("// comment\nnull").ok?)
+    assert(!JSON.parse("{/* comment */\"x\":1}").ok?)
+  end
+
+  it("accepts line and block comments only when enabled") do
+    let options = { allowComments: true }
+
+    assert(JSON.parse("// heading\nnull", options: options) == Ok(None))
+    assert(
+      JSON.parse(
+        "{/* key */\"x\":1// value\n}",
+        options: options
+      ) == Ok({ "x": 1 })
+    )
+    assert(
+      JSON.parse(
+        "{\"url\":\"https://kex.dev/a/*b*/\"}",
+        options: options
+      ) == Ok({ "url": "https://kex.dev/a/*b*/" })
+    )
+  end
+
+  it("rejects unknown options") do
+    assert(
+      JSON.parse("null", options: { unknown: true }) ==
+        Error(UnknownOption(:unknown))
+    )
+  end
+
+  it("rejects malformed input") do
+    assert(!JSON.parse("01").ok?)
+    assert(!JSON.parse("1.").ok?)
+    assert(!JSON.parse("[1,]").ok?)
+    assert(!JSON.parse("{\"x\":1,}").ok?)
+    assert(!JSON.parse("{} trailing").ok?)
+    assert(!JSON.parse("/* unterminated", options: { allowComments: true }).ok?)
+  end
+
+  it("uses JSON whitespace rules rather than general character whitespace") do
+    let verticalTab = String.fromCodepoint(11).or("")
+    assert(!JSON.parse("${verticalTab}null").ok?)
+  end
+
+  it("decodes unicode escapes and surrogate pairs") do
+    assert(JSON.parse("\"\\u03bb\"") == Ok("λ"))
+    assert(JSON.parse("\"\\ud83d\\ude80\"") == Ok("🚀"))
+    assert(JSON.parse("\"λ🚀\"") == Ok("λ🚀"))
+    assert(!JSON.parse("\"\\ud83d\"").ok?)
+    assert(!JSON.parse("\"\\ude80\"").ok?)
+  end
+end
+
+describe("JSON.stringify") do
+  it("serializes native Kex JSON values as strict JSON") do
+    var items: [Any] = []
+    items.push!(None)
+    items.push!(2)
+    let value = {
+      "message": "hello\n\"Kex\"",
+      "enabled": true,
+      "items": items
+    }
+
+    assert(
+      JSON.stringify(value) ==
+        "{\"enabled\":true,\"items\":[null,2],\"message\":\"hello\\n\\\"Kex\\\"\"}"
+    )
+  end
+
+  it("escapes control characters and preserves unicode text") do
+    let controls = String.fromCodepoint(8).or("") + String.fromCodepoint(12).or("")
+
+    assert(JSON.stringify(controls) == "\"\\b\\f\"")
+    assert(JSON.stringify("λ🚀") == "\"λ🚀\"")
+  end
+
+  it("round-trips supported values") do
+    var array: [Any] = []
+    array.push!(1)
+    array.push!(2.5)
+    array.push!(true)
+    array.push!(None)
+    let value = {
+      "array": array,
+      "text": "Kex"
+    }
+
+    assert(JSON.parse(JSON.stringify(value)) == Ok(value))
+  end
+end

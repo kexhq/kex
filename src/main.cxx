@@ -154,6 +154,19 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   return source.substr(off, end - off);
 }
 
+// Readline preserves whitespace typed or pasted before the first token. Kex's
+// parser accepts that indentation, but the REPL classifies definitions before
+// parsing them; comparing the raw line against "let ", "using ", etc. made an
+// indented definition fall through to expression lowering. Only indentation
+// outside the first token is removed—continuation-line and literal contents
+// remain untouched.
+static auto replTrimLeadingIndent(std::string source) -> std::string {
+  const auto first = source.find_first_not_of(" \t");
+  if (first == std::string::npos) return {};
+  source.erase(0, first);
+  return source;
+}
+
 // Wrap `s` as a single POSIX-shell single-quoted argument, escaping any
 // embedded `'` via the standard close-quote/escaped-literal-quote/reopen
 // idiom (`'\''`). Needed wherever an Erlang -eval string itself contains
@@ -1179,13 +1192,20 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
 // this backend-agnostic diagnostic. Returns false if there were any errors.
 auto runSemanticCheck(const kex::ast::Program &program,
                       const std::string &filepath,
-                      kex::semantic::Analyzer *retainedAnalyzer = nullptr) -> bool {
+                      kex::semantic::Analyzer *retainedAnalyzer = nullptr,
+                      const std::string &extraDeclFile = "") -> bool {
   // Pass 1+2: SemanticDB undefined-name detection
   kex::semantic::SemanticDB runDb;
   runDb.setImportedInterfaces(&preludeSemanticInterfaces());
   runDb.setModuleRoots(moduleRootsFor(filepath));
   loadPrelude(runDb);
-  runDb.updateFile(filepath, readFile(filepath));
+  // A `<name>.spec.kex`'s declarations come from its base `<name>.kex`, which
+  // the Analyzer sees (they are merged into `program`) but the DB would not:
+  // it re-reads `filepath` from disk. Pass the base as a companion so its
+  // types and constructors are not reported as undefined names.
+  std::vector<std::string> companions;
+  if (!extraDeclFile.empty()) companions.push_back(extraDeclFile);
+  runDb.updateFile(filepath, readFile(filepath), companions);
   bool dbOk = true;
   for (const auto &diag : runDb.diagnosticsFor(filepath)) {
     if (diag.level == kex::semantic::Diagnostic::Level::Error)
@@ -1730,6 +1750,7 @@ int main(int argc, char *argv[]) {
           break;
         input = l;
       }
+      input = replTrimLeadingIndent(std::move(input));
       if (input.empty())
         continue;
       if (kex::isReplExit(input))
@@ -2391,6 +2412,7 @@ int main(int argc, char *argv[]) {
       }
       if (!ok)
         break;
+      input = replTrimLeadingIndent(std::move(input));
       line = input;
       if (kex::isReplExit(line))
         break;
@@ -3282,8 +3304,41 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+    // `<name>.spec.kex` auto-loads `<name>.kex`'s declarations — merge them
+    // into `program` BEFORE the semantic check, exactly as the BEAM path
+    // above does. Loading them only into the Evaluator (as this path used to)
+    // leaves the checker blind to the base file's types: spec/
+    // json_parser.spec.kex's `JsonNull`/`JsonBool` come from examples/
+    // json_parser.kex's `type Json`, and the checker rejected every one of
+    // them as an undefined constructor before the program ever ran.
+    std::string specBaseFile;
+    if (mode == "run") {
+      for (const auto &candidate : specBaseCandidates(filepath)) {
+        if (!fileExists(candidate))
+          continue;
+        specBaseFile = candidate;
+
+        auto baseSource = readFile(candidate);
+        kex::Lexer baseLexer(std::move(baseSource), candidate);
+        auto baseTokens = baseLexer.tokenizeAll();
+        kex::Parser baseParser(std::move(baseTokens), candidate);
+        auto baseProgram = baseParser.parseProgram();
+
+        std::vector<kex::ast::TopLevelItem> merged;
+        merged.reserve(baseProgram.items.size() + program.items.size());
+        for (auto &item : baseProgram.items)
+          if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
+                  item))
+            merged.push_back(std::move(item));
+        for (auto &item : program.items)
+          merged.push_back(std::move(item));
+        program.items = std::move(merged);
+        break;
+      }
+    }
+
     if (mode == "run" && !skipCheck) {
-      if (!runSemanticCheck(program, filepath)) {
+      if (!runSemanticCheck(program, filepath, nullptr, specBaseFile)) {
         std::cerr
             << kex::color::apply(kex::color::bold)
             << kex::color::apply(kex::color::magenta)
@@ -3301,34 +3356,10 @@ int main(int argc, char *argv[]) {
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.
 
-      // Must outlive `evaluator.execute(program)` below: the
-      // evaluator keeps raw `const ast::FunctionDef*` pointers into
-      // whatever Program owns these nodes (see m_functionDefs), so a
-      // Program that goes out of scope before the evaluator is done
-      // leaves those pointers dangling — declaring it here, not
-      // inside the loop, keeps it alive for the rest of this block.
-      kex::ast::Program declarationsOnly;
-      for (const auto &candidate : specBaseCandidates(filepath)) {
-        if (!fileExists(candidate))
-          continue;
-
-        auto baseSource = readFile(candidate);
-        kex::Lexer baseLexer(std::move(baseSource), candidate);
-        auto baseTokens = baseLexer.tokenizeAll();
-        kex::Parser baseParser(std::move(baseTokens), candidate);
-        auto baseProgram = baseParser.parseProgram();
-
-        declarationsOnly.items.reserve(baseProgram.items.size());
-        for (auto &item : baseProgram.items) {
-          if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(
-                  item)) {
-            declarationsOnly.items.push_back(std::move(item));
-          }
-        }
-        evaluator.execute(declarationsOnly);
-        break;
-      }
-
+      // The spec base file's declarations were merged into `program` above
+      // (before the semantic check), so there is nothing extra to load here —
+      // and `program` owns those nodes for as long as the evaluator needs the
+      // raw `const ast::FunctionDef*` pointers it keeps into them.
       auto result = evaluator.execute(program);
       if (auto *i = std::get_if<kex::interpreter::IntValue>(&result->data))
         return static_cast<int>(i->value);

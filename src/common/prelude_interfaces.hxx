@@ -410,7 +410,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         // on the wasm build, which has no prebuilt artifacts.
         auto collectArities = [&](const auto& item) {
             if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
-                if (!*td || !(*td)->variants) return;
+                if (!*td) return;
+                // Record the type's NAME before the constructor walk below:
+                // an alias like `type List<X> = [X]` contributes no
+                // constructors and so never reaches `ifaces.adts`, but `List`
+                // is still a declared type name that resolves.
+                ifaces.typeNames.insert((*td)->name);
+                if (!(*td)->variants) return;
                 kex::semantic::ImportedADT adt;
                 adt.name = (*td)->name;
                 for (const auto& variant : *(*td)->variants) {
@@ -430,7 +436,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (!adt.constructors.empty()) ifaces.adts.push_back(std::move(adt));
             } else if (const auto* rd =
                            std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-                if (*rd) ifaces.recordArities[(*rd)->name] = (*rd)->fields.size();
+                if (*rd) {
+                    ifaces.recordArities[(*rd)->name] = (*rd)->fields.size();
+                    ifaces.typeNames.insert((*rd)->name);
+                }
             }
         };
 
@@ -483,6 +492,7 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                      std::make_move_iterator(extra.adts.end()));
     for (auto& [name, arity] : extra.recordArities)
         base.recordArities.try_emplace(name, arity);
+    base.typeNames.insert(extra.typeNames.begin(), extra.typeNames.end());
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),
                        std::make_move_iterator(extra.traits.end()));

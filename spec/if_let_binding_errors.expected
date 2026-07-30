@@ -1,0 +1,7 @@
+spec/if_let_binding_errors.kex:29:16: error: Undefined name: `n`
+spec/if_let_binding_errors.kex:35:8: error: Undefined name: `a`
+spec/if_let_binding_errors.kex:42:22: error: Undefined name: `nosuchthing`
+spec/if_let_binding_errors.kex:22:19: error: Undefined identifier: json
+spec/if_let_binding_errors.kex:29:16: error: Undefined identifier: n
+spec/if_let_binding_errors.kex:35:8: error: Undefined identifier: a
+spec/if_let_binding_errors.kex:42:22: error: Undefined identifier: nosuchthing

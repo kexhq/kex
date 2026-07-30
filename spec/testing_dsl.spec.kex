@@ -113,15 +113,9 @@ describe("nesting") do
   end
 end
 
-describe("it survives more than just failed asserts") do
-  it("catches an ordinary runtime error too, not just assert failures") do
-    assert(doesNotExist == 1)
-  end
-
-  it("still runs after the previous test errored") do
-    assert(true)
-  end
-end
+# A runtime error inside `it` is covered by testing_dsl_runtime_error.spec.kex.
+# It is kept out of this file because its expected output records the error's
+# source line, which anything inserted here would shift.
 
 # Outside of `it`, a failed assert is just an ordinary uncaught error —
 # there's nothing here to catch it, so the program stops.
