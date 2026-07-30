@@ -3,6 +3,13 @@
 # Kex traits do not inherit from one another, so concrete types explicitly
 # implement every structure whose laws they satisfy.
 
+# The result of `Comparable.compare`. Declared here rather than only inside
+# the interpreter so that `Ordering`, `Less`, `Equal` and `Greater` reach the
+# semantic layer the same way every other stdlib type does — through the
+# collected interfaces — instead of existing solely as native environment
+# bindings the type checker and name resolver cannot see.
+type Ordering = Less | Equal | Greater
+
 trait Monoid do
   # `combine` must be associative and `identity` neutral on both sides.
   identity :> This
@@ -39,4 +46,34 @@ end
 make [A], implement: Monoid do
   let identity = []
   let combine(other: This) -> This = this + other
+end
+
+# Ordering is a Monoid under "first decision wins", with Equal as identity.
+# That is what makes multi-key comparison compose instead of nesting ifs:
+#
+#   a.name.compare(b.name).combine(a.age.compare(b.age))
+#
+# `combine` evaluates its argument eagerly, so the later comparison runs even
+# when the earlier one already decided. Use `thenBy` when that matters.
+make Ordering, implement: Monoid do
+  let identity = Equal
+
+  let combine(@Equal, other: Ordering) -> Ordering = other
+  let combine(@Less, _) -> Ordering = Less
+  let combine(@Greater, _) -> Ordering = Greater
+
+  # Swaps Less and Greater and fixes Equal — descending order.
+  reverse :> Ordering
+  let reverse(@Less) -> Ordering = Greater
+  let reverse(@Greater) -> Ordering = Less
+  let reverse(@Equal) -> Ordering = Equal
+
+  # Short-circuiting `combine`: the tie-breaker block runs only when this
+  # comparison is Equal, so it costs nothing once the order is decided.
+  #
+  #   a.name.compare(b.name).thenBy { a.age.compare(b.age) }
+  thenBy :> Block<Ordering> -> Ordering
+  let thenBy(@Equal, tieBreaker) -> Ordering = tieBreaker()
+  let thenBy(@Less, _) -> Ordering = Less
+  let thenBy(@Greater, _) -> Ordering = Greater
 end

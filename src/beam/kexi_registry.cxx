@@ -653,14 +653,25 @@ auto KexiRegistry::buildSemanticInterfaces() const
                     ctors.push_back(ctor.name);
                     arities[ctor.name] = ctor.arity;
                 }
+                interfaces.typeNames.insert(adt.name);
                 interfaces.adts.push_back(
                     {adt.name, std::move(ctors), std::move(arities)});
             }
 
+    // `metadata.adts` only holds types that have constructors. The type
+    // interface lists every declared type, so aliases such as
+    // `type List<X> = [X]` are picked up here rather than being invisible.
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
-            for (const auto& record : module.chunk.metadata.records)
+            for (const auto& te : module.chunk.typeInterface.types)
+                interfaces.typeNames.insert(te.name);
+
+    for (const auto& [_, unit] : m_units)
+        for (const auto& module : unit.modules)
+            for (const auto& record : module.chunk.metadata.records) {
                 interfaces.recordArities[record.name] = record.fields.size();
+                interfaces.typeNames.insert(record.name);
+            }
 
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)

@@ -130,6 +130,12 @@ struct Type {
 };
 
 auto typeToString(const TypePtr& type) -> std::string;
+
+// True for the language's built-in type names — the spellings typeToString
+// produces for primitives, plus the structural types that have no source
+// declaration. These are the type names that resolve without any `type`
+// declaration behind them; everything else must be declared.
+auto isPrimitiveTypeName(const std::string& name) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
 class TypeEnv {

@@ -147,8 +147,11 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     reg.define(TraitDef{"Float", {}});
     reg.define(TraitDef{"Equatable",
         {Signature{"==", {Type::typeVar(-1)}, Type::boolean()}}});
+    // `Ordering` is the type algebra.kex declares and the interpreter builds
+    // Less/Equal/Greater from. The result was previously named "Comparison",
+    // which no declaration anywhere defines.
     reg.define(TraitDef{"Comparable",
-        {Signature{"compare", {Type::typeVar(-1)}, Type::named("Comparison")}}});
+        {Signature{"compare", {Type::typeVar(-1)}, Type::named("Ordering")}}});
     reg.define(TraitDef{"Showable",
         {Signature{"to_s", {}, Type::string()}}});
 

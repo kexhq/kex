@@ -41,7 +41,15 @@ public:
     auto setImportedInterfaces(const ImportedInterfaces* ifaces) -> void {
         m_imports = ifaces;
     }
-    auto updateFile(const std::string& path, std::string source) -> void;
+    // `companionDeclFiles` names files whose top-level declarations belong to
+    // the same compilation unit as `path` — the `<name>.spec.kex` convention,
+    // where the spec's types and functions are declared in `<name>.kex`.
+    // Their declarations are merged into this file's AST before the passes
+    // run; each node keeps its own source location, so diagnostics still
+    // point into the file the code actually came from.
+    auto updateFile(const std::string& path, std::string source,
+                    const std::vector<std::string>& companionDeclFiles = {})
+        -> void;
     auto removeFile(const std::string& path) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;
     auto ensureModule(const std::string& moduleName,

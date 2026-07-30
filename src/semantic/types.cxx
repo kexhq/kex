@@ -1,4 +1,5 @@
 #include "types.hxx"
+#include <unordered_set>
 
 namespace kex::semantic {
 
@@ -108,6 +109,21 @@ auto Type::float64() -> TypePtr {
 
 auto Type::constrained(const std::string& varName, const std::string& traitName) -> TypePtr {
     return std::make_shared<Type>(Type{ConstrainedType{varName, traitName}});
+}
+
+auto isPrimitiveTypeName(const std::string& name) -> bool {
+    // Kept beside typeToString deliberately: these are exactly the names it
+    // prints for types that no source file declares. A structural type such
+    // as List or Map only appears here if the stdlib does not declare it —
+    // `type List<X> = [X]` in list.kex means `List` resolves as a declared
+    // type name and needs no entry.
+    static const std::unordered_set<std::string> names = {
+        "Integer", "Int", "Float", "Number", "String", "Char", "Bool",
+        "Atom", "Void", "Any", "Byte", "Int8", "Int16", "Int32", "Int64",
+        "UInt16", "UInt32", "UInt64", "Float32", "Float64",
+        "Tuple", "Block",
+    };
+    return names.count(name) != 0;
 }
 
 auto typeToString(const TypePtr& type) -> std::string {
