@@ -86,6 +86,10 @@ auto Analyzer::typeOf(const ast::Expr* expr) const -> TypePtr {
     return m_checker.typeOf(expr);
 }
 
+auto Analyzer::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
+    return m_checker.displayTypeOf(expr);
+}
+
 auto Analyzer::typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>& {
     return m_checker.typeMap();
 }
