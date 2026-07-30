@@ -144,6 +144,9 @@ private:
                    SourceLocation loc, bool isMethodCall = false,
                    const ast::MethodCall* methodCall = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    // Trait conformance for a value type, lifting a nullary ADT constructor
+    // (`Dog`) to the ADT that declares the conformance (`Animal`).
+    auto satisfiesTrait(const TypePtr& type, const std::string& traitName) const -> bool;
     auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
 
     // Scope management

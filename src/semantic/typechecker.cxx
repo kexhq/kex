@@ -126,11 +126,21 @@ auto TypeChecker::check(const ast::Program& program,
         }, item);
     }
 
-    if (m_importedInterfaces)
+    if (m_importedInterfaces) {
+        // Constructor names are only unique per ADT: `Kilo` is a nullary
+        // Units.Data prefix and a one-payload Units.SI prefix. These maps are
+        // keyed by bare constructor name, so a name claimed by two different
+        // ADTs is dropped rather than resolved last-writer-wins — which would
+        // reject correct patterns against whichever ADT lost.
+        std::unordered_set<std::string> ambiguous;
         for (const auto& adt : m_importedInterfaces->adts) {
             m_adtVariants[adt.name] = adt.constructors;
             for (const auto& ctor : adt.constructors) {
-                m_adtOfConstructor[ctor] = adt.name;
+                auto [owner, fresh] = m_adtOfConstructor.try_emplace(ctor, adt.name);
+                if (!fresh && owner->second != adt.name) {
+                    ambiguous.insert(ctor);
+                    continue;
+                }
                 auto arity = adt.constructorArities.find(ctor);
                 if (arity != adt.constructorArities.end()) {
                     m_constructorArity[ctor] = arity->second;
@@ -138,6 +148,12 @@ auto TypeChecker::check(const ast::Program& program,
                 }
             }
         }
+        for (const auto& ctor : ambiguous) {
+            m_adtOfConstructor.erase(ctor);
+            m_constructorArity.erase(ctor);
+            m_nullaryConstructors.erase(ctor);
+        }
+    }
 
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {
@@ -2750,6 +2766,34 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
     }
 }
 
+auto TypeChecker::satisfiesTrait(const TypePtr& type,
+                                 const std::string& traitName) const -> bool {
+    if (m_traits.satisfies(type, traitName)) return true;
+    // A nullary constructor's value type is the constructor name (`Dog`,
+    // `Meter`), but the conformance is declared on the ADT that owns it
+    // (`make Animal, implement: Speaker`). Lift to the owner and retry —
+    // otherwise `describe(Dog)` rejects a value the trait plainly covers.
+    auto* named = std::get_if<NamedType>(&type->kind);
+    if (!named) return false;
+    auto ownerSatisfies = [&](const std::string& ownerName) {
+        return ownerName != named->name &&
+               m_traits.satisfies(Type::named(ownerName), traitName);
+    };
+    if (auto owner = m_adtOfConstructor.find(named->name);
+        owner != m_adtOfConstructor.end() && ownerSatisfies(owner->second))
+        return true;
+    // Constructors of a `using`-imported module are registered per module
+    // rather than in the file-local ADT map.
+    for (const auto& [module, constructors] : m_moduleConstructors) {
+        auto constructor = constructors.find(named->name);
+        if (constructor != constructors.end() &&
+            moduleMemberImported(module, named->name) &&
+            ownerSatisfies(constructor->second.typeName))
+            return true;
+    }
+    return false;
+}
+
 auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool {
     auto isPermissive = [](const TypePtr& t) {
         return std::holds_alternative<UnknownType>(t->kind) || std::holds_alternative<TypeVar>(t->kind);
@@ -2759,7 +2803,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // compatible with any expected type.
     if (std::holds_alternative<VoidType>(argType->kind)) return true;
     if (auto* constrained = std::get_if<ConstrainedType>(&paramType->kind)) {
-        return m_traits.satisfies(argType, constrained->traitName);
+        return satisfiesTrait(argType, constrained->traitName);
     }
     // NamedType param that is itself a trait name: `Shape`, `Comparable`, etc.
     // Occurs when a heterogeneous list was widened to a trait element type and
@@ -2771,7 +2815,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
             if (auto* argNamed = std::get_if<NamedType>(&argType->kind);
                 argNamed && argNamed->name == paramNamed->name)
                 return true; // trait-typed value matches trait param
-            return m_traits.satisfies(argType, paramNamed->name);
+            return satisfiesTrait(argType, paramNamed->name);
         }
     }
     // Sized ints/floats and arbitrary-precision Integer aren't distinguished
