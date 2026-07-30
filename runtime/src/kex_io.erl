@@ -356,7 +356,10 @@ value_type_name(X) when is_tuple(X) ->
                 _ -> "Tuple"
             end
     end;
-value_type_name(X) when is_atom(X) -> "Atom";
+%% A nullary constructor lowers to a bare atom, so its type has to come from
+%% the variant registry — otherwise every one of them reported "Atom", and
+%% containers holding them reported "[Atom]" / "Option<Atom>".
+value_type_name(X) when is_atom(X) -> nullary_type_name(X);
 value_type_name(_) -> "Any".
 
 %% Any Kex value as a Kex String VALUE (UTF-8 binary) — what `.to(String)`
