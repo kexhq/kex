@@ -181,6 +181,25 @@ int main() {
             assertTrue(out.find("=> 8 : Int") != std::string::npos, out);
         });
 
+        it("persists var bindings, reassignment, and ! mutation", []() {
+            const std::string input =
+                "var s = \"hello\"\n"
+                "s.replace!(\"lo\", \"a\")\n"
+                "s\n"
+                "var n = 1\n"
+                "n = n + 5\n"
+                "n\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("Undefined identifier: s")
+                           == std::string::npos, out);
+                assertTrue(out.find("unimplemented expr node")
+                           == std::string::npos, out);
+                assertTrue(out.find("=> \"hela\" : String")
+                           != std::string::npos, out);
+                assertTrue(out.find("=> 6 : Int") != std::string::npos, out);
+            }
+        });
+
         it("accepts indentation before persisted let bindings", []() {
             const std::string input =
                 "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"

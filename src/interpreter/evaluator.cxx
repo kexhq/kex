@@ -1223,7 +1223,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 throw RuntimeError("Cannot assign to immutable binding: " + node.name, expr.location);
             }
             m_env->set(node.name, value);
-            return Value::none();
+            // The assigned value, matching BEAM lowering (which yields the
+            // new SSA binding). Returning None made the REPL print
+            // "=> None : Optional" for `n = n + 5`.
+            return value;
         }
         else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
             // Short-circuit && and || before evaluating rhs.
