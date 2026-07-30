@@ -1706,6 +1706,14 @@ int main(int argc, char *argv[]) {
     // independent defs stay in source order.
     std::vector<std::pair<std::string, std::string>> topDefs;
     std::string localBinds; // let x = ... — re-emitted inside main do each eval
+    // Names bound with `var`. They are replayed as `var` (not `let`) so a
+    // later line may reassign or `!`-mutate them, and every evaluation stores
+    // them back into the process dictionary so those mutations survive.
+    std::vector<std::string> mutableBinds;
+    auto isMutableBind = [&](const std::string &name) {
+      return std::find(mutableBinds.begin(), mutableBinds.end(), name) !=
+             mutableBinds.end();
+    };
     // Original local binding sources retained for semantic replay. Runtime
     // replay uses process-dictionary lookups, which intentionally erase the
     // source type and therefore cannot enforce typestate by itself.
@@ -1802,6 +1810,7 @@ int main(int argc, char *argv[]) {
       if (input == "/reset") {
         topDefs.clear();
         localBinds.clear();
+        mutableBinds.clear();
         beamSemanticBinds.clear();
         iteration = 0;
         std::cout << "  (bindings cleared)\n";
@@ -1988,6 +1997,7 @@ int main(int argc, char *argv[]) {
       // Classify: function def vs local let vs expression
       bool isFuncDef = false;
       bool isLocalLet = false;
+      bool isMutableLet = false;
       std::string letVarName;
       std::vector<std::string> patternLetNames;
       {
@@ -1996,6 +2006,11 @@ int main(int argc, char *argv[]) {
           off = 4;
         else if (source.rfind("foul ", 0) == 0)
           off = 5;
+        // `var x = v` is a binding, never a definition — a mutable one, so it
+        // takes the local-binding path rather than being wrapped as an
+        // expression (which lowered `IO.inspect(var x = v)` and failed).
+        else if (source.rfind("var ", 0) == 0)
+          isMutableLet = true;
         // `let Just(x) = ...` destructures a constructor pattern — it binds
         // the pattern's variables, it does not define a function named `Just`.
         // Function names are lowercase, so an uppercase initial rules the
@@ -2029,6 +2044,16 @@ int main(int argc, char *argv[]) {
           } else {
             isFuncDef = true; // 0-arity function def
           }
+        }
+        if (isMutableLet) {
+          size_t i = 4;
+          while (i < source.size() &&
+                 (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+            i++;
+          letVarName = source.substr(4, i - 4);
+          isLocalLet = !letVarName.empty() &&
+                       source.find('=', i) != std::string::npos;
+          isMutableLet = isLocalLet;
         }
       }
       if (source.rfind("module ", 0) == 0 || source.rfind("type ", 0) == 0 ||
@@ -2142,25 +2167,61 @@ int main(int argc, char *argv[]) {
             throwOnParseErrors(checkParser);
           }
 
+          const auto putBack = [](const std::string &name) {
+            return "  Erlang.Erlang.put(:kexrepl" + name + ", " + name + ")\n";
+          };
+          // Any line can mutate a `var` from an earlier line — by reassigning
+          // it or through a `!` method — so every tracked mutable name is
+          // written back, not only the one this line binds.
+          std::string mutablePuts;
+          for (const auto &name : mutableBinds)
+            mutablePuts += putBack(name);
+
+          // `x = v` and `x.foo!(v)` are statements: lowering rejects a `!`
+          // receiver that is not a plain binding, and neither node lowers as
+          // an expression, so they cannot go inside `IO.inspect(...)`. Run the
+          // line as a statement and inspect the variable afterwards.
+          std::string mutatedName;
+          if (!isLocalLet && !isFuncDef) {
+            size_t i = 0;
+            while (i < source.size() &&
+                   (std::isalnum((unsigned char)source[i]) || source[i] == '_'))
+              i++;
+            const auto head = source.substr(0, i);
+            const auto rest = source.find_first_not_of(" \t", i);
+            const bool reassigns = rest != std::string::npos &&
+                                   source[rest] == '=' &&
+                                   rest + 1 < source.size() &&
+                                   source[rest + 1] != '=';
+            const bool mutates = rest != std::string::npos &&
+                                 source[rest] == '.' &&
+                                 source.find('!', rest) != std::string::npos;
+            if (!head.empty() && isMutableBind(head) && (reassigns || mutates))
+              mutatedName = head;
+          }
+
           std::string kexSource;
           if (isLocalLet) {
             std::string puts;
             std::string shown = letVarName;
             if (!patternLetNames.empty()) {
               for (const auto &name : patternLetNames)
-                puts += "  Erlang.Erlang.put(:kexrepl" + name + ", " + name +
-                        ")\n";
+                puts += putBack(name);
               shown = patternLetNames.front();
             } else {
-              puts = "  Erlang.Erlang.put(:kexrepl" + letVarName + ", " +
-                     letVarName + ")\n";
+              puts = putBack(letVarName);
             }
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" + puts +
+                        source + "\n" + puts + mutablePuts +
                         "  " + inspectCall(shown) + "\nend\n";
+          } else if (!mutatedName.empty()) {
+            kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
+                        source + "\n" + mutablePuts +
+                        "  " + inspectCall(mutatedName) + "\nend\n";
           } else {
             kexSource = topDefsStr() + "main do\n" + localBinds +
-                        "  " + inspectCall(source) + "\nend\n";
+                        "  " + inspectCall(source) + "\n" + mutablePuts +
+                        "end\n";
           }
 
           kex::Lexer lexer(kexSource);
@@ -2312,9 +2373,16 @@ int main(int argc, char *argv[]) {
             if (isLambda)
               localBinds += "  " + source + "\n";
             else
-              for (const auto &name : replayNames)
-                localBinds += "  let " + name +
+              for (const auto &name : replayNames) {
+                // A `var` replays as `var`: replaying it as `let` would make
+                // every later line see an immutable binding and reject both
+                // `name = v` and `name.foo!(v)`.
+                localBinds += std::string("  ") +
+                              (isMutableLet ? "var " : "let ") + name +
                               " = Erlang.Erlang.get(:kexrepl" + name + ")\n";
+                if (isMutableLet && !isMutableBind(name))
+                  mutableBinds.push_back(name);
+              }
             beamSemanticBinds.erase(
                 std::remove_if(
                     beamSemanticBinds.begin(), beamSemanticBinds.end(),
@@ -2744,8 +2812,20 @@ int main(int argc, char *argv[]) {
                 std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item);
             if (!main || !*main || (*main)->body.empty())
               continue;
-            const auto *binding = std::get_if<kex::ast::LetExpr>(
-                &(*main)->body.back()->kind);
+            const auto &lastKind = (*main)->body.back()->kind;
+            // `var x = v` binds just as much as `let` does. The runtime value
+            // lives in the evaluator's persistent REPL env either way; what
+            // this record drives is the semantic replay below, and without it
+            // the NEXT line's analysis reports `x` undefined.
+            if (const auto *mutableBinding =
+                    std::get_if<kex::ast::VarExpr>(&lastKind)) {
+              if (!mutableBinding->name.empty()) {
+                bindingName = mutableBinding->name;
+                boundNames = {mutableBinding->name};
+              }
+              continue;
+            }
+            const auto *binding = std::get_if<kex::ast::LetExpr>(&lastKind);
             if (!binding || !binding->pattern)
               continue;
             std::vector<std::string> names;
