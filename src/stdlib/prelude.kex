@@ -28,6 +28,7 @@ using Range
 using Stream
 using String
 using System
+using Time
 using Test
 using TaggedValidation
 using Truthyable

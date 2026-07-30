@@ -1,0 +1,208 @@
+describe("Time") do
+  it("builds and validates dates") do
+    let date = Date.of(2026, 7, 30).try
+    assert(date.year == 2026)
+    assert(date.month == 7)
+    assert(date.day == 30)
+    assert(date.iso == "2026-07-30")
+    assert(Date.of(2026, 2, 30).ok? == false)
+    assert(Date.of(2026, 13, 1).ok? == false)
+    assert(Date.of(2028, 2, 29).ok?)
+  end
+
+  it("builds and validates times of day") do
+    let time = Time.of(14, 3, 9).try
+    assert(time.iso == "14:03:09")
+    assert(time.secondsSinceMidnight == 50589)
+    assert(Time.of(24, 0, 0).ok? == false)
+    assert(Time.of(0, 60, 0).ok? == false)
+    assert(Time.of(0, 0, 60).ok? == false)
+    assert(Time.midnight().iso == "00:00:00")
+    # Nanoseconds are kept on the value but not rendered.
+    assert(Time.of(1, 2, 3, 400000000).try.iso == "01:02:03")
+    assert(Time.of(1, 2, 3, 400000000).try.nanosecond == 400000000)
+  end
+
+  it("converts between civil dates and epoch days") do
+    assert(Date.of(1970, 1, 1).try.epochDay == 0)
+    assert(Date.of(2026, 7, 30).try.epochDay == 20664)
+    assert(Date.fromEpochDay(0).iso == "1970-01-01")
+    assert(Date.fromEpochDay(20664).iso == "2026-07-30")
+    # Before the epoch, where truncating division needs the floor correction.
+    assert(Date.of(1969, 12, 31).try.epochDay == -1)
+    assert(Date.fromEpochDay(-1).iso == "1969-12-31")
+    # The shift constant lands on the algorithm's era boundary, 0000-03-01.
+    assert(Date.fromEpochDay(-719468).iso == "0000-03-01")
+  end
+
+  it("knows weekdays") do
+    # 1970-01-01 was a Thursday.
+    assert(Date.fromEpochDay(0).weekday.name == "Thursday")
+    assert(Date.of(2026, 7, 30).try.weekday.name == "Thursday")
+    assert(Date.of(2026, 8, 1).try.weekday.name == "Saturday")
+    assert(Date.of(2026, 8, 1).try.weekday.weekend?)
+    assert(Date.of(2026, 7, 30).try.weekday.weekend? == false)
+    assert(Date.of(2026, 8, 2).try.weekday.number == 7)
+  end
+
+  it("does calendar arithmetic") do
+    let date = Date.of(2026, 7, 30).try
+    assert(date.addDays(10).iso == "2026-08-09")
+    assert(date.addWeeks(1).iso == "2026-08-06")
+    assert(date.plus(10.days).iso == "2026-08-09")
+    assert(date.minus(1.weeks).iso == "2026-07-23")
+    # A sub-day span truncates: whole days only.
+    assert(date.plus(36.hours).iso == "2026-07-31")
+    assert(date.daysUntil(date.addDays(45)) == 45)
+    assert(date.dayOfYear == 211)
+    assert(Date.of(2026, 1, 1).try.dayOfYear == 1)
+  end
+
+  it("clamps month arithmetic into the target month") do
+    assert(Date.of(2026, 1, 31).try.addMonths(1).iso == "2026-02-28")
+    assert(Date.of(2028, 1, 31).try.addMonths(1).iso == "2028-02-29")
+    assert(Date.of(2026, 7, 30).try.addMonths(7).iso == "2027-02-28")
+    assert(Date.of(2026, 3, 15).try.addMonths(-3).iso == "2025-12-15")
+    assert(Date.of(2026, 7, 30).try.addYears(2).iso == "2028-07-30")
+  end
+
+  it("identifies leap years") do
+    assert(Time.leapYear?(2028))
+    assert(Time.leapYear?(2026) == false)
+    assert(Time.leapYear?(2100) == false)
+    assert(Time.leapYear?(2000))
+  end
+
+  it("renders instants with their offset") do
+    let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
+    assert(moment.iso == "2026-07-30T14:03:00+02:00")
+    assert(moment.utc.iso == "2026-07-30T12:03:00Z")
+    assert(moment.epochSeconds == 1785412980)
+    assert(moment.at(Duration.utcOffset(-5, 0)).iso == "2026-07-30T07:03:00-05:00")
+    assert(DateTime.fromEpochSeconds(0).iso == "1970-01-01T00:00:00Z")
+    assert(DateTime.fromEpochSeconds(-86400).iso == "1969-12-31T00:00:00Z")
+    assert(DateTime.fromEpochSeconds(1785412980, Duration.utcOffset(2, 0)).iso ==
+           "2026-07-30T14:03:00+02:00")
+  end
+
+  it("orders instants by the moment, not by the rendering") do
+    let local = DateTime.parse("2026-07-30T14:03:00+02:00").try
+    let utc = DateTime.parse("2026-07-30T12:03:00Z").try
+    assert(local.compareTo(utc) == Equal)
+    assert(local.before?(local.plus(1.hours)))
+    assert(local.plus(1.hours).after?(local))
+    assert(local.compareTo(local.plus(1.seconds)) == Less)
+  end
+
+  it("adds and subtracts durations from instants") do
+    let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
+    assert(moment.plus(90.minutes).iso == "2026-07-30T15:33:00+02:00")
+    assert(moment.minus(3.hours).iso == "2026-07-30T11:03:00+02:00")
+    # Crossing midnight rolls the date.
+    assert(moment.plus(12.hours).iso == "2026-07-31T02:03:00+02:00")
+    assert(moment.until(moment.plus(2.hours)).wholeMinutes == 120)
+    assert(moment.until(moment.minus(1.hours)).wholeMinutes == -60)
+  end
+
+  it("parses ISO 8601 text") do
+    assert(Date.parse("2026-07-30").try.iso == "2026-07-30")
+    assert(Time.parse("14:03").try.iso == "14:03:00")
+    assert(Time.parse("14:03:09").try.iso == "14:03:09")
+    assert(Time.parse("14:03:09.5").try.iso == "14:03:09")
+    assert(Time.parse("14:03:09.5").try.nanosecond == 500000000)
+    assert(DateTime.parse("2026-07-30T14:03:00Z").try.iso == "2026-07-30T14:03:00Z")
+    # A bare civil datetime reads as UTC.
+    assert(DateTime.parse("2026-07-30T14:03:00").try.iso == "2026-07-30T14:03:00Z")
+    assert(Time.parseOffset("Z").try.wholeSeconds == 0)
+    assert(Time.parseOffset("+02:00").try.wholeSeconds == 7200)
+    assert(Time.parseOffset("-05:30").try.wholeSeconds == -19800)
+  end
+
+  it("reports a parse failure against the whole input") do
+    # Not against the fragment that failed: "2:03 pm" complains about
+    # "2:03 pm", not about "03 pm".
+    match Time.parse("2:03 pm") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 2:03 pm")
+    end
+    match Date.parse("20x6-07-30") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 20x6-07-30")
+    end
+    match DateTime.parse("2026-07-30T14:03:00+0z:00") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 2026-07-30T14:03:00+0z:00")
+    end
+  end
+
+  it("rejects text that is not a date or time") do
+    assert(Date.parse("2026-02-30").ok? == false)
+    assert(Date.parse("nope").ok? == false)
+    assert(Date.parse("2026-07").ok? == false)
+    assert(Time.parse("14").ok? == false)
+    assert(DateTime.parse("2026-07-30 14:03:00").ok? == false)
+    assert(Time.parseOffset("+2").ok? == false)
+  end
+
+  it("describes what went wrong") do
+    match Date.of(2026, 2, 30) do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) == "not a calendar date: 2026-2-30")
+    end
+    match Date.parse("nope") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) == "cannot parse as a date/time: nope")
+    end
+  end
+
+  it("builds durations from plural spellings") do
+    assert(1.seconds.seconds == 1.0)
+    assert(2.minutes.wholeSeconds == 120)
+    assert(3.hours.wholeMinutes == 180)
+    assert(2.days.wholeHours == 48)
+    assert(1.weeks.wholeDays == 7)
+    assert(500.milliseconds.seconds == 0.5)
+    assert(1.5.hours.wholeMinutes == 90)
+    # Truncation is toward zero, both ways.
+    assert(90.minutes.wholeHours == 1)
+    assert((0 - 90).minutes.wholeHours == -1)
+  end
+
+  it("combines and orders durations") do
+    assert(1.hours.plus(30.minutes).wholeMinutes == 90)
+    assert(1.hours.minus(30.minutes).wholeMinutes == 30)
+    assert(1.hours.negated.wholeMinutes == -60)
+    assert(30.minutes.compareTo(1.hours) == Less)
+    assert(1.hours.compareTo(60.minutes) == Equal)
+    assert(Duration.zero().wholeSeconds == 0)
+    assert(Duration.utcOffset(-5, 30).wholeSeconds == -19800)
+  end
+
+  it("answers `now` for every type") do
+    let moment = DateTime.now()
+    let date = Date.now()
+    let clock = Time.now()
+    # All three read the same clock, so the date and time components of the
+    # instant agree with the standalone readings (barring a midnight tick).
+    assert(date.compareTo(moment.date) == Equal)
+    assert(clock.hour == moment.time.hour)
+    assert(Date.today().compareTo(Date.now()) == Equal)
+    assert(Date.utcNow().compareTo(DateTime.utcNow().date) == Equal)
+    assert(Time.utcNow().hour == DateTime.utcNow().time.hour)
+  end
+
+  it("reads the host clock consistently across both backends") do
+    let now = DateTime.now()
+    let utc = DateTime.utcNow()
+    # Same instant rendered two ways, so the civil days can differ but the
+    # epoch seconds cannot drift by more than the time between the calls.
+    assert(now.compareTo(now.utc) == Equal)
+    assert(utc.offset.wholeSeconds == 0)
+    assert(now.until(utc).wholeSeconds.abs <= 5)
+    assert(Date.today().compareTo(DateTime.now().date) == Equal)
+    assert(DateTime.epochNanos() > 1750000000000000000)
+  end
+end

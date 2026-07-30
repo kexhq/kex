@@ -42,6 +42,15 @@ struct ExternalModules {
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
 };
 
+// A variant tag declared outside the module being compiled (the prelude, or
+// a loaded unit). Only display registration needs these: without them a
+// compiled program printed prelude ADTs as raw tuples/atoms.
+struct ExternalVariantTag {
+    std::string tag;
+    int arity = 0;
+    std::string owner;
+};
+
 struct ExternalRecordLayout {
     std::string name;
     std::vector<std::string> fields;
@@ -55,7 +64,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::vector<ExternalRecordLayout>* externalRecords = nullptr,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false)
+                  bool preferExternalReceivers = false,
+                  const std::vector<ExternalVariantTag>* externalVariants = nullptr)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -67,7 +77,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const ExternalModules* externals = nullptr,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
-                  bool preferExternalReceivers = false)
+                  bool preferExternalReceivers = false,
+                  const std::vector<ExternalVariantTag>* externalVariants = nullptr)
     -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the

@@ -123,6 +123,7 @@ add_library(kex_lib
     src/interpreter/stdlib/process.cxx
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
+    src/interpreter/stdlib/time.cxx
     src/interpreter/stdlib/bits.cxx
     src/interpreter/stdlib/console.cxx
     src/interpreter/stdlib/test.cxx

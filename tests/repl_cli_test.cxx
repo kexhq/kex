@@ -465,6 +465,32 @@ int main() {
             assertTrue(out.find("=> :ok : Atom") == std::string::npos, out);
         });
 
+        it("renders prelude ADT variants by constructor, not as raw data", []() {
+            // The prelude's own display info was registered by nobody, so
+            // BEAM printed `(:InvalidFormat, "x")` where the walker printed
+            // `InvalidFormat("x")`.
+            const std::string input = "Date.of(2026, 2, 30)\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("Error(InvalidDate(2026, 2, 30))")
+                           != std::string::npos, out);
+                assertTrue(out.find(":InvalidDate") == std::string::npos, out);
+            }
+        });
+
+        it("types a nullary variant by its ADT, not as an atom", []() {
+            const std::string input =
+                "type Colour = Red | Blue(Integer)\n"
+                "[Red, Red]\n"
+                "Just(Red)\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("[Red, Red] : [Colour]")
+                           != std::string::npos, out);
+                assertTrue(out.find("Just(Red) : Option<Colour>")
+                           != std::string::npos, out);
+                assertTrue(out.find("Atom") == std::string::npos, out);
+            }
+        });
+
         it("renders Optional and Result values as Kex ADTs", []() {
             auto out = runBeamRepl(
                 "Just(42)\n"

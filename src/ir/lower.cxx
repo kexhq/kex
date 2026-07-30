@@ -3804,7 +3804,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::vector<ExternalRecordLayout>* externalRecords,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls,
-                  bool preferExternalReceivers)
+                  bool preferExternalReceivers,
+                  const std::vector<ExternalVariantTag>* externalVariants)
     -> Module {
     Lowering L;
     L.sourceFile = sourcePath;
@@ -3894,6 +3895,13 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         for (const auto& record : *externalRecords) {
             L.collectRecordLayout(record.name, record.fields);
             L.knownTypes.insert(record.name);
+        }
+    // Display info only — deliberately NOT added to variantTagSet, which
+    // drives codegen decisions for tags this module declares itself.
+    if (externalVariants)
+        for (const auto& variant : *externalVariants) {
+            L.variantArity[variant.tag] = variant.arity;
+            L.variantOwner[variant.tag] = variant.owner;
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
@@ -4731,11 +4739,12 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const ExternalModules* externals,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls,
-                  bool preferExternalReceivers)
+                  bool preferExternalReceivers,
+                  const std::vector<ExternalVariantTag>* externalVariants)
     -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
                              externalRecords, resolvedCalls,
-                             preferExternalReceivers);
+                             preferExternalReceivers, externalVariants);
 
     struct Definition {
         std::string path;

@@ -1209,6 +1209,55 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   return layouts;
 }
 
+// Prelude variant tags, so a compiled program can register their display info
+// the same way it registers the prelude's record layouts.
+auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag> {
+  std::vector<kex::ir::ExternalVariantTag> tags;
+  auto runtimeDir = prebuiltRuntimeBeamDir();
+  if (runtimeDir.empty()) return tags;
+  const auto &registry = kex::preludeRegistry(runtimeDir);
+  for (const auto *module : registry.allLoadedModules())
+    for (const auto &adt : module->chunk.metadata.adts)
+      for (const auto &constructor : adt.constructors)
+        tags.push_back({constructor.tagAtom,
+                        static_cast<int>(constructor.arity), adt.name});
+  return tags;
+}
+
+// Display info for everything the PRELUDE declares, in the shape
+// kex_io:register_display/2 expects. A compiled module registers its own
+// records and variants (see lower.cxx's withDisplayInfo), and `/load`
+// registers a loaded unit's — but the prelude's were registered by nobody, so
+// the BEAM REPL printed every prelude ADT as raw data: `(:InvalidFormat, "x")`
+// instead of `InvalidFormat("x")`.
+auto preludeDisplayRegistration() -> std::string {
+  auto runtimeDir = prebuiltRuntimeBeamDir();
+  if (runtimeDir.empty()) return "";
+  std::string records;
+  std::string variants;
+  const auto &registry = kex::preludeRegistry(runtimeDir);
+  for (const auto *module : registry.allLoadedModules()) {
+    for (const auto &record : module->chunk.metadata.records) {
+      if (!records.empty()) records += ", ";
+      records += "'" + record.name + "' => [";
+      for (size_t i = 0; i < record.fields.size(); i++) {
+        if (i) records += ", ";
+        records += "'" + record.fields[i].name + "'";
+      }
+      records += "]";
+    }
+    for (const auto &adt : module->chunk.metadata.adts)
+      for (const auto &constructor : adt.constructors) {
+        if (!variants.empty()) variants += ", ";
+        variants += "'" + constructor.tagAtom + "' => {" +
+                    std::to_string(constructor.arity) + ", '" + adt.name +
+                    "'}";
+      }
+  }
+  if (records.empty() && variants.empty()) return "";
+  return "kex_io:register_display(#{" + records + "}, #{" + variants + "})";
+}
+
 // Runs semantic analysis (undefined-name detection + type checking) and
 // prints any diagnostics, same as plain `run` mode's pre-execution check.
 // Shared by `run` and `compile`/`-R` (BEAM) so both backends catch the same
@@ -1685,6 +1734,16 @@ int main(int argc, char *argv[]) {
                   << kex::color::apply(kex::color::reset) << "\n";
     }
     kex::printReplBanner(std::cout, "BEAM");
+
+    if (!skipPrelude) {
+      const auto preludeDisplay = preludeDisplayRegistration();
+      if (!preludeDisplay.empty()) {
+        std::string nonce = "display_boot";
+        vm.writeLine("exec " + nonce + " " + preludeDisplay);
+        std::string status;
+        vm.readUntilSentinel("KEX_REPL_DONE " + nonce + " ", status);
+      }
+    }
 
     kex::semantic::SemanticDB beamReplDb;
     if (!skipPrelude) {
@@ -3208,13 +3267,16 @@ int main(int argc, char *argv[]) {
       kex::ir::EmitResult result;
       std::vector<kex::ir::EmitResult> moduleResults;
       try {
+        auto preludeVariantTags = loadPreludeVariantTags();
         auto irModules = kex::ir::lowerModules(program, stem,
                                                filepath,
                                                &preludeRecordLayouts,
                                                &preludeExternalModules(),
                                                compileAnalysis
                                                    ? &compileAnalysis->resolvedCalls()
-                                                   : nullptr);
+                                                   : nullptr,
+                                               /*preferExternalReceivers=*/false,
+                                               &preludeVariantTags);
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
         result = moduleResults.front();
