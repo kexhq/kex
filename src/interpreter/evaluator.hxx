@@ -183,6 +183,7 @@ private:
     auto registerEnvBuiltins() -> void;
     auto registerMapBuiltins() -> void;
     auto registerMathBuiltins() -> void;
+    auto registerTimeBuiltins() -> void;
     auto registerBitsBuiltins() -> void;
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;

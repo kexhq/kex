@@ -142,7 +142,7 @@ int main() {
                 assertEqual(fs::path(ordered[i]).filename().string(),
                             std::string(kex::kPreludeTier0[i]));
             assertEqual(fs::path(ordered.back()).filename().string(),
-                        std::string("units.kex"));
+                        std::string(kex::kPreludeTier3.back()));
 
             const auto groups = kex::groupPreludeSourcesByTier(manifest);
             assertEqual(groups[0].size(), kex::kPreludeTier0.size());

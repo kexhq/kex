@@ -64,6 +64,17 @@ auto Evaluator::registerNumberBuiltins() -> void {
         return Value::integer(0);
     });
 
+    // Truncate toward zero, a no-op on integers. Matches
+    // kex_intrinsic_number:toInteger/1, which number.kex's `Float.toInteger`
+    // has always called on BEAM — the interpreter simply never defined it.
+    defineIntrinsic("Number::toInteger", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::integer(0);
+        if (auto i = asInteger(args[0])) return integerResult(*i);
+        if (auto* f = std::get_if<FloatValue>(&args[0]->data))
+            return Value::integer(static_cast<int64_t>(std::trunc(f->value)));
+        return Value::integer(0);
+    });
+
     defineIntrinsic("Number::round", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto i = asInteger(args[0])) return integerResult(*i);

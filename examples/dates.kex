@@ -1,0 +1,70 @@
+# Dates, times, and instants. Everything here is in the prelude — no `using`.
+#
+#   kex examples/dates.kex
+#   kex -R examples/dates.kex     # same output on BEAM
+
+main do
+  IO.printLine("=== Building ===")
+  # Validating constructors return a Result, so bad input is a value, not a
+  # crash. `.try` unwraps it (and propagates the error out of `main`).
+  let launch = Time.dateOf(2026, 7, 30).try
+  let noon = Time.timeOf(12, 0, 0).try
+  IO.printLine("date:     ${launch.iso}")
+  IO.printLine("time:     ${noon.iso}")
+  IO.printLine("weekday:  ${launch.weekday.name} (weekend? ${launch.weekday.weekend?})")
+  IO.printLine("day 211?  ${launch.dayOfYear == 211}")
+
+  match Time.dateOf(2026, 2, 30) do
+    Ok(date) -> IO.printLine("impossible: ${date.iso}")
+    Error(error) -> IO.printLine("rejected: ${Time.errorMessage(error)}")
+  end
+
+  IO.printLine("")
+  IO.printLine("=== Calendar arithmetic ===")
+  # Durations are the plural spellings; the singular ones (5.sec) build unit
+  # Measures instead, which is a different thing on purpose.
+  IO.printLine("in ten days:   ${launch.plus(10.days).iso}")
+  IO.printLine("a week before: ${launch.minus(1.weeks).iso}")
+  IO.printLine("seven months:  ${launch.addMonths(7).iso}")
+  # Month arithmetic clamps into the target month rather than overflowing.
+  IO.printLine("Jan 31 + 1mo:  ${Time.dateOf(2026, 1, 31).try.addMonths(1).iso}")
+  IO.printLine("leap year:     ${Time.dateOf(2028, 1, 1).try.leapYear?}")
+
+  let deadline = launch.addDays(45)
+  IO.printLine("days to go:    ${launch.daysUntil(deadline)}")
+  IO.printLine("before it?     ${launch.before?(deadline)}")
+
+  IO.printLine("")
+  IO.printLine("=== Instants and offsets ===")
+  # A DateTime is a civil date + time + a fixed offset from UTC.
+  let meeting = Time.parseDateTime("2026-07-30T14:03:00+02:00").try
+  IO.printLine("local:   ${meeting.iso}")
+  IO.printLine("as UTC:  ${meeting.utc.iso}")
+  IO.printLine("in -05:  ${meeting.at(Duration.utcOffset(-5, 0)).iso}")
+  IO.printLine("epoch:   ${meeting.epochSeconds}")
+
+  # The offset only changes the rendering, never the instant, so the same
+  # moment written two ways compares Equal.
+  let sameMoment = Time.parseDateTime("2026-07-30T12:03:00Z").try
+  IO.printLine("same instant?  ${sameMoment.compareTo(meeting)}")
+
+  let later = meeting.plus(90.minutes)
+  IO.printLine("+90 minutes:   ${later.iso}")
+  IO.printLine("elapsed hours: ${meeting.until(later).wholeMinutes} minutes")
+
+  IO.printLine("")
+  IO.printLine("=== The epoch, and before it ===")
+  IO.printLine("epoch:      ${Time.fromEpochSeconds(0).iso}")
+  IO.printLine("one day before: ${Time.fromEpochSeconds(-86400).iso}")
+
+  IO.printLine("")
+  IO.printLine("=== Reading the clock ===")
+  # `now` is foul: it reads the host clock, so pure functions cannot call it.
+  let now = Time.now()
+  IO.printLine("today is a ${Time.today().weekday.name}")
+  # `.utc` re-renders the same instant, so it compares Equal to itself —
+  # unlike two separate clock reads, which differ by however long they took.
+  IO.printLine("local and its UTC view agree: ${now.compareTo(now.utc) == Equal}")
+  IO.printLine("this year is ${now.date.year}")
+  IO.printLine("offset here: ${Time.formatOffset(now.offset)}")
+end

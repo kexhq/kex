@@ -179,8 +179,39 @@ elapsed.kind                      # :time
 elapsed.to(String)                # "2.5 s"
 ```
 
-`Duration` is a separate elapsed-span concept intended for `Time`, `Date`, and
-`DateTime`; a value such as `5.sec` is a `Measure`, not a `Duration`.
+`Duration` is a separate elapsed-span concept, used by `Date`, `Time`, and
+`DateTime` (below); a value such as `5.sec` is a `Measure`, not a `Duration`.
+The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
+
+## Dates and times
+
+Three civil record types, all in the prelude. `Date` is a calendar day with no
+time and no zone, `Time` a time of day with no date and no zone, and
+`DateTime` both plus a fixed offset from UTC.
+
+```kex
+let due = Time.dateOf(2026, 7, 30).try   # Result<Date, Time.Error>
+due.iso                                  # "2026-07-30"
+due.weekday.name                         # "Thursday"
+due.plus(10.days).iso                    # "2026-08-09"
+due.addMonths(1).iso                     # clamps into the target month
+
+let moment = Time.parseDateTime("2026-07-30T14:03:00+02:00").try
+moment.utc.iso                           # "2026-07-30T12:03:00Z"
+moment.epochSeconds                      # 1785412980
+moment.compareTo(other)                  # Less | Equal | Greater, by instant
+
+Time.now()                               # foul: reads the host clock
+```
+
+Values are built through the `Time` module (`dateOf`, `timeOf`,
+`fromEpochSeconds`, `parseDate`, `parseTime`, `parseDateTime`, `now`,
+`utcNow`, `today`) and used through methods on the records themselves.
+
+Zones are fixed offsets only — UTC, an explicit `+02:00`, or the system zone's
+offset at a given instant. Named IANA zones and DST rules are not modeled, so
+`Time.now()` is correct for the present moment but cannot predict the offset
+for a future local time.
 
 Physical SI constructors and arithmetic are opt-in through `Units.SI`. `using`
 brings its public names into scope, so qualification is only needed without an
