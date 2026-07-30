@@ -134,6 +134,43 @@ jobs:
           emmake make -j"$(nproc)"
           emmake make install
 
+      # PCRE2 for wasm32, backing the Regex module in the wasm build. Same
+      # arrangement as GMP above: no Emscripten port exists, and
+      # third_party/pcre2-wasm's include/lib are gitignored build output (see
+      # that directory's README.md). Cheap to build compared to GMP, but
+      # cached on the same terms since it never changes unless the version
+      # pin does.
+      - name: Cache PCRE2-for-wasm
+        id: cache-pcre2-wasm
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/pcre2-wasm/include
+            third_party/pcre2-wasm/lib
+          key: pcre2-wasm-10.44-emsdk-5.0.7-v1
+
+      - name: Build PCRE2 for wasm
+        if: steps.cache-pcre2-wasm.outputs.cache-hit != 'true'
+        run: |
+          source emsdk/emsdk_env.sh
+          curl -LO https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
+          tar xf pcre2-10.44.tar.gz
+          mkdir pcre2-10.44/build-wasm && cd pcre2-10.44/build-wasm
+          # --disable-pcre2-jit: the JIT emits native machine code, which does
+          # not exist for wasm. --enable-unicode: regex.cxx compiles patterns
+          # with PCRE2_UTF/PCRE2_UCP, which need it.
+          emconfigure ../configure \
+            --host=wasm32-unknown-emscripten \
+            --build="$(../config.guess)" \
+            --disable-shared \
+            --enable-static \
+            --disable-pcre2-jit \
+            --enable-unicode \
+            --prefix="${GITHUB_WORKSPACE}/third_party/pcre2-wasm" \
+            CFLAGS="-O2"
+          emmake make -j"$(nproc)"
+          emmake make install
+
       - name: Configure and build wasm target
         run: |
           source emsdk/emsdk_env.sh

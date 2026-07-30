@@ -205,11 +205,19 @@ target_link_libraries(kex_lib PUBLIC ${GMPXX_LIB} ${GMP_LIB})
 # the same pattern language. BSD-licensed, so unlike GMP above
 # there is no static/dynamic linking constraint here.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
-    # Not yet built for wasm: that needs a vendored third_party/pcre2-wasm
-    # pipeline alongside gmp-wasm (static build, PCRE2_SUPPORT_JIT=OFF since
-    # wasm has no JIT, PCRE2_SUPPORT_UNICODE=ON to back UTF/UCP). Until that
-    # lands the wasm REPL builds without regex rather than failing to configure.
-    message(STATUS "PCRE2 not wired for wasm yet — Regex module unavailable")
+    # Static build from third_party/pcre2-wasm (gitignored, not vendored —
+    # same arrangement as gmp-wasm above; that directory's README.md has the
+    # recipe). No Emscripten port exists for PCRE2, and unlike GMP its BSD
+    # licence puts no constraint on linking it statically.
+    set(PCRE2_WASM_DIR "${CMAKE_SOURCE_DIR}/third_party/pcre2-wasm")
+    set(PCRE2_LIB "${PCRE2_WASM_DIR}/lib/libpcre2-8.a")
+    set(PCRE2_INCLUDE "${PCRE2_WASM_DIR}/include")
+
+    if(NOT EXISTS "${PCRE2_LIB}" OR NOT EXISTS "${PCRE2_INCLUDE}/pcre2.h")
+        message(FATAL_ERROR
+            "Prebuilt wasm PCRE2 not found under ${PCRE2_WASM_DIR} — see "
+            "third_party/pcre2-wasm/README.md to rebuild it.")
+    endif()
 else()
     find_library(PCRE2_LIB pcre2-8 HINTS /opt/homebrew/lib /usr/local/lib)
     find_path(PCRE2_INCLUDE pcre2.h HINTS /opt/homebrew/include /usr/local/include)
@@ -219,14 +227,16 @@ else()
             "PCRE2 (libpcre2-8) not found — required for the Regex module. "
             "Install it (e.g. `brew install pcre2`) and re-run cmake.")
     endif()
-
-    # PCRE2 requires the code-unit width to be chosen by the including
-    # translation unit; 8 means UTF-8 subjects, matching Kex's String
-    # representation and Erlang `re`'s binary subjects.
-    target_compile_definitions(kex_lib PRIVATE PCRE2_CODE_UNIT_WIDTH=8 KEX_HAVE_PCRE2=1)
-    target_include_directories(kex_lib SYSTEM PUBLIC ${PCRE2_INCLUDE})
-    target_link_libraries(kex_lib PUBLIC ${PCRE2_LIB})
 endif()
+
+# PCRE2 requires the code-unit width to be chosen by the including
+# translation unit; 8 means UTF-8 subjects, matching Kex's String
+# representation and Erlang `re`'s binary subjects. No KEX_HAVE_PCRE2 guard
+# any more: every platform, wasm included, now fails to configure without
+# PCRE2 rather than building a Regex-less interpreter.
+target_compile_definitions(kex_lib PRIVATE PCRE2_CODE_UNIT_WIDTH=8)
+target_include_directories(kex_lib SYSTEM PUBLIC ${PCRE2_INCLUDE})
+target_link_libraries(kex_lib PUBLIC ${PCRE2_LIB})
 
 # SHA-256 for KexI interface hashing: CommonCrypto on macOS, OpenSSL on Linux
 if(NOT APPLE AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")

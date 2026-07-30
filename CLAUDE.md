@@ -17,10 +17,11 @@ Run: `./build/kex <file.kex>`
 
 Powers `web/index.html`'s in-browser REPL. Requires `emsdk` active, pinned to
 **5.0.7** (not Homebrew's Emscripten — see `third_party/gmp-wasm/README.md`
-for a real regression in newer versions), and a prebuilt
-`third_party/gmp-wasm/{include,lib}` (gitignored, not vendored — same
-README has the build recipe). CI builds and caches this from scratch; see
-`.github/workflows/ci.yml`'s `wasm` job.
+for a real regression in newer versions), plus two prebuilt static
+dependencies: `third_party/gmp-wasm/{include,lib}` and
+`third_party/pcre2-wasm/{include,lib}` (both gitignored rather than vendored;
+each directory's README.md has its build recipe). CI builds and caches both
+from scratch; see `.github/workflows/ci.yml`'s `wasm` job.
 
 ```
 make build-wasm   # emcmake cmake -B build-wasm && cmake --build build-wasm
