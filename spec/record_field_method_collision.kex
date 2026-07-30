@@ -1,0 +1,57 @@
+# A record field may share its name with a receiver method — `rest` is a field
+# below and a method on List/String; `value` is a field of the prelude's own
+# ParseError and Measure.
+#
+# On BEAM a field accessor whose name collides is not emitted standalone (it
+# would shadow the method and send `[1,2,3].rest` to a tuple read), so these
+# calls reach the method's type dispatcher instead. That dispatcher had no arm
+# matching a record, so every one of these died with `if_clause` while the
+# walker read the field fine. Both backends must agree here.
+
+record Coll do
+  first : String
+  last  : String
+  count : Integer
+  value : String
+  rest  : String
+  head  : String
+  keys  : String
+  join  : String
+end
+
+let c = Coll { first: "F", last: "L", count: 2, value: "V",
+               rest: "R", head: "H", keys: "K", join: "J" }
+
+IO.printLine(c.first)
+IO.printLine(c.last)
+IO.printLine(c.count)
+IO.printLine(c.value)
+IO.printLine(c.rest)
+IO.printLine(c.head)
+IO.printLine(c.keys)
+IO.printLine(c.join)
+
+# The colliding methods must still reach their real receivers — the field
+# accessor falls through to them rather than replacing them.
+IO.printLine([1, 2, 3].first)
+IO.printLine([1, 2, 3].last)
+IO.printLine([1, 2, 3].count)
+IO.printLine([1, 2, 3].rest)
+IO.printLine(["a", "b"].join(","))
+IO.printLine("abc".rest)
+IO.printLine("abc".length)
+IO.printLine({"k": 1}.keys)
+IO.printLine({"k": 1}.count)
+
+# The same collision on a prelude record reached through a Result — this is
+# the ParseError case, where `rest` and `value` are both fields.
+match Float.parse("1.5xy") do
+  Ok(v) -> IO.printLine("unexpected ok ${v}")
+  Error(e) -> do
+    IO.printLine(e.input)
+    IO.printLine(e.position)
+    IO.printLine(e.value)
+    IO.printLine(e.message)
+    IO.printLine(e.rest)
+  end
+end

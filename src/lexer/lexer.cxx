@@ -1,5 +1,8 @@
 #include "lexer.hxx"
 #include <algorithm>
+#include <cctype>
+#include <gmpxx.h>
+#include <stdexcept>
 #include <unordered_map>
 
 namespace kex {
@@ -194,6 +197,11 @@ auto Lexer::peekNext() const -> char {
     return m_source[m_pos + 1];
 }
 
+auto Lexer::peekAt(int offset) const -> char {
+    if (m_pos + offset >= static_cast<int>(m_source.size())) return '\0';
+    return m_source[m_pos + offset];
+}
+
 auto Lexer::advance() -> char {
     char c = m_source[m_pos++];
     if (c == '\n') {
@@ -258,7 +266,41 @@ auto Lexer::lexIdentifier() -> Token {
 }
 
 auto Lexer::lexNumber() -> Token {
-    std::string num(1, m_source[m_pos - 1]);
+    char first = m_source[m_pos - 1];
+
+    // Radix literals are normalized to their decimal spelling here rather than
+    // carried through as `0x…`: every consumer downstream (stoll/mpz_class in
+    // the evaluator, literal patterns, Core Erlang literal emission) already
+    // understands base 10 and nothing else. The original text stays
+    // recoverable from the token's source offsets.
+    if (first == '0' && (peek() == 'x' || peek() == 'X' ||
+                         peek() == 'b' || peek() == 'B' ||
+                         peek() == 'o' || peek() == 'O')) {
+        char marker = static_cast<char>(std::tolower(static_cast<unsigned char>(peek())));
+        int base = marker == 'x' ? 16 : marker == 'o' ? 8 : 2;
+        const char* what = marker == 'x' ? "hexadecimal"
+                         : marker == 'o' ? "octal" : "binary";
+        advance();
+        std::string digits;
+        while (!atEnd() && (isHexDigit(peek()) || peek() == '_')) {
+            if (peek() == '_') {
+                advance();
+                continue;
+            }
+            digits += advance();
+        }
+        if (digits.empty()) {
+            return errorToken(std::string("Expected ") + what + " digits after '0" + marker + "'");
+        }
+        // mpz_class rejects out-of-range digits (`0b12`, `0o88`) by throwing.
+        try {
+            return makeToken(TokenType::Integer, mpz_class(digits, base).get_str());
+        } catch (const std::invalid_argument&) {
+            return errorToken("'" + digits + "' is not a valid " + what + " literal");
+        }
+    }
+
+    std::string num(1, first);
     bool isFloat = false;
 
     while (!atEnd() && (isDigit(peek()) || peek() == '_')) {
@@ -272,6 +314,31 @@ auto Lexer::lexNumber() -> Token {
     if (!atEnd() && peek() == '.' && isDigit(peekNext())) {
         isFloat = true;
         num += advance();
+        while (!atEnd() && (isDigit(peek()) || peek() == '_')) {
+            if (peek() == '_') {
+                advance();
+                continue;
+            }
+            num += advance();
+        }
+    }
+
+    // Exponent (3e22, 1.5E-4). Only consumed when a well-formed exponent
+    // actually follows, so `2.each` and a bare `2e` still lex as a number
+    // followed by an identifier. An exponent makes the literal a Float even
+    // without a fraction part.
+    bool hasExponent = (peek() == 'e' || peek() == 'E') &&
+        (isDigit(peekNext()) ||
+         ((peekNext() == '+' || peekNext() == '-') && isDigit(peekAt(2))));
+    if (hasExponent) {
+        isFloat = true;
+        // Core Erlang (and Erlang) require a fraction part before the
+        // exponent, so `3e22` has to become `3.0e22`. Lowercased for the same
+        // reason: `3.0E22` is not a valid Erlang float literal.
+        if (num.find('.') == std::string::npos) num += ".0";
+        num += 'e';
+        advance();
+        if (peek() == '+' || peek() == '-') num += advance();
         while (!atEnd() && (isDigit(peek()) || peek() == '_')) {
             if (peek() == '_') {
                 advance();
@@ -538,6 +605,10 @@ auto Lexer::isAlpha(char c) -> bool {
 
 auto Lexer::isDigit(char c) -> bool {
     return c >= '0' && c <= '9';
+}
+
+auto Lexer::isHexDigit(char c) -> bool {
+    return isDigit(c) || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
 }
 
 auto Lexer::isIdentChar(char c) -> bool {

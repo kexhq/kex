@@ -2424,5 +2424,65 @@ int main() {
         });
     });
 
+    // A Kex Float is always finite. Erlang floats cannot represent NaN or
+    // Infinity — every operation that would produce one raises badarith — so
+    // the walker raises too, or the two backends would silently disagree.
+    // The raising itself is asserted here rather than in spec/ because the
+    // message differs by backend (BEAM reports a bare "badarith"), and the
+    // spec suite diffs walker output against BEAM output.
+    describe("Interpreter — Floats are always finite", []() {
+        auto raises = [](const std::string& expr, const std::string& fragment) {
+            try {
+                run("main do\n  IO.printLine(" + expr + ")\nend\n");
+            } catch (const std::exception& error) {
+                return std::string(error.what()).find(fragment) != std::string::npos;
+            }
+            return false;
+        };
+
+        it("raises on a domain error instead of returning NaN", [&]() {
+            assertTrue(raises("Math.sqrt(-1.0)", "Math.sqrt: undefined result (NaN)"),
+                       "Math.sqrt(-1.0) should raise");
+            assertTrue(raises("Math.acos(2.0)", "Math.acos: undefined result (NaN)"),
+                       "Math.acos(2.0) should raise");
+        });
+
+        it("raises on overflow instead of returning Infinity", [&]() {
+            assertTrue(raises("Math.exp(1000.0)", "Math.exp: result overflowed (Infinity)"),
+                       "Math.exp(1000.0) should raise");
+            assertTrue(raises("Math.log(0.0)", "Math.log: result overflowed (-Infinity)"),
+                       "Math.log(0.0) should raise");
+        });
+
+        // BEAM rejects `1.0e308 * 10.0` the same way, so plain arithmetic
+        // needs the check too — not just the Math intrinsics.
+        it("raises when arithmetic overflows", [&]() {
+            assertTrue(raises("1.0e308 * 10.0",
+                              "Float multiplication: result overflowed (Infinity)"),
+                       "float multiplication overflow should raise");
+            assertTrue(raises("1.0e308 + 1.0e308",
+                              "Float addition: result overflowed (Infinity)"),
+                       "float addition overflow should raise");
+            assertTrue(raises("10.0 ^ 400.0",
+                              "Exponentiation: result overflowed (Infinity)"),
+                       "exponentiation overflow should raise");
+        });
+
+        it("rejects a float literal too large to represent", [&]() {
+            assertTrue(raises("1.0e999", "Float literal out of range"),
+                       "an out-of-range float literal should raise");
+        });
+
+        it("still computes finite results", [&]() {
+            auto out = runOutput(
+                "main do\n"
+                "  IO.printLine(Math.sqrt(9.0))\n"
+                "  IO.printLine(Math.atan2(0.0, 0.0))\n"
+                "  IO.printLine(1.0e308 * 0.5)\n"
+                "end\n");
+            assertEqual(out, std::string("3.0\n0.0\n5.0e307\n"));
+        });
+    });
+
     return runAll();
 }

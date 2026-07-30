@@ -1,5 +1,7 @@
 # Truthyable — types that can be checked for boolean truthiness (Crystal semantics).
-# Only false, None, () (Void), and NaN are falsy; everything else is truthy.
+# Only false, None, and () (Void) are falsy; everything else is truthy.
+# There is no NaN to consider: a float operation that would produce one raises
+# instead, matching BEAM (see nonFiniteFloatError in src/interpreter/value.cxx).
 
 trait Truthyable do
   truthy? :> Bool
@@ -18,7 +20,6 @@ end
 
 make Float, implement: Truthyable do
   truthy? :> Bool
-  let truthy?(@NaN) = false
   let truthy?(@_) = true
 end
 

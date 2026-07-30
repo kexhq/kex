@@ -469,21 +469,68 @@ variant_string(X) ->
     Parts = [to_string(E) || E <- Args],
     atom_to_list(Tag) ++ "(" ++ lists:flatten(lists:join(", ", Parts)) ++ ")".
 
-%% Float display — matches src/interpreter/value.cxx's toString exactly:
-%% format with 6 decimal places (not Erlang's ~g, which picks a variable,
-%% shorter number of significant digits and produced real mismatches —
-%% "3.14159" vs "3.141593", "6.28000"/"4.00000" vs "6.28"/"4.0"), then trim
-%% trailing zeros, keeping at least one digit after the decimal point.
+%% Float display — the same algorithm as src/interpreter/value.cxx's
+%% formatFloat, digit for digit, since the spec suite diffs walker output
+%% against BEAM output. Both render the shortest digit string that reads back
+%% as the same double; neither can use its platform default, because
+%% `float_to_list(X, [short])` spells 2000000.0 as "2.0e6" while C++'s
+%% shortest `to_chars` spells it "2e+06".
+%% Signed zero, without arithmetic — `1.0 / 0.0` is a badarith on BEAM.
+format_float(X) when X == 0.0 ->
+    case float_to_list(X, [short]) of
+        [$- | _] -> "-0.0";
+        _        -> "0.0"
+    end;
 format_float(X) ->
-    S = lists:flatten(io_lib:format("~.6f", [X])),
-    case string:split(S, ".") of
-        [Whole, Frac] ->
-            Trimmed = string:trim(Frac, trailing, "0"),
-            case Trimmed of
-                "" -> Whole ++ ".0";
-                _  -> Whole ++ "." ++ Trimmed
-            end;
-        _ -> S
+    S = float_to_list(X, [short]),
+    {Sign, Rest} = case S of
+        [$- | R] -> {"-", R};
+        _        -> {"", S}
+    end,
+    %% Reduce to `Digits * 10^Power`, the one shape both backends agree on
+    %% regardless of how their shortest-round-trip primitive spelled it.
+    {MantS, Exp0} = case string:split(Rest, "e") of
+        [M, E] -> {M, list_to_integer(E)};
+        [M]    -> {M, 0}
+    end,
+    {Whole, Frac} = case string:split(MantS, ".") of
+        [W, F] -> {W, F};
+        [W]    -> {W, ""}
+    end,
+    %% Canonicalize, so "20 * 10^5" and "2 * 10^6" render identically.
+    {Digits, Power} = strip_trailing_zeros(Whole ++ Frac, Exp0 - length(Frac)),
+    Mag = abs(X),
+    case Mag < 1.0e-4 orelse Mag >= 1.0e16 of
+        true  -> Sign ++ sci_float(Digits, Power);
+        false -> Sign ++ plain_float(Digits, Power)
+    end.
+
+strip_trailing_zeros(Digits, Power) when length(Digits) > 1 ->
+    case lists:last(Digits) of
+        $0 -> strip_trailing_zeros(lists:droplast(Digits), Power + 1);
+        _  -> {Digits, Power}
+    end;
+strip_trailing_zeros(Digits, Power) ->
+    {Digits, Power}.
+
+sci_float([D | Rest], Power) ->
+    Frac = case Rest of
+        [] -> "0";
+        _  -> Rest
+    end,
+    [D] ++ "." ++ Frac ++ "e" ++ integer_to_list(Power + length(Rest)).
+
+plain_float(Digits, Power) when Power >= 0 ->
+    %% Whole number — keep it visibly a float ("2" -> "2000000.0").
+    Digits ++ lists:duplicate(Power, $0) ++ ".0";
+plain_float(Digits, Power) ->
+    Shift = -Power,
+    case length(Digits) > Shift of
+        true ->
+            {W, F} = lists:split(length(Digits) - Shift, Digits),
+            W ++ "." ++ F;
+        false ->
+            "0." ++ lists:duplicate(Shift - length(Digits), $0) ++ Digits
     end.
 
 

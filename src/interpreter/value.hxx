@@ -191,6 +191,25 @@ auto asInteger(const ValuePtr& v) -> std::optional<mpz_class>;
 // shrinking back down), otherwise keeps the bignum representation.
 auto integerResult(mpz_class v) -> ValuePtr;
 
+// Erlang floats cannot represent NaN or Infinity: every float operation that
+// would produce one raises `badarith` instead, including plain overflow like
+// `1.0e308 * 10.0`. Kex follows that rule so the walker and the BEAM backend
+// agree, and because a NaN value would otherwise leak into comparisons,
+// pattern matching, and Map keys, where `NaN != NaN` behaves surprisingly.
+//
+// Returns the error message for a non-finite result of the operation named by
+// `what`, or nullopt when `v` is finite and the caller should proceed. The
+// caller raises in whichever style its layer uses (RuntimeError with a source
+// location in the evaluator, std::runtime_error in the stdlib intrinsics).
+auto nonFiniteFloatError(double v, const std::string& what)
+    -> std::optional<std::string>;
+
+// Parses a whole string as an integer in `base` (2-36), with an optional
+// leading sign — nullopt if any character is not a digit of that base, or if
+// the base itself is out of range. Backs both `Integer.parse(s, radix: 16)`
+// and `s.to(Integer, radix: 16)`.
+auto parseIntegerInBase(const std::string& text, int base) -> std::optional<mpz_class>;
+
 // Text content of a String, a Char, or a ListValue whose elements are all
 // Char — nullopt for anything else. String/Char/[Char] are meant to be
 // interchangeable from the language user's standpoint; this is the shared

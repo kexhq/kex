@@ -500,8 +500,20 @@ UPPER_IDENT  = [A-Z] [A-Za-z0-9]* ;
 SPLICE_IDENT = "%" LOWER_IDENT ;
 
 (* Literals *)
-INTEGER = [0-9] [0-9_]* ;
-FLOAT   = [0-9] [0-9_]* "." [0-9] [0-9_]* ;
+(* `_` is a separator anywhere after the first digit (or after the radix
+   marker) and carries no meaning. Radix literals are arbitrary precision like
+   decimal ones, and the lexer hands every consumer the decimal spelling. *)
+INTEGER = DECIMAL | HEX | OCTAL | BINARY ;
+DECIMAL = [0-9] [0-9_]* ;
+HEX     = "0" ("x" | "X") [0-9A-Fa-f] [0-9A-Fa-f_]* ;
+OCTAL   = "0" ("o" | "O") [0-7] [0-7_]* ;
+BINARY  = "0" ("b" | "B") [01] [01_]* ;
+
+(* The fraction part is optional when an exponent is present (3e22), and the
+   exponent is optional when a fraction part is present (3.14). *)
+FLOAT    = DECIMAL "." DECIMAL EXPONENT?
+         | DECIMAL EXPONENT ;
+EXPONENT = ("e" | "E") ("+" | "-")? DECIMAL ;
 STRING  = '"' string_content* '"' ;
 string_content = [^"$\\] | escape | interpolation ;
 escape = "\\" [nrt\\$"] ;

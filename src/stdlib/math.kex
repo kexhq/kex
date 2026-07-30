@@ -1,7 +1,8 @@
 # The +Math+ module provides standard mathematical constants and functions.
-# All trigonometric functions operate in radians. Domain errors
-# (e.g. +Math.sqrt(-1.0)+) produce +NaN+ or +Infinity+ rather than raising,
-# matching IEEE 754 semantics.
+# All trigonometric functions operate in radians. A Kex +Float+ is always
+# finite, so a domain error (+Math.sqrt(-1.0)+) or an overflow
+# (+Math.exp(1000.0)+) raises rather than producing +NaN+ or +Infinity+ —
+# the same rule BEAM enforces, where those two values cannot exist at all.
 module Math do
   # Math.PI : Float
   # Ratio of a circle's circumference to its diameter.
@@ -17,14 +18,14 @@ module Math do
   #   Math.E   # => 2.718281828459045
   let E = 2.71828182845904523536
 
-  # Square root of +x+. Returns +NaN+ for negative input.
+  # Square root of +x+. Raises for negative input, which has no real root.
   #
   # @param x [Number]
   # @return [Float]
   #
   # @example
   #   Math.sqrt(9.0)    # => 3.0
-  #   Math.sqrt(-1.0)   # => NaN
+  #   Math.sqrt(-1.0)   # raises: Math.sqrt: undefined result (NaN)
   sqrt : Number -> Float
   let sqrt(x) = Kex.Intrinsic.Math.sqrt(x)
 

@@ -148,5 +148,14 @@ let or(value, _) = value
 # value (e.g. String, Integer, Float, List). Returns an Optional result.
 let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 
+# Base-aware conversion between Integer and String, in base 2..36:
+#
+#   255.to(String, radix: 16)    # => Just("ff")
+#   "ff".to(Integer, radix: 16)  # => Just(255)
+#
+# Digits above 9 are lowercase on the way out and accepted in either case on
+# the way in. None for any other type pair, or a radix outside 2..36.
+let to(value, t, radix: Integer) = Kex.Intrinsic.Fun.convertTo(value, t, radix)
+
 make Either<L, R>, implement: Eitherable do
 end

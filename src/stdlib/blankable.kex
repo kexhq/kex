@@ -19,7 +19,6 @@ end
 
 make Float, implement: Blankable do
   blank? :> Bool
-  let blank?(@NaN) = true
   let blank?(@_) = false
 end
 

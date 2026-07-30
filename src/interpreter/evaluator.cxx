@@ -1062,7 +1062,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             }
         }
         else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
-            return Value::floating(std::stod(node.value));
+            // A literal too large for a double (1.0e999) rounds to Infinity,
+            // which is not a Kex Float — report it as the out-of-range
+            // literal it is rather than letting it through.
+            double v = 0.0;
+            try {
+                v = std::stod(node.value);
+            } catch (const std::out_of_range&) {
+                throw RuntimeError("Float literal out of range: " + node.value, expr.location);
+            }
+            if (auto error = nonFiniteFloatError(v, "Float literal " + node.value))
+                throw RuntimeError(*error, expr.location);
+            return Value::floating(v);
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
             if (!node.parts.empty()) {
@@ -2136,6 +2147,14 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
         return iv ? static_cast<double>(iv->value) : asMpz.get_d();
     };
 
+    // Float arithmetic that would produce NaN or Infinity raises instead —
+    // including overflow like `1.0e308 * 10.0`, which BEAM also rejects. See
+    // nonFiniteFloatError.
+    auto floatOp = [&loc](double v, const char* what) -> ValuePtr {
+        if (auto error = nonFiniteFloatError(v, what)) throw RuntimeError(*error, loc);
+        return Value::floating(v);
+    };
+
     switch (op) {
         case TokenType::Plus:
             if (li && ri) {
@@ -2143,9 +2162,9 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                 if (!__builtin_add_overflow(li->value, ri->value, &result)) return Value::integer(result);
             }
             if (leftInt && rightInt) return integerResult(*leftInt + *rightInt);
-            if (lf && rf) return Value::floating(lf->value + rf->value);
-            if (leftInt && rf) return Value::floating(intToDouble(li, *leftInt) + rf->value);
-            if (lf && rightInt) return Value::floating(lf->value + intToDouble(ri, *rightInt));
+            if (lf && rf) return floatOp(lf->value + rf->value, "Float addition");
+            if (leftInt && rf) return floatOp(intToDouble(li, *leftInt) + rf->value, "Float addition");
+            if (lf && rightInt) return floatOp(lf->value + intToDouble(ri, *rightInt), "Float addition");
             // String/Char/[Char] concatenate as text — e.g. 'a' + 'b' ==
             // "ab", "ab" + 'c' == "abc". This is broader than the Char/
             // String *equality* rule (Char isn't a String for ==) — here
@@ -2172,9 +2191,9 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                 if (!__builtin_sub_overflow(li->value, ri->value, &result)) return Value::integer(result);
             }
             if (leftInt && rightInt) return integerResult(*leftInt - *rightInt);
-            if (lf && rf) return Value::floating(lf->value - rf->value);
-            if (leftInt && rf) return Value::floating(intToDouble(li, *leftInt) - rf->value);
-            if (lf && rightInt) return Value::floating(lf->value - intToDouble(ri, *rightInt));
+            if (lf && rf) return floatOp(lf->value - rf->value, "Float subtraction");
+            if (leftInt && rf) return floatOp(intToDouble(li, *leftInt) - rf->value, "Float subtraction");
+            if (lf && rightInt) return floatOp(lf->value - intToDouble(ri, *rightInt), "Float subtraction");
             throw RuntimeError("Cannot subtract " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Star:
@@ -2183,9 +2202,9 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                 if (!__builtin_mul_overflow(li->value, ri->value, &result)) return Value::integer(result);
             }
             if (leftInt && rightInt) return integerResult(*leftInt * *rightInt);
-            if (lf && rf) return Value::floating(lf->value * rf->value);
-            if (leftInt && rf) return Value::floating(intToDouble(li, *leftInt) * rf->value);
-            if (lf && rightInt) return Value::floating(lf->value * intToDouble(ri, *rightInt));
+            if (lf && rf) return floatOp(lf->value * rf->value, "Float multiplication");
+            if (leftInt && rf) return floatOp(intToDouble(li, *leftInt) * rf->value, "Float multiplication");
+            if (lf && rightInt) return floatOp(lf->value * intToDouble(ri, *rightInt), "Float multiplication");
             throw RuntimeError("Cannot multiply " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Slash:
@@ -2193,9 +2212,9 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (rf && rf->value == 0.0) throw RuntimeError("Division by zero", loc);
             if (li && ri) return Value::integer(li->value / ri->value);
             if (leftInt && rightInt) return integerResult(*leftInt / *rightInt);
-            if (lf && rf) return Value::floating(lf->value / rf->value);
-            if (leftInt && rf) return Value::floating(intToDouble(li, *leftInt) / rf->value);
-            if (lf && rightInt) return Value::floating(lf->value / intToDouble(ri, *rightInt));
+            if (lf && rf) return floatOp(lf->value / rf->value, "Float division");
+            if (leftInt && rf) return floatOp(intToDouble(li, *leftInt) / rf->value, "Float division");
+            if (lf && rightInt) return floatOp(lf->value / intToDouble(ri, *rightInt), "Float division");
             throw RuntimeError("Cannot divide " + left->typeName() + " and " + right->typeName(), loc);
 
         case TokenType::Percent:
@@ -2219,10 +2238,10 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
                 return integerResult(std::move(result));
             }
             if (leftInt && rightInt)
-                return Value::floating(std::pow(intToDouble(li, *leftInt), intToDouble(ri, *rightInt)));
-            if (lf && rf) return Value::floating(std::pow(lf->value, rf->value));
-            if (leftInt && rf) return Value::floating(std::pow(intToDouble(li, *leftInt), rf->value));
-            if (lf && rightInt) return Value::floating(std::pow(lf->value, intToDouble(ri, *rightInt)));
+                return floatOp(std::pow(intToDouble(li, *leftInt), intToDouble(ri, *rightInt)), "Exponentiation");
+            if (lf && rf) return floatOp(std::pow(lf->value, rf->value), "Exponentiation");
+            if (leftInt && rf) return floatOp(std::pow(intToDouble(li, *leftInt), rf->value), "Exponentiation");
+            if (lf && rightInt) return floatOp(std::pow(lf->value, intToDouble(ri, *rightInt)), "Exponentiation");
             throw RuntimeError("Exponentiation requires numbers", loc);
 
         case TokenType::EqEq: return Value::boolean(valuesEqual(left, right));
@@ -2646,7 +2665,13 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
             return result;
         }
     } catch (...) {
+        // The body already ran and failed — restore the environment the
+        // partial call left behind, but let the error out. Swallowing it here
+        // made `boom` (a bare reference that auto-calls) silently evaluate to
+        // the function value, so a failing statement looked like it succeeded
+        // and the program carried on to the next one.
         m_env = savedEnv;
+        throw;
     }
     return val;
 }
@@ -2889,6 +2914,30 @@ auto Evaluator::registerBuiltins() -> void {
                 targetName = m->name;
             else if (auto* v = std::get_if<VariantValue>(&args[1]->data))
                 targetName = v->tag;
+
+            // Optional third argument: `.to(String, radix: 16)` /
+            // `.to(Integer, radix: 2)`. Only Integer <-> String is base
+            // dependent; anything else with a radix is a conversion that was
+            // not meant, so it fails rather than silently ignoring the base.
+            if (args.size() >= 3) {
+                auto radix = asInteger(args[2]);
+                if (!radix || *radix < 2 || *radix > 36) return Value::none();
+                int base = static_cast<int>(radix->get_si());
+                if (targetName == "String") {
+                    auto i = asInteger(val);
+                    if (!i) return Value::none();
+                    return Value::just(Value::string(i->get_str(base)));
+                }
+                if (targetName == "Integer") {
+                    auto* s = std::get_if<StringValue>(&val->data);
+                    if (!s) return Value::none();
+                    if (auto parsed = parseIntegerInBase(s->value, base))
+                        return Value::just(integerResult(*parsed));
+                    return Value::none();
+                }
+                return Value::none();
+            }
+
             if (targetName == "Integer") {
                 if (std::holds_alternative<IntValue>(val->data) ||
                     std::holds_alternative<BigIntValue>(val->data))
@@ -2915,7 +2964,10 @@ auto Evaluator::registerBuiltins() -> void {
                     try {
                         size_t parsed = 0;
                         auto v = std::stod(s->value, &parsed);
-                        if (parsed == s->value.size()) return Value::just(Value::floating(v));
+                        // std::stod accepts "nan"/"inf", which are not Kex
+                        // Float values — see nonFiniteFloatError.
+                        if (parsed == s->value.size() && !nonFiniteFloatError(v, "to(Float)"))
+                            return Value::just(Value::floating(v));
                     } catch (...) {}
                 }
                 return Value::none();

@@ -101,6 +101,11 @@ auto Evaluator::registerNumberBuiltins() -> void {
         size_t consumed = 0;
         try {
             double v = std::stod(s->value, &consumed);
+            // std::stod accepts "nan" and "inf"; Kex has no such Float values
+            // (see nonFiniteFloatError), so they are invalid input here just
+            // as they are for Erlang's binary_to_float.
+            if (auto bad = nonFiniteFloatError(v, "Float.parse"))
+                return Value::error(parseError(s->value, 0, noVal(), "invalid float", s->value));
             if (consumed != s->value.size())
                 return Value::error(parseError(s->value, consumed, Value::floating(v),
                                                "trailing characters after float",
@@ -119,6 +124,7 @@ auto Evaluator::registerNumberBuiltins() -> void {
         size_t consumed = 0;
         try {
             double v = std::stod(s->value, &consumed);
+            if (nonFiniteFloatError(v, "Float.parsePrefix")) return Value::none();
             return Value::just(Value::tuple({Value::floating(v), Value::string(s->value.substr(consumed))}));
         } catch (const std::exception&) {
             return Value::none();
@@ -129,6 +135,23 @@ auto Evaluator::registerNumberBuiltins() -> void {
     defineIntrinsic("Integer::parse", [parseError, noVal](std::vector<ValuePtr> args) -> ValuePtr {
         auto* s = args.empty() ? nullptr : std::get_if<StringValue>(&args[0]->data);
         if (!s) return Value::error(parseError("", 0, noVal(), "Integer.parse expects a String", ""));
+
+        // Integer.parse(s, radix: 16) — the whole string in the given base.
+        // Unlike base 10 there is no partial-parse story worth telling here:
+        // in base 16 "12z" has no meaningful numeric prefix to report, so a
+        // bad digit is simply an invalid integer.
+        if (args.size() >= 2) {
+            auto radix = asInteger(args[1]);
+            if (!radix || *radix < 2 || *radix > 36)
+                return Value::error(parseError(s->value, 0, noVal(),
+                                               "radix must be between 2 and 36", s->value));
+            if (auto parsed = parseIntegerInBase(s->value, static_cast<int>(radix->get_si())))
+                return Value::ok(integerResult(*parsed));
+            return Value::error(parseError(s->value, 0, noVal(),
+                                           "invalid integer for radix " + radix->get_str(),
+                                           s->value));
+        }
+
         size_t consumed = 0;
         try {
             int64_t v = std::stoll(s->value, &consumed);
@@ -189,7 +212,8 @@ auto Evaluator::registerNumberBuiltins() -> void {
         } catch (...) {}
         try {
             double v = std::stod(s->value, &consumed);
-            if (consumed == s->value.size()) return Value::ok(Value::floating(v));
+            if (consumed == s->value.size() && !nonFiniteFloatError(v, "Number.parse"))
+                return Value::ok(Value::floating(v));
         } catch (...) {}
         return Value::error(parseError(s->value, 0, noVal(), "invalid number", s->value));
     });

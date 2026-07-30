@@ -3,7 +3,7 @@
 %% are expressed there in Kex on top of `modulo`. Receiver is the first arg.
 -module(kex_intrinsic_integer).
 -export([modulo/2, times/2, integer_parse/1,
-         parse/1, parsePrefix/1]).
+         parse/1, parse/2, parsePrefix/1, parse_in_base/2]).
 
 %% Mathematical modulo: the result has the divisor's sign, matching the Kex
 %% interpreter rather than Erlang's dividend-signed rem/2.
@@ -54,6 +54,36 @@ integer_parse_prefix(S) ->
         {Int, Rest} when is_integer(Int) -> {'Just', {Int, Rest}};
         _ -> 'None'
     end.
+
+%% Whole-string parse in base 2..36, mirroring value.cxx's parseIntegerInBase:
+%% an optional sign, then digits valid for that base, and nothing else.
+%% list_to_integer/2 enforces exactly that and, unlike string:to_integer/1,
+%% refuses a partial parse. Digits above 9 are accepted in either case.
+parse_in_base(S, Radix) when is_binary(S) ->
+    parse_in_base(unicode:characters_to_list(S), Radix);
+parse_in_base(S, Radix) when is_integer(Radix), Radix >= 2, Radix =< 36 ->
+    try {ok, list_to_integer(S, Radix)}
+    catch error:badarg -> error
+    end;
+parse_in_base(_, _) -> error.
+
+as_binary(S) when is_binary(S) -> S;
+as_binary(S) -> unicode:characters_to_binary(S).
+
+%% Integer.parse(s, radix: N). In a non-decimal base there is no meaningful
+%% numeric prefix to report for a bad digit ("12z" in base 16), so the whole
+%% string either parses or it does not — see src/interpreter/stdlib/number.cxx.
+parse(S, Radix) when is_integer(Radix), Radix >= 2, Radix =< 36 ->
+    case parse_in_base(S, Radix) of
+        {ok, N} -> {'Ok', N};
+        error ->
+            Msg = unicode:characters_to_binary(
+                    "invalid integer for radix " ++ integer_to_list(Radix)),
+            {'Error', parse_error(as_binary(S), 0, 'None', Msg, as_binary(S))}
+    end;
+parse(S, _Radix) ->
+    {'Error', parse_error(as_binary(S), 0, 'None',
+                          <<"radix must be between 2 and 36">>, as_binary(S))}.
 
 parse(S) -> integer_parse(S).
 parsePrefix(S) -> integer_parse_prefix(S).

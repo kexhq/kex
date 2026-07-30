@@ -1,0 +1,27 @@
+# kex: no-check
+# A bare reference to a zero-arg function auto-calls it. When that call
+# raises, the error must surface — it used to be swallowed, leaving the
+# reference evaluating to the function value so a failing statement looked
+# like it had succeeded and the program carried on to the next one.
+#
+# Like testing_dsl_runtime_error.spec.kex, the expected output records the
+# error's SOURCE LOCATION, so the line numbers below are part of the golden
+# file. Regenerate the .expected if you add a line above them.
+
+let boom do
+  1 / 0
+end
+
+let fine do
+  42
+end
+
+describe("a raising zero-arg auto-call") do
+  it("reports the error instead of yielding the function value") do
+    assert(boom == 0)
+  end
+
+  it("still auto-calls the ones that succeed") do
+    assert(fine == 42)
+  end
+end

@@ -1,9 +1,80 @@
 #include "value.hxx"
 #include "../common/color.hxx"
 #include <algorithm>
+#include <charconv>
+#include <cmath>
 #include <optional>
 
 namespace kex::interpreter {
+
+namespace {
+
+// `std::to_string` is `%f`: six decimals, no exponent. That silently printed
+// every float below ~1e-7 as "0.0" and truncated the rest (pi came out
+// "3.141593"), so a literal like `345e-22` could not survive a round trip
+// through display. What follows renders the *shortest* digit string that
+// reads back as the same double.
+//
+// runtime/src/kex_io.erl's format_float/1 implements this same algorithm
+// digit for digit — the two must agree, since the spec suite diffs walker
+// output against BEAM output. Neither side can just use its platform's
+// default float formatting: `to_chars` shortest renders 2000000.0 as
+// "2e+06" and Erlang's `float_to_list(X, [short])` renders it "2.0e6".
+auto formatFloat(double v) -> std::string {
+    // Unreachable from Kex code — nonFiniteFloatError makes producing either
+    // value an error. Kept so a NaN arriving from a future intrinsic that
+    // forgets the check prints as itself instead of as garbage digits.
+    if (std::isnan(v)) return "NaN";
+    if (std::isinf(v)) return v < 0 ? "-Infinity" : "Infinity";
+    if (v == 0.0) return std::signbit(v) ? "-0.0" : "0.0";
+
+    char buf[64];
+    auto [end, ec] = std::to_chars(buf, buf + sizeof(buf), v,
+                                   std::chars_format::scientific);
+    std::string s(buf, end);
+
+    bool neg = s[0] == '-';
+    if (neg) s.erase(0, 1);
+
+    // Reduce to `digits * 10^power`, the one shape both backends agree on
+    // regardless of how their shortest-round-trip primitive spelled it.
+    auto epos = s.find('e');
+    std::string mantissa = s.substr(0, epos);
+    int power = std::stoi(s.substr(epos + 1));
+    auto dot = mantissa.find('.');
+    if (dot != std::string::npos) {
+        power -= static_cast<int>(mantissa.size() - dot - 1);
+        mantissa.erase(dot, 1);
+    }
+    // Canonicalize, so "20 * 10^5" and "2 * 10^6" render identically.
+    while (mantissa.size() > 1 && mantissa.back() == '0') {
+        mantissa.pop_back();
+        power++;
+    }
+
+    // Plain notation over the range people actually read as a number,
+    // exponent form outside it.
+    double mag = std::fabs(v);
+    std::string sign = neg ? "-" : "";
+    if (mag < 1e-4 || mag >= 1e16) {
+        std::string frac = mantissa.size() > 1 ? mantissa.substr(1) : "0";
+        int exponent = power + static_cast<int>(mantissa.size()) - 1;
+        return sign + mantissa.substr(0, 1) + "." + frac + "e" + std::to_string(exponent);
+    }
+
+    if (power >= 0) {
+        // Whole number — keep it visibly a float ("2" -> "2000000.0").
+        return sign + mantissa + std::string(power, '0') + ".0";
+    }
+    auto shift = static_cast<size_t>(-power);
+    if (mantissa.size() > shift) {
+        return sign + mantissa.substr(0, mantissa.size() - shift) + "." +
+               mantissa.substr(mantissa.size() - shift);
+    }
+    return sign + "0." + std::string(shift - mantissa.size(), '0') + mantissa;
+}
+
+} // namespace
 
 auto Value::none() -> ValuePtr {
     return std::make_shared<Value>(Value{VariantValue{"None", "Optional", {}, {"X"}, {}}});
@@ -52,6 +123,36 @@ auto integerResult(mpz_class v) -> ValuePtr {
         return Value::integer(std::stoll(v.get_str()));
     }
     return Value::bigInteger(std::move(v));
+}
+
+auto nonFiniteFloatError(double v, const std::string& what)
+    -> std::optional<std::string> {
+    if (std::isnan(v)) return what + ": undefined result (NaN)";
+    if (std::isinf(v))
+        return what + ": result overflowed (" +
+               (v < 0 ? "-Infinity" : "Infinity") + ")";
+    return std::nullopt;
+}
+
+auto parseIntegerInBase(const std::string& text, int base) -> std::optional<mpz_class> {
+    if (base < 2 || base > 36) return std::nullopt;
+    if (text.empty()) return std::nullopt;
+    // mpz_set_str is lenient about embedded whitespace and would accept
+    // " 1 2 " as 12; the digit check keeps it to exactly what Kex accepts.
+    size_t i = (text[0] == '+' || text[0] == '-') ? 1 : 0;
+    if (i == text.size()) return std::nullopt;
+    for (size_t d = i; d < text.size(); d++) {
+        int value;
+        char c = text[d];
+        if (c >= '0' && c <= '9') value = c - '0';
+        else if (c >= 'a' && c <= 'z') value = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'Z') value = c - 'A' + 10;
+        else return std::nullopt;
+        if (value >= base) return std::nullopt;
+    }
+    mpz_class out;
+    if (mpz_set_str(out.get_mpz_t(), text.c_str(), base) != 0) return std::nullopt;
+    return out;
 }
 
 auto Value::floating(double v) -> ValuePtr {
@@ -132,17 +233,7 @@ auto Value::toString() const -> std::string {
         if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return std::to_string(v.value);
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
-        else if constexpr (std::is_same_v<T, FloatValue>) {
-            auto s = std::to_string(v.value);
-            // Remove trailing zeros but keep at least one decimal
-            auto dot = s.find('.');
-            if (dot != std::string::npos) {
-                auto last = s.find_last_not_of('0');
-                if (last == dot) last++;
-                s = s.substr(0, last + 1);
-            }
-            return s;
-        }
+        else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
         else if constexpr (std::is_same_v<T, StringValue>) return v.value;
         else if constexpr (std::is_same_v<T, CharValue>) return std::string(1, v.value);
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
@@ -514,16 +605,8 @@ auto Value::inspect() const -> std::string {
                 return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
             else if constexpr (std::is_same_v<T, BigIntValue>)
                 return std::string(c(yellow)) + node.value.get_str() + c(reset);
-            else if constexpr (std::is_same_v<T, FloatValue>) {
-                auto s = std::to_string(node.value);
-                auto dot = s.find('.');
-                if (dot != std::string::npos) {
-                    auto last = s.find_last_not_of('0');
-                    if (last == dot) last++;
-                    s = s.substr(0, last + 1);
-                }
-                return std::string(c(yellow)) + s + c(reset);
-            }
+            else if constexpr (std::is_same_v<T, FloatValue>)
+                return std::string(c(yellow)) + formatFloat(node.value) + c(reset);
             else if constexpr (std::is_same_v<T, StringValue>)
                 return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
             else if constexpr (std::is_same_v<T, CharValue>)

@@ -1,0 +1,52 @@
+# A Kex Float is always finite. Erlang floats cannot represent NaN or
+# Infinity — any operation producing one raises `badarith` — so Kex raises on
+# both backends rather than letting either value exist.
+#
+# The raising itself is asserted in tests/interpreter_test.cxx, not here: the
+# message differs by backend (BEAM reports a bare "badarith"), and this suite
+# diffs walker output against BEAM output.
+
+# Text that would parse to NaN or Infinity is invalid input, not a Float.
+# std::stod and Erlang disagree about which spellings they even recognize, so
+# both backends have to reject the whole family explicitly.
+["nan", "NaN", "-nan", "inf", "-inf", "Infinity", "infinity"].each do |t|
+  match Float.parse(t) do
+    Ok(v) -> IO.printLine("${t} -> unexpectedly ok ${v}")
+    Error(e) -> IO.printLine("${t} -> ${e.message}")
+  end
+end
+
+# The same via the universal conversion, which returns None rather than an
+# Error.
+IO.printLine("nan".to(Float).or(-1.0))
+IO.printLine("inf".to(Float).or(-1.0))
+
+# Exponent text the lexer accepts as a literal must parse the same way — a
+# bare mantissa ("1e10") has no fraction part, which Erlang's string:to_float
+# rejects on its own.
+["1e10", "1.5e3", "345e-22", "2.5e+2", "-1e3", "5", "1.5"].each do |t|
+  match Float.parse(t) do
+    Ok(v) -> IO.printLine("${t} -> ${v}")
+    Error(e) -> IO.printLine("${t} -> unexpected error ${e.message}")
+  end
+end
+
+# Text that is not a float at all is still rejected.
+["1e", "e10", "abc", ""].each do |t|
+  match Float.parse(t) do
+    Ok(v) -> IO.printLine("${t} -> unexpectedly ok ${v}")
+    Error(e) -> IO.printLine("${t} -> ${e.message}")
+  end
+end
+
+# Finite results are untouched — only the non-finite ones became errors.
+IO.printLine(Math.sqrt(9.0))
+IO.printLine(Math.atan2(0.0, 0.0))
+IO.printLine(Math.log(8.0, 2.0))
+IO.printLine(1.0e308 * 0.5)
+IO.printLine(2.0 ^ 3.0)
+
+# Floats have no NaN case to be falsy for, so every Float is truthy.
+IO.printLine(0.0.truthy?)
+IO.printLine(1.5.truthy?)
+IO.printLine(0.0.blank?)

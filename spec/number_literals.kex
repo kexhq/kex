@@ -1,0 +1,73 @@
+# Radix integer literals, float exponents, and base-aware conversion.
+
+# Hexadecimal, binary, octal — case-insensitive marker and digits, `_` allowed
+# as a separator anywhere after the marker.
+IO.printLine(0xff)
+IO.printLine(0xAAF23)
+IO.printLine(0XFF)
+IO.printLine(0xDEAD_BEEF)
+IO.printLine(0b1011)
+IO.printLine(0b1111_0000)
+IO.printLine(0o755)
+
+# Arbitrary precision applies to radix literals too — this one is well past
+# what an int64 holds.
+IO.printLine(0xFFFFFFFFFFFFFFFFFF)
+
+# A radix literal is an ordinary Integer.
+IO.printLine(0xff + 1)
+IO.printLine(0xff == 255)
+
+# Float exponents, with and without a fraction part, either case of `e`,
+# and an explicit sign.
+IO.printLine(3e22)
+IO.printLine(1.5e3)
+IO.printLine(1.5E3)
+IO.printLine(2.5e+2)
+IO.printLine(345e-22)
+IO.printLine(1e0 + 1.0)
+
+# Floats print the shortest text that reads back as the same value, switching
+# to exponent form only outside the range that reads naturally as a number.
+IO.printLine(2000000.0)
+IO.printLine(0.0001)
+IO.printLine(0.00001)
+IO.printLine(1.0 / 3.0)
+IO.printLine(0.0)
+
+# `e` only starts an exponent when a well-formed one follows, so ranges and
+# method calls on integer literals are unaffected.
+IO.printLine((1..3).to(List).or([]))
+IO.printLine(2.to(String).or("?"))
+
+# Base-aware conversion, both directions. Digits above 9 come out lowercase
+# and are accepted in either case going in.
+IO.printLine(255.to(String, radix: 16).or("?"))
+IO.printLine(255.to(String, radix: 2).or("?"))
+IO.printLine(493.to(String, radix: 8).or("?"))
+IO.printLine("ff".to(Integer, radix: 16).or(-1))
+IO.printLine("FF".to(Integer, radix: 16).or(-1))
+IO.printLine("1011".to(Integer, radix: 2).or(-1))
+
+# A digit that is not valid for the base, and an out-of-range radix, both fail
+# rather than parsing a prefix.
+IO.printLine("zz".to(Integer, radix: 16).or(-1))
+IO.printLine(255.to(String, radix: 99).or("bad radix"))
+
+# Integer.parse with a radix reports the same failures as an Error.
+match Integer.parse("ff", radix: 16) do
+  Ok(n) -> IO.printLine("ok ${n}")
+  Error(e) -> IO.printLine("err ${e.message}")
+end
+match Integer.parse("12z", radix: 16) do
+  Ok(n) -> IO.printLine("ok ${n}")
+  Error(e) -> IO.printLine("err ${e.message}")
+end
+match Integer.parse("10", radix: 99) do
+  Ok(n) -> IO.printLine("ok ${n}")
+  Error(e) -> IO.printLine("err ${e.message}")
+end
+
+# Round trip through an arbitrary base.
+IO.printLine(0xAAF23.to(String, radix: 36).or("?"))
+IO.printLine("F09V".to(Integer, radix: 36).or(-1) == 0xAAF23)
