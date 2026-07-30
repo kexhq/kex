@@ -53,6 +53,13 @@ spec/io_scratch.txt
 third_party/gmp-wasm/include/
 third_party/gmp-wasm/lib/
 
+# Likewise generated, by third_party/pcre2-wasm/README.md's recipe. Ignoring
+# the whole directory rather than listing include/ and lib/: PCRE2's `make
+# install` also drops bin/, share/ and lib/pkgconfig, none of which is linked
+# or vendored. Only the recipe itself is tracked.
+third_party/pcre2-wasm/*
+!third_party/pcre2-wasm/README.md
+
 # Assembled by packages/kex/scripts/build.sh from build-wasm/ — build
 # output, not source, same reasoning as the gmp-wasm entries above.
 packages/kex/dist/

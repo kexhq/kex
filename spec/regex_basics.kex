@@ -2,12 +2,6 @@
 # `regex` returns Result because an arbitrary string may not be a valid
 # pattern; a Match keys captures by group number and by name.
 
-# kex: skip-wasm
-#
-# Skipped on the wasm build: it has no PCRE2 — building PCRE2 for wasm32 is a
-# vendored-dependency pipeline like gmp-wasm and is not done yet, so every
-# Regex call raises "Regex is unavailable in this build".
-
 using Regex
 
 foul show(label, opt) do

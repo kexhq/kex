@@ -3,15 +3,11 @@
 #include <mutex>
 #include <unordered_map>
 
-#ifdef KEX_HAVE_PCRE2
 #include <pcre2.h>
-#endif
 
 namespace kex::interpreter {
 
 namespace {
-
-#ifdef KEX_HAVE_PCRE2
 
 // Compiled patterns are cached by source text and never freed: a program's
 // distinct pattern set is bounded by its source, and `Regex` values carry only
@@ -188,8 +184,6 @@ auto matchAt(pcre2_code* code, const std::string& subject, size_t start,
     return true;
 }
 
-#endif // KEX_HAVE_PCRE2
-
 } // namespace
 
 // --- Shared with String's own operations (see regex_support.hxx) -----------
@@ -203,10 +197,6 @@ auto isRegex(const ValuePtr& value) -> bool {
 
 auto split(const std::string& subject, const ValuePtr& regex, int64_t limit)
     -> std::optional<std::vector<ValuePtr>> {
-#ifndef KEX_HAVE_PCRE2
-    (void)subject; (void)regex; (void)limit;
-    return std::nullopt;
-#else
     const auto* source = regexSource(regex);
     if (!source) return std::nullopt;
 
@@ -256,7 +246,6 @@ auto split(const std::string& subject, const ValuePtr& regex, int64_t limit)
             fields.pop_back();
         }
     return fields;
-#endif
 }
 
 } // namespace regexsupport
@@ -264,21 +253,6 @@ auto split(const std::string& subject, const ValuePtr& regex, int64_t limit)
 auto Evaluator::registerRegexBuiltins() -> void {
     defineModule("Regex");
 
-#ifndef KEX_HAVE_PCRE2
-    // Wasm has no PCRE2 yet (see CMakeLists.txt). Fail loudly at the call
-    // rather than silently returning a non-matching Regex.
-    auto unavailable = [](std::vector<ValuePtr>) -> ValuePtr {
-        throw std::runtime_error(
-            "Regex is unavailable in this build (PCRE2 not compiled in)");
-    };
-    defineIntrinsic("Regex::compile", unavailable);
-    defineIntrinsic("Regex::quote", unavailable);
-    defineIntrinsic("Regex::matches", unavailable);
-    defineIntrinsic("Regex::matches?", unavailable);
-    defineIntrinsic("Regex::scan", unavailable);
-    defineIntrinsic("Regex::replace", unavailable);
-    defineIntrinsic("Regex::split", unavailable);
-#else
 
     // Regex::compile(source) -> Result<Regex, RegexError>
     //
@@ -537,8 +511,6 @@ auto Evaluator::registerRegexBuiltins() -> void {
         auto fields = regexsupport::split(subject->value, args[1], limit);
         return fields ? Value::list(std::move(*fields)) : Value::list({});
     });
-
-#endif // KEX_HAVE_PCRE2
 }
 
 } // namespace kex::interpreter
