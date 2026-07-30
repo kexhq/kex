@@ -205,6 +205,13 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
     kex::semantic::ImportedInterfaces ifaces;
 
     std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
+    // `make T, implement: Trait` claims, plus the constructors of every ADT
+    // seen, so the claims can be expanded to constructors once all files are
+    // read (a `make` block may precede the type it targets). Without this a
+    // trait-typed param rejects values from an opt-in module — the KexI path
+    // does the same expansion for prebuilt artifacts.
+    std::vector<std::pair<std::string, std::string>> traitClaims;
+    std::unordered_map<std::string, std::vector<std::string>> adtConstructors;
 
     auto backendModuleFor = [directBackendOwnership](const std::string& mod) {
         return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
@@ -278,6 +285,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         auto collectMakeAnnotations = [&](const ast::MakeDef& make,
                                           const std::string& owner = "") {
             auto typeName = makeTargetName(make);
+            if (!typeName.empty())
+                for (const auto& trait : make.implements)
+                    traitClaims.push_back({typeName, trait});
             const auto sourceModule = owner.empty() ? typeName : owner;
             auto& module = ifaces.modules[sourceModule];
             module.sourceModule = sourceModule;
@@ -316,7 +326,18 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                                              const ast::TypeDef& td) {
             auto constructors = kex::typeConstructors(td);
             if (!constructors) return;
+            // A module's ADTs need the same registration top-level ones get
+            // from collectArities below — without it nothing knows `MB`
+            // belongs to `DataUnit`, so passing it to a `DataUnit` param is
+            // rejected.
+            kex::semantic::ImportedADT adt;
+            adt.name = td.name;
+            ifaces.typeNames.insert(td.name);
             for (const auto& constructor : *constructors) {
+                adt.constructors.push_back(constructor.name);
+                adt.constructorArities[constructor.name] =
+                    static_cast<int>(constructor.arity);
+                adtConstructors[td.name].push_back(constructor.name);
                 kex::semantic::ImportedFunction function;
                 function.sourceName = constructor.name;
                 function.sourceModule = moduleName;
@@ -355,6 +376,8 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     .exports[constructor.name]
                     .push_back(std::move(function));
             }
+            if (!adt.constructors.empty())
+                ifaces.adts.push_back(std::move(adt));
         };
 
         std::function<void(const ast::ModuleDef&)> collectModule =
@@ -433,7 +456,10 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                             static_cast<int>(gt->args.size());
                     }
                 }
-                if (!adt.constructors.empty()) ifaces.adts.push_back(std::move(adt));
+                if (adt.constructors.empty()) return;
+                for (const auto& ctor : adt.constructors)
+                    adtConstructors[adt.name].push_back(ctor);
+                ifaces.adts.push_back(std::move(adt));
             } else if (const auto* rd =
                            std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 if (*rd) {
@@ -455,6 +481,16 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (*ann) addReceiverSig("", annotationToSignature(**ann, nullptr));
             }
         }
+    }
+
+    // `make Animal, implement: Speaker` makes every Animal constructor a
+    // Speaker too, since a nullary constructor's value type is its own name.
+    for (const auto& [typeName, traitName] : traitClaims) {
+        ifaces.traitConformances.push_back({typeName, traitName});
+        if (auto constructors = adtConstructors.find(typeName);
+            constructors != adtConstructors.end())
+            for (const auto& constructor : constructors->second)
+                ifaces.traitConformances.push_back({constructor, traitName});
     }
     return ifaces;
 }

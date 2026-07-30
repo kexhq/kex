@@ -102,7 +102,7 @@ let to(measure: Measure, String, @Micro) -> String? = Just(displayWithPrefix(mea
 let to(measure: Measure, String, @Nano) -> String? = Just(displayWithPrefix(measure, 0.000000001, "n"))
 let to(measure: Measure, String, in: SIPrefix) -> String? do
   match measure.kind == in.kind do
-    true -> return Just("${measure.canonical / in.factor} ${in.symbol}")
+    true -> return Just("${prefixScaled(measure.canonical, in.factor)} ${in.symbol}")
     false -> return None
   end
 end
@@ -124,7 +124,7 @@ let times(measure: Measure, other: Measure) = multiplyMeasures(measure, other)
 make Measure do
   let kilo -> Measure = Measure {
     canonical: this.canonical,
-    value: this.canonical / (this.factor * 1000.0),
+    value: prefixScaled(this.canonical, this.factor * 1000.0),
     unit: UnitDefinition {
       conversionFactor: this.factor * 1000.0,
       dimension: this.kind,
@@ -193,8 +193,34 @@ make Measure do
   end
 end
 
+# Divides `canonical` by a prefix factor. The conversion is exact in principle
+# — 0.000005 W is 5 μW — but neither the measured value nor the prefix factor
+# is exactly representable in binary, so the quotient lands an ulp or two off
+# (5.000000000000001). Round back to 15 significant digits, comfortably inside
+# a double's ~15.95, so prefixed measures read the way they were written.
+#
+# An implementation detail that unfortunately cannot live in `private do`: the
+# `kilo` method below is a `make` body, and those do not see module-private
+# helpers. The result is always a Float; the annotation says Number because
+# `Integer / Float` infers Integer.
+let prefixScaled(canonical: Float, factor: Float) -> Number do
+  let raw = canonical / factor
+  return raw if raw == 0.0
+  # Scaling past the exponent range would overflow to infinity; nothing that
+  # extreme is a meaningful measurement anyway.
+  return raw if raw.abs < 1.0e-300 || raw.abs > 1.0e300
+  # Shift by dividing rather than multiplying: this module also declares `*`
+  # overloads on units, and `Float * Float` resolves to one of those. Both
+  # powers of ten come from `pow` rather than one being the other's
+  # reciprocal, which would reintroduce the rounding this is here to remove.
+  let exponent = 14 - Math.log10(raw.abs).floor
+  let scale = Math.pow(10.0, exponent)
+  let inverse = Math.pow(10.0, 0 - exponent)
+  return (raw / inverse).round / scale
+end
+
 private do
-  let displayWithPrefix(measure, prefixFactor, prefix) = "${measure.canonical / (measure.factor * prefixFactor)} ${prefix}${measure.symbol}"
+  let displayWithPrefix(measure, prefixFactor, prefix) = "${prefixScaled(measure.canonical, measure.factor * prefixFactor)} ${prefix}${measure.symbol}"
 
   let displayFactor(@Meter) = 1.0
   let displayFactor(@Gram) = 1.0
@@ -251,7 +277,7 @@ private do
 
   let prefixed(measure, prefixFactor, prefix) = Measure {
     canonical: measure.canonical,
-    value: measure.canonical / (measure.factor * prefixFactor),
+    value: prefixScaled(measure.canonical, measure.factor * prefixFactor),
     unit: UnitDefinition {
       conversionFactor: measure.factor * prefixFactor,
       dimension: measure.kind,

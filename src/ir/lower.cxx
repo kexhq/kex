@@ -123,6 +123,68 @@ auto localOverloadKey(const std::string& method,
     return method + "\n" + receiverType + "\n" + std::to_string(arity);
 }
 
+// Does `expr` reference the SSA name `name` anywhere? Names are freshened at
+// binding time, so a plain syntactic scan is exact — nothing shadows.
+auto mentionsVar(const Expr& expr, const std::string& name) -> bool {
+    return std::visit([&](const auto& node) -> bool {
+        using T = std::decay_t<decltype(node)>;
+        auto visit = [&](const ExprPtr& child) {
+            return child && mentionsVar(*child, name);
+        };
+        auto anyOf = [&](const std::vector<ExprPtr>& items) {
+            for (const auto& item : items) if (visit(item)) return true;
+            return false;
+        };
+        auto anyClause = [&](const std::vector<MatchClause>& clauses) {
+            for (const auto& clause : clauses) {
+                if (clause.guard && visit(*clause.guard)) return true;
+                if (visit(clause.body)) return true;
+            }
+            return false;
+        };
+        if constexpr (std::is_same_v<T, Var>) {
+            return node.name == name;
+        } else if constexpr (std::is_same_v<T, Intrinsic>) {
+            return anyOf(node.args);
+        } else if constexpr (std::is_same_v<T, Call>) {
+            return anyOf(node.args);
+        } else if constexpr (std::is_same_v<T, CallIndirect>) {
+            return visit(node.callee) || anyOf(node.args);
+        } else if constexpr (std::is_same_v<T, Let>) {
+            return visit(node.value) || visit(node.body);
+        } else if constexpr (std::is_same_v<T, Seq>) {
+            return anyOf(node.exprs);
+        } else if constexpr (std::is_same_v<T, Match>) {
+            return anyOf(node.subjects) || anyClause(node.clauses);
+        } else if constexpr (std::is_same_v<T, Construct>) {
+            return anyOf(node.args);
+        } else if constexpr (std::is_same_v<T, MakeTuple>) {
+            return anyOf(node.elements);
+        } else if constexpr (std::is_same_v<T, MakeList>) {
+            return anyOf(node.elements) || (node.rest && visit(*node.rest));
+        } else if constexpr (std::is_same_v<T, FieldGet>) {
+            return visit(node.record);
+        } else if constexpr (std::is_same_v<T, Lambda>) {
+            return visit(node.body);
+        } else if constexpr (std::is_same_v<T, Return>) {
+            return visit(node.value);
+        } else if constexpr (std::is_same_v<T, TryThrow>) {
+            return visit(node.error);
+        } else if constexpr (std::is_same_v<T, TryCatch>) {
+            return visit(node.body) || anyClause(node.clauses);
+        } else if constexpr (std::is_same_v<T, LetRec>) {
+            return visit(node.funBody) || visit(node.contBody);
+        } else if constexpr (std::is_same_v<T, Receive>) {
+            for (const auto& clause : node.clauses)
+                if (visit(clause.body)) return true;
+            return (node.timeout && visit(*node.timeout)) ||
+                   (node.afterBody && visit(*node.afterBody));
+        } else {
+            return false;
+        }
+    }, expr.node);
+}
+
 // A pending `let name = value in ...` binding, accumulated while lowering a
 // compound expression's operands into ANF, then wrapped (outermost-first)
 // around the consuming expression.
@@ -2120,6 +2182,13 @@ struct Lowering {
         m.subjects = subjExprs();
         for (size_t i = 0; i < gi; ++i) m.clauses.push_back(std::move(clauses[i]));
         MatchClause g;
+        // An all-var/wildcard pattern already matches everything, so the
+        // trailing fallback below would be dead code (erlc warns about it);
+        // the guard's own `_ -> cont` arm covers the failure path.
+        bool irrefutable = true;
+        for (const auto& p : clauses[gi].patterns)
+            if (p->kind != PatKind::Var && p->kind != PatKind::Wild)
+                irrefutable = false;
         g.patterns = std::move(clauses[gi].patterns);
         // `true -> body; _ -> cont` — a non-boolean guard fails the clause.
         Match gm;
@@ -2138,10 +2207,12 @@ struct Lowering {
         ge->node = std::move(gm);
         g.body = std::move(ge);
         m.clauses.push_back(std::move(g));
-        MatchClause fall;
-        for (size_t i = 0; i < m.subjects.size(); ++i) fall.patterns.push_back(wildPat());
-        fall.body = callCont();
-        m.clauses.push_back(std::move(fall));
+        if (!irrefutable) {
+            MatchClause fall;
+            for (size_t i = 0; i < m.subjects.size(); ++i) fall.patterns.push_back(wildPat());
+            fall.body = callCont();
+            m.clauses.push_back(std::move(fall));
+        }
         auto caseE = std::make_unique<Expr>();
         caseE->node = std::move(m);
         LetRec lr; lr.name = contName; lr.params = {};
@@ -2725,10 +2796,16 @@ struct Lowering {
             if (mutVars.size() == 1) {
                 chained = makeLet(boundNames[0], var(resVar), std::move(chained));
             } else {
-                for (size_t k = mutVars.size(); k-- > 0; )
+                // Only unpack the loop-carried slots the continuation actually
+                // reads: an `element/2` bound to a dead name makes erlc warn
+                // that the call's result is ignored (loop counters hit this
+                // constantly, since they're live only inside the loop).
+                for (size_t k = mutVars.size(); k-- > 0; ) {
+                    if (!mentionsVar(*chained, boundNames[k])) continue;
                     chained = makeLet(boundNames[k],
                         callE("erlang", "element", 2, two(litInt((long)k + 1), var(resVar))),
                         std::move(chained));
+                }
             }
             lr.contBody = makeLet(resVar, std::move(callLoop), std::move(chained));
         }
