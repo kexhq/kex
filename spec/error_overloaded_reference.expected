@@ -3,4 +3,4 @@ spec/error_overloaded_reference.kex:5:18: error: Cannot reference overloaded fun
 render : Integer -> String
 
 render : String -> String
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

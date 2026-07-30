@@ -1,2 +1,2 @@
 spec/error_trait_missing_method.kex:6:1: error: make Point, implement: Printable — missing required method 'toString'
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

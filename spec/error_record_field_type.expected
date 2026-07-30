@@ -1,2 +1,2 @@
 spec/error_record_field_type.kex:9:24: error: Cannot add Integer and String
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

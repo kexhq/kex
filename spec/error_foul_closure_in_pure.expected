@@ -1,2 +1,2 @@
 spec/error_foul_closure_in_pure.kex:5:17: error: Cannot call foul function 'IO.printLine' from pure context
-Aborted: fix type errors before running (use --no-check to skip).
+Aborted: 1 type error — fix before running (use --no-check to skip).

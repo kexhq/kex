@@ -1,2 +1,2 @@
 spec/error_loop_with_do.kex:6:4: error: Expected 'end' to close main block, got Eof
-Aborted: fix syntax errors before running.
+Aborted: 1 syntax error — fix before running.

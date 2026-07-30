@@ -145,10 +145,13 @@ inspect_real(X) when is_integer(X) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~p" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Int" ++ ?RESET ++ "~n", [X]), X;
+%% format_float/1, not ~g: ~g rendered 3.0e11 as "3.00000e+11" in the BEAM
+%% REPL while the walker REPL and every non-REPL path printed
+%% "300000000000.0" for the same value.
 inspect_real(X) when is_float(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~g" ++ ?RESET
+    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~ts" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "Float" ++ ?RESET ++ "~n", [X]), X;
+              ++ " " ++ ?CYAN ++ "Float" ++ ?RESET ++ "~n", [format_float(X)]), X;
 inspect_real(true) ->
     io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "true" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
