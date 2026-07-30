@@ -8,6 +8,13 @@
 
 namespace kex::semantic {
 
+// The synthetic module holding the standard library's FILE-LEVEL declarations
+// — `describe`, `it`, `assert`, and friends — as opposed to the named modules
+// (Math, Bits, IO, …) that the same sources also declare. Both are flagged
+// automaticImport, but only these are callable without qualification, so the
+// two have to be told apart wherever "is this bare name in scope?" is decided.
+inline constexpr std::string_view kFileLevelPreludeModule = "Prelude";
+
 struct ImportedFunction {
     std::string sourceName;
     std::string backendFunction;

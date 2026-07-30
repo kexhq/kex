@@ -2893,6 +2893,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerMapBuiltins();
     registerEnvBuiltins();
     registerMathBuiltins();
+    registerBitsBuiltins();
     registerConsoleBuiltins();
     registerTestBuiltins();
     registerProcessBuiltins();

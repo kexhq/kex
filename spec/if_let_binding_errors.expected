@@ -1,3 +1,4 @@
+spec/if_let_binding_errors.kex:22:19: error: Undefined name: `json`
 spec/if_let_binding_errors.kex:29:16: error: Undefined name: `n`
 spec/if_let_binding_errors.kex:35:8: error: Undefined name: `a`
 spec/if_let_binding_errors.kex:42:22: error: Undefined name: `nosuchthing`

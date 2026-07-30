@@ -1113,7 +1113,7 @@ auto compilePreludeCore(const std::string &dir,
         kex::beam::CollectOptions options;
         options.unitId = "kex_prelude";
         options.moduleAtom = built.emitted.moduleName;
-        options.moduleName = "Prelude";
+        options.moduleName = std::string(kex::semantic::kFileLevelPreludeModule);
         options.collectTopLevel = true;
         options.flattenModules = true;
         options.role = kex::beam::KexiModuleRole::Entry;
@@ -1121,8 +1121,10 @@ auto compilePreludeCore(const std::string &dir,
         built.interface = kex::beam::collectMetadata(merged, options);
         built.interface.metadata.package.id = "kex.stdlib";
         built.interface.metadata.package.unitIds = {"kex_prelude"};
-        built.interface.metadata.package.receiverProviders = {"Prelude"};
-        built.interface.metadata.package.automaticImports = {"Prelude"};
+        built.interface.metadata.package.receiverProviders = {
+            std::string(kex::semantic::kFileLevelPreludeModule)};
+        built.interface.metadata.package.automaticImports = {
+            std::string(kex::semantic::kFileLevelPreludeModule)};
         built.interface.sourceHash = kex::preludeSourceHash(files);
       } else {
         kex::beam::CollectOptions options;

@@ -693,7 +693,19 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
                     return true;
             for (const auto& [_, mod] : m_imports->modules) {
                 if (!mod.automaticImport) continue;
-                if (mod.exports.count(name)) return true;
+                if (!mod.exports.count(name)) continue;
+                // The file-level prelude declarations (`describe`, `it`,
+                // `assert`) really are in scope unqualified.
+                if (mod.sourceModule == kFileLevelPreludeModule) return true;
+                // Inside a NAMED module, only a constructor-style member is
+                // reachable without qualification — `Stream.Sequence(...)` is
+                // callable as bare `Sequence(...)`, but `Math.cbrt` is not
+                // callable as bare `cbrt`, and neither is `Bits.and` as `and`.
+                // Accepting those lowercase names let a typo pass this pass
+                // and resurface as the typechecker's terser "Undefined
+                // identifier", with no "did you mean" suggestion.
+                if (!name.empty() && std::isupper(static_cast<unsigned char>(name[0])))
+                    return true;
             }
         }
     }
