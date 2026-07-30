@@ -11,9 +11,9 @@
 # NOT a Duration: a Measure describes a measurement, a Duration describes
 # elapsed time. The plural `5.seconds` builds the Duration.
 #
-# Values are built through the `Time` module and used through methods:
+# Values are built through their own module and used through methods:
 #
-#   let due = Time.dateOf(2026, 7, 30).try       # Result<Date, Time.Error>
+#   let due = Date.of(2026, 7, 30).try       # Result<Date, Time.Error>
 #   due.weekday.name                             # "Thursday"
 #   due.plus(10.days).iso                        # "2026-08-09"
 #   Time.now().iso                               # "2026-07-30T14:03:00+02:00"
@@ -24,9 +24,17 @@
 # effect at that moment, so it is right now, but it cannot say what the offset
 # WILL be for some future local time.
 #
-# Everything that constructs a value lives in `module Time` because a module
-# body cannot see file-level declarations; the records stay at file level
-# because `make` blocks and callers need them there.
+# The records and the two ADTs stay at file level so `make` blocks, callers,
+# and every module here can see them.
+
+# Weekday names in ISO order (Monday is day 1).
+type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday
+             | Saturday | Sunday
+
+# A field out of range, or text that is not a date/time.
+type TimeError = InvalidDate(Integer, Integer, Integer)
+               | InvalidTime(Integer, Integer, Integer)
+               | InvalidFormat(String)
 
 record Date do
   year : Integer
@@ -48,29 +56,11 @@ record DateTime do
 end
 
 module Time do
-  # Weekday names in ISO order (Monday is day 1).
-  type Weekday = Monday | Tuesday | Wednesday | Thursday | Friday
-               | Saturday | Sunday
-
-  # A field out of range, or text that is not a date/time.
-  type Error = InvalidDate(Integer, Integer, Integer)
-             | InvalidTime(Integer, Integer, Integer)
-             | InvalidFormat(String)
-
   # ── Constructing ────────────────────────────────────────────────────────
 
-  # Validating constructor. The record literal `Date { ... }` bypasses it, so
-  # prefer this for anything derived from input.
-  let dateOf(year: Integer, month: Integer, day: Integer) -> Result<Date, Error> do
-    return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
-    return Error(InvalidDate(year, month, day)) if day < 1
-    return Error(InvalidDate(year, month, day)) if day > Time.daysInMonth(year, month)
-    return Ok(Date { year: year, month: month, day: day })
-  end
+  let of(hour: Integer, minute: Integer, second: Integer) -> Result<Time, TimeError> = Time.of(hour, minute, second, 0)
 
-  let timeOf(hour: Integer, minute: Integer, second: Integer) -> Result<Time, Error> = Time.timeOf(hour, minute, second, 0)
-
-  let timeOf(hour: Integer, minute: Integer, second: Integer, nanosecond: Integer) -> Result<Time, Error> do
+  let of(hour: Integer, minute: Integer, second: Integer, nanosecond: Integer) -> Result<Time, TimeError> do
     return Error(InvalidTime(hour, minute, second)) if hour < 0 || hour > 23
     return Error(InvalidTime(hour, minute, second)) if minute < 0 || minute > 59
     # 60 is rejected: leap seconds are not modeled.
@@ -80,82 +70,15 @@ module Time do
     return Ok(Time { hour: hour, minute: minute, second: second, nanosecond: nanosecond })
   end
 
-  let dateTimeOf(date: Date, time: Time, offset: Duration) -> DateTime = DateTime { date: date, time: time, offset: offset }
-
   let midnight() -> Time = Time { hour: 0, minute: 0, second: 0, nanosecond: 0 }
 
-  # Days since 1970-01-01, negative before it.
-  let dateFromEpochDay(day: Integer) -> Date = Time.civilFromDays(day)
-
-  let timeFromSecondsSinceMidnight(count: Integer) -> Time do
+  let fromSecondsSinceMidnight(count: Integer) -> Time do
     let total = count.modulo(86400)
     return Time { hour: total / 3600, minute: total.modulo(3600) / 60, second: total.modulo(60), nanosecond: 0 }
   end
 
-  # UTC. Declared before the two-argument form: the interpreter resolves an
-  # overloaded module function to its LAST definition regardless of arity, so
-  # a delegating overload has to come first or it recurses into itself.
-  let fromEpochSeconds(count: Integer) -> DateTime = Time.fromEpochSeconds(count, Duration.zero())
-
-  # The civil rendering of an instant, at a given offset.
-  let fromEpochSeconds(count: Integer, offset: Duration) -> DateTime do
-    let local = count + offset.wholeSeconds
-    let day = Time.floorDiv(local, 86400)
-    return DateTime {
-      date: Time.civilFromDays(day),
-      time: Time.timeFromSecondsSinceMidnight(local - day * 86400),
-      offset: offset
-    }
-  end
-
-  # ── Reading the clock ───────────────────────────────────────────────────
-
-  # Now, in this machine's zone as it stands at this instant.
-  foul now() -> DateTime do
-    let nanos = Kex.Intrinsic.Time.nowNanos()
-    let epochSeconds = Time.floorDiv(nanos, 1000000000)
-    let offset = Duration.seconds(Kex.Intrinsic.Time.localOffset(epochSeconds))
-    return Time.withNanosecond(Time.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
-  end
-
-  foul utcNow() -> DateTime do
-    let nanos = Kex.Intrinsic.Time.nowNanos()
-    let epochSeconds = Time.floorDiv(nanos, 1000000000)
-    return Time.withNanosecond(Time.fromEpochSeconds(epochSeconds, Duration.zero()), nanos - epochSeconds * 1000000000)
-  end
-
-  foul today() -> Date do
-    # Bound first: chaining a field access directly onto a foul call's result
-    # (`Time.now().date`) fails to resolve in the tree-walk interpreter.
-    let moment = Time.now()
-    return moment.date
-  end
-
-  foul utcToday() -> Date do
-    let moment = Time.utcNow()
-    return moment.date
-  end
-
-  # Nanoseconds since the Unix epoch, straight from the host clock.
-  foul epochNanos() -> Integer do
-    return Kex.Intrinsic.Time.nowNanos()
-  end
-
-  # ── Parsing ─────────────────────────────────────────────────────────────
-
-  # ISO 8601 calendar date: `2026-07-30`.
-  let parseDate(text: String) -> Result<Date, Error> do
-    let parts = text.split("-")
-    # A leading "-" would be a negative year, which this deliberately rejects.
-    return Error(InvalidFormat(text)) if parts.count != 3
-    let year = Time.digitsToInteger(parts.at(0).or("")).try
-    let month = Time.digitsToInteger(parts.at(1).or("")).try
-    let day = Time.digitsToInteger(parts.at(2).or("")).try
-    return Time.dateOf(year, month, day)
-  end
-
   # ISO 8601 time of day: `14:03`, `14:03:00`, or `14:03:00.123456789`.
-  let parseTime(text: String) -> Result<Time, Error> do
+  let parse(text: String) -> Result<Time, TimeError> do
     let parts = text.split(":")
     return Error(InvalidFormat(text)) if parts.count < 2 || parts.count > 3
     let hour = Time.digitsToInteger(parts.at(0).or("")).try
@@ -163,23 +86,22 @@ module Time do
     let secondParts = parts.at(2).or("0").split(".")
     let second = Time.digitsToInteger(secondParts.at(0).or("0")).try
     let nanosecond = Time.parseFraction(secondParts.at(1).or("")).try
-    return Time.timeOf(hour, minute, second, nanosecond)
+    return Time.of(hour, minute, second, nanosecond)
   end
 
-  # ISO 8601: `2026-07-30T14:03:00+02:00`, `...Z`, or a bare civil datetime
-  # (read as UTC).
-  let parseDateTime(text: String) -> Result<DateTime, Error> do
-    let parts = text.split("T")
-    return Error(InvalidFormat(text)) if parts.count != 2
-    let date = Time.parseDate(parts.at(0).or("")).try
-    let halves = Time.splitOffset(parts.at(1).or(""))
-    let time = Time.parseTime(halves.at(0).or("")).try
-    let offset = Time.parseOffset(halves.at(1).or("")).try
-    return Ok(DateTime { date: date, time: time, offset: offset })
+  # The current time of day, in this machine's zone.
+  foul now() -> Time do
+    let moment = DateTime.now()
+    return moment.time
+  end
+
+  foul utcNow() -> Time do
+    let moment = DateTime.utcNow()
+    return moment.time
   end
 
   # An ISO 8601 zone designator: `Z`, `+02:00`, `-05:30`.
-  let parseOffset(text: String) -> Result<Duration, Error> do
+  let parseOffset(text: String) -> Result<Duration, TimeError> do
     return Ok(Duration.zero()) if text.blank? || text == "Z"
     let sign = text.at(0).or('+')
     return Error(InvalidFormat(text)) if sign != '+' && sign != '-'
@@ -351,7 +273,7 @@ module Time do
     return text
   end
 
-  let digitsToInteger(text: String) -> Result<Integer, Error> do
+  let digitsToInteger(text: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(text)) if text.blank?
     match Integer.parse(text) do
       Ok(value) -> return Ok(value)
@@ -360,7 +282,7 @@ module Time do
   end
 
   # ".5" is 500000000ns — the digits are padded out to nanosecond scale.
-  let parseFraction(text: String) -> Result<Integer, Error> do
+  let parseFraction(text: String) -> Result<Integer, TimeError> do
     return Ok(0) if text.blank?
     return Error(InvalidFormat(text)) if text.count > 9
     var digits = text
@@ -383,6 +305,106 @@ module Time do
   end
 end
 
+
+module Date do
+  # Validating constructor. The record literal `Date { ... }` bypasses it, so
+  # prefer this for anything derived from input.
+  let of(year: Integer, month: Integer, day: Integer) -> Result<Date, TimeError> do
+    return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
+    return Error(InvalidDate(year, month, day)) if day < 1
+    return Error(InvalidDate(year, month, day)) if day > Time.daysInMonth(year, month)
+    return Ok(Date { year: year, month: month, day: day })
+  end
+
+  # Days since 1970-01-01, negative before it.
+  let fromEpochDay(day: Integer) -> Date = Time.civilFromDays(day)
+
+  # ISO 8601 calendar date: `2026-07-30`.
+  let parse(text: String) -> Result<Date, TimeError> do
+    let parts = text.split("-")
+    # A leading "-" would be a negative year, which this deliberately rejects.
+    return Error(InvalidFormat(text)) if parts.count != 3
+    let year = Time.digitsToInteger(parts.at(0).or("")).try
+    let month = Time.digitsToInteger(parts.at(1).or("")).try
+    let day = Time.digitsToInteger(parts.at(2).or("")).try
+    return Date.of(year, month, day)
+  end
+
+  # The current date in this machine's zone. `today` reads better in most
+  # code; `now` exists so every type in this file answers the same question
+  # the same way.
+  foul now() -> Date do
+    let moment = DateTime.now()
+    return moment.date
+  end
+
+  foul today() -> Date do
+    let moment = DateTime.now()
+    return moment.date
+  end
+
+  foul utcNow() -> Date do
+    let moment = DateTime.utcNow()
+    return moment.date
+  end
+
+  foul utcToday() -> Date do
+    let moment = DateTime.utcNow()
+    return moment.date
+  end
+end
+
+module DateTime do
+  let of(date: Date, time: Time, offset: Duration) -> DateTime = DateTime { date: date, time: time, offset: offset }
+
+  # UTC. Declared before the two-argument form: the interpreter resolves an
+  # overloaded module function to its LAST definition regardless of arity, so
+  # a delegating overload has to come first or it recurses into itself.
+  let fromEpochSeconds(count: Integer) -> DateTime = DateTime.fromEpochSeconds(count, Duration.zero())
+
+  # The civil rendering of an instant, at a given offset.
+  let fromEpochSeconds(count: Integer, offset: Duration) -> DateTime do
+    let local = count + offset.wholeSeconds
+    let day = Time.floorDiv(local, 86400)
+    return DateTime {
+      date: Time.civilFromDays(day),
+      time: Time.fromSecondsSinceMidnight(local - day * 86400),
+      offset: offset
+    }
+  end
+
+  # ISO 8601: `2026-07-30T14:03:00+02:00`, `...Z`, or a bare civil datetime
+  # (read as UTC).
+  let parse(text: String) -> Result<DateTime, TimeError> do
+    let parts = text.split("T")
+    return Error(InvalidFormat(text)) if parts.count != 2
+    let date = Date.parse(parts.at(0).or("")).try
+    let halves = Time.splitOffset(parts.at(1).or(""))
+    let time = Time.parse(halves.at(0).or("")).try
+    let offset = Time.parseOffset(halves.at(1).or("")).try
+    return Ok(DateTime { date: date, time: time, offset: offset })
+  end
+
+  # Now, in this machine's zone as it stands at this instant.
+  foul now() -> DateTime do
+    let nanos = Kex.Intrinsic.Time.nowNanos()
+    let epochSeconds = Time.floorDiv(nanos, 1000000000)
+    let offset = Duration.seconds(Kex.Intrinsic.Time.localOffset(epochSeconds))
+    return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, offset), nanos - epochSeconds * 1000000000)
+  end
+
+  foul utcNow() -> DateTime do
+    let nanos = Kex.Intrinsic.Time.nowNanos()
+    let epochSeconds = Time.floorDiv(nanos, 1000000000)
+    return Time.withNanosecond(DateTime.fromEpochSeconds(epochSeconds, Duration.zero()), nanos - epochSeconds * 1000000000)
+  end
+
+  # Nanoseconds since the Unix epoch, straight from the host clock.
+  foul epochNanos() -> Integer do
+    return Kex.Intrinsic.Time.nowNanos()
+  end
+
+end
 # ── Durations ─────────────────────────────────────────────────────────────
 # The plural spellings build a Duration; the singular ones from units.kex
 # build a time Measure. `5.seconds` is an elapsed span, `5.sec` a measurement.
@@ -449,7 +471,7 @@ end
 make Date do
   let epochDay -> Integer = Time.daysFromCivil(this.year, this.month, this.day)
 
-  let weekday -> Time.Weekday = Time.weekdayFromEpochDay(this.epochDay)
+  let weekday -> Weekday = Time.weekdayFromEpochDay(this.epochDay)
 
   # 1 on January 1st.
   let dayOfYear -> Integer = this.epochDay - Time.daysFromCivil(this.year, 1, 1) + 1
@@ -458,10 +480,10 @@ make Date do
 
   # Whole days only: a Duration with a sub-day remainder truncates toward
   # zero, so `date.plus(36.hours)` advances exactly one day.
-  let plus(span: Duration) -> Date = Time.dateFromEpochDay(this.epochDay + span.wholeDays)
-  let minus(span: Duration) -> Date = Time.dateFromEpochDay(this.epochDay - span.wholeDays)
+  let plus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
+  let minus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
 
-  let addDays(count: Integer) -> Date = Time.dateFromEpochDay(this.epochDay + count)
+  let addDays(count: Integer) -> Date = Date.fromEpochDay(this.epochDay + count)
   let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
 
   # Calendar-aware, so the day is clamped into the target month: one month
@@ -527,14 +549,14 @@ make DateTime do
   # No `year`/`hour`/... shorthands here: a method named after a record
   # field makes `value.year` inside a module function dispatch to it on BEAM
   # and fail with function_clause. Reach through `.date` and `.time`.
-  let weekday -> Time.Weekday = this.date.weekday
+  let weekday -> Weekday = this.date.weekday
 
   # The same instant, rendered at another offset.
-  let at(offset: Duration) -> DateTime = Time.withNanosecond(Time.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
+  let at(offset: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
   let utc -> DateTime = this.at(Duration.zero())
 
-  let plus(span: Duration) -> DateTime = Time.withNanosecond(Time.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
-  let minus(span: Duration) -> DateTime = Time.withNanosecond(Time.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
+  let plus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
+  let minus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
 
   # Elapsed time from this instant to `other`, negative when `other` is
   # earlier. Sub-second precision is kept.

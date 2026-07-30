@@ -649,6 +649,13 @@ auto ResolvePass::recordRef(const std::string& name, SourceLocation loc) -> void
         sym->references.push_back(loc);
 }
 
+auto ResolvePass::enclosesCurrentModule(const std::string& owner) const -> bool {
+    if (owner.empty() || owner == m_currentModule) return true;
+    return m_currentModule.size() > owner.size() &&
+           m_currentModule.compare(0, owner.size(), owner) == 0 &&
+           m_currentModule[owner.size()] == '.';
+}
+
 auto ResolvePass::isKnown(const std::string& name) const -> bool {
     // The language's own primitive type vocabulary. A bare type name is a
     // legal value in a type-directed call (`n.to(Integer)`), and primitives
@@ -663,12 +670,14 @@ auto ResolvePass::isKnown(const std::string& name) const -> bool {
     for (auto it = m_scopes.rbegin(); it != m_scopes.rend(); ++it) {
         if (it->count(name)) return true;
     }
-    // Current file's collected symbols. Module members are not globals: an
-    // unqualified reference can only see definitions owned by the same module
-    // (or file-level definitions while resolving file-level code).
+    // Current file's collected symbols. Module members are not globals, but a
+    // module body IS lexically nested in its file, so it sees file-level
+    // declarations — and a nested module sees its enclosing module's. What
+    // stays invisible is a sibling module's members, which need qualifying.
     if (m_state) {
         for (const auto& sym : m_state->symbols) {
-            if (sym.name == name && sym.module == m_currentModule) return true;
+            if (sym.name == name && enclosesCurrentModule(sym.module))
+                return true;
         }
     }
     if (m_imports) {

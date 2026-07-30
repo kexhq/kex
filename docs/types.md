@@ -190,27 +190,30 @@ time and no zone, `Time` a time of day with no date and no zone, and
 `DateTime` both plus a fixed offset from UTC.
 
 ```kex
-let due = Time.dateOf(2026, 7, 30).try   # Result<Date, Time.Error>
+let due = Date.of(2026, 7, 30).try   # Result<Date, Time.Error>
 due.iso                                  # "2026-07-30"
 due.weekday.name                         # "Thursday"
 due.plus(10.days).iso                    # "2026-08-09"
 due.addMonths(1).iso                     # clamps into the target month
 
-let moment = Time.parseDateTime("2026-07-30T14:03:00+02:00").try
+let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
 moment.utc.iso                           # "2026-07-30T12:03:00Z"
 moment.epochSeconds                      # 1785412980
 moment.compareTo(other)                  # Less | Equal | Greater, by instant
 
-Time.now()                               # foul: reads the host clock
+DateTime.now()                               # foul: reads the host clock
 ```
 
-Values are built through the `Time` module (`dateOf`, `timeOf`,
-`fromEpochSeconds`, `parseDate`, `parseTime`, `parseDateTime`, `now`,
-`utcNow`, `today`) and used through methods on the records themselves.
+Each type has a module of its own — `Date.of`, `Date.parse`, `Date.fromEpochDay`,
+`Time.of`, `Time.parse`, `Time.midnight`, `DateTime.of`, `DateTime.parse`,
+`DateTime.fromEpochSeconds` — and all three answer `now()` and `utcNow()`
+(`Date.today()` reads better where you want a day). Shared calendar helpers
+(`Time.daysInMonth`, `Time.leapYear?`, `Time.formatDate`, `Time.errorMessage`)
+live in `module Time`. Values are then used through methods on the records.
 
 Zones are fixed offsets only — UTC, an explicit `+02:00`, or the system zone's
 offset at a given instant. Named IANA zones and DST rules are not modeled, so
-`Time.now()` is correct for the present moment but cannot predict the offset
+`DateTime.now()` is correct for the present moment but cannot predict the offset
 for a future local time.
 
 Physical SI constructors and arithmetic are opt-in through `Units.SI`. `using`

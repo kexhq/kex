@@ -40,6 +40,9 @@ private:
     auto bindParams(const std::vector<ast::Param>& params) -> void;
 
     auto isKnown(const std::string& name) const -> bool;
+    // True when `owner` (a symbol's owning module path, "" for file level) is
+    // the current module or lexically encloses it.
+    auto enclosesCurrentModule(const std::string& owner) const -> bool;
     // If `name` resolves to a top-level symbol, record `loc` as a reference.
     auto recordRef(const std::string& name, SourceLocation loc) -> void;
     auto suggest(const std::string& name) const -> std::string;

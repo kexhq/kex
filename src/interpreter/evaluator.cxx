@@ -2001,8 +2001,12 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // user record types) are registered in the environment at
             // declaration time. An unknown name here is a real error.
             auto val = m_env->get(node.name);
-            if (!val && !m_currentModule.empty())
-                val = m_env->get(m_currentModule + "::" + node.name);
+            for (auto scope = m_currentModule; !val && !scope.empty();) {
+                val = m_env->get(scope + "::" + node.name);
+                const auto dot = scope.rfind('.');
+                if (dot == std::string::npos) break;
+                scope.resize(dot);
+            }
             if (val) return autoCallZeroArgConstant(node.name, val);
             throw RuntimeError("Undefined identifier: " + node.name, expr.location);
         }
@@ -2328,8 +2332,16 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
 
     std::string lookupName = name;
     if (!m_currentModule.empty() && name.find("::") == std::string::npos) {
-        const auto scopedName = m_currentModule + "::" + name;
-        if (m_env->get(scopedName)) lookupName = scopedName;
+        // Innermost module first, then each enclosing one — the same lexical
+        // rule the resolver applies, so `Outer.Inner` sees `Outer`'s names
+        // and every module body sees the file's.
+        for (auto scope = m_currentModule; !scope.empty();) {
+            const auto scopedName = scope + "::" + name;
+            if (m_env->get(scopedName)) { lookupName = scopedName; break; }
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
     }
     auto val = m_env->get(lookupName);
     if (!val && !name.empty() && std::isupper(static_cast<unsigned char>(name[0]))) {
