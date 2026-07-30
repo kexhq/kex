@@ -18,7 +18,9 @@ describe("Time") do
     assert(Time.of(0, 60, 0).ok? == false)
     assert(Time.of(0, 0, 60).ok? == false)
     assert(Time.midnight().iso == "00:00:00")
-    assert(Time.of(1, 2, 3, 400000000).try.iso == "01:02:03.400000000")
+    # Nanoseconds are kept on the value but not rendered.
+    assert(Time.of(1, 2, 3, 400000000).try.iso == "01:02:03")
+    assert(Time.of(1, 2, 3, 400000000).try.nanosecond == 400000000)
   end
 
   it("converts between civil dates and epoch days") do
@@ -106,13 +108,34 @@ describe("Time") do
     assert(Date.parse("2026-07-30").try.iso == "2026-07-30")
     assert(Time.parse("14:03").try.iso == "14:03:00")
     assert(Time.parse("14:03:09").try.iso == "14:03:09")
-    assert(Time.parse("14:03:09.5").try.iso == "14:03:09.500000000")
+    assert(Time.parse("14:03:09.5").try.iso == "14:03:09")
+    assert(Time.parse("14:03:09.5").try.nanosecond == 500000000)
     assert(DateTime.parse("2026-07-30T14:03:00Z").try.iso == "2026-07-30T14:03:00Z")
     # A bare civil datetime reads as UTC.
     assert(DateTime.parse("2026-07-30T14:03:00").try.iso == "2026-07-30T14:03:00Z")
     assert(Time.parseOffset("Z").try.wholeSeconds == 0)
     assert(Time.parseOffset("+02:00").try.wholeSeconds == 7200)
     assert(Time.parseOffset("-05:30").try.wholeSeconds == -19800)
+  end
+
+  it("reports a parse failure against the whole input") do
+    # Not against the fragment that failed: "2:03 pm" complains about
+    # "2:03 pm", not about "03 pm".
+    match Time.parse("2:03 pm") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 2:03 pm")
+    end
+    match Date.parse("20x6-07-30") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 20x6-07-30")
+    end
+    match DateTime.parse("2026-07-30T14:03:00+0z:00") do
+      Ok(_) -> assert(false)
+      Error(error) -> assert(Time.errorMessage(error) ==
+                             "cannot parse as a date/time: 2026-07-30T14:03:00+0z:00")
+    end
   end
 
   it("rejects text that is not a date or time") do

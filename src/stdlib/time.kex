@@ -81,11 +81,11 @@ module Time do
   let parse(text: String) -> Result<Time, TimeError> do
     let parts = text.split(":")
     return Error(InvalidFormat(text)) if parts.count < 2 || parts.count > 3
-    let hour = Time.digitsToInteger(parts.at(0).or("")).try
-    let minute = Time.digitsToInteger(parts.at(1).or("")).try
+    let hour = Time.digitsIn(parts.at(0).or(""), text).try
+    let minute = Time.digitsIn(parts.at(1).or(""), text).try
     let secondParts = parts.at(2).or("0").split(".")
-    let second = Time.digitsToInteger(secondParts.at(0).or("0")).try
-    let nanosecond = Time.parseFraction(secondParts.at(1).or("")).try
+    let second = Time.digitsIn(secondParts.at(0).or("0"), text).try
+    let nanosecond = Time.parseFraction(secondParts.at(1).or(""), text).try
     return Time.of(hour, minute, second, nanosecond)
   end
 
@@ -109,8 +109,8 @@ module Time do
     # binary string, so `split` on it raises function_clause.
     let parts = text.replace("+", "").replace("-", "").split(":")
     return Error(InvalidFormat(text)) if parts.count != 2
-    let hours = Time.digitsToInteger(parts.at(0).or("")).try
-    let minutes = Time.digitsToInteger(parts.at(1).or("")).try
+    let hours = Time.digitsIn(parts.at(0).or(""), text).try
+    let minutes = Time.digitsIn(parts.at(1).or(""), text).try
     return Error(InvalidFormat(text)) if hours > 23 || minutes > 59
     return Ok(Duration.utcOffset(0 - hours, 0 - minutes)) if sign == '-'
     return Ok(Duration.utcOffset(hours, minutes))
@@ -209,11 +209,9 @@ module Time do
 
   let formatDateTime(value: DateTime) -> String = "${Time.formatDate(value.date)}T${Time.formatTime(value.time)}${Time.formatOffset(value.offset)}"
 
-  let formatTime(value: Time) -> String do
-    let clock = "${Time.pad2(value.hour)}:${Time.pad2(value.minute)}:${Time.pad2(value.second)}"
-    return clock if value.nanosecond == 0
-    return "${clock}.${Time.pad9(value.nanosecond)}"
-  end
+  # Second resolution: the nanosecond field is kept on the value and used by
+  # comparisons, but ISO output does not carry it.
+  let formatTime(value: Time) -> String = "${Time.pad2(value.hour)}:${Time.pad2(value.minute)}:${Time.pad2(value.second)}"
 
   # ±HH:MM, the shape an ISO 8601 offset takes. UTC renders as "Z".
   let formatOffset(offset: Duration) -> String do
@@ -273,6 +271,16 @@ module Time do
     return text
   end
 
+  # Digits, with the failure reported against the WHOLE input rather than the
+  # fragment that failed: `Time.parse("2:03 pm")` should complain about
+  # "2:03 pm", not about "03 pm".
+  let digitsIn(fragment: String, whole: String) -> Result<Integer, TimeError> do
+    match Time.digitsToInteger(fragment) do
+      Ok(value) -> return Ok(value)
+      Error(_) -> return Error(InvalidFormat(whole))
+    end
+  end
+
   let digitsToInteger(text: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(text)) if text.blank?
     match Integer.parse(text) do
@@ -282,14 +290,14 @@ module Time do
   end
 
   # ".5" is 500000000ns — the digits are padded out to nanosecond scale.
-  let parseFraction(text: String) -> Result<Integer, TimeError> do
+  let parseFraction(text: String, whole: String) -> Result<Integer, TimeError> do
     return Ok(0) if text.blank?
-    return Error(InvalidFormat(text)) if text.count > 9
+    return Error(InvalidFormat(whole)) if text.count > 9
     var digits = text
     while digits.count < 9
       digits = "${digits}0"
     end
-    return Time.digitsToInteger(digits)
+    return Time.digitsIn(digits, whole)
   end
 
   # Splits "14:03:00+02:00" into its time and offset halves. A missing offset
@@ -324,9 +332,9 @@ module Date do
     let parts = text.split("-")
     # A leading "-" would be a negative year, which this deliberately rejects.
     return Error(InvalidFormat(text)) if parts.count != 3
-    let year = Time.digitsToInteger(parts.at(0).or("")).try
-    let month = Time.digitsToInteger(parts.at(1).or("")).try
-    let day = Time.digitsToInteger(parts.at(2).or("")).try
+    let year = Time.digitsIn(parts.at(0).or(""), text).try
+    let month = Time.digitsIn(parts.at(1).or(""), text).try
+    let day = Time.digitsIn(parts.at(2).or(""), text).try
     return Date.of(year, month, day)
   end
 
@@ -378,10 +386,18 @@ module DateTime do
   let parse(text: String) -> Result<DateTime, TimeError> do
     let parts = text.split("T")
     return Error(InvalidFormat(text)) if parts.count != 2
-    let date = Date.parse(parts.at(0).or("")).try
+    # Each half reports against the whole datetime, not against the fragment
+    # it was handed.
+    let dateResult = Date.parse(parts.at(0).or(""))
+    return Error(InvalidFormat(text)) if dateResult.ok? == false
     let halves = Time.splitOffset(parts.at(1).or(""))
-    let time = Time.parse(halves.at(0).or("")).try
-    let offset = Time.parseOffset(halves.at(1).or("")).try
+    let timeResult = Time.parse(halves.at(0).or(""))
+    return Error(InvalidFormat(text)) if timeResult.ok? == false
+    let offsetResult = Time.parseOffset(halves.at(1).or(""))
+    return Error(InvalidFormat(text)) if offsetResult.ok? == false
+    let date = dateResult.try
+    let time = timeResult.try
+    let offset = offsetResult.try
     return Ok(DateTime { date: date, time: time, offset: offset })
   end
 

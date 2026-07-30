@@ -883,10 +883,15 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                             }
                         }
                         popEnv();
-                        // No rescue — propagate as return Error(e)
+                        // No rescue — this call's result IS Error(e). Return
+                        // it; throwing a ReturnException here would escape
+                        // THIS frame (a throw inside a catch handler skips
+                        // that try's sibling handlers) and be caught by the
+                        // caller instead — which silently ended `main` when a
+                        // `.try` failure propagated out of a nested call.
                         auto errorVal = std::make_shared<Value>();
                         errorVal->data = VariantValue{"Error", "Result", {e.error()}, {}, {}};
-                        throw ReturnException(errorVal);
+                        return errorVal;
                     } catch (ReturnException& ret) {
                         popEnv();
                         return ret.value();
