@@ -147,6 +147,30 @@ target_include_directories(kex_lib PUBLIC src)
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_compile_definitions(kex_lib PUBLIC
         KEX_STDLIB_DIR="${CMAKE_SOURCE_DIR}/src/stdlib")
+
+    # The COMPILED standard-library unit (kex_prelude.beam plus its Kex.*
+    # companions). Without it the checker falls back to extracting interfaces
+    # from .kex source, which cannot recover inferred result types or the
+    # trait bounds behind `make T, implement: ...` — so the same program
+    # type-checks differently under wasm than natively. The unit is produced
+    # by running the NATIVE kex (`--build-prelude`, which needs erlc), so a
+    # wasm-only build cannot make it: point this at a native build tree.
+    # Loading it is pure parsing — no Erlang is involved at runtime, and wasm
+    # never executes the code half of these files.
+    set(KEX_PREBUILT_RUNTIME_DIR "" CACHE PATH
+        "Native build's runtime/beam directory, holding the compiled stdlib unit")
+    if(KEX_PREBUILT_RUNTIME_DIR AND
+       EXISTS "${KEX_PREBUILT_RUNTIME_DIR}/kex_prelude.beam")
+        target_compile_definitions(kex_lib PUBLIC
+            KEX_RUNTIME_BEAM_DIR="${KEX_PREBUILT_RUNTIME_DIR}")
+        set(KEX_WASM_RUNTIME_UNIT "${KEX_PREBUILT_RUNTIME_DIR}")
+        message(STATUS "wasm: using compiled stdlib unit from ${KEX_PREBUILT_RUNTIME_DIR}")
+    else()
+        message(STATUS
+            "wasm: no compiled stdlib unit — the checker will derive interfaces "
+            "from source (set KEX_PREBUILT_RUNTIME_DIR to a native build's "
+            "runtime/beam to match native behaviour)")
+    endif()
 endif()
 
 # GMP backs the arbitrary-precision `Integer` default (see
@@ -378,6 +402,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # path as a bogus linker input.
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
     )
+    # The compiled stdlib unit is deliberately NOT preloaded here. The browser
+    # REPL never sets ImportedInterfaces on its SemanticDB, so it would embed
+    # ~330 KB that nothing reads. prebuiltRuntimeBeamDir() already looks in
+    # /runtime, so mapping it here is the only change needed if that REPL
+    # grows a type-checking path.
 endif()
 
 enable_testing()

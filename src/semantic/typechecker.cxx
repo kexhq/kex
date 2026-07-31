@@ -27,6 +27,32 @@ auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<st
 // The receiver without its type arguments — `Result<Box, ?>` becomes
 // `Result`, which is the part that decides whether a candidate could accept
 // it.
+// Does a type contain an Unknown anywhere? On a signature PARAMETER this
+// marks a contract the checker never learned — the shape-only entries the
+// source-derived interface path records for un-annotated `make` methods,
+// where compiled artifacts would supply real types. Type variables are not
+// this: `[A]` is a known, genuinely generic contract.
+auto mentionsUnknownType(const TypePtr& type) -> bool {
+    if (!type) return false;
+    if (std::holds_alternative<UnknownType>(type->kind)) return true;
+    if (auto* named = std::get_if<NamedType>(&type->kind)) {
+        for (const auto& arg : named->typeArgs)
+            if (mentionsUnknownType(arg)) return true;
+        return false;
+    }
+    if (auto* list = std::get_if<ListType>(&type->kind))
+        return mentionsUnknownType(list->element);
+    if (auto* optional = std::get_if<OptionalType>(&type->kind))
+        return mentionsUnknownType(optional->inner);
+    if (auto* map = std::get_if<MapType>(&type->kind))
+        return mentionsUnknownType(map->key) || mentionsUnknownType(map->value);
+    if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+        for (const auto& element : tuple->elements)
+            if (mentionsUnknownType(element)) return true;
+    }
+    return false;
+}
+
 auto headShapeOf(const TypePtr& type) -> TypePtr {
     if (!type) return type;
     if (auto* named = std::get_if<NamedType>(&type->kind))
@@ -3756,10 +3782,24 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                                 std::holds_alternative<SizedIntType>(argTypes[0]->kind))))) {
         bool anyFirstParamPlausible = false;
         bool anyConstrainedFirstParam = false;
+        // A candidate carrying an Unknown parameter is one whose real contract
+        // the checker never learned — the shape-only entries the source-derived
+        // interface path records for un-annotated `make` methods, where the
+        // compiled artifacts would have given real types. A method with any
+        // such candidate has a candidate list that cannot be treated as the
+        // whole truth, so no mismatch is provable from it. TYPE VARIABLES are
+        // a different thing entirely and stay provable: `[A]` is a known,
+        // genuinely generic contract.
+        bool anyUnknownParamCandidate = false;
         for (const auto& sig : *sigs) {
             if (!sig.params.empty()) {
                 if (std::holds_alternative<ConstrainedType>(sig.params[0]->kind))
                     anyConstrainedFirstParam = true;
+                for (const auto& param : sig.params)
+                    if (mentionsUnknownType(param)) {
+                        anyUnknownParamCandidate = true;
+                        break;
+                    }
                 if (argMatchesParam(argTypes[0], sig.params[0])) {
                     anyFirstParamPlausible = true;
                     break;
@@ -3808,9 +3848,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             m_traits.implementorKey(argTypes[0]), name);
         const bool provableMismatch =
             !m_inMakeBlock && isFullyConcrete(headShapeOf(argTypes[0])) &&
-            !receiverIsField && !traitProvides;
-        if (!anyFirstParamPlausible && !anyConstrainedFirstParam &&
-            !hasReceiverRefinementConflict && !provableMismatch)
+            !receiverIsField && !traitProvides && !anyUnknownParamCandidate;
+        // An unreliable candidate list blocks every route to a mismatch
+        // report, the trait-bound one included: `"5".to(Integer)` finds only
+        // `to : Measure -> ? -> ?` from units.kex when the interfaces come
+        // from source, and String is not a Measure — but String's own `to` is
+        // a native builtin that never appears in these tables at all. The
+        // check is confined to the case where NOTHING matched, so a call that
+        // does match still gets its real result type rather than `?`.
+        if (!anyFirstParamPlausible &&
+            (anyUnknownParamCandidate ||
+             (!anyConstrainedFirstParam && !hasReceiverRefinementConflict &&
+              !provableMismatch)))
             return Type::unknown();
     }
 
@@ -4126,6 +4175,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         firstPtr = am;
         break;
     }
+    // Same rule as the receiver-mismatch guard above, for the path a
+    // PRIMITIVE receiver takes: when every candidate carries an Unknown
+    // parameter, this candidate list is not the whole truth and no mismatch
+    // follows from it. `"42".to(Integer)` reaches here seeing only Measure's
+    // `to` from units.kex, because String's `to` is a native builtin that
+    // appears in no signature table. The runtime still catches a real mistake.
+    const bool unreliableCandidates =
+        std::all_of(arityMatches.begin(), arityMatches.end(),
+                    [](const Signature* sig) {
+                        return std::any_of(sig->params.begin(), sig->params.end(),
+                                           mentionsUnknownType);
+                    });
+    if (unreliableCandidates) return arityMatches[0]->result;
+
     const Signature& first = *firstPtr;
     std::string detail = "different arguments";
     for (size_t i = 0; i < first.params.size(); i++) {

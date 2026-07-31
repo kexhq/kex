@@ -49,8 +49,17 @@ test: build
 # prebuilt third_party/gmp-wasm/{include,lib} (not checked in — rebuild
 # locally per that README, or see .github/workflows/ci.yml for how CI
 # builds and caches it).
+# The wasm build reuses the NATIVE build's compiled stdlib unit
+# (kex_prelude.beam and its Kex.* companions). Producing it means running the
+# native kex through erlc, which a cross-compiled build cannot do — but
+# READING it is pure parsing, and without it the checker falls back to
+# extracting interfaces from .kex source, where inferred result types and
+# trait bounds are simply absent. That made the same program type-check
+# differently under wasm than natively. When no native build is present the
+# fallback still applies, so this stays a soft dependency.
 build-wasm:
-	@emcmake cmake -B $(WASM_BUILD_DIR)
+	@emcmake cmake -B $(WASM_BUILD_DIR) \
+		-DKEX_PREBUILT_RUNTIME_DIR=$(CURDIR)/$(BUILD_DIR)/runtime/beam
 	@cmake --build $(WASM_BUILD_DIR)
 
 # Only interpreter_test is run here — it's the suite this project has

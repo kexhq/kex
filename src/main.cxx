@@ -1396,6 +1396,14 @@ auto prebuiltRuntimeBeamDir() -> std::string {
     roots.push_back((executableDir / "../share/kex/runtime").lexically_normal());
     roots.push_back((executableDir / "runtime/beam").lexically_normal());
   }
+#ifdef KEX_RUNTIME_BEAM_DIR
+  // Baked in for wasm, which has no executable path to search from. The CLI
+  // build reads it straight off the host filesystem via NODERAWFS.
+  roots.emplace_back(KEX_RUNTIME_BEAM_DIR);
+#endif
+  // Where the browser REPL's copy is mounted — see the --preload-file mapping
+  // in CMakeLists.txt, next to /stdlib.
+  roots.emplace_back("/runtime");
   for (const auto &root : roots) {
     std::error_code ec;
     if (fs::exists(root / "kex_io.beam", ec)) return root.string();

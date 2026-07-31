@@ -83,7 +83,8 @@ inline auto preludeRegistry(const std::string& runtimeDir)
 // Handles the subset of types used in prelude annotations.
 inline auto resolveSourceType(const ast::TypeExpr& expr,
                               std::unordered_map<std::string, kex::semantic::TypePtr>& vars,
-                              const std::unordered_map<std::string, kex::semantic::TypePtr>* aliases = nullptr)
+                              const std::unordered_map<std::string, kex::semantic::TypePtr>* aliases = nullptr,
+                              const std::unordered_set<std::string>* traits = nullptr)
     -> kex::semantic::TypePtr {
     using Type = kex::semantic::Type;
     return std::visit([&](const auto& node) -> kex::semantic::TypePtr {
@@ -106,6 +107,8 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
                 vars[name] = tv;
                 return tv;
             }
+            if (traits && traits->count(name))
+                return Type::constrained(name, name);
             if (aliases) {
                 if (auto it = aliases->find(name); it != aliases->end())
                     return it->second;
@@ -116,7 +119,7 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
             std::vector<kex::semantic::TypePtr> args;
             for (const auto& a : node.args)
-                if (a) args.push_back(resolveSourceType(*a, vars, aliases));
+                if (a) args.push_back(resolveSourceType(*a, vars, aliases, traits));
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
             if (name == "Map" && args.size() == 2)
@@ -130,34 +133,34 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            auto p = node.param ? resolveSourceType(*node.param, vars, aliases) : Type::unknown();
-            auto r = node.result ? resolveSourceType(*node.result, vars, aliases) : Type::unknown();
+            auto p = node.param ? resolveSourceType(*node.param, vars, aliases, traits) : Type::unknown();
+            auto r = node.result ? resolveSourceType(*node.result, vars, aliases, traits) : Type::unknown();
             return Type::func({p}, r);
         }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<kex::semantic::TypePtr> elems;
             for (const auto& e : node.elements)
-                if (e) elems.push_back(resolveSourceType(*e, vars, aliases));
+                if (e) elems.push_back(resolveSourceType(*e, vars, aliases, traits));
             return Type::tuple(std::move(elems));
         }
         else if constexpr (std::is_same_v<T, ast::ListType>) {
-            return Type::list(node.element ? resolveSourceType(*node.element, vars, aliases) : Type::unknown());
+            return Type::list(node.element ? resolveSourceType(*node.element, vars, aliases, traits) : Type::unknown());
         }
         else if constexpr (std::is_same_v<T, ast::MapType>) {
             return Type::map(
-                node.key ? resolveSourceType(*node.key, vars, aliases) : Type::unknown(),
-                node.value ? resolveSourceType(*node.value, vars, aliases) : Type::unknown());
+                node.key ? resolveSourceType(*node.key, vars, aliases, traits) : Type::unknown(),
+                node.value ? resolveSourceType(*node.value, vars, aliases, traits) : Type::unknown());
         }
         else if constexpr (std::is_same_v<T, ast::OptionalType>) {
-            return Type::optional(node.inner ? resolveSourceType(*node.inner, vars, aliases) : Type::unknown());
+            return Type::optional(node.inner ? resolveSourceType(*node.inner, vars, aliases, traits) : Type::unknown());
         }
         else if constexpr (std::is_same_v<T, ast::UnionType>) {
             std::vector<kex::semantic::TypePtr> members;
             members.push_back(node.left
-                ? resolveSourceType(*node.left, vars, aliases)
+                ? resolveSourceType(*node.left, vars, aliases, traits)
                 : Type::unknown());
             members.push_back(node.right
-                ? resolveSourceType(*node.right, vars, aliases)
+                ? resolveSourceType(*node.right, vars, aliases, traits)
                 : Type::unknown());
             return std::make_shared<Type>(
                 Type{kex::semantic::UnionType{std::move(members)}});
@@ -198,11 +201,73 @@ inline auto flattenFunctionType(kex::semantic::TypePtr type,
 // Source-based fallback for builds without prebuilt BEAM artifacts (wasm).
 // Parses prelude .kex sources, resolves type annotations into Signatures,
 // and builds ImportedInterfaces with real type information.
+// Trait names declared anywhere in a parsed program, modules included. The
+// top-level and module-body item variants are distinct types with the same
+// two alternatives that matter here, so this is written once as a template.
+template <typename Item>
+inline auto collectTraitNames(const Item& item,
+                              std::unordered_set<std::string>& out) -> void {
+    if (const auto* trait = std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
+        if (*trait) out.insert((*trait)->name);
+    } else if (const auto* mod =
+                   std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+        if (*mod)
+            for (const auto& nested : (*mod)->body) collectTraitNames(nested, out);
+    }
+}
+
+// A trait as the checker needs it: the signatures it REQUIRES, and the names
+// of the methods it supplies a default body for. Without the latter, a type
+// that claims the trait (`make Range, implement: Foldable`) looks like it has
+// no `each` at all, because an inherited default is registered nowhere else.
+inline auto importedTraitFromSource(const ast::TraitDef& trait)
+    -> kex::semantic::TraitDef {
+    kex::semantic::TraitDef result;
+    result.name = trait.name;
+    for (const auto& member : trait.body) {
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member)) {
+            if (*fn) result.defaultMethods.push_back((*fn)->name);
+        } else if (const auto* ann =
+                       std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member)) {
+            if (*ann) {
+                kex::semantic::Signature sig;
+                sig.name = (*ann)->name;
+                sig.isFoul = (*ann)->isFoul;
+                result.requiredMethods.push_back(std::move(sig));
+            }
+        }
+    }
+    return result;
+}
+
 inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles,
                                      bool automaticImport,
                                      bool directBackendOwnership)
     -> kex::semantic::ImportedInterfaces {
     kex::semantic::ImportedInterfaces ifaces;
+
+    // Parsed up front, because a signature cannot be resolved correctly until
+    // EVERY trait name is known: `each : Foldable -> ...` in list.kex names a
+    // trait declared in enumerable.kex, and resolving it before that file is
+    // read would yield a nominal type named "Foldable" that no receiver
+    // matches. Tier order does not save us — traits are referenced across
+    // tiers in both directions.
+    std::vector<ast::Program> programs;
+    programs.reserve(sourceFiles.size());
+    for (const auto& filePath : sourceFiles) {
+        std::ifstream input(filePath);
+        if (!input) continue;
+        std::string src((std::istreambuf_iterator<char>(input)),
+                        std::istreambuf_iterator<char>());
+        Lexer lexer(std::move(src), filePath);
+        Parser parser(lexer.tokenizeAll(), filePath);
+        programs.push_back(parser.parseProgram());
+    }
+
+    std::unordered_set<std::string> traitNames;
+    for (const auto& program : programs)
+        for (const auto& item : program.items)
+            collectTraitNames(item, traitNames);
 
     std::unordered_map<std::string, kex::semantic::TypePtr> typeAliases;
     // `make T, implement: Trait` claims, plus the constructors of every ADT
@@ -217,7 +282,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         return directBackendOwnership && !mod.empty() ? "Kex." + mod : "";
     };
 
-    auto annotationToSignature = [&typeAliases](const ast::TypeAnnotation& ann,
+    auto annotationToSignature = [&](const ast::TypeAnnotation& ann,
                                     kex::semantic::TypePtr selfType,
                                     std::unordered_map<std::string, kex::semantic::TypePtr> vars = {})
         -> kex::semantic::Signature {
@@ -225,10 +290,41 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         sig.name = ann.name;
         sig.isFoul = ann.isFoul;
         if (!ann.type) { sig.result = kex::semantic::Type::unknown(); return sig; }
-        auto resolved = resolveSourceType(*ann.type, vars, &typeAliases);
+        auto resolved = resolveSourceType(*ann.type, vars, &typeAliases, &traitNames);
         if (ann.implicitThis && selfType)
             sig.params.push_back(selfType);
         sig.result = flattenFunctionType(resolved, sig.params);
+        return sig;
+    };
+
+    // `let parse(text: String) -> Result<Date, TimeError> do ... end` carries
+    // a full signature without a standalone `parse : ...` annotation, and the
+    // stdlib is written that way throughout. Read only what is written: a
+    // parameter or result left unannotated stays Unknown, which the checker
+    // treats as "contract not known" rather than as a claim.
+    auto inlineSignature = [&](const ast::FunctionDef& fn,
+                               const kex::semantic::TypePtr& selfType)
+        -> std::optional<kex::semantic::Signature> {
+        if (fn.clauses.empty()) return std::nullopt;
+        const auto& clause = fn.clauses.front();
+        const bool anyAnnotation =
+            clause.returnAnnotation.has_value() ||
+            std::any_of(clause.params.begin(), clause.params.end(),
+                        [](const ast::Param& param) { return param.type.has_value(); });
+        if (!anyAnnotation) return std::nullopt;
+        std::unordered_map<std::string, kex::semantic::TypePtr> vars;
+        kex::semantic::Signature sig;
+        sig.name = fn.name;
+        sig.isFoul = fn.isFoul;
+        if (selfType) sig.params.push_back(selfType);
+        for (const auto& param : clause.params)
+            sig.params.push_back(
+                param.type && *param.type
+                    ? resolveSourceType(**param.type, vars, &typeAliases, &traitNames)
+                    : kex::semantic::Type::unknown());
+        sig.result = clause.returnAnnotation && *clause.returnAnnotation
+            ? resolveSourceType(**clause.returnAnnotation, vars, &typeAliases, &traitNames)
+            : kex::semantic::Type::unknown();
         return sig;
     };
 
@@ -245,6 +341,28 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         }
         ifaces.modules[mod].exports[sig.name].push_back(ifn);
     };
+    // `make Range do let sum = ... end` carries no annotation, so nothing
+    // above records a signature — yet the method plainly exists on Range. A
+    // shape-only signature (receiver known, parameters and result unknown)
+    // says exactly that much and no more: `?` matches anything, so this can
+    // never turn into a false mismatch of its own, while its absence made
+    // `(1..3).sum` look like a call to List's `sum` with a Range receiver.
+    auto shapeOnlySignature = [](const ast::FunctionDef& fn,
+                                 const kex::semantic::TypePtr& selfType)
+        -> kex::semantic::Signature {
+        kex::semantic::Signature sig;
+        sig.name = fn.name;
+        sig.isFoul = fn.isFoul;
+        sig.params.push_back(selfType ? selfType
+                                      : kex::semantic::Type::unknown());
+        const size_t arity =
+            fn.clauses.empty() ? 0 : fn.clauses.front().params.size();
+        for (size_t i = 0; i < arity; i++)
+            sig.params.push_back(kex::semantic::Type::unknown());
+        sig.result = kex::semantic::Type::unknown();
+        return sig;
+    };
+
     auto addReceiverSig = [&](const std::string& mod,
                               const kex::semantic::Signature& sig) {
         kex::semantic::ImportedFunction ifn;
@@ -260,14 +378,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         ifaces.receiverFunctions[sig.name].push_back(ifn);
     };
 
-    for (const auto& filePath : sourceFiles) {
-        std::ifstream input(filePath);
-        if (!input) continue;
-        std::string src((std::istreambuf_iterator<char>(input)),
-                        std::istreambuf_iterator<char>());
-        Lexer lexer(std::move(src), filePath);
-        Parser parser(lexer.tokenizeAll(), filePath);
-        auto program = parser.parseProgram();
+    for (auto& program : programs) {
 
         auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
             if (!make.target) return "";
@@ -297,18 +408,44 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             std::unordered_map<std::string, kex::semantic::TypePtr> tvars;
             if (make.target)
                 selfType = resolveSourceType(*make.target, tvars);
+            std::unordered_set<std::string> annotatedMembers;
             for (const auto& item : make.body) {
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
-                    if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
-                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
-                    if (*fn) ifaces.modules[typeName].exports.try_emplace((*fn)->name);
+                    if (*ann) annotatedMembers.insert((*ann)->name);
                 if (const auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
-                    if (*vb) for (const auto& vi : (*vb)->items) {
+                    if (*vb) for (const auto& vi : (*vb)->items)
                         if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&vi))
-                            if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
-                        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
-                            if (*fn) ifaces.modules[typeName].exports.try_emplace((*fn)->name);
+                            if (*ann) annotatedMembers.insert((*ann)->name);
+            }
+            auto collectMakeMember = [&](const auto& member) {
+                if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&member))
+                    if (*ann) addReceiverSig(sourceModule, annotationToSignature(**ann, selfType, tvars));
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&member))
+                    if (*fn) {
+                        ifaces.modules[typeName].exports.try_emplace((*fn)->name);
+                        // Only where this data is the ONLY data: the
+                        // source-derived prelude. For opt-in modules the
+                        // prelude's compiled interfaces already describe these
+                        // receivers, and a second, vaguer provider of the same
+                        // name reads as an ambiguous import (`peek` from both
+                        // kex_prelude and Kex.Parsing).
+                        // Shape-only on purpose, even when the method looks
+                        // annotated: a `make` body also holds type-DIRECTED
+                        // dispatch (`let to(String) -> String` in units.kex,
+                        // where `String` is a type-valued argument, not a
+                        // parameter type), and reading those as ordinary
+                        // parameter annotations invents contracts that do not
+                        // exist. Module-level functions have no such form.
+                        if (!directBackendOwnership &&
+                            !annotatedMembers.count((*fn)->name))
+                            addReceiverSig(sourceModule,
+                                           shapeOnlySignature(**fn, selfType));
                     }
+            };
+            for (const auto& item : make.body) {
+                collectMakeMember(item);
+                if (const auto* vb = std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item))
+                    if (*vb) for (const auto& vi : (*vb)->items) collectMakeMember(vi);
             }
         };
 
@@ -380,8 +517,19 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 ifaces.adts.push_back(std::move(adt));
         };
 
+        std::unordered_set<std::string> moduleAnnotated;
+        std::function<void(const ast::ModuleDef&)> collectAnnotatedNames =
+            [&](const ast::ModuleDef& mod) {
+            for (const auto& item : mod.body) {
+                if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
+                    if (*ann) moduleAnnotated.insert(mod.name + "::" + (*ann)->name);
+                if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*nested) collectAnnotatedNames(**nested);
+            }
+        };
         std::function<void(const ast::ModuleDef&)> collectModule =
             [&](const ast::ModuleDef& mod) {
+            collectAnnotatedNames(mod);
             ifaces.modules[mod.name].sourceModule = mod.name;
             ifaces.modules[mod.name].backendModule =
                 backendModuleFor(mod.name);
@@ -389,7 +537,12 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             ifaces.modules[mod.name].isFoul = mod.isFoul;
             for (const auto& item : mod.body) {
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
-                    if (*fn) ifaces.modules[mod.name].exports.try_emplace((*fn)->name);
+                    if (*fn) {
+                        ifaces.modules[mod.name].exports.try_emplace((*fn)->name);
+                        if (!moduleAnnotated.count(mod.name + "::" + (*fn)->name))
+                            if (auto sig = inlineSignature(**fn, nullptr))
+                                addModuleSig(mod.name, *sig);
+                    }
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) {
                         auto sig = annotationToSignature(**ann, nullptr);
@@ -480,6 +633,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (*make) collectMakeAnnotations(**make);
             } else if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                 if (*mod) collectModule(**mod);
+            } else if (const auto* trait =
+                           std::get_if<std::unique_ptr<ast::TraitDef>>(&item)) {
+                if (*trait) ifaces.traits.push_back(importedTraitFromSource(**trait));
             } else if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
                 if (*fn) ifaces.receiverFunctions.try_emplace((*fn)->name);
             } else if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
