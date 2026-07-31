@@ -167,9 +167,12 @@ auto isPrimitiveTypeName(const std::string& name) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
 // True when a type is fully determined — no Unknown, no type variable, and no
-// trait-bound placeholder anywhere inside it. This is the question "is the
-// checked type worth showing to a user?": in gradual regions the checker
-// yields `?`/`A`/`N`, where the VALUE is the better source of a type name.
+// trait-bound placeholder anywhere inside it. Two callers ask it for the same
+// underlying reason, "does the checker actually KNOW this type?":
+//   - display, where a gradual `?`/`A`/`N` means the VALUE is the better
+//     source of a type name than the checked type;
+//   - diagnostics, where a mismatch against a determined receiver is provable
+//     and one against a gradual receiver is not.
 auto isFullyConcrete(const TypePtr& type) -> bool;
 
 class TypeEnv {

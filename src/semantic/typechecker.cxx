@@ -24,9 +24,6 @@ auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<st
     return std::nullopt;
 }
 
-// True when a type is fully determined: no Unknown, no type variable, and no
-// trait-bound placeholder anywhere inside it. A mismatch against such a
-// receiver is provable; against a gradual one it is not.
 // The receiver without its type arguments — `Result<Box, ?>` becomes
 // `Result`, which is the part that decides whether a candidate could accept
 // it.
@@ -35,39 +32,6 @@ auto headShapeOf(const TypePtr& type) -> TypePtr {
     if (auto* named = std::get_if<NamedType>(&type->kind))
         return Type::named(named->name);
     return type;
-}
-
-auto isFullyDetermined(const TypePtr& type) -> bool {
-    if (!type) return false;
-    return std::visit([](const auto& t) -> bool {
-        using T = std::decay_t<decltype(t)>;
-        auto all = [](const std::vector<TypePtr>& types) {
-            for (const auto& element : types)
-                if (!isFullyDetermined(element)) return false;
-            return true;
-        };
-        if constexpr (std::is_same_v<T, UnknownType> ||
-                      std::is_same_v<T, TypeVar> ||
-                      std::is_same_v<T, ConstrainedType>) {
-            return false;
-        } else if constexpr (std::is_same_v<T, NamedType>) {
-            return all(t.typeArgs);
-        } else if constexpr (std::is_same_v<T, ListType>) {
-            return isFullyDetermined(t.element);
-        } else if constexpr (std::is_same_v<T, OptionalType>) {
-            return isFullyDetermined(t.inner);
-        } else if constexpr (std::is_same_v<T, MapType>) {
-            return isFullyDetermined(t.key) && isFullyDetermined(t.value);
-        } else if constexpr (std::is_same_v<T, TupleType>) {
-            return all(t.elements);
-        } else if constexpr (std::is_same_v<T, UnionType>) {
-            return all(t.members);
-        } else if constexpr (std::is_same_v<T, FuncType>) {
-            return all(t.params) && isFullyDetermined(t.result);
-        } else {
-            return true;
-        }
-    }, type->kind);
 }
 
 } // namespace
@@ -694,10 +658,10 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
                        std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
                    visibility && *visibility) {
             for (const auto& visible : (*visibility)->items)
-                if (auto* ann =
+                if (auto* visibleAnn =
                         std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&visible);
-                    ann && *ann)
-                    add(**ann, false);
+                    visibleAnn && *visibleAnn)
+                    add(**visibleAnn, false);
         } else if (auto* nested =
                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
                    nested && *nested) {
@@ -726,9 +690,9 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
                        std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
                    visibility && *visibility) {
             for (const auto& visible : (*visibility)->items)
-                if (auto* ann =
+                if (auto* visibleAnn =
                         std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&visible))
-                    add(*ann);
+                    add(*visibleAnn);
         }
     }
 }
@@ -3325,7 +3289,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // this branch both sides fall to typesEqual which fails on mismatched
     // TypeVar ids even though both are permissive. Recurse into params and
     // result so lambda arguments to map/filter/each pass the checker.
-    if (auto* paramFn = std::get_if<FuncType>(&paramType->kind)) {
+    if (std::holds_alternative<FuncType>(paramType->kind)) {
         auto* argFn = std::get_if<FuncType>(&argType->kind);
         if (!argFn) return isPermissive(argType);
         // `(A) -> (B) -> C` and `(A, B) -> C` are the same callable shape
@@ -3843,7 +3807,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const bool traitProvides = m_traits.declaresMethod(
             m_traits.implementorKey(argTypes[0]), name);
         const bool provableMismatch =
-            !m_inMakeBlock && isFullyDetermined(headShapeOf(argTypes[0])) &&
+            !m_inMakeBlock && isFullyConcrete(headShapeOf(argTypes[0])) &&
             !receiverIsField && !traitProvides;
         if (!anyFirstParamPlausible && !anyConstrainedFirstParam &&
             !hasReceiverRefinementConflict && !provableMismatch)
