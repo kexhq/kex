@@ -166,6 +166,12 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
 auto isPrimitiveTypeName(const std::string& name) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
+// True when a type is fully determined — no Unknown, no type variable, and no
+// trait-bound placeholder anywhere inside it. This is the question "is the
+// checked type worth showing to a user?": in gradual regions the checker
+// yields `?`/`A`/`N`, where the VALUE is the better source of a type name.
+auto isFullyConcrete(const TypePtr& type) -> bool;
+
 class TypeEnv {
 public:
     auto set(const std::string& name, TypePtr type) -> void;

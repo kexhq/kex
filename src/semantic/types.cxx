@@ -302,6 +302,39 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
     }, type->kind);
 }
 
+auto isFullyConcrete(const TypePtr& type) -> bool {
+    if (!type) return false;
+    return std::visit([](const auto& t) -> bool {
+        using T = std::decay_t<decltype(t)>;
+        auto all = [](const std::vector<TypePtr>& types) {
+            for (const auto& element : types)
+                if (!isFullyConcrete(element)) return false;
+            return true;
+        };
+        if constexpr (std::is_same_v<T, UnknownType> ||
+                      std::is_same_v<T, TypeVar> ||
+                      std::is_same_v<T, ConstrainedType>) {
+            return false;
+        } else if constexpr (std::is_same_v<T, NamedType>) {
+            return all(t.typeArgs);
+        } else if constexpr (std::is_same_v<T, ListType>) {
+            return isFullyConcrete(t.element);
+        } else if constexpr (std::is_same_v<T, OptionalType>) {
+            return isFullyConcrete(t.inner);
+        } else if constexpr (std::is_same_v<T, MapType>) {
+            return isFullyConcrete(t.key) && isFullyConcrete(t.value);
+        } else if constexpr (std::is_same_v<T, TupleType>) {
+            return all(t.elements);
+        } else if constexpr (std::is_same_v<T, UnionType>) {
+            return all(t.members);
+        } else if constexpr (std::is_same_v<T, FuncType>) {
+            return all(t.params) && isFullyConcrete(t.result);
+        } else {
+            return true;
+        }
+    }, type->kind);
+}
+
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
 // PrimitiveType{Unit} (from Type::unit() in compiled signatures) represents
 // the same concept. Normalize both representations before comparing.

@@ -25,6 +25,11 @@ public:
     // Query the inferred type of any expression node after check() has run.
     // Returns nullptr for nodes not visited (e.g. unreachable code).
     auto typeOf(const ast::Expr* expr) const -> TypePtr;
+    // `typeOf` widened for presentation: a nullary constructor's type is its
+    // own name (`Red`), but what a reader wants to see is the ADT it belongs
+    // to (`Colour`). Checking is unaffected — this is display only, and it is
+    // the same constructor→owner relation `satisfiesTrait` uses.
+    auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;

@@ -37,6 +37,8 @@ public:
 
     // Query the inferred type of an expression node after analyze() has run.
     auto typeOf(const ast::Expr* expr) const -> TypePtr;
+    // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
+    auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;

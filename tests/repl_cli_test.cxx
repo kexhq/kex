@@ -317,10 +317,12 @@ int main() {
                 "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
                 "reader.readLine\n"
                 "reader.readLine\n");
-            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+            // `String?` is the source-level spelling the checker renders;
+            // the value-derived fallback said `Option<String>`.
+            assertTrue(out.find("Just(\"contents\") : String?") !=
                            std::string::npos,
                        out);
-            assertTrue(out.find("None : Option") != std::string::npos, out);
+            assertTrue(out.find("None : String?") != std::string::npos, out);
         });
 
         it("acknowledges native definitions", []() {
@@ -466,10 +468,12 @@ int main() {
                 "let reader = FS.File.open(\"optional.txt\", FS.Read).try\n"
                 "reader.readLine\n"
                 "reader.readLine\n");
-            assertTrue(out.find("Just(\"contents\") : Option<String>") !=
+            // `String?` is the source-level spelling the checker renders;
+            // the value-derived fallback said `Option<String>`.
+            assertTrue(out.find("Just(\"contents\") : String?") !=
                            std::string::npos,
                        out);
-            assertTrue(out.find("None : Option") != std::string::npos, out);
+            assertTrue(out.find("None : String?") != std::string::npos, out);
         });
 
         it("does not execute readable methods on a write-only handle", []() {
@@ -556,6 +560,46 @@ int main() {
             }
         });
 
+        it("shows the checked type where the value cannot carry it", []() {
+            // A Result's unused half and a record's element types are erased
+            // at runtime, so the value-derived name reported `?`. The checked
+            // type knows them.
+            const std::string input =
+                "Time.parse(\"14:03\")\n"
+                "Date.of(2026, 2, 30)\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find(": Result<Time, TimeError>")
+                           != std::string::npos, out);
+                assertTrue(out.find(": Result<Date, TimeError>")
+                           != std::string::npos, out);
+            }
+        });
+
+        it("widens a nullary constructor to its ADT when showing a type", []() {
+            // The checked type of `Red` is `Red`; what a reader wants is the
+            // type it belongs to.
+            const std::string input =
+                "type Colour = Red | Blue(Integer)\n"
+                "Red\n"
+                "[Red, Blue(2)]\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("Red : Colour") != std::string::npos, out);
+                assertTrue(out.find("[Red, Blue(2)] : [Colour]")
+                           != std::string::npos, out);
+            }
+        });
+
+        it("falls back to the value when the checked type is not concrete", []() {
+            // An empty list has no element type to infer, so the static type
+            // is `[?]` — no better than what the value reports, and the
+            // fallback must still produce something rather than nothing.
+            const std::string input = "[]\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("=> []") != std::string::npos, out);
+                assertTrue(out.find(" : ") != std::string::npos, out);
+            }
+        });
+
         it("renders Optional and Result values as Kex ADTs", []() {
             auto out = runBeamRepl(
                 "Just(42)\n"
@@ -575,9 +619,9 @@ int main() {
                 "(1, \"x\")\n"
                 "{ \"x\": 1 }\n"
                 "Less\n");
-            assertTrue(out.find("=> (1, \"x\") : Tuple")
+            assertTrue(out.find("=> (1, \"x\") : (Integer, String)")
                        != std::string::npos, out);
-            assertTrue(out.find("=> { \"x\": 1 } : Map")
+            assertTrue(out.find("=> { \"x\": 1 } : {String: Integer}")
                        != std::string::npos, out);
             assertTrue(out.find("=> Less : Ordering")
                        != std::string::npos, out);
@@ -726,14 +770,20 @@ int main() {
         });
 
         it("reports a record's type by name, not Tuple", []() {
+            // The checked type also fills in the Ok half, which the value
+            // alone cannot know (it only ever holds one side).
             auto out = runBeamRepl("Integer.parse(\"12x\")\n");
-            assertTrue(out.find("Result<?, ParseError>") != std::string::npos, out);
-            assertTrue(out.find("Result<?, Tuple>") == std::string::npos, out);
+            assertTrue(out.find("Result<Integer, ParseError>")
+                       != std::string::npos, out);
+            assertTrue(out.find("Tuple") == std::string::npos, out);
         });
 
-        it("still reports a genuine tuple as Tuple", []() {
+        it("reports a genuine tuple by its element types", []() {
+            // Still not mistaken for a record or a variant — but the checked
+            // type names the elements, where the value-derived name could
+            // only say "Tuple".
             auto out = runBeamRepl("(1, \"a\")\n");
-            assertTrue(out.find(": Tuple") != std::string::npos, out);
+            assertTrue(out.find(": (Integer, String)") != std::string::npos, out);
         });
     });
 
