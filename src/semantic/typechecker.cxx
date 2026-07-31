@@ -2766,6 +2766,38 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
     }
 }
 
+auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
+    std::function<TypePtr(const TypePtr&)> widen =
+        [&](const TypePtr& type) -> TypePtr {
+        if (!type) return type;
+        auto widenAll = [&](std::vector<TypePtr> types) {
+            for (auto& element : types) element = widen(element);
+            return types;
+        };
+        if (auto* named = std::get_if<NamedType>(&type->kind)) {
+            if (auto owner = m_adtOfConstructor.find(named->name);
+                owner != m_adtOfConstructor.end() &&
+                owner->second != named->name)
+                return Type::named(owner->second);
+            // Type ARGUMENTS are left alone: a phantom typestate parameter is
+            // spelled with constructors too (`FileHandle<Write>`), and
+            // widening those to their ADT (`FileHandle<WriteCapability>`)
+            // erases exactly the distinction the parameter exists to make.
+            return type;
+        }
+        if (auto* list = std::get_if<ListType>(&type->kind))
+            return Type::list(widen(list->element));
+        if (auto* optional = std::get_if<OptionalType>(&type->kind))
+            return Type::optional(widen(optional->inner));
+        if (auto* map = std::get_if<MapType>(&type->kind))
+            return Type::map(widen(map->key), widen(map->value));
+        if (auto* tuple = std::get_if<TupleType>(&type->kind))
+            return Type::tuple(widenAll(tuple->elements));
+        return type;
+    };
+    return widen(typeOf(expr));
+}
+
 auto TypeChecker::satisfiesTrait(const TypePtr& type,
                                  const std::string& traitName) const -> bool {
     if (m_traits.satisfies(type, traitName)) return true;

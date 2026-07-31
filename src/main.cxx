@@ -1209,6 +1209,21 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   return layouts;
 }
 
+// The checked type of a REPL expression, when it is worth showing. Both REPLs
+// otherwise derive the type from the VALUE, which cannot recover what runtime
+// representation erases (a typestate parameter, an empty list's element type,
+// the unused half of a Result). A gradual/unannotated expression checks as
+// `?`/`A`/`N`, and there the value is the better source — hence the
+// concreteness gate rather than "always prefer static".
+auto displayTypeOf(const kex::semantic::Analyzer &analyzer,
+                   const kex::ast::Expr *expr)
+    -> std::optional<std::string> {
+  if (!expr) return std::nullopt;
+  auto type = analyzer.displayTypeOf(expr);
+  if (!type || !kex::semantic::isFullyConcrete(type)) return std::nullopt;
+  return kex::semantic::typeToString(type);
+}
+
 // Prelude variant tags, so a compiled program can register their display info
 // the same way it registers the prelude's record layouts.
 auto loadPreludeVariantTags() -> std::vector<kex::ir::ExternalVariantTag> {
@@ -2199,11 +2214,7 @@ int main(int argc, char *argv[]) {
                     std::get_if<kex::ast::LetExpr>(&last->kind);
                 binding && binding->value)
               typedExpr = binding->value.get();
-            if (auto type = semanticAnalyzer.typeOf(typedExpr)) {
-              auto rendered = kex::semantic::typeToString(type);
-              if (rendered.find("FileHandle") != std::string::npos)
-                beamSemanticType = std::move(rendered);
-            }
+            beamSemanticType = displayTypeOf(semanticAnalyzer, typedExpr);
             break;
           }
           const auto inspectCall = [&](const std::string &expression) {
@@ -2924,11 +2935,7 @@ int main(int argc, char *argv[]) {
                         std::get_if<kex::ast::LetExpr>(&last->kind);
                     binding && binding->value)
                   typedExpr = binding->value.get();
-                if (auto type = replAnalyzer.typeOf(typedExpr)) {
-                  auto rendered = kex::semantic::typeToString(type);
-                  if (rendered.find("FileHandle") != std::string::npos)
-                    semanticType = std::move(rendered);
-                }
+                semanticType = displayTypeOf(replAnalyzer, typedExpr);
                 break;
               }
             } else {
