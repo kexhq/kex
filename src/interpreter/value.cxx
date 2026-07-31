@@ -443,7 +443,7 @@ auto Value::typeName() const -> std::string {
                     anyResolved = true;
                 }
             }
-            // Zero-arg variant of a generic type (e.g. Nothing) carries no
+            // Zero-arg variant of a generic type (e.g. None) carries no
             // payload to infer params from — show the bare type name.
             if (!anyResolved) return base;
             std::string result = base + "<";

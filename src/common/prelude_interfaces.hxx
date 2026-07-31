@@ -440,6 +440,11 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 // is still a declared type name that resolves.
                 ifaces.typeNames.insert((*td)->name);
                 if (!(*td)->variants) return;
+                // `type FilePath = String` is a transparent alias, not an ADT
+                // whose constructor happens to be spelled `String` — treating
+                // it as one made `String` a constructor of `FilePath`, so a
+                // bare `String` widened to `FilePath`.
+                if (kex::isTransparentTypeAlias(**td)) return;
                 kex::semantic::ImportedADT adt;
                 adt.name = (*td)->name;
                 for (const auto& variant : *(*td)->variants) {

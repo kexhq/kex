@@ -1,0 +1,47 @@
+# What `Type.of` answers when the CHECKER has a concrete type — the half of
+# the story spec/prelude/type.spec.kex cannot tell, since that suite runs with
+# --no-check and so only ever sees the runtime fallback.
+#
+# A value cannot carry the unused half of a Result, and a constructor value
+# does not know it belongs to an ADT. A checked expression knows both.
+type Shade = Light | Dark(Integer)
+
+let double(n: Integer) -> Integer = n * 2
+foul loudly(text: String) -> String = text
+
+# A type the compiler computes, used as a type.
+type Greeting = Type.returnedBy(double)
+
+# The same construct in a standalone declaration.
+answer : Type.of(42)
+let answer = 7
+
+main do
+  IO.printLine(Type.of(Date.of(2026, 7, 30)).toString)
+  IO.printLine(Type.of(Integer.parse("12x")).toString)
+  IO.printLine(Type.of([Light, Dark(3)]).toString)
+  IO.printLine(Type.of("hi").toString)
+
+  # A function's type is its signature: parameters, result, and whether
+  # calling it is a side effect. Only the compiler knows any of that — the
+  # value is just a closure.
+  IO.printLine(Type.of(double).toString)
+  IO.printLine(Type.of(loudly).toString)
+  IO.printLine(Type.of(Date.parse).toString)
+  # Bound outside the interpolation on purpose: expressions inside `${}` are
+  # not type-checked, so a `Type.of` written there falls back to the value and
+  # reports a bare `Function`.
+  let effectful = Type.of(loudly)
+  let doubler = Type.of(double)
+  IO.printLine("${effectful.pure} ${doubler.args.count}")
+
+  # A computed alias is an ordinary type: it annotates, and it is enforced.
+  let greeting: Greeting = double(2)
+  IO.printLine("${greeting}")
+
+  # Answered by the compiler alone: a function value has no signature at runtime.
+  IO.printLine(Type.returnedBy(double).toString)
+  IO.printLine(Type.returnedBy(Date.parse).toString)
+  IO.printLine(Type.returnedBy(Time.midnight).toString)
+  IO.printLine("${answer}")
+end

@@ -1,0 +1,104 @@
+# Types written in DECLARATION positions: computed aliases, standalone
+# declarations, and annotated bindings. All of it is compile-time — the
+# runtime sees ordinary values — so this spec runs checked (spec-prelude's
+# --no-check suite cannot exercise any of it).
+
+type Hello = You(String) | World
+
+# An alias whose right-hand side NAMES a type, and one naming a builtin.
+type HelloClone = Type.of(Hello)
+type TextClone = Type.of(String)
+
+let helloWorld(name: String) -> String = "Hello, ${name}!"
+let rowCount(rows: [String]) -> Integer = rows.count
+foul readLoudly(path: String) -> String = path
+
+# A type the compiler computes from a function's signature.
+type Greeting = Type.returnedBy(helloWorld)
+type Counted = Type.returnedBy(rowCount)
+
+# The same thing from a value's type.
+type Answer = Type.of(42)
+
+# A standalone declaration, the `name : Type` form, on a top-level binding.
+label : Type.of("text")
+let label = "shipping"
+
+main do
+  IO.printLine("=== computed aliases as types ===")
+  # Usable exactly like a written-out type: annotation, parameter, result.
+  let greeting: Greeting = helloWorld("Akos")
+  IO.printLine(greeting)
+  IO.printLine("${shout(greeting)}")
+
+  let total: Counted = rowCount(["a", "b"])
+  IO.printLine("${total + 1}")
+
+  let answer: Answer = 7
+  IO.printLine("${answer * 6}")
+  IO.printLine(label)
+
+  IO.printLine("")
+  IO.printLine("=== annotated bindings ===")
+  # The annotation is what the binding IS — an empty list has no element type
+  # of its own to infer from.
+  let empty: [Integer] = []
+  IO.printLine("${empty.count}")
+
+  var counter: Integer = 5
+  counter = counter + 1
+  IO.printLine("${counter}")
+
+  let maybe: String? = Just("here")
+  IO.printLine("${maybe.or("missing")}")
+
+  IO.printLine("")
+  IO.printLine("=== function types ===")
+  # A function's type is its signature: parameters, result, and purity. None
+  # of that survives into the value, so only the compiler can answer.
+  IO.printLine(Type.of(helloWorld).toString)
+  IO.printLine(Type.of(rowCount).toString)
+  IO.printLine(Type.of(readLoudly).toString)
+  IO.printLine(Type.of(Date.parse).toString)
+
+  let effectful = Type.of(readLoudly)
+  let pure = Type.of(helloWorld)
+  IO.printLine("${effectful.pure} ${pure.pure}")
+  IO.printLine("${pure.args.count} ${pure.name}")
+
+  IO.printLine("")
+  IO.printLine("=== a type name IS a type ===")
+  # `Type.of(Hello)` names a TYPE, not a value: the walker used to die on
+  # "Undefined identifier: Hello" and BEAM lowered it to an atom and answered
+  # `Atom`. A bare type name is already a value in `x.to(String)`.
+  IO.printLine(Type.of(Hello).toString)
+  IO.printLine(Type.of(String).toString)
+  IO.printLine(Type.of(Date).toString)
+  let hello = Type.of(Hello)
+  IO.printLine("${hello.constructors.count} ${hello.adt?}")
+  # A CONSTRUCTOR still reads as a value of its ADT.
+  IO.printLine(Type.of(World).toString)
+  IO.printLine(Type.of(You("a")).toString)
+
+  # An alias OF a type name is that type, and answers identically.
+  IO.printLine(Type.of(HelloClone).toString)
+  let cloned = Type.of(HelloClone) == Type.of(Hello)
+  IO.printLine("${cloned}")
+  IO.printLine(Type.of(TextClone).toString)
+
+  IO.printLine("")
+  IO.printLine("=== the two forms agree ===")
+  # `Type.returnedBy(f)` is the last argument of `Type.of(f)`. Bound outside
+  # the interpolation deliberately: expressions inside `${...}` are not parsed
+  # into the AST at all, so nothing there is type-checked and a compile-time
+  # query like this one would fall back to the value and answer "Function".
+  let returned = Type.returnedBy(helloWorld)
+  let counted = Type.returnedBy(rowCount)
+  let sameAnswer = Type.of(42) == Type.of(answer)
+  IO.printLine("${returned == Type.named("String")}")
+  IO.printLine(counted.toString)
+  IO.printLine("${sameAnswer}")
+end
+
+# Takes and returns the computed alias.
+let shout(text: Greeting) -> Greeting = text.upperCase

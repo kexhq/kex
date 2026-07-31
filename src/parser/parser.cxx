@@ -20,6 +20,25 @@ auto Parser::diagnostics() const -> const std::vector<ParseDiagnostic>& {
     return m_diagnostics;
 }
 
+// `.to(...)`'s argument is normally a TYPE (`String`, `[X]`, `Optional<Int>`),
+// parsed as a type expression. But a `Type` VALUE is a perfectly good argument
+// too — `x.to(Type.of(y))` — and that starts with an UpperIdent as well.
+//
+// They are told apart by what follows the dotted uppercase run: a lowercase
+// segment means a call or a module member (`Type.of`, `FS.File.open`), so the
+// argument is a value. All-uppercase segments are a qualified type name
+// (`Temperature.Fahrenheit`), which stays on the type path.
+auto Parser::toArgumentIsValue() const -> bool {
+    if (!check(TokenType::UpperIdent)) return false;
+    int offset = 1;
+    while (peekAt(offset).type == TokenType::Dot) {
+        const auto& segment = peekAt(offset + 1);
+        if (segment.type != TokenType::UpperIdent) return true;
+        offset += 2;
+    }
+    return false;
+}
+
 // ===== Token Navigation =====
 
 auto Parser::peek() const -> const Token& {
@@ -31,6 +50,12 @@ auto Parser::peekNext() const -> const Token& {
         return m_tokens.back();
     }
     return m_tokens[m_pos + 1];
+}
+
+auto Parser::peekAt(int offset) const -> const Token& {
+    const int index = m_pos + offset;
+    if (index >= static_cast<int>(m_tokens.size())) return m_tokens.back();
+    return m_tokens[index < 0 ? 0 : index];
 }
 
 auto Parser::advance() -> const Token& {
@@ -326,6 +351,14 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         auto parseVariant = [this]() -> ast::TypeExprPtr {
             auto variant = std::make_unique<ast::TypeExpr>();
             variant->location = currentLocation();
+
+            // `type Row = Type.returnedBy(parseRow)` — a computed alias, not a
+            // constructor list. It looks like an UpperIdent to the branch
+            // below, so it is recognised first.
+            if (check(TokenType::UpperIdent) && peek().value == "Type" &&
+                peekNext().type == TokenType::Dot &&
+                peekAt(2).type == TokenType::LowerIdent)
+                return parseTypePrimary();
 
             if (check(TokenType::UpperIdent) || check(TokenType::None)) {
                 auto name = check(TokenType::None)
@@ -952,6 +985,22 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         return type;
     }
 
+    // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
+    // Written where a type goes, so it parses here rather than as a value.
+    if (check(TokenType::UpperIdent) && peek().value == "Type" &&
+        peekNext().type == TokenType::Dot &&
+        peekAt(2).type == TokenType::LowerIdent &&
+        (peekAt(2).value == "of" || peekAt(2).value == "returnedBy")) {
+        advance(); // Type
+        advance(); // .
+        auto query = advance().value;
+        expect(TokenType::LParen, "Expected '(' after Type." + query);
+        auto argument = parseExpr();
+        expect(TokenType::RParen, "Expected ')' after Type." + query + " argument");
+        type->kind = ast::TypeQuery{std::move(query), std::move(argument)};
+        return type;
+    }
+
     // Named type (possibly with generics)
     if (check(TokenType::UpperIdent)) {
         auto name = parseTypeName();
@@ -1267,7 +1316,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                             auto name = advance().value;
                             advance(); // :
                             namedArgs.push_back({name, parseExpr()});
-                        } else if (method == "to" &&
+                        } else if (method == "to" && !toArgumentIsValue() &&
                                    (check(TokenType::UpperIdent) ||
                                     (check(TokenType::LBracket) && peekNext().type == TokenType::UpperIdent))) {
                             // `.to(...)` receives a Type — any type spelling:
@@ -1313,7 +1362,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
 
             call->kind = ast::MethodCall{
                 std::move(expr), method, std::move(args),
-                std::move(namedArgs), std::move(block), mutating};
+                std::move(namedArgs), std::move(block), mutating, hasParens};
             expr = std::move(call);
             continue;
         }
@@ -2314,10 +2363,16 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
     expect(TokenType::Let, "Expected 'let'");
 
     auto pattern = parsePattern();
+    // `let x: Type = value` — documented in docs/types.md and parsed here;
+    // a destructuring pattern takes its types from what it matches, so the
+    // annotation is only meaningful on a plain name.
+    std::optional<ast::TypeExprPtr> declaredType;
+    if (match(TokenType::Colon)) declaredType = parseTypeExpr();
     expect(TokenType::Equals, "Expected '=' in let binding");
     auto value = parseExpr();
 
-    expr->kind = ast::LetExpr{std::move(pattern), std::move(value)};
+    expr->kind = ast::LetExpr{std::move(pattern), std::move(value),
+                              std::move(declaredType)};
     return expr;
 }
 
@@ -2329,14 +2384,14 @@ auto Parser::parseVarExpr() -> ast::ExprPtr {
     auto name = expect(TokenType::LowerIdent, "Expected variable name").value;
 
     // Optional type annotation: var x: Type = value
-    if (match(TokenType::Colon)) {
-        parseTypeExpr(); // consume type (stored later if needed)
-    }
+    std::optional<ast::TypeExprPtr> declaredType;
+    if (match(TokenType::Colon)) declaredType = parseTypeExpr();
 
     expect(TokenType::Equals, "Expected '=' in var binding");
     auto value = parseExpr();
 
-    expr->kind = ast::VarExpr{std::move(name), std::move(value)};
+    expr->kind = ast::VarExpr{std::move(name), std::move(value),
+                              std::move(declaredType)};
     return expr;
 }
 

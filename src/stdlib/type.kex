@@ -1,0 +1,88 @@
+# Types as values.
+#
+# `Type.of(x)` answers what a value IS, as something you can hold, print,
+# compare, and take apart:
+#
+#   Type.of(42)                     # Type { name: "Integer", args: [] }
+#   Type.of([1, 2]).toString        # "[Integer]"
+#   Type.of(x) == Type.of(y)        # structural equality, like any record
+#   Type.of(due).fields             # ["year", "month", "day"]
+#
+# The answer comes from the compiler where it can: a checked expression knows
+# things a value cannot carry, such as the unused half of a `Result` or the
+# element type of an empty list. Where the checker has no concrete answer —
+# gradual code, `--no-check`, a value arriving from another process — the
+# value itself is asked instead. That fallback is honest but lossy: an empty
+# list has no element to inspect, and a `Result` only ever holds one side.
+record Type do
+  name : String
+  args : [Type]
+  # Functions only: false when calling it is a side effect — the question
+  # `foul` answers in source, phrased positively because everything in Kex is
+  # pure by default. True for every other type.
+  pure : Bool
+end
+
+module Type do
+  # What this value is. Prefer this over matching on the record directly.
+  let of(value: Any) -> Type = Kex.Intrinsic.Type.ofValue(value)
+
+  # Builds a type by name, for comparing against something you already know:
+  # `Type.of(x) == Type.named("Date")`.
+  let named(name: String) -> Type = Type { name: name, args: [], pure: true }
+
+  let with(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
+
+  # A function type: parameters followed by the result, the way a signature
+  # is written — `Type.function([Type.named("String")], Type.named("String"))`.
+  let function(params: [Type], result: Type) -> Type = Type { name: "Function", args: params + [result], pure: true }
+
+  # The type a named function returns, answered by the compiler:
+  #
+  #   Type.returnedBy(Date.parse).toString   # "Result<Date, TimeError>"
+  #
+  # Named functions only. A lambda or a function VALUE carries no signature at
+  # runtime, and an overloaded name has no single answer — both are compile
+  # errors rather than a guess.
+  let returnedBy(function: Any) -> Type = Kex.Intrinsic.Type.ofValue(function)
+
+  # No `nameOf`/`argsOf`: `type.name` and `type.args` are the record's own
+  # fields and read the same on both backends, while a module function taking
+  # a Type collides with the `name` receiver dispatcher on BEAM.
+end
+
+# Everything else is a METHOD, not a module function: a module function is
+# only reachable through UFCS in the interpreter, so `Type.of(x).fields`
+# worked there and raised on BEAM.
+make Type do
+  # The field names of a record type, in declaration order, or [] for
+  # anything else. Reads the layout the compiler already ships to the runtime
+  # for display; no separate metadata.
+  let fields -> [String] = Kex.Intrinsic.Type.fieldsOf(this.name)
+
+  # The constructor names of an ADT, or [] for anything else.
+  let constructors -> [String] = Kex.Intrinsic.Type.constructorsOf(this.name)
+
+  # "does this have fields" and "does this have constructors".
+  let record? -> Bool = this.fields.count > 0
+  let adt? -> Bool = this.constructors.count > 0
+
+  # The type as it is written in SOURCE, not as it is stored: a list is
+  # `[Integer]`, a tuple `(Integer, String)`, an optional `String?`.
+  let toString -> String do
+    # A function reads as its signature: `String -> String`, `foul () -> Void`.
+    if this.name == "Function" && this.args.count > 0
+      let arrow = this.args.map(&.toString).join(" -> ")
+      let signature = if this.args.count == 1 then "() -> ${arrow}" else arrow end
+      return "foul ${signature}" if this.pure == false
+      return signature
+    end
+    return this.name if this.args.count == 0
+    let rendered = this.args.map(&.toString)
+    return "[${rendered.at(0).or("?")}]" if this.name == "List" && this.args.count == 1
+    return "(${rendered.join(", ")})" if this.name == "Tuple"
+    return "${rendered.at(0).or("?")}?" if this.name == "Option" && this.args.count == 1
+    return "{${rendered.at(0).or("?")}: ${rendered.at(1).or("?")}}" if this.name == "Map" && this.args.count == 2
+    return "${this.name}<${rendered.join(", ")}>"
+  end
+end

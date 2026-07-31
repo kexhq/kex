@@ -6,6 +6,9 @@
 -module(kex_intrinsic_fun).
 -export([applyItem/2, convertTo/2, convertTo/3, items/1]).
 
+%% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
+%% binary, so it routes back through the atom-keyed clauses below.
+convertTo(V, {'Type', Name, _Args, _Pure}) -> convertTo(V, binary_to_atom(Name, utf8));
 convertTo(V, 'String') -> kex_io:to_string_optional(V);
 convertTo(V, 'Integer') -> kex_intrinsic_number:to_integer(V);
 convertTo(V, 'Float') -> kex_intrinsic_number:to_float(V);

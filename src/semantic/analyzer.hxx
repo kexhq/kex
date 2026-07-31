@@ -42,6 +42,10 @@ public:
         -> const std::vector<Signature>*;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto staticTypeOfCalls() const
+        -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
+        return m_checker.staticTypeOfCalls();
+    }
     auto referencedModules() const
         -> const std::unordered_set<std::string>& {
         return m_checker.referencedModules();

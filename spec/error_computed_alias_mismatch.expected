@@ -1,0 +1,4 @@
+spec/error_computed_alias_mismatch.kex:11:16: error: `shout` expects argument 1 to be String, but got Integer
+
+shout : String -> String
+Aborted: 1 type error — fix before running (use --no-check to skip).

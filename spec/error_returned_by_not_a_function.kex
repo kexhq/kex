@@ -1,0 +1,8 @@
+# `Type.returnedBy` is answered by the compiler, so it needs the NAME of a
+# function: a lambda carries no signature at runtime, and a name that is not a
+# function has none to read.
+type FromLambda = Type.returnedBy(&.count)
+
+main do
+  IO.printLine("unreachable")
+end

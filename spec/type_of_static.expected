@@ -1,0 +1,13 @@
+Result<Date, TimeError>
+Result<Integer, ParseError>
+[Shade]
+String
+Integer -> Integer
+foul String -> String
+String -> Result<Date, TimeError>
+false 2
+4
+Integer
+Result<Date, TimeError>
+Time
+7

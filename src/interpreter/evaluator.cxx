@@ -589,7 +589,7 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
         }
     }
     // Register sum-type variant constructors. Zero-arg variants (Fizz,
-    // Nothing, ...) are stored directly as VariantValue in the environment.
+    // None, ...) are stored directly as VariantValue in the environment.
     // With-arg constructors (Just(A), Ok(A), ...) are registered as
     // callable functions that build a VariantValue with a positional args
     // list. Both kinds get an entry in m_variantParent so `make TypeName
@@ -1285,6 +1285,25 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 {}, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::MethodCall>) {
+            // `Type.of(x)` where the checker typed the argument concretely:
+            // build the answer from what it recorded. The value cannot know a
+            // Result's unused half or an empty list's element type, so this
+            // has to win over the runtime fallback — and it must sit ahead of
+            // every dispatch path below, since a namespace call returns from
+            // one of those.
+            if (m_staticTypeOfCalls) {
+                auto recorded = m_staticTypeOfCalls->find(&node);
+                if (recorded != m_staticTypeOfCalls->end()) {
+                    // A value argument still runs (it may have effects); one
+                    // that NAMES a function does not — `Date.parse` on its own
+                    // is a call missing its argument.
+                    if (recorded->second.evaluateArgument)
+                        for (const auto& arg : node.args)
+                            if (arg) eval(*arg);
+                    return structuredTypeValue(recorded->second.type);
+                }
+            }
+
             // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.
             // `Kex`, `Intrinsic`, `<Category>` are nested modules; dispatch the
             // function to its native C++ builtin (the walker's intrinsics stay
@@ -1505,7 +1524,37 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     dispatchName = mangled;
                 }
-                return callFunction(dispatchName, std::move(args), std::move(namedArgs), expr.location);
+                // An unknown namespace must not fall back to a global of the
+                // same method name: `Maths.sqrt(4.0)` quietly became
+                // `sqrt(4.0)` here and returned 2.0, while BEAM rejected it —
+                // a typo that ran fine in one backend and broke in the other.
+                if (dispatchName == node.method) {
+                    const bool knownNamespace =
+                        m_moduleRegistry.count(namespaceName) > 0 ||
+                        m_recordDefs.count(namespaceName) > 0 ||
+                        m_variantParent.count(namespaceName) > 0 ||
+                        knownModuleValue(namespaceName);
+                    if (!knownNamespace)
+                        throw RuntimeError(
+                            "Undefined function: " + namespaceName + "." + node.method,
+                            expr.location);
+                }
+                // Report WHERE the name was looked for: `Missing.thing`, not
+                // a bare `thing`, so a mistyped namespace says so. BEAM words
+                // it the same way.
+                try {
+                    return callFunction(dispatchName, std::move(args),
+                                        std::move(namedArgs), expr.location);
+                } catch (const RuntimeError& error) {
+                    const std::string undefined =
+                        "Undefined function: " + dispatchName;
+                    if (std::string(error.what()).find(undefined) ==
+                        std::string::npos)
+                        throw;
+                    throw RuntimeError(
+                        "Undefined function: " + namespaceName + "." + node.method,
+                        expr.location);
+                }
             }
 
             // Field access on records: receiver.field (no args, no parens)
@@ -1556,7 +1605,35 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return result;
             }
 
-            return callFunction(mangledName, std::move(args), std::move(namedArgs), expr.location);
+            // A method call that resolves to nothing should say so as a
+            // METHOD — `d.iso` where `d` is a Result reads as "no `iso` for a
+            // Result", not as a missing global. The BEAM dispatcher's
+            // fallback clause words it identically.
+            try {
+                return callFunction(mangledName, std::move(args),
+                                    std::move(namedArgs), expr.location);
+            } catch (const RuntimeError& error) {
+                const std::string undefined = "Undefined function: " + mangledName;
+                if (std::string(error.what()).find(undefined) == std::string::npos)
+                    throw;
+                // Say WHERE the name was looked for. A namespace call names
+                // the namespace (`Missing.thing`, which is what BEAM
+                // reports); a value receiver names its type instead.
+                if (isNamespaceCall) {
+                    std::string qualified;
+                    if (node.receiver)
+                        if (auto* uid = std::get_if<ast::UpperIdentifier>(
+                                &node.receiver->kind))
+                            qualified = uid->name + "." + node.method;
+                    if (qualified.empty()) throw;
+                    throw RuntimeError("Undefined function: " + qualified,
+                                       expr.location);
+                }
+                if (!receiver) throw;
+                throw RuntimeError("Undefined method: " + mangledName + " for " +
+                                       receiver->typeName(),
+                                   expr.location);
+            }
         }
         else if constexpr (std::is_same_v<T, ast::ListExpr>) {
             std::vector<ValuePtr> elements;
@@ -2330,6 +2407,28 @@ auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
     }
 }
 
+// A semantic::StructuredType as the Kex `Type` record it stands for.
+// Is this name bound to a module value (directly, or inside the module being
+// evaluated)? Modules registered without a mangled prefix live here.
+auto Evaluator::knownModuleValue(const std::string& name) const -> bool {
+    auto binding = m_env->get(name);
+    if (binding && std::holds_alternative<ModuleValue>(binding->data)) return true;
+    if (m_currentModule.empty()) return false;
+    auto scoped = m_env->get(m_currentModule + "::" + name);
+    return scoped && std::holds_alternative<ModuleValue>(scoped->data);
+}
+
+auto Evaluator::structuredTypeValue(const semantic::StructuredType& type)
+    -> ValuePtr {
+    std::vector<ValuePtr> args;
+    for (const auto& arg : type.args) args.push_back(structuredTypeValue(arg));
+    return Value::record("Type", {
+        {"name", Value::string(type.name)},
+        {"args", Value::list(std::move(args))},
+        {"pure", Value::boolean(type.pure)},
+    });
+}
+
 auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args,
                              NamedArgs namedArgs, SourceLocation loc) -> ValuePtr {
     checkDeadline();
@@ -2816,7 +2915,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             if (pat.name == "None") return value->isNone();
 
             if (pat.args.empty()) {
-                // Match zero-arg variant constructors (Nothing, Less, Fizz, ...)
+                // Match zero-arg variant constructors (None, Less, Fizz, ...)
                 if (auto* var = std::get_if<VariantValue>(&value->data)) {
                     if (var->tag == pat.name && var->args.empty()) return true;
                 }
@@ -2914,6 +3013,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerEnvBuiltins();
     registerMathBuiltins();
     registerTimeBuiltins();
+    registerTypeBuiltins();
     registerBitsBuiltins();
     registerConsoleBuiltins();
     registerTestBuiltins();
@@ -2936,6 +3036,13 @@ auto Evaluator::registerBuiltins() -> void {
                 targetName = m->name;
             else if (auto* v = std::get_if<VariantValue>(&args[1]->data))
                 targetName = v->tag;
+            // A `Type` VALUE names its target too: `x.to(Type.of(y))`.
+            else if (auto* r = std::get_if<RecordValue>(&args[1]->data);
+                     r && r->typeName == "Type") {
+                if (auto field = r->fields.find("name"); field != r->fields.end())
+                    if (auto* n = std::get_if<StringValue>(&field->second->data))
+                        targetName = n->value;
+            }
 
             // Optional third argument: `.to(String, radix: 16)` /
             // `.to(Integer, radix: 2)`. Only Integer <-> String is base

@@ -32,5 +32,6 @@ using Time
 using Test
 using TaggedValidation
 using Truthyable
+using Type
 using Units
 using WebServer

@@ -303,6 +303,157 @@ int main() {
         });
     });
 
+    describe("Semantic — type declarations", []() {
+        it("binds the declared type, not the inferred one", []() {
+            // The whole point of writing `[Integer]` is that `[]` has no
+            // element type to infer.
+            assertTrue(noErrors(
+                "main do\n"
+                "  let empty: [Integer] = []\n"
+                "  let total: Integer = empty.count\n"
+                "end\n"));
+        });
+
+        it("checks an initializer against a let annotation", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let label: String = 42\n"
+                "end\n",
+                "expected String, got Integer"));
+        });
+
+        it("checks an initializer against a var annotation", []() {
+            // `var x: T = v` parsed before this and threw the annotation away.
+            assertTrue(hasError(
+                "main do\n"
+                "  var total: Integer = \"zero\"\n"
+                "end\n",
+                "expected Integer, got String"));
+            assertTrue(noErrors(
+                "main do\n"
+                "  var total: Integer = 0\n"
+                "  total = total + 1\n"
+                "end\n"));
+        });
+
+        it("checks a top-level binding against its standalone declaration", []() {
+            // A top-level `let x = v` is a synthetic-main binding rather than
+            // a zero-argument function, so its `x : T` line never reached it.
+            assertTrue(hasError(
+                "count : Integer\n"
+                "let count = \"not a number\"\n"
+                "main do\n"
+                "  IO.printLine(\"x\")\n"
+                "end\n",
+                "expected Integer, got String"));
+        });
+
+        it("does not let a global declaration govern a local binding", []() {
+            // Same name, different scope: the annotation belongs to the
+            // top-level constant only.
+            assertTrue(noErrors(
+                "count : Integer\n"
+                "let count = 1\n"
+                "let describe() -> String do\n"
+                "  let count = \"three\"\n"
+                "  return count\n"
+                "end\n"
+                "main do\n"
+                "  IO.printLine(describe())\n"
+                "end\n"));
+        });
+
+        it("resolves a computed alias to the function's return type", []() {
+            assertTrue(noErrors(
+                "let helloWorld(name: String) -> String = name\n"
+                "type Greeting = Type.returnedBy(helloWorld)\n"
+                "let shout(text: Greeting) -> Greeting = text.upperCase\n"
+                "main do\n"
+                "  IO.printLine(shout(\"a\"))\n"
+                "end\n"));
+        });
+
+        it("enforces a computed alias like any other type", []() {
+            assertTrue(hasError(
+                "let helloWorld(name: String) -> String = name\n"
+                "type Greeting = Type.returnedBy(helloWorld)\n"
+                "let shout(text: Greeting) -> Greeting = text.upperCase\n"
+                "main do\n"
+                "  IO.printLine(shout(42))\n"
+                "end\n",
+                "to be String, but got Integer"));
+        });
+
+        it("computes an alias from a value's type too", []() {
+            assertTrue(noErrors(
+                "type Answer = Type.of(42)\n"
+                "main do\n"
+                "  let answer: Answer = 7\n"
+                "  IO.printLine(\"${answer}\")\n"
+                "end\n"));
+            assertTrue(hasError(
+                "type Answer = Type.of(42)\n"
+                "main do\n"
+                "  let answer: Answer = \"seven\"\n"
+                "end\n",
+                "expected Integer, got String"));
+        });
+
+        it("reads a bare type name as that type", []() {
+            // `Type.of(Hello)` names a TYPE. It is not a runtime value at
+            // all — the walker died on "Undefined identifier: Hello" and BEAM
+            // answered `Atom`.
+            assertTrue(noErrors(
+                "type Hello = You(String) | World\n"
+                "main do\n"
+                "  let named = Type.of(Hello)\n"
+                "  let sameByName = named == Type.named(\"Hello\")\n"
+                "  IO.printLine(\"${sameByName}\")\n"
+                "end\n"));
+        });
+
+        it("clones a type through an alias of a type name", []() {
+            // `type HelloClone = Type.of(Hello)` is `Hello`, so it enforces
+            // like `Hello` — the alias path used to infer `Hello` as an
+            // expression and get nothing.
+            assertTrue(noErrors(
+                "type Hello = You(String) | World\n"
+                "type HelloClone = Type.of(Hello)\n"
+                "let greet(h: HelloClone) -> String = \"ok\"\n"
+                "main do\n"
+                "  IO.printLine(greet(World))\n"
+                "end\n"));
+            assertTrue(hasError(
+                "type Hello = You(String) | World\n"
+                "type HelloClone = Type.of(Hello)\n"
+                "let greet(h: HelloClone) -> String = \"ok\"\n"
+                "main do\n"
+                "  IO.printLine(greet(42))\n"
+                "end\n",
+                "to be Hello, but got Integer"));
+        });
+
+        it("rejects Type.returnedBy without a function name", []() {
+            assertTrue(hasError(
+                "type FromLambda = Type.returnedBy(&.count)\n"
+                "main do\n"
+                "  IO.printLine(\"x\")\n"
+                "end\n",
+                "needs the NAME of a function"));
+        });
+
+        it("rejects Type.returnedBy on an overloaded name", []() {
+            assertTrue(hasError(
+                "let render(n: Integer) -> Integer = n\n"
+                "let render(s: String) -> String = s\n"
+                "type Rendered = Type.returnedBy(render)\n"
+                "main do\n"
+                "  IO.printLine(\"x\")\n"
+                "end\n",
+                "cannot choose between the overloads"));
+        });
+    });
+
     describe("Semantic — Purity", []() {
         it("allows foul calls in main (implicitly foul)", []() {
             assertTrue(noErrors(
@@ -722,8 +873,7 @@ int main() {
                 "record Temperature do\n"
                 "  celsius : Float\n"
                 "  static do\n"
-                "    let Fahrenheit(value: Float) -> Temperature =\n"
-                "      Temperature { celsius: value }\n"
+                "    let Fahrenheit(value: Float) -> Temperature = Temperature { celsius: value }\n"
                 "    let Freezing = Temperature { celsius: 0.0 }\n"
                 "  end\n"
                 "end\n"

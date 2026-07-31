@@ -238,6 +238,70 @@ auto typeToString(const TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
+    if (!type) return std::nullopt;
+    return std::visit([](const auto& t) -> std::optional<StructuredType> {
+        using T = std::decay_t<decltype(t)>;
+        auto argsOf = [](const std::vector<TypePtr>& types)
+            -> std::optional<std::vector<StructuredType>> {
+            std::vector<StructuredType> out;
+            for (const auto& element : types) {
+                auto structured = structuredTypeOf(element);
+                if (!structured) return std::nullopt;
+                out.push_back(std::move(*structured));
+            }
+            return out;
+        };
+        auto compound = [&](const std::string& name,
+                            const std::vector<TypePtr>& types)
+            -> std::optional<StructuredType> {
+            auto args = argsOf(types);
+            if (!args) return std::nullopt;
+            return StructuredType{name, std::move(*args)};
+        };
+        // Unknown, type variables and trait bounds are exactly the cases the
+        // value answers better than the checker.
+        if constexpr (std::is_same_v<T, UnknownType> ||
+                      std::is_same_v<T, TypeVar> ||
+                      std::is_same_v<T, ConstrainedType> ||
+                      std::is_same_v<T, UnionType>) {
+            return std::nullopt;
+        } else if constexpr (std::is_same_v<T, FuncType>) {
+            // Parameters then the result, matching how a signature is written.
+            std::vector<TypePtr> parts = t.params;
+            parts.push_back(t.result);
+            return compound("Function", parts);
+        } else if constexpr (std::is_same_v<T, NamedType>) {
+            return compound(t.name, t.typeArgs);
+        } else if constexpr (std::is_same_v<T, ListType>) {
+            // String IS [Char]; report it the way it is written.
+            if (auto* prim = std::get_if<PrimitiveType>(&t.element->kind);
+                prim && prim->kind == PrimitiveType::Char)
+                return StructuredType{"String", {}};
+            return compound("List", {t.element});
+        } else if constexpr (std::is_same_v<T, OptionalType>) {
+            return compound("Option", {t.inner});
+        } else if constexpr (std::is_same_v<T, MapType>) {
+            return compound("Map", {t.key, t.value});
+        } else if constexpr (std::is_same_v<T, TupleType>) {
+            return compound("Tuple", t.elements);
+        } else if constexpr (std::is_same_v<T, SizedIntType>) {
+            // Width is not observable at runtime (IntValue is one int64_t,
+            // and the fallback answers "Integer"), so a static answer must
+            // not claim more than the value can confirm.
+            return StructuredType{"Integer", {}};
+        } else if constexpr (std::is_same_v<T, SizedFloatType>) {
+            return StructuredType{"Float", {}};
+        } else if constexpr (std::is_same_v<T, PrimitiveType>) {
+            if (t.kind == PrimitiveType::Integer)
+                return StructuredType{"Integer", {}};
+            return StructuredType{typeToString(std::make_shared<Type>(Type{t})), {}};
+        } else {
+            return StructuredType{typeToString(std::make_shared<Type>(Type{t})), {}};
+        }
+    }, type->kind);
+}
+
 // TupleType{} (empty tuple, from parsing `()` in a type annotation) and
 // PrimitiveType{Unit} (from Type::unit() in compiled signatures) represents
 // the same concept. Normalize both representations before comparing.

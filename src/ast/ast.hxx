@@ -67,6 +67,15 @@ struct GenericVar {
     std::string name; // single letter
 };
 
+// A type the COMPILER computes: `type Row = Type.returnedBy(parseRow)`,
+// `type Item = Type.of(defaultItem)`. The argument is an ordinary expression —
+// a function name for `returnedBy`, any expression for `of` — resolved during
+// checking and erased afterwards, like every other type.
+struct TypeQuery {
+    std::string query;   // "of" | "returnedBy"
+    ExprPtr argument;
+};
+
 struct TypeExpr {
     SourceLocation location;
     std::variant<
@@ -80,7 +89,8 @@ struct TypeExpr {
         OptionalType,
         BlockType,
         AtomType,
-        GenericVar
+        GenericVar,
+        TypeQuery
     > kind;
 };
 
@@ -170,6 +180,10 @@ struct MethodCall {
     std::vector<std::pair<std::string, ExprPtr>> namedArgs;
     std::optional<ExprPtr> block;
     bool mutating = false; // the ! suffix
+    // Whether the source wrote `()`. `Time.midnight` and `Time.midnight()`
+    // are otherwise the same node — a zero-argument MethodCall — and
+    // `Type.of` has to tell a function REFERENCE from a call to it.
+    bool parenthesized = false;
 };
 
 struct FunctionCall {
@@ -277,11 +291,16 @@ struct NextExpr {};
 struct LetExpr {
     PatternPtr pattern;
     ExprPtr value;
+    // `let x: String? = None` — the declared type, when written. The checker
+    // binds THIS rather than what the initializer happens to infer to, which
+    // is the point of writing it (`let xs: [Colour] = []`).
+    std::optional<TypeExprPtr> type;
 };
 
 struct VarExpr {
     std::string name;
     ExprPtr value;
+    std::optional<TypeExprPtr> type;
 };
 
 struct AssignExpr {

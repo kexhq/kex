@@ -1,4 +1,14 @@
 describe("Time") do
+  it("reaches the Date inside the Result before using it") do
+    # `Date.of(...)` is a Result: `.iso` belongs to Date, and calling it on the
+    # Result is a type error (spec/error_method_on_wrong_receiver.kex).
+    assert(Date.of(2026, 2, 22).try.iso == "2026-02-22")
+    match Date.of(2026, 2, 22) do
+      Ok(date) -> assert(date.iso == "2026-02-22")
+      Error(_) -> assert(false)
+    end
+  end
+
   it("builds and validates dates") do
     let date = Date.of(2026, 7, 30).try
     assert(date.year == 2026)

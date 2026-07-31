@@ -4,6 +4,7 @@
 #include "environment.hxx"
 #include "scheduler.hxx"
 #include "value.hxx"
+#include "../semantic/types.hxx"
 #include <chrono>
 #include <deque>
 #include <memory>
@@ -184,6 +185,23 @@ private:
     auto registerMapBuiltins() -> void;
     auto registerMathBuiltins() -> void;
     auto registerTimeBuiltins() -> void;
+    auto registerTypeBuiltins() -> void;
+    auto structuredTypeValue(const semantic::StructuredType& type) -> ValuePtr;
+    auto knownModuleValue(const std::string& name) const -> bool;
+
+public:
+    // `Type.of(x)` sites the checker typed concretely (see
+    // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
+    // — the table is simply absent and every `Type.of` asks the value.
+    auto setStaticTypeOfCalls(
+        const std::unordered_map<const ast::MethodCall*,
+                                 semantic::StaticTypeAnswer>* calls) -> void {
+        m_staticTypeOfCalls = calls;
+    }
+
+private:
+    const std::unordered_map<const ast::MethodCall*,
+                             semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
     auto registerBitsBuiltins() -> void;
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;

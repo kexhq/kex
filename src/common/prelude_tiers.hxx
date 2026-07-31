@@ -26,8 +26,8 @@ inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
 };
 // time.kex comes after units.kex: Date/Time/DateTime are built on the
 // Duration record the unit system declares.
-inline constexpr std::array<std::string_view, 4> kPreludeTier3 = {
-    "list.kex", "map.kex", "units.kex", "time.kex",
+inline constexpr std::array<std::string_view, 5> kPreludeTier3 = {
+    "list.kex", "map.kex", "units.kex", "time.kex", "type.kex",
 };
 
 inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)

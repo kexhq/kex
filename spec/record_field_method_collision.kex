@@ -43,6 +43,32 @@ IO.printLine("abc".length)
 IO.printLine({"k": 1}.keys)
 IO.printLine({"k": 1}.count)
 
+# A SINGLE make-block method sharing a name with a record field. The method
+# owns the bare symbol, and for an ADT owner the clauses used to be merged
+# straight into it — an implicit `this` is a catch-all, so it swallowed every
+# receiver and `tagged.label` returned the METHOD's answer on BEAM while the
+# walker read the field. The prelude's `name` (Weekday's method) made every
+# record field called `name` unreadable that way, `Type.name` included.
+type Shade = Light | Dark
+
+record Tagged do
+  label : String
+end
+
+make Shade do
+  let label -> String = "from the method"
+end
+
+let opaque(x: Any) -> Any = x
+
+IO.printLine(Tagged { label: "from the field" }.label)
+IO.printLine(opaque(Tagged { label: "erased receiver" }).label)
+IO.printLine(opaque(Light).label)
+
+# The prelude's own case: `name` is Weekday's method AND a field of Type.
+IO.printLine(Type.of(42).name)
+IO.printLine(opaque(Type.of("x")).name)
+
 # The same collision on a prelude record reached through a Result — this is
 # the ParseError case, where `rest` and `value` are both fields.
 match Float.parse("1.5xy") do

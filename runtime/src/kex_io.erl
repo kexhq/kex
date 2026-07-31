@@ -3,7 +3,7 @@
            inspect/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
-           mock_stop/0]).
+           mock_stop/0, value_type_name/1]).
 
 %% register_display/2 — called once at main start with the compiling module's
 %% record layouts (#{Tag => [field, …]} in declaration order) and ADT payload

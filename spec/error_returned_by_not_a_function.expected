@@ -1,0 +1,2 @@
+spec/error_returned_by_not_a_function.kex:4:35: error: `Type.returnedBy` needs the NAME of a function; a lambda or a function value carries no signature
+Aborted: 1 type error — fix before running (use --no-check to skip).

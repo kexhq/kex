@@ -183,6 +183,59 @@ elapsed.to(String)                # "2.5 s"
 `DateTime` (below); a value such as `5.sec` is a `Measure`, not a `Duration`.
 The plural spellings build durations: `5.seconds`, `90.minutes`, `2.days`.
 
+## Types as values
+
+`Type.of(x)` answers what a value is, as a record you can hold, print, compare
+and take apart. It is in the prelude.
+
+```kex
+Type.of(42).toString                  # "Integer"
+Type.of([1, 2]).toString              # "[Integer]"
+Type.of((1, "a")).toString            # "(Integer, String)"
+Type.of(Date.of(2026, 7, 30))         # Result<Date, TimeError>
+Type.of(x) == Type.named("Date")      # ordinary record equality
+Type.of(point).fields                 # ["x", "y"]
+Type.of(Light).constructors           # ["Light", "Dark"]
+Type.returnedBy(Date.parse).toString  # "Result<Date, TimeError>"
+
+"34".to(Type.of(234))                 # Just(34) — `.to` takes a Type value
+5.to(String)                          # Just("5") — or a bare type name
+```
+
+The answer comes from the compiler where it has one: a checked expression
+knows things a value cannot carry, such as the unused half of a `Result` or
+that `Light` belongs to `Shade`. Where it does not — gradual code,
+`--no-check`, a value arriving from another process — the value itself is
+asked. That fallback is honest but lossy: `Type.of([])` is `[?]`, because an
+empty list has no element to inspect.
+
+A function's type is its signature — parameters, result, and whether calling it
+is a side effect:
+
+```kex
+Type.of(helloWorld).toString    # "String -> String"
+Type.of(shout).toString         # "foul String -> String"
+Type.of(shout).pure           # true
+```
+
+`Type.returnedBy` is answered by the compiler alone, so it needs the NAME of a
+function: a lambda or a function value carries no signature at runtime, and an
+overloaded name has no single answer. Both are compile errors.
+
+Either form can be written where a TYPE goes — in a declaration, an
+annotation, or a binding:
+
+```kex
+type Row = Type.returnedBy(parseRow)     # a computed alias, usable as a type
+answer : Type.of(42)                     # a standalone declaration
+let answer = 7
+let items: [Colour] = []                 # ordinary annotations, now on bindings
+```
+
+One limit: expressions inside a string interpolation are not type-checked, so a
+`Type.of` written in `${...}` falls back to the value and reports a bare
+`Function` for a function argument. Bind it outside the interpolation.
+
 ## Dates and times
 
 Three civil record types, all in the prelude. `Date` is a calendar day with no

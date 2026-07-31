@@ -24,6 +24,52 @@ auto extractConstructorName(const ast::TypeExprPtr& variant) -> std::optional<st
     return std::nullopt;
 }
 
+// True when a type is fully determined: no Unknown, no type variable, and no
+// trait-bound placeholder anywhere inside it. A mismatch against such a
+// receiver is provable; against a gradual one it is not.
+// The receiver without its type arguments — `Result<Box, ?>` becomes
+// `Result`, which is the part that decides whether a candidate could accept
+// it.
+auto headShapeOf(const TypePtr& type) -> TypePtr {
+    if (!type) return type;
+    if (auto* named = std::get_if<NamedType>(&type->kind))
+        return Type::named(named->name);
+    return type;
+}
+
+auto isFullyDetermined(const TypePtr& type) -> bool {
+    if (!type) return false;
+    return std::visit([](const auto& t) -> bool {
+        using T = std::decay_t<decltype(t)>;
+        auto all = [](const std::vector<TypePtr>& types) {
+            for (const auto& element : types)
+                if (!isFullyDetermined(element)) return false;
+            return true;
+        };
+        if constexpr (std::is_same_v<T, UnknownType> ||
+                      std::is_same_v<T, TypeVar> ||
+                      std::is_same_v<T, ConstrainedType>) {
+            return false;
+        } else if constexpr (std::is_same_v<T, NamedType>) {
+            return all(t.typeArgs);
+        } else if constexpr (std::is_same_v<T, ListType>) {
+            return isFullyDetermined(t.element);
+        } else if constexpr (std::is_same_v<T, OptionalType>) {
+            return isFullyDetermined(t.inner);
+        } else if constexpr (std::is_same_v<T, MapType>) {
+            return isFullyDetermined(t.key) && isFullyDetermined(t.value);
+        } else if constexpr (std::is_same_v<T, TupleType>) {
+            return all(t.elements);
+        } else if constexpr (std::is_same_v<T, UnionType>) {
+            return all(t.members);
+        } else if constexpr (std::is_same_v<T, FuncType>) {
+            return all(t.params) && isFullyDetermined(t.result);
+        } else {
+            return true;
+        }
+    }, type->kind);
+}
+
 } // namespace
 
 auto TypeChecker::check(const ast::Program& program,
@@ -166,6 +212,11 @@ auto TypeChecker::check(const ast::Program& program,
         }, item);
     }
 
+    for (const auto& item : program.items)
+        if (const auto* function =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+            function && *function)
+            m_functionDeclarations.emplace((*function)->name, function->get());
     registerTypeAliases(program);
 
     // Register built-in types
@@ -206,9 +257,13 @@ auto TypeChecker::check(const ast::Program& program,
         for (const auto& c : m_importedInterfaces->traitConformances)
             m_traits.registerImplementation(c.typeName, c.traitName);
     registerRecordFields(program);
+    for (const auto& [name, query] : m_computedAliases)
+        m_typeAliases[name] = resolveTypeQuery(*query);
+    m_computedAliases.clear();
     registerDeclaredSignatures(program);
     registerMakeSignatures(program);
     preRegisterFunctionSigs(program);
+
 
     // Topological ordering: check functions whose callees are all known
     // before checking their callers, so forward-reference calls use real
@@ -478,8 +533,12 @@ auto TypeChecker::registerTraits(const ast::Program& program) -> void {
                                 td.requiredMethods.push_back(std::move(*sig));
                             }
                         }
-                        // FunctionDef items are default implementations — registered
-                        // for completeness but not added to requiredMethods.
+                        // FunctionDef items are default implementations: no
+                        // signature of their own, but the NAME matters —
+                        // every implementing type inherits it.
+                        else if constexpr (std::is_same_v<BT, std::unique_ptr<ast::FunctionDef>>) {
+                            if (bi) td.defaultMethods.push_back(bi->name);
+                        }
                     }, bodyItem);
                 }
                 m_traits.define(std::move(td));
@@ -494,6 +553,20 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
+                // `type Row = Type.returnedBy(parseRow)` resolves against
+                // function signatures, which are registered after this pass —
+                // so it is deferred rather than resolved here.
+                if (node->variants->size() == 1) {
+                    if (auto* query = std::get_if<ast::TypeQuery>(
+                            &(*node->variants)[0]->kind)) {
+                        // Resolved after the builtin type names are
+                        // registered — before them, `String` is just a name
+                        // and the alias would bind NamedType("String")
+                        // instead of the real string type.
+                        m_computedAliases.push_back({node->name, query});
+                        return;
+                    }
+                }
                 // Transparent type alias: single bare TypeName — register
                 // immediately, before falling through to the constructor check.
                 if (node->variants->size() == 1) {
@@ -518,6 +591,20 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
+                // `type Row = Type.returnedBy(parseRow)` resolves against
+                // function signatures, which are registered after this pass —
+                // so it is deferred rather than resolved here.
+                if (node->variants->size() == 1) {
+                    if (auto* query = std::get_if<ast::TypeQuery>(
+                            &(*node->variants)[0]->kind)) {
+                        // Resolved after the builtin type names are
+                        // registered — before them, `String` is just a name
+                        // and the alias would bind NamedType("String")
+                        // instead of the real string type.
+                        m_computedAliases.push_back({node->name, query});
+                        return;
+                    }
+                }
                 // Transparent type alias: single bare TypeName — register
                 // immediately, before falling through to the constructor check.
                 if (node->variants->size() == 1) {
@@ -806,7 +893,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
     return std::visit([this, &genericVars](const auto& node) -> TypePtr {
         using T = std::decay_t<decltype(node)>;
 
-        if constexpr (std::is_same_v<T, ast::TypeName>) {
+        if constexpr (std::is_same_v<T, ast::TypeQuery>) {
+            return resolveTypeQuery(node);
+        }
+        else if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
             const std::string& last = node.parts.back();
             // `This` inside a make block refers to the implementing type.
@@ -1392,6 +1482,13 @@ auto TypeChecker::checkTraitImplementation(const ast::MakeDef& def) -> void {
 }
 
 auto TypeChecker::checkMainBlock(const ast::MainBlock& block) -> void {
+    const bool wasInSyntheticMain = m_inSyntheticMain;
+    m_inSyntheticMain = block.synthetic;
+    struct Restore {
+        bool& flag;
+        bool saved;
+        ~Restore() { flag = saved; }
+    } restore{m_inSyntheticMain, wasInSyntheticMain};
     auto savedDeclarationImports = m_declarationImports;
     if (auto imports = m_mainImports.find(&block); imports != m_mainImports.end())
         m_declarationImports = imports->second;
@@ -1865,8 +1962,20 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::LetExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
+            // `let xs: [Colour] = []` — the annotation is what the binding IS;
+            // the initializer only has to be compatible with it. Binding the
+            // inferred type instead would defeat the reason for writing one.
+            auto declared = declaredBindingType(node.type, valueType, expr.location);
             if (auto* varPat = std::get_if<ast::VarPattern>(&node.pattern->kind)) {
-                defineVar(varPat->name, valueType);
+                // `x : Type.of(y)` on the line above `let x = 34`: a top-level
+                // binding is a synthetic-main LetExpr, not a 0-arg function, so
+                // its declaration has to be matched here. Scoped to the
+                // synthetic main, or a local `let` would pick up a global
+                // annotation that merely shares its name.
+                if (!declared && m_inSyntheticMain)
+                    declared = declaredConstantType(varPat->name, valueType,
+                                                    expr.location);
+                defineVar(varPat->name, declared ? declared : valueType);
             } else if (node.pattern) {
                 checkPatternArity(*node.pattern);
                 // Reject constructor mismatches early, e.g.
@@ -1894,7 +2003,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         }
         else if constexpr (std::is_same_v<T, ast::VarExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
-            defineVar(node.name, valueType);
+            auto declared = declaredBindingType(node.type, valueType, expr.location);
+            defineVar(node.name, declared ? declared : valueType);
             return Type::unit();
         }
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
@@ -2152,6 +2262,86 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 callName = std::get<ast::UpperIdentifier>(node.receiver->kind).name +
                            "::" + node.method;
             }
+            // `Type.of(Hello)` where `Hello` NAMES a type answers with that
+            // type. A bare type name is already a value elsewhere (`x.to(String)`),
+            // and it is not a runtime value at all — the walker died on
+            // "Undefined identifier: Hello" while BEAM lowered it to an atom
+            // and reported `Atom`.
+            if (callName == "Type::of" && node.args.size() == 1 && node.args[0]) {
+                if (auto referenced = typeNameReference(*node.args[0])) {
+                    if (auto structured = structuredTypeOf(referenced)) {
+                        m_staticTypeOfCalls[&node] =
+                            {std::move(*structured), /*evaluateArgument=*/false};
+                        return Type::named("Type");
+                    }
+                }
+                if (auto signature = namedFunctionSignature(*node.args[0])) {
+                    StructuredType function;
+                    function.name = "Function";
+                    function.pure = !signature->isFoul;
+                    bool complete = true;
+                    for (const auto& param : signature->params) {
+                        auto structured = structuredTypeOf(param);
+                        if (!structured) { complete = false; break; }
+                        function.args.push_back(std::move(*structured));
+                    }
+                    if (complete)
+                        if (auto result = structuredTypeOf(signature->result)) {
+                            function.args.push_back(std::move(*result));
+                            m_staticTypeOfCalls[&node] =
+                                {std::move(function), /*evaluateArgument=*/false};
+                            return Type::named("Type");
+                        }
+                }
+            }
+            // `Type.returnedBy(f)`: resolved entirely here — a function value
+            // carries no signature at runtime. The argument must NAME a
+            // function; an overloaded name has no single answer.
+            if (callName == "Type::returnedBy" && node.args.size() == 1 &&
+                node.args[0]) {
+                const auto* identifier =
+                    std::get_if<ast::Identifier>(&node.args[0]->kind);
+                std::string functionName;
+                if (identifier) {
+                    functionName = identifier->name;
+                } else if (const auto* qualified =
+                               std::get_if<ast::MethodCall>(&node.args[0]->kind);
+                           qualified && qualified->args.empty() &&
+                           qualified->receiver) {
+                    if (auto path = importedModulePath(*qualified->receiver))
+                        functionName = *path + "::" + qualified->method;
+                }
+                std::vector<Signature> candidates;
+                if (!functionName.empty()) {
+                    if (auto user = m_userSignatures.find(functionName);
+                        user != m_userSignatures.end())
+                        candidates = user->second;
+                    if (candidates.empty())
+                        candidates = importedCandidateSignatures(functionName);
+                }
+                if (candidates.empty()) {
+                    error(expr.location,
+                          "`Type.returnedBy` needs the NAME of a function; "
+                          "a lambda or a function value carries no signature");
+                } else if (candidates.size() > 1) {
+                    std::string message =
+                        "`Type.returnedBy` cannot choose between the overloads of `" +
+                        functionName + "`";
+                    for (const auto& candidate : candidates)
+                        message += "\n\n" + displaySignature(functionName, candidate);
+                    error(expr.location, message);
+                } else if (auto structured =
+                               structuredTypeOf(candidates.front().result)) {
+                    m_staticTypeOfCalls[&node] =
+                        {std::move(*structured), /*evaluateArgument=*/false};
+                } else {
+                    error(expr.location,
+                          "`Type.returnedBy` cannot answer for `" + functionName +
+                          "`: its return type is not concrete");
+                }
+                return Type::named("Type");
+            }
+
             std::vector<TypePtr> argTypes;
             if (!isNamespaceCall)
                 argTypes.push_back(node.receiver ? inferExpr(*node.receiver) : Type::unknown());
@@ -2186,6 +2376,45 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     callName, argTypes, /*isMethodCall=*/!isNamespaceCall);
                 argTypes.push_back(inferBlock(**node.block, hints));
             }
+            // `Type.of(x)`: record what the CHECKER knows about the argument.
+            // A checked expression knows things the value cannot carry — the
+            // unused half of a Result, an empty list's element type — and both
+            // backends prefer this recording over asking the value. A nullary
+            // constructor is widened to its ADT (`Red` is a `Colour`).
+            if (callName == "Type::of" && argTypes.size() == 1) {
+                // Widen constructor names to their ADT, through containers:
+                // `[Red, Blue(2)]` is a `[Colour]`, not a `[Red]`. Type
+                // ARGUMENTS are left alone — a phantom typestate parameter is
+                // spelled with constructors too, and widening those erases the
+                // distinction they exist to make.
+                std::function<TypePtr(const TypePtr&)> widen =
+                    [&](const TypePtr& type) -> TypePtr {
+                    auto resolved = resolve(type);
+                    if (auto* named = std::get_if<NamedType>(&resolved->kind)) {
+                        if (auto owner = m_adtOfConstructor.find(named->name);
+                            owner != m_adtOfConstructor.end() &&
+                            owner->second != named->name)
+                            return Type::named(owner->second);
+                        return resolved;
+                    }
+                    if (auto* list = std::get_if<ListType>(&resolved->kind))
+                        return Type::list(widen(list->element));
+                    if (auto* optional = std::get_if<OptionalType>(&resolved->kind))
+                        return Type::optional(widen(optional->inner));
+                    if (auto* map = std::get_if<MapType>(&resolved->kind))
+                        return Type::map(widen(map->key), widen(map->value));
+                    if (auto* tuple = std::get_if<TupleType>(&resolved->kind)) {
+                        std::vector<TypePtr> elements;
+                        for (const auto& element : tuple->elements)
+                            elements.push_back(widen(element));
+                        return Type::tuple(std::move(elements));
+                    }
+                    return resolved;
+                };
+                if (auto structured = structuredTypeOf(widen(argTypes[0])))
+                    m_staticTypeOfCalls[&node] = {std::move(*structured), true};
+            }
+
             // pid.send(msg) UFCS — check msg type against Process<Msg>.
             // argTypes[0] = pid type, argTypes[1] = msg type.
             if (node.method == "send" && argTypes.size() == 2) {
@@ -2764,6 +2993,186 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
         default:
             return Type::unknown();
     }
+}
+
+// `Type.of(expr)` / `Type.returnedBy(fn)` written where a TYPE goes. The
+// value-level forms answer at runtime from a recording made here; this one is
+// resolved entirely at check time, because there is no value to fall back on.
+// The type an expression NAMES, or null when it does not name one. A bare
+// `Hello` is a type reference, not a value: it is exactly what `x.to(String)`
+// already relies on. A CONSTRUCTOR is deliberately excluded — `World` is a
+// value whose type is `Hello`.
+auto TypeChecker::typeNameReference(const ast::Expr& expr) -> TypePtr {
+    const auto* named = std::get_if<ast::UpperIdentifier>(&expr.kind);
+    if (!named) return nullptr;
+    if (m_nullaryConstructors.count(named->name) ||
+        m_adtOfConstructor.count(named->name))
+        return nullptr;
+    ast::TypeName typeName;
+    typeName.parts = {named->name};
+    ast::TypeExpr asType;
+    asType.location = expr.location;
+    asType.kind = std::move(typeName);
+    std::unordered_map<std::string, TypePtr> generics;
+    return resolveTypeExpr(asType, generics);
+}
+
+// The single signature of the function an expression NAMES, or null when the
+// expression is not a function name (or names an overload set).
+auto TypeChecker::namedFunctionSignature(const ast::Expr& expr)
+    -> const Signature* {
+    std::string functionName;
+    if (const auto* identifier = std::get_if<ast::Identifier>(&expr.kind)) {
+        functionName = identifier->name;
+    } else if (const auto* qualified = std::get_if<ast::MethodCall>(&expr.kind);
+               qualified && qualified->args.empty() && qualified->receiver &&
+               !qualified->parenthesized) {
+        std::function<std::optional<std::string>(const ast::Expr&)> path;
+        path = [&](const ast::Expr& receiver) -> std::optional<std::string> {
+            if (auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+                return root->name;
+            auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
+            if (!segment || !segment->receiver || !segment->args.empty())
+                return std::nullopt;
+            auto parent = path(*segment->receiver);
+            return parent ? std::optional<std::string>{*parent + "." + segment->method}
+                          : std::nullopt;
+        };
+        if (auto module = path(*qualified->receiver))
+            functionName = *module + "::" + qualified->method;
+    }
+    if (functionName.empty()) return nullptr;
+    if (auto user = m_userSignatures.find(functionName);
+        user != m_userSignatures.end() && user->second.size() == 1)
+        return &user->second.front();
+    m_importedSignatureCache = importedCandidateSignatures(functionName);
+    if (m_importedSignatureCache.size() == 1)
+        return &m_importedSignatureCache.front();
+    return nullptr;
+}
+
+auto TypeChecker::resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr {
+    if (!query.argument) return Type::unknown();
+    if (query.query == "of") {
+        if (auto referenced = typeNameReference(*query.argument)) return referenced;
+        return resolve(inferExpr(*query.argument));
+    }
+
+    // returnedBy: the argument NAMES a function.
+    std::string functionName;
+    if (const auto* identifier = std::get_if<ast::Identifier>(&query.argument->kind)) {
+        functionName = identifier->name;
+    } else if (const auto* qualified =
+                   std::get_if<ast::MethodCall>(&query.argument->kind);
+               qualified && qualified->args.empty() && qualified->receiver) {
+        std::function<std::optional<std::string>(const ast::Expr&)> path;
+        path = [&](const ast::Expr& receiver) -> std::optional<std::string> {
+            if (auto* root = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+                return root->name;
+            auto* segment = std::get_if<ast::MethodCall>(&receiver.kind);
+            if (!segment || !segment->receiver || !segment->args.empty())
+                return std::nullopt;
+            auto parent = path(*segment->receiver);
+            return parent ? std::optional<std::string>{*parent + "." + segment->method}
+                          : std::nullopt;
+        };
+        if (auto module = path(*qualified->receiver))
+            functionName = *module + "::" + qualified->method;
+    }
+
+    std::vector<Signature> candidates;
+    if (!functionName.empty()) {
+        if (auto user = m_userSignatures.find(functionName);
+            user != m_userSignatures.end())
+            candidates = user->second;
+        if (candidates.empty())
+            candidates = importedCandidateSignatures(functionName);
+    }
+    if (candidates.empty()) {
+        // A computed ALIAS resolves before signatures are registered (the
+        // signatures may themselves name the alias), so fall back to the
+        // declaration's own return annotation.
+        if (m_functionDeclarations.count(functionName) > 1) {
+            error(query.argument->location,
+                  "`Type.returnedBy` cannot choose between the overloads of `" +
+                  functionName + "`");
+            return Type::unknown();
+        }
+        if (auto declaration = m_functionDeclarations.find(functionName);
+            declaration != m_functionDeclarations.end()) {
+            const auto* function = declaration->second;
+            if (!function->clauses.empty() &&
+                function->clauses.front().returnAnnotation) {
+                std::unordered_map<std::string, TypePtr> generics;
+                return resolveTypeExpr(**function->clauses.front().returnAnnotation,
+                                       generics);
+            }
+            error(query.argument->location,
+                  "`Type.returnedBy` needs `" + functionName +
+                  "` to declare its return type");
+            return Type::unknown();
+        }
+        error(query.argument->location,
+              "`Type.returnedBy` needs the NAME of a function; a lambda or a "
+              "function value carries no signature");
+        return Type::unknown();
+    }
+    if (candidates.size() > 1) {
+        std::string message =
+            "`Type.returnedBy` cannot choose between the overloads of `" +
+            functionName + "`";
+        for (const auto& candidate : candidates)
+            message += "\n\n" + displaySignature(functionName, candidate);
+        error(query.argument->location, message);
+        return Type::unknown();
+    }
+    return candidates.front().result;
+}
+
+// The type a `let`/`var` annotation declares, after checking the initializer
+// against it. Null when there is no annotation.
+auto TypeChecker::declaredBindingType(const std::optional<ast::TypeExprPtr>& annotation,
+                                      const TypePtr& valueType,
+                                      SourceLocation loc) -> TypePtr {
+    if (!annotation || !*annotation) return nullptr;
+    std::unordered_map<std::string, TypePtr> generics;
+    auto declared = resolveTypeExpr(**annotation, generics);
+    if (!declared) return nullptr;
+    auto actual = resolve(valueType);
+    // A gradual initializer (`?`, a type variable) is accepted: pinning it
+    // down is exactly what the annotation is for. `This` — the trait
+    // placeholder — has no substitution mechanism yet and leaks out of trait
+    // default methods as a literal type name, so it is treated the same way
+    // (checkCall bails on it for the same reason).
+    const bool unsubstitutedThis =
+        std::holds_alternative<NamedType>(actual->kind) &&
+        std::get<NamedType>(actual->kind).name == "This";
+    if (!std::holds_alternative<UnknownType>(actual->kind) &&
+        !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
+        !argMatchesParam(actual, declared))
+        typeMismatch(loc, declared, actual);
+    return declared;
+}
+
+// The type a standalone `name : T` declaration gives a top-level constant,
+// after checking its definition against it.
+auto TypeChecker::declaredConstantType(const std::string& name,
+                                       const TypePtr& valueType,
+                                       SourceLocation loc) -> TypePtr {
+    auto declared = m_userSignatures.find(name);
+    if (declared == m_userSignatures.end() || declared->second.size() != 1)
+        return nullptr;
+    const auto& signature = declared->second.front();
+    if (!signature.params.empty() || !signature.result) return nullptr;
+    auto actual = resolve(valueType);
+    const bool unsubstitutedThis =
+        std::holds_alternative<NamedType>(actual->kind) &&
+        std::get<NamedType>(actual->kind).name == "This";
+    if (!std::holds_alternative<UnknownType>(actual->kind) &&
+        !std::holds_alternative<TypeVar>(actual->kind) && !unsubstitutedThis &&
+        !argMatchesParam(actual, signature.result))
+        typeMismatch(loc, signature.result, actual);
+    return signature.result;
 }
 
 auto TypeChecker::satisfiesTrait(const TypePtr& type,
@@ -3366,8 +3775,46 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             if (!m_traits.hasConformances(receiverKey))
                 anyConstrainedFirstParam = false;
         }
+        // A receiver no candidate accepts is usually the guard's case above —
+        // but not when the receiver type is fully known and we are in
+        // ordinary code. `Date.of(...).iso` (a `Date` method on a
+        // `Result<Date, TimeError>`) landed here and was waved through, which
+        // is why it only failed at runtime, as `if_clause` on BEAM. Fall
+        // through to the mismatch report instead.
+        //
+        // Inside a make block the tables are incomplete on purpose (the type
+        // under check has its own methods unregistered — see checkFunctionDef),
+        // and a gradual receiver genuinely isn't known, so both stay permissive.
+        // `date.day` is a field read, not a call to Integer's `day`. Local
+        // record layouts are known by name; an IMPORTED record's are not —
+        // `recordArities` counts fields without naming them — so any field
+        // access on one has to stay permissive until interfaces carry field
+        // names (they exist in KexI metadata; display registration uses them).
+        const bool receiverIsField = [&] {
+            auto* named = std::get_if<NamedType>(&argTypes[0]->kind);
+            if (!named) return false;
+            if (auto record = m_recordFields.find(named->name);
+                record != m_recordFields.end())
+                return record->second.count(name) > 0;
+            return m_importedInterfaces &&
+                   m_importedInterfaces->recordArities.count(named->name) > 0;
+        }();
+        // The receiver's own shape is what decides this, not its type
+        // arguments: `Ok(b)` is `Result<Box, ?>`, and the unknown error side
+        // says nothing about whether some `label` accepts a Result. A receiver
+        // that is ITSELF unknown or a type variable stays permissive, and the
+        // enclosing condition already restricts this to those shapes.
+        // A method a trait gives the receiver's type — required or defaulted —
+        // is legitimate even though no signature names that type: an
+        // inherited default is registered under whichever type overrode it,
+        // if any (`shout : Player -> String` while `Bot` inherits it).
+        const bool traitProvides = m_traits.declaresMethod(
+            m_traits.implementorKey(argTypes[0]), name);
+        const bool provableMismatch =
+            !m_inMakeBlock && isFullyDetermined(headShapeOf(argTypes[0])) &&
+            !receiverIsField && !traitProvides;
         if (!anyFirstParamPlausible && !anyConstrainedFirstParam &&
-            !hasReceiverRefinementConflict)
+            !hasReceiverRefinementConflict && !provableMismatch)
             return Type::unknown();
     }
 

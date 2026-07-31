@@ -45,6 +45,13 @@ struct ExternalModules {
 // A variant tag declared outside the module being compiled (the prelude, or
 // a loaded unit). Only display registration needs these: without them a
 // compiled program printed prelude ADTs as raw tuples/atoms.
+// `Type.of(x)` sites the checker typed concretely — see
+// TypeChecker::staticTypeOfCalls. Lowering emits the recorded shape as a
+// literal `Type` record; without an entry the call reaches the runtime
+// fallback, which asks the value.
+using StaticTypeOfCalls =
+    std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer>;
+
 struct ExternalVariantTag {
     std::string tag;
     int arity = 0;
@@ -65,7 +72,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
                   bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr)
+                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
+                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -78,7 +86,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
                   bool preferExternalReceivers = false,
-                  const std::vector<ExternalVariantTag>* externalVariants = nullptr)
+                  const std::vector<ExternalVariantTag>* externalVariants = nullptr,
+                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr)
     -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the

@@ -1,0 +1,13 @@
+# An annotation on a binding is a claim the checker enforces — on `let`, on
+# `var`, and on a standalone `name : Type` declaration. All three were
+# previously accepted: `let` did not parse an annotation at all, `var` parsed
+# and discarded one, and a standalone declaration never reached a top-level
+# binding (it is a synthetic-main LetExpr, not a zero-argument function).
+count : Integer
+let count = "not a number"
+
+main do
+  let label: String = 42
+  var total: Integer = "zero"
+  IO.printLine("${label}${total}${count}")
+end

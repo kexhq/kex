@@ -1,0 +1,12 @@
+# A computed alias is a real type, not documentation: `Greeting` IS whatever
+# `helloWorld` returns, and passing something else is rejected against the
+# resolved type, not against the alias name.
+let helloWorld(name: String) -> String = "Hello, ${name}!"
+
+type Greeting = Type.returnedBy(helloWorld)
+
+let shout(text: Greeting) -> Greeting = text.upperCase
+
+main do
+  IO.printLine(shout(42))
+end
