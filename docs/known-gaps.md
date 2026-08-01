@@ -154,28 +154,3 @@ wanted. The fix is to extend the `let`/`foul` binding form with the same
 `LOWER_IDENT COLON type_expr EQUALS expr` shape that typed params and `var`
 already accept.
 
-## `&.field` shorthand fails at runtime for plain record fields
-
-`&.method` works, but `&.field` on a bare record field raises at runtime:
-
-```kex
-record R do
-  title : String
-end
-main do
-  let rs = [R { title: "a" }]
-  IO.printLine(rs.map { |r| r.title })   # ["a"] — explicit lambda
-  IO.printLine(rs.map(&.title))          # Internal error: Undefined function: title
-end
-```
-
-The field accessor resolves in the type checker (`&.title` types as
-`R -> String`), so the program type-checks, but the interpreter has no callable
-`title/1` function for `&.` to reference, so it dies with `Undefined function`.
-`&.method` (a make-block or prelude method) is unaffected — every passing
-example uses that form (`&.adult?`, `&.fizzBuzz`, `&.to(String)`). The docs,
-however, present `&.field` as field-access sugar (`docs/functions.md`'s
-`arr.map(&.name)  # { |x| x.name }`, the same in `README.md` and
-`docs/error-handling.md`). The fix is to register record field accessors as
-callable functions at runtime, the same way methods are — this is the same
-accessor-registration family as the prelude-name-collision gap above.

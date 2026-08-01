@@ -1612,7 +1612,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Shorthand lambda: &.method or &function
+    // Receiver shorthand: &.method
     if (check(TokenType::Amp)) {
         return parseShorthandLambda();
     }

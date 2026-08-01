@@ -1,0 +1,34 @@
+# `&.name` on a plain record field. The shorthand builds a lambda that
+# dispatches on its argument, and that path used to go straight to UFCS
+# function dispatch — but a plain field has no callable `name/1` to dispatch
+# to, so the walker died with `Undefined function` while BEAM (which reuses
+# the ordinary method-call lowering) read the field fine. Field access has to
+# win over dispatch here, the same order `receiver.field` already uses.
+
+record R do
+  title : String
+  count : Integer
+end
+
+make R do
+  let shout -> String = this.title.upperCase
+end
+
+# A field whose name collides with a prelude method.
+record Named do
+  name : String
+end
+
+let rs = [R { title: "a", count: 1 }, R { title: "bb", count: 2 }]
+
+IO.printLine(rs.map(&.title))
+IO.printLine(rs.map(&.count))
+
+# A make-block method still dispatches — the field check falls through.
+IO.printLine(rs.map(&.shout))
+
+# Chaining off a field, and a method called on a field's value.
+IO.printLine(rs.map(&.title.upperCase))
+IO.printLine(rs.filter(&.count.even?))
+
+IO.printLine([Named { name: "x" }].map(&.name))

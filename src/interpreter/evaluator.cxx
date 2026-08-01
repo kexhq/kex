@@ -1905,6 +1905,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 lambda->data = FunctionValue{"&." + method,
                     [this, method](std::vector<ValuePtr> args) -> ValuePtr {
                         if (args.empty()) return Value::none();
+                        // Field access wins over UFCS dispatch, the same order
+                        // `receiver.field` uses — there is no callable
+                        // `field/1` for a plain record field to dispatch to.
+                        if (auto* rec = std::get_if<RecordValue>(&args[0]->data)) {
+                            auto field = rec->fields.find(method);
+                            if (field != rec->fields.end()) return field->second;
+                        }
                         auto dispatchName = resolveMethodName(args[0], method);
                         return callFunction(dispatchName, std::move(args), {}, {});
                     }};
