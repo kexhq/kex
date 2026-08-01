@@ -1,4 +1,5 @@
 #include "collect_metadata.hxx"
+#include "../common/type_def_utils.hxx"
 #include <unordered_set>
 
 namespace kex::beam {
@@ -474,7 +475,9 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     KexiTypeExport te;
     te.name = td.name;
     te.genericParams = td.typeParams;
-    if (td.variants) {
+    // A transparent alias (`type FilePath = String`) has no constructors —
+    // recording `String` as one made every bare `String` widen to `FilePath`.
+    if (td.variants && !kex::isTransparentTypeAlias(td)) {
         KexiADT adt;
         adt.name = td.name;
         adt.typeParams = td.typeParams;

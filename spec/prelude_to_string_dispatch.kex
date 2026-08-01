@@ -1,0 +1,30 @@
+# `to(String)` is the language's conversion protocol, and it is type-directed:
+# `String` there is a type-valued ARGUMENT, not a parameter type. That makes
+# every implementation share one `to/2` on BEAM, and the dispatch between them
+# is fragile — adding a SECOND `to(String)` anywhere in the prelude (a
+# `make Version do let to(String) ... end` in kex.kex was the case that found
+# this) silently rerouted every prelude type's `to(String)` to the universal
+# value conversion, so `3.kilo.watt.to(String)` started answering
+# `Just(Measure { ... })` instead of "3000.0 W".
+#
+# Nothing in the gating spec suite covered that, so it only showed up in a REPL
+# test. This is the guard: a prelude type and a local type must each reach
+# their OWN implementation, in one program.
+using Units.SI
+
+record Ticket do
+  id : Integer
+end
+
+make Ticket do
+  let to(String) -> String = "ticket #${this.id}"
+end
+
+main do
+  # A prelude type's own implementation, not the universal fallback.
+  IO.printLine(3.kilo.watt.to(String))
+  IO.printLine(1500.gram.to(String))
+
+  # A local type's, in the same program.
+  IO.printLine(Ticket { id: 7 }.to(String))
+end

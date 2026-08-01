@@ -8,6 +8,7 @@
 // real binary and asserts on its real stdout.
 #include "test.hxx"
 #include "../src/common/prelude_loader.hxx"
+#include "../src/common/version.hxx"
 #include <array>
 #include <cstdio>
 #include <filesystem>
@@ -94,6 +95,31 @@ auto runBeamRepl(const std::string& input) -> std::string {
     return stripAnsi(result);
 }
 
+auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::string {
+    char sourcePath[] = "/tmp/kex_walker_cli_test_XXXXXX.kex";
+    int fd = mkstemps(sourcePath, 4);
+    assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+    {
+        std::ofstream f(sourcePath);
+        f << source;
+    }
+    close(fd);
+
+    std::string cmd = std::string(KEX_BINARY_PATH) + " " +
+        (noCheck ? "--no-check " : "") + "--no-colors " + sourcePath + " 2>&1";
+    std::string result;
+    FILE* pipe = popen(cmd.c_str(), "r");
+    if (pipe) {
+        std::array<char, 4096> buf;
+        size_t n;
+        while ((n = fread(buf.data(), 1, buf.size(), pipe)) > 0)
+            result.append(buf.data(), n);
+        pclose(pipe);
+    }
+    std::remove(sourcePath);
+    return stripAnsi(result);
+}
+
 auto runBeamFile(const std::string& source, const std::string& argument,
                  bool noCheck = false) -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
@@ -167,6 +193,46 @@ int main() {
             fs::remove_all(root);
             assertEqual(interpreterOutput, std::string("[1, 2]\n"));
             assertEqual(beamOutput, std::string("[1, 2]\n"));
+        });
+    });
+
+    describe("CLI — method on the wrong receiver", []() {
+        it("names the method and the receiver when it cannot be checked", []() {
+            // The checker rejects this outright (spec/error_method_on_wrong_
+            // receiver.kex). With `--no-check` it reaches the runtime, where
+            // BEAM used to fall off the end of the generated dispatcher and
+            // raise a bare `if_clause` — no method, no receiver, no location.
+            const std::string source =
+                "main do\n"
+                "  let due = Date.of(2026, 2, 22)\n"
+                "  IO.printLine(due.iso)\n"
+                "end\n";
+            const std::string walker = runWalkerFile(source, /*noCheck=*/true);
+            const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
+            for (const auto& out : {walker, beam}) {
+                assertTrue(out.find("Undefined method: iso for Result<Date, ?>")
+                           != std::string::npos, out);
+                assertTrue(out.find("if_clause") == std::string::npos, out);
+            }
+        });
+    });
+
+    describe("CLI — undefined name errors", []() {
+        it("names the namespace a missing function was looked for in", []() {
+            // The bare `Undefined function: thing` did not say WHERE the
+            // name was looked for. BEAM already qualified it; the walker now
+            // agrees. (`Maths.sqrt` would be the nicer example, but the
+            // walker still resolves an unknown namespace to a global of the
+            // same name — see the note in the PR.)
+            const std::string source =
+                "main do\n"
+                "  IO.printLine(Missing.thing(1))\n"
+                "end\n";
+            const std::string walker = runWalkerFile(source, /*noCheck=*/true);
+            const std::string beam = runBeamFile(source, "", /*noCheck=*/true);
+            for (const auto& out : {walker, beam})
+                assertTrue(out.find("Undefined function: Missing.thing")
+                           != std::string::npos, out);
         });
     });
 
@@ -737,6 +803,44 @@ int main() {
             auto beam = runBeamRepl("{ \"a\": 1 }.inspect\n");
             assertTrue(tree.find("{ \"a\": 1 }") != std::string::npos, tree);
             assertTrue(beam.find("{ \"a\": 1 }") != std::string::npos, beam);
+        });
+    });
+
+    // One version, three places it surfaces. A program asking
+    // `Kex.Kernel.VERSION` is asking "what am I running on?", so a mismatch
+    // with what the CLI prints would make the answer worse than useless.
+    describe("version reporting", []() {
+        it("prints the version on the command line", []() {
+            auto out = runCommand(std::string(KEX_BINARY_PATH) + " --version");
+            assertTrue(out.find("kex " + kex::versionNumber()) != std::string::npos,
+                       "expected the version number, got: " + out);
+        });
+
+        it("shows the same version in the REPL banner", []() {
+            auto out = runRepl("1\n");
+            assertTrue(out.find(kex::versionNumber()) != std::string::npos,
+                       "expected the version number in the banner, got: " + out);
+        });
+
+        it("reports the same version to a Kex program", []() {
+            auto out = runRepl("Kex.Kernel.VERSION.number\n");
+            assertTrue(out.find(kex::versionNumber()) != std::string::npos,
+                       "Kex.Kernel.VERSION disagrees with the binary: " + out);
+        });
+
+        it("reports this build's git revision when there is one", []() {
+            auto out = runRepl("Kex.Kernel.VERSION.revision\n");
+            if (*kex::kGitRevision) {
+                assertTrue(out.find(kex::kGitRevision) != std::string::npos,
+                           "expected the revision in the tuple, got: " + out);
+                auto cli = runCommand(std::string(KEX_BINARY_PATH) + " --version");
+                assertTrue(cli.find(kex::kGitRevision) != std::string::npos,
+                           "expected the revision on the CLI, got: " + cli);
+            } else {
+                // A source archive has no commit to name, and says so.
+                assertTrue(out.find("None") != std::string::npos,
+                           "expected None without a revision, got: " + out);
+            }
         });
     });
 

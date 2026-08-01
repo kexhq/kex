@@ -20,6 +20,11 @@ struct Signature {
 struct TraitDef {
     std::string name;                        // "Number", "Comparable", user-defined names too
     std::vector<Signature> requiredMethods;  // e.g. Comparable requires `compare : This -> Comparison`
+    // Names of methods the trait DEFINES a default body for. They have no
+    // signature of their own and are not registered per implementing type, so
+    // without this list `bot.shout` (an inherited default) is indistinguishable
+    // from a call to a method that does not exist.
+    std::vector<std::string> defaultMethods;
 };
 
 // Open, name-keyed registry of traits and which types implement them.
@@ -52,6 +57,12 @@ public:
     // or "" if they have no common user-defined trait. Used to widen
     // heterogeneous list elements to their common trait type.
     auto commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string;
+
+    // Does any trait `type` implements declare `method` — as a requirement or
+    // as a default body? An inherited default has no per-type signature, so
+    // this is the only way to know the call is legitimate.
+    auto declaresMethod(const std::string& type, const std::string& method) const
+        -> bool;
 
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.

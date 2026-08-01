@@ -1,0 +1,24 @@
+# A make block on a record declared INSIDE a module, whose method name is also
+# an imported receiver function (`to`, from the prelude's conversion protocol).
+# The local implementation owns this receiver and must win.
+#
+# KNOWN BEAM DIVERGENCE: the walker prints "inner 1"; BEAM raises `if_clause`,
+# because the call resolves to the imported `to/2` — which has no clause for a
+# locally declared record — instead of the method defined right here. Drop the
+# `using Units.SI` and it works, which is what makes this a dispatch bug rather
+# than a module-scoping one.
+using Units.SI
+
+module Outer do
+  record Inner do
+    a : Integer
+  end
+
+  make Inner do
+    let to(String) -> String = "inner ${this.a}"
+  end
+end
+
+main do
+  IO.printLine(Outer.Inner { a: 1 }.to(String))
+end

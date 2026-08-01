@@ -1,0 +1,11 @@
+# An UPPERCASE receiver that names no module, record or ADT is a typo, not a
+# namespace. The walker used to strip the qualifier and dispatch on the bare
+# method name, so `Maths.sqrt(4.0)` quietly answered 2.0 via the global `sqrt`
+# while BEAM rejected it. Both backends now refuse it, identically.
+# kex: no-check
+# kex: run-beam
+
+main do
+  IO.printLine("before")
+  IO.inspect(Maths.sqrt(4.0))
+end

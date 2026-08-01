@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <variant>
@@ -131,6 +132,33 @@ struct Type {
 
 auto typeToString(const TypePtr& type) -> std::string;
 
+// A type flattened to name + arguments, the shape `Type.of` hands back to Kex
+// code. Backend-neutral on purpose: the interpreter builds a record from it
+// and the BEAM lowering emits a literal, without either depending on the
+// checker's type representation.
+struct StructuredType {
+    std::string name;
+    std::vector<StructuredType> args;
+    // Functions only: `Function` carries the parameters followed by the
+    // result in `args`. `pure` is false when calling it is a side effect —
+    // the question `foul` answers in source, phrased positively because
+    // everything is pure by default.
+    bool pure = true;
+};
+
+// A recorded answer for a `Type.of`/`Type.returnedBy` call site. The argument
+// of `Type.of(someValue)` still runs (it may have effects); one that NAMES a
+// function does not — `Date.parse` on its own is a call missing its argument.
+struct StaticTypeAnswer {
+    StructuredType type;
+    bool evaluateArgument = true;
+};
+
+// The checked type in that shape, or nullopt when it is not fully determined
+// (a gradual expression checks as `?`/`A`/`N`, where the VALUE is the better
+// source and the runtime fallback should answer instead).
+auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
+
 // True for the language's built-in type names — the spellings typeToString
 // produces for primitives, plus the structural types that have no source
 // declaration. These are the type names that resolve without any `type`
@@ -139,9 +167,12 @@ auto isPrimitiveTypeName(const std::string& name) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
 // True when a type is fully determined — no Unknown, no type variable, and no
-// trait-bound placeholder anywhere inside it. This is the question "is the
-// checked type worth showing to a user?": in gradual regions the checker
-// yields `?`/`A`/`N`, where the VALUE is the better source of a type name.
+// trait-bound placeholder anywhere inside it. Two callers ask it for the same
+// underlying reason, "does the checker actually KNOW this type?":
+//   - display, where a gradual `?`/`A`/`N` means the VALUE is the better
+//     source of a type name than the checked type;
+//   - diagnostics, where a mismatch against a determined receiver is provable
+//     and one against a gradual receiver is not.
 auto isFullyConcrete(const TypePtr& type) -> bool;
 
 class TypeEnv {

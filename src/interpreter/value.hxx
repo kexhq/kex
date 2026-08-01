@@ -32,7 +32,7 @@ struct BoolValue { bool value; };
 struct AtomValue { std::string name; };
 
 struct VariantValue {
-    std::string tag;         // "Ok", "Less", "Nothing"
+    std::string tag;         // "Ok", "Less", "None"
     std::string parentType;  // "Result", "Ordering", "Option", "" if unknown
     std::vector<ValuePtr> args;  // payload — empty for zero-arg
 

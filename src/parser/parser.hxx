@@ -25,6 +25,8 @@ private:
     // Token navigation
     auto peek() const -> const Token&;
     auto peekNext() const -> const Token&;
+    auto peekAt(int offset) const -> const Token&;
+    auto toArgumentIsValue() const -> bool;
     auto advance() -> const Token&;
     auto atEnd() const -> bool;
     auto check(TokenType type) const -> bool;

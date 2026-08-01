@@ -63,8 +63,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # erlang-base and libgmp-dev are for the NATIVE build below, not for
+      # the wasm one: the compiled stdlib unit the wasm checker reads can only
+      # be produced by running the native kex through erlc.
       - name: Install dependencies
-        run: sudo apt-get update && sudo apt-get install -y cmake
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libreadline-dev \
+            erlang-base libboost-context-dev
 
       # Pinned to 5.0.7 specifically — newer Emscripten (6.0.2 at the time
       # this was found) has a real regression where -sASYNCIFY combined with
@@ -170,6 +176,14 @@ jobs:
             CFLAGS="-O2"
           emmake make -j"$(nproc)"
           emmake make install
+
+      # Produces build/runtime/beam/kex_prelude.beam plus its Kex.* companions.
+      # The wasm build reads their KexI metadata so its type checker sees the
+      # same signatures the native one does; nothing here is executed by wasm.
+      - name: Build native kex (for the compiled stdlib unit)
+        run: |
+          cmake -B build -G "Unix Makefiles"
+          cmake --build build --target kex_prelude_beam
 
       - name: Configure and build wasm target
         run: |

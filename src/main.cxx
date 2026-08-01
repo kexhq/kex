@@ -1396,6 +1396,14 @@ auto prebuiltRuntimeBeamDir() -> std::string {
     roots.push_back((executableDir / "../share/kex/runtime").lexically_normal());
     roots.push_back((executableDir / "runtime/beam").lexically_normal());
   }
+#ifdef KEX_RUNTIME_BEAM_DIR
+  // Baked in for wasm, which has no executable path to search from. The CLI
+  // build reads it straight off the host filesystem via NODERAWFS.
+  roots.emplace_back(KEX_RUNTIME_BEAM_DIR);
+#endif
+  // Where the browser REPL's copy is mounted — see the --preload-file mapping
+  // in CMakeLists.txt, next to /stdlib.
+  roots.emplace_back("/runtime");
   for (const auto &root : roots) {
     std::error_code ec;
     if (fs::exists(root / "kex_io.beam", ec)) return root.string();
@@ -1472,7 +1480,7 @@ auto printUsage(const char *progName) -> void {
 }
 
 auto printVersion() -> void {
-  std::cout << "kex " << kex::kVersion << "\n";
+  std::cout << "kex " << kex::versionString() << "\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -2345,10 +2353,17 @@ int main(int argc, char *argv[]) {
           kex::semantic::Analyzer replAnalyzer(&preludeSemanticInterfaces());
           replAnalyzer.analyze(program);
           auto replRecordLayouts = loadPreludeRecordLayouts();
+          auto replVariantTags = loadPreludeVariantTags();
           auto irModules = kex::ir::lowerModules(
               program, "kex_repl_session", "", &replRecordLayouts,
               extMods.nameToAtom.empty() ? nullptr : &extMods,
-              &replAnalyzer.resolvedCalls());
+              &replAnalyzer.resolvedCalls(),
+              /*preferExternalReceivers=*/false, &replVariantTags,
+              // Without this the REPL never saw the checker's `Type.of`
+              // answers: `Type.of(someFunction)` fell back to the runtime,
+              // which lowered the bare function name to an unbound Core
+              // Erlang variable and failed to compile.
+              &replAnalyzer.staticTypeOfCalls());
           std::vector<kex::ir::EmitResult> results;
           for (const auto& irModule : irModules)
             results.push_back(kex::ir::emitCore(irModule));
@@ -3283,7 +3298,10 @@ int main(int argc, char *argv[]) {
                                                    ? &compileAnalysis->resolvedCalls()
                                                    : nullptr,
                                                /*preferExternalReceivers=*/false,
-                                               &preludeVariantTags);
+                                               &preludeVariantTags,
+                                               compileAnalysis
+                                                   ? &compileAnalysis->staticTypeOfCalls()
+                                                   : nullptr);
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
         result = moduleResults.front();
@@ -3549,9 +3567,15 @@ int main(int argc, char *argv[]) {
       }
     }
 
+    // Retained so the evaluator can use what the checker learned — today the
+    // `Type.of(x)` sites it typed concretely. Declared out here so it outlives
+    // the evaluator that borrows from it.
+    kex::semantic::Analyzer runAnalyzer(&preludeSemanticInterfaces());
+    bool runAnalyzed = false;
     if (mode == "run" && !skipCheck) {
       int typeErrors = 0;
-      if (!runSemanticCheck(program, filepath, nullptr, specBaseFile,
+      runAnalyzed = true;
+      if (!runSemanticCheck(program, filepath, &runAnalyzer, specBaseFile,
                             &typeErrors)) {
         std::cerr
             << kex::color::apply(kex::color::bold)
@@ -3567,6 +3591,8 @@ int main(int argc, char *argv[]) {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
       evaluator.setModuleRoots(moduleRootsFor(filepath));
+      if (runAnalyzed)
+        evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.

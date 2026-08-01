@@ -1615,12 +1615,15 @@ int main() {
     describe("Interpreter — Streams", []() {
         it("does not expose private intrinsics as ordinary namespace functions", []() {
             const std::vector<std::pair<std::string, std::string>> cases = {
-                {"FS.file(\"private.txt\", \"hidden\")", "file"},
-                {"List.foldLeft([1, 2], 0, { |acc, n| acc + n })", "foldLeft"},
-                {"Map.getWithDefault({\"a\": 1}, \"a\", 0)", "getWithDefault"},
-                {"Char.is_digit('1')", "is_digit"},
-                {"Stream.generate(0, { |n| n + 1 })", "generate"},
-                {"IO.ioMockStart()", "ioMockStart"},
+                // Qualified: the error names WHERE the lookup happened, so
+                // this also asserts the name was not found in that namespace
+                // rather than merely absent globally.
+                {"FS.file(\"private.txt\", \"hidden\")", "FS.file"},
+                {"List.foldLeft([1, 2], 0, { |acc, n| acc + n })", "List.foldLeft"},
+                {"Map.getWithDefault({\"a\": 1}, \"a\", 0)", "Map.getWithDefault"},
+                {"Char.is_digit('1')", "Char.is_digit"},
+                {"Stream.generate(0, { |n| n + 1 })", "Stream.generate"},
+                {"IO.ioMockStart()", "IO.ioMockStart"},
             };
 
             for (const auto& [expression, name] : cases) {

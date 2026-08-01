@@ -119,6 +119,21 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
     return false;
 }
 
+auto TraitRegistry::declaresMethod(const std::string& type,
+                                   const std::string& method) const -> bool {
+    auto implemented = m_implementations.find(type);
+    if (implemented == m_implementations.end()) return false;
+    for (const auto& traitName : implemented->second) {
+        auto trait = m_traits.find(traitName);
+        if (trait == m_traits.end()) continue;
+        for (const auto& required : trait->second.requiredMethods)
+            if (required.name == method) return true;
+        for (const auto& defaulted : trait->second.defaultMethods)
+            if (defaulted == method) return true;
+    }
+    return false;
+}
+
 auto TraitRegistry::commonTrait(const TypePtr& a, const TypePtr& b) const -> std::string {
     auto keyA = implementorKey(a);
     auto keyB = implementorKey(b);

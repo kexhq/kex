@@ -64,7 +64,7 @@ extern "C" {
 static std::string g_banner;
 
 EMSCRIPTEN_KEEPALIVE
-const char* kex_version() { return kex::kVersion; }
+const char* kex_version() { return kex::versionString().c_str(); }
 
 EMSCRIPTEN_KEEPALIVE
 const char* kex_repl_banner() {

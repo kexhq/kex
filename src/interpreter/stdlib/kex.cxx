@@ -1,3 +1,4 @@
+#include "../../common/version.hxx"
 #include "../evaluator.hxx"
 
 namespace kex::interpreter {
@@ -66,6 +67,18 @@ auto Evaluator::registerKexBuiltins() -> void {
 
     defineIntrinsic("Kex::backend", [makeVariant](std::vector<ValuePtr>) -> ValuePtr {
         return makeVariant("Interpreter");
+    });
+
+    // Mirrors kex_intrinsic_kex:version/0 — see src/common/version.hxx for
+    // why both sides read from one place.
+    defineIntrinsic("Kex::version", [](std::vector<ValuePtr>) -> ValuePtr {
+        auto revision =
+            *kGitRevision
+                ? Value::variant("Just", "", {Value::string(kGitRevision)})
+                : Value::variant("None", "", {});
+        return Value::tuple({Value::integer(kVersionMajor),
+                             Value::integer(kVersionMinor),
+                             Value::integer(kVersionPatch), revision});
     });
 
     defineIntrinsic("Kex::featureHas?", hasFeature);

@@ -2,9 +2,65 @@ type Backend = Interpreter | Beam
 
 type Feature = Http | FS | Process | WebServer
 
+
 foul module Kex do
   backend : Backend
   let backend = Kex.Intrinsic.Kex.backend()
+
+  module Kernel do
+    # The toolchain a program is running on. `kex --version` and the REPL
+    # banner report the same numbers.
+    #
+    # `revision` is the git commit the compiler was built from — `None` when
+    # it was built from a source archive rather than a checkout, which is why
+    # it is an Optional rather than a String.
+    #
+    # @example
+    #   Kex.Kernel.VERSION.major        # => 0
+    #   Kex.Kernel.VERSION.revision     # => Just("a1b2c3d")
+    #   Kex.Kernel.VERSION.to(String)   # => "0.3.0 (a1b2c3d)"
+    record Version do
+      major : Integer
+      minor : Integer
+      patch : Integer
+      revision : String?
+    end
+
+    make Version do
+      # The three numbers, without the revision.
+      #
+      # `to(String)` — the language's conversion protocol, and what this
+      # should really be — is deliberately NOT defined here: a second
+      # `to(String)` implementation anywhere in the prelude breaks
+      # type-directed `to` dispatch for every prelude type on BEAM, so adding
+      # one here silently broke `3.kilo.watt.to(String)`. Pinned by
+      # spec/prelude_to_string_dispatch.kex; restore this as `to(String)` once
+      # that dispatcher is fixed.
+      #
+      # @example
+      #   Kex.Kernel.VERSION.number       # => "0.3.0"
+      # The same four values as a tuple, for destructuring. A tuple cannot
+      # carry accessors of its own — there is no named type for a `make` block
+      # to target — so the record is the value and this is the view.
+      #
+      # @example
+      #   let (major, minor, patch, revision) = Kex.Kernel.VERSION.tuple
+      tuple : (Integer, Integer, Integer, String?)
+      let tuple = (this.major, this.minor, this.patch, this.revision)
+
+      number : String
+      let number = match this.revision do
+        Just(hash) -> "${this.major}.${this.minor}.${this.patch} (${hash})"
+        None -> "${this.major}.${this.minor}.${this.patch}"
+      end
+    end
+
+    VERSION : Version
+    let VERSION = match Kex.Intrinsic.Kex.version() do
+      (major, minor, patch, revision) ->
+        Version { major: major, minor: minor, patch: patch, revision: revision }
+    end
+  end
 
   foul module Feature do
     has? : Feature -> Bool

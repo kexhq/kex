@@ -1,0 +1,27 @@
+# A nullary constructor is a VALUE, so a method call on one is an ordinary
+# receiver call: `Monday.name` is the same thing as `let m = Monday` followed
+# by `m.name`.
+#
+# BEAM used to read `Upper.method` as a namespace access and report
+# `Undefined function: Monday.name`, while the walker called the method. Local
+# and prelude constructors both have to work — the prelude's tags are not in
+# the compiled module's own tag set.
+type Shade = Light | Dark(Integer)
+
+make Shade do
+  let label -> String = "a shade"
+end
+
+# Declared locally.
+IO.printLine(Light.label)
+IO.printLine(Dark(2).label)
+
+# From the prelude.
+IO.printLine(Monday.name)
+IO.printLine(Sunday.name)
+IO.printLine("${Monday.number} ${Sunday.weekend?}")
+IO.printLine("${None.blank?}")
+
+# The same call through a binding, which always worked.
+let day = Monday
+IO.printLine(day.name)

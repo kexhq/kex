@@ -1,0 +1,108 @@
+type Shade = Light | Dark(Integer)
+
+record Point do
+  x : Integer
+  y : Integer
+end
+
+describe("Type") do
+  it("names primitives") do
+    assert(Type.of(42).toString == "Integer")
+    assert(Type.of(1.5).toString == "Float")
+    assert(Type.of("hi").toString == "String")
+    assert(Type.of(true).toString == "Bool")
+    assert(Type.of('c').toString == "Char")
+    assert(Type.of(42).name == "Integer")
+    assert(Type.of(42).args == [])
+  end
+
+  it("renders containers the way they are written") do
+    assert(Type.of([1, 2]).toString == "[Integer]")
+    assert(Type.of([[1], [2]]).toString == "[[Integer]]")
+    assert(Type.of((1, "a")).toString == "(Integer, String)")
+    assert(Type.of({ "a": 1 }).toString == "{String: Integer}")
+    assert(Type.of([1, 2]).name == "List")
+    assert(Type.of([1, 2]).args.count == 1)
+  end
+
+  it("names records and ADTs, not their constructors") do
+    assert(Type.of(Point { x: 1, y: 2 }).toString == "Point")
+    assert(Type.of(Light).toString == "Shade")
+    assert(Type.of(Dark(3)).toString == "Shade")
+  end
+
+  it("reads what the value carries when nothing else knows") do
+    # This suite runs with --no-check, so these are the FALLBACK answers: a
+    # Result knows only the side it holds. The checked answers are asserted in
+    # spec/type_of_static.kex.
+    assert(Type.of(Date.of(2026, 7, 30)).name == "Result")
+    assert(Type.of(Date.of(2026, 7, 30)).args.count == 2)
+    assert(Type.of(Date.of(2026, 7, 30).try).toString == "Date")
+  end
+
+  it("degrades honestly when nothing knows the type") do
+    # An empty list has no element to inspect and no annotation to read.
+    assert(Type.of([]).toString == "[?]")
+    assert(Type.of([]).args.count == 1)
+  end
+
+  it("carries purity for function types") do
+    # This suite runs --no-check, so a function value can only report its
+    # kind; the signature-backed answers are asserted in
+    # spec/type_declarations.kex, which runs checked.
+    assert(Type.of(42).pure)
+    assert(Type.named("String").pure)
+  end
+
+  it("converts through a Type value") do
+    # `.to(...)` takes a type: a bare name as always, and now a Type VALUE.
+    assert("34".to(Type.of(234)) == Just(34))
+    assert(5.to(Type.of("s")) == Just("5"))
+    assert("4.5".to(Type.of(1.5)) == Just(4.5))
+    assert(5.to(String) == Just("5"))
+    # A conversion that does not exist still fails as a value, not a crash.
+    assert("abc".to(Type.of(1)) == None)
+  end
+
+  it("compares as a value") do
+    assert(Type.of(42) == Type.named("Integer"))
+    assert(Type.of(42) == Type.of(7))
+    assert(Type.of(42) != Type.of("7"))
+    assert(Type.of([1]) == Type.with("List", [Type.named("Integer")]))
+    assert(Type.of(Point { x: 1, y: 2 }) == Type.named("Point"))
+  end
+
+  it("takes a type apart") do
+    let point = Type.of(Point { x: 1, y: 2 })
+    assert(point.name == "Point")
+    assert(point.args == [])
+    let pair = Type.of((1, "a"))
+    assert(pair.name == "Tuple")
+    # Compared as a whole rather than indexed: `.at(n)` erases `Just` for some
+    # receivers, and reading a field off that result raises function_clause on
+    # BEAM inside a spec block.
+    assert(pair.args == [Type.named("Integer"), Type.named("String")])
+  end
+
+  it("reports a record's fields and an ADT's constructors") do
+    let point = Type.of(Point { x: 1, y: 2 })
+    assert(point.fields == ["x", "y"])
+    assert(point.record?)
+    assert(point.adt? == false)
+
+    let shade = Type.of(Light)
+    assert(shade.constructors.count == 2)
+    assert(shade.constructors.contains?("Light"))
+    assert(shade.constructors.contains?("Dark"))
+    assert(shade.adt?)
+    assert(shade.record? == false)
+
+    # A prelude record answers the same way.
+    assert(Type.of(Time.midnight()).fields ==
+           ["hour", "minute", "second", "nanosecond"])
+  end
+
+  # `Type.returnedBy` is answered entirely by the compiler — a function value
+  # carries no signature — so it is asserted in spec/type_of_static.kex, which
+  # runs checked.
+end

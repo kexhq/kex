@@ -1,0 +1,35 @@
+=== computed aliases as types ===
+Hello, Akos!
+HELLO, AKOS!
+3
+42
+shipping
+
+=== annotated bindings ===
+0
+6
+here
+
+=== function types ===
+String -> String
+[String] -> Integer
+foul String -> String
+String -> Result<Date, TimeError>
+false true
+2 Function
+
+=== a type name IS a type ===
+Hello
+String
+Date
+2 true
+Hello
+Hello
+Hello
+true
+String
+
+=== the two forms agree ===
+true
+Integer
+true

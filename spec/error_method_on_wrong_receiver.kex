@@ -1,0 +1,10 @@
+# A method belongs to a type. Calling it on a value of ANOTHER fully known
+# type is a mistake the checker can prove, so it must not survive to runtime —
+# it used to reach BEAM and die there as a bare `if_clause`.
+#
+# `Date.of` returns Result<Date, TimeError>; `iso` is a method on Date. The
+# fix is `.try.iso` (or matching the Result), not `.iso`.
+main do
+  let due = Date.of(2026, 2, 22)
+  IO.printLine(due.iso)
+end

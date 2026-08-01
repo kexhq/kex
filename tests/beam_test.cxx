@@ -1042,5 +1042,47 @@ int main() {
         });
     });
 
+    // Artifact digests must come out identical on every platform: a native
+    // build writes them into the compiled stdlib unit, and other builds —
+    // including wasm, which delegates to the host's crypto — verify against
+    // them. A divergence would surface far from its cause, as an
+    // "implementation digest mismatch" on a perfectly good artifact. These
+    // are the FIPS 180-4 vectors, truncated to the 128 bits KexI stores.
+    test::describe("content hashing", []() {
+        const auto hashOf = [](const std::string& input) {
+            std::vector<uint8_t> bytes(input.begin(), input.end());
+            auto hash = kex::beam::computeContentHash(bytes);
+            std::string out;
+            for (unsigned char byte : hash) {
+                const char* digits = "0123456789abcdef";
+                out += digits[byte >> 4];
+                out += digits[byte & 0xf];
+            }
+            return out;
+        };
+
+        test::it("hashes the empty input", [&]() {
+            test::assertEqual(hashOf(""),
+                              std::string("e3b0c44298fc1c149afbf4c8996fb924"));
+        });
+
+        test::it("hashes a single block", [&]() {
+            test::assertEqual(hashOf("abc"),
+                              std::string("ba7816bf8f01cfea414140de5dae2223"));
+        });
+
+        test::it("hashes across the two-block padding boundary", [&]() {
+            // 56 bytes: the length field no longer fits in the first block.
+            test::assertEqual(
+                hashOf("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+                std::string("248d6a61d20638b8e5c026930c3e6039"));
+        });
+
+        test::it("hashes a multi-block input", [&]() {
+            test::assertEqual(hashOf(std::string(1000, 'a')),
+                              std::string("41edece42d63e8d9bf515a9ba6932e1c"));
+        });
+    });
+
     return test::runAll();
 }

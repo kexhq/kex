@@ -35,6 +35,15 @@ public:
         -> const std::vector<Signature>*;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    // `Type.of(x)` call sites whose argument the checker typed concretely.
+    // Both backends materialize the recorded shape instead of asking the
+    // value, which is what lets `Type.of` see a Result's unused half and an
+    // empty list's element type. Absent entry (or no analysis at all, as with
+    // `--no-check`) means "ask the value".
+    auto staticTypeOfCalls() const
+        -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
+        return m_staticTypeOfCalls;
+    }
     auto referencedModules() const
         -> const std::unordered_set<std::string>& {
         return m_referencedModules;
@@ -149,6 +158,24 @@ private:
                    SourceLocation loc, bool isMethodCall = false,
                    const ast::MethodCall* methodCall = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
+    auto resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr;
+    auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
+    auto typeNameReference(const ast::Expr& expr) -> TypePtr;
+    // Backing store for the pointer namedFunctionSignature returns when the
+    // match came from imported interfaces.
+    std::vector<Signature> m_importedSignatureCache;
+    // `type X = Type.returnedBy(f)` declarations, held until the builtin type
+    // names exist.
+    std::vector<std::pair<std::string, const ast::TypeQuery*>> m_computedAliases;
+    // Declared functions by name, so `type X = Type.returnedBy(f)` can read a
+    // return annotation before signature registration has run.
+    std::unordered_multimap<std::string, const ast::FunctionDef*>
+        m_functionDeclarations;
+    auto declaredBindingType(const std::optional<ast::TypeExprPtr>& annotation,
+                             const TypePtr& valueType, SourceLocation loc) -> TypePtr;
+    auto declaredConstantType(const std::string& name, const TypePtr& valueType,
+                              SourceLocation loc) -> TypePtr;
+    bool m_inSyntheticMain = false;
     // Trait conformance for a value type, lifting a nullary ADT constructor
     // (`Dog`) to the ADT that declares the conformance (`Animal`).
     auto satisfiesTrait(const TypePtr& type, const std::string& traitName) const -> bool;
@@ -184,6 +211,7 @@ private:
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;
     // Source module identities declared by the current compilation unit.
     // Local modules take precedence over package interfaces with the same name.

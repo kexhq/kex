@@ -3,6 +3,46 @@ project(kex LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
+# ── Build revision ──────────────────────────────────────────────────────
+# The commit a build came from, so `kex --version`, the REPL banner and
+# `Kex.Kernel.VERSION` can all report it. Resolved at CONFIGURE time, with
+# .git/HEAD as a dependency so switching branches or committing re-runs this
+# rather than leaving a stale hash baked in. A source archive has no .git at
+# all; that is a normal state and leaves the revision empty (`None` in Kex).
+# The version NUMBERS are not duplicated here — they are read back out of
+# version.hxx below, which stays the single place they are written down.
+set(KEX_GIT_REVISION "")
+if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE KEX_GIT_REVISION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/.git/HEAD")
+    endif()
+endif()
+
+# version.hxx is authoritative for the numbers; erlc needs them too, so they
+# are parsed back out rather than restated.
+file(READ "${CMAKE_SOURCE_DIR}/src/common/version.hxx" KEX_VERSION_HEADER)
+string(REGEX MATCH "kVersionMajor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_MAJOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionMinor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_MINOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionPatch = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_PATCH "${CMAKE_MATCH_1}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/common/version.hxx")
+if(KEX_GIT_REVISION)
+    message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (${KEX_GIT_REVISION})")
+else()
+    message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (no git revision)")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -124,6 +164,7 @@ add_library(kex_lib
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/time.cxx
+    src/interpreter/stdlib/type.cxx
     src/interpreter/stdlib/bits.cxx
     src/interpreter/stdlib/console.cxx
     src/interpreter/stdlib/test.cxx
@@ -141,11 +182,40 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
+if(KEX_GIT_REVISION)
+    target_compile_definitions(kex_lib PUBLIC
+        KEX_GIT_REVISION="${KEX_GIT_REVISION}")
+endif()
+
 # Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
 # no _NSGetExecutablePath) so bake the source path in at compile time.
 if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_compile_definitions(kex_lib PUBLIC
         KEX_STDLIB_DIR="${CMAKE_SOURCE_DIR}/src/stdlib")
+
+    # The COMPILED standard-library unit (kex_prelude.beam plus its Kex.*
+    # companions). Without it the checker falls back to extracting interfaces
+    # from .kex source, which cannot recover inferred result types or the
+    # trait bounds behind `make T, implement: ...` — so the same program
+    # type-checks differently under wasm than natively. The unit is produced
+    # by running the NATIVE kex (`--build-prelude`, which needs erlc), so a
+    # wasm-only build cannot make it: point this at a native build tree.
+    # Loading it is pure parsing — no Erlang is involved at runtime, and wasm
+    # never executes the code half of these files.
+    set(KEX_PREBUILT_RUNTIME_DIR "" CACHE PATH
+        "Native build's runtime/beam directory, holding the compiled stdlib unit")
+    if(KEX_PREBUILT_RUNTIME_DIR AND
+       EXISTS "${KEX_PREBUILT_RUNTIME_DIR}/kex_prelude.beam")
+        target_compile_definitions(kex_lib PUBLIC
+            KEX_RUNTIME_BEAM_DIR="${KEX_PREBUILT_RUNTIME_DIR}")
+        set(KEX_WASM_RUNTIME_UNIT "${KEX_PREBUILT_RUNTIME_DIR}")
+        message(STATUS "wasm: using compiled stdlib unit from ${KEX_PREBUILT_RUNTIME_DIR}")
+    else()
+        message(STATUS
+            "wasm: no compiled stdlib unit — the checker will derive interfaces "
+            "from source (set KEX_PREBUILT_RUNTIME_DIR to a native build's "
+            "runtime/beam to match native behaviour)")
+    endif()
 endif()
 
 # GMP backs the arbitrary-precision `Integer` default (see
@@ -278,7 +348,15 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     add_custom_command(
         OUTPUT ${KEX_RUNTIME_BEAMS}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${KEX_RUNTIME_BEAM_DIR}
-        COMMAND ${ERLC_EXECUTABLE} -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
+        # The version reaches the BEAM side as erlc defines rather than a
+        # second copy of the numbers: kex_intrinsic_kex:version/0 has to
+        # answer exactly what the native binary reports.
+        COMMAND ${ERLC_EXECUTABLE}
+            -DKEX_VERSION_MAJOR=${KEX_VERSION_MAJOR}
+            -DKEX_VERSION_MINOR=${KEX_VERSION_MINOR}
+            -DKEX_VERSION_PATCH=${KEX_VERSION_PATCH}
+            "-DKEX_GIT_REVISION=\"${KEX_GIT_REVISION}\""
+            -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
         DEPENDS ${KEX_RUNTIME_ERL}
         COMMENT "Compiling Kex runtime Erlang modules"
         VERBATIM
@@ -377,6 +455,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
         # path as a bogus linker input.
         "SHELL:--preload-file ${CMAKE_SOURCE_DIR}/src/stdlib@/stdlib"
     )
+    # The compiled stdlib unit is deliberately NOT preloaded here. The browser
+    # REPL never sets ImportedInterfaces on its SemanticDB, so it would embed
+    # ~330 KB that nothing reads. prebuiltRuntimeBeamDir() already looks in
+    # /runtime, so mapping it here is the only change needed if that REPL
+    # grows a type-checking path.
 endif()
 
 enable_testing()

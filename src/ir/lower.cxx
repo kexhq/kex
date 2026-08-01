@@ -295,6 +295,7 @@ struct Lowering {
     // Exact imported call ownership selected by semantic analysis.
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
+    const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -311,6 +312,22 @@ struct Lowering {
         return staticCtorNames.count(name) && !variantTagSet.count(name)
             && !records.count(name) && !knownFns.count(name);
     }
+    // A semantic::StructuredType as the `Type { name, args }` record it
+    // stands for — a tagged tuple, the same shape a record literal lowers to.
+    auto structuredTypeLiteral(const semantic::StructuredType& type) -> ExprPtr {
+        std::vector<ExprPtr> args;
+        for (const auto& arg : type.args) args.push_back(structuredTypeLiteral(arg));
+        auto list = std::make_unique<Expr>();
+        list->node = MakeList{std::move(args), std::nullopt};
+        auto record = std::make_unique<Expr>();
+        std::vector<ExprPtr> fields;
+        fields.push_back(lit(LitKind::String, type.name));
+        fields.push_back(std::move(list));
+        fields.push_back(litBool(type.pure));
+        record->node = Construct{"Type", std::move(fields)};
+        return record;
+    }
+
     // An erlang:error carrying the walker's exact runtime-error text,
     // prefixed with the current source location.
     auto runtimeError(const std::string& msg) -> ExprPtr {
@@ -1256,6 +1273,21 @@ struct Lowering {
                 return callE("erlang", "element", 2,
                     two(litInt(selected->second), lower(n.receiver)));
         }
+        // `Type.of(x)` the checker answered: emit the recorded shape as a
+        // literal record. Ahead of every dispatch path, like the walker's.
+        if (staticTypeOfCalls) {
+            auto recorded = staticTypeOfCalls->find(&n);
+            if (recorded != staticTypeOfCalls->end()) {
+                std::vector<Binding> binds;
+                // A value argument still runs (it may have effects); one that
+                // NAMES a function does not — `Date.parse` alone is a call
+                // missing its argument, which would not even compile.
+                if (recorded->second.evaluateArgument)
+                    for (const auto& arg : n.args)
+                        if (arg) binds.push_back({fresh("TypeArg"), lower(arg)});
+                return wrapLets(binds, structuredTypeLiteral(recorded->second.type));
+            }
+        }
         if (resolvedCalls) {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
@@ -1702,7 +1734,20 @@ struct Lowering {
                 ex->node = Construct{n.method, std::move(fieldArgs)};
                 return wrapLets(binds, std::move(ex));
             }
-            return wrapLets(binds, runtimeError("Undefined function: " + uid->name + "." + n.method));
+            // A nullary CONSTRUCTOR is a value, not a namespace: `Monday.name`
+            // is the same call as `let m = Monday` then `m.name`, which has
+            // always worked. Fall through to the value-receiver path below
+            // rather than reporting the namespace as undefined.
+            const bool nullaryConstructorReceiver =
+                nullaryVariantTags.count(uid->name) ||
+                // Prelude/imported constructors are not in the local tag set;
+                // the external variant table (seeded for display) knows them.
+                (variantOwner.count(uid->name) &&
+                 variantArity.count(uid->name) &&
+                 variantArity.at(uid->name) == 0);
+            if (!nullaryConstructorReceiver)
+                return wrapLets(binds,
+                    runtimeError("Undefined function: " + uid->name + "." + n.method));
         }
         // UFCS method on a value receiver. Atomize the receiver once so
         // methods that use it several times (min/get/count/…) don't
@@ -3363,7 +3408,12 @@ struct Lowering {
         if (ext == externalModules->receiverFunctions.end()) return nullptr;
         for (const auto& candidate : ext->second)
             if (candidate.beamArity == 1) return &candidate;
-        blocked = true;
+        // Every import of this name takes more than a receiver, so there is
+        // nothing to collide with: BEAM keys functions by name AND arity, and
+        // a field read is always arity 1. `Kex.Kernel.VERSION.patch` is the
+        // case — `patch` is also `Http.patch/2,3`, and blocking the accessor
+        // here left the field unreadable on BEAM while the walker read it
+        // fine. Emitting `patch/1` cannot shadow `patch/2`.
         return nullptr;
     }
 
@@ -3745,11 +3795,40 @@ struct Lowering {
             m.clauses.insert(m.clauses.begin(), std::move(mc));
         }
         appendFieldClauses(name, arity, m);
+        // A receiver no clause covers is a call that should not have compiled
+        // — `Date.of(...).iso`, where `iso` belongs to Date and the receiver
+        // is a Result. The checker rejects that now, but `--no-check` and
+        // gradual code still reach here, and falling off the end raised a
+        // bare `if_clause`: no method name, no receiver, no location. Name it
+        // instead, in the walker's wording, with the receiver's runtime type.
+        {
+            MatchClause fallback;
+            auto wild = std::make_unique<Pattern>();
+            wild->kind = PatKind::Wild;
+            fallback.patterns.push_back(std::move(wild));
+            auto message = callE("erlang", "iolist_to_binary", 1,
+                one(makeListOf(
+                    lit(LitKind::String, "runtime error: Undefined method: " +
+                                          name + " for "),
+                    callE("kex_io", "value_type_name", 1, one(var("_a0"))))));
+            fallback.body = callE("erlang", "error", 1, one(std::move(message)));
+            m.clauses.push_back(std::move(fallback));
+        }
         auto body = std::make_unique<Expr>();
         body->node = std::move(m);
         fc.body = std::move(body);
         def.clauses.push_back(std::move(fc));
         return def;
+    }
+
+    // [a, b] as an IR list, for building an iolist at runtime.
+    auto makeListOf(ExprPtr first, ExprPtr second) -> ExprPtr {
+        std::vector<ExprPtr> elements;
+        elements.push_back(std::move(first));
+        elements.push_back(std::move(second));
+        auto list = std::make_unique<Expr>();
+        list->node = MakeList{std::move(elements), std::nullopt};
+        return list;
     }
 
     // A record field can share its name with a receiver method — `rest` is a
@@ -3805,7 +3884,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls,
                   bool preferExternalReceivers,
-                  const std::vector<ExternalVariantTag>* externalVariants)
+                  const std::vector<ExternalVariantTag>* externalVariants,
+                  const StaticTypeOfCalls* staticTypeOfCalls)
     -> Module {
     Lowering L;
     L.sourceFile = sourcePath;
@@ -3898,6 +3978,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     // Display info only — deliberately NOT added to variantTagSet, which
     // drives codegen decisions for tags this module declares itself.
+    L.staticTypeOfCalls = staticTypeOfCalls;
     if (externalVariants)
         for (const auto& variant : *externalVariants) {
             L.variantArity[variant.tag] = variant.arity;
@@ -4133,7 +4214,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     }
     for (const auto& [name, owners] : L.methodOwners)
-        if (owners.size() > 1) L.collidingMethods.insert(name);
+        if (owners.size() > 1 || L.fieldAccessors.count(name))
+            L.collidingMethods.insert(name);
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
     L.knownFns = definedFns;
@@ -4553,7 +4635,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             // patterns — merge them into one function and skip the guard-
             // based dispatcher entirely. Pattern matching handles dispatch
             // natively, avoiding Core Erlang guard short-circuit issues.
-            bool allAdt = !owners.empty();
+            // Merging clauses works when the owners' patterns are distinct
+            // ADT variants — but not when the name is also a record FIELD.
+            // A method with an implicit `this` is an unguarded catch-all, so
+            // merged clauses swallow every receiver and the field would never
+            // be read: `tagged.name` returned the METHOD's answer on BEAM
+            // while the walker read the field. Those go through the guarded
+            // dispatcher below, which appends the field clauses.
+            bool allAdt = !owners.empty() && !L.fieldAccessors.count(name);
             for (const auto& o : owners) {
                 if (!L.typeVariantTags.count(o)) { allAdt = false; break; }
             }
@@ -4740,11 +4829,13 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                   const std::unordered_map<const ast::MethodCall*,
                       semantic::ResolvedCallTarget>* resolvedCalls,
                   bool preferExternalReceivers,
-                  const std::vector<ExternalVariantTag>* externalVariants)
+                  const std::vector<ExternalVariantTag>* externalVariants,
+                  const StaticTypeOfCalls* staticTypeOfCalls)
     -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
                              externalRecords, resolvedCalls,
-                             preferExternalReceivers, externalVariants);
+                             preferExternalReceivers, externalVariants,
+                             staticTypeOfCalls);
 
     struct Definition {
         std::string path;
