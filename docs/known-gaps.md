@@ -7,6 +7,38 @@ not a wishlist.
 Verify the state of a section before acting on it; `make test-all` and
 `make spec-beam` are the two commands that show it.
 
+## `Block<[A]>` collection blocks are not implemented
+
+`docs/dsl.md` documents a `Block<[A]>` parameter as collecting each expression
+in the `do…end` body into a list. Neither backend does that — the block arrives
+as an opaque callable instead:
+
+```kex
+record El do
+  tag : String
+end
+let p(text: String) -> El = El { tag: text }
+let div(children: Block<[El]>) -> [El] = children
+
+main do
+  let out = div do
+    p("first")
+    p("second")
+  end
+  IO.printLine(out.length())
+  # walker: Undefined method: length for Function
+  # BEAM:   Undefined method: length for Any
+end
+```
+
+The `...expr` spread that `docs/dsl.md` describes as part of the same feature
+is accepted in a `do` body by the parser, but nothing consumes it: on BEAM it
+reaches lowering as `IR lower: unimplemented expr node SpreadExpr`. Spreading
+into a list or a map literal is unaffected and works on both backends.
+
+Every use of `Block<[A]>` in the tree is under `examples/aspirational/`, which
+is not run by any suite — so nothing catches this today.
+
 ## Interpreter crashes on the no-argument `String.split`
 
 ```kex
@@ -19,25 +51,6 @@ The error message itself is corrupted, which points at a memory bug rather
 than a plain failure. BEAM handles the same program correctly (`h|i`), so this
 is interpreter-only, in the no-argument `split` path (`split :> [String]` in
 `src/prelude/string.kex`). Pre-existing; unrelated to any recent regex work.
-
-## A record field named like a prelude method breaks on BEAM
-
-```kex
-record Holder do
-  items : Map<Any, String>       # `entries` fails the same way
-end
-```
-
-`h.items` compiles to `kex_prelude:items/1` — that is `Range.items` — and dies
-at runtime with `if_clause`; `entries` hits `Map.entries` and gives `badmap`.
-`makeAccessors` (`src/ir/lower.cxx`) deliberately skips emitting a local field
-accessor when a prelude receiver function shares the name, so the field is
-unreachable. The interpreter is unaffected.
-
-The fix is the same shape as the one already applied to method calls: dispatch
-on the record tag rather than skipping, falling back to the prelude only for
-other receivers. `spec/union_param_atom.kex` names its field `slots` to avoid
-this.
 
 ## Interpolating tags are typed as if they cannot fail
 
@@ -84,23 +97,29 @@ signatures (`src/semantic/typechecker.cxx`), which fixed `.to(String)` dispatch
 for three specs, yet a minimal one-record reproduction still resolves to the
 prelude. Something in the fuller context enables it.
 
-## BEAM parity: 4 specs differ
+## BEAM parity: 6 specs differ
 
-`make spec-beam` reports 127 matching, 4 differing. It is informational and
+`make spec-beam` reports 158 matching, 6 differing. It is informational and
 never fails the build — the BEAM backend is secondary by design.
 
 | Spec | Symptom |
 |---|---|
-| `char_type.kex` | `function_clause` at runtime |
-| `my_capitalize.kex` | `function_clause` at runtime |
-| `standalone_module.kex` | `if_clause` at runtime |
-| `json_parser.spec.kex` | `function_clause` in "parses null" |
+| `char_type.kex` | `Undefined method: + for Char` at runtime |
+| `my_capitalize.kex` | `Undefined method: + for Char` at runtime |
+| `module_scoped_make_import_collision.kex` | `if_clause` at runtime |
+| `to_string_universal_with_local.kex` | `function_clause` at runtime |
+| `json_parser.spec.kex` | `Undefined constructor or type: JsonNull` at compile time |
+| `regex_basics.kex` | `Ambiguous overload for replace` at compile time |
 
-All four are runtime crashes rather than wrong answers, and all are likely the
-same make-block/receiver dispatch family as the two fixed items above.
-`static_namespacing.kex` was in this list until make-block `let` methods began
-registering signatures; the remaining four did not benefit, which is the same
-uncharacterized boundary noted above.
+The first four are runtime crashes rather than wrong answers. Two are `Char`
+arithmetic, which the walker allows and the BEAM lowering has no arm for; the
+other two look like the make-block/receiver dispatch family. The last two fail
+the BEAM-side ANALYSIS rather than running at all, so they are a different
+problem from the rest — the names resolve for the walker but not for the
+compile path.
+
+`standalone_module.kex` and `static_namespacing.kex` were both in this list
+previously and now match.
 
 ## No regex on the wasm build
 
@@ -129,28 +148,23 @@ The diagnostic is correct and appears on both REPLs; the interpreter one also
 emits a `...>` continuation prompt first, so some multi-line heuristic still
 reads the input as an unfinished definition.
 
-## Type-annotated `let`/`foul` bindings do not parse
+## Type-annotated `foul` bindings do not parse
 
-Only `var` bindings accept a type annotation; `let` and `foul` bindings reject
-the `:`.
+`let` and `var` bindings accept a type annotation in every position. A
+top-level `foul` binding still rejects the `:`.
 
 ```kex
+let y : Int = 5        # ok, top level and in a body
 main do
   var x : Int = 5      # ok
-  let y : Int = 5      # error: Expected '=' in let binding, got :
+  let z : Int = 5      # ok
 end
 
 foul c : Int = 5       # error: Unexpected token at top level: :
 ```
 
-The grammar's binding rule is `LET LOWER_IDENT EQUALS expr` (no annotation),
-and no example uses an annotated `let`. This is a parser asymmetry, not an
-intended restriction: the docs write annotated bindings freely (e.g.
-`docs/types.md`'s `let email: String? = None`, `docs/streams.md`'s
-`foul lines: Feed<String> = ...`, `docs/concurrency.md`'s
-`foul counter: Process<CounterMessage> = spawn`). Today the workaround is to
-drop the annotation and let inference run, or use `var` when an annotation is
-wanted. The fix is to extend the `let`/`foul` binding form with the same
-`LOWER_IDENT COLON type_expr EQUALS expr` shape that typed params and `var`
-already accept.
-
+The remaining asymmetry is `foul` only; the docs write annotated bindings
+freely (e.g. `docs/streams.md`'s `foul lines: Feed<String> = ...`,
+`docs/concurrency.md`'s `foul counter: Process<CounterMessage> = spawn`). The
+fix is to give the top-level `foul` binding form the same
+`LOWER_IDENT COLON type_expr EQUALS expr` shape `let` already accepts.

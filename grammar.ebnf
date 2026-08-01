@@ -343,9 +343,11 @@ while_expr = WHILE expr NEWLINE body END ;
 
 (* ===== Let / Var / Assignment ===== *)
 
-let_expr = LET pattern EQUALS expr ;
+(* The type annotation is optional. A top-level `foul` binding does not accept
+   one yet — see docs/known-gaps.md. *)
+let_expr = LET pattern ( COLON type_expr )? EQUALS expr ;
 
-var_expr = VAR LOWER_IDENT EQUALS expr ;
+var_expr = VAR LOWER_IDENT ( COLON type_expr )? EQUALS expr ;
 
 assign_expr = LOWER_IDENT EQUALS expr ;
 

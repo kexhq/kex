@@ -1,5 +1,10 @@
 # DSL Support
 
+> **Not implemented yet.** `Block<[A]>` blocks are described here as designed;
+> neither backend collects them today, and every use in the tree is under
+> `examples/aspirational/`. See [known-gaps.md](known-gaps.md). Spreading into
+> a list or a map literal does work — see the language spec's Spread section.
+
 ## Block<[A]> — Collection Blocks
 
 When a function's last parameter is `Block<[A]>`, the compiler collects each expression in the `do...end` body into a list:
