@@ -3408,7 +3408,12 @@ struct Lowering {
         if (ext == externalModules->receiverFunctions.end()) return nullptr;
         for (const auto& candidate : ext->second)
             if (candidate.beamArity == 1) return &candidate;
-        blocked = true;
+        // Every import of this name takes more than a receiver, so there is
+        // nothing to collide with: BEAM keys functions by name AND arity, and
+        // a field read is always arity 1. `Kex.Kernel.VERSION.patch` is the
+        // case — `patch` is also `Http.patch/2,3`, and blocking the accessor
+        // here left the field unreadable on BEAM while the walker read it
+        // fine. Emitting `patch/1` cannot shadow `patch/2`.
         return nullptr;
     }
 

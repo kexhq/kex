@@ -1,0 +1,24 @@
+# Defining `to(String)` for one type must not take the conversion away from
+# every other type. `42.to(String)` is the universal value conversion the
+# prelude owns; the local implementation below only covers Ticket.
+#
+# KNOWN BEAM DIVERGENCE: the walker answers "42" here, but BEAM raises
+# `function_clause` — the local `to/2` shadows the prelude's without falling
+# through to it. `make spec-beam` lists this file for that reason; it is a
+# real bug in the argument-overloaded dispatch path, not a spec that needs
+# relaxing. The same root cause is why a second `to(String)` in the PRELUDE
+# silently rerouted every prelude type's conversion — see
+# spec/prelude_to_string_dispatch.kex, which guards that half.
+record Ticket do
+  id : Integer
+end
+
+make Ticket do
+  let to(String) -> String = "ticket #${this.id}"
+end
+
+main do
+  IO.printLine(Ticket { id: 7 }.to(String))
+  IO.printLine("${42.to(String).or("?")}")
+  IO.printLine("${3.5.to(String).or("?")}")
+end

@@ -71,7 +71,8 @@ inline auto printReplBanner(std::ostream &out, const std::string &backend)
   if (!backend.empty()) out << "\n";
   out << color::apply(color::bold) << color::apply(color::yellow)
       << "Kex Interactive" << color::apply(color::reset) << " "
-      << color::apply(color::yellow) << kVersion << color::apply(color::reset);
+      << color::apply(color::yellow) << versionString()
+      << color::apply(color::reset);
   if (!backend.empty())
     out << " " << color::apply(color::gray) << "(" << backend << ")"
         << color::apply(color::reset);

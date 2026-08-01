@@ -3,6 +3,46 @@ project(kex LANGUAGES CXX)
 
 include(GNUInstallDirs)
 
+# ── Build revision ──────────────────────────────────────────────────────
+# The commit a build came from, so `kex --version`, the REPL banner and
+# `Kex.Kernel.VERSION` can all report it. Resolved at CONFIGURE time, with
+# .git/HEAD as a dependency so switching branches or committing re-runs this
+# rather than leaving a stale hash baked in. A source archive has no .git at
+# all; that is a normal state and leaves the revision empty (`None` in Kex).
+# The version NUMBERS are not duplicated here — they are read back out of
+# version.hxx below, which stays the single place they are written down.
+set(KEX_GIT_REVISION "")
+if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    find_package(Git QUIET)
+    if(GIT_FOUND)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+            WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+            OUTPUT_VARIABLE KEX_GIT_REVISION
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET)
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+            "${CMAKE_SOURCE_DIR}/.git/HEAD")
+    endif()
+endif()
+
+# version.hxx is authoritative for the numbers; erlc needs them too, so they
+# are parsed back out rather than restated.
+file(READ "${CMAKE_SOURCE_DIR}/src/common/version.hxx" KEX_VERSION_HEADER)
+string(REGEX MATCH "kVersionMajor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_MAJOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionMinor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_MINOR "${CMAKE_MATCH_1}")
+string(REGEX MATCH "kVersionPatch = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+set(KEX_VERSION_PATCH "${CMAKE_MATCH_1}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_SOURCE_DIR}/src/common/version.hxx")
+if(KEX_GIT_REVISION)
+    message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (${KEX_GIT_REVISION})")
+else()
+    message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (no git revision)")
+endif()
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -141,6 +181,11 @@ add_library(kex_lib
 )
 
 target_include_directories(kex_lib PUBLIC src)
+
+if(KEX_GIT_REVISION)
+    target_compile_definitions(kex_lib PUBLIC
+        KEX_GIT_REVISION="${KEX_GIT_REVISION}")
+endif()
 
 # Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
 # no _NSGetExecutablePath) so bake the source path in at compile time.
@@ -303,7 +348,15 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     add_custom_command(
         OUTPUT ${KEX_RUNTIME_BEAMS}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${KEX_RUNTIME_BEAM_DIR}
-        COMMAND ${ERLC_EXECUTABLE} -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
+        # The version reaches the BEAM side as erlc defines rather than a
+        # second copy of the numbers: kex_intrinsic_kex:version/0 has to
+        # answer exactly what the native binary reports.
+        COMMAND ${ERLC_EXECUTABLE}
+            -DKEX_VERSION_MAJOR=${KEX_VERSION_MAJOR}
+            -DKEX_VERSION_MINOR=${KEX_VERSION_MINOR}
+            -DKEX_VERSION_PATCH=${KEX_VERSION_PATCH}
+            "-DKEX_GIT_REVISION=\"${KEX_GIT_REVISION}\""
+            -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
         DEPENDS ${KEX_RUNTIME_ERL}
         COMMENT "Compiling Kex runtime Erlang modules"
         VERBATIM

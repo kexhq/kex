@@ -1,5 +1,31 @@
 -module(kex_intrinsic_kex).
--export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, kind/1]).
+-export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, kind/1,
+         version/0]).
+
+%% Defined by erlc from CMake (see CMakeLists.txt) so this reports the same
+%% version the native binary does. The fallbacks keep a bare
+%% `erlc runtime/src/*.erl` working outside the build system.
+-ifndef(KEX_VERSION_MAJOR).
+-define(KEX_VERSION_MAJOR, 0).
+-endif.
+-ifndef(KEX_VERSION_MINOR).
+-define(KEX_VERSION_MINOR, 0).
+-endif.
+-ifndef(KEX_VERSION_PATCH).
+-define(KEX_VERSION_PATCH, 0).
+-endif.
+-ifndef(KEX_GIT_REVISION).
+-define(KEX_GIT_REVISION, "").
+-endif.
+
+%% {Major, Minor, Patch, Revision} where Revision is a Kex Optional: a build
+%% from a source archive has no commit to name.
+version() ->
+    Revision = case ?KEX_GIT_REVISION of
+                   "" -> 'None';
+                   Hash -> {'Just', list_to_binary(Hash)}
+               end,
+    {?KEX_VERSION_MAJOR, ?KEX_VERSION_MINOR, ?KEX_VERSION_PATCH, Revision}.
 
 backend() -> 'Beam'.
 

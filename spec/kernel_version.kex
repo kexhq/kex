@@ -1,0 +1,22 @@
+# `Kex.Kernel.VERSION` reports the toolchain a program is running on: the same
+# numbers `kex --version` and the REPL banner print, plus the git commit the
+# compiler was built from.
+#
+# Deliberately shape-only. The literal version would have to be edited here on
+# every release, and the revision differs between a checkout and a source
+# archive — tests/repl_cli_test.cxx is where the exact values are pinned
+# against the CLI, which is the coupling that actually matters.
+main do
+  let version = Kex.Kernel.VERSION
+
+  IO.printLine("${version.major >= 0 && version.minor >= 0 && version.patch >= 0}")
+  # An Optional of String either way: a known revision, or the default.
+  IO.printLine("${version.revision.or("unknown").blank?}")
+  IO.printLine("${version.number.count >= 5}")
+  IO.printLine("${version == Kex.Kernel.VERSION}")
+
+  # The tuple view destructures, and agrees with the fields it came from.
+  let (major, minor, patch, revision) = version.tuple
+  IO.printLine("${major == version.major && minor == version.minor}")
+  IO.printLine("${patch == version.patch && revision == version.revision}")
+end
