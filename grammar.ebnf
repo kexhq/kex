@@ -300,7 +300,7 @@ record_init = record_field_init ( COMMA record_field_init )* ;
 
 record_field_init
   = LOWER_IDENT COLON expr
-  | LOWER_IDENT DOT_DOT                          (* shorthand: name: name *)
+  | LOWER_IDENT                                  (* shorthand for `name: name` *)
   ;
 
 (* ===== Range ===== *)

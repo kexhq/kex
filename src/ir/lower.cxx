@@ -1378,8 +1378,18 @@ struct Lowering {
                 !std::holds_alternative<ast::UpperIdentifier>(
                     n.receiver->kind) &&
                 moduleImports.count(n.method);
+            // A bare `x.field` whose name is also an imported receiver method
+            // (`name` is Weekday's and Type's) must go through THIS module's
+            // accessor, which matches the record tags and delegates to the
+            // import for anything else. Calling the import directly skips the
+            // record arms, so an erased receiver — `opaque(p).name`, or any
+            // REPL value — died with "Undefined method: name for Person"
+            // while a statically typed `p.name` read the field fine.
+            const bool localFieldAccessor =
+                n.args.empty() && n.namedArgs.empty() && !n.block &&
+                !n.mutating && fieldAccessors.count(n.method);
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
-                !stalePreludeTarget) {
+                !stalePreludeTarget && !localFieldAccessor) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -2412,6 +2422,26 @@ struct Lowering {
             }
         }
         return body;
+    }
+    // A top-level destructuring `let` has to expose every name it binds as its
+    // own 0-arity function, the same shape a simple `let name = value` gets.
+    // Each one re-runs the right-hand side and keeps its own component, which
+    // is already how top-level constants behave.
+    auto topLevelPatternBinding(const ast::LetExpr& le, const std::string& name)
+        -> ExprPtr {
+        if (auto* rp = std::get_if<ast::RecordPattern>(&le.pattern->kind)) {
+            std::string rv = fresh("rec");
+            std::vector<std::pair<std::string, ExprPtr>> prefix;
+            destructureRecordPattern(rv, *rp, prefix);
+            for (auto& [nm, _] : prefix) subst[nm] = nm;
+            ExprPtr body = var(name);
+            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+                body = makeLet(it->first, std::move(it->second), std::move(body));
+            return makeLet(rv, lower(le.value), std::move(body));
+        }
+        auto val = lower(le.value);
+        auto pat = lowerPattern(le.pattern);
+        return makeMatch1(std::move(val), std::move(pat), var(name));
     }
     auto lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
         if (!p) { auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }
@@ -3942,6 +3972,33 @@ struct Lowering {
 // range pattern). So `count(@[])` is count/1 but `count(pred)` is count/2 even
 // though both have one AST param. Grouping and trait-inheritance both key on
 // this — a method can be overloaded by BEAM arity across those two forms.
+// Every name a pattern binds, in source order.
+static auto patternBoundNames(const ast::PatternPtr& p,
+                              std::vector<std::string>& out) -> void {
+    if (!p) return;
+    std::visit([&](const auto& pn) {
+        using T = std::decay_t<decltype(pn)>;
+        if constexpr (std::is_same_v<T, ast::VarPattern>) {
+            if (pn.name != "_") out.push_back(pn.name);
+        } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+            for (const auto& a : pn.args) patternBoundNames(a, out);
+        } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+            for (const auto& a : pn.elements) patternBoundNames(a, out);
+        } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            for (const auto& a : pn.elements) patternBoundNames(a, out);
+            if (pn.rest) patternBoundNames(*pn.rest, out);
+        } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            // A field with no sub-pattern is the shorthand binding.
+            for (const auto& f : pn.fields) {
+                if (f.pattern) patternBoundNames(*f.pattern, out);
+                else if (f.name != "_") out.push_back(f.name);
+            }
+        } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            if (pn.inner) patternBoundNames(pn.inner, out);
+        }
+    }, p->kind);
+}
+
 static auto beamArity(const ast::FunctionDef* fd) -> size_t {
     if (!fd || fd->clauses.empty()) return 1;
     const auto& params = fd->clauses[0].params;
@@ -4279,9 +4336,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (*mb && (*mb)->synthetic)
                 for (const auto& e : (*mb)->body)
                     if (auto* le = std::get_if<ast::LetExpr>(&e->kind))
-                        if (le->pattern)
-                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
-                                L.topLevelConstants.insert(vp->name);
+                        if (le->pattern) {
+                            // Every name, so a destructuring top-level `let`
+                            // registers all of them and not just a bare one.
+                            std::vector<std::string> names;
+                            patternBoundNames(le->pattern, names);
+                            for (auto& name : names)
+                                L.topLevelConstants.insert(std::move(name));
+                        }
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             if (*fd) preFn(**fd);
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
@@ -4391,10 +4453,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // Top-level `let name = expr` → a 0-arity function.
                     for (const auto& e : node->body) {
                         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-                            if (le->pattern) if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                            if (!le->pattern) continue;
+                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                                 L.subst.clear();
                                 FunDef def; def.name = vp->name; def.arity = 0;
                                 FunClause fc; fc.body = L.lower(le->value);
+                                def.clauses.push_back(std::move(fc));
+                                mod.functions.push_back(std::move(def));
+                                continue;
+                            }
+                            // `let (a, b) = …` at top level: one 0-arity
+                            // function per bound name. Without these the names
+                            // compiled to nothing and every later reference
+                            // died with "Undefined variable".
+                            std::vector<std::string> names;
+                            patternBoundNames(le->pattern, names);
+                            for (const auto& name : names) {
+                                L.subst.clear();
+                                FunDef def; def.name = name; def.arity = 0;
+                                FunClause fc;
+                                fc.body = L.topLevelPatternBinding(*le, name);
                                 def.clauses.push_back(std::move(fc));
                                 mod.functions.push_back(std::move(def));
                             }

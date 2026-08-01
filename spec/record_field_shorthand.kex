@@ -1,0 +1,40 @@
+# `Person { name }` is shorthand for `Person { name: name }`, mirroring how
+# record patterns already destructure with `{ name, age }`. The grammar
+# promised a shorthand spelled `name..`, which was never implemented; the bare
+# form is the one that matches the pattern side.
+
+record Person do
+  name : String
+  birthYear : Integer
+end
+
+record Address do
+  street : String
+  city : String = "Budapest"
+end
+
+let name = "Andrew"
+let birthYear = 2001
+
+# All shorthand.
+let p = Person { name, birthYear }
+IO.printLine(p.name)
+IO.printLine(p.birthYear)
+
+# Mixed with explicit fields, in either order.
+IO.printLine(Person { name, birthYear: 1993 }.birthYear)
+IO.printLine(Person { birthYear: 1993, name }.name)
+
+# Shorthand alongside an omitted defaulted field.
+let street = "Main St"
+let a = Address { street }
+IO.printLine(a.street)
+IO.printLine(a.city)
+
+# The pattern-side shorthand this mirrors, inside a function body (top-level
+# record destructuring is a separate, pre-existing BEAM gap).
+let describe(person: Person) -> String do
+  let { name, birthYear } = person
+  return "${name} ${birthYear}"
+end
+IO.printLine(describe(p))

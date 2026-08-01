@@ -7,6 +7,8 @@
 
 namespace kex::semantic {
 
+auto containsOpenType(const TypePtr& type) -> bool;
+
 namespace {
 
 // A sum-type variant is constructor-shaped (TypeName or GenericType with a
@@ -2680,8 +2682,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unit();
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& [_, val] : node.fields) {
-                if (val) inferExpr(*val);
+            // Check each value against the field's DECLARED type. Without
+            // this, `User { name: 42 }` on `name : String` was accepted and
+            // only surfaced later — or not at all.
+            auto record = m_recordFields.find(node.typeName);
+            for (const auto& [fieldName, val] : node.fields) {
+                if (!val) continue;
+                auto valueType = resolve(inferExpr(*val));
+                if (record == m_recordFields.end()) continue;
+                auto declared = record->second.find(fieldName);
+                if (declared == record->second.end()) continue;
+                auto expected = resolve(declared->second);
+                // Stay quiet where either side is open ANYWHERE inside it: a
+                // type variable, a type the checker could not pin down, or a
+                // trait constraint, which names a set rather than a concrete
+                // type. Two cases this must not reject: `make Integer do …
+                // Duration { seconds: this * 1.0 }` infers `Number` for the
+                // value, and a `Map<Any, String>` field takes `{"k": "v"}`
+                // — there the openness is nested, not at the top.
+                if (containsOpenType(valueType) || containsOpenType(expected))
+                    continue;
+                if (!argMatchesParam(valueType, expected))
+                    error(val->location,
+                          "`" + node.typeName + "." + fieldName +
+                          "` expects " + typeToString(expected) + ", but got " +
+                          typeToString(valueType));
             }
             return Type::named(node.typeName);
         }
@@ -4261,6 +4286,48 @@ auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {
     if (m_diagnostics) {
         m_diagnostics->push_back({Diagnostic::Level::Error, loc, msg});
     }
+}
+
+// Whether a type has any component the checker has not pinned down — a type
+// variable, an unknown, or a trait constraint. Checks that would otherwise
+// report a mismatch use this to stay quiet rather than invent an error from
+// incomplete information.
+auto containsOpenType(const TypePtr& type) -> bool {
+    if (!type) return true;
+    return std::visit(
+        [](const auto& node) -> bool {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, TypeVar> ||
+                          std::is_same_v<T, UnknownType> ||
+                          std::is_same_v<T, ConstrainedType>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, NamedType>) {
+                for (const auto& arg : node.typeArgs)
+                    if (containsOpenType(arg)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, FuncType>) {
+                for (const auto& param : node.params)
+                    if (containsOpenType(param)) return true;
+                return containsOpenType(node.result);
+            } else if constexpr (std::is_same_v<T, TupleType>) {
+                for (const auto& element : node.elements)
+                    if (containsOpenType(element)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, ListType>) {
+                return containsOpenType(node.element);
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                return containsOpenType(node.key) || containsOpenType(node.value);
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                return containsOpenType(node.inner);
+            } else if constexpr (std::is_same_v<T, UnionType>) {
+                for (const auto& member : node.members)
+                    if (containsOpenType(member)) return true;
+                return false;
+            } else {
+                return false;
+            }
+        },
+        type->kind);
 }
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected,

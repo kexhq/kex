@@ -81,3 +81,23 @@ match Float.parse("1.5xy") do
     IO.printLine(e.rest)
   end
 end
+
+# A USER record whose field shares a name with a PRELUDE receiver method, read
+# through an erased receiver. The statically typed read compiled to the local
+# accessor, but the erased one called the prelude's `name/1` directly, skipping
+# the record arms — "Undefined method: name for Person". Every REPL value takes
+# that path, so it showed up there for any record with a `name` field.
+record Person do
+  name : String
+  birthYear : Integer
+end
+
+let per = Person { name: "Andrew", birthYear: 2001 }
+IO.printLine(per.name)
+IO.printLine(opaque(per).name)
+IO.printLine(opaque(per).birthYear)
+
+# The prelude method it collides with must still reach its own receiver.
+let theDate = Date.of(2026, 2, 22).try
+IO.printLine(theDate.weekday.name)
+IO.printLine(opaque(theDate.weekday).name)

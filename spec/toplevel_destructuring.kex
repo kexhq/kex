@@ -1,0 +1,34 @@
+# A destructuring `let` at top level has to expose every name it binds. On BEAM
+# each top-level constant becomes a 0-arity function, and only a bare
+# `let name = value` was emitting one — so the names from a pattern compiled to
+# nothing and every later reference died with "Undefined variable: n" while the
+# walker bound them fine.
+
+record Person do
+  name : String
+  birthYear : Integer
+end
+
+let p = Person { name: "Andrew", birthYear: 2001 }
+
+let { name: n, birthYear: y } = p        # record, renaming
+let { name, birthYear } = p              # record, shorthand
+let (a, b) = (1, 2)                      # tuple
+let [q, r] = [10, 20]                    # list
+let [h | t] = [1, 2, 3]                  # cons
+let Just(j) = Just(7)                    # constructor
+
+IO.printLine("${n} ${y}")
+IO.printLine("${name} ${birthYear}")
+IO.printLine("${a} ${b}")
+IO.printLine("${q} ${r}")
+IO.printLine(h)
+IO.printLine(t)
+IO.printLine(j)
+
+# Nested, and reachable from a function body as well as top level.
+let ((u, v), [w]) = ((1, 2), [3])
+IO.printLine("${u} ${v} ${w}")
+
+let sum() -> Integer = a + b + q + r
+IO.printLine(sum())

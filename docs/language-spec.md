@@ -836,7 +836,16 @@ let user = User { name: "Alice", age: 30 }
 let addr = Address { street: "Main St", city: "Budapest" }
 ```
 
-Fields use explicit `field: value` syntax in construction:
+A bare field name is shorthand for `name: name`, mirroring how record patterns
+destructure with `{ name, age }`:
+
+```kex
+let name = "Alice"
+let age = 30
+
+let user = User { name, age }              # User { name: name, age: age }
+let other = User { name, age: 41 }         # the two forms mix freely
+```
 
 ---
 

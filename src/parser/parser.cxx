@@ -1697,8 +1697,17 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     } else {
                         error("Expected field name");
                     }
-                    expect(TokenType::Colon, "Expected ':' after field name");
-                    auto value = parseExpr();
+                    ast::ExprPtr value;
+                    if (match(TokenType::Colon)) {
+                        value = parseExpr();
+                    } else {
+                        // Field shorthand: `Person { name }` is
+                        // `Person { name: name }`, matching how record
+                        // patterns already destructure with `{ name, age }`.
+                        value = std::make_unique<ast::Expr>();
+                        value->location = currentLocation();
+                        value->kind = ast::Identifier{fieldName};
+                    }
                     fields.push_back({fieldName, std::move(value)});
                     skipNewlines();
                 } while (match(TokenType::Comma));
