@@ -1,0 +1,7 @@
+# `...` only spreads into a collection. As a general unary expression it was
+# accepted anywhere and quietly evaluated to None.
+main do
+  let xs = [1, 2]
+  let y = ...xs
+  IO.printLine(y)
+end

@@ -232,6 +232,9 @@ struct ListExpr {
 struct MapEntry {
     ExprPtr key;
     ExprPtr value;
+    // `{ ...other, "k": 1 }` — `value` is the map being spread and `key` is
+    // null. Later entries win, so a spread can be overridden by what follows.
+    bool spread = false;
 };
 
 struct MapExpr {

@@ -1674,10 +1674,28 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         else if constexpr (std::is_same_v<T, ast::MapExpr>) {
             auto map = std::make_shared<Value>();
             std::vector<std::pair<ValuePtr, ValuePtr>> entries;
+            // Later entries win, so a key written after a spread overrides the
+            // one it brought in — and a spread overrides what came before it.
+            auto put = [&entries](const ValuePtr& key, const ValuePtr& val) {
+                for (auto& [existing, slot] : entries)
+                    if (valuesEqual(existing, key)) { slot = val; return; }
+                entries.push_back({key, val});
+            };
             for (const auto& entry : node.entries) {
+                if (entry.spread) {
+                    auto source = entry.value ? eval(*entry.value) : Value::none();
+                    if (auto* other = std::get_if<MapValue>(&source->data)) {
+                        for (const auto& [key, val] : other->entries) put(key, val);
+                    } else {
+                        throw RuntimeError(
+                            "Cannot spread " + source->typeName() + " into a map",
+                            entry.value ? entry.value->location : expr.location);
+                    }
+                    continue;
+                }
                 auto key = entry.key ? eval(*entry.key) : Value::none();
                 auto val = entry.value ? eval(*entry.value) : Value::none();
-                entries.push_back({key, val});
+                put(key, val);
             }
             map->data = MapValue{std::move(entries)};
             return map;

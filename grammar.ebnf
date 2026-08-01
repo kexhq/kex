@@ -251,7 +251,6 @@ expr
   | lambda
   | shorthand_lambda
   | curry_expr
-  | spread_expr
   | expr IF expr                                 (* trailing conditional *)
   | then_else_expr
   ;
@@ -290,11 +289,14 @@ unary_op = MINUS | BANG ;
 
 (* ===== Collections ===== *)
 
-list_items = expr ( COMMA expr )* ( PIPE expr )? ;
+list_items = list_item ( COMMA list_item )* ( PIPE expr )? ;
+
+list_item = expr | spread ;
 
 map_items = map_entry ( COMMA map_entry )* ;
 
-map_entry = expr COLON expr ;
+(* Later entries win, so a spread overrides what precedes it. *)
+map_entry = expr COLON expr | spread ;
 
 record_init = record_field_init ( COMMA record_field_init )* ;
 
@@ -399,7 +401,10 @@ operator
   | AND_AND | PIPE_PIPE
   ;
 
-spread_expr = DOT_DOT_DOT expr ;
+(* `...` is a spread, not an operator: it is valid only where a collection is
+   being built — a list literal, a map literal, or a statement in a `do` block
+   body that a `Block<[A]>` parameter collects. *)
+spread = DOT_DOT_DOT expr ;
 
 (* ===== Blocks ===== *)
 
@@ -410,7 +415,7 @@ block
   | LBRACE expr RBRACE
   ;
 
-body = expr* ;
+body = ( expr | spread )* ;   (* a spread is collected by a Block<[A]> param *)
 
 (* ===== Patterns ===== *)
 

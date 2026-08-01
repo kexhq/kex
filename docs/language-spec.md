@@ -359,6 +359,32 @@ let scores = { alice: 95, bob: 72 }              # atom keys (:alice, :bob)
 let config = { "host": "localhost", "port": 80 }  # string keys
 ```
 
+### Spread (`...`)
+
+`...` splices a collection into the one being built. It is a spread, not an
+operator: it is only valid inside a list literal, inside a map literal, or as a
+statement in a `do` block body that a `Block<[A]>` parameter collects. Anywhere
+else is a syntax error.
+
+```kex
+let xs = [1, 2]
+[0, ...xs, 5]                    # [0, 1, 2, 5]
+[...xs, ...other]
+```
+
+In a map, later entries win — so a spread overrides what precedes it, and is
+itself overridden by what follows:
+
+```kex
+let m = { "a": 1, "b": 2 }
+let n = { "b": 20, "c": 30 }
+
+{ ...m, "z": 9 }                 # { a: 1, b: 2, z: 9 }
+{ ...m, ...n }                   # { a: 1, b: 20, c: 30 }  — n's b wins
+{ ...m, "b": 99 }                # { a: 1, b: 99 }
+{ "b": 99, ...m }                # { a: 1, b: 2 }          — m's b wins
+```
+
 ### Ranges
 
 `a..b` creates a `Range` — a bounded sequence. Ranges implement `Enumerable`,

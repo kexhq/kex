@@ -443,6 +443,62 @@ int main() {
         });
     });
 
+    describe("Interpreter — Spread", []() {
+        // A map spread merges with later-wins, so a key written after the
+        // spread overrides what it brought in, and a spread overrides what
+        // came before it.
+        auto mapKeys = [](const ValuePtr& v) {
+            std::string out;
+            for (const auto& [k, val] : std::get<MapValue>(v->data).entries) {
+                if (!out.empty()) out += ",";
+                out += std::get<StringValue>(k->data).value + "=" +
+                       std::to_string(std::get<IntValue>(val->data).value);
+            }
+            return out;
+        };
+
+        it("spreads a map and appends new keys", [mapKeys]() {
+            auto result = run("main do\n"
+                              "  let m = { \"a\": 1 }\n"
+                              "  { ...m, \"b\": 2 }\n"
+                              "end\n");
+            assertEqual(mapKeys(result), std::string("a=1,b=2"));
+        });
+
+        it("lets a later key override a spread", [mapKeys]() {
+            auto result = run("main do\n"
+                              "  let m = { \"a\": 1, \"b\": 2 }\n"
+                              "  { ...m, \"b\": 99 }\n"
+                              "end\n");
+            assertEqual(mapKeys(result), std::string("a=1,b=99"));
+        });
+
+        it("lets a later spread override an earlier key", [mapKeys]() {
+            auto result = run("main do\n"
+                              "  let m = { \"b\": 2 }\n"
+                              "  { \"b\": 99, ...m }\n"
+                              "end\n");
+            assertEqual(mapKeys(result), std::string("b=2"));
+        });
+
+        it("merges two spreads with the later one winning", [mapKeys]() {
+            auto result = run("main do\n"
+                              "  let m = { \"a\": 1, \"b\": 2 }\n"
+                              "  let n = { \"b\": 20, \"c\": 30 }\n"
+                              "  { ...m, ...n }\n"
+                              "end\n");
+            assertEqual(mapKeys(result), std::string("a=1,b=20,c=30"));
+        });
+
+        it("spreads a list into a list literal", []() {
+            auto result = run("main do\n"
+                              "  let xs = [1, 2]\n"
+                              "  [0, ...xs, 3].length()\n"
+                              "end\n");
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(4));
+        });
+    });
+
     describe("Interpreter — Literals", []() {
         it("evaluates integers", []() {
             auto result = run("main do\n  42\nend\n");

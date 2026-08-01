@@ -40,7 +40,7 @@ No pipe operator (`|>`) either — UFCS covers chaining: `input.parse.transform.
 | Op | Meaning |
 |----|---------|
 | `..` | Range (`1..10`) |
-| `...` | Spread in Block<[A]> |
+| `...` | Spread into a list, a map, or a `Block<[A]>` body |
 | `!` (suffix) | Mutating call on var |
 | `~` (prefix) | Capture / partial application (`~func`, `~func(args)`, `~Mod.func`, `~(op)`) |
 | `&.` (prefix) | Receiver shorthand (`&.method` = `{ \|x\| x.method }`) |

@@ -105,6 +105,7 @@ private:
     auto parseShorthandLambda() -> ast::ExprPtr;
     auto parseCurryExpr() -> ast::ExprPtr;
     auto parseListExpr() -> ast::ExprPtr;
+    auto parseSpreadableExpr() -> ast::ExprPtr;
     auto parseMapOrBlock() -> ast::ExprPtr;
     auto parseTupleOrGrouped() -> ast::ExprPtr;
     auto parseTryingExpr() -> ast::ExprPtr;

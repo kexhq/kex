@@ -775,6 +775,43 @@ int main() {
         });
     });
 
+    describe("Parser — Spread", []() {
+        it("accepts a spread in a list literal", []() {
+            assertFalse(parseFails("main do\n  let x = [0, ...xs, 5]\nend"));
+            assertFalse(parseFails("main do\n  let x = [...xs, ...ys]\nend"));
+        });
+
+        it("accepts a spread in a map literal", []() {
+            assertFalse(parseFails("main do\n  let x = { ...m, \"k\": 1 }\nend"));
+            assertFalse(parseFails("main do\n  let x = { \"k\": 1, ...m }\nend"));
+            assertFalse(parseFails("main do\n  let x = { ...m }\nend"));
+            assertFalse(parseFails("main do\n  let x = { ...m, ...n }\nend"));
+        });
+
+        it("parses a map spread as a map, not a lambda body", []() {
+            auto program = parse("main do\n  let x = { ...m }\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& map = std::get<ast::MapExpr>(let.value->kind);
+            assertEqual(map.entries.size(), size_t(1));
+            assertTrue(map.entries[0].spread);
+            assertTrue(map.entries[0].key == nullptr);
+        });
+
+        it("accepts a spread as a do-block statement", []() {
+            assertFalse(parseFails(
+                "main do\n  let x = div do\n    ...items\n  end\nend"));
+        });
+
+        it("rejects a spread outside a collection", []() {
+            // `...` used to parse as a general unary expression, so these were
+            // accepted and evaluated to None.
+            assertTrue(parseFails("main do\n  let y = ...xs\nend"));
+            assertTrue(parseFails("main do\n  IO.printLine(...xs)\nend"));
+            assertTrue(parseFails("main do\n  let y = 1 + ...xs\nend"));
+        });
+    });
+
     describe("Parser — Currying", []() {
         it("parses a bare function capture", []() {
             auto program = parse("main do\n  let x = list.sort(~compare)\nend");

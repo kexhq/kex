@@ -1187,15 +1187,11 @@ auto Parser::parseUnary() -> ast::ExprPtr {
         return expr;
     }
 
+    // `...` is a spread, not an operator: it only means anything where a
+    // collection is being built. Parsing it as a general unary expression made
+    // `let y = ...xs` legal, and it quietly evaluated to None.
     if (check(TokenType::DotDotDot)) {
-        auto loc = currentLocation();
-        advance();
-        auto inner = parseUnary();
-
-        auto expr = std::make_unique<ast::Expr>();
-        expr->location = loc;
-        expr->kind = ast::SpreadExpr{std::move(inner)};
-        return expr;
+        error("`...` only spreads into a list, a map, or a `do` block body");
     }
 
     return parsePower();
@@ -2526,7 +2522,9 @@ auto Parser::parseLambda() -> ast::ExprPtr {
         skipNewlines();
         std::vector<ast::ExprPtr> body;
         while (!check(TokenType::End) && !atEnd()) {
-            body.push_back(parseExpr());
+            // A `Block<[A]>` parameter collects these, and `...expr` splices a
+            // list into what it collects (see docs/dsl.md).
+            body.push_back(parseSpreadableExpr());
             skipNewlines();
         }
         expect(TokenType::End, "Expected 'end' to close do block");
@@ -2644,6 +2642,18 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     return expr;
 }
 
+// An expression in a position that also accepts `...expr` — a list element or
+// a statement in a block body that a `Block<[A]>` parameter collects.
+auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
+    if (!check(TokenType::DotDotDot)) return parseExpr();
+    auto loc = currentLocation();
+    advance();
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = loc;
+    expr->kind = ast::SpreadExpr{parseExpr()};
+    return expr;
+}
+
 auto Parser::parseListExpr() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
@@ -2654,12 +2664,12 @@ auto Parser::parseListExpr() -> ast::ExprPtr {
 
     skipNewlines();
     if (!check(TokenType::RBracket)) {
-        elements.push_back(parseExpr());
+        elements.push_back(parseSpreadableExpr());
         skipNewlines();
         while (match(TokenType::Comma)) {
             skipNewlines();
             if (check(TokenType::RBracket)) break; // trailing comma
-            elements.push_back(parseExpr());
+            elements.push_back(parseSpreadableExpr());
             skipNewlines();
         }
         if (match(TokenType::Pipe)) {
@@ -2736,17 +2746,29 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     // Try to detect map vs single-expression lambda
     // Map: { key: value, ... }
     // Lambda: { expr }
-    // Heuristic: if first token is string/ident followed by colon, it's a map
-    if ((check(TokenType::String) || check(TokenType::RawString) ||
-         check(TokenType::InterpolatedRawString) ||
-         check(TokenType::LowerIdent)) &&
-        peekNext().type == TokenType::Colon) {
+    // Heuristic: if first token is string/ident followed by colon, it's a map.
+    // A leading `...` also means a map — `{ ...other, "k": 1 }` splices one in,
+    // and a lambda body has no use for a bare spread.
+    if (check(TokenType::DotDotDot) ||
+        ((check(TokenType::String) || check(TokenType::RawString) ||
+          check(TokenType::InterpolatedRawString) ||
+          check(TokenType::LowerIdent)) &&
+         peekNext().type == TokenType::Colon)) {
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;
 
         std::vector<ast::MapEntry> entries;
         do {
             skipNewlines();
+            // `{ ...other, "k": 1 }` — splice another map in. No `key: value`
+            // follows, so this entry is complete once the source is parsed.
+            if (check(TokenType::DotDotDot)) {
+                advance();
+                auto source = parseExpr();
+                entries.push_back(ast::MapEntry{nullptr, std::move(source), true});
+                skipNewlines();
+                continue;
+            }
             ast::ExprPtr key;
             // `ident:` sugar — bare lowercase identifier used as an atom key,
             // same as Elixir's `%{host: "localhost"}` meaning `%{:host => ...}`.
@@ -3217,7 +3239,7 @@ auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
     std::vector<ast::ExprPtr> body;
     while (!check(TokenType::End) && !atEnd()) {
         try {
-            body.push_back(parseExpr());
+            body.push_back(parseSpreadableExpr());
         } catch (const ParseError& e) {
             // Insert an ErrorNode so the AST body stays complete, then sync
             // to the next statement boundary before continuing.

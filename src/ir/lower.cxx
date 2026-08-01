@@ -745,15 +745,36 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
                 if (n.entries.empty()) return callE("maps", "new", 0, {});
                 std::vector<Binding> binds;
+                // Runs of literal pairs become one `maps:from_list`; each
+                // `...other` is a map in its own right. Folding the segments
+                // with `maps:merge` gives later-wins, since merge/2 lets its
+                // SECOND argument take precedence.
+                std::vector<ExprPtr> segments;
                 std::vector<ExprPtr> pairs;
+                auto flushPairs = [&]() {
+                    if (pairs.empty()) return;
+                    auto lst = std::make_unique<Expr>();
+                    lst->node = MakeList{std::move(pairs), std::nullopt};
+                    pairs.clear();
+                    segments.push_back(
+                        callE("maps", "from_list", 1, one(std::move(lst))));
+                };
                 for (const auto& ent : n.entries) {
+                    if (ent.spread) {
+                        flushPairs();
+                        segments.push_back(atomize(ent.value, binds));
+                        continue;
+                    }
                     auto t = std::make_unique<Expr>();
                     t->node = MakeTuple{two(atomize(ent.key, binds), atomize(ent.value, binds))};
                     pairs.push_back(std::move(t));
                 }
-                auto lst = std::make_unique<Expr>();
-                lst->node = MakeList{std::move(pairs), std::nullopt};
-                return wrapLets(binds, callE("maps", "from_list", 1, one(std::move(lst))));
+                flushPairs();
+                auto merged = std::move(segments.front());
+                for (size_t i = 1; i < segments.size(); i++)
+                    merged = callE("maps", "merge", 2,
+                                   two(std::move(merged), std::move(segments[i])));
+                return wrapLets(binds, std::move(merged));
             } else if constexpr (std::is_same_v<T, ast::Lambda>) {
                 // Params shadow outer bindings: resolve to themselves inside.
                 auto snap = subst;
