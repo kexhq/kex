@@ -2394,10 +2394,30 @@ struct Lowering {
                 two(litInt(it->second[0].second), std::move(base)));
         return callE("", fname, 1, one(std::move(base)));
     }
+    // Field read when the record's type IS known — a named pattern `Foo { x }`.
+    // Resolving by field name alone (fieldAccess above) takes the FIRST record
+    // in the program declaring that name, which for common names like `value`
+    // or `rest` is the prelude's 5-field ParseError. That yields silently wrong
+    // tuple offsets for the user's own record. With a type name in hand, index
+    // its declared layout directly.
+    auto fieldAccessIn(const std::string& typeName, const std::string& fname,
+                       ExprPtr base) -> ExprPtr {
+        if (!typeName.empty()) {
+            if (auto rec = records.find(typeName); rec != records.end()) {
+                const auto& fs = rec->second.fields;
+                for (size_t i = 0; i < fs.size(); i++)
+                    if (fs[i] == fname)
+                        return callE("erlang", "element", 2,
+                                     two(litInt(static_cast<int>(i) + 2),
+                                         std::move(base)));
+            }
+        }
+        return fieldAccess(fname, std::move(base));
+    }
     void destructureRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                                   std::vector<std::pair<std::string, ExprPtr>>& prefix) {
         for (const auto& field : rp.fields) {
-            auto acc = fieldAccess(field.name, var(baseVar));
+            auto acc = fieldAccessIn(rp.typeName, field.name, var(baseVar));
             if (!field.pattern) {
                 prefix.push_back({field.name, std::move(acc)});
             } else if (auto* vp = std::get_if<ast::VarPattern>(&(*field.pattern)->kind)) {
@@ -2429,7 +2449,7 @@ struct Lowering {
     auto wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                            ExprPtr body) -> ExprPtr {
         for (auto it = rp.fields.rbegin(); it != rp.fields.rend(); ++it) {
-            auto value = fieldAccess(it->name, var(baseVar));
+            auto value = fieldAccessIn(rp.typeName, it->name, var(baseVar));
             if (!it->pattern) {
                 body = makeLet(it->name, std::move(value), std::move(body));
             } else if (auto* vp = std::get_if<ast::VarPattern>(&(*it->pattern)->kind)) {
@@ -2443,6 +2463,23 @@ struct Lowering {
             }
         }
         return body;
+    }
+    // Guard asserting `sv` is a record whose tag (tuple element 1) is
+    // `typeName`: `is_tuple(sv) andalso element(1, sv) =:= 'typeName`. Used by
+    // named record patterns in `match` arms (`Foo { x }`), which must reject
+    // records of a different type sharing those field names.
+    auto recordTagGuard(const std::string& sv, const std::string& typeName) -> ExprPtr {
+        auto isTuple = callE("erlang", "is_tuple", 1, one(var(sv)));
+        auto elem1 = callE("erlang", "element", 2, two(litInt(1), var(sv)));
+        auto eq = callE("erlang", "=:=", 2,
+                        two(std::move(elem1), lit(LitKind::Atom, typeName)));
+        return callE("erlang", "andalso", 2, two(std::move(isTuple), std::move(eq)));
+    }
+    // Combine two optional guards with `andalso` (either may be null).
+    auto guardAnd(ExprPtr a, ExprPtr b) -> ExprPtr {
+        if (!a) return b;
+        if (!b) return a;
+        return callE("erlang", "andalso", 2, two(std::move(a), std::move(b)));
     }
     // A top-level destructuring `let` has to expose every name it binds as its
     // own 0-arity function, the same shape a simple `let name = value` gets.
@@ -2504,6 +2541,42 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
                 return pn.inner ? lowerPattern(pn.inner)
                                 : [&]{ auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }();
+            } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                // A record is a tagged tuple {'Name', f1, f2, ...} in
+                // declaration order, so a NAMED pattern is just a constructor
+                // pattern: wildcard every field the pattern doesn't mention.
+                // That asserts the record's type structurally, which is exactly
+                // what `Foo { x }` means — no extra guard required.
+                if (pn.typeName.empty())
+                    throw LowerError(
+                        "IR lower: anonymous record pattern `{ ... }` is not "
+                        "supported in match/if-let; name the record "
+                        "(`Foo { ... }`) so its field layout is known");
+                auto rec = records.find(pn.typeName);
+                if (rec == records.end())
+                    throw LowerError("IR lower: unknown record `" + pn.typeName +
+                                     "` in pattern");
+                out->kind = PatKind::Construct;
+                out->tag = pn.typeName;
+                for (const auto& fieldName : rec->second.fields) {
+                    const ast::FieldPattern* bound = nullptr;
+                    for (const auto& f : pn.fields)
+                        if (!f.isStringKey && f.name == fieldName) { bound = &f; break; }
+                    if (!bound) {
+                        auto w = std::make_unique<Pattern>();
+                        w->kind = PatKind::Wild;
+                        out->args.push_back(std::move(w));
+                    } else if (bound->pattern && *bound->pattern) {
+                        out->args.push_back(lowerPattern(*bound->pattern));
+                    } else {
+                        // Shorthand `{ x }` binds the field to its own name.
+                        auto v = std::make_unique<Pattern>();
+                        v->kind = PatKind::Var;
+                        v->name = bound->name;
+                        subst[bound->name] = bound->name;
+                        out->args.push_back(std::move(v));
+                    }
+                }
             } else {
                 throw LowerError("IR lower: unsupported pattern kind");
             }

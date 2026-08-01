@@ -2311,13 +2311,13 @@ auto Parser::isLetFunctionDefAhead() -> bool {
 
     // UpperIdent after `let` is a zero-arg constant definition
     // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`), UNLESS it's
-    // followed by `(` which makes it a constructor pattern
-    // (`let Ok((v, r)) = parse(s)` -> pattern binding).
+    // followed by `(` (constructor pattern: `let Ok((v, r)) = parse(s)`) or
+    // `{` (named record pattern: `let Pt { x, y } = point`).
     if (isUpperName) {
         auto savedPos2 = m_pos;
         advance(); // let
         advance(); // UpperIdent name
-        bool isPattern = check(TokenType::LParen);
+        bool isPattern = check(TokenType::LParen) || check(TokenType::LBrace);
         m_pos = savedPos2;
         return !isPattern;
     }
@@ -2883,6 +2883,40 @@ auto Parser::parsePattern() -> ast::PatternPtr {
     return first;
 }
 
+// Shared by the anonymous `{ ... }` and named `Foo { ... }` record/map
+// patterns: the `{` has already been consumed; this consumes through `}`.
+auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
+    std::vector<ast::FieldPattern> fields;
+    if (!check(TokenType::RBrace)) {
+        do {
+            skipNewlines();
+            ast::FieldPattern field;
+
+            if (check(TokenType::String) || check(TokenType::RawString)) {
+                field.isStringKey = true;
+                field.name = advance().value;
+            } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
+                       check(TokenType::Type) ||
+                       check(TokenType::Loop) || check(TokenType::Match) ||
+                       check(TokenType::Timeout)) {
+                field.name = advance().value;
+            } else {
+                error("Expected field name");
+            }
+
+            if (match(TokenType::Colon)) {
+                field.pattern = parsePattern();
+            }
+
+            fields.push_back(std::move(field));
+            skipNewlines();
+        } while (match(TokenType::Comma));
+    }
+
+    expect(TokenType::RBrace, "Expected '}'");
+    return fields;
+}
+
 auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     auto loc = currentLocation();
     auto pattern = std::make_unique<ast::Pattern>();
@@ -2916,36 +2950,8 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 
     // Record/map destructuring: { ... }
     if (match(TokenType::LBrace)) {
-        std::vector<ast::FieldPattern> fields;
-
-        if (!check(TokenType::RBrace)) {
-            do {
-                skipNewlines();
-                ast::FieldPattern field;
-
-                if (check(TokenType::String) || check(TokenType::RawString)) {
-                    field.isStringKey = true;
-                    field.name = advance().value;
-                } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
-                           check(TokenType::Type) ||
-                           check(TokenType::Loop) || check(TokenType::Match) ||
-                           check(TokenType::Timeout)) {
-                    field.name = advance().value;
-                } else {
-                    error("Expected field name");
-                }
-
-                if (match(TokenType::Colon)) {
-                    field.pattern = parsePattern();
-                }
-
-                fields.push_back(std::move(field));
-                skipNewlines();
-            } while (match(TokenType::Comma));
-        }
-
-        expect(TokenType::RBrace, "Expected '}'");
-        pattern->kind = ast::RecordPattern{std::move(fields)};
+        auto fields = parseRecordPatternFields();
+        pattern->kind = ast::RecordPattern{.fields = std::move(fields)};
         return pattern;
     }
 
@@ -2997,6 +3003,15 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     // Constructor pattern: Name(args) or just Name
     if (check(TokenType::UpperIdent)) {
         auto name = advance().value;
+        // Named record pattern: `Foo { x, y }` — same field-list grammar as
+        // the anonymous `{ ... }` form, but the leading type name makes the
+        // match also assert the record's type (see ast::RecordPattern).
+        if (check(TokenType::LBrace)) {
+            advance(); // consume '{'
+            auto fields = parseRecordPatternFields();
+            pattern->kind = ast::RecordPattern{.typeName = name, .fields = std::move(fields)};
+            return pattern;
+        }
         if (match(TokenType::LParen)) {
             std::vector<ast::PatternPtr> args;
             if (!check(TokenType::RParen)) {

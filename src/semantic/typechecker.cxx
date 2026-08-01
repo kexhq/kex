@@ -1017,6 +1017,27 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
         } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) checkPatternArity(*node.inner);
         } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            // A named record pattern asserts a concrete record type. Verify the
+            // name is a known record and that every listed field belongs to it
+            // (catches typos like `ParseError { valu, rest }`). Imported records
+            // only expose an arity, so field names can't be checked there.
+            if (!node.typeName.empty()) {
+                auto local = m_recordFields.find(node.typeName);
+                bool known = local != m_recordFields.end();
+                if (!known && m_importedInterfaces &&
+                    m_importedInterfaces->recordArities.count(node.typeName))
+                    known = true;
+                if (!known)
+                    error(pattern.location,
+                          "`" + node.typeName + "` is not a record type");
+                else if (local != m_recordFields.end())
+                    for (const auto& field : node.fields)
+                        if (!field.isStringKey &&
+                            !local->second.count(field.name))
+                            error(pattern.location,
+                                  "record `" + node.typeName + "` has no field `" +
+                                  field.name + "`");
+            }
             for (const auto& field : node.fields)
                 if (field.pattern) checkPatternArity(**field.pattern);
         } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
@@ -1049,7 +1070,15 @@ auto TypeChecker::bindPatternVars(
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
             const std::unordered_map<std::string, TypePtr>* fields = nullptr;
-            if (expected)
+            // A named record pattern (`Foo { x }`) pins the record type itself,
+            // so resolve field types from the declared type regardless of what
+            // the scrutinee was inferred to be. Fall back to `expected` for the
+            // anonymous `{ x }` form.
+            if (!node.typeName.empty()) {
+                if (auto found = m_recordFields.find(node.typeName);
+                    found != m_recordFields.end())
+                    fields = &found->second;
+            } else if (expected)
                 if (auto* named = std::get_if<NamedType>(&expected->kind))
                     if (auto found = m_recordFields.find(named->name);
                         found != m_recordFields.end())

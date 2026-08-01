@@ -122,6 +122,12 @@ struct FieldPattern {
 };
 
 struct RecordPattern {
+    // Optional type name for a *named* record pattern (`Foo { x, y }`). When
+    // absent, the pattern is purely structural — it matches any record (or map)
+    // carrying the listed fields. When present, the match also asserts the
+    // value's record type, so `ParseError { value, rest }` won't match any
+    // other record that happens to share those field names.
+    std::string typeName;
     std::vector<FieldPattern> fields;
 };
 

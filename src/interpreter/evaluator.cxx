@@ -1181,6 +1181,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 // `field.name` (the key itself) for the shorthand `{ name }`
                 // form with no explicit pattern.
                 if (auto* recVal = std::get_if<RecordValue>(&value->data)) {
+                    if (!recPat->typeName.empty() && recVal->typeName != recPat->typeName)
+                        throw RuntimeError("pattern mismatch — expected record " +
+                                           recPat->typeName, expr.location);
                     for (const auto& field : recPat->fields) {
                         if (auto it = recVal->fields.find(field.name); it != recVal->fields.end()) {
                             if (field.pattern && *field.pattern) {
@@ -1190,7 +1193,10 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             }
                         }
                     }
-                } else if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
+                } else if (recPat->typeName.empty()) {
+                  // The anonymous `{ k }` form also destructures maps by key; a
+                  // named `Foo { k }` is record-only (maps carry no type name).
+                  if (auto* mapVal = std::get_if<MapValue>(&value->data)) {
                     for (const auto& field : recPat->fields) {
                         for (const auto& [k, v] : mapVal->entries) {
                             if (auto* sk = std::get_if<StringValue>(&k->data)) {
@@ -1204,6 +1210,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                             }
                         }
                     }
+                  }
                 }
             } else if (auto* constrPat = std::get_if<ast::ConstructorPattern>(&node.pattern->kind)) {
                 if (!matchPattern(*node.pattern, value))
@@ -3035,6 +3042,10 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
             if (auto* rv = std::get_if<RecordValue>(&value->data)) {
+                // A named record pattern (`Foo { x }`) additionally asserts the
+                // value's record type; the anonymous `{ x }` matches any record.
+                if (!pat.typeName.empty() && rv->typeName != pat.typeName)
+                    return false;
                 for (const auto& field : pat.fields) {
                     auto it = rv->fields.find(field.name);
                     if (it == rv->fields.end()) return false;

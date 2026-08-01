@@ -114,6 +114,8 @@ private:
     // Patterns
     auto parsePattern() -> ast::PatternPtr;
     auto parsePatternPrimary() -> ast::PatternPtr;
+    // Record/map pattern field list; `{` already consumed, consumes through `}`.
+    auto parseRecordPatternFields() -> std::vector<ast::FieldPattern>;
 
     // Helpers
     auto parseBlock() -> std::optional<ast::ExprPtr>;
