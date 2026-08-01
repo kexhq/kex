@@ -144,13 +144,21 @@ function_clauses
   | function_clause ( function_clause )*
   ;
 
+(* `-> type_expr` may precede any body. A clause with NO parameter list may
+   spell that annotation `: type_expr` instead, which is how a binding reads:
+   `foul lines : Feed<String> = …`. A clause WITH parameters requires `->`. *)
 function_clause
-  = LPAREN params RPAREN EQUALS expr
-  | LPAREN params RPAREN DO body END
-  | LPAREN params RPAREN DO body END
+  = LPAREN params RPAREN return_annotation? clause_body
+  | return_annotation? clause_body
+  | COLON type_expr EQUALS expr                   (* parameterless binding *)
+  ;
+
+return_annotation = ARROW type_expr ;
+
+clause_body
+  = EQUALS expr
   | DO body END
   | DO PIPE params PIPE body END
-  | EQUALS expr
   ;
 
 params = param ( COMMA param )* | (* empty *) ;
@@ -343,8 +351,7 @@ while_expr = WHILE expr NEWLINE body END ;
 
 (* ===== Let / Var / Assignment ===== *)
 
-(* The type annotation is optional. A top-level `foul` binding does not accept
-   one yet — see docs/known-gaps.md. *)
+(* The type annotation is optional. *)
 let_expr = LET pattern ( COLON type_expr )? EQUALS expr ;
 
 var_expr = VAR LOWER_IDENT ( COLON type_expr )? EQUALS expr ;

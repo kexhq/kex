@@ -714,7 +714,9 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     ast::FunctionClause clause;
 
     // Parameters
+    bool hasParamList = false;
     if (match(TokenType::LParen)) {
+        hasParamList = true;
         if (!check(TokenType::RParen)) {
             clause.params = parseParams();
         }
@@ -723,6 +725,15 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
 
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
+        clause.returnAnnotation = parseTypeExpr();
+    }
+    // A parameterless binding may annotate with `:` instead, which is how the
+    // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
+    // form through parseLetExpr; without this, `foul` had no way to write it.
+    // Only when no parameter list was given, so function signatures keep
+    // requiring `->`.
+    else if (!hasParamList && check(TokenType::Colon)) {
+        advance();
         clause.returnAnnotation = parseTypeExpr();
     }
 

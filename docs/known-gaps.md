@@ -147,24 +147,3 @@ kex> let Error(ParseError(err)) = Integer.parse("12x")
 The diagnostic is correct and appears on both REPLs; the interpreter one also
 emits a `...>` continuation prompt first, so some multi-line heuristic still
 reads the input as an unfinished definition.
-
-## Type-annotated `foul` bindings do not parse
-
-`let` and `var` bindings accept a type annotation in every position. A
-top-level `foul` binding still rejects the `:`.
-
-```kex
-let y : Int = 5        # ok, top level and in a body
-main do
-  var x : Int = 5      # ok
-  let z : Int = 5      # ok
-end
-
-foul c : Int = 5       # error: Unexpected token at top level: :
-```
-
-The remaining asymmetry is `foul` only; the docs write annotated bindings
-freely (e.g. `docs/streams.md`'s `foul lines: Feed<String> = ...`,
-`docs/concurrency.md`'s `foul counter: Process<CounterMessage> = spawn`). The
-fix is to give the top-level `foul` binding form the same
-`LOWER_IDENT COLON type_expr EQUALS expr` shape `let` already accepts.

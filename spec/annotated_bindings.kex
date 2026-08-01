@@ -1,0 +1,22 @@
+# Type annotations on bindings. `let` and `var` accepted `: Type` in every
+# position, but a top-level `foul` binding rejected the `:` — the spelling the
+# docs use (`foul lines : Feed<String> = …`). Only `->` worked there.
+
+let topLevel : Integer = 1
+foul foulTop : Integer = 2
+foul foulArrow -> Integer = 3
+foul foulBare = 4
+
+IO.printLine(topLevel)
+IO.printLine(foulTop)
+IO.printLine(foulArrow)
+IO.printLine(foulBare)
+
+let describe() -> String do
+  let inBody : Integer = 5
+  var mutable : Integer = 6
+  let (a, b) : (Integer, Integer) = (7, 8)
+  return "${inBody} ${mutable} ${a} ${b}"
+end
+
+IO.printLine(describe())
