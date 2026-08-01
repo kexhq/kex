@@ -3,8 +3,13 @@
 %% applyItem/2 is the auto-splat used by Enumerable's default HOFs: a block may
 %% be written `{ |x| }` over elements (List/Range) or `{ |k, v| }` over pairs
 %% (Map). When the item is a 2-tuple and the block takes 2 args, spread it.
+%%
+%% applyIndexed/3 is the same idea for the indexed HOFs (eachIndexed /
+%% mapIndexed). The index is always the LAST argument, so `|entry, I|` gets the
+%% whole item and `|K, V, I|` gets a Map entry spread. A 1-arity block ignores
+%% the index.
 -module(kex_intrinsic_fun).
--export([applyItem/2, convertTo/2, convertTo/3, items/1]).
+-export([applyItem/2, applyIndexed/3, convertTo/2, convertTo/3, items/1]).
 
 %% A `Type` VALUE names its target too: `x.to(Type.of(y))`. Its name is a
 %% binary, so it routes back through the atom-keyed clauses below.
@@ -34,6 +39,13 @@ applyItem(F, Item) ->
     case {erlang:fun_info(F, arity), Item} of
         {{arity, 2}, {K, V}} -> F(K, V);
         _                    -> F(Item)
+    end.
+
+applyIndexed(F, Item, I) ->
+    case {erlang:fun_info(F, arity), Item} of
+        {{arity, 3}, {K, V}} -> F(K, V, I);
+        {{arity, 1}, _}      -> F(Item);
+        _                    -> F(Item, I)
     end.
 
 %% Normalize an Enumerable receiver to the item representation used by Kex

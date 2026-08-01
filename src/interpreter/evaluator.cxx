@@ -1887,7 +1887,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     m_env = prevEnv;
                     return result;
-                }};
+                }, static_cast<int>(paramNames.size())};
             return lambda;
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
@@ -3200,6 +3200,31 @@ auto Evaluator::registerBuiltins() -> void {
                 return nf->native(callArgs);
             // Named Kex function passed by reference (no native callback) —
             // call through the evaluator's normal dispatch.
+            if (auto* nf = std::get_if<FunctionValue>(&fn.data))
+                return callFunction(nf->name, std::move(callArgs), {}, {});
+            return Value::none();
+        });
+
+        // Kex.Intrinsic.Fun.applyIndexed(f, item, i) — the applyItem of the
+        // indexed HOFs (eachIndexed/mapIndexed). The index is always the LAST
+        // argument, so a 3-parameter block over a Map entry reads
+        // `|k, v, i|` while a 2-parameter one reads `|entry, i|`. A
+        // 1-parameter block simply ignores the extra argument, exactly as the
+        // lambda wrapper does. Mirrors kex_intrinsic_fun:applyIndexed/3.
+        defineIntrinsic("Fun::applyIndexed", [this](std::vector<ValuePtr> args) -> ValuePtr {
+            if (args.size() < 3) return Value::none();
+            auto& fn = *args[0];
+            std::vector<ValuePtr> callArgs;
+            auto* tuple = std::get_if<TupleValue>(&args[1]->data);
+            int arity = -1;
+            if (auto* nf = std::get_if<FunctionValue>(&fn.data)) arity = nf->arity;
+            if (arity == 3 && tuple && tuple->elements.size() == 2) {
+                callArgs = {tuple->elements[0], tuple->elements[1], args[2]};
+            } else {
+                callArgs = {args[1], args[2]};
+            }
+            if (auto* nf = std::get_if<FunctionValue>(&fn.data); nf && nf->native)
+                return nf->native(callArgs);
             if (auto* nf = std::get_if<FunctionValue>(&fn.data))
                 return callFunction(nf->name, std::move(callArgs), {}, {});
             return Value::none();

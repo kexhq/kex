@@ -91,6 +91,11 @@ using NativeFunc = std::function<ValuePtr(std::vector<ValuePtr>)>;
 struct FunctionValue {
     std::string name;
     NativeFunc native; // for built-in functions
+    // Declared parameter count for closures built from a Lambda; -1 when
+    // unknown (builtins, function references). Mirrors what BEAM recovers via
+    // erlang:fun_info(F, arity) — Kex.Intrinsic.Fun.applyIndexed needs it to
+    // tell `|item, i|` from `|k, v, i|`.
+    int arity = -1;
 };
 
 struct LambdaValue {
