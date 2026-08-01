@@ -745,6 +745,59 @@ int main() {
             assertTrue(out.find("42") != std::string::npos, out);
         });
 
+        it("binds tuple, list and record patterns in the BEAM REPL", []() {
+            // Only CONSTRUCTOR patterns took the pattern path (an uppercase
+            // initial). `let (a, b) = …` matched the `name(params)` shape
+            // instead, so the REPL announced "defined" and bound nothing.
+            auto tuple = runBeamRepl("let (a, b) = (1, 2)\na + b\n");
+            assertTrue(tuple.find("defined") == std::string::npos, tuple);
+            assertTrue(tuple.find("=> 3 : Int") != std::string::npos, tuple);
+
+            auto list = runBeamRepl("let [x, y] = [10, 20]\nx + y\n");
+            assertTrue(list.find("=> 30 : Int") != std::string::npos, list);
+
+            auto cons = runBeamRepl("let [h | t] = [1, 2, 3]\nh + t.length()\n");
+            assertTrue(cons.find("=> 3 : Int") != std::string::npos, cons);
+
+            // Record fields need collectPatternNames to know RecordPattern.
+            auto record = runBeamRepl(
+                "let { major, minor } = Kex.Kernel.VERSION\n"
+                "major >= 0 && minor >= 0\n");
+            assertTrue(record.find("defined") == std::string::npos, record);
+            assertTrue(record.find("=> true : Bool") != std::string::npos, record);
+        });
+
+        it("echoes the whole matched value for a destructuring let", []() {
+            // The type is inferred for the binding as a whole, so echoing the
+            // first name bound out of the pattern disagreed with it:
+            // `let (a, b) = (1, 2)` printed `1 : (Integer, Integer)`.
+            for (auto* run : {&runBeamRepl, &runRepl}) {
+                auto out = (*run)("let (a, b) = (1, 2)\n");
+                assertTrue(out.find("=> (1, 2) : (Integer, Integer)")
+                           != std::string::npos, out);
+            }
+        });
+
+        it("evaluates a destructured right-hand side exactly once", []() {
+            // The echo binds the right-hand side to a temporary rather than
+            // re-running it, so its side effects happen once.
+            auto out = runBeamRepl(
+                "let (p, q) = (IO.printLine(\"ONCE\"), 7)\nq\n");
+            // The REPL echoes the input line, which itself contains the
+            // marker, so count only lines that are the marker on its own.
+            size_t printed = 0;
+            for (size_t i = out.find("\nONCE\n"); i != std::string::npos;
+                 i = out.find("\nONCE\n", i + 1))
+              printed++;
+            assertEqual(printed, size_t(1), out);
+            assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
+        });
+
+        it("does not split a destructuring let on an `=` inside a string", []() {
+            auto out = runBeamRepl("let (s, n) = (\"x=1\", 2)\ns\n");
+            assertTrue(out.find("=> \"x=1\" : String") != std::string::npos, out);
+        });
+
         it("keeps pattern-let bindings usable on later BEAM inputs", []() {
             // The value was stored in the process dictionary but never
             // replayed into the next input's scope, so `x` came back empty.

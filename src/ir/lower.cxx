@@ -312,6 +312,19 @@ struct Lowering {
         return staticCtorNames.count(name) && !variantTagSet.count(name)
             && !records.count(name) && !knownFns.count(name);
     }
+    // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`). A tag is
+    // just an atom at runtime, so the qualifier has no representation here —
+    // resolve to the bare tag. `variantOwner` covers tags declared outside
+    // this module (the prelude's, via externalVariants) as well as its own,
+    // so an unknown name still falls through to the usual error.
+    auto qualifiedVariantTag(const std::string& name) const -> std::string {
+        auto dot = name.rfind('.');
+        if (dot == std::string::npos) return "";
+        auto tag = name.substr(dot + 1);
+        if (tag.empty() || !std::isupper(static_cast<unsigned char>(tag[0])))
+            return "";
+        return (variantTagSet.count(tag) || variantOwner.count(tag)) ? tag : "";
+    }
     // A semantic::StructuredType as the `Type { name, args }` record it
     // stands for — a tagged tuple, the same shape a record literal lowers to.
     auto structuredTypeLiteral(const semantic::StructuredType& type) -> ExprPtr {
@@ -538,9 +551,13 @@ struct Lowering {
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
+                auto ex = std::make_unique<Expr>();
+                if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
+                    ex->node = Construct{tag, {}};
+                    return ex;
+                }
                 if (staticCtorOutOfScope(n.name))
                     return runtimeError("Undefined identifier: " + n.name);
-                auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.name, {}};
                 return ex;
             } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
@@ -723,46 +740,41 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-                // `&name` where name is a LOCAL binding holding a fun (e.g.
-                // `let inc = { |x| … }; xs.map(&inc)`) — the reference IS the
-                // fun; pass it through (the UFCS path below would look for a
-                // method `.inc`, which doesn't exist).
-                if (n.kind == ast::ShorthandLambda::Kind::Function &&
-                    n.args.empty() && subst.count(n.name))
-                    return var(currentName(n.name));
-                // `&.method` / `&func` / `&.method(args)` → fun(_sx) ->
-                // _sx.method(args). Reusing the UFCS method path means
-                // `&digit?` (a builtin) and `&myFn` (a local) both resolve
-                // correctly with no special-casing.
-                std::string sx = fresh("Sx");
-                auto recvAst = std::make_unique<ast::Expr>();
-                recvAst->kind = ast::Identifier{sx};
-                ast::MethodCall mc;
-                mc.receiver = std::move(recvAst);
-                mc.method = n.name;
-                // Borrow the shorthand's arg exprs for the synthetic call and
-                // restore them after — the AST node is shared and re-lowered
-                // (multi-clause functions), so it must be left intact.
-                auto& lentArgs = const_cast<std::vector<ast::ExprPtr>&>(n.args);
-                mc.args = std::move(lentArgs);
-                auto snap = subst; subst[sx] = sx;
-                auto body = lowerMethodCall(mc);
-                subst = snap;
-                lentArgs = std::move(mc.args);
-                Lambda lam; lam.params = {sx}; lam.body = std::move(body);
-                auto ex = std::make_unique<Expr>(); ex->node = std::move(lam); return ex;
+                // `&.method` / `&.method(args)` → fun(_sx) -> _sx.method(args).
+                return lowerNameAsUfcsFun(n.name, n.args);
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
                 if (n.entries.empty()) return callE("maps", "new", 0, {});
                 std::vector<Binding> binds;
+                // Runs of literal pairs become one `maps:from_list`; each
+                // `...other` is a map in its own right. Folding the segments
+                // with `maps:merge` gives later-wins, since merge/2 lets its
+                // SECOND argument take precedence.
+                std::vector<ExprPtr> segments;
                 std::vector<ExprPtr> pairs;
+                auto flushPairs = [&]() {
+                    if (pairs.empty()) return;
+                    auto lst = std::make_unique<Expr>();
+                    lst->node = MakeList{std::move(pairs), std::nullopt};
+                    pairs.clear();
+                    segments.push_back(
+                        callE("maps", "from_list", 1, one(std::move(lst))));
+                };
                 for (const auto& ent : n.entries) {
+                    if (ent.spread) {
+                        flushPairs();
+                        segments.push_back(atomize(ent.value, binds));
+                        continue;
+                    }
                     auto t = std::make_unique<Expr>();
                     t->node = MakeTuple{two(atomize(ent.key, binds), atomize(ent.value, binds))};
                     pairs.push_back(std::move(t));
                 }
-                auto lst = std::make_unique<Expr>();
-                lst->node = MakeList{std::move(pairs), std::nullopt};
-                return wrapLets(binds, callE("maps", "from_list", 1, one(std::move(lst))));
+                flushPairs();
+                auto merged = std::move(segments.front());
+                for (size_t i = 1; i < segments.size(); i++)
+                    merged = callE("maps", "merge", 2,
+                                   two(std::move(merged), std::move(segments[i])));
+                return wrapLets(binds, std::move(merged));
             } else if constexpr (std::is_same_v<T, ast::Lambda>) {
                 // Params shadow outer bindings: resolve to themselves inside.
                 auto snap = subst;
@@ -950,9 +962,40 @@ struct Lowering {
         static const std::unordered_map<std::string, Op> t = {
             {"+",Op::Add},{"-",Op::Sub},{"*",Op::Mul},{"/",Op::Div},{"%",Op::Mod},{"^",Op::Pow},
             {"==",Op::Eq},{"!=",Op::Neq},{"<",Op::Lt},{"<=",Op::Lte},{">",Op::Gt},{">=",Op::Gte},
+            {"&&",Op::And},{"||",Op::Or},
         };
         auto it = t.find(name); return it == t.end() ? std::nullopt : std::optional<Op>(it->second);
     }
+    // `name` used as a bare function value, with no arity known statically.
+    // Routing through the UFCS method path means a builtin (`digit?`), a
+    // module-local function (`stringify`) and a local binding holding a fun
+    // all resolve with no special-casing here.
+    auto lowerNameAsUfcsFun(const std::string& name,
+                            const std::vector<ast::ExprPtr>& args) -> ExprPtr {
+        // A LOCAL binding holding a fun IS the fun — pass it through, since
+        // the UFCS path would instead look for a method `.name`.
+        if (args.empty() && subst.count(name)) return var(currentName(name));
+
+        std::string sx = fresh("Sx");
+        auto recvAst = std::make_unique<ast::Expr>();
+        recvAst->kind = ast::Identifier{sx};
+        ast::MethodCall mc;
+        mc.receiver = std::move(recvAst);
+        mc.method = name;
+        // Borrow the caller's arg exprs for the synthetic call and restore
+        // them after — the AST node is shared and re-lowered (multi-clause
+        // functions), so it must be left intact.
+        auto& lentArgs = const_cast<std::vector<ast::ExprPtr>&>(args);
+        mc.args = std::move(lentArgs);
+        auto snap = subst; subst[sx] = sx;
+        auto body = lowerMethodCall(mc);
+        subst = snap;
+        lentArgs = std::move(mc.args);
+        Lambda lam; lam.params = {sx}; lam.body = std::move(body);
+        auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
+        return ex;
+    }
+
     // `~fn(args...)` / `~(op)` — partial or full application. Flatten every
     // paren group into ordered slots (a `_` placeholder is an open slot); if
     // all slots are bound and enough are present, apply now, else build a fun
@@ -967,16 +1010,58 @@ struct Lowering {
                     slots.push_back({true, nullptr});
                 else slots.push_back({false, atomize(a, binds)});
             }
+        const std::string qualKey = n.module.empty() ? n.name : n.module + "." + n.name;
+
+        const bool isUnaryOp = n.isOperator && n.name == "!";
+
         int arity = -1;
-        if (n.isOperator) arity = 2;
-        else if (auto it = fnParamNames.find(n.name); it != fnParamNames.end())
+        if (n.isOperator) arity = isUnaryOp ? 1 : 2;
+        else if (auto it = fnParamNames.find(qualKey); it != fnParamNames.end())
             arity = static_cast<int>(it->second.size());
+        else if (!n.module.empty() && externalModules) {
+            auto pit = externalModules->exportParamNames.find(qualKey);
+            if (pit != externalModules->exportParamNames.end())
+                arity = static_cast<int>(pit->second.size());
+        }
+
+        // Can this qualified name be emitted as a direct module call?
+        const bool qualifiedKnown = !n.module.empty()
+            && (moduleFunctions.count(qualKey)
+                || (externalModules
+                    && externalModules->exportToBeamFn.count(qualKey)
+                    && externalModules->nameToAtom.count(n.module)));
+
+        // A bare reference whose arity isn't known here: an unqualified
+        // builtin/module-local/local binding, or a qualified name belonging to
+        // a prelude module, which is an intrinsic rather than a BEAM module.
+        // Emitting Call{name, 0} would be wrong; defer to the UFCS path, where
+        // `String.upperCase(s)` and `s.upperCase` are the same call anyway.
+        if (!n.isOperator && slots.empty() && arity < 0 && !qualifiedKnown)
+            return lowerNameAsUfcsFun(n.name, {});
 
         auto buildCall = [&](std::vector<ExprPtr> args) -> ExprPtr {
+            if (isUnaryOp && args.size() >= 1)
+                return intrin(Op::Not, one(std::move(args[0])));
             if (n.isOperator && args.size() >= 2)
                 if (auto op = curryOp(n.name))
                     return intrin(*op, two(std::move(args[0]), std::move(args[1])));
             int ar = static_cast<int>(args.size());
+            if (!n.module.empty()) {
+                // Same two lookups the namespace MethodCall path uses: a
+                // function of a module in this compilation unit, else an
+                // export of a separately compiled one.
+                if (auto it = moduleFunctions.find(qualKey); it != moduleFunctions.end())
+                    return callE("", it->second, ar, std::move(args));
+                if (externalModules) {
+                    auto eit = externalModules->exportToBeamFn.find(qualKey);
+                    auto ait = externalModules->nameToAtom.find(n.module);
+                    if (eit != externalModules->exportToBeamFn.end()
+                        && ait != externalModules->nameToAtom.end())
+                        return callE(ait->second, eit->second, ar, std::move(args));
+                }
+                throw LowerError("IR lower: unknown module function in `~"
+                                 + qualKey + "`");
+            }
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.name, ar, std::move(args), false};
             return ex;
@@ -1193,6 +1278,10 @@ struct Lowering {
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
             && !zeroArgThunk) {
+            if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
+                ex->node = Construct{tag, std::move(args)};
+                return wrapLets(binds, std::move(ex));
+            }
             if (staticCtorOutOfScope(n.name))
                 return wrapLets(binds, runtimeError("Undefined function: " + n.name));
             ex->node = Construct{n.name, std::move(args)};
@@ -1310,8 +1399,18 @@ struct Lowering {
                 !std::holds_alternative<ast::UpperIdentifier>(
                     n.receiver->kind) &&
                 moduleImports.count(n.method);
+            // A bare `x.field` whose name is also an imported receiver method
+            // (`name` is Weekday's and Type's) must go through THIS module's
+            // accessor, which matches the record tags and delegates to the
+            // import for anything else. Calling the import directly skips the
+            // record arms, so an erased receiver — `opaque(p).name`, or any
+            // REPL value — died with "Undefined method: name for Person"
+            // while a statically typed `p.name` read the field fine.
+            const bool localFieldAccessor =
+                n.args.empty() && n.namedArgs.empty() && !n.block &&
+                !n.mutating && fieldAccessors.count(n.method);
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
-                !stalePreludeTarget) {
+                !stalePreludeTarget && !localFieldAccessor) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -1733,6 +1832,17 @@ struct Lowering {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.method, std::move(fieldArgs)};
                 return wrapLets(binds, std::move(ex));
+            }
+            // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
+            // The tag is just an atom at runtime, so the qualifier has no
+            // representation here — emit the bare tag.
+            if (n.args.empty() && !n.block && n.namedArgs.empty()) {
+                if (auto tag = qualifiedVariantTag(uid->name + "." + n.method);
+                    !tag.empty()) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{tag, {}};
+                    return wrapLets(binds, std::move(ex));
+                }
             }
             // A nullary CONSTRUCTOR is a value, not a namespace: `Monday.name`
             // is the same call as `let m = Monday` then `m.name`, which has
@@ -2333,6 +2443,26 @@ struct Lowering {
             }
         }
         return body;
+    }
+    // A top-level destructuring `let` has to expose every name it binds as its
+    // own 0-arity function, the same shape a simple `let name = value` gets.
+    // Each one re-runs the right-hand side and keeps its own component, which
+    // is already how top-level constants behave.
+    auto topLevelPatternBinding(const ast::LetExpr& le, const std::string& name)
+        -> ExprPtr {
+        if (auto* rp = std::get_if<ast::RecordPattern>(&le.pattern->kind)) {
+            std::string rv = fresh("rec");
+            std::vector<std::pair<std::string, ExprPtr>> prefix;
+            destructureRecordPattern(rv, *rp, prefix);
+            for (auto& [nm, _] : prefix) subst[nm] = nm;
+            ExprPtr body = var(name);
+            for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
+                body = makeLet(it->first, std::move(it->second), std::move(body));
+            return makeLet(rv, lower(le.value), std::move(body));
+        }
+        auto val = lower(le.value);
+        auto pat = lowerPattern(le.pattern);
+        return makeMatch1(std::move(val), std::move(pat), var(name));
     }
     auto lowerPattern(const ast::PatternPtr& p) -> PatternPtr {
         if (!p) { auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }
@@ -3863,6 +3993,33 @@ struct Lowering {
 // range pattern). So `count(@[])` is count/1 but `count(pred)` is count/2 even
 // though both have one AST param. Grouping and trait-inheritance both key on
 // this — a method can be overloaded by BEAM arity across those two forms.
+// Every name a pattern binds, in source order.
+static auto patternBoundNames(const ast::PatternPtr& p,
+                              std::vector<std::string>& out) -> void {
+    if (!p) return;
+    std::visit([&](const auto& pn) {
+        using T = std::decay_t<decltype(pn)>;
+        if constexpr (std::is_same_v<T, ast::VarPattern>) {
+            if (pn.name != "_") out.push_back(pn.name);
+        } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+            for (const auto& a : pn.args) patternBoundNames(a, out);
+        } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+            for (const auto& a : pn.elements) patternBoundNames(a, out);
+        } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+            for (const auto& a : pn.elements) patternBoundNames(a, out);
+            if (pn.rest) patternBoundNames(*pn.rest, out);
+        } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            // A field with no sub-pattern is the shorthand binding.
+            for (const auto& f : pn.fields) {
+                if (f.pattern) patternBoundNames(*f.pattern, out);
+                else if (f.name != "_") out.push_back(f.name);
+            }
+        } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+            if (pn.inner) patternBoundNames(pn.inner, out);
+        }
+    }, p->kind);
+}
+
 static auto beamArity(const ast::FunctionDef* fd) -> size_t {
     if (!fd || fd->clauses.empty()) return 1;
     const auto& params = fd->clauses[0].params;
@@ -4200,9 +4357,14 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (*mb && (*mb)->synthetic)
                 for (const auto& e : (*mb)->body)
                     if (auto* le = std::get_if<ast::LetExpr>(&e->kind))
-                        if (le->pattern)
-                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind))
-                                L.topLevelConstants.insert(vp->name);
+                        if (le->pattern) {
+                            // Every name, so a destructuring top-level `let`
+                            // registers all of them and not just a bare one.
+                            std::vector<std::string> names;
+                            patternBoundNames(le->pattern, names);
+                            for (auto& name : names)
+                                L.topLevelConstants.insert(std::move(name));
+                        }
         } else if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
             if (*fd) preFn(**fd);
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
@@ -4312,10 +4474,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     // Top-level `let name = expr` → a 0-arity function.
                     for (const auto& e : node->body) {
                         if (auto* le = std::get_if<ast::LetExpr>(&e->kind)) {
-                            if (le->pattern) if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
+                            if (!le->pattern) continue;
+                            if (auto* vp = std::get_if<ast::VarPattern>(&le->pattern->kind)) {
                                 L.subst.clear();
                                 FunDef def; def.name = vp->name; def.arity = 0;
                                 FunClause fc; fc.body = L.lower(le->value);
+                                def.clauses.push_back(std::move(fc));
+                                mod.functions.push_back(std::move(def));
+                                continue;
+                            }
+                            // `let (a, b) = …` at top level: one 0-arity
+                            // function per bound name. Without these the names
+                            // compiled to nothing and every later reference
+                            // died with "Undefined variable".
+                            std::vector<std::string> names;
+                            patternBoundNames(le->pattern, names);
+                            for (const auto& name : names) {
+                                L.subst.clear();
+                                FunDef def; def.name = name; def.arity = 0;
+                                FunClause fc;
+                                fc.body = L.topLevelPatternBinding(*le, name);
                                 def.clauses.push_back(std::move(fc));
                                 mod.functions.push_back(std::move(def));
                             }

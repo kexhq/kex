@@ -127,10 +127,10 @@ module App do
     end
 
     let router = Router.Config {}
-      .use(&logMiddleware)
-      .get("/", &handleHome)
-      .get("/users", &handleUsers)
-      .post("/users", &handleCreateUser)
+      .use(~logMiddleware)
+      .get("/", ~handleHome)
+      .get("/users", ~handleUsers)
+      .post("/users", ~handleCreateUser)
   end
 
   foul start(router: Router.Config) do

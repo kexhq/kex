@@ -21,7 +21,7 @@ main do
   let nums = [1, 2, 3, 4, 5]
 
   IO.printLine(nums.map { |x| x * 2 })
-  IO.printLine(nums.filter(&even?))
+  IO.printLine(nums.filter(~even?))
   IO.printLine(nums.reduce(0) { |acc, x| acc + x })
   IO.printLine(nums.count)
   IO.printLine(nums.first)

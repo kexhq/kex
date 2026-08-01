@@ -20,5 +20,5 @@ end
 
 main do
   let shapes = [Circle { radius: 5.0 }, Circle { radius: 2.0 }]
-  shapes.each(&printShape)
+  shapes.each(~printShape)
 end

@@ -47,7 +47,7 @@ end
 module App do
   using Http do
     let router = Router.Config {}
-      .get("/", &handleHome)
+      .get("/", ~handleHome)
   end
 end
 ```

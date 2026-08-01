@@ -1431,9 +1431,42 @@ auto collectPatternNames(const kex::ast::Pattern &pattern,
           for (const auto &element : node.elements)
             if (element) collectPatternNames(*element, names);
           if (node.rest) collectPatternNames(**node.rest, names);
+        } else if constexpr (std::is_same_v<T, kex::ast::RecordPattern>) {
+          // `let { name, age } = user` — a field with no sub-pattern is the
+          // shorthand binding, so the field name is what it binds.
+          for (const auto &field : node.fields) {
+            if (field.pattern) collectPatternNames(**field.pattern, names);
+            else if (field.name != "_") names.push_back(field.name);
+          }
+        } else if constexpr (std::is_same_v<T, kex::ast::ThisPattern>) {
+          if (node.inner) collectPatternNames(*node.inner, names);
         }
       },
       pattern.kind);
+}
+
+// Offset of the `=` separating a binding's pattern from its right-hand side,
+// or npos. Bracket depth keeps a `=` inside the pattern from matching, and the
+// comparison operators (`==`, `!=`, `<=`, `>=`) are skipped.
+auto replBindingEqualsPos(const std::string &source, size_t from) -> size_t {
+  int depth = 0;
+  for (size_t i = from; i < source.size(); i++) {
+    char c = source[i];
+    if (c == '(' || c == '[' || c == '{') depth++;
+    else if (c == ')' || c == ']' || c == '}') depth--;
+    else if (c == '"' || c == '\'') { // skip a string/char literal
+      char quote = c;
+      for (i++; i < source.size() && source[i] != quote; i++)
+        if (source[i] == '\\') i++;
+    } else if (c == '=' && depth == 0) {
+      if (i + 1 < source.size() && source[i + 1] == '=') { i++; continue; }
+      if (i > from && (source[i - 1] == '!' || source[i - 1] == '<' ||
+                       source[i - 1] == '>' || source[i - 1] == ':'))
+        continue;
+      return i;
+    }
+  }
+  return std::string::npos;
 }
 
 // Names bound by a REPL input's trailing `let`, or empty if it is not one.
@@ -2093,17 +2126,22 @@ int main(int argc, char *argv[]) {
         // expression (which lowered `IO.inspect(var x = v)` and failed).
         else if (source.rfind("var ", 0) == 0)
           isMutableLet = true;
-        // `let Just(x) = ...` destructures a constructor pattern — it binds
-        // the pattern's variables, it does not define a function named `Just`.
-        // Function names are lowercase, so an uppercase initial rules the
-        // definition reading out. Without this the REPL announced "defined
-        // Just", kept the binding as a top-level definition, and re-evaluated
-        // it later in a scope where the right-hand side's locals were gone
+        // A destructuring `let` binds the pattern's variables; it does not
+        // define a function. `let Just(x) = ...` must not define `Just`, and
+        // `let (a, b) = ...` must not be read as the `name(params)` shape —
+        // without the pattern openers here it matched "paren before =" and the
+        // REPL announced "defined", binding nothing. Function names are
+        // lowercase identifiers, so an uppercase initial or a `(`/`[`/`{`
+        // opener rules the definition reading out. Getting this wrong also
+        // kept the binding as a top-level definition that was re-evaluated
+        // later in a scope where the right-hand side's locals were gone
         // ("Undefined identifier: a").
-        const bool constructorPattern =
-            off != std::string::npos && off < source.size() &&
-            std::isupper((unsigned char)source[off]);
-        if (constructorPattern) {
+        const char patternLead =
+            (off != std::string::npos && off < source.size()) ? source[off] : '\0';
+        const bool destructuringPattern =
+            std::isupper((unsigned char)patternLead) || patternLead == '(' ||
+            patternLead == '[' || patternLead == '{';
+        if (destructuringPattern) {
           // `let Just(x) = ...` binds through the pattern; persist each name.
           patternLetNames = replLetBoundNames(source);
           isLocalLet = !patternLetNames.empty();
@@ -2282,15 +2320,30 @@ int main(int argc, char *argv[]) {
           if (isLocalLet) {
             std::string puts;
             std::string shown = letVarName;
+            std::string bindLine = "  " + source + "\n";
             if (!patternLetNames.empty()) {
               for (const auto &name : patternLetNames)
                 puts += putBack(name);
-              shown = patternLetNames.front();
+              // Echo the whole MATCHED value, not the first name bound out of
+              // it: the type comes from analysing the binding as a whole, so
+              // showing `a` against it printed `1 : (Integer, Integer)`. The
+              // right-hand side is bound to a temporary first so it is still
+              // evaluated exactly once.
+              constexpr const char *matched = "__replMatched";
+              auto eq = replBindingEqualsPos(source, 0);
+              if (eq != std::string::npos) {
+                bindLine = "  let " + std::string(matched) + " =" +
+                           source.substr(eq + 1) + "\n" +
+                           "  " + source.substr(0, eq + 1) + " " + matched + "\n";
+                shown = matched;
+              } else {
+                shown = patternLetNames.front();
+              }
             } else {
               puts = putBack(letVarName);
             }
-            kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
-                        source + "\n" + puts + mutablePuts +
+            kexSource = topDefsStr() + "main do\n" + localBinds + bindLine +
+                        puts + mutablePuts +
                         "  " + inspectCall(shown) + "\nend\n";
           } else if (!mutatedName.empty()) {
             kexSource = topDefsStr() + "main do\n" + localBinds + "  " +
@@ -2826,11 +2879,16 @@ int main(int argc, char *argv[]) {
         defOffset = 4;
       else if (source.substr(0, 5) == "foul ")
         defOffset = 5;
-      // An uppercase name after let/foul is a constructor pattern being
-      // destructured (`let Just(x) = ...`), not a function definition — see
-      // the matching guard in the BEAM branch above.
+      // A destructuring `let` binds the pattern's names; it is not a function
+      // definition. An uppercase name is a constructor pattern
+      // (`let Just(x) = ...`) and `(`/`[`/`{` open a tuple, list or record
+      // one — without the openers, `let (a, b) = ...` matched the
+      // `name(params)` shape below and was echoed as "defined". See the
+      // matching guard in the BEAM branch above.
       if (defOffset != std::string::npos && defOffset < source.size() &&
-          std::isupper((unsigned char)source[defOffset]))
+          (std::isupper((unsigned char)source[defOffset]) ||
+           source[defOffset] == '(' || source[defOffset] == '[' ||
+           source[defOffset] == '{'))
         defOffset = std::string::npos;
       if (defOffset != std::string::npos) {
         // It's a function def if: let/foul name( ... )  with parens before =

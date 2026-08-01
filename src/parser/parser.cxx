@@ -714,7 +714,9 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     ast::FunctionClause clause;
 
     // Parameters
+    bool hasParamList = false;
     if (match(TokenType::LParen)) {
+        hasParamList = true;
         if (!check(TokenType::RParen)) {
             clause.params = parseParams();
         }
@@ -723,6 +725,15 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
 
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
+        clause.returnAnnotation = parseTypeExpr();
+    }
+    // A parameterless binding may annotate with `:` instead, which is how the
+    // docs spell it — `foul lines : Feed<String> = …`. `let` reaches the same
+    // form through parseLetExpr; without this, `foul` had no way to write it.
+    // Only when no parameter list was given, so function signatures keep
+    // requiring `->`.
+    else if (!hasParamList && check(TokenType::Colon)) {
+        advance();
         clause.returnAnnotation = parseTypeExpr();
     }
 
@@ -1187,15 +1198,11 @@ auto Parser::parseUnary() -> ast::ExprPtr {
         return expr;
     }
 
+    // `...` is a spread, not an operator: it only means anything where a
+    // collection is being built. Parsing it as a general unary expression made
+    // `let y = ...xs` legal, and it quietly evaluated to None.
     if (check(TokenType::DotDotDot)) {
-        auto loc = currentLocation();
-        advance();
-        auto inner = parseUnary();
-
-        auto expr = std::make_unique<ast::Expr>();
-        expr->location = loc;
-        expr->kind = ast::SpreadExpr{std::move(inner)};
-        return expr;
+        error("`...` only spreads into a list, a map, or a `do` block body");
     }
 
     return parsePower();
@@ -1612,7 +1619,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Shorthand lambda: &.method or &function
+    // Receiver shorthand: &.method
     if (check(TokenType::Amp)) {
         return parseShorthandLambda();
     }
@@ -1697,8 +1704,17 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
                     } else {
                         error("Expected field name");
                     }
-                    expect(TokenType::Colon, "Expected ':' after field name");
-                    auto value = parseExpr();
+                    ast::ExprPtr value;
+                    if (match(TokenType::Colon)) {
+                        value = parseExpr();
+                    } else {
+                        // Field shorthand: `Person { name }` is
+                        // `Person { name: name }`, matching how record
+                        // patterns already destructure with `{ name, age }`.
+                        value = std::make_unique<ast::Expr>();
+                        value->location = currentLocation();
+                        value->kind = ast::Identifier{fieldName};
+                    }
                     fields.push_back({fieldName, std::move(value)});
                     skipNewlines();
                 } while (match(TokenType::Comma));
@@ -2517,7 +2533,9 @@ auto Parser::parseLambda() -> ast::ExprPtr {
         skipNewlines();
         std::vector<ast::ExprPtr> body;
         while (!check(TokenType::End) && !atEnd()) {
-            body.push_back(parseExpr());
+            // A `Block<[A]>` parameter collects these, and `...expr` splices a
+            // list into what it collects (see docs/dsl.md).
+            body.push_back(parseSpreadableExpr());
             skipNewlines();
         }
         expect(TokenType::End, "Expected 'end' to close do block");
@@ -2530,6 +2548,23 @@ auto Parser::parseLambda() -> ast::ExprPtr {
     error("Expected lambda");
 }
 
+// Every binary operator that can be named as a value — `~(op)` curries any of
+// these, and `&.op` takes one as a method name.
+static auto isOperatorToken(TokenType t) -> bool {
+    switch (t) {
+        case TokenType::Plus: case TokenType::Minus:
+        case TokenType::Star: case TokenType::Slash:
+        case TokenType::Percent: case TokenType::Caret:
+        case TokenType::EqEq: case TokenType::NotEq:
+        case TokenType::LessThan: case TokenType::LessEq:
+        case TokenType::GreaterThan: case TokenType::GreaterEq:
+        case TokenType::AmpAmp: case TokenType::PipePipe:
+            return true;
+        default:
+            return false;
+    }
+}
+
 auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
@@ -2539,14 +2574,14 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         std::string name;
         if (check(TokenType::LowerIdent)) {
             name = advance().value;
-        } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
-                   check(TokenType::Star) || check(TokenType::Slash) ||
-                   check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
-                   check(TokenType::NotEq) || check(TokenType::LessThan) ||
-                   check(TokenType::GreaterThan)) {
-            name = std::string(tokenTypeName(advance().type));
+        } else if (isOperatorToken(peek().type)) {
+            // `&.` names a method; operators are captured with `~(op)`, which
+            // covers both spellings: `&.+ 1` → `~(+)(1)`, `&.+` → `~(+)`.
+            auto opName = std::string(tokenTypeName(peek().type));
+            error("`&." + opName + "` is not valid — write `~(" + opName
+                  + ")` to capture an operator");
         } else {
-            error("Expected method name or operator after '&.'");
+            error("Expected method name after '&.'");
         }
         std::vector<ast::ExprPtr> args;
 
@@ -2601,18 +2636,32 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         return expr;
     }
 
-    // &operator (e.g. &.+ 1) or &function_name
-    if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-        check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret)) {
-        auto opName = std::string(tokenTypeName(advance().type));
-        expr->kind = ast::ShorthandLambda{
-            ast::ShorthandLambda::Kind::Function, opName, {}};
-        return expr;
+    // `&` is receiver shorthand only — `&.method`. Capturing a named function
+    // or an operator is spelled with `~`, which also curries.
+    if (check(TokenType::LowerIdent)) {
+        error("`&" + std::string(peek().value) + "` is no longer valid — write `~"
+              + std::string(peek().value) + "` to capture a named function ('&' is "
+              "receiver shorthand only, as in `&.method`)");
     }
+    if (isOperatorToken(peek().type)) {
+        auto opName = std::string(tokenTypeName(peek().type));
+        error("`&" + opName + "` is no longer valid — write `~(" + opName
+              + ")` to capture an operator ('&' is receiver shorthand only, as "
+                "in `&.method`)");
+    }
+    error("Expected '.' after '&' — '&' is receiver shorthand, as in `&.method`");
+    return expr;
+}
 
-    auto name = expect(TokenType::LowerIdent, "Expected function name after '&'").value;
-    expr->kind = ast::ShorthandLambda{
-        ast::ShorthandLambda::Kind::Function, name, {}};
+// An expression in a position that also accepts `...expr` — a list element or
+// a statement in a block body that a `Block<[A]>` parameter collects.
+auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
+    if (!check(TokenType::DotDotDot)) return parseExpr();
+    auto loc = currentLocation();
+    advance();
+    auto expr = std::make_unique<ast::Expr>();
+    expr->location = loc;
+    expr->kind = ast::SpreadExpr{parseExpr()};
     return expr;
 }
 
@@ -2626,12 +2675,12 @@ auto Parser::parseListExpr() -> ast::ExprPtr {
 
     skipNewlines();
     if (!check(TokenType::RBracket)) {
-        elements.push_back(parseExpr());
+        elements.push_back(parseSpreadableExpr());
         skipNewlines();
         while (match(TokenType::Comma)) {
             skipNewlines();
             if (check(TokenType::RBracket)) break; // trailing comma
-            elements.push_back(parseExpr());
+            elements.push_back(parseSpreadableExpr());
             skipNewlines();
         }
         if (match(TokenType::Pipe)) {
@@ -2708,17 +2757,29 @@ auto Parser::parseMapOrBlock() -> ast::ExprPtr {
     // Try to detect map vs single-expression lambda
     // Map: { key: value, ... }
     // Lambda: { expr }
-    // Heuristic: if first token is string/ident followed by colon, it's a map
-    if ((check(TokenType::String) || check(TokenType::RawString) ||
-         check(TokenType::InterpolatedRawString) ||
-         check(TokenType::LowerIdent)) &&
-        peekNext().type == TokenType::Colon) {
+    // Heuristic: if first token is string/ident followed by colon, it's a map.
+    // A leading `...` also means a map — `{ ...other, "k": 1 }` splices one in,
+    // and a lambda body has no use for a bare spread.
+    if (check(TokenType::DotDotDot) ||
+        ((check(TokenType::String) || check(TokenType::RawString) ||
+          check(TokenType::InterpolatedRawString) ||
+          check(TokenType::LowerIdent)) &&
+         peekNext().type == TokenType::Colon)) {
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;
 
         std::vector<ast::MapEntry> entries;
         do {
             skipNewlines();
+            // `{ ...other, "k": 1 }` — splice another map in. No `key: value`
+            // follows, so this entry is complete once the source is parsed.
+            if (check(TokenType::DotDotDot)) {
+                advance();
+                auto source = parseExpr();
+                entries.push_back(ast::MapEntry{nullptr, std::move(source), true});
+                skipNewlines();
+                continue;
+            }
             ast::ExprPtr key;
             // `ident:` sugar — bare lowercase identifier used as an atom key,
             // same as Elixir's `%{host: "localhost"}` meaning `%{:host => ...}`.
@@ -3189,7 +3250,7 @@ auto Parser::parseBody() -> std::vector<ast::ExprPtr> {
     std::vector<ast::ExprPtr> body;
     while (!check(TokenType::End) && !atEnd()) {
         try {
-            body.push_back(parseExpr());
+            body.push_back(parseSpreadableExpr());
         } catch (const ParseError& e) {
             // Insert an ErrorNode so the AST body stays complete, then sync
             // to the next statement boundary before continuing.
@@ -3286,15 +3347,30 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
     expr->location = loc;
 
     std::string name;
+    std::string module;
     bool isOperator = false;
 
-    if (check(TokenType::LParen)) {
+    if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Dot) {
+        // ~Mod.fn — a module-qualified capture. Nested namespaces (~A.B.fn)
+        // join with '.', matching how MethodCall receivers are named.
+        module = advance().value;
+        while (match(TokenType::Dot)) {
+            if (check(TokenType::UpperIdent)) { module += "." + advance().value; continue; }
+            name = expect(TokenType::LowerIdent,
+                          "Expected function name after '~" + module + ".'").value;
+            break;
+        }
+        if (name.empty()) error("Expected function name after '~" + module + ".'");
+    } else if (check(TokenType::LParen)) {
         // ~(op) form
         advance(); // consume '('
-        if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-            check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
-            check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
-            check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+        // `~(!)` is the only unary capture: `-` in this position stays binary
+        // subtraction, since `~(-)(_, 5)` is how you fix its right operand.
+        if (check(TokenType::Bang)) {
+            advance();
+            name = "!";
+            isOperator = true;
+        } else if (isOperatorToken(peek().type)) {
             name = std::string(tokenTypeName(advance().type));
             isOperator = true;
         } else {
@@ -3334,7 +3410,7 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
         argGroups.push_back(parseCurryArgGroup());
     }
 
-    expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups)};
+    expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups), std::move(module)};
     return expr;
 }
 

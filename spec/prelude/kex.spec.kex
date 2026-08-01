@@ -1,24 +1,24 @@
-describe("Kex.backend") do
+describe("Kex.BACKEND") do
   it("returns Interpreter on the tree-walk backend") do
-    assert(Kex.backend == Interpreter)
+    assert(Kex.BACKEND == Kex.Interpreter)
   end
 end
 
 describe("Kex.Feature.has?") do
   it("returns true for FS") do
-    assert(Kex.Feature.has?(FS))
+    assert(Kex.Feature.has?(Kex.FS))
   end
 
   it("returns false for Http on interpreter") do
-    assert(Kex.Feature.has?(Http) == false)
+    assert(Kex.Feature.has?(Kex.Http) == false)
   end
 
   it("returns false for Process on interpreter") do
-    assert(Kex.Feature.has?(Process) == false)
+    assert(Kex.Feature.has?(Kex.Process) == false)
   end
 
   it("returns false for WebServer on interpreter") do
-    assert(Kex.Feature.has?(WebServer) == false)
+    assert(Kex.Feature.has?(Kex.WebServer) == false)
   end
 end
 
@@ -29,10 +29,10 @@ describe("Kex.Feature.list") do
   end
 
   it("includes FS on interpreter") do
-    assert(Kex.Feature.list().contains?(FS))
+    assert(Kex.Feature.list().contains?(Kex.FS))
   end
 
   it("does not include Http on interpreter") do
-    assert(Kex.Feature.list().contains?(Http) == false)
+    assert(Kex.Feature.list().contains?(Kex.Http) == false)
   end
 end

@@ -257,7 +257,13 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
         std::string memberPrefix = prefix.substr(dotPos + 1);
         for (const auto& [path, state] : m_files) {
             for (const auto& sym : state.symbols) {
-                bool matchesMod = sym.module == qualifier;
+                // A record's fields and a make block's methods carry the
+                // module they were DECLARED in as well as the type they belong
+                // to. They are members of the type, not of the module, so
+                // `Kex.Kernel.` must not offer `major`/`number`/`tuple` —
+                // those complete under `Version.`, which is what makeTarget
+                // matches below.
+                bool matchesMod = sym.module == qualifier && sym.makeTarget.empty();
                 bool matchesMake = (!sym.makeTarget.empty() && sym.makeTarget == qualifier);
                 if ((matchesMod || matchesMake) && sym.isExported
                     && sym.name.rfind(memberPrefix, 0) == 0) {

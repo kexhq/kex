@@ -1,0 +1,32 @@
+# `...` is a spread, not a general operator: it only means something where a
+# collection is being built. It used to parse as a unary expression anywhere,
+# so `let y = ...xs` was accepted and quietly evaluated to None.
+
+let xs = [1, 2]
+let ys = [3, 4]
+
+# Lists
+IO.printLine([0, ...xs, 5])
+IO.printLine([...xs, ...ys])
+IO.printLine([...xs])
+IO.printLine([])
+
+# Maps. Later entries win, so a spread overrides what precedes it and is
+# overridden by what follows.
+let m = { "a": 1, "b": 2 }
+let n = { "b": 20, "c": 30 }
+
+IO.printLine({ ...m, "z": 9 })
+IO.printLine({ ...m, ...n })
+IO.printLine({ ...m, "b": 99 })
+IO.printLine({ "b": 99, ...m })
+IO.printLine({ ...m })
+
+# The atom-key sugar still works alongside a spread.
+IO.printLine({ host: "local", ...n })
+
+# Spreading an expression, not just a name.
+IO.printLine([...xs.map(~double), 99])
+IO.printLine({ ...m.merge(n) })
+
+let double(n: Integer) -> Integer = n * 2

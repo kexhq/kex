@@ -1,0 +1,2 @@
+spec/error_record_construction_field_type.kex:9:24: error: `User.name` expects String, but got Integer
+Aborted: 1 type error — fix before running (use --no-check to skip).

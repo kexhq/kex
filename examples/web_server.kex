@@ -26,9 +26,9 @@ end
 
 main do
   let server = Web.Server.new(8080)
-    .get("/", &home)
-    .get("/hello", &hello)
-    .post("/echo", &echo)
+    .get("/", ~home)
+    .get("/hello", ~hello)
+    .post("/echo", ~echo)
 
   IO.printLine("Web.Server listening on http://localhost:8080")
   if let Error(reason) = server.start()

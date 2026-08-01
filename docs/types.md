@@ -357,7 +357,7 @@ type HtmlFunction = String? -> [String] -> Block<[Element]> -> Element
 
 ```kex
 make [Int] do
-  let sum = this.reduce(0, &.+)
+  let sum = this.reduce(0, ~(+))
 end
 
 make [String] do

@@ -35,10 +35,10 @@ main do
   let doubled = nums.map { |x| x * 2 }
   IO.printLine("doubled: ${doubled}")
 
-  let evens = nums.filter(&even?)
+  let evens = nums.filter(~even?)
   IO.printLine("evens: ${evens}")
 
-  let odds = nums.reject(&even?)
+  let odds = nums.reject(~even?)
   IO.printLine("odds: ${odds}")
 
   let sum = nums.reduce(0) { |acc, x| acc + x }
@@ -53,8 +53,8 @@ main do
   IO.printLine("any > 8? ${nums.any? { |x| x > 8 }}")
   IO.printLine("all > 0? ${nums.all? { |x| x > 0 }}")
   IO.printLine("all > 5? ${nums.all? { |x| x > 5 }}")
-  IO.printLine("count evens: ${nums.count(&even?)}")
-  IO.printLine("count odds: ${nums.count(&odd?)}")
+  IO.printLine("count evens: ${nums.count(~even?)}")
+  IO.printLine("count odds: ${nums.count(~odd?)}")
 
   IO.printLine("")
   IO.printLine("=== String Operations ===")
@@ -78,7 +78,7 @@ main do
   IO.printLine("factorial(5) = ${factorial(5)}")
   IO.printLine("factorial(10) = ${factorial(10)}")
 
-  let fibs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(&fib)
+  let fibs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(~fib)
   IO.printLine("fibonacci: ${fibs}")
 
   IO.printLine("")

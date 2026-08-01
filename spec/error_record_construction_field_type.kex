@@ -1,0 +1,11 @@
+# A record construction checks each value against the field's DECLARED type.
+# `User { name: 42 }` was accepted and only surfaced later, if at all.
+record User do
+  name : String
+  age : Integer
+end
+
+main do
+  let u = User { name: 42, age: 30 }
+  IO.printLine(u.name)
+end

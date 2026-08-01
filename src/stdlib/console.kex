@@ -1,24 +1,24 @@
 # ANSI terminal styling. Color constants become empty strings when Kex is
 # started with --no-colors, so callers can compose them without branching.
 module Console do
-  let Reset = Kex.Intrinsic.Console.Reset
-  let Bold = Kex.Intrinsic.Console.Bold
-  let Dim = Kex.Intrinsic.Console.Dim
-  let Italic = Kex.Intrinsic.Console.Italic
-  let Underline = Kex.Intrinsic.Console.Underline
-  let Blink = Kex.Intrinsic.Console.Blink
-  let Reverse = Kex.Intrinsic.Console.Reverse
-  let Hidden = Kex.Intrinsic.Console.Hidden
-  let Strikethrough = Kex.Intrinsic.Console.Strikethrough
-  let Red = Kex.Intrinsic.Console.Red
-  let Green = Kex.Intrinsic.Console.Green
-  let Yellow = Kex.Intrinsic.Console.Yellow
-  let Blue = Kex.Intrinsic.Console.Blue
-  let Magenta = Kex.Intrinsic.Console.Magenta
-  let Cyan = Kex.Intrinsic.Console.Cyan
-  let White = Kex.Intrinsic.Console.White
-  let Gray = Kex.Intrinsic.Console.Gray
-  let Purple = Kex.Intrinsic.Console.Purple
+  let RESET = Kex.Intrinsic.Console.Reset
+  let BOLD = Kex.Intrinsic.Console.Bold
+  let DIM = Kex.Intrinsic.Console.Dim
+  let ITALIC = Kex.Intrinsic.Console.Italic
+  let UNDERLINE = Kex.Intrinsic.Console.Underline
+  let BLINK = Kex.Intrinsic.Console.Blink
+  let REVERSE = Kex.Intrinsic.Console.Reverse
+  let HIDDEN = Kex.Intrinsic.Console.Hidden
+  let STRIKETHROUGH = Kex.Intrinsic.Console.Strikethrough
+  let RED = Kex.Intrinsic.Console.Red
+  let GREEN = Kex.Intrinsic.Console.Green
+  let YELLOW = Kex.Intrinsic.Console.Yellow
+  let BLUE = Kex.Intrinsic.Console.Blue
+  let MAGENTA = Kex.Intrinsic.Console.Magenta
+  let CYAN = Kex.Intrinsic.Console.Cyan
+  let WHITE = Kex.Intrinsic.Console.White
+  let GRAY = Kex.Intrinsic.Console.Gray
+  let PURPLE = Kex.Intrinsic.Console.Purple
 
   # Wrap +text+ in an ANSI style and reset attributes afterwards.
   colorize : String -> String -> String

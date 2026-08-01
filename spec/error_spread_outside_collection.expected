@@ -1,0 +1,2 @@
+spec/error_spread_outside_collection.kex:5:11: error: `...` only spreads into a list, a map, or a `do` block body
+Aborted: 1 syntax error — fix before running.

@@ -7,6 +7,8 @@
 
 namespace kex::semantic {
 
+auto containsOpenType(const TypePtr& type) -> bool;
+
 namespace {
 
 // A sum-type variant is constructor-shaped (TypeName or GenericType with a
@@ -1721,6 +1723,15 @@ auto TypeChecker::resolveArgHints(const std::string& name,
     return {};
 }
 
+// A bare `~f` capture — no argument groups, no operator, unqualified. Like a
+// shorthand lambda, it needs the callee's signature to know what it's being
+// checked against, so it's deferred to the contextual (hinted) pass.
+static auto isBareCapture(const ast::Expr* e) -> bool {
+    if (!e) return false;
+    const auto* ce = std::get_if<ast::CurryExpr>(&e->kind);
+    return ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty();
+}
+
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
@@ -1764,40 +1775,38 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         popScope();
         return Type::func(std::move(paramTypes), resultType);
     }
-    if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
-        if (sl->kind == ast::ShorthandLambda::Kind::Function && hintParams.size() > 1) {
-            // Multi-param function capture: &+ used as (acc, elem) -> acc + elem.
-            // Build a param list from all hints, call the function with all of them.
-            std::vector<TypePtr> paramTypes;
-            for (const auto& h : hintParams) {
-                auto pt = resolve(h);
-                paramTypes.push_back(
-                    (std::holds_alternative<TypeVar>(pt->kind) ||
-                     std::holds_alternative<UnknownType>(pt->kind))
-                        ? freshTypeVar() : pt);
-            }
-            auto resultType = checkCall(
-                sl->name, paramTypes, blockExpr.location,
-                /*isMethodCall=*/false);
-            return Type::func(std::move(paramTypes), resolve(resultType));
+    // A bare `~f` passed where a function is expected: check it against the
+    // hinted param types, so `words.filter(~even?)` reports the element-type
+    // mismatch rather than inferring fresh vars that unify with anything.
+    // Only plain unqualified captures — an operator or a `~Mod.fn` name isn't
+    // resolvable through checkCall here, and partial applications already
+    // carry their own arg types.
+    if (auto* ce = std::get_if<ast::CurryExpr>(&blockExpr.kind);
+        ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty()
+        && !hintParams.empty()) {
+        std::vector<TypePtr> paramTypes;
+        for (const auto& h : hintParams) {
+            auto pt = resolve(h);
+            paramTypes.push_back(
+                (std::holds_alternative<TypeVar>(pt->kind) ||
+                 std::holds_alternative<UnknownType>(pt->kind))
+                    ? freshTypeVar() : pt);
         }
+        auto resultType = checkCall(ce->name, paramTypes, blockExpr.location,
+                                    /*isMethodCall=*/false);
+        return Type::func(std::move(paramTypes), resolve(resultType));
+    }
+    if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
         TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
         if (std::holds_alternative<TypeVar>(paramType->kind) ||
             std::holds_alternative<UnknownType>(paramType->kind))
             paramType = freshTypeVar();
-        TypePtr resultType;
-        if (sl->kind == ast::ShorthandLambda::Kind::Function) {
-            resultType = checkCall(
-                sl->name, {paramType}, blockExpr.location,
-                /*isMethodCall=*/false);
-        } else {
-            // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
-            std::vector<TypePtr> callArgs = {paramType};
-            for (const auto& arg : sl->args) {
-                if (arg) callArgs.push_back(inferExpr(*arg));
-            }
-            resultType = checkCall(sl->name, callArgs, blockExpr.location, true);
+        // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
+        std::vector<TypePtr> callArgs = {paramType};
+        for (const auto& arg : sl->args) {
+            if (arg) callArgs.push_back(inferExpr(*arg));
         }
+        auto resultType = checkCall(sl->name, callArgs, blockExpr.location, true);
         return Type::func({paramType}, resolve(resultType));
     }
     // BlockExpr (no param list) — infer body for side effects, stay permissive.
@@ -2086,6 +2095,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (node.args[i] &&
                     (std::holds_alternative<ast::ShorthandLambda>(
                          node.args[i]->kind) ||
+                     isBareCapture(node.args[i].get()) ||
                      (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
                     contextualLambdas.emplace_back(i, i);
@@ -2344,6 +2354,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (node.args[i] &&
                     (std::holds_alternative<ast::ShorthandLambda>(
                          node.args[i]->kind) ||
+                     isBareCapture(node.args[i].get()) ||
                      (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
                     contextualLambdas.emplace_back(
@@ -2671,8 +2682,31 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unit();
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& [_, val] : node.fields) {
-                if (val) inferExpr(*val);
+            // Check each value against the field's DECLARED type. Without
+            // this, `User { name: 42 }` on `name : String` was accepted and
+            // only surfaced later — or not at all.
+            auto record = m_recordFields.find(node.typeName);
+            for (const auto& [fieldName, val] : node.fields) {
+                if (!val) continue;
+                auto valueType = resolve(inferExpr(*val));
+                if (record == m_recordFields.end()) continue;
+                auto declared = record->second.find(fieldName);
+                if (declared == record->second.end()) continue;
+                auto expected = resolve(declared->second);
+                // Stay quiet where either side is open ANYWHERE inside it: a
+                // type variable, a type the checker could not pin down, or a
+                // trait constraint, which names a set rather than a concrete
+                // type. Two cases this must not reject: `make Integer do …
+                // Duration { seconds: this * 1.0 }` infers `Number` for the
+                // value, and a `Map<Any, String>` field takes `{"k": "v"}`
+                // — there the openness is nested, not at the top.
+                if (containsOpenType(valueType) || containsOpenType(expected))
+                    continue;
+                if (!argMatchesParam(valueType, expected))
+                    error(val->location,
+                          "`" + node.typeName + "." + fieldName +
+                          "` expects " + typeToString(expected) + ", but got " +
+                          typeToString(valueType));
             }
             return Type::named(node.typeName);
         }
@@ -2724,16 +2758,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
             // &.method → (T) -> result; T unknown until used in context.
             auto paramType = freshTypeVar();
-            TypePtr resultType;
-            if (node.kind == ast::ShorthandLambda::Kind::Function) {
-                resultType = checkCall(node.name, {paramType}, expr.location);
-            } else {
-                std::vector<TypePtr> callArgs = {paramType};
-                for (const auto& arg : node.args) {
-                    if (arg) callArgs.push_back(inferExpr(*arg));
-                }
-                resultType = checkCall(node.name, callArgs, expr.location);
+            std::vector<TypePtr> callArgs = {paramType};
+            for (const auto& arg : node.args) {
+                if (arg) callArgs.push_back(inferExpr(*arg));
             }
+            auto resultType = checkCall(node.name, callArgs, expr.location);
             return Type::func({paramType}, resolve(resultType));
         }
         else if constexpr (std::is_same_v<T, ast::CurryPlaceholder>) {
@@ -2751,7 +2780,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // Determine arity to compute remaining open param count.
             int arity = -1;
             if (node.isOperator) {
-                arity = 2;
+                arity = (node.name == "!") ? 1 : 2; // `~(!)` is the unary one
             } else {
                 auto usit = m_userSignatures.find(node.name);
                 if (usit != m_userSignatures.end() && !usit->second.empty()) {
@@ -4257,6 +4286,48 @@ auto TypeChecker::error(SourceLocation loc, const std::string& msg) -> void {
     if (m_diagnostics) {
         m_diagnostics->push_back({Diagnostic::Level::Error, loc, msg});
     }
+}
+
+// Whether a type has any component the checker has not pinned down — a type
+// variable, an unknown, or a trait constraint. Checks that would otherwise
+// report a mismatch use this to stay quiet rather than invent an error from
+// incomplete information.
+auto containsOpenType(const TypePtr& type) -> bool {
+    if (!type) return true;
+    return std::visit(
+        [](const auto& node) -> bool {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, TypeVar> ||
+                          std::is_same_v<T, UnknownType> ||
+                          std::is_same_v<T, ConstrainedType>) {
+                return true;
+            } else if constexpr (std::is_same_v<T, NamedType>) {
+                for (const auto& arg : node.typeArgs)
+                    if (containsOpenType(arg)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, FuncType>) {
+                for (const auto& param : node.params)
+                    if (containsOpenType(param)) return true;
+                return containsOpenType(node.result);
+            } else if constexpr (std::is_same_v<T, TupleType>) {
+                for (const auto& element : node.elements)
+                    if (containsOpenType(element)) return true;
+                return false;
+            } else if constexpr (std::is_same_v<T, ListType>) {
+                return containsOpenType(node.element);
+            } else if constexpr (std::is_same_v<T, MapType>) {
+                return containsOpenType(node.key) || containsOpenType(node.value);
+            } else if constexpr (std::is_same_v<T, OptionalType>) {
+                return containsOpenType(node.inner);
+            } else if constexpr (std::is_same_v<T, UnionType>) {
+                for (const auto& member : node.members)
+                    if (containsOpenType(member)) return true;
+                return false;
+            } else {
+                return false;
+            }
+        },
+        type->kind);
 }
 
 auto TypeChecker::typeMismatch(SourceLocation loc, const TypePtr& expected,

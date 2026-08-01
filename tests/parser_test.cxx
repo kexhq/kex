@@ -434,7 +434,7 @@ int main() {
         it("parses make with specialized type", []() {
             auto program = parse(
                 "make [Int] do\n"
-                "  let sum = this.reduce(0, &.+)\n"
+                "  let sum = this.reduce(0, ~(+))\n"
                 "end\n"
             );
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
@@ -761,16 +761,101 @@ int main() {
             assertTrue(std::holds_alternative<ast::Lambda>(map.args[0]->kind));
         });
 
-        it("parses shorthand function lambda", []() {
-            auto program = parse("main do\n  let x = list.sort(&compare)\nend");
+        it("rejects &.operator — capture is spelled with ~(op)", []() {
+            assertTrue(parseFails("main do\n  let x = list.map(&.+ 1)\nend"));
+            assertTrue(parseFails("main do\n  let x = list.reduce(0, &.+)\nend"));
+        });
+
+        it("rejects &function — capture is spelled with ~", []() {
+            assertTrue(parseFails("main do\n  let x = list.sort(&compare)\nend"));
+        });
+
+        it("rejects &operator — capture is spelled with ~(op)", []() {
+            assertTrue(parseFails("main do\n  let x = list.reduce(0, &+)\nend"));
+        });
+    });
+
+    describe("Parser — Spread", []() {
+        it("accepts a spread in a list literal", []() {
+            assertFalse(parseFails("main do\n  let x = [0, ...xs, 5]\nend"));
+            assertFalse(parseFails("main do\n  let x = [...xs, ...ys]\nend"));
+        });
+
+        it("accepts a spread in a map literal", []() {
+            assertFalse(parseFails("main do\n  let x = { ...m, \"k\": 1 }\nend"));
+            assertFalse(parseFails("main do\n  let x = { \"k\": 1, ...m }\nend"));
+            assertFalse(parseFails("main do\n  let x = { ...m }\nend"));
+            assertFalse(parseFails("main do\n  let x = { ...m, ...n }\nend"));
+        });
+
+        it("parses a map spread as a map, not a lambda body", []() {
+            auto program = parse("main do\n  let x = { ...m }\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& map = std::get<ast::MapExpr>(let.value->kind);
+            assertEqual(map.entries.size(), size_t(1));
+            assertTrue(map.entries[0].spread);
+            assertTrue(map.entries[0].key == nullptr);
+        });
+
+        it("accepts a spread as a do-block statement", []() {
+            assertFalse(parseFails(
+                "main do\n  let x = div do\n    ...items\n  end\nend"));
+        });
+
+        it("rejects a spread outside a collection", []() {
+            // `...` used to parse as a general unary expression, so these were
+            // accepted and evaluated to None.
+            assertTrue(parseFails("main do\n  let y = ...xs\nend"));
+            assertTrue(parseFails("main do\n  IO.printLine(...xs)\nend"));
+            assertTrue(parseFails("main do\n  let y = 1 + ...xs\nend"));
+        });
+    });
+
+    describe("Parser — Currying", []() {
+        it("parses a bare function capture", []() {
+            auto program = parse("main do\n  let x = list.sort(~compare)\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
             assertEqual(main->body.size(), size_t(1));
         });
 
-        it("parses shorthand operator lambda", []() {
-            auto program = parse("main do\n  let x = list.map(&.+ 1)\nend");
+        it("parses every binary operator capture", []() {
+            for (const auto* op : {"+", "-", "*", "/", "%", "^",
+                                   "==", "!=", "<", "<=", ">", ">=",
+                                   "&&", "||"}) {
+                assertFalse(parseFails(
+                    "main do\n  let x = list.reduce(0, ~(" + std::string(op) + "))\nend"));
+            }
+        });
+
+        it("parses a module-qualified capture", []() {
+            auto program = parse("main do\n  let x = list.each(~IO.printLine)\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
-            assertEqual(main->body.size(), size_t(1));
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& each = std::get<ast::MethodCall>(let.value->kind);
+            auto& curry = std::get<ast::CurryExpr>(each.args[0]->kind);
+            assertEqual(curry.module, std::string("IO"));
+            assertEqual(curry.name, std::string("printLine"));
+        });
+
+        it("parses a nested-submodule capture", []() {
+            auto program = parse(
+                "main do\n  let x = list.map(~Outer.Inner.Deep.shout)\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& let = std::get<ast::LetExpr>(main->body[0]->kind);
+            auto& map = std::get<ast::MethodCall>(let.value->kind);
+            auto& curry = std::get<ast::CurryExpr>(map.args[0]->kind);
+            assertEqual(curry.module, std::string("Outer.Inner.Deep"));
+            assertEqual(curry.name, std::string("shout"));
+        });
+
+        it("parses partial application of a qualified name", []() {
+            assertFalse(parseFails(
+                "main do\n  let x = list.map(~Outer.Inner.add(10))\nend"));
+        });
+
+        it("rejects a qualified capture with no function name", []() {
+            assertTrue(parseFails("main do\n  let x = list.map(~Outer.Inner)\nend"));
         });
     });
 

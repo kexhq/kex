@@ -232,6 +232,9 @@ struct ListExpr {
 struct MapEntry {
     ExprPtr key;
     ExprPtr value;
+    // `{ ...other, "k": 1 }` — `value` is the map being spread and `key` is
+    // null. Later entries win, so a spread can be overridden by what follows.
+    bool spread = false;
 };
 
 struct MapExpr {
@@ -341,8 +344,10 @@ struct Lambda {
     std::optional<RescueBlock> rescue;
 };
 
+// `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
+// function or an operator is spelled with `~` (CurryExpr), never `&`.
 struct ShorthandLambda {
-    enum class Kind { Method, MethodWithArgs, Function };
+    enum class Kind { Method, MethodWithArgs };
     Kind kind;
     std::string name;
     std::vector<ExprPtr> args;
@@ -369,6 +374,7 @@ struct CurryExpr {
     std::string name;       // function or operator name ("add", "+", etc.)
     bool isOperator;        // true for ~(+), ~(*), etc.
     std::vector<std::vector<ExprPtr>> argGroups; // each (args) paren group
+    std::string module;     // namespace for ~Mod.fn; empty when unqualified
 };
 
 struct BlockExpr {

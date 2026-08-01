@@ -359,6 +359,32 @@ let scores = { alice: 95, bob: 72 }              # atom keys (:alice, :bob)
 let config = { "host": "localhost", "port": 80 }  # string keys
 ```
 
+### Spread (`...`)
+
+`...` splices a collection into the one being built. It is a spread, not an
+operator: it is only valid inside a list literal, inside a map literal, or as a
+statement in a `do` block body that a `Block<[A]>` parameter collects. Anywhere
+else is a syntax error.
+
+```kex
+let xs = [1, 2]
+[0, ...xs, 5]                    # [0, 1, 2, 5]
+[...xs, ...other]
+```
+
+In a map, later entries win — so a spread overrides what precedes it, and is
+itself overridden by what follows:
+
+```kex
+let m = { "a": 1, "b": 2 }
+let n = { "b": 20, "c": 30 }
+
+{ ...m, "z": 9 }                 # { a: 1, b: 2, z: 9 }
+{ ...m, ...n }                   # { a: 1, b: 20, c: 30 }  — n's b wins
+{ ...m, "b": 99 }                # { a: 1, b: 99 }
+{ "b": 99, ...m }                # { a: 1, b: 2 }          — m's b wins
+```
+
 ### Ranges
 
 `a..b` creates a `Range` — a bounded sequence. Ranges implement `Enumerable`,
@@ -700,31 +726,66 @@ Rule: `{ |params| expr }` for one-liners, `do |params| ... end` for multi-line.
 
 ### Shorthand Lambda (`&`)
 
-`&.method` expands to `{ |x| x.method }`:
+`&` is receiver shorthand: `&.method` expands to `{ |x| x.method }`.
 
 ```kex
-list.filter(&.even?)              # { |x| x.even? }
+list.filter(&.even?)             # { |x| x.even? }
 list.map(&.to(String).or(""))    # { |x| x.to(String).or("") }
-list.map(&double)                # { |x| double(x) }
 ```
+
+The method name is always an identifier. To capture a *named* function or an
+operator rather than call a method on the receiver, use `~` (below): `&f` and
+`&.+` are not valid syntax, and the parser will point you at `~f` and `~(+)`.
 
 ### Currying (`~`)
 
-`~f(arg)` produces a partial application — a lambda that supplies `arg` as the
-first parameter of `f`:
+`~f` captures `f` as a value. Each trailing `(args)` group partially applies
+it, so `~f` on its own is just `f`:
 
 ```kex
 let add(a, b) = a + b
+
+[1, 2, 3].map(~double)           # { |x| double(x) }  — plain capture
 let inc = ~add(1)                # { |b| add(1, b) }
-
 [1, 2, 3].map(~add(10))          # [11, 12, 13]
-(1..100).reduce(0, ~(+))         # 5050
-
-let sub5 = ~(-)(_, 5)            # { |a| a - 5 }  (_ = placeholder)
+~add(3)(4)                       # 7 — groups chain
 ```
 
-Operators can be curried directly: `~(+)`, `~(-)`, `~(*)`. Use `_` as a
-placeholder to fix the non-leading argument.
+Use `_` as a placeholder to fix a non-leading argument:
+
+```kex
+let sub5 = ~(-)(_, 5)            # { |a| a - 5 }
+```
+
+Every binary operator can be captured with `~(op)` — `~(+)`, `~(-)`, `~(*)`,
+`~(/)`, `~(%)`, `~(^)`, `~(==)`, `~(!=)`, `~(<)`, `~(<=)`, `~(>)`, `~(>=)`,
+`~(&&)`, `~(||)`:
+
+```kex
+(1..100).reduce(0, ~(+))         # 5050
+flags.reduce(true, ~(&&))        # all true?
+```
+
+Note that `~(&&)` and `~(||)` are ordinary two-argument functions: both
+arguments are evaluated before the call, so they do not short-circuit the way
+the `&&` and `||` operators do.
+
+`~(!)` captures the unary negation as a one-argument function:
+
+```kex
+flags.map(~(!))                  # { |b| !b }
+```
+
+`-` in this position is always binary subtraction, since `~(-)(_, 5)` is how
+you fix its right operand; there is no `~` capture of unary minus.
+
+The name may be module-qualified, to any nesting depth:
+
+```kex
+["a", "b"].each(~IO.printLine)
+[1, 2].map(~Math.Vec2.scale(2))
+words.map(~Outer.Inner.Deep.shout)
+```
 
 ### Higher-Order Functions
 
@@ -801,7 +862,16 @@ let user = User { name: "Alice", age: 30 }
 let addr = Address { street: "Main St", city: "Budapest" }
 ```
 
-Fields use explicit `field: value` syntax in construction:
+A bare field name is shorthand for `name: name`, mirroring how record patterns
+destructure with `{ name, age }`:
+
+```kex
+let name = "Alice"
+let age = 30
+
+let user = User { name, age }              # User { name: name, age: age }
+let other = User { name, age: 41 }         # the two forms mix freely
+```
 
 ---
 
@@ -1712,16 +1782,28 @@ Run Kex source in an isolated evaluator. The options record has fields:
 
 ### 23.20 Kex (Backend / Feature Introspection)
 
+Both types live under `Kex`, so their constructors are qualified too — this
+keeps `FS`, `Http` and `Process` from colliding with the modules of the same
+name in the global namespace.
+
 ```kex
-type Backend = Interpreter | Beam
-type Feature = Http | FS | Process | WebServer
+module Kex do
+  type Backend = Interpreter | Beam
+  type Feature = Http | FS | Process | WebServer
+end
 ```
 
 | Function | Description |
 |---|---|
-| `Kex.backend` | Active backend (`Interpreter` or `Beam`) |
+| `Kex.BACKEND` | Active backend (`Kex.Interpreter` or `Kex.Beam`) |
 | `Kex.Feature.has?(f)` | Whether a feature is available on this backend |
 | `Kex.Feature.list` | All available features |
+
+```kex
+if Kex.BACKEND == Kex.Beam then
+  IO.printLine(Kex.Feature.has?(Kex.Process))
+end
+```
 
 ### 23.21 Test Doubles (Mock)
 

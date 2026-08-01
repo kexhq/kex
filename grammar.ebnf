@@ -144,13 +144,21 @@ function_clauses
   | function_clause ( function_clause )*
   ;
 
+(* `-> type_expr` may precede any body. A clause with NO parameter list may
+   spell that annotation `: type_expr` instead, which is how a binding reads:
+   `foul lines : Feed<String> = …`. A clause WITH parameters requires `->`. *)
 function_clause
-  = LPAREN params RPAREN EQUALS expr
-  | LPAREN params RPAREN DO body END
-  | LPAREN params RPAREN DO body END
+  = LPAREN params RPAREN return_annotation? clause_body
+  | return_annotation? clause_body
+  | COLON type_expr EQUALS expr                   (* parameterless binding *)
+  ;
+
+return_annotation = ARROW type_expr ;
+
+clause_body
+  = EQUALS expr
   | DO body END
   | DO PIPE params PIPE body END
-  | EQUALS expr
   ;
 
 params = param ( COMMA param )* | (* empty *) ;
@@ -250,7 +258,7 @@ expr
   | next_expr
   | lambda
   | shorthand_lambda
-  | spread_expr
+  | curry_expr
   | expr IF expr                                 (* trailing conditional *)
   | then_else_expr
   ;
@@ -289,17 +297,20 @@ unary_op = MINUS | BANG ;
 
 (* ===== Collections ===== *)
 
-list_items = expr ( COMMA expr )* ( PIPE expr )? ;
+list_items = list_item ( COMMA list_item )* ( PIPE expr )? ;
+
+list_item = expr | spread ;
 
 map_items = map_entry ( COMMA map_entry )* ;
 
-map_entry = expr COLON expr ;
+(* Later entries win, so a spread overrides what precedes it. *)
+map_entry = expr COLON expr | spread ;
 
 record_init = record_field_init ( COMMA record_field_init )* ;
 
 record_field_init
   = LOWER_IDENT COLON expr
-  | LOWER_IDENT DOT_DOT                          (* shorthand: name: name *)
+  | LOWER_IDENT                                  (* shorthand for `name: name` *)
   ;
 
 (* ===== Range ===== *)
@@ -340,9 +351,10 @@ while_expr = WHILE expr NEWLINE body END ;
 
 (* ===== Let / Var / Assignment ===== *)
 
-let_expr = LET pattern EQUALS expr ;
+(* The type annotation is optional. *)
+let_expr = LET pattern ( COLON type_expr )? EQUALS expr ;
 
-var_expr = VAR LOWER_IDENT EQUALS expr ;
+var_expr = VAR LOWER_IDENT ( COLON type_expr )? EQUALS expr ;
 
 assign_expr = LOWER_IDENT EQUALS expr ;
 
@@ -366,13 +378,42 @@ lambda
   | DO PIPE params PIPE body END                  (* multi-line lambda *)
   ;
 
+(* `&` is receiver shorthand only, and the method is always an identifier.
+   Capturing a named function or an operator is spelled with `~` — see
+   curry_expr. *)
 shorthand_lambda
   = AMP DOT LOWER_IDENT                           (* &.method *)
   | AMP DOT LOWER_IDENT LPAREN args RPAREN        (* &.method(args) *)
-  | AMP LOWER_IDENT                               (* &function *)
   ;
 
-spread_expr = DOT_DOT_DOT expr ;
+(* `~f` captures a named function; every trailing (args) group partially
+   applies it, so `~f` alone is just f. `_` fixes a non-leading argument.
+   The name may be module-qualified to any depth: `~Math.Vec2.add`. *)
+curry_expr
+  = TILDE curry_target { LPAREN curry_args RPAREN }
+  ;
+
+curry_target
+  = LOWER_IDENT                                   (* ~function *)
+  | UPPER_IDENT { DOT UPPER_IDENT } DOT LOWER_IDENT  (* ~Mod.Sub.function *)
+  | LPAREN operator RPAREN                        (* ~(+), ~(<=), ~(&&) *)
+  | LPAREN BANG RPAREN                            (* ~(!) — the unary one *)
+  ;
+
+curry_args = [ curry_arg { COMMA curry_arg } ] ;
+curry_arg  = expr | UNDERSCORE ;                  (* _ = placeholder *)
+
+(* Every binary operator can be captured with `~(op)`. *)
+operator
+  = PLUS | MINUS | STAR | SLASH | PERCENT | CARET
+  | EQ_EQ | NOT_EQ | LESS_THAN | LESS_EQ | GREATER_THAN | GREATER_EQ
+  | AND_AND | PIPE_PIPE
+  ;
+
+(* `...` is a spread, not an operator: it is valid only where a collection is
+   being built — a list literal, a map literal, or a statement in a `do` block
+   body that a `Block<[A]>` parameter collects. *)
+spread = DOT_DOT_DOT expr ;
 
 (* ===== Blocks ===== *)
 
@@ -383,7 +424,7 @@ block
   | LBRACE expr RBRACE
   ;
 
-body = expr* ;
+body = ( expr | spread )* ;   (* a spread is collected by a Block<[A]> param *)
 
 (* ===== Patterns ===== *)
 
@@ -463,6 +504,7 @@ ARROW        = "->" ;
 AMP          = "&" ;
 AT           = "@" ;
 BANG         = "!" ;
+CARET        = "^" ;
 COLON        = ":" ;
 COMMA        = "," ;
 DOT          = "." ;
@@ -491,6 +533,7 @@ RBRACKET     = "]" ;
 RPAREN       = ")" ;
 SLASH        = "/" ;
 STAR         = "*" ;
+TILDE        = "~" ;
 TYPE_ANNOTATION = ":>" ;
 UNDERSCORE   = "_" ;
 

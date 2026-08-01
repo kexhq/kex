@@ -17,7 +17,7 @@ main do
 
   # useful with filter
   let word = "h3ll0 w0rld"
-  IO.printLine(word.filter(&alpha?))
-  IO.printLine(word.filter(&digit?))
+  IO.printLine(word.filter(~alpha?))
+  IO.printLine(word.filter(~digit?))
   IO.printLine("  trim me  ".filter { |c| !c.space? })
 end

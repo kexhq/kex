@@ -562,7 +562,9 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
                 if (v) resolveExpr(*v);
         }
         else if constexpr (std::is_same_v<T, ast::CurryExpr>) {
-            if (!node.name.empty()
+            // `~Mod.fn` names a member of another namespace, which this pass
+            // can't see — the same reason `Mod.fn(x)` calls aren't checked here.
+            if (node.module.empty() && !node.name.empty()
                     && std::islower(static_cast<unsigned char>(node.name[0]))) {
                 if (!isKnown(node.name)) {
                     auto hint = suggest(node.name);

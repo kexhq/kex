@@ -40,7 +40,7 @@ nonexistent names:
 
 ```kex
 Math.PI
-Console.Green
+Console.GREEN
 MissingModule.NotAConstructor
 ```
 
@@ -48,7 +48,7 @@ MissingModule.NotAConstructor
 
 - `Math.PI` evaluates to the atom `PI` on BEAM instead of the floating-point
   constant.
-- `Console.Green` is inferred as the type `Green` instead of `String`.
+- `Console.GREEN` is inferred as the type `Green` instead of `String`.
 - nonexistent qualified names pass semantic checking;
 - bare `Read` must not become visible merely because the FS interface is
   available;
@@ -67,7 +67,7 @@ The tree interpreter prints the numeric value of `Math.PI`; BEAM prints `PI`.
 build/kex -R --no-colors spec/console.kex
 ```
 
-This fails because `Console.Green` is inferred as `Green` rather than
+This fails because `Console.GREEN` is inferred as `Green` rather than
 `String`.
 
 A program containing only `MissingModule.NotAConstructor` passes `--check`.
@@ -227,7 +227,7 @@ the negative import case or existing uppercase module constants on BEAM.
 Add tree and BEAM parity tests for:
 
 - `Math.PI`;
-- `Console.Green`;
+- `Console.GREEN`;
 - known qualified nullary constructors;
 - nonexistent qualified uppercase members;
 - `FS.Read` with `using FS`;
