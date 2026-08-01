@@ -1898,12 +1898,6 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::record(node.typeName, std::move(fields));
         }
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-            if (node.kind == ast::ShorthandLambda::Kind::Function) {
-                // &function — look up the function and return it
-                auto val = m_env->get(node.name);
-                if (val) return val;
-                throw RuntimeError("Undefined function: " + node.name, expr.location);
-            }
             if (node.kind == ast::ShorthandLambda::Kind::Method) {
                 // &.method — create a lambda that calls method on its arg
                 auto method = node.name;

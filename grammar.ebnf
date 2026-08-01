@@ -367,14 +367,13 @@ lambda
   | DO PIPE params PIPE body END                  (* multi-line lambda *)
   ;
 
-(* `&` is receiver shorthand only. Capturing a named function or an
-   operator is spelled with `~` — see curry_expr. *)
+(* `&` is receiver shorthand only, and the method is always an identifier.
+   Capturing a named function or an operator is spelled with `~` — see
+   curry_expr. *)
 shorthand_lambda
-  = AMP DOT method_name                           (* &.method, &.+ *)
-  | AMP DOT method_name LPAREN args RPAREN        (* &.method(args) *)
+  = AMP DOT LOWER_IDENT                           (* &.method *)
+  | AMP DOT LOWER_IDENT LPAREN args RPAREN        (* &.method(args) *)
   ;
-
-method_name = LOWER_IDENT | operator ;
 
 (* `~f` captures a named function; every trailing (args) group partially
    applies it, so `~f` alone is just f. `_` fixes a non-leading argument.

@@ -179,22 +179,3 @@ however, present `&.field` as field-access sugar (`docs/functions.md`'s
 `docs/error-handling.md`). The fix is to register record field accessors as
 callable functions at runtime, the same way methods are — this is the same
 accessor-registration family as the prelude-name-collision gap above.
-
-## `&.op arg` shorthand fails to type-check for plain numbers
-
-The operator form of the receiver shorthand parses, but picks the wrong
-overload for an `Integer` receiver:
-
-```kex
-main do
-  IO.printLine([1, 2, 3].map(&.+ 1))
-  # error: `+` expects argument 1 to be Measure, but got Integer
-end
-```
-
-`&.+ 1` desugars to a UFCS call `x.+(1)`, and overload selection for `+` in
-that position resolves to the `Measure`/`Duration` signatures rather than the
-numeric one. The explicit lambda (`{ |x| x + 1 }`) and the curried operator
-(`~(+)(1)`) both work, so this affects only the `&.op` spelling. The fix
-belongs in overload ranking for operator names reached through the UFCS
-method path.

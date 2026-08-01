@@ -47,8 +47,9 @@ No pipe operator (`|>`) either — UFCS covers chaining: `input.parse.transform.
 
 `~` and `&.` are easy to confuse. `~name` captures the function `name` and
 passes it along; `&.name` builds a lambda that calls `.name` **on its
-argument**. `&` is only ever followed by `.` — `&name` is not valid syntax, and
-the parser will point you at `~name`.
+argument**. Each has exactly one spelling: `&` is always followed by `.` and an
+identifier, and every operator capture goes through `~`. `&name` and `&.+` are
+both invalid, and the parser points you at `~name` and `~(+)`.
 
 Every binary operator can be captured with `~(op)`, plus `~(!)` for unary
 negation. See [functions.md](functions.md#operators) for the full list and the

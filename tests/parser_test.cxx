@@ -434,7 +434,7 @@ int main() {
         it("parses make with specialized type", []() {
             auto program = parse(
                 "make [Int] do\n"
-                "  let sum = this.reduce(0, &.+)\n"
+                "  let sum = this.reduce(0, ~(+))\n"
                 "end\n"
             );
             assertTrue(firstItemIs<std::unique_ptr<ast::MakeDef>>(program));
@@ -761,10 +761,9 @@ int main() {
             assertTrue(std::holds_alternative<ast::Lambda>(map.args[0]->kind));
         });
 
-        it("parses shorthand operator lambda", []() {
-            auto program = parse("main do\n  let x = list.map(&.+ 1)\nend");
-            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
-            assertEqual(main->body.size(), size_t(1));
+        it("rejects &.operator — capture is spelled with ~(op)", []() {
+            assertTrue(parseFails("main do\n  let x = list.map(&.+ 1)\nend"));
+            assertTrue(parseFails("main do\n  let x = list.reduce(0, &.+)\nend"));
         });
 
         it("rejects &function — capture is spelled with ~", []() {

@@ -1795,39 +1795,16 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         return Type::func(std::move(paramTypes), resolve(resultType));
     }
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
-        if (sl->kind == ast::ShorthandLambda::Kind::Function && hintParams.size() > 1) {
-            // Multi-param function capture: &+ used as (acc, elem) -> acc + elem.
-            // Build a param list from all hints, call the function with all of them.
-            std::vector<TypePtr> paramTypes;
-            for (const auto& h : hintParams) {
-                auto pt = resolve(h);
-                paramTypes.push_back(
-                    (std::holds_alternative<TypeVar>(pt->kind) ||
-                     std::holds_alternative<UnknownType>(pt->kind))
-                        ? freshTypeVar() : pt);
-            }
-            auto resultType = checkCall(
-                sl->name, paramTypes, blockExpr.location,
-                /*isMethodCall=*/false);
-            return Type::func(std::move(paramTypes), resolve(resultType));
-        }
         TypePtr paramType = (!hintParams.empty()) ? resolve(hintParams[0]) : freshTypeVar();
         if (std::holds_alternative<TypeVar>(paramType->kind) ||
             std::holds_alternative<UnknownType>(paramType->kind))
             paramType = freshTypeVar();
-        TypePtr resultType;
-        if (sl->kind == ast::ShorthandLambda::Kind::Function) {
-            resultType = checkCall(
-                sl->name, {paramType}, blockExpr.location,
-                /*isMethodCall=*/false);
-        } else {
-            // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
-            std::vector<TypePtr> callArgs = {paramType};
-            for (const auto& arg : sl->args) {
-                if (arg) callArgs.push_back(inferExpr(*arg));
-            }
-            resultType = checkCall(sl->name, callArgs, blockExpr.location, true);
+        // &.method or &.method(args): UFCS → checkCall(name, [receiver, ...args])
+        std::vector<TypePtr> callArgs = {paramType};
+        for (const auto& arg : sl->args) {
+            if (arg) callArgs.push_back(inferExpr(*arg));
         }
+        auto resultType = checkCall(sl->name, callArgs, blockExpr.location, true);
         return Type::func({paramType}, resolve(resultType));
     }
     // BlockExpr (no param list) — infer body for side effects, stay permissive.
@@ -2756,16 +2733,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
             // &.method → (T) -> result; T unknown until used in context.
             auto paramType = freshTypeVar();
-            TypePtr resultType;
-            if (node.kind == ast::ShorthandLambda::Kind::Function) {
-                resultType = checkCall(node.name, {paramType}, expr.location);
-            } else {
-                std::vector<TypePtr> callArgs = {paramType};
-                for (const auto& arg : node.args) {
-                    if (arg) callArgs.push_back(inferExpr(*arg));
-                }
-                resultType = checkCall(node.name, callArgs, expr.location);
+            std::vector<TypePtr> callArgs = {paramType};
+            for (const auto& arg : node.args) {
+                if (arg) callArgs.push_back(inferExpr(*arg));
             }
+            auto resultType = checkCall(node.name, callArgs, expr.location);
             return Type::func({paramType}, resolve(resultType));
         }
         else if constexpr (std::is_same_v<T, ast::CurryPlaceholder>) {

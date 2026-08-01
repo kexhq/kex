@@ -2557,9 +2557,13 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         if (check(TokenType::LowerIdent)) {
             name = advance().value;
         } else if (isOperatorToken(peek().type)) {
-            name = std::string(tokenTypeName(advance().type));
+            // `&.` names a method; operators are captured with `~(op)`, which
+            // covers both spellings: `&.+ 1` → `~(+)(1)`, `&.+` → `~(+)`.
+            auto opName = std::string(tokenTypeName(peek().type));
+            error("`&." + opName + "` is not valid — write `~(" + opName
+                  + ")` to capture an operator");
         } else {
-            error("Expected method name or operator after '&.'");
+            error("Expected method name after '&.'");
         }
         std::vector<ast::ExprPtr> args;
 

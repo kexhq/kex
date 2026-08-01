@@ -341,8 +341,10 @@ struct Lambda {
     std::optional<RescueBlock> rescue;
 };
 
+// `&.method` / `&.method(args)` — receiver shorthand. Capturing a named
+// function or an operator is spelled with `~` (CurryExpr), never `&`.
 struct ShorthandLambda {
-    enum class Kind { Method, MethodWithArgs, Function };
+    enum class Kind { Method, MethodWithArgs };
     Kind kind;
     std::string name;
     std::vector<ExprPtr> args;

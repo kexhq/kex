@@ -707,11 +707,9 @@ list.filter(&.even?)             # { |x| x.even? }
 list.map(&.to(String).or(""))    # { |x| x.to(String).or("") }
 ```
 
-An operator may be used as the method name (`&.+ 1`), though that form
-currently mis-resolves for plain numbers — see [known-gaps.md](known-gaps.md).
-
-To capture a *named* function rather than call a method on the receiver, use
-`~` (below). `&f` is not valid syntax; the parser will point you at `~f`.
+The method name is always an identifier. To capture a *named* function or an
+operator rather than call a method on the receiver, use `~` (below): `&f` and
+`&.+` are not valid syntax, and the parser will point you at `~f` and `~(+)`.
 
 ### Currying (`~`)
 
