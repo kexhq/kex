@@ -42,7 +42,17 @@ No pipe operator (`|>`) either — UFCS covers chaining: `input.parse.transform.
 | `..` | Range (`1..10`) |
 | `...` | Spread in Block<[A]> |
 | `!` (suffix) | Mutating call on var |
-| `~` (prefix) | Curry / partial application (`~func(args)`, `~(op)`) |
+| `~` (prefix) | Capture / partial application (`~func`, `~func(args)`, `~Mod.func`, `~(op)`) |
+| `&.` (prefix) | Receiver shorthand (`&.method` = `{ \|x\| x.method }`) |
+
+`~` and `&.` are easy to confuse. `~name` captures the function `name` and
+passes it along; `&.name` builds a lambda that calls `.name` **on its
+argument**. `&` is only ever followed by `.` — `&name` is not valid syntax, and
+the parser will point you at `~name`.
+
+Every binary operator can be captured with `~(op)`, plus `~(!)` for unary
+negation. See [functions.md](functions.md#operators) for the full list and the
+short-circuiting caveat on `~(&&)` / `~(||)`.
 
 ## Overriding
 

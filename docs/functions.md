@@ -154,13 +154,15 @@ let empty?(list: [A]) -> Bool = ...
 let adult?({ age }) = age >= 18
 ```
 
-## Currying and Partial Application
+## Capturing, Currying and Partial Application
 
-`~` creates a partially applied function. Bound arguments fill left-to-right; `_` is an explicit placeholder for a specific position. Chained `(args)` groups that fully saturate the function call it immediately.
+`~` captures a function as a value. On its own, `~f` *is* `f`. Each trailing `(args)` group partially applies it: bound arguments fill left-to-right, and `_` is an explicit placeholder for a specific position. Chained `(args)` groups that fully saturate the function call it immediately.
 
 ```kex
 let add(a, b) = a + b
 let multiply(a, b) = a * b
+
+[1, 2, 3, 4].filter(~even?)    # plain capture — no argument group
 
 let inc    = ~add(1)           # {|b| add(1, b)}
 let double = ~multiply(2)      # {|b| multiply(2, b)}
@@ -175,7 +177,31 @@ sub5(20)                               # 15
 ~add(3)(4)                             # 7
 ```
 
-`~(op)` lifts any built-in operator into a function value. `_` can appear multiple times; each one becomes a positional parameter filled left-to-right.
+`_` can appear multiple times; each one becomes a positional parameter filled left-to-right.
+
+### Operators
+
+`~(op)` lifts any built-in binary operator into a two-argument function value — `~(+)`, `~(-)`, `~(*)`, `~(/)`, `~(%)`, `~(^)`, `~(==)`, `~(!=)`, `~(<)`, `~(<=)`, `~(>)`, `~(>=)`, `~(&&)`, `~(||)`.
+
+`~(&&)` and `~(||)` are ordinary functions, so both arguments are evaluated before the call — they do not short-circuit the way the operators do.
+
+`~(!)` is the one unary capture:
+
+```kex
+flags.map(~(!))                        # {|b| !b}
+```
+
+`-` in this position is always binary subtraction, since `~(-)(_, 5)` is how you fix its right operand. There is no capture of unary minus.
+
+### Qualified names
+
+The captured name may be module-qualified, to any nesting depth:
+
+```kex
+["a", "b"].each(~IO.printLine)
+["x", "y"].map(~String.upperCase)
+[1, 2].map(~Outer.Inner.Deep.add(10))  # partial application works too
+```
 
 ## Closures
 
@@ -191,10 +217,12 @@ end
 # Zero-arg
 let thunk = { 42 }
 
-# Shorthand
+# Receiver shorthand — `&.` calls a method on the argument
 arr.map(&.name)           # { |x| x.name }
 arr.filter(&.adult?)      # { |x| x.adult? }
-arr.sort(~compare)        # passes named function
+
+# Capture — `~` passes a named function
+arr.sort(~compare)
 
 # Value capture (not reference)
 var x = 10

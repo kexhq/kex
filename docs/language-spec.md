@@ -705,11 +705,13 @@ Rule: `{ |params| expr }` for one-liners, `do |params| ... end` for multi-line.
 ```kex
 list.filter(&.even?)             # { |x| x.even? }
 list.map(&.to(String).or(""))    # { |x| x.to(String).or("") }
-list.map(&.+ 1)                  # { |x| x + 1 }
 ```
 
+An operator may be used as the method name (`&.+ 1`), though that form
+currently mis-resolves for plain numbers — see [known-gaps.md](known-gaps.md).
+
 To capture a *named* function rather than call a method on the receiver, use
-`~` (below). `&f` is not valid syntax.
+`~` (below). `&f` is not valid syntax; the parser will point you at `~f`.
 
 ### Currying (`~`)
 
