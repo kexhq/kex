@@ -23,8 +23,15 @@ auto stripAnsi(const std::string& s) -> std::string {
     std::string out;
     for (size_t i = 0; i < s.size();) {
         if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+            // CSI sequence: ESC [ <params> <intermediate>* <final>. The final
+            // byte is in 0x40–0x7E (@–~) — e.g. 'm' for color, 'H' for cursor
+            // home, 'J' for screen clear. Stop at the first such byte rather
+            // than scanning only for 'm', which would swallow everything to
+            // EOF when a /clear's ED sequence preceded any later color code.
             size_t j = i + 2;
-            while (j < s.size() && s[j] != 'm') j++;
+            while (j < s.size() &&
+                   !((unsigned char)s[j] >= 0x40 && (unsigned char)s[j] <= 0x7e))
+                j++;
             i = (j < s.size()) ? j + 1 : j;
         } else {
             out += s[i];
@@ -360,6 +367,31 @@ int main() {
                 "  1 + 2\n"
                 ")\n");
             assertTrue(out.find("=> 3 : Int") != std::string::npos, out);
+        });
+    });
+
+    describe("REPL CLI — /clear", []() {
+        it("lists /clear in /help", []() {
+            auto out = runRepl("/help\n");
+            assertTrue(out.find("/clear") != std::string::npos, out);
+            assertTrue(out.find("Clear the terminal screen") != std::string::npos,
+                       out);
+        });
+
+        it("clears the screen and keeps evaluating", []() {
+            // Over a pipe the terminal never actually clears — the screen-wipe
+            // escape is just bytes (which stripAnsi removes) — so the testable
+            // contract is that /clear is recognized as a command (no error) and
+            // the loop keeps evaluating subsequent input.
+            auto out = runRepl("1 + 2\n/clear\n3 + 4\n");
+            assertTrue(out.find("error:") == std::string::npos, out);
+            assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
+        });
+
+        it("clears the screen in the BEAM REPL too", []() {
+            auto out = runBeamRepl("/clear\n3 + 4\n");
+            assertTrue(out.find("error:") == std::string::npos, out);
+            assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
         });
     });
 

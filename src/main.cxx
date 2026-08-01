@@ -1922,6 +1922,10 @@ int main(int argc, char *argv[]) {
         kex::printReplHelp(std::cout);
         continue;
       }
+      if (input == "/clear") {
+        std::cout << kex::replClearScreenSequence() << std::flush;
+        continue;
+      }
       if (input == "/reset") {
         topDefs.clear();
         localBinds.clear();
@@ -2684,6 +2688,10 @@ int main(int argc, char *argv[]) {
       // REPL commands
       if (line == "/help" || line == "/h") {
         kex::printReplHelp(std::cout, setOptionsHelp);
+        continue;
+      }
+      if (line == "/clear") {
+        std::cout << kex::replClearScreenSequence() << std::flush;
         continue;
       }
       if (line == "/set") {
