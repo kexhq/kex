@@ -15,6 +15,10 @@ public:
     auto tokenizeAll() -> std::vector<Token>;
 
 private:
+    // The actual scanner. `nextToken` wraps it to record m_prevType, which the
+    // `%` disambiguation below depends on.
+    auto scanToken() -> Token;
+
     auto peek() const -> char;
     auto peekNext() const -> char;
     auto peekAt(int offset) const -> char;
@@ -54,6 +58,9 @@ private:
     int m_tokenStartColumn = 1;
     int m_tokenStartOffset = 0;
     int m_parenDepth = 0;
+    // Previous significant token, used to tell `%` (modulo) from `%name`
+    // (splice). Starts as Newline so a `%name` opening a file is a splice.
+    TokenType m_prevType = TokenType::Newline;
 };
 
 } // namespace kex
