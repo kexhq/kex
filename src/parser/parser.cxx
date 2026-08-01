@@ -2530,6 +2530,23 @@ auto Parser::parseLambda() -> ast::ExprPtr {
     error("Expected lambda");
 }
 
+// Every binary operator that can be named as a value — `~(op)` curries any of
+// these, and `&.op` takes one as a method name.
+static auto isOperatorToken(TokenType t) -> bool {
+    switch (t) {
+        case TokenType::Plus: case TokenType::Minus:
+        case TokenType::Star: case TokenType::Slash:
+        case TokenType::Percent: case TokenType::Caret:
+        case TokenType::EqEq: case TokenType::NotEq:
+        case TokenType::LessThan: case TokenType::LessEq:
+        case TokenType::GreaterThan: case TokenType::GreaterEq:
+        case TokenType::AmpAmp: case TokenType::PipePipe:
+            return true;
+        default:
+            return false;
+    }
+}
+
 auto Parser::parseShorthandLambda() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = currentLocation();
@@ -2539,11 +2556,7 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         std::string name;
         if (check(TokenType::LowerIdent)) {
             name = advance().value;
-        } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
-                   check(TokenType::Star) || check(TokenType::Slash) ||
-                   check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
-                   check(TokenType::NotEq) || check(TokenType::LessThan) ||
-                   check(TokenType::GreaterThan)) {
+        } else if (isOperatorToken(peek().type)) {
             name = std::string(tokenTypeName(advance().type));
         } else {
             error("Expected method name or operator after '&.'");
@@ -2601,18 +2614,20 @@ auto Parser::parseShorthandLambda() -> ast::ExprPtr {
         return expr;
     }
 
-    // &operator (e.g. &.+ 1) or &function_name
-    if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-        check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret)) {
-        auto opName = std::string(tokenTypeName(advance().type));
-        expr->kind = ast::ShorthandLambda{
-            ast::ShorthandLambda::Kind::Function, opName, {}};
-        return expr;
+    // `&` is receiver shorthand only — `&.method`. Capturing a named function
+    // or an operator is spelled with `~`, which also curries.
+    if (check(TokenType::LowerIdent)) {
+        error("`&" + std::string(peek().value) + "` is no longer valid — write `~"
+              + std::string(peek().value) + "` to capture a named function ('&' is "
+              "receiver shorthand only, as in `&.method`)");
     }
-
-    auto name = expect(TokenType::LowerIdent, "Expected function name after '&'").value;
-    expr->kind = ast::ShorthandLambda{
-        ast::ShorthandLambda::Kind::Function, name, {}};
+    if (isOperatorToken(peek().type)) {
+        auto opName = std::string(tokenTypeName(peek().type));
+        error("`&" + opName + "` is no longer valid — write `~(" + opName
+              + ")` to capture an operator ('&' is receiver shorthand only, as "
+                "in `&.method`)");
+    }
+    error("Expected '.' after '&' — '&' is receiver shorthand, as in `&.method`");
     return expr;
 }
 
@@ -3286,15 +3301,30 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
     expr->location = loc;
 
     std::string name;
+    std::string module;
     bool isOperator = false;
 
-    if (check(TokenType::LParen)) {
+    if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Dot) {
+        // ~Mod.fn — a module-qualified capture. Nested namespaces (~A.B.fn)
+        // join with '.', matching how MethodCall receivers are named.
+        module = advance().value;
+        while (match(TokenType::Dot)) {
+            if (check(TokenType::UpperIdent)) { module += "." + advance().value; continue; }
+            name = expect(TokenType::LowerIdent,
+                          "Expected function name after '~" + module + ".'").value;
+            break;
+        }
+        if (name.empty()) error("Expected function name after '~" + module + ".'");
+    } else if (check(TokenType::LParen)) {
         // ~(op) form
         advance(); // consume '('
-        if (check(TokenType::Plus) || check(TokenType::Minus) || check(TokenType::Star) ||
-            check(TokenType::Slash) || check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
-            check(TokenType::NotEq) || check(TokenType::LessThan) || check(TokenType::LessEq) ||
-            check(TokenType::GreaterThan) || check(TokenType::GreaterEq)) {
+        // `~(!)` is the only unary capture: `-` in this position stays binary
+        // subtraction, since `~(-)(_, 5)` is how you fix its right operand.
+        if (check(TokenType::Bang)) {
+            advance();
+            name = "!";
+            isOperator = true;
+        } else if (isOperatorToken(peek().type)) {
             name = std::string(tokenTypeName(advance().type));
             isOperator = true;
         } else {
@@ -3334,7 +3364,7 @@ auto Parser::parseCurryExpr() -> ast::ExprPtr {
         argGroups.push_back(parseCurryArgGroup());
     }
 
-    expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups)};
+    expr->kind = ast::CurryExpr{name, isOperator, std::move(argGroups), std::move(module)};
     return expr;
 }
 

@@ -173,7 +173,7 @@ int main() {
         it("filters streams lazily", []() {
             ReplSession repl;
             repl.eval("let even?(n: Int) = n.modulo(2) == 0");
-            repl.eval("let evens = Sequence(from: 1) { |n| n + 1 }\n  .filter(&even?)");
+            repl.eval("let evens = Sequence(from: 1) { |n| n + 1 }\n  .filter(~even?)");
             assertEqual(repl.eval("evens.take(5)"), std::string("[2, 4, 6, 8, 10]"));
         });
     });

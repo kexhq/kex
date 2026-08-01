@@ -369,6 +369,25 @@ int main() {
             auto r2 = simulate(db, "String.sh", 0, "String.sh");
             assertTrue(has(r2, "String.shout"));
         });
+        it("offers a module's own members, not its types' fields", []() {
+            auto db = makePreludeDb();
+            // `Kex.Kernel` declares the constant VERSION and the record
+            // Version. The record's FIELDS and its make-block methods are
+            // members of Version, not of Kex.Kernel — they carry the
+            // declaring module only incidentally, and used to leak here.
+            auto members = simulate(db, "Kex.Kernel.", 0, "Kex.Kernel.");
+            assertTrue(has(members, "Kex.Kernel.VERSION"), "VERSION missing");
+            for (const auto& leaked : {"Kex.Kernel.major", "Kex.Kernel.minor",
+                                       "Kex.Kernel.patch", "Kex.Kernel.revision",
+                                       "Kex.Kernel.number", "Kex.Kernel.tuple"})
+                assertTrue(!has(members, leaked),
+                           std::string("leaked into the module: ") + leaked);
+
+            // They still complete where they belong.
+            auto fields = simulate(db, "Version.", 0, "Version.");
+            assertTrue(has(fields, "Version.major"), "Version.major missing");
+            assertTrue(has(fields, "Version.number"), "Version.number missing");
+        });
     });
 
     return runAll();

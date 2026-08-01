@@ -1699,7 +1699,7 @@ int main() {
                 "let even?(n: Int) = n.modulo(2) == 0\n"
                 "main do\n"
                 "  let evens = Sequence(from: 1) { |n| n + 1 }\n"
-                "    .filter(&even?)\n"
+                "    .filter(~even?)\n"
                 "  evens.take(5)\n"
                 "end\n"
             );
@@ -1717,7 +1717,7 @@ int main() {
                 "main do\n"
                 "  let evenSquares = Sequence(from: 1) { |n| n + 1 }\n"
                 "    .map { |n| n * n }\n"
-                "    .filter(&even?)\n"
+                "    .filter(~even?)\n"
                 "  evenSquares.take(4)\n"
                 "end\n"
             );
@@ -1738,7 +1738,7 @@ int main() {
                 "end\n"
                 "main do\n"
                 "  let primes = Sequence(from: 2) { |n| n + 1 }\n"
-                "    .filter(&isPrime?)\n"
+                "    .filter(~isPrime?)\n"
                 "  primes.take(10)\n"
                 "end\n"
             );

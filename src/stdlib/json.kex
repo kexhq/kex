@@ -57,7 +57,7 @@ let stringify(value: Any) -> String do
     :integer -> return "${value}"
     :float -> return "${value}"
     :string -> return encodeString(value)
-    :list -> return "[${value.map(&stringify).join(",")}]"
+    :list -> return "[${value.map(~stringify).join(",")}]"
     :map -> do
       let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
         let (key, item) = entry

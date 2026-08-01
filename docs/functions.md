@@ -194,7 +194,7 @@ let thunk = { 42 }
 # Shorthand
 arr.map(&.name)           # { |x| x.name }
 arr.filter(&.adult?)      # { |x| x.adult? }
-arr.sort(&compare)        # passes named function
+arr.sort(~compare)        # passes named function
 
 # Value capture (not reference)
 var x = 10

@@ -700,31 +700,66 @@ Rule: `{ |params| expr }` for one-liners, `do |params| ... end` for multi-line.
 
 ### Shorthand Lambda (`&`)
 
-`&.method` expands to `{ |x| x.method }`:
+`&` is receiver shorthand: `&.method` expands to `{ |x| x.method }`.
 
 ```kex
-list.filter(&.even?)              # { |x| x.even? }
+list.filter(&.even?)             # { |x| x.even? }
 list.map(&.to(String).or(""))    # { |x| x.to(String).or("") }
-list.map(&double)                # { |x| double(x) }
+list.map(&.+ 1)                  # { |x| x + 1 }
 ```
+
+To capture a *named* function rather than call a method on the receiver, use
+`~` (below). `&f` is not valid syntax.
 
 ### Currying (`~`)
 
-`~f(arg)` produces a partial application — a lambda that supplies `arg` as the
-first parameter of `f`:
+`~f` captures `f` as a value. Each trailing `(args)` group partially applies
+it, so `~f` on its own is just `f`:
 
 ```kex
 let add(a, b) = a + b
+
+[1, 2, 3].map(~double)           # { |x| double(x) }  — plain capture
 let inc = ~add(1)                # { |b| add(1, b) }
-
 [1, 2, 3].map(~add(10))          # [11, 12, 13]
-(1..100).reduce(0, ~(+))         # 5050
-
-let sub5 = ~(-)(_, 5)            # { |a| a - 5 }  (_ = placeholder)
+~add(3)(4)                       # 7 — groups chain
 ```
 
-Operators can be curried directly: `~(+)`, `~(-)`, `~(*)`. Use `_` as a
-placeholder to fix the non-leading argument.
+Use `_` as a placeholder to fix a non-leading argument:
+
+```kex
+let sub5 = ~(-)(_, 5)            # { |a| a - 5 }
+```
+
+Every binary operator can be captured with `~(op)` — `~(+)`, `~(-)`, `~(*)`,
+`~(/)`, `~(%)`, `~(^)`, `~(==)`, `~(!=)`, `~(<)`, `~(<=)`, `~(>)`, `~(>=)`,
+`~(&&)`, `~(||)`:
+
+```kex
+(1..100).reduce(0, ~(+))         # 5050
+flags.reduce(true, ~(&&))        # all true?
+```
+
+Note that `~(&&)` and `~(||)` are ordinary two-argument functions: both
+arguments are evaluated before the call, so they do not short-circuit the way
+the `&&` and `||` operators do.
+
+`~(!)` captures the unary negation as a one-argument function:
+
+```kex
+flags.map(~(!))                  # { |b| !b }
+```
+
+`-` in this position is always binary subtraction, since `~(-)(_, 5)` is how
+you fix its right operand; there is no `~` capture of unary minus.
+
+The name may be module-qualified, to any nesting depth:
+
+```kex
+["a", "b"].each(~IO.printLine)
+[1, 2].map(~Math.Vec2.scale(2))
+words.map(~Outer.Inner.Deep.shout)
+```
 
 ### Higher-Order Functions
 

@@ -34,7 +34,7 @@ end
 # Higher-order functions
 let applyTwice(f, x) = f(f(x))
 let addOne(n) = n + 1
-applyTwice(&addOne, 5)   # 7
+applyTwice(~addOne, 5)   # 7
 
 main do
   IO.printLine("doubled: ${doubled}")
@@ -42,5 +42,5 @@ main do
   IO.printLine("thunk: ${value}")
   IO.printLine(hello("Alice"))
   IO.printLine(hi("World"))
-  IO.printLine("applyTwice: ${applyTwice(&addOne, 5)}")
+  IO.printLine("applyTwice: ${applyTwice(~addOne, 5)}")
 end

@@ -2183,14 +2183,14 @@ int main() {
     });
 
     describe("Semantic — type aliases", []() {
-        it("preserves typed local function params and returns through &capture", []() {
+        it("preserves typed local function params and returns through ~capture", []() {
             auto diagnostics = check(
                 "type Handler = Integer -> Integer\n"
                 "main do\n"
                 "  let wrap(handler: Handler) -> Handler do\n"
                 "    return { |n| handler(n) }\n"
                 "  end\n"
-                "  let middleware = &wrap\n"
+                "  let middleware = ~wrap\n"
                 "  let wrapped = middleware({ |n| n })\n"
                 "  wrapped(1)\n"
                 "end\n"
@@ -2611,21 +2611,21 @@ int main() {
             , "expects argument 1 to be String, but got Integer"));
         });
 
-        it("&function on correct element type passes", []() {
+        it("~function on correct element type passes", []() {
             assertTrue(noErrors(
                 "main do\n"
                 "  let nums = [1, 2, 3, 4]\n"
-                "  let evens = nums.filter(&even?)\n"
+                "  let evens = nums.filter(~even?)\n"
                 "  IO.printLine(evens.join(\", \"))\n"
                 "end\n"
             ));
         });
 
-        it("&function on wrong element type is an error", []() {
+        it("~function on wrong element type is an error", []() {
             assertTrue(hasError(
                 "main do\n"
                 "  let words = [\"a\", \"b\"]\n"
-                "  let evens = words.filter(&even?)\n"
+                "  let evens = words.filter(~even?)\n"
                 "  IO.printLine(evens.join(\", \"))\n"
                 "end\n"
             , "expects argument 1 to be Integer, but got String"));
@@ -2683,7 +2683,7 @@ int main() {
                 "type Comparison = Less | Equal | Greater\n"
                 "let render(value: Comparison) = value\n"
                 "main do\n"
-                "  [Less, Equal, Greater].each(&render)\n"
+                "  [Less, Equal, Greater].each(~render)\n"
                 "end\n"
             ));
         });

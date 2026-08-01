@@ -369,6 +369,7 @@ struct CurryExpr {
     std::string name;       // function or operator name ("add", "+", etc.)
     bool isOperator;        // true for ~(+), ~(*), etc.
     std::vector<std::vector<ExprPtr>> argGroups; // each (args) paren group
+    std::string module;     // namespace for ~Mod.fn; empty when unqualified
 };
 
 struct BlockExpr {

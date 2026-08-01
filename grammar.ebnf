@@ -250,6 +250,7 @@ expr
   | next_expr
   | lambda
   | shorthand_lambda
+  | curry_expr
   | spread_expr
   | expr IF expr                                 (* trailing conditional *)
   | then_else_expr
@@ -366,10 +367,37 @@ lambda
   | DO PIPE params PIPE body END                  (* multi-line lambda *)
   ;
 
+(* `&` is receiver shorthand only. Capturing a named function or an
+   operator is spelled with `~` — see curry_expr. *)
 shorthand_lambda
-  = AMP DOT LOWER_IDENT                           (* &.method *)
-  | AMP DOT LOWER_IDENT LPAREN args RPAREN        (* &.method(args) *)
-  | AMP LOWER_IDENT                               (* &function *)
+  = AMP DOT method_name                           (* &.method, &.+ *)
+  | AMP DOT method_name LPAREN args RPAREN        (* &.method(args) *)
+  ;
+
+method_name = LOWER_IDENT | operator ;
+
+(* `~f` captures a named function; every trailing (args) group partially
+   applies it, so `~f` alone is just f. `_` fixes a non-leading argument.
+   The name may be module-qualified to any depth: `~Math.Vec2.add`. *)
+curry_expr
+  = TILDE curry_target { LPAREN curry_args RPAREN }
+  ;
+
+curry_target
+  = LOWER_IDENT                                   (* ~function *)
+  | UPPER_IDENT { DOT UPPER_IDENT } DOT LOWER_IDENT  (* ~Mod.Sub.function *)
+  | LPAREN operator RPAREN                        (* ~(+), ~(<=), ~(&&) *)
+  | LPAREN BANG RPAREN                            (* ~(!) — the unary one *)
+  ;
+
+curry_args = [ curry_arg { COMMA curry_arg } ] ;
+curry_arg  = expr | UNDERSCORE ;                  (* _ = placeholder *)
+
+(* Every binary operator can be captured with `~(op)`. *)
+operator
+  = PLUS | MINUS | STAR | SLASH | PERCENT | CARET
+  | EQ_EQ | NOT_EQ | LESS_THAN | LESS_EQ | GREATER_THAN | GREATER_EQ
+  | AND_AND | PIPE_PIPE
   ;
 
 spread_expr = DOT_DOT_DOT expr ;
@@ -463,6 +491,7 @@ ARROW        = "->" ;
 AMP          = "&" ;
 AT           = "@" ;
 BANG         = "!" ;
+CARET        = "^" ;
 COLON        = ":" ;
 COMMA        = "," ;
 DOT          = "." ;
@@ -491,6 +520,7 @@ RBRACKET     = "]" ;
 RPAREN       = ")" ;
 SLASH        = "/" ;
 STAR         = "*" ;
+TILDE        = "~" ;
 TYPE_ANNOTATION = ":>" ;
 UNDERSCORE   = "_" ;
 

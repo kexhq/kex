@@ -33,7 +33,7 @@ foul module IO do
   # Treated as pure by the type checker — purity checking ignores this call.
   #
   # @example
-  #   xs.map(&double).inspect.filter(&even?)
+  #   xs.map(~double).inspect.filter(~even?)
   inspect : A -> A
   let inspect(val) = Kex.Intrinsic.IO.inspect(val)
 

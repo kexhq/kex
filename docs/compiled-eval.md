@@ -163,10 +163,10 @@ Usage:
 
 ```kex
 let dispatch = Router.new()
-  .get("/", &index)
-  .get("/users", &listUsers)
-  .get("/users/:id", &getUser)
-  .post("/users", &createUser)
+  .get("/", ~index)
+  .get("/users", ~listUsers)
+  .get("/users/:id", ~getUser)
+  .post("/users", ~createUser)
   .compile()
 ```
 

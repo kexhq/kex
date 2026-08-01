@@ -1953,13 +1953,40 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         slots.push_back({false, eval(*argExpr)});
 
             auto fnName = node.name;
+            // `~Mod.fn` — resolve to the mangled "Mod::fn" binding that
+            // namespace calls use, so callFunction dispatches to the module's
+            // function rather than a same-named global.
+            std::string defKey = fnName;
+            if (!node.module.empty()) {
+                auto ns = node.module;
+                if (!m_moduleRegistry.contains(ns)) {
+                    module::Resolver resolver(m_moduleRoots);
+                    if (resolver.resolve(ns, m_currentModule))
+                        ns = ensureModuleLoaded(ns, expr.location, m_currentModule);
+                }
+                if (auto registered = m_moduleRegistry.find(ns);
+                    registered != m_moduleRegistry.end()
+                    && registered->second.privateNames.contains(node.name)
+                    && m_currentModule != ns) {
+                    throw RuntimeError("cannot access private name `" + node.name
+                                       + "` from " + ns, expr.location);
+                }
+                const auto mangled = ns + "::" + node.name;
+                if (!m_env->get(mangled))
+                    throw RuntimeError("`" + node.module + "." + node.name
+                                       + "` is not a function", expr.location);
+                fnName = mangled;
+                defKey = mangled; // defs register under the same mangled name
+            }
 
-            // Determine arity: operators are always 2; user functions from defs.
+            // Determine arity: `!` is unary, other operators binary; user
+            // functions from their defs.
+            const bool isUnaryOp = node.isOperator && fnName == "!";
             int arity = -1;
             if (node.isOperator) {
-                arity = 2;
+                arity = isUnaryOp ? 1 : 2;
             } else {
-                auto it = m_functionDefs.find(fnName);
+                auto it = m_functionDefs.find(defKey);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
                     const auto& firstDef = *it->second[0];
                     if (!firstDef.clauses.empty())
@@ -1971,13 +1998,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             int openCount = 0;
             for (const auto& s : slots) if (s.isOpen) openCount++;
 
-            // Fully applied: no open slots and we have at least arity args.
-            bool fullyApplied = (openCount == 0) &&
+            // Fully applied: an argument group was actually written, no open
+            // slots, and we have at least arity args. `~f` with no group is a
+            // plain capture and must never be applied here — note that a
+            // method's recorded arity can be 0 (the receiver is implicit
+            // rather than a declared param), so arity alone can't decide this.
+            bool fullyApplied = !node.argGroups.empty() && (openCount == 0) &&
                                 (arity >= 0 ? boundCount >= arity : boundCount > 0);
 
             if (fullyApplied) {
                 std::vector<ValuePtr> args;
                 for (const auto& s : slots) args.push_back(s.value);
+                if (isUnaryOp && args.size() >= 1)
+                    return evalUnaryOp(TokenType::Bang, args[0], expr.location);
                 if (node.isOperator && args.size() >= 2) {
                     static const std::unordered_map<std::string, TokenType> opToks = {
                         {"+", TokenType::Plus}, {"-", TokenType::Minus},
@@ -1986,6 +2019,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                         {"!=", TokenType::NotEq}, {"<", TokenType::LessThan},
                         {"<=", TokenType::LessEq}, {">", TokenType::GreaterThan},
                         {">=", TokenType::GreaterEq},
+                        {"&&", TokenType::AmpAmp}, {"||", TokenType::PipePipe},
                     };
                     auto it2 = opToks.find(fnName);
                     if (it2 != opToks.end())
@@ -2002,6 +2036,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 {"!=", TokenType::NotEq}, {"<", TokenType::LessThan},
                 {"<=", TokenType::LessEq}, {">", TokenType::GreaterThan},
                 {">=", TokenType::GreaterEq},
+                {"&&", TokenType::AmpAmp}, {"||", TokenType::PipePipe},
             };
             auto opIt = opTokens.find(fnName);
             bool isOp = node.isOperator && opIt != opTokens.end();
@@ -2010,7 +2045,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // Partial: return a lambda that fills open slots (or appends) then calls.
             auto lambda = std::make_shared<Value>();
             lambda->data = FunctionValue{"~" + fnName,
-                [this, fnName, slots, isOp, opToken](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
+                [this, fnName, slots, isOp, isUnaryOp, opToken](std::vector<ValuePtr> fillArgs) mutable -> ValuePtr {
                     std::vector<ValuePtr> finalArgs;
                     size_t fillIdx = 0;
                     for (const auto& s : slots) {
@@ -2021,6 +2056,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                     while (fillIdx < fillArgs.size())
                         finalArgs.push_back(fillArgs[fillIdx++]);
+                    if (isUnaryOp && finalArgs.size() >= 1)
+                        return evalUnaryOp(TokenType::Bang, finalArgs[0], {});
                     if (isOp && finalArgs.size() >= 2)
                         return evalBinaryOp(opToken, finalArgs[0], finalArgs[1], {});
                     return callFunction(fnName, std::move(finalArgs), {}, {});

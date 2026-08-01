@@ -723,34 +723,8 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
-                // `&name` where name is a LOCAL binding holding a fun (e.g.
-                // `let inc = { |x| … }; xs.map(&inc)`) — the reference IS the
-                // fun; pass it through (the UFCS path below would look for a
-                // method `.inc`, which doesn't exist).
-                if (n.kind == ast::ShorthandLambda::Kind::Function &&
-                    n.args.empty() && subst.count(n.name))
-                    return var(currentName(n.name));
-                // `&.method` / `&func` / `&.method(args)` → fun(_sx) ->
-                // _sx.method(args). Reusing the UFCS method path means
-                // `&digit?` (a builtin) and `&myFn` (a local) both resolve
-                // correctly with no special-casing.
-                std::string sx = fresh("Sx");
-                auto recvAst = std::make_unique<ast::Expr>();
-                recvAst->kind = ast::Identifier{sx};
-                ast::MethodCall mc;
-                mc.receiver = std::move(recvAst);
-                mc.method = n.name;
-                // Borrow the shorthand's arg exprs for the synthetic call and
-                // restore them after — the AST node is shared and re-lowered
-                // (multi-clause functions), so it must be left intact.
-                auto& lentArgs = const_cast<std::vector<ast::ExprPtr>&>(n.args);
-                mc.args = std::move(lentArgs);
-                auto snap = subst; subst[sx] = sx;
-                auto body = lowerMethodCall(mc);
-                subst = snap;
-                lentArgs = std::move(mc.args);
-                Lambda lam; lam.params = {sx}; lam.body = std::move(body);
-                auto ex = std::make_unique<Expr>(); ex->node = std::move(lam); return ex;
+                // `&.method` / `&.method(args)` → fun(_sx) -> _sx.method(args).
+                return lowerNameAsUfcsFun(n.name, n.args);
             } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
                 if (n.entries.empty()) return callE("maps", "new", 0, {});
                 std::vector<Binding> binds;
@@ -950,9 +924,40 @@ struct Lowering {
         static const std::unordered_map<std::string, Op> t = {
             {"+",Op::Add},{"-",Op::Sub},{"*",Op::Mul},{"/",Op::Div},{"%",Op::Mod},{"^",Op::Pow},
             {"==",Op::Eq},{"!=",Op::Neq},{"<",Op::Lt},{"<=",Op::Lte},{">",Op::Gt},{">=",Op::Gte},
+            {"&&",Op::And},{"||",Op::Or},
         };
         auto it = t.find(name); return it == t.end() ? std::nullopt : std::optional<Op>(it->second);
     }
+    // `name` used as a bare function value, with no arity known statically.
+    // Routing through the UFCS method path means a builtin (`digit?`), a
+    // module-local function (`stringify`) and a local binding holding a fun
+    // all resolve with no special-casing here.
+    auto lowerNameAsUfcsFun(const std::string& name,
+                            const std::vector<ast::ExprPtr>& args) -> ExprPtr {
+        // A LOCAL binding holding a fun IS the fun — pass it through, since
+        // the UFCS path would instead look for a method `.name`.
+        if (args.empty() && subst.count(name)) return var(currentName(name));
+
+        std::string sx = fresh("Sx");
+        auto recvAst = std::make_unique<ast::Expr>();
+        recvAst->kind = ast::Identifier{sx};
+        ast::MethodCall mc;
+        mc.receiver = std::move(recvAst);
+        mc.method = name;
+        // Borrow the caller's arg exprs for the synthetic call and restore
+        // them after — the AST node is shared and re-lowered (multi-clause
+        // functions), so it must be left intact.
+        auto& lentArgs = const_cast<std::vector<ast::ExprPtr>&>(args);
+        mc.args = std::move(lentArgs);
+        auto snap = subst; subst[sx] = sx;
+        auto body = lowerMethodCall(mc);
+        subst = snap;
+        lentArgs = std::move(mc.args);
+        Lambda lam; lam.params = {sx}; lam.body = std::move(body);
+        auto ex = std::make_unique<Expr>(); ex->node = std::move(lam);
+        return ex;
+    }
+
     // `~fn(args...)` / `~(op)` — partial or full application. Flatten every
     // paren group into ordered slots (a `_` placeholder is an open slot); if
     // all slots are bound and enough are present, apply now, else build a fun
@@ -967,16 +972,58 @@ struct Lowering {
                     slots.push_back({true, nullptr});
                 else slots.push_back({false, atomize(a, binds)});
             }
+        const std::string qualKey = n.module.empty() ? n.name : n.module + "." + n.name;
+
+        const bool isUnaryOp = n.isOperator && n.name == "!";
+
         int arity = -1;
-        if (n.isOperator) arity = 2;
-        else if (auto it = fnParamNames.find(n.name); it != fnParamNames.end())
+        if (n.isOperator) arity = isUnaryOp ? 1 : 2;
+        else if (auto it = fnParamNames.find(qualKey); it != fnParamNames.end())
             arity = static_cast<int>(it->second.size());
+        else if (!n.module.empty() && externalModules) {
+            auto pit = externalModules->exportParamNames.find(qualKey);
+            if (pit != externalModules->exportParamNames.end())
+                arity = static_cast<int>(pit->second.size());
+        }
+
+        // Can this qualified name be emitted as a direct module call?
+        const bool qualifiedKnown = !n.module.empty()
+            && (moduleFunctions.count(qualKey)
+                || (externalModules
+                    && externalModules->exportToBeamFn.count(qualKey)
+                    && externalModules->nameToAtom.count(n.module)));
+
+        // A bare reference whose arity isn't known here: an unqualified
+        // builtin/module-local/local binding, or a qualified name belonging to
+        // a prelude module, which is an intrinsic rather than a BEAM module.
+        // Emitting Call{name, 0} would be wrong; defer to the UFCS path, where
+        // `String.upperCase(s)` and `s.upperCase` are the same call anyway.
+        if (!n.isOperator && slots.empty() && arity < 0 && !qualifiedKnown)
+            return lowerNameAsUfcsFun(n.name, {});
 
         auto buildCall = [&](std::vector<ExprPtr> args) -> ExprPtr {
+            if (isUnaryOp && args.size() >= 1)
+                return intrin(Op::Not, one(std::move(args[0])));
             if (n.isOperator && args.size() >= 2)
                 if (auto op = curryOp(n.name))
                     return intrin(*op, two(std::move(args[0]), std::move(args[1])));
             int ar = static_cast<int>(args.size());
+            if (!n.module.empty()) {
+                // Same two lookups the namespace MethodCall path uses: a
+                // function of a module in this compilation unit, else an
+                // export of a separately compiled one.
+                if (auto it = moduleFunctions.find(qualKey); it != moduleFunctions.end())
+                    return callE("", it->second, ar, std::move(args));
+                if (externalModules) {
+                    auto eit = externalModules->exportToBeamFn.find(qualKey);
+                    auto ait = externalModules->nameToAtom.find(n.module);
+                    if (eit != externalModules->exportToBeamFn.end()
+                        && ait != externalModules->nameToAtom.end())
+                        return callE(ait->second, eit->second, ar, std::move(args));
+                }
+                throw LowerError("IR lower: unknown module function in `~"
+                                 + qualKey + "`");
+            }
             auto ex = std::make_unique<Expr>();
             ex->node = Call{"", n.name, ar, std::move(args), false};
             return ex;

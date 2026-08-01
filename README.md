@@ -70,8 +70,8 @@ let suspicious = requests
   .take(20)
 
 # Equivalent forms; pick whichever reads better locally.
-requests.map(&normalize)
-map(requests, &normalize)
+requests.map(~normalize)
+map(requests, ~normalize)
 ```
 
 ### Type-Directed Behavior Without Classes
@@ -144,7 +144,7 @@ end
 
 main do
   (1..100)
-    .map(&fizzBuzz)
+    .map(~fizzBuzz)
     .each { |s| IO.printLine(s) }
 end
 ```

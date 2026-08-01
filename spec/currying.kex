@@ -1,6 +1,16 @@
 let add(a, b) = a + b
 let multiply(a, b) = a * b
 let greet(greeting, name) = "${greeting}, ${name}!"
+let triple(n) = n * 3
+
+module Outer do
+  module Inner do
+    module Deep do
+      let shout(s) = s.upperCase
+      let add(a, b) = a + b
+    end
+  end
+end
 
 main do
   # partial application of named functions
@@ -34,4 +44,27 @@ main do
   let hello = ~greet("Hello")
   IO.printLine(hello("Alice"))
   IO.printLine(hello("Bob"))
+
+  # bare capture — `~f` with no argument group is just `f`
+  IO.printLine([1, 2, 3, 4].filter(~even?))
+  IO.printLine([1, 2, 3].map(~triple))
+
+  # comparison and logical operators
+  IO.printLine([3, 1, 2].filter(~(<=)(_, 2)))
+  IO.printLine([1, 2, 2].filter(~(==)(2)))
+  IO.printLine([true, true, true].reduce(true, ~(&&)))
+  IO.printLine([false, false, true].reduce(false, ~(||)))
+
+  # `!` is the unary capture — `-` in this position stays binary subtraction
+  IO.printLine([true, false].map(~(!)))
+  IO.printLine(~(!)(false))
+
+  # module-qualified capture
+  IO.printLine(["x", "y"].map(~String.upperCase))
+  ["a", "b"].each(~IO.printLine)
+
+  # nested submodules, bare and partially applied
+  IO.printLine(["hi"].map(~Outer.Inner.Deep.shout))
+  IO.printLine([1, 2].map(~Outer.Inner.Deep.add(10)))
+  IO.printLine(~Outer.Inner.Deep.add(3)(4))
 end

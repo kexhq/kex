@@ -1721,6 +1721,15 @@ auto TypeChecker::resolveArgHints(const std::string& name,
     return {};
 }
 
+// A bare `~f` capture — no argument groups, no operator, unqualified. Like a
+// shorthand lambda, it needs the callee's signature to know what it's being
+// checked against, so it's deferred to the contextual (hinted) pass.
+static auto isBareCapture(const ast::Expr* e) -> bool {
+    if (!e) return false;
+    const auto* ce = std::get_if<ast::CurryExpr>(&e->kind);
+    return ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty();
+}
+
 auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                              const std::vector<TypePtr>& hintParams) -> TypePtr {
     if (auto* lam = std::get_if<ast::Lambda>(&blockExpr.kind)) {
@@ -1763,6 +1772,27 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
         }
         popScope();
         return Type::func(std::move(paramTypes), resultType);
+    }
+    // A bare `~f` passed where a function is expected: check it against the
+    // hinted param types, so `words.filter(~even?)` reports the element-type
+    // mismatch rather than inferring fresh vars that unify with anything.
+    // Only plain unqualified captures — an operator or a `~Mod.fn` name isn't
+    // resolvable through checkCall here, and partial applications already
+    // carry their own arg types.
+    if (auto* ce = std::get_if<ast::CurryExpr>(&blockExpr.kind);
+        ce && ce->argGroups.empty() && !ce->isOperator && ce->module.empty()
+        && !hintParams.empty()) {
+        std::vector<TypePtr> paramTypes;
+        for (const auto& h : hintParams) {
+            auto pt = resolve(h);
+            paramTypes.push_back(
+                (std::holds_alternative<TypeVar>(pt->kind) ||
+                 std::holds_alternative<UnknownType>(pt->kind))
+                    ? freshTypeVar() : pt);
+        }
+        auto resultType = checkCall(ce->name, paramTypes, blockExpr.location,
+                                    /*isMethodCall=*/false);
+        return Type::func(std::move(paramTypes), resolve(resultType));
     }
     if (auto* sl = std::get_if<ast::ShorthandLambda>(&blockExpr.kind)) {
         if (sl->kind == ast::ShorthandLambda::Kind::Function && hintParams.size() > 1) {
@@ -2086,6 +2116,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (node.args[i] &&
                     (std::holds_alternative<ast::ShorthandLambda>(
                          node.args[i]->kind) ||
+                     isBareCapture(node.args[i].get()) ||
                      (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
                     contextualLambdas.emplace_back(i, i);
@@ -2344,6 +2375,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (node.args[i] &&
                     (std::holds_alternative<ast::ShorthandLambda>(
                          node.args[i]->kind) ||
+                     isBareCapture(node.args[i].get()) ||
                      (lambda && !lambda->params.empty()))) {
                     argTypes.push_back(Type::unknown()); // placeholder
                     contextualLambdas.emplace_back(
@@ -2751,7 +2783,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // Determine arity to compute remaining open param count.
             int arity = -1;
             if (node.isOperator) {
-                arity = 2;
+                arity = (node.name == "!") ? 1 : 2; // `~(!)` is the unary one
             } else {
                 auto usit = m_userSignatures.find(node.name);
                 if (usit != m_userSignatures.end() && !usit->second.empty()) {

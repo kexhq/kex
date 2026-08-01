@@ -28,9 +28,9 @@ main do
 
   IO.printLine((1..10).map { |x| x * x })
   IO.printLine((1..100).sum)
-  IO.printLine((1..10).filter(&even?))
+  IO.printLine((1..10).filter(~even?))
 
   let primes = Sequence(from: 2) { |n| n + 1 }
-    .filter(&isPrime?)
+    .filter(~isPrime?)
   IO.printLine(primes.take(10))
 end
