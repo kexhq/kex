@@ -1747,16 +1747,28 @@ Run Kex source in an isolated evaluator. The options record has fields:
 
 ### 23.20 Kex (Backend / Feature Introspection)
 
+Both types live under `Kex`, so their constructors are qualified too — this
+keeps `FS`, `Http` and `Process` from colliding with the modules of the same
+name in the global namespace.
+
 ```kex
-type Backend = Interpreter | Beam
-type Feature = Http | FS | Process | WebServer
+module Kex do
+  type Backend = Interpreter | Beam
+  type Feature = Http | FS | Process | WebServer
+end
 ```
 
 | Function | Description |
 |---|---|
-| `Kex.backend` | Active backend (`Interpreter` or `Beam`) |
+| `Kex.BACKEND` | Active backend (`Kex.Interpreter` or `Kex.Beam`) |
 | `Kex.Feature.has?(f)` | Whether a feature is available on this backend |
 | `Kex.Feature.list` | All available features |
+
+```kex
+if Kex.BACKEND == Kex.Beam then
+  IO.printLine(Kex.Feature.has?(Kex.Process))
+end
+```
 
 ### 23.21 Test Doubles (Mock)
 

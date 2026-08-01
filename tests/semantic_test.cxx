@@ -1060,7 +1060,7 @@ int main() {
                 "let needsString(value: String) = value\n"
                 "main do\n"
                 "  needsFloat(Math.PI)\n"
-                "  needsString(Console.Green)\n"
+                "  needsString(Console.GREEN)\n"
                 "end\n"));
         });
 

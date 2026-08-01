@@ -312,6 +312,19 @@ struct Lowering {
         return staticCtorNames.count(name) && !variantTagSet.count(name)
             && !records.count(name) && !knownFns.count(name);
     }
+    // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`). A tag is
+    // just an atom at runtime, so the qualifier has no representation here —
+    // resolve to the bare tag. `variantOwner` covers tags declared outside
+    // this module (the prelude's, via externalVariants) as well as its own,
+    // so an unknown name still falls through to the usual error.
+    auto qualifiedVariantTag(const std::string& name) const -> std::string {
+        auto dot = name.rfind('.');
+        if (dot == std::string::npos) return "";
+        auto tag = name.substr(dot + 1);
+        if (tag.empty() || !std::isupper(static_cast<unsigned char>(tag[0])))
+            return "";
+        return (variantTagSet.count(tag) || variantOwner.count(tag)) ? tag : "";
+    }
     // A semantic::StructuredType as the `Type { name, args }` record it
     // stands for — a tagged tuple, the same shape a record literal lowers to.
     auto structuredTypeLiteral(const semantic::StructuredType& type) -> ExprPtr {
@@ -538,9 +551,13 @@ struct Lowering {
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
                 // tag → the atom 'Name' (e.g. JsonNull, Less).
+                auto ex = std::make_unique<Expr>();
+                if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
+                    ex->node = Construct{tag, {}};
+                    return ex;
+                }
                 if (staticCtorOutOfScope(n.name))
                     return runtimeError("Undefined identifier: " + n.name);
-                auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.name, {}};
                 return ex;
             } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
@@ -1240,6 +1257,10 @@ struct Lowering {
         // Capitalized name = ADT constructor with a payload → tagged tuple.
         if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))
             && !zeroArgThunk) {
+            if (auto tag = qualifiedVariantTag(n.name); !tag.empty()) {
+                ex->node = Construct{tag, std::move(args)};
+                return wrapLets(binds, std::move(ex));
+            }
             if (staticCtorOutOfScope(n.name))
                 return wrapLets(binds, runtimeError("Undefined function: " + n.name));
             ex->node = Construct{n.name, std::move(args)};
@@ -1780,6 +1801,17 @@ struct Lowering {
                 auto ex = std::make_unique<Expr>();
                 ex->node = Construct{n.method, std::move(fieldArgs)};
                 return wrapLets(binds, std::move(ex));
+            }
+            // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`).
+            // The tag is just an atom at runtime, so the qualifier has no
+            // representation here — emit the bare tag.
+            if (n.args.empty() && !n.block && n.namedArgs.empty()) {
+                if (auto tag = qualifiedVariantTag(uid->name + "." + n.method);
+                    !tag.empty()) {
+                    auto ex = std::make_unique<Expr>();
+                    ex->node = Construct{tag, {}};
+                    return wrapLets(binds, std::move(ex));
+                }
             }
             // A nullary CONSTRUCTOR is a value, not a namespace: `Monday.name`
             // is the same call as `let m = Monday` then `m.name`, which has
