@@ -9,6 +9,7 @@
 #include "ir/emit_core.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
+#include "compiled/expand.hxx"
 #include "module/resolver.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
@@ -1505,6 +1506,7 @@ auto printUsage(const char *progName) -> void {
       << "  -s, --summary     Print public API signatures (Kex syntax)\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+      << "      --expand      Print the AST after `compiled do` expansion\n"
       << "  -o <dir>          Output directory for -c / --emit-core (default: "
          ".)\n"
       << "  -h, --help        Show this help\n"
@@ -1535,6 +1537,10 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
+      // Print the AST AFTER compile-time expansion of `compiled do` blocks —
+      // i.e. what the type checker and both backends actually see. `--parse`
+      // shows the AST before it.
+      {"expand", no_argument, nullptr, 1004},
       // Compile the sources selected by src/stdlib/prelude.kex into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
@@ -1558,6 +1564,9 @@ int main(int argc, char *argv[]) {
     switch (opt) {
     case 1003:
       skipPrelude = true;
+      break;
+    case 1004:
+      mode = "expand";
       break;
     case 1001: {
       std::string dir = optarg;
@@ -3221,6 +3230,37 @@ int main(int argc, char *argv[]) {
     }
 
     if (mode == "parse") {
+      printAst(program);
+      return 0;
+    }
+
+    // Compile-time expansion of `compiled do` blocks. Deliberately the ONE
+    // place every mode passes through, right after parsing and before any
+    // semantic pass — so --check, --run, --compile, --emit-core and -R can
+    // never disagree about what the program contains.
+    //
+    // Note for when this stops being an identity pass: the BEAM path also
+    // merges a `.spec.kex` base file's declarations into program.items further
+    // down, and resolveBeamDeps pulls in dependency modules. Those items are
+    // parsed AFTER this point, so their own `compiled` blocks would not be
+    // expanded here — they need either their own expand() call at load time or
+    // a second pass once the program is fully assembled.
+    {
+      std::vector<kex::semantic::Diagnostic> expandDiagnostics;
+      const bool expanded =
+          kex::compiled::expand(program, expandDiagnostics);
+      for (const auto &diagnostic : expandDiagnostics)
+        printSemanticDiagnostic(diagnostic);
+      if (!expanded) {
+        std::cerr << kex::color::apply(kex::color::bold)
+                  << kex::color::apply(kex::color::magenta)
+                  << "Aborted:" << kex::color::apply(kex::color::reset)
+                  << " compile-time expansion failed.\n";
+        return 1;
+      }
+    }
+
+    if (mode == "expand") {
       printAst(program);
       return 0;
     }

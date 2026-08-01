@@ -143,6 +143,7 @@ add_library(kex_lib
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/compiled/expand.cxx
     src/module/resolver.cxx
     src/module/package_metadata.cxx
     src/validation/tag_validator.cxx
