@@ -19,7 +19,8 @@ auto make(const SourceLocation& location) -> ast::ExprPtr {
 
 auto valueToLiteral(const ValuePtr& value,
                     const SourceLocation& location,
-                    std::string& error) -> ast::ExprPtr {
+                    std::string& error,
+                    const RecordLayouts* layouts) -> ast::ExprPtr {
     if (!value) {
         error = "no value";
         return nullptr;
@@ -67,7 +68,7 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::ListValue>) {
                 ast::ListExpr list;
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error);
+                    auto lowered = valueToLiteral(element, location, error, layouts);
                     if (!lowered) return nullptr;
                     list.elements.push_back(std::move(lowered));
                 }
@@ -75,7 +76,7 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::TupleValue>) {
                 ast::TupleExpr tuple;
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error);
+                    auto lowered = valueToLiteral(element, location, error, layouts);
                     if (!lowered) return nullptr;
                     tuple.elements.push_back(std::move(lowered));
                 }
@@ -83,9 +84,9 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::MapValue>) {
                 ast::MapExpr map;
                 for (const auto& [key, mapped] : node.entries) {
-                    auto loweredKey = valueToLiteral(key, location, error);
+                    auto loweredKey = valueToLiteral(key, location, error, layouts);
                     if (!loweredKey) return nullptr;
-                    auto loweredValue = valueToLiteral(mapped, location, error);
+                    auto loweredValue = valueToLiteral(mapped, location, error, layouts);
                     if (!loweredValue) return nullptr;
                     map.entries.push_back(
                         ast::MapEntry{std::move(loweredKey), std::move(loweredValue)});
@@ -94,34 +95,43 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::RecordValue>) {
                 ast::RecordConstruction record;
                 record.typeName = node.typeName;
-                // Sorted to keep the emitted AST stable: RecordValue::fields
-                // is an unordered_map, and an unstable order would make
-                // identical builds emit different code.
+                // DECLARATION order, because a record is a tuple on BEAM and
+                // the order here can BE the tuple layout: lowering's main path
+                // looks each written field up by name, but its `records.find`
+                // MISS path falls back to "fields as written", positionally.
+                // Emitting declared order makes written order and layout
+                // coincide, so that fallback cannot corrupt anything.
                 //
-                // TODO — emit DECLARATION order instead, and drop the sort.
-                // Lowering's main path is name-based (lowerRecordConstruction
-                // walks the declared fields and looks each name up), so the
-                // written order is normally irrelevant. But its `records.find`
-                // MISS path falls back to "fields as written", positionally —
-                // and there the order here would BE the tuple layout, so a
-                // rename that moves a field alphabetically would silently
-                // change the ABI. No reachable case was found (even prelude
-                // records like ParseError, whose declared order differs from
-                // alphabetical in 4 of 5 slots, are registered and take the
-                // safe path), but relying on that fallback being unreachable
-                // is the wrong guarantee. Emitting declaration order makes
-                // written order and layout coincide, so the fallback stops
-                // mattering. Needs record layouts passed in to valueToLiteral.
+                // Falling back to ALPHABETICAL for a type with no known layout
+                // — rather than the map's own order — because RecordValue's
+                // fields are an unordered_map, and an unstable order would
+                // make identical builds emit different code.
                 std::vector<const std::string*> names;
                 names.reserve(node.fields.size());
-                for (const auto& [field, _] : node.fields) names.push_back(&field);
-                std::sort(names.begin(), names.end(),
+                if (layouts) {
+                    const auto declared = layouts->find(node.typeName);
+                    if (declared != layouts->end())
+                        for (const auto& field : declared->second)
+                            if (node.fields.count(field)) names.push_back(&field);
+                }
+                // Anything the layout did not account for (and every field, if
+                // the type is unknown) keeps the reproducible alphabetical
+                // tail rather than being dropped.
+                std::vector<const std::string*> extra;
+                for (const auto& [field, _] : node.fields) {
+                    bool listed = false;
+                    for (const auto* seen : names)
+                        if (*seen == field) { listed = true; break; }
+                    if (!listed) extra.push_back(&field);
+                }
+                std::sort(extra.begin(), extra.end(),
                           [](const std::string* a, const std::string* b) {
                               return *a < *b;
                           });
+                names.insert(names.end(), extra.begin(), extra.end());
                 for (const auto* field : names) {
                     auto lowered =
-                        valueToLiteral(node.fields.at(*field), location, error);
+                        valueToLiteral(node.fields.at(*field), location, error, layouts);
                     if (!lowered) return nullptr;
                     record.fields.emplace_back(*field, std::move(lowered));
                 }
@@ -135,7 +145,7 @@ auto valueToLiteral(const ValuePtr& value,
                     ast::FunctionCall call;
                     call.name = node.tag;
                     for (const auto& arg : node.args) {
-                        auto lowered = valueToLiteral(arg, location, error);
+                        auto lowered = valueToLiteral(arg, location, error, layouts);
                         if (!lowered) return nullptr;
                         call.args.push_back(std::move(lowered));
                     }

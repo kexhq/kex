@@ -7,6 +7,7 @@
 #include "../parser/parser.hxx"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 namespace kex::compiled {
@@ -17,19 +18,25 @@ namespace {
 //
 // Not named "isConstant": Kex is immutable by default, so every `let` value
 // binding is already constant — and arguably a function definition is too.
-// Constancy is not the distinction. What matters here is arity: a binding with
-// no parameters denotes a value we can compute now, whereas a `let` WITH
-// parameters is a function the program calls at runtime, with arguments we
-// cannot know, so it is left alone.
+// Constancy is not the distinction. What matters here is whether the source
+// wrote a PARAMETER LIST: a binding denotes a value we can compute now, whereas
+// a `let` with a parameter list is a function the program calls at runtime,
+// with arguments we cannot know, so it is left alone.
 //
 // It is a binding, not a function; the parser merely encodes a parameterless
 // binding as a FunctionDef with one clause and no parameters (grammar.ebnf
 // calls that clause form a "parameterless binding"), so that is the shape we
 // match on. Being evaluated at compile time comes from the enclosing
 // `compiled do` block, not from anything about the binding itself.
+//
+// `hasParamList` is what separates `let x = 3` from `let x() = 3` — both have
+// empty `params`, and treating the second as a binding evaluated it at compile
+// time, failed to substitute its (method-call) uses, and then pruned the
+// definition. That is what `Undefined function: Css.stylesheet` was.
 auto isValueBinding(const ast::FunctionDef& fn) -> bool {
-    return fn.clauses.size() == 1 && fn.clauses[0].params.empty() &&
-           fn.clauses[0].body.size() == 1 && fn.clauses[0].body[0] != nullptr;
+    return fn.clauses.size() == 1 && !fn.clauses[0].hasParamList &&
+           fn.clauses[0].params.empty() && fn.clauses[0].body.size() == 1 &&
+           fn.clauses[0].body[0] != nullptr;
 }
 
 auto addError(std::vector<semantic::Diagnostic>& diagnostics,
@@ -73,6 +80,19 @@ struct Substituter {
     // learn which scope a template belongs to, so its generated declarations
     // land in the module that declared them rather than at top level.
     std::function<void(const ast::GeneratedDecl&)> onGenerated;
+    // Consulted for every expression slot before anything else. Returning true
+    // CLAIMS the slot: the walk neither substitutes nor descends into it.
+    // Chain collapse uses this — it replaces a whole call chain, so rewriting
+    // the parts underneath would be wasted work at best.
+    std::function<bool(ast::ExprPtr&)> onSlot;
+    // Declared record field order, so a reified record is written in the order
+    // its declaration gives — which on BEAM is its tuple layout. Null until
+    // the sandbox has run and can report it.
+    const RecordLayouts* layouts = nullptr;
+    // A second reason to pre-split an interpolated string, beyond "it mentions
+    // a constant". Chain collapse needs one: a chain written straight inside
+    // `"${...}"` is raw text here, so the walk would never reach it.
+    std::function<bool(const std::string&)> alsoSplit;
 
     auto nameOf(const ast::Expr& expr) -> const std::string* {
         if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind))
@@ -84,12 +104,13 @@ struct Substituter {
 
     auto substitute(ast::ExprPtr& slot) -> void {
         if (!slot) return;
+        if (onSlot && onSlot(slot)) return;
         if (const auto* name = nameOf(*slot)) {
             auto found = constants.find(*name);
             if (found != constants.end()) {
                 std::string why;
                 auto literal =
-                    valueToLiteral(found->second, slot->location, why);
+                    valueToLiteral(found->second, slot->location, why, layouts);
                 if (literal) {
                     slot = std::move(literal);
                     return;
@@ -137,7 +158,7 @@ struct Substituter {
         bool mentions = false;
         for (const auto& [name, _] : constants)
             if (text.find(name) != std::string::npos) { mentions = true; break; }
-        if (!mentions) return;
+        if (!mentions && !(alsoSplit && alsoSplit(text))) return;
 
         std::vector<std::string> parts;
         std::vector<ast::ExprPtr> values;
@@ -283,8 +304,12 @@ struct Substituter {
 };
 
 // Applies `visitor` to every function/main body reachable in `items`.
+//
+// `intoCompiled` false stops at a `compiled do` block. Constant substitution
+// wants to go in (a constant may be used by another declaration there); chain
+// collapse must not, since those bodies ARE the builder being collapsed.
 template <typename Items, typename Visit>
-auto walkBodies(Items& items, Visit&& visit) -> void {
+auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
     for (auto& item : items) {
         std::visit(
             [&](auto& node) {
@@ -296,16 +321,263 @@ auto walkBodies(Items& items, Visit&& visit) -> void {
                 } else if constexpr (std::is_same_v<Ptr, ast::MainBlock>) {
                     for (auto& expr : node->body) visit(expr);
                 } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
-                    walkBodies(node->body, visit);
+                    walkBodies(node->body, visit, intoCompiled);
                 } else if constexpr (std::is_same_v<Ptr, ast::ModuleDef>) {
-                    walkBodies(node->body, visit);
+                    walkBodies(node->body, visit, intoCompiled);
                 } else if constexpr (std::is_same_v<Ptr, ast::CompiledBlock>) {
-                    walkBodies(node->items, visit);
+                    if (intoCompiled) walkBodies(node->items, visit, intoCompiled);
                 } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
-                    walkBodies(node->items, visit);
+                    walkBodies(node->items, visit, intoCompiled);
                 }
             },
             item);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Chain collapse
+//
+// A method declared inside a `compiled do` block, called as the TERMINAL of a
+// chain whose every argument is already known at compile time, is evaluated
+// during compilation and the result reified in place. That is what turns a
+// builder like `SQL.select(:all).from(:users).emit()` from a sequence of
+// record allocations into the string literal it always described.
+//
+// The rule is deliberately SYNTACTIC — no dataflow analysis. An expression
+// qualifies when the walk can see that it is made of literals and compiled
+// calls, and nothing else. Anything mentioning a runtime name (a parameter, a
+// local, a global) is left to run at runtime, which is also the entire reason
+// `q2`/`q3` in examples/compiled_sql.kex still build normally: free-variable
+// placeholders are the next slice, not this one.
+//
+// Evaluation is attempted, not proven: a candidate that throws in the sandbox
+// simply keeps its runtime form. Compiled-block code is required to be pure,
+// so a failed attempt leaves nothing behind.
+// ---------------------------------------------------------------------------
+
+// Names declared inside a `compiled do` block that a use site can call: the
+// block's own functions plus the methods of any `make` it holds. A chain is a
+// candidate only if its outermost call names one of these, so ordinary runtime
+// code is never evaluated at compile time.
+using CompiledNames = std::unordered_set<std::string>;
+
+auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void;
+
+template <typename Items>
+auto collectDeclaredNames(const Items& items, CompiledNames& into) -> void {
+    for (const auto& entry : items) {
+        std::visit(
+            [&](const auto& node) {
+                using Ptr = std::decay_t<decltype(*node)>;
+                if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
+                    if (node && !isValueBinding(*node)) into.insert(node->name);
+                } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
+                    if (node) collectMakeMethods(*node, into);
+                } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
+                    if (node) collectDeclaredNames(node->items, into);
+                }
+            },
+            entry);
+    }
+}
+
+// Overload for the CompiledItem variant, which also holds bare ExprPtr.
+auto collectDeclaredNames(const std::vector<ast::CompiledItem>& items,
+                          CompiledNames& into) -> void {
+    for (const auto& entry : items) {
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
+            if (*fn && !isValueBinding(**fn)) into.insert((*fn)->name);
+        } else if (const auto* make =
+                       std::get_if<std::unique_ptr<ast::MakeDef>>(&entry)) {
+            if (*make) collectMakeMethods(**make, into);
+        }
+    }
+}
+
+auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void {
+    collectDeclaredNames(make.body, into);
+}
+
+// Every `compiled do` block in the program, at top level or inside a module.
+auto compiledNames(const ast::Program& program) -> CompiledNames {
+    CompiledNames names;
+    auto scan = [&](const auto& items) {
+        for (const auto& item : items)
+            if (const auto* block =
+                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item))
+                if (*block) collectDeclaredNames((*block)->items, names);
+    };
+    scan(program.items);
+    for (const auto& item : program.items)
+        if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+            if (*mod) scan((*mod)->body);
+    return names;
+}
+
+struct ChainCollapser {
+    const CompiledNames& compiled;
+    // Slots to replace, outermost only: claiming a chain stops the walk from
+    // descending, so a nested call is never collected separately.
+    std::vector<ast::ExprPtr*> slots;
+
+    // A bare `Foo` in receiver position is a MODULE or TYPE qualifier, not a
+    // value — `SQL.select(...)`. Accepted there and nowhere else: treating it
+    // as a value would let a top-level binding be baked in, which is exactly
+    // what must keep happening at runtime.
+    static auto isCallQualifier(const ast::Expr& expr) -> bool {
+        return std::holds_alternative<ast::UpperIdentifier>(expr.kind);
+    }
+
+    auto allStatic(const std::vector<ast::ExprPtr>& list) const -> bool {
+        for (const auto& item : list)
+            if (!item || !isStatic(*item)) return false;
+        return true;
+    }
+    auto allStatic(const std::vector<std::pair<std::string, ast::ExprPtr>>& list)
+        const -> bool {
+        for (const auto& [_, item] : list)
+            if (!item || !isStatic(*item)) return false;
+        return true;
+    }
+
+    // Is this expression's value fully determined at compile time?
+    //
+    // Note what is NOT here: `Identifier`. By the time collapse runs, every
+    // compiled constant has already been substituted into a literal, so any
+    // lower-case name left is a runtime binding and disqualifies the chain.
+    auto isStatic(const ast::Expr& expr) const -> bool {
+        return std::visit(
+            [&](const auto& node) -> bool {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T, ast::IntLiteral> ||
+                              std::is_same_v<T, ast::FloatLiteral> ||
+                              std::is_same_v<T, ast::CharLiteral> ||
+                              std::is_same_v<T, ast::BoolLiteral> ||
+                              std::is_same_v<T, ast::NoneLiteral> ||
+                              std::is_same_v<T, ast::AtomLiteral>) {
+                    return true;
+                } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                    // `interpolating` is set for every double-quoted string,
+                    // whether or not it contains a `${...}` — so it is not the
+                    // question. What matters is whether anything is embedded,
+                    // and whether that is itself known.
+                    if (!node.interpolating) return true;
+                    // Already pre-split into parts/values.
+                    if (!node.parts.empty()) return allStatic(node.values);
+                    // Still raw text. No `${` means nothing to look up; with
+                    // one, the reference is invisible from here and the string
+                    // has to count as unknown.
+                    return node.value.find("${") == std::string::npos;
+                } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
+                    return !node.rest && allStatic(node.elements);
+                } else if constexpr (std::is_same_v<T, ast::TupleExpr>) {
+                    return allStatic(node.elements);
+                } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
+                    return allStatic(node.fields);
+                } else if constexpr (std::is_same_v<T, ast::MapExpr>) {
+                    for (const auto& entry : node.entries)
+                        if (!entry.key || !isStatic(*entry.key) ||
+                            !entry.value || !isStatic(*entry.value))
+                            return false;
+                    return true;
+                } else if constexpr (std::is_same_v<T, ast::BinaryOp>) {
+                    return node.left && node.right && isStatic(*node.left) &&
+                           isStatic(*node.right);
+                } else if constexpr (std::is_same_v<T, ast::UnaryOp>) {
+                    return node.operand && isStatic(*node.operand);
+                } else if constexpr (std::is_same_v<T, ast::MethodCall> ||
+                                     std::is_same_v<T, ast::FunctionCall>) {
+                    // Only a call into compiled code counts: an ordinary
+                    // runtime call on literals stays where the author put it.
+                    return isCollapsible(expr);
+                } else {
+                    return false;
+                }
+            },
+            expr.kind);
+    }
+
+    auto isCollapsible(const ast::Expr& expr) const -> bool {
+        if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
+            if (!compiled.count(call->method) || call->block || !call->receiver)
+                return false;
+            const bool receiverKnown = isCallQualifier(*call->receiver) ||
+                                       isStatic(*call->receiver);
+            return receiverKnown && allStatic(call->args) &&
+                   allStatic(call->namedArgs);
+        }
+        if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
+            const auto dot = call->name.rfind('.');
+            const std::string bare = dot == std::string::npos
+                                         ? call->name
+                                         : call->name.substr(dot + 1);
+            if (!compiled.count(bare) || call->block) return false;
+            return allStatic(call->args) && allStatic(call->namedArgs);
+        }
+        return false;
+    }
+
+    auto claim(ast::ExprPtr& slot) -> bool {
+        if (!slot || !isCollapsible(*slot)) return false;
+        slots.push_back(&slot);
+        return true;
+    }
+};
+
+// Finds every collapsible chain in `program`, evaluates them in one sandbox
+// run, and replaces those that produced a reifiable value.
+auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void {
+    const auto compiled = compiledNames(program);
+    if (compiled.empty()) return;
+
+    ChainCollapser collapser{compiled, {}};
+    Constants none;
+    // The walk is used purely for its traversal here: onSlot claims every
+    // candidate before the constant machinery sees it, so neither the empty
+    // constant map nor this sink ever receives anything.
+    std::vector<semantic::Diagnostic> unused;
+    Substituter walk{none, unused, {}, {}, {}};
+    walk.onSlot = [&](ast::ExprPtr& slot) { return collapser.claim(slot); };
+    walk.alsoSplit = [&](const std::string& text) {
+        for (const auto& name : compiled)
+            if (text.find(name) != std::string::npos) return true;
+        return false;
+    };
+    walkBodies(
+        program.items,
+        [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                walk.functionBody(target);
+            else
+                walk.substitute(target);
+        },
+        /*intoCompiled=*/false);
+    if (collapser.slots.empty()) return;
+
+    std::vector<const ast::Expr*> exprs;
+    exprs.reserve(collapser.slots.size());
+    for (auto* slot : collapser.slots) exprs.push_back(slot->get());
+
+    std::vector<interpreter::ValuePtr> values;
+    RecordLayouts layouts;
+    try {
+        interpreter::Evaluator evaluator;
+        evaluator.loadPrelude();
+        values = evaluator.evaluateExpressions(program, exprs, options.timeout);
+        layouts = evaluator.recordFieldOrder();
+    } catch (const std::exception&) {
+        // Collapse is an optimization: if the sandbox itself cannot run, the
+        // program still compiles and builds its values at runtime.
+        return;
+    }
+
+    for (std::size_t i = 0; i < collapser.slots.size() && i < values.size(); i++) {
+        if (!values[i]) continue;
+        std::string why;
+        auto literal =
+            valueToLiteral(values[i], (*collapser.slots[i])->location, why, &layouts);
+        if (literal) *collapser.slots[i] = std::move(literal);
     }
 }
 
@@ -377,6 +649,10 @@ auto expand(ast::Program& program,
     // they are just code the sandbox runs.
     Constants constants;
     std::vector<interpreter::Evaluator::GeneratedDeclaration> generated;
+    // Declared field order for every record the sandbox knows, the prelude's
+    // included — a reified record has to be written in its declared order,
+    // which on BEAM is its tuple layout.
+    RecordLayouts layouts;
     {
         const SourceLocation blame =
             locations.empty() ? SourceLocation{} : locations.front();
@@ -386,6 +662,7 @@ auto expand(ast::Program& program,
             evaluator.loadPrelude();
             values = evaluator.evaluateConstants(program, names, options.timeout);
             generated = evaluator.generatedDeclarations();
+            layouts = evaluator.recordFieldOrder();
         } catch (const interpreter::EvaluationTimeout&) {
             addError(diagnostics, blame,
                      "compile-time evaluation timed out after " +
@@ -402,7 +679,7 @@ auto expand(ast::Program& program,
     }
 
     // --- 3. Substitute every use with the computed literal.
-    Substituter substituter{constants, diagnostics, {}, {}, {}};
+    Substituter substituter{constants, diagnostics, {}, {}, {}, {}, &layouts};
     walkBodies(program.items, [&](auto& target) {
         using T = std::decay_t<decltype(target)>;
         if constexpr (std::is_same_v<T, ast::FunctionDef>)
@@ -414,7 +691,7 @@ auto expand(ast::Program& program,
     bool ok = true;
     for (const auto& name : substituter.remaining) {
         std::string why;
-        (void)valueToLiteral(constants.at(name), SourceLocation{}, why);
+        (void)valueToLiteral(constants.at(name), SourceLocation{}, why, &layouts);
         addError(diagnostics, SourceLocation{},
                  "compile-time constant `" + name +
                      "` cannot be inlined: " + why);
@@ -481,7 +758,7 @@ auto expand(ast::Program& program,
             for (const auto& clause : copy->clauses)
                 for (const auto& param : clause.params)
                     if (param.name) captured.erase(*param.name);
-            Substituter inner{captured, diagnostics, {}, {}, {}};
+            Substituter inner{captured, diagnostics, {}, {}, {}, {}, &layouts};
             inner.functionBody(*copy);
             if (into) into->body.push_back(std::move(copy));
             else program.items.push_back(std::move(copy));
@@ -536,6 +813,13 @@ auto expand(ast::Program& program,
     for (auto& item : program.items)
         if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
             if (*mod) prune((*mod)->body);
+
+    // --- 5. Collapse compiled-builder chains that are already fully known.
+    //
+    // Last, and over the pruned program: by now the constants are literals, so
+    // "mentions a lower-case name" is an exact test for "depends on something
+    // that only exists at runtime".
+    if (ok) collapseChains(program, options);
 
     return ok;
 }

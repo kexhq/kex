@@ -1,9 +1,15 @@
 # Compiled SQL — zero-overhead query builder
 #
 # The SQL module defines its builder methods inside `compiled do...end`.
-# When user code calls `.emit()`, the compiler evaluates the entire chain
-# at compile time, producing a static SQL string + a params list of any
-# runtime values (free variables auto-detected as placeholders).
+# A chain whose arguments are all known at compile time is evaluated during
+# compilation and replaced by its result, so no QueryBuilder is ever allocated
+# and `emit` never runs — see q1 below.
+#
+# A chain that depends on a runtime value still builds at runtime today. The
+# intended end state is that free variables become placeholders and even those
+# collapse, to a static string plus a params list (q2/q3); that part is not
+# implemented yet. Its static PREFIX does collapse, so `SQL.select(...)
+# .from(:users)` is a literal even in q2.
 
 module SQL do
   record Query do
@@ -59,9 +65,9 @@ module SQL do
         }
       end
 
-      # .emit() is the compile-time collapse trigger.
-      # The compiler evaluates the whole chain, producing a Query record
-      # with a static SQL string and any free variables as params.
+      # .emit() is the usual collapse trigger, though nothing here is special
+      # about the name: any method of this block terminating an all-static
+      # chain is evaluated at compile time and replaced by its result.
       let emit() -> Query do
         let field_str = match @fields do
           [:all] -> "*"
@@ -98,39 +104,42 @@ end
 let eq(val) = val
 
 # ---------------------------------------------------------------------------
-# Usage — these look like normal calls but collapse at compile time.
+# Usage — these look like normal calls; the static ones collapse at compile
+# time. `kex -e` and a look at the emitted Core Erlang is the only way to tell.
 # ---------------------------------------------------------------------------
 
 main do
   let userId = "42"
   let userName = "John"
 
-  # Fully static — no free vars, entire query is a string literal at runtime
+  # Fully static — no free vars, so the whole chain is gone before codegen.
   let q1 = SQL.select(:all).from(:users).emit()
-  # Compiles to: Query { text: "SELECT * FROM users", params: [] }
+  # Emits the literal Query { text: "SELECT * FROM :users", params: [] }
 
   IO.printLine(q1.text)
 
-  # Free variable detected — userId becomes $1
+  # Free variable — `userId` only exists at runtime, so `where`/`emit` still
+  # run there. The select/from prefix is a QueryBuilder literal.
+  # Intended once placeholders land: userId becomes $1 in a static string.
   let q2 = SQL.select([:name, :email])
               .from(:users)
               .where([(:id, userId)])
               .emit()
-  # Result: Query { text: "SELECT name, email FROM users WHERE id = $1",
-  #                 params: [userId] }
+  # Intended result: Query { text: "SELECT name, email FROM users WHERE id = $1",
+  #                          params: [userId] }
 
   IO.printLine(q2.text)
   IO.inspect(q2.params)
 
-  # Multiple free vars
+  # Multiple free vars — same story as q2.
   let q3 = SQL.select(:all)
               .from(:users)
               .where([(:name, userName), (:id, userId)])
               .orderBy("name")
               .limit(10)
               .emit()
-  # Result: Query { text: "SELECT * FROM users WHERE name = $1 AND id = $2 ORDER BY name asc LIMIT $3",
-  #                 params: [userName, userId, 10] }
+  # Intended result: Query { text: "SELECT * FROM users WHERE name = $1 AND id = $2 ORDER BY name asc LIMIT $3",
+  #                          params: [userName, userId, 10] }
 
   IO.printLine(q3.text)
 end

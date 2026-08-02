@@ -1,4 +1,6 @@
 #include "test.hxx"
+#include "../src/compiled/expand.hxx"
+#include "../src/compiled/reify.hxx"
 #include "../src/ir/emit_core.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
@@ -50,6 +52,15 @@ auto stdlibExternal() -> kex::ir::ExternalModules {
     ext.receiverFunctions["to"].push_back({"kex_prelude", "to", 2});
     ext.receiverFunctions["or"].push_back({"kex_prelude", "or", 2});
     return ext;
+}
+
+auto countOccurrences(const std::string& haystack, const std::string& needle)
+    -> std::size_t {
+    std::size_t count = 0;
+    for (std::size_t at = haystack.find(needle); at != std::string::npos;
+         at = haystack.find(needle, at + needle.size()))
+        count++;
+    return count;
 }
 
 // Parse Kex source and emit Core Erlang text through the production IR path.
@@ -376,6 +387,180 @@ int main() {
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "'true'"), out);
             assertTrue(contains(out, "'false'"), out);
+        });
+    });
+
+    // -----------------------------------------------------------------------
+    // Compile-time expansion
+    //
+    // These two are the half of `compiled do` that spec/compiled_collapse.kex
+    // CANNOT see. That spec proves collapsing does not change what a program
+    // computes — which is exactly why it also passes when nothing collapses at
+    // all, and why the codegen assertions have to live here.
+    // -----------------------------------------------------------------------
+    describe("compile-time expansion — chain collapse", []() {
+        it("collapses a fully static compiled chain, and only that", []() {
+            const std::string source =
+                "module Boxes do\n"
+                "  record Box do\n"
+                "    total : Int = 0\n"
+                "  end\n"
+                "  compiled do\n"
+                "    let of(n: Int) -> Box do\n"
+                "      Box { total: n }\n"
+                "    end\n"
+                "    make Box do\n"
+                "      let add(n: Int) -> Box do\n"
+                "        Box { total: @total + n }\n"
+                "      end\n"
+                "      let scaled(by: Int) -> Int do\n"
+                "        @total * by\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                // A top-level binding, NOT a compiled constant. The sandbox
+                // could evaluate it — which is exactly why it must not: this
+                // one happens to be a literal, but the next one is
+                // `Time.now()`, and baking that in changes the program.
+                "let seed = 4\n"
+                "\n"
+                "main do\n"
+                "  let a = Boxes.of(2).add(3).scaled(10)\n"
+                "  let b = Boxes.of(seed).add(3).scaled(10)\n"
+                "  a + b\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            assertTrue(kex::compiled::expand(program, diagnostics),
+                       "expansion should succeed");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "collapse", "", &ext))
+                           .source;
+
+            // `a` is gone: the whole chain is the number it always was.
+            assertTrue(out.find("50") != std::string::npos,
+                       "the static chain should survive as its literal value");
+            // `b` is not, because `seed` is a runtime binding — so exactly one
+            // of each builder call remains. An assertion of "no calls at all"
+            // would pass just as well if collapse became over-eager and reached
+            // through a name it has no business evaluating.
+            assertEqual(countOccurrences(out, "apply 'add'"), 1,
+                        "only the runtime chain should still call add");
+            assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
+                        "only the runtime chain should still call scaled");
+        });
+
+        it("collapses through a string argument and a nullary compiled function",
+           []() {
+            // Two things that both looked fine and both silently disabled
+            // collapse for a whole class of builder:
+            //
+            //  - EVERY double-quoted string is flagged `interpolating`, with or
+            //    without a `${...}` — so reading that flag as "value unknown"
+            //    disqualified any chain taking a string at all.
+            //  - `let empty() = ...` and `let empty = ...` are the same AST
+            //    node but not the same thing. Read as a binding, the nullary
+            //    FUNCTION was evaluated at compile time and its definition
+            //    pruned, leaving its uses undefined.
+            const std::string source =
+                "module Boxes do\n"
+                "  record Box do\n"
+                "    total : Int = 0\n"
+                "  end\n"
+                "  compiled do\n"
+                "    let empty() -> Box = Box {}\n"
+                "    make Box do\n"
+                "      let add(n: Int) -> Box do\n"
+                "        Box { total: @total + n }\n"
+                "      end\n"
+                "      let tag(label: String) -> String do\n"
+                "        \"${label}!\"\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  Boxes.empty().add(9).tag(\"count\")\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            assertTrue(kex::compiled::expand(program, diagnostics),
+                       "expansion should succeed");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "strings", "", &ext))
+                           .source;
+
+            assertEqual(countOccurrences(out, "apply 'add'"), 0,
+                        "the whole chain is static");
+            assertEqual(countOccurrences(out, "apply 'tag'"), 0,
+                        "a string argument is a known value");
+            assertEqual(countOccurrences(out, "apply 'empty'"), 0,
+                        "a nullary compiled function is callable and collapses");
+        });
+    });
+
+    describe("compile-time expansion — reification", []() {
+        it("writes a reified record's fields in declaration order", []() {
+            // A record is a TUPLE on BEAM, so field order is ABI. Declared
+            // order here is deliberately NOT alphabetical: `zebra` first,
+            // `apple` last. Reifying alphabetically would read as correct
+            // everywhere lowering resolves fields by name, and silently wrong
+            // on the one path that takes them positionally.
+            auto record = std::make_shared<kex::interpreter::Value>();
+            kex::interpreter::RecordValue value;
+            value.typeName = "Rev";
+            value.fields["zebra"] = kex::interpreter::Value::integer(1);
+            value.fields["middle"] = kex::interpreter::Value::integer(2);
+            value.fields["apple"] = kex::interpreter::Value::integer(3);
+            record->data = std::move(value);
+
+            kex::compiled::RecordLayouts layouts;
+            layouts["Rev"] = {"zebra", "middle", "apple"};
+
+            std::string why;
+            auto literal = kex::compiled::valueToLiteral(
+                record, kex::SourceLocation{}, why, &layouts);
+            assertTrue(literal != nullptr, "a record should reify: " + why);
+            const auto* construction =
+                std::get_if<kex::ast::RecordConstruction>(&literal->kind);
+            assertTrue(construction != nullptr, "reifies to a RecordConstruction");
+            assertEqual(construction->fields.size(), std::size_t{3},
+                        "every field survives");
+            assertEqual(construction->fields[0].first, std::string("zebra"),
+                        "declaration order, not alphabetical");
+            assertEqual(construction->fields[1].first, std::string("middle"), "");
+            assertEqual(construction->fields[2].first, std::string("apple"), "");
+        });
+
+        it("falls back to a reproducible order for an unknown record", []() {
+            auto record = std::make_shared<kex::interpreter::Value>();
+            kex::interpreter::RecordValue value;
+            value.typeName = "Unknown";
+            value.fields["zebra"] = kex::interpreter::Value::integer(1);
+            value.fields["apple"] = kex::interpreter::Value::integer(2);
+            record->data = std::move(value);
+
+            kex::compiled::RecordLayouts layouts;  // deliberately empty
+            std::string why;
+            auto literal = kex::compiled::valueToLiteral(
+                record, kex::SourceLocation{}, why, &layouts);
+            assertTrue(literal != nullptr, "still reifies: " + why);
+            const auto* construction =
+                std::get_if<kex::ast::RecordConstruction>(&literal->kind);
+            assertTrue(construction != nullptr, "reifies to a RecordConstruction");
+            // Alphabetical: the fields live in an unordered_map, and identical
+            // builds must not emit different code.
+            assertEqual(construction->fields[0].first, std::string("apple"), "");
+            assertEqual(construction->fields[1].first, std::string("zebra"), "");
         });
     });
 

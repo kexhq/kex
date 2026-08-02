@@ -1,9 +1,14 @@
 # Compiled CSS — type-safe stylesheets with compile-time optimization
 #
 # The Css module defines style constructors inside `compiled do...end`.
-# At compile time, styles are validated (no typos in property names,
-# units checked, conflicts detected) and collapsed into a static CSS string.
-# Unused styles are dead-code eliminated. Vendor prefixes auto-inserted.
+# A rule whose arguments are all known at compile time is evaluated during
+# compilation and replaced by its result: every `Css.px`/`Css.hex` call below is
+# gone before codegen, as is the first `.rule("*", ...)`.
+#
+# The rest still builds at runtime, because `primaryColor`/`textColor` are
+# runtime bindings — collapsing through a free variable needs the placeholder
+# work described in docs/compiled-todo.md. Validation of property names, unit
+# checking, dead-style elimination and vendor prefixing are all aspirational.
 
 module Css do
   record Rule do
@@ -96,7 +101,8 @@ main do
     ])
     .emit()
 
-  # At compile time, this collapses into a single string literal.
-  # No Rule records, no list traversal, no join() at runtime.
+  # Intended: this collapses into a single string literal, with no Rule
+  # records, no list traversal and no join() at runtime. Today the static
+  # prefix collapses and the rest waits on placeholders.
   IO.printLine(styles)
 end

@@ -143,10 +143,14 @@ auto Evaluator::evaluateFunction(
     }
 }
 
-auto Evaluator::evaluateConstants(
-    const ast::Program& program,
-    const std::vector<std::string>& names,
-    std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
+// Shared body of the compile-time sandbox: arm the deadline, block process
+// termination, load `program`'s declarations, then run `produce` on the
+// scheduler — for the same reason evaluateFunction's call does, since
+// compile-time code may touch anything the runtime offers and the fiber
+// machinery has to be live.
+auto Evaluator::runCompileTime(const ast::Program& program,
+                               std::chrono::milliseconds timeout,
+                               const std::function<void()>& produce) -> void {
     m_deadline = std::chrono::steady_clock::now() + timeout;
     try {
         auto blockedTermination = [](std::vector<ValuePtr>) -> ValuePtr {
@@ -157,32 +161,76 @@ auto Evaluator::evaluateConstants(
         defineIntrinsic("System::die", blockedTermination);
         defineIntrinsic("System::exit", blockedTermination);
 
-        // Declarations and calls run on the scheduler for the same reason
-        // evaluateFunction's call does: a constant's initializer may touch
-        // anything the runtime offers, and the fiber machinery must be live.
-        std::vector<ValuePtr> values;
         m_scheduler->runToCompletion(
-            [this, &program, &names, &values]() -> ValuePtr {
+            [this, &program, &produce]() -> ValuePtr {
                 for (const auto& item : program.items) {
                     checkDeadline();
                     execTopLevel(item);
                 }
                 resolvePendingExports();
-                values.reserve(names.size());
-                for (const auto& name : names) {
-                    checkDeadline();
-                    values.push_back(
-                        callFunction(name, {}, {}, SourceLocation{}));
-                }
+                produce();
                 return Value::unit();
             },
             m_globalEnv);
         m_deadline.reset();
-        return values;
     } catch (...) {
         m_deadline.reset();
         throw;
     }
+}
+
+auto Evaluator::recordFieldOrder() const
+    -> std::unordered_map<std::string, std::vector<std::string>> {
+    std::unordered_map<std::string, std::vector<std::string>> order;
+    for (const auto& [name, def] : m_recordDefs) {
+        if (!def) continue;
+        auto& fields = order[name];
+        fields.reserve(def->fields.size());
+        for (const auto& field : def->fields) fields.push_back(field.name);
+    }
+    return order;
+}
+
+auto Evaluator::evaluateConstants(
+    const ast::Program& program,
+    const std::vector<std::string>& names,
+    std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
+    std::vector<ValuePtr> values;
+    runCompileTime(program, timeout, [&] {
+        values.reserve(names.size());
+        for (const auto& name : names) {
+            checkDeadline();
+            values.push_back(callFunction(name, {}, {}, SourceLocation{}));
+        }
+    });
+    return values;
+}
+
+auto Evaluator::evaluateExpressions(
+    const ast::Program& program,
+    const std::vector<const ast::Expr*>& expressions,
+    std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
+    std::vector<ValuePtr> values;
+    runCompileTime(program, timeout, [&] {
+        values.reserve(expressions.size());
+        for (const auto* expr : expressions) {
+            checkDeadline();
+            if (!expr) {
+                values.push_back(nullptr);
+                continue;
+            }
+            try {
+                values.push_back(eval(*expr));
+            } catch (const EvaluationTimeout&) {
+                throw;
+            } catch (const std::exception&) {
+                // Not compile-time evaluable after all — the caller keeps the
+                // runtime form.
+                values.push_back(nullptr);
+            }
+        }
+    });
+    return values;
 }
 
 auto Evaluator::checkDeadline() const -> void {

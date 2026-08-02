@@ -132,6 +132,7 @@ auto clone(const FunctionClause& clause) -> FunctionClause {
     out.body = cloneVec(clause.body);
     out.returnAnnotation = cloneOpt(clause.returnAnnotation);
     out.rescue = cloneOpt(clause.rescue);
+    out.hasParamList = clause.hasParamList;
     return out;
 }
 

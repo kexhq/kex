@@ -103,9 +103,34 @@ public:
         return m_generatedDeclarations;
     }
 
+    // Declared field order of every record this Evaluator knows, the prelude's
+    // included, keyed by both the bare and the module-scoped name.
+    //
+    // A RecordValue stores its fields in an unordered_map, which loses the
+    // order — and on BEAM a record IS a tuple, so field order is the ABI. Any
+    // code turning a record value back into source (src/compiled/) has to
+    // recover the declared order from here rather than invent one.
+    auto recordFieldOrder() const
+        -> std::unordered_map<std::string, std::vector<std::string>>;
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
+        std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
+    // Same sandbox, but for arbitrary expressions rather than named bindings:
+    // loads `program`'s declarations once, then evaluates each expression in
+    // the global scope. Used by `compiled` chain collapse, which has to
+    // evaluate a call chain written at a use site, not a declaration.
+    //
+    // An expression that FAILS yields a null entry instead of aborting the
+    // run: collapse is an optimization and falls back to building the value at
+    // runtime, so an expression that turns out not to be compile-time
+    // evaluable is an ordinary outcome, not an error. A timeout still
+    // propagates — that is the sandbox's budget for the whole program, not one
+    // expression's problem.
+    auto evaluateExpressions(
+        const ast::Program& program,
+        const std::vector<const ast::Expr*>& expressions,
         std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
     // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
     // once into a shared AST and
@@ -142,6 +167,9 @@ private:
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
                             const std::string& currentModule = "") -> std::string;
     auto resolvePendingExports() -> void;
+    auto runCompileTime(const ast::Program& program,
+                        std::chrono::milliseconds timeout,
+                        const std::function<void()>& produce) -> void;
     auto defineImported(const std::string& bindingName, const std::string& logicalName,
                         const std::string& sourceModule, bool explicitImport,
                         const std::string& moduleScope, ValuePtr value,

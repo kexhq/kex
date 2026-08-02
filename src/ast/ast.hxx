@@ -501,6 +501,13 @@ struct FunctionClause {
     std::vector<ExprPtr> body;
     std::optional<TypeExprPtr> returnAnnotation;
     std::optional<RescueBlock> rescue;
+    // Whether the source wrote a parameter list at all. `let x = 3` and
+    // `let x() = 3` are otherwise the same node — an empty `params` — and they
+    // are NOT the same thing: the first is a value binding, the second a
+    // nullary function. `compiled do` has to tell them apart, since it
+    // evaluates bindings at compile time and leaves functions alone. Same
+    // distinction MethodCall::parenthesized draws on the call side.
+    bool hasParamList = false;
 };
 
 struct FunctionDef {

@@ -1,0 +1,82 @@
+# Chain collapse: a builder declared inside `compiled do` and called with
+# nothing but literals is evaluated at COMPILE TIME and the result reified.
+#
+# This spec pins the OBSERVABLE half — that collapsing does not change what the
+# program computes, on either backend. The half that cannot be seen from here,
+# that the emitted module contains a literal and no builder calls at all, is
+# pinned by "collapses a fully static compiled chain" in tests/codegen_test.cxx.
+# Both halves are needed: this file alone passes just as happily when nothing
+# collapses.
+#
+# Each case pairs a chain that MUST collapse with one that must NOT, so a
+# regression in either direction shows up as a wrong answer rather than as
+# silence.
+
+module Boxes do
+  record Box do
+    parts : [Int] = []
+    total : Int = 0
+  end
+
+  compiled do
+    # An explicitly nullary FUNCTION, not a value binding. These look identical
+    # in the AST — same empty parameter list — and reading this one as a
+    # binding evaluated it at compile time, then pruned the definition its
+    # (method-call) uses still needed.
+    let empty() -> Box = Box {}
+
+    let of(n: Int) -> Box do
+      Box { parts: [n], total: n }
+    end
+
+    make Box do
+      let add(n: Int) -> Box do
+        Box { parts: @parts + [n], total: @total + n }
+      end
+
+      let scaled(by: Int) -> Int do
+        @total * by
+      end
+
+      let describe() -> String do
+        "total=${@total} parts=${@parts.length}"
+      end
+
+      let tag(label: String) -> String do
+        "${label}:${@total}"
+      end
+    end
+  end
+end
+
+main do
+  # Fully static: every argument is a literal, so the whole chain is gone by
+  # the time the backend sees it.
+  let fixed = Boxes.of(2).add(3).scaled(10)
+  IO.printLine("${fixed}")
+
+  # A record result reifies too, fields and all. Field ORDER is not observable
+  # from here — lowering places fields by name, so a misordered reification
+  # still reads back correctly; that is pinned directly on valueToLiteral in
+  # tests/codegen_test.cxx instead.
+  let built = Boxes.of(4).add(6)
+  IO.printLine("${built.parts} ${built.total}")
+
+  # A free runtime variable disqualifies the chain: it keeps building at
+  # runtime, and must still produce the same answer.
+  let runtime = 5
+  IO.printLine("${Boxes.of(runtime).add(3).scaled(10)}")
+
+  # Partially static — the collapsible prefix is NOT collapsed on its own,
+  # because the call that terminates the chain is not evaluable.
+  IO.printLine(Boxes.of(1).add(runtime).describe())
+
+  # Interpolation is not a hiding place: a chain written straight inside
+  # `"${...}"` collapses like any other.
+  IO.printLine("${Boxes.of(7).add(1).scaled(2)}")
+
+  # A plain string ARGUMENT is a known value. Every double-quoted string is
+  # flagged interpolating whether or not it embeds anything, so reading that
+  # flag as "unknown" disqualified every chain taking a string at all.
+  IO.printLine(Boxes.empty().add(9).tag("count"))
+end

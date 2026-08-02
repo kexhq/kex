@@ -3,6 +3,8 @@
 #include "../ast/ast.hxx"
 #include "../interpreter/value.hxx"
 #include <string>
+#include <unordered_map>
+#include <vector>
 
 namespace kex::compiled {
 
@@ -20,8 +22,19 @@ namespace kex::compiled {
 // Returns nullptr and sets `error` for anything with no literal form — a
 // closure, a process id, a resource handle. Integers round-trip through their
 // decimal text so arbitrary-precision values survive.
+//
+// `layouts` maps a record type to its DECLARED field order (see
+// Evaluator::recordFieldOrder). A record value's own fields are an unordered
+// map, and on BEAM a record is a tuple — so field order is ABI, and a reified
+// record must be written in declaration order rather than in whatever order
+// happens to be convenient. A type missing from `layouts` falls back to
+// alphabetical, which is at least reproducible across builds.
+using RecordLayouts =
+    std::unordered_map<std::string, std::vector<std::string>>;
+
 auto valueToLiteral(const interpreter::ValuePtr& value,
                     const SourceLocation& location,
-                    std::string& error) -> ast::ExprPtr;
+                    std::string& error,
+                    const RecordLayouts* layouts = nullptr) -> ast::ExprPtr;
 
 } // namespace kex::compiled

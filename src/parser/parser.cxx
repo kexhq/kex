@@ -736,6 +736,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         }
         expect(TokenType::RParen, "Expected ')' after parameters");
     }
+    clause.hasParamList = hasParamList;
 
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
