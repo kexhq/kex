@@ -15,7 +15,7 @@
 #
 #   let due = Date.of(2026, 7, 30).try       # Result<Date, Time.Error>
 #   due.weekday.name                             # "Thursday"
-#   due.plus(10.days).iso                        # "2026-08-09"
+#   (due + 10.days).iso                          # "2026-08-09"
 #   Time.now().iso                               # "2026-07-30T14:03:00+02:00"
 #
 # Zones are fixed offsets — UTC, an explicit `+02:00`, or whatever this
@@ -116,6 +116,47 @@ module Time do
     return Ok(Duration.utcOffset(hours, minutes))
   end
 
+  # ── The test clock ──────────────────────────────────────────────────────
+  # Anything that asks what time it is — `Time.now`, `Date.today`,
+  # `DateTime.utcNow` — reads one primitive, so pinning that primitive pins
+  # the whole calendar. This is what makes code that calls `Date.today()`
+  # testable: freeze the clock, assert against a date you chose.
+  #
+  #   Time.freeze(DateTime.parse("2026-07-30T14:03:00Z").try)
+  #   Date.today().iso                            # "2026-07-30" — always
+  #   Time.release()
+  #
+  # The clock is global, not per-process: a frozen clock stays frozen inside
+  # spawned processes, which is the only behavior that matches a real one.
+  # `release` is not automatic, so a test that freezes must also release —
+  # otherwise every later test in the run inherits the frozen clock.
+
+  # Pin the clock. Every reading returns this exact instant until `release`.
+  foul freeze(moment: DateTime) -> Void do
+    return Kex.Intrinsic.Time.freezeAt(moment.epochNanos)
+  end
+
+  # Move the clock to an instant and let it run from there: readings advance
+  # normally, they just start somewhere else. Use this over `freeze` when the
+  # code under test measures elapsed time.
+  foul travel(moment: DateTime) -> Void do
+    return Kex.Intrinsic.Time.travelTo(moment.epochNanos)
+  end
+
+  # Back to the host clock.
+  foul release() -> Void do
+    return Kex.Intrinsic.Time.release()
+  end
+
+  # True while `freeze` or `travel` is in effect.
+  foul controlled?() -> Bool do
+    return Kex.Intrinsic.Time.clockMode() != 0
+  end
+
+  foul frozen?() -> Bool do
+    return Kex.Intrinsic.Time.clockMode() == 1
+  end
+
   # ── Calendar arithmetic ─────────────────────────────────────────────────
   # Public because the `make` blocks below live at file level and reach them
   # by qualification; they are equally useful on their own.
@@ -126,7 +167,21 @@ module Time do
     return year.modulo(400) == 0
   end
 
-  let daysInMonth(year: Integer, month: Integer) -> Integer do
+  # Year first, matching `Date.of(year, month, day)` and every other
+  # date-shaped signature in this file.
+  #
+  # A month outside 1..12 has no answer, so this is a Result rather than an
+  # Integer: the old version fell through its month tests and returned 28,
+  # which quietly turned `Time.daysInMonth(1, 2026)` — the arguments the wrong
+  # way round — into a plausible-looking wrong number.
+  let daysInMonth(year: Integer, month: Integer) -> Result<Integer, TimeError> do
+    return Error(InvalidDate(year, month, 1)) if month < 1 || month > 12
+    return Ok(Time.daysInValidMonth(year, month))
+  end
+
+  # The same question with the range check already done. Every caller inside
+  # this file has a month it built or validated itself.
+  let daysInValidMonth(year: Integer, month: Integer) -> Integer do
     return 31 if month == 1 || month == 3 || month == 5 || month == 7
     return 31 if month == 8 || month == 10 || month == 12
     return 30 if month == 4 || month == 6 || month == 9 || month == 11
@@ -320,7 +375,7 @@ module Date do
   let of(year: Integer, month: Integer, day: Integer) -> Result<Date, TimeError> do
     return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
     return Error(InvalidDate(year, month, day)) if day < 1
-    return Error(InvalidDate(year, month, day)) if day > Time.daysInMonth(year, month)
+    return Error(InvalidDate(year, month, day)) if day > Time.daysInValidMonth(year, month)
     return Ok(Date { year: year, month: month, day: day })
   end
 
@@ -349,6 +404,16 @@ module Date do
   foul today() -> Date do
     let moment = DateTime.now()
     return moment.date
+  end
+
+  foul tomorrow() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(1)
+  end
+
+  foul yesterday() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(0 - 1)
   end
 
   foul utcNow() -> Date do
@@ -446,11 +511,6 @@ make Duration do
   let -(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
   let negated -> Duration = Duration { seconds: 0.0 - this.seconds }
 
-  # Named forms of `+`/`-`, matching Date and DateTime, which cannot use the
-  # operators (see their `plus`).
-  let plus(other: Duration) -> Duration = Duration { seconds: this.seconds + other.seconds }
-  let minus(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
-
   # Whole units contained in the span, truncated toward zero.
   let wholeSeconds -> Integer = this.seconds.toInteger
   let wholeMinutes -> Integer = Time.truncatedBy(this.seconds, 60.0)
@@ -494,13 +554,23 @@ make Date do
 
   let leapYear? -> Bool = Time.leapYear?(this.year)
 
+  # Days in THIS date's month. No Result: a Date's month is in range by
+  # construction, unlike `Time.daysInMonth`'s two loose integers.
+  let daysInMonth -> Integer = Time.daysInValidMonth(this.year, this.month)
+
   # Whole days only: a Duration with a sub-day remainder truncates toward
-  # zero, so `date.plus(36.hours)` advances exactly one day.
-  let plus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
-  let minus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
+  # zero, so `date + 36.hours` advances exactly one day.
+  let +(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
+  let -(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
 
   let addDays(count: Integer) -> Date = Date.fromEpochDay(this.epochDay + count)
   let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
+
+  # No `date.tomorrow`/`date.yesterday` methods: on BEAM a make-block method
+  # flattens onto the same name as the `Date.tomorrow()`/`Date.yesterday()`
+  # module functions above and one of the two has to win. The module
+  # functions win — `Date.tomorrow()` is the spelling people reach for, and
+  # `date.addDays(1)` already says the rest.
 
   # Calendar-aware, so the day is clamped into the target month: one month
   # after January 31st is the last day of February, not March 3rd.
@@ -508,7 +578,7 @@ make Date do
     let total = this.year * 12 + (this.month - 1) + count
     let month = total.modulo(12) + 1
     let year = (total - total.modulo(12)) / 12
-    let last = Time.daysInMonth(year, month)
+    let last = Time.daysInValidMonth(year, month)
     let day = if this.day > last then last else this.day end
     return Date { year: year, month: month, day: day }
   end
@@ -571,8 +641,8 @@ make DateTime do
   let at(offset: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
   let utc -> DateTime = this.at(Duration.zero())
 
-  let plus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
-  let minus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
+  let +(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
+  let -(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
 
   # Elapsed time from this instant to `other`, negative when `other` is
   # earlier. Sub-second precision is kept.

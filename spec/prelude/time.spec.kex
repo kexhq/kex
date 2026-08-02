@@ -59,10 +59,10 @@ describe("Time") do
     let date = Date.of(2026, 7, 30).try
     assert(date.addDays(10).iso == "2026-08-09")
     assert(date.addWeeks(1).iso == "2026-08-06")
-    assert(date.plus(10.days).iso == "2026-08-09")
-    assert(date.minus(1.weeks).iso == "2026-07-23")
+    assert((date + 10.days).iso == "2026-08-09")
+    assert((date - 1.weeks).iso == "2026-07-23")
     # A sub-day span truncates: whole days only.
-    assert(date.plus(36.hours).iso == "2026-07-31")
+    assert((date + 36.hours).iso == "2026-07-31")
     assert(date.daysUntil(date.addDays(45)) == 45)
     assert(date.dayOfYear == 211)
     assert(Date.of(2026, 1, 1).try.dayOfYear == 1)
@@ -99,19 +99,19 @@ describe("Time") do
     let local = DateTime.parse("2026-07-30T14:03:00+02:00").try
     let utc = DateTime.parse("2026-07-30T12:03:00Z").try
     assert(local.compareTo(utc) == Equal)
-    assert(local.before?(local.plus(1.hours)))
-    assert(local.plus(1.hours).after?(local))
-    assert(local.compareTo(local.plus(1.seconds)) == Less)
+    assert(local.before?(local + 1.hours))
+    assert((local + 1.hours).after?(local))
+    assert(local.compareTo(local + 1.seconds) == Less)
   end
 
   it("adds and subtracts durations from instants") do
     let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try
-    assert(moment.plus(90.minutes).iso == "2026-07-30T15:33:00+02:00")
-    assert(moment.minus(3.hours).iso == "2026-07-30T11:03:00+02:00")
+    assert((moment + 90.minutes).iso == "2026-07-30T15:33:00+02:00")
+    assert((moment - 3.hours).iso == "2026-07-30T11:03:00+02:00")
     # Crossing midnight rolls the date.
-    assert(moment.plus(12.hours).iso == "2026-07-31T02:03:00+02:00")
-    assert(moment.until(moment.plus(2.hours)).wholeMinutes == 120)
-    assert(moment.until(moment.minus(1.hours)).wholeMinutes == -60)
+    assert((moment + 12.hours).iso == "2026-07-31T02:03:00+02:00")
+    assert(moment.until(moment + 2.hours).wholeMinutes == 120)
+    assert(moment.until(moment - 1.hours).wholeMinutes == -60)
   end
 
   it("parses ISO 8601 text") do
@@ -182,8 +182,8 @@ describe("Time") do
   end
 
   it("combines and orders durations") do
-    assert(1.hours.plus(30.minutes).wholeMinutes == 90)
-    assert(1.hours.minus(30.minutes).wholeMinutes == 30)
+    assert((1.hours + 30.minutes).wholeMinutes == 90)
+    assert((1.hours - 30.minutes).wholeMinutes == 30)
     assert(1.hours.negated.wholeMinutes == -60)
     assert(30.minutes.compareTo(1.hours) == Less)
     assert(1.hours.compareTo(60.minutes) == Equal)

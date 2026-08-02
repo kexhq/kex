@@ -23,8 +23,8 @@ main do
   IO.printLine("=== Calendar arithmetic ===")
   # Durations are the plural spellings; the singular ones (5.sec) build unit
   # Measures instead, which is a different thing on purpose.
-  IO.printLine("in ten days:   ${launch.plus(10.days).iso}")
-  IO.printLine("a week before: ${launch.minus(1.weeks).iso}")
+  IO.printLine("in ten days:   ${(launch + 10.days).iso}")
+  IO.printLine("a week before: ${(launch - 1.weeks).iso}")
   IO.printLine("seven months:  ${launch.addMonths(7).iso}")
   # Month arithmetic clamps into the target month rather than overflowing.
   IO.printLine("Jan 31 + 1mo:  ${Date.of(2026, 1, 31).try.addMonths(1).iso}")
@@ -48,7 +48,7 @@ main do
   let sameMoment = DateTime.parse("2026-07-30T12:03:00Z").try
   IO.printLine("same instant?  ${sameMoment.compareTo(meeting)}")
 
-  let later = meeting.plus(90.minutes)
+  let later = meeting + 90.minutes
   IO.printLine("+90 minutes:   ${later.iso}")
   IO.printLine("elapsed hours: ${meeting.until(later).wholeMinutes} minutes")
 
