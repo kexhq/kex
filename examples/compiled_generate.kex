@@ -1,0 +1,64 @@
+# Compile-time declaration generation
+#
+# A `compiled do` block runs at COMPILE time. Ordinary code inside it — loops,
+# `each`, conditionals — drives the generation, and `let %name(...)` declares a
+# function whose name is computed while that code runs. Nothing survives into
+# the compiled program except the declarations themselves: no loop, no closure,
+# no table lookup.
+
+# --- Generating a family of accessors -------------------------------------
+#
+# `index` is a loop variable, so it exists only at compile time. It is baked
+# into each generated body as a literal — `kex -e` shows `at(List, 0)`,
+# `at(List, 1)`, `at(List, 2)`, three independent functions.
+
+compiled do
+  ["firstOf", "secondOf", "thirdOf"].eachIndexed do |name, index|
+    let %name(list: [String]) -> String? do
+      list.at(index)
+    end
+  end
+end
+
+# --- Computed names --------------------------------------------------------
+#
+# `%name` splices a variable; `%{expr}` computes the name from any compile-time
+# expression. Predicate functions (`?`) generate too.
+
+module Validators do
+  compiled do
+    let KINDS = ["email", "phone", "url"]
+
+    KINDS.each do |kind|
+      let %{kind + "?"}(input: String) -> Bool do
+        input.contains?(kind)
+      end
+    end
+  end
+end
+
+# --- Generating types ------------------------------------------------------
+#
+# Type names must be upper-case, so lower-case source data is capitalized —
+# a lower-case generated type name is a compile-time error that says so.
+
+compiled do
+  ["celsius", "fahrenheit"].each do |unit|
+    type %{unit.capitalize} = Float
+  end
+end
+
+main do
+  let xs = ["a", "b", "c"]
+  IO.printLine("${firstOf(xs).or("?")} ${secondOf(xs).or("?")} ${thirdOf(xs).or("?")}")
+
+  # Each generated predicate closes over its own `kind`, so they disagree on
+  # the same input — which is the point: three different functions, not one
+  # function consulting a table.
+  IO.printLine("${Validators.email?("send email now")} ${Validators.email?("call me")}")
+  IO.printLine("${Validators.phone?("call me")} ${Validators.url?("visit url")}")
+
+  let c: Celsius = 21.5
+  let f: Fahrenheit = 70.7
+  IO.printLine("${c} ${f}")
+end

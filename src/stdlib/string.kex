@@ -150,11 +150,14 @@ make String, implement: Enumerable, Foldable do
   #     let capitalize(@[c | cs]) = "${c.upperCase}${cs.lowerCase}"
   #
   # It parses and works in the interpreter, but the backends disagree on what
-  # the tail binds to: a String in the interpreter, a [Char] on BEAM — and
-  # bridging with `.to(String)` reintroduces the empty-list rendering (`"a"`
-  # capitalizes to "A[]"). Same root cause as `rest` below. Going through
-  # `chars` is explicit on both backends, so it is what ships until the runtime
-  # is fixed; switch to the receiver form then.
+  # the tail binds to: a String in the interpreter, a [Char] on BEAM.
+  #
+  # Re-encoding the BEAM side to a binary looks like the fix and is NOT: the
+  # `[Char]`-is-String equivalence is load-bearing for composition. Making
+  # `filter` hand back a binary breaks `["hello","world"].flatMap { |s|
+  # s.filter(~alpha?) }` (spec/list_hof.kex) with a badarg, because flatMap
+  # needs a list to flatten. Any real fix has to keep both readings working.
+  # Until then `chars` is explicit on both backends.
   let capitalize = match this.chars do
     []       -> ""
     [c | cs] -> "${c.upperCase}${cs.join("").lowerCase}"
