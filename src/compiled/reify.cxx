@@ -1,5 +1,6 @@
 #include "reify.hxx"
 
+#include <algorithm>
 #include <variant>
 
 namespace kex::compiled {
@@ -90,6 +91,56 @@ auto valueToLiteral(const ValuePtr& value,
                         ast::MapEntry{std::move(loweredKey), std::move(loweredValue)});
                 }
                 out->kind = std::move(map);
+            } else if constexpr (std::is_same_v<T, interpreter::RecordValue>) {
+                ast::RecordConstruction record;
+                record.typeName = node.typeName;
+                // Sorted to keep the emitted AST stable: RecordValue::fields
+                // is an unordered_map, and an unstable order would make
+                // identical builds emit different code.
+                //
+                // TODO — emit DECLARATION order instead, and drop the sort.
+                // Lowering's main path is name-based (lowerRecordConstruction
+                // walks the declared fields and looks each name up), so the
+                // written order is normally irrelevant. But its `records.find`
+                // MISS path falls back to "fields as written", positionally —
+                // and there the order here would BE the tuple layout, so a
+                // rename that moves a field alphabetically would silently
+                // change the ABI. No reachable case was found (even prelude
+                // records like ParseError, whose declared order differs from
+                // alphabetical in 4 of 5 slots, are registered and take the
+                // safe path), but relying on that fallback being unreachable
+                // is the wrong guarantee. Emitting declaration order makes
+                // written order and layout coincide, so the fallback stops
+                // mattering. Needs record layouts passed in to valueToLiteral.
+                std::vector<const std::string*> names;
+                names.reserve(node.fields.size());
+                for (const auto& [field, _] : node.fields) names.push_back(&field);
+                std::sort(names.begin(), names.end(),
+                          [](const std::string* a, const std::string* b) {
+                              return *a < *b;
+                          });
+                for (const auto* field : names) {
+                    auto lowered =
+                        valueToLiteral(node.fields.at(*field), location, error);
+                    if (!lowered) return nullptr;
+                    record.fields.emplace_back(*field, std::move(lowered));
+                }
+                out->kind = std::move(record);
+            } else if constexpr (std::is_same_v<T, interpreter::VariantValue>) {
+                // A nullary variant is just its name (`None`); one with a
+                // payload is a constructor call (`Just(3)`).
+                if (node.args.empty()) {
+                    out->kind = ast::UpperIdentifier{node.tag};
+                } else {
+                    ast::FunctionCall call;
+                    call.name = node.tag;
+                    for (const auto& arg : node.args) {
+                        auto lowered = valueToLiteral(arg, location, error);
+                        if (!lowered) return nullptr;
+                        call.args.push_back(std::move(lowered));
+                    }
+                    out->kind = std::move(call);
+                }
             } else {
                 error = "a " + value->typeName() + " has no literal form";
                 return nullptr;

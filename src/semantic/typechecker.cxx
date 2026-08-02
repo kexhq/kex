@@ -2720,7 +2720,35 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto valueType = resolve(inferExpr(*val));
                 if (record == m_recordFields.end()) continue;
                 auto declared = record->second.find(fieldName);
-                if (declared == record->second.end()) continue;
+                // An unknown field name used to be skipped, which made a
+                // renamed field silently absorb the old spelling: the
+                // interpreter stored `zebra:` on a record with no such field
+                // and `.zebra` read it straight back, while BEAM only failed at
+                // runtime with "Undefined method: zebra". Renaming a field
+                // therefore broke callers with no diagnostic at all. The
+                // pattern side has always checked this (see checkPatternArity);
+                // construction just never did.
+                if (declared == record->second.end()) {
+                    // List the layout: on a rename or a typo the useful
+                    // question is immediately "then what ARE the fields?".
+                    // Sorted so the message is stable — m_recordFields is a
+                    // hash map.
+                    std::vector<std::string> available;
+                    available.reserve(record->second.size());
+                    for (const auto& [known, _] : record->second)
+                        available.push_back(known);
+                    std::sort(available.begin(), available.end());
+                    std::string layout;
+                    for (std::size_t i = 0; i < available.size(); i++) {
+                        if (i) layout += ", ";
+                        layout += available[i];
+                    }
+                    error(val->location,
+                          "record `" + node.typeName + "` has no field `" +
+                          fieldName + "` — it has " +
+                          (layout.empty() ? "no fields" : layout));
+                    continue;
+                }
                 auto expected = resolve(declared->second);
                 // Stay quiet where either side is open ANYWHERE inside it: a
                 // type variable, a type the checker could not pin down, or a

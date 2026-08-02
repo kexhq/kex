@@ -1,0 +1,52 @@
+# Compile-time constants are not limited to scalars: records and variants
+# reify too, so a whole structure can be computed at compile time and spliced
+# in as a literal.
+#
+# `SHIFTED = Point { x: ORIGIN.x + 10, ... }` compiles to the literal tuple
+# {'Point', 11, 12} — zero additions survive into the emitted module — and
+# `NESTED` becomes a literal list of literal records.
+#
+# Records were the gap that blocked this: the reifier handled scalars, lists,
+# tuples and maps, so a record constant failed with "a Point has no literal
+# form". Variants (Just/None/Ok) were missing for the same reason. Both are
+# also prerequisites for `.emit()` collapse, whose builders return records.
+
+record Point do
+  x : Int
+  y : Int
+end
+
+# Declaration order deliberately NOT alphabetical. The reifier sorts field
+# names — only so the emitted AST is stable, since RecordValue::fields is an
+# unordered_map and an unstable order would make identical builds emit
+# different code. It cannot reorder the RECORD, because RecordConstruction
+# names every field and lowering resolves them against the declaration: this
+# emits {'Rev', 1, 2, 3}, and reordering the declaration re-orders the tuple
+# to match while `.zebra` still reads 1. `Point { x, y }` alone would not
+# prove that, being alphabetical already.
+record Rev do
+  zebra  : Int
+  apple  : Int
+  middle : Int
+end
+
+compiled do
+  let ORIGIN  = Point { x: 1, y: 2 }
+  let SHIFTED = Point { x: ORIGIN.x + 10, y: ORIGIN.y + 10 }
+  let SOME    = Just(7)
+  let NOTHING = None
+  let NESTED  = [Point { x: 1, y: 1 }, Point { x: 2, y: 2 }]
+  let OK      = Ok("fine")
+  let REV     = Rev { zebra: 1, apple: 2, middle: 3 }
+end
+
+main do
+  IO.printLine("${ORIGIN.x},${ORIGIN.y} ${SHIFTED.x},${SHIFTED.y}")
+  IO.printLine("${SOME.or(0)} ${NOTHING.or(99)}")
+  IO.printLine("${NESTED.count}")
+  IO.printLine("zebra=${REV.zebra} apple=${REV.apple} middle=${REV.middle}")
+  match OK do
+    Ok(v)    -> IO.printLine("ok ${v}")
+    Error(_) -> IO.printLine("err")
+  end
+end
