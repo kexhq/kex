@@ -143,6 +143,7 @@ add_library(kex_lib
     src/semantic/db.cxx
     src/semantic/collect_pass.cxx
     src/semantic/resolve_pass.cxx
+    src/ast/clone.cxx
     src/compiled/expand.cxx
     src/compiled/reify.cxx
     src/module/resolver.cxx
