@@ -32,9 +32,24 @@ namespace kex::compiled {
 using RecordLayouts =
     std::unordered_map<std::string, std::vector<std::string>>;
 
+// Everything reification needs beyond the value itself. A struct rather than
+// more parameters because both members are optional and neither is meaningful
+// at most call sites.
+struct ReifyContext {
+    const RecordLayouts* layouts = nullptr;
+    // The expression each PlaceholderValue index stands for. A placeholder
+    // reifies to a CLONE of the original AST rather than to a literal — that
+    // is the whole point of it: `Query { text: "...id = $1", params: [userId] }`
+    // keeps `userId` as the runtime reference it was.
+    //
+    // Null here means placeholders cannot be reified at all, and one reaching
+    // the reifier is an error rather than a silent wrong answer.
+    const std::vector<const ast::Expr*>* placeholders = nullptr;
+};
+
 auto valueToLiteral(const interpreter::ValuePtr& value,
                     const SourceLocation& location,
                     std::string& error,
-                    const RecordLayouts* layouts = nullptr) -> ast::ExprPtr;
+                    const ReifyContext& context = {}) -> ast::ExprPtr;
 
 } // namespace kex::compiled

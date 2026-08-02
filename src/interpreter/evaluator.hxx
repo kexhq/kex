@@ -128,9 +128,17 @@ public:
     // evaluable is an ordinary outcome, not an error. A timeout still
     // propagates — that is the sandbox's budget for the whole program, not one
     // expression's problem.
+    // One expression to evaluate, plus the free names it is allowed to carry
+    // without knowing. Each is bound to a PlaceholderValue whose `index` is
+    // its position in `placeholders`, so the caller can map a placeholder that
+    // survives into the result back to the expression it stands for.
+    struct ExpressionRequest {
+        const ast::Expr* expr = nullptr;
+        std::vector<std::string> placeholders;
+    };
     auto evaluateExpressions(
         const ast::Program& program,
-        const std::vector<const ast::Expr*>& expressions,
+        const std::vector<ExpressionRequest>& requests,
         std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
     // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
     // once into a shared AST and

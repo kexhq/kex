@@ -6,6 +6,7 @@
 #include <gmpxx.h>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,6 +17,22 @@ namespace kex::interpreter {
 
 struct Value;
 using ValuePtr = std::shared_ptr<Value>;
+
+// Thrown when compile-time evaluation tries to USE a PlaceholderValue rather
+// than just carry it around. Not a user-facing error: chain collapse catches
+// it and keeps the runtime form, which is always correct — the builder simply
+// turned out to need a value only the running program has.
+class PlaceholderMisuse : public std::runtime_error {
+public:
+    explicit PlaceholderMisuse(const std::string& name, const std::string& what)
+        : std::runtime_error("the value of `" + name + "` is not known at " +
+                             "compile time, and " + what + " needs it"),
+          m_name(name) {}
+    auto name() const -> const std::string& { return m_name; }
+
+private:
+    std::string m_name;
+};
 
 struct UnitValue {};  // Kex `()` — void return from IO/effectful operations
 struct IntValue { int64_t value; };
@@ -98,6 +115,24 @@ struct FunctionValue {
     int arity = -1;
 };
 
+// A runtime value standing in for ITSELF during compile-time evaluation.
+//
+// `compiled` chain collapse binds each free variable of an otherwise-known
+// chain to one of these, so a builder can carry the value through records and
+// lists — the `params: [userId]` case — and the reifier can put the ORIGINAL
+// expression back wherever it came to rest.
+//
+// Deliberately inert. Any operation that would need the actual value —
+// arithmetic, comparison, stringification, a truthiness test — must FAIL
+// rather than invent one, which is what PlaceholderMisuse is for. Silently
+// producing something would bake a wrong answer into the emitted program,
+// which is far worse than not collapsing: `"${userId}"` must never become the
+// text "Placeholder".
+struct PlaceholderValue {
+    std::size_t index;   // into the collapse site's captured expressions
+    std::string name;    // as written, for diagnostics
+};
+
 struct LambdaValue {
     std::vector<std::string> params;
     // body is stored by reference to AST — evaluated at call time
@@ -127,7 +162,8 @@ struct Value {
         FileHandleValue,
         RecordValue,
         FunctionValue,
-        LambdaValue
+        LambdaValue,
+        PlaceholderValue
     > data;
 
     static auto none() -> ValuePtr;

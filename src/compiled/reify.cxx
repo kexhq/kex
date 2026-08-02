@@ -1,5 +1,7 @@
 #include "reify.hxx"
 
+#include "../ast/clone.hxx"
+
 #include <algorithm>
 #include <variant>
 
@@ -20,7 +22,7 @@ auto make(const SourceLocation& location) -> ast::ExprPtr {
 auto valueToLiteral(const ValuePtr& value,
                     const SourceLocation& location,
                     std::string& error,
-                    const RecordLayouts* layouts) -> ast::ExprPtr {
+                    const ReifyContext& context) -> ast::ExprPtr {
     if (!value) {
         error = "no value";
         return nullptr;
@@ -29,6 +31,27 @@ auto valueToLiteral(const ValuePtr& value,
         [&](const auto& node) -> ast::ExprPtr {
             using T = std::decay_t<decltype(node)>;
             auto out = make(location);
+            if constexpr (std::is_same_v<T, interpreter::PlaceholderValue>) {
+                // A placeholder reifies to the EXPRESSION it stands for, not
+                // to a value — that is what lets a collapsed builder keep a
+                // runtime reference in the middle of an otherwise-literal
+                // result.
+                if (!context.placeholders ||
+                    node.index >= context.placeholders->size() ||
+                    !(*context.placeholders)[node.index]) {
+                    error = "`" + node.name +
+                            "` is not known at compile time and has no "
+                            "expression to fall back on";
+                    return nullptr;
+                }
+                // `clone` takes the owning pointer; borrow the node into one and
+                // release it again so the original AST keeps its owner.
+                auto borrowed = ast::ExprPtr(
+                    const_cast<ast::Expr*>((*context.placeholders)[node.index]));
+                auto copy = ast::clone(borrowed);
+                (void)borrowed.release();
+                return copy;
+            } else
             if constexpr (std::is_same_v<T, interpreter::UnitValue>) {
                 out->kind = ast::TupleExpr{};  // `()`
             } else if constexpr (std::is_same_v<T, interpreter::IntValue>) {
@@ -68,7 +91,7 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::ListValue>) {
                 ast::ListExpr list;
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error, layouts);
+                    auto lowered = valueToLiteral(element, location, error, context);
                     if (!lowered) return nullptr;
                     list.elements.push_back(std::move(lowered));
                 }
@@ -76,7 +99,7 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::TupleValue>) {
                 ast::TupleExpr tuple;
                 for (const auto& element : node.elements) {
-                    auto lowered = valueToLiteral(element, location, error, layouts);
+                    auto lowered = valueToLiteral(element, location, error, context);
                     if (!lowered) return nullptr;
                     tuple.elements.push_back(std::move(lowered));
                 }
@@ -84,9 +107,9 @@ auto valueToLiteral(const ValuePtr& value,
             } else if constexpr (std::is_same_v<T, interpreter::MapValue>) {
                 ast::MapExpr map;
                 for (const auto& [key, mapped] : node.entries) {
-                    auto loweredKey = valueToLiteral(key, location, error, layouts);
+                    auto loweredKey = valueToLiteral(key, location, error, context);
                     if (!loweredKey) return nullptr;
-                    auto loweredValue = valueToLiteral(mapped, location, error, layouts);
+                    auto loweredValue = valueToLiteral(mapped, location, error, context);
                     if (!loweredValue) return nullptr;
                     map.entries.push_back(
                         ast::MapEntry{std::move(loweredKey), std::move(loweredValue)});
@@ -108,9 +131,9 @@ auto valueToLiteral(const ValuePtr& value,
                 // make identical builds emit different code.
                 std::vector<const std::string*> names;
                 names.reserve(node.fields.size());
-                if (layouts) {
-                    const auto declared = layouts->find(node.typeName);
-                    if (declared != layouts->end())
+                if (context.layouts) {
+                    const auto declared = context.layouts->find(node.typeName);
+                    if (declared != context.layouts->end())
                         for (const auto& field : declared->second)
                             if (node.fields.count(field)) names.push_back(&field);
                 }
@@ -131,7 +154,7 @@ auto valueToLiteral(const ValuePtr& value,
                 names.insert(names.end(), extra.begin(), extra.end());
                 for (const auto* field : names) {
                     auto lowered =
-                        valueToLiteral(node.fields.at(*field), location, error, layouts);
+                        valueToLiteral(node.fields.at(*field), location, error, context);
                     if (!lowered) return nullptr;
                     record.fields.emplace_back(*field, std::move(lowered));
                 }
@@ -145,7 +168,7 @@ auto valueToLiteral(const ValuePtr& value,
                     ast::FunctionCall call;
                     call.name = node.tag;
                     for (const auto& arg : node.args) {
-                        auto lowered = valueToLiteral(arg, location, error, layouts);
+                        auto lowered = valueToLiteral(arg, location, error, context);
                         if (!lowered) return nullptr;
                         call.args.push_back(std::move(lowered));
                     }

@@ -45,6 +45,12 @@ module Boxes do
       let tag(label: String) -> String do
         "${label}:${@total}"
       end
+
+      # Only ever STORES what it is given, so a runtime value can pass through
+      # it at compile time as a placeholder.
+      let note(extra) -> Box do
+        Box { parts: @parts + [extra], total: @total }
+      end
     end
   end
 end
@@ -62,10 +68,25 @@ main do
   let built = Boxes.of(4).add(6)
   IO.printLine("${built.parts} ${built.total}")
 
-  # A free runtime variable disqualifies the chain: it keeps building at
-  # runtime, and must still produce the same answer.
+  # A runtime value the builder only CARRIES rides through as a placeholder:
+  # the chain still collapses, and the reified result refers back to
+  # `runtime` where it came to rest.
   let runtime = 5
+  # printLine rather than inspect: IO.inspect ignores --no-colors on BEAM and
+  # prefixes `=> `, which would make this spec differ for reasons that have
+  # nothing to do with collapse.
+  IO.printLine("${Boxes.of(1).note(runtime).parts}")
+
+  # A runtime value the builder COMPUTES with cannot: `scaled` multiplies, so
+  # evaluation gives up and the whole chain is left to run. Same answer.
   IO.printLine("${Boxes.of(runtime).add(3).scaled(10)}")
+
+  # Nor can one it STRINGIFIES — and unlike the others, this case is visible
+  # from here. A placeholder that were allowed to render as text would print
+  # `?:1`, with the wrong answer compiled into the program rather than merely
+  # computed late. That is why PlaceholderValue refuses to produce text at all.
+  let who = "abc"
+  IO.printLine(Boxes.of(1).tag(who))
 
   # Partially static — the collapsible prefix is NOT collapsed on its own,
   # because the call that terminates the chain is not evaluable.
@@ -79,4 +100,8 @@ main do
   # flagged interpolating whether or not it embeds anything, so reading that
   # flag as "unknown" disqualified every chain taking a string at all.
   IO.printLine(Boxes.empty().add(9).tag("count"))
+
+  # Being fully determined is what matters, not the shape of the outermost
+  # node: a `+` over two known operands collapses as readily as a chain does.
+  IO.printLine("[" + Boxes.empty().add(1).tag("n") + "]")
 end

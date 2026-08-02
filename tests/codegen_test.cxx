@@ -506,6 +506,102 @@ int main() {
             assertEqual(countOccurrences(out, "apply 'empty'"), 0,
                         "a nullary compiled function is callable and collapses");
         });
+
+        it("collapses a static expression whose outermost node is not a call",
+           []() {
+            // The first rule was "the terminal of a call chain", which left
+            // `"0 " + Css.px(24)` building at runtime — both operands literal,
+            // the result decidable, and the only reason it survived was that
+            // the outermost node happened to be a `+`. Being fully determined
+            // is the property that matters; the chain shape never was.
+            const std::string source =
+                "module Css do\n"
+                "  compiled do\n"
+                "    let px(n: Int) -> String = \"${n}px\"\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  \"0 \" + Css.px(24)\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            assertTrue(kex::compiled::expand(program, diagnostics),
+                       "expansion should succeed");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "concat", "", &ext))
+                           .source;
+
+            // "0 24px" as a single binary literal — the `+` is gone, and with
+            // it the is_tuple dispatch guard that duplicated both operands.
+            const std::string joined =
+                "#<48>(8,1,'integer',['unsigned'|['big']]),"
+                "#<32>(8,1,'integer',['unsigned'|['big']]),"
+                "#<50>(8,1,'integer',['unsigned'|['big']]),"
+                "#<52>(8,1,'integer',['unsigned'|['big']])";
+            assertTrue(out.find(joined) != std::string::npos,
+                       "\"0 \" + Css.px(24) should be one literal \"0 24px\"");
+            assertEqual(countOccurrences(out, "'kex_prelude':'+'"), 0,
+                        "no concatenation should survive to runtime");
+        });
+
+        it("carries a runtime value through as a placeholder", []() {
+            // The point of placeholders: `note` only STORES what it is given,
+            // so the chain collapses even though `seed` has no compile-time
+            // value — and the reified literal refers back to `seed` where it
+            // came to rest. `scaled` MULTIPLIES, so the second chain cannot,
+            // and falls back to running.
+            const std::string source =
+                "module Boxes do\n"
+                "  record Box do\n"
+                "    total : Int = 0\n"
+                "    extra : Int = 0\n"
+                "  end\n"
+                "  compiled do\n"
+                "    let of(n: Int) -> Box do\n"
+                "      Box { total: n }\n"
+                "    end\n"
+                "    make Box do\n"
+                "      let note(e) -> Box do\n"
+                "        Box { total: @total, extra: e }\n"
+                "      end\n"
+                "      let scaled(by: Int) -> Int do\n"
+                "        @total * by\n"
+                "      end\n"
+                "    end\n"
+                "  end\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  let seed = 7\n"
+                "  let carried = Boxes.of(2).note(seed)\n"
+                "  let computed = Boxes.of(seed).scaled(3)\n"
+                "  (carried, computed)\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            assertTrue(kex::compiled::expand(program, diagnostics),
+                       "expansion should succeed");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "carried", "", &ext))
+                           .source;
+
+            // `carried` is the literal record with Seed still a REFERENCE —
+            // not the value 7, which would bake in a runtime binding.
+            assertTrue(out.find("{'Box', 2, Seed}") != std::string::npos,
+                       "a carried placeholder reifies back to its expression");
+            assertEqual(countOccurrences(out, "apply 'note'"), 0,
+                        "the carrying chain collapses");
+            // `computed` cannot: multiplying a placeholder has no answer.
+            assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
+                        "a chain that computes with a placeholder keeps running");
+        });
     });
 
     describe("compile-time expansion — reification", []() {
@@ -528,7 +624,7 @@ int main() {
 
             std::string why;
             auto literal = kex::compiled::valueToLiteral(
-                record, kex::SourceLocation{}, why, &layouts);
+                record, kex::SourceLocation{}, why, {&layouts});
             assertTrue(literal != nullptr, "a record should reify: " + why);
             const auto* construction =
                 std::get_if<kex::ast::RecordConstruction>(&literal->kind);
@@ -552,7 +648,7 @@ int main() {
             kex::compiled::RecordLayouts layouts;  // deliberately empty
             std::string why;
             auto literal = kex::compiled::valueToLiteral(
-                record, kex::SourceLocation{}, why, &layouts);
+                record, kex::SourceLocation{}, why, {&layouts});
             assertTrue(literal != nullptr, "still reifies: " + why);
             const auto* construction =
                 std::get_if<kex::ast::RecordConstruction>(&literal->kind);

@@ -208,26 +208,41 @@ auto Evaluator::evaluateConstants(
 
 auto Evaluator::evaluateExpressions(
     const ast::Program& program,
-    const std::vector<const ast::Expr*>& expressions,
+    const std::vector<ExpressionRequest>& requests,
     std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> values;
     runCompileTime(program, timeout, [&] {
-        values.reserve(expressions.size());
-        for (const auto* expr : expressions) {
+        values.reserve(requests.size());
+        for (const auto& request : requests) {
             checkDeadline();
-            if (!expr) {
+            if (!request.expr) {
                 values.push_back(nullptr);
                 continue;
             }
+            // Each request gets its own scope, so one expression's
+            // placeholders are invisible to the next and a name that is also a
+            // real global is shadowed only while this expression runs.
+            pushEnv();
             try {
-                values.push_back(eval(*expr));
+                for (std::size_t i = 0; i < request.placeholders.size(); i++) {
+                    auto placeholder = std::make_shared<Value>();
+                    placeholder->data =
+                        PlaceholderValue{i, request.placeholders[i]};
+                    m_env->define(request.placeholders[i],
+                                  std::move(placeholder));
+                }
+                values.push_back(eval(*request.expr));
             } catch (const EvaluationTimeout&) {
+                popEnv();
                 throw;
             } catch (const std::exception&) {
-                // Not compile-time evaluable after all — the caller keeps the
-                // runtime form.
+                // Not compile-time evaluable after all — a PlaceholderMisuse
+                // (the builder needed a value only the running program has) or
+                // anything else. Either way the caller keeps the runtime form,
+                // which is always correct.
                 values.push_back(nullptr);
             }
+            popEnv();
         }
     });
     return values;
@@ -2366,6 +2381,13 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
 
 auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr& right,
                              SourceLocation loc) -> ValuePtr {
+    // A placeholder can be CARRIED by compile-time evaluation but never
+    // computed with — `x + 1` has no answer until the program runs. Checked
+    // before operator overloading, which would otherwise dispatch on it.
+    for (const auto* side : {&left, &right})
+        if (const auto* ph = std::get_if<PlaceholderValue>(&(*side)->data))
+            throw PlaceholderMisuse(ph->name, "this operator");
+
     // Operator overloading: `make Type do let +(other) -> Type ... end`
     // registers "Type::+", dispatched here through the same receiver-type
     // resolution as method calls (including ADT variants), before built-ins.
@@ -2562,6 +2584,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
 
 auto Evaluator::evalUnaryOp(TokenType op, const ValuePtr& operand,
                             SourceLocation loc) -> ValuePtr {
+    if (const auto* ph = std::get_if<PlaceholderValue>(&operand->data))
+        throw PlaceholderMisuse(ph->name, "this operator");
     switch (op) {
         case TokenType::Minus:
             if (auto* i = std::get_if<IntValue>(&operand->data)) {
