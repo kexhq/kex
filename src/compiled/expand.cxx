@@ -323,6 +323,37 @@ auto expand(ast::Program& program,
             if (*mod) scan((*mod)->body);
     if (!hasBlock) return true;
 
+    // Declaration GENERATION is not built yet. A driver loop such as
+    // `NAMES.each do |n| let %n(...) ... end` currently parses — the loop
+    // lands in the block as a plain expression and the `%n` splice inside it
+    // is never instantiated — so without this the whole construct silently
+    // compiles to nothing and every call to a generated name fails much later
+    // with "Undefined method". Refuse it up front instead.
+    {
+        bool rejected = false;
+        auto rejectSplices = [&](auto& items) {
+            for (auto& item : items) {
+                auto* block =
+                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
+                if (!block || !*block) continue;
+                for (auto& entry : (*block)->items)
+                    if (auto* expr = std::get_if<ast::ExprPtr>(&entry))
+                        if (*expr) {
+                            addError(diagnostics, (*expr)->location,
+                                     "declaration generation inside `compiled do` "
+                                     "is not implemented yet — this loop compiles "
+                                     "to nothing");
+                            rejected = true;
+                        }
+            }
+        };
+        rejectSplices(program.items);
+        for (auto& item : program.items)
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod) rejectSplices((*mod)->body);
+        if (rejected) return false;
+    }
+
     // --- 2. Evaluate them, once, against the whole program.
     Constants constants;
     if (!names.empty()) {
