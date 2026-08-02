@@ -95,7 +95,7 @@ public:
     // as literals since they do not exist at runtime.
     struct GeneratedDeclaration {
         std::string name;
-        std::shared_ptr<ast::FunctionDef> function;
+        ast::GeneratedTemplate function;
         std::unordered_map<std::string, ValuePtr> bindings;
         SourceLocation location;
     };

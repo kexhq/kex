@@ -124,6 +124,42 @@ make String, implement: Enumerable, Foldable do
   lowerCase :> String
   let lowerCase = Kex.Intrinsic.String.lowerCase(this)
 
+  # Returns the string with its first character upper-cased and the rest
+  # LOWER-cased, matching Ruby's String#capitalize — so "hELLO" becomes
+  # "Hello", not "HELLO". Unlike +upperCase+, which shouts the whole string.
+  #
+  # Needed to build type names from data: a generated `type %name = ...`
+  # inside a `compiled do` block requires an upper-case identifier, so a list
+  # of lower-case words has to be capitalized first.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "hello".capitalize          # => "Hello"
+  #   "hELLO".capitalize          # => "Hello"   (tail is lower-cased)
+  #   "already Capital".capitalize # => "Already capital"
+  #   "".capitalize               # => ""
+  capitalize :> String
+  # Destructures the characters rather than using `"${at(0).upperCase}${rest}"`:
+  # `rest` returns an empty LIST instead of an empty String when nothing
+  # remains, so that spelling gave "A[]" for "a".capitalize on the BEAM
+  # backend. See the note on `rest` — the bug is there, not here.
+  # The natural spelling is a RECEIVER pattern, matching on `this` directly:
+  #
+  #     let capitalize(@[])       = ""
+  #     let capitalize(@[c | cs]) = "${c.upperCase}${cs.lowerCase}"
+  #
+  # It parses and works in the interpreter, but the backends disagree on what
+  # the tail binds to: a String in the interpreter, a [Char] on BEAM — and
+  # bridging with `.to(String)` reintroduces the empty-list rendering (`"a"`
+  # capitalizes to "A[]"). Same root cause as `rest` below. Going through
+  # `chars` is explicit on both backends, so it is what ships until the runtime
+  # is fixed; switch to the receiver form then.
+  let capitalize = match this.chars do
+    []       -> ""
+    [c | cs] -> "${c.upperCase}${cs.join("").lowerCase}"
+  end
+
   # Returns the string with its characters in reverse order.
   #
   # @return [String]

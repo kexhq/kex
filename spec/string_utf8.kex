@@ -1,0 +1,40 @@
+# UTF-8 handling in String — and a REAL divergence between the backends.
+#
+# The interpreter treats a String as BYTES; BEAM treats it as codepoints:
+#
+#            "école".length   "école".chars.count   "école".capitalize
+#   interp   6                6                     "école"  (unchanged)
+#   BEAM     5                5                     "École"
+#
+# `chars` in the interpreter splits "école" into 6 items because `é` is two
+# bytes, so `chars[0]` is a half-character: upper-casing it does nothing and
+# the pieces reassemble to the original. BEAM splits into 5 codepoints and
+# capitalizes correctly.
+#
+# The .expected here records the INTERPRETER's behaviour (what `make spec`
+# checks), so this file shows up in `make spec-beam`'s differing list. That is
+# accurate, not a test bug: BEAM is right and the interpreter is wrong. Pinned
+# so the fix shows up as a spec diff.
+#
+# ASCII is identical on both backends — see spec/string_capitalize.kex.
+
+main do
+  # Multi-byte leading character
+  IO.printLine("[${"école".capitalize}]")
+  IO.printLine("[${"ñandú".capitalize}]")
+  IO.printLine("[${"é".capitalize}]")
+
+  # Already-upper multi-byte lead: the tail still lower-cases on both
+  IO.printLine("[${"ÉCOLE".capitalize}]")
+
+  # No case mapping at all — identical on both backends
+  IO.printLine("[${"日本語".capitalize}]")
+
+  # ASCII lead with a multi-byte tail — the lead capitalizes on both
+  IO.printLine("[${"straße".capitalize}]")
+
+  # Where the byte-vs-codepoint split shows up directly
+  IO.printLine("length ${"école".length}")
+  IO.printLine("chars  ${"école".chars.count}")
+  IO.printLine("ascii  ${"cafe".length}")
+end

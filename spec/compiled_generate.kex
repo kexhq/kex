@@ -31,9 +31,12 @@ compiled do
 end
 
 # `type %name = ...` generates a type alias or sum type the same way.
+# Type names must be upper-case, so lower-case source data is capitalized —
+# the reason String#capitalize exists. A lower-case generated type name is a
+# compile-time error suggesting exactly this.
 compiled do
-  ["Small", "Large"].each do |n|
-    type %n = Int
+  ["small", "large"].each do |n|
+    type %{n.capitalize} = Int
   end
 end
 

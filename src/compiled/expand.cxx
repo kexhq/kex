@@ -437,6 +437,33 @@ auto expand(ast::Program& program,
             ok = false;
             continue;
         }
+        // A generated name has to be a legal identifier of the right KIND:
+        // types are upper-case, functions lower-case. Without this a
+        // `type %{name}` over lower-case data silently declared a type called
+        // `small`, which nothing can ever reference.
+        {
+            const bool wantsUpper =
+                std::holds_alternative<std::shared_ptr<ast::TypeDef>>(decl.function);
+            const unsigned char lead =
+                static_cast<unsigned char>(decl.name.front());
+            const bool isUpper = lead >= 'A' && lead <= 'Z';
+            const bool isLower = (lead >= 'a' && lead <= 'z') || lead == '_';
+            if (wantsUpper && !isUpper) {
+                addError(diagnostics, decl.location,
+                         "generated type name `" + decl.name +
+                             "` must start with an upper-case letter" +
+                             (isLower ? " — try `%{name.capitalize}`" : ""));
+                ok = false;
+                continue;
+            }
+            if (!wantsUpper && !isLower) {
+                addError(diagnostics, decl.location,
+                         "generated function name `" + decl.name +
+                             "` must start with a lower-case letter");
+                ok = false;
+                continue;
+            }
+        }
         auto owner = templateOwner.find(templateId(decl.function));
         auto* into = owner != templateOwner.end() ? owner->second : nullptr;
 
