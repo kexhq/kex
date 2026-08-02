@@ -1,6 +1,7 @@
 #include "expand.hxx"
 
 #include "reify.hxx"
+#include "../ast/clone.hxx"
 #include "../interpreter/evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../parser/parser.hxx"
@@ -323,40 +324,17 @@ auto expand(ast::Program& program,
             if (*mod) scan((*mod)->body);
     if (!hasBlock) return true;
 
-    // Declaration GENERATION is not built yet. A driver loop such as
-    // `NAMES.each do |n| let %n(...) ... end` currently parses — the loop
-    // lands in the block as a plain expression and the `%n` splice inside it
-    // is never instantiated — so without this the whole construct silently
-    // compiles to nothing and every call to a generated name fails much later
-    // with "Undefined method". Refuse it up front instead.
-    {
-        bool rejected = false;
-        auto rejectSplices = [&](auto& items) {
-            for (auto& item : items) {
-                auto* block =
-                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
-                if (!block || !*block) continue;
-                for (auto& entry : (*block)->items)
-                    if (auto* expr = std::get_if<ast::ExprPtr>(&entry))
-                        if (*expr) {
-                            addError(diagnostics, (*expr)->location,
-                                     "declaration generation inside `compiled do` "
-                                     "is not implemented yet — this loop compiles "
-                                     "to nothing");
-                            rejected = true;
-                        }
-            }
-        };
-        rejectSplices(program.items);
-        for (auto& item : program.items)
-            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod) rejectSplices((*mod)->body);
-        if (rejected) return false;
-    }
 
-    // --- 2. Evaluate them, once, against the whole program.
+    // --- 2. Run the block once, against the whole program.
+    //
+    // This both forces the constants AND executes any generation code: a
+    // driver loop is ordinary compile-time code, and `let %name(...)` records
+    // a declaration as it runs (Evaluator's GeneratedDecl case). That is why
+    // `each`, `eachIndexed`, nesting and conditionals need no support here —
+    // they are just code the sandbox runs.
     Constants constants;
-    if (!names.empty()) {
+    std::vector<interpreter::Evaluator::GeneratedDeclaration> generated;
+    {
         const SourceLocation blame =
             locations.empty() ? SourceLocation{} : locations.front();
         std::vector<interpreter::ValuePtr> values;
@@ -364,6 +342,7 @@ auto expand(ast::Program& program,
             interpreter::Evaluator evaluator;
             evaluator.loadPrelude();
             values = evaluator.evaluateConstants(program, names, options.timeout);
+            generated = evaluator.generatedDeclarations();
         } catch (const interpreter::EvaluationTimeout&) {
             addError(diagnostics, blame,
                      "compile-time evaluation timed out after " +
@@ -399,6 +378,46 @@ auto expand(ast::Program& program,
         ok = false;
     }
 
+    // --- 3b. Instantiate the generated declarations.
+    //
+    // Each recorded `let %name(...)` becomes a real FunctionDef: the template
+    // is CLONED (one template, N independent bodies), given its resolved name,
+    // and has the compile-time bindings it closed over baked in as literals —
+    // a loop variable does not exist at runtime, so it cannot survive as a
+    // reference. Parameters of the generated function shadow those bindings,
+    // which falls out of Substituter skipping any name it does not know.
+    std::vector<std::unique_ptr<ast::FunctionDef>> instantiated;
+    for (const auto& decl : generated) {
+        if (!decl.function) continue;
+        if (decl.name.empty()) {
+            addError(diagnostics, decl.location,
+                     "generated declaration has an empty name");
+            ok = false;
+            continue;
+        }
+        auto copy = ast::clone(*decl.function);
+        copy->name = decl.name;
+        copy->location = decl.location;
+        // A parameter of the generated function must win over a same-named
+        // compile-time binding, so drop those from the substitution map.
+        Constants captured;
+        for (const auto& [bound, value] : decl.bindings) captured.emplace(bound, value);
+        for (const auto& clause : copy->clauses)
+            for (const auto& param : clause.params)
+                if (param.name) captured.erase(*param.name);
+        Substituter inner{captured, diagnostics, {}, {}};
+        inner.functionBody(*copy);
+        instantiated.push_back(std::move(copy));
+    }
+    if (!instantiated.empty()) {
+        // Appended at top level. Attributing each back to the scope of the
+        // block that produced it needs the template pointer matched against
+        // each block's subtree; until then, generation inside a `module` body
+        // lands one level out.
+        for (auto& fn : instantiated)
+            program.items.push_back(std::move(fn));
+    }
+
     // --- 4. Drop the definitions. A constant is gone from the emitted module
     // entirely — no nullary function, nothing exported. Only constants whose
     // uses were all substituted are removed; anything left referenced keeps
@@ -417,7 +436,13 @@ auto expand(ast::Program& program,
                 const bool inlined = fn && *fn && isValueBinding(**fn) &&
                                      constants.count((*fn)->name) &&
                                      !keep.count((*fn)->name);
-                if (!inlined) kept.push_back(std::move(entry));
+                // A bare expression in a compiled block is compile-time work
+                // and nothing else — a driver loop, typically. It has already
+                // run, and its generated declarations are now real items, so
+                // keeping it would re-run the loop at runtime (and leave a
+                // CompiledBlock that top-level BEAM lowering cannot handle).
+                const bool consumed = std::holds_alternative<ast::ExprPtr>(entry);
+                if (!inlined && !consumed) kept.push_back(std::move(entry));
             }
             entries = std::move(kept);
             if (entries.empty()) items.erase(items.begin() + static_cast<long>(i));

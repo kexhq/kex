@@ -1122,6 +1122,34 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 throw RuntimeError(*error, expr.location);
             return Value::floating(v);
         }
+        else if constexpr (std::is_same_v<T, ast::GeneratedDecl>) {
+            // `let %name(...)` — RECORD a declaration rather than binding
+            // anything. Only meaningful during compile-time evaluation; at
+            // runtime the expansion pass has already replaced it, so reaching
+            // here means the pass did not run.
+            std::string name;
+            if (node.name) {
+                auto resolved = eval(*node.name);
+                if (auto* text = std::get_if<StringValue>(&resolved->data))
+                    name = text->value;
+                else if (auto* atom = std::get_if<AtomValue>(&resolved->data))
+                    name = atom->name;
+                else
+                    name = resolved->toString();
+            }
+            // Snapshot the compile-time scope the body closes over. Innermost
+            // binding wins, and the global scope is excluded: those names still
+            // exist at runtime and must NOT be baked in as literals.
+            std::unordered_map<std::string, ValuePtr> bindings;
+            for (auto scope = m_env; scope && scope != m_globalEnv;
+                 scope = scope->parent())
+                for (const auto& bound : scope->names())
+                    bindings.emplace(bound, scope->get(bound));
+            m_generatedDeclarations.push_back(
+                {std::move(name), node.function, std::move(bindings),
+                 expr.location});
+            return Value::unit();
+        }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
             if (!node.parts.empty()) {
                 std::string result;

@@ -685,7 +685,11 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
     if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
         check(TokenType::Loop) ||
         check(TokenType::Match) || check(TokenType::SpliceIdent)) {
-        def->name = advance().value;
+        // A splice keeps its `%` so callers can tell `let %name(...)` (the name
+        // is computed at compile time) from an ordinary `let name(...)`. The
+        // lexer strips the sigil, so it is restored here.
+        const bool spliced = check(TokenType::SpliceIdent);
+        def->name = (spliced ? "%" : "") + advance().value;
     } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
                check(TokenType::Star) || check(TokenType::Slash) ||
                check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
@@ -2342,6 +2346,20 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
             auto funcDef = parseFunctionDef();
             auto expr = std::make_unique<ast::Expr>();
             expr->location = loc;
+            // `let %name(...)` declares a function whose NAME is computed at
+            // compile time, so it cannot become a local binding — the name is
+            // not known yet. Emit a GeneratedDecl for the expansion pass; the
+            // `%` prefix was put there by parseFunctionDef.
+            if (!funcDef->name.empty() && funcDef->name.front() == '%') {
+                auto nameExpr = std::make_unique<ast::Expr>();
+                nameExpr->location = loc;
+                nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
+                funcDef->name.clear();
+                expr->kind = ast::GeneratedDecl{
+                    std::move(nameExpr),
+                    std::shared_ptr<ast::FunctionDef>(std::move(funcDef))};
+                return expr;
+            }
             // Represent as a let binding of a lambda with the function name
             ast::PatternPtr pat = std::make_unique<ast::Pattern>();
             pat->location = loc;

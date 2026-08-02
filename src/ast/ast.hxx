@@ -401,6 +401,21 @@ struct ErrorNode {
 
 // `using Module` or `using Module do ... end` inside a function/main body.
 // Brings the module's compiled-block definitions into the current scope.
+// `let %name(...) -> T do ... end` inside a `compiled do` block: a declaration
+// whose NAME is computed at compile time.
+//
+// It is an EXPRESSION rather than a declaration form so that generation can be
+// driven by ordinary code — `NAMES.eachIndexed do |n, i| let %n(...) ... end`
+// needs no new statement grammar, and loops, nesting and conditionals all work
+// because the compile-time sandbox simply runs them. Evaluating one produces no
+// value; it RECORDS a declaration for the expansion pass to splice in.
+struct GeneratedDecl {
+    ExprPtr name;                           // `%n` -> Identifier{"n"}
+    // The template. shared_ptr because one template yields N declarations,
+    // each an independent ast::clone of it.
+    std::shared_ptr<struct FunctionDef> function;
+};
+
 struct UsingExpr {
     TypeName module;
     std::optional<std::string> alias;
@@ -455,6 +470,7 @@ struct Expr {
         TryExpr,
         TryingExpr,
         ErrorNode,
+        GeneratedDecl,
         UsingExpr
     > kind;
 };

@@ -88,6 +88,21 @@ public:
     // invoked. Loading once lets a later constant reference an earlier one.
     // A name that cannot be forced yields a null entry rather than throwing,
     // so the caller can report which one.
+    // A `let %name(...)` executed during compile-time evaluation. Recorded
+    // rather than acted on: the expansion pass turns each into a real
+    // declaration. `bindings` is the compile-time scope at the moment it ran —
+    // the loop variables a generated body closes over, which must be baked in
+    // as literals since they do not exist at runtime.
+    struct GeneratedDeclaration {
+        std::string name;
+        std::shared_ptr<ast::FunctionDef> function;
+        std::unordered_map<std::string, ValuePtr> bindings;
+        SourceLocation location;
+    };
+    auto generatedDeclarations() const -> const std::vector<GeneratedDeclaration>& {
+        return m_generatedDeclarations;
+    }
+
     auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
@@ -279,6 +294,9 @@ private:
     bool m_replMode = false;
     bool m_preludeLoaded = false;
     std::optional<std::chrono::steady_clock::time_point> m_deadline;
+    // Declarations recorded by `let %name(...)` during compile-time
+    // evaluation; drained by src/compiled/expand.cxx.
+    std::vector<GeneratedDeclaration> m_generatedDeclarations;
 
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;

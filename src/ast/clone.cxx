@@ -282,6 +282,10 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 out->kind = TryExpr{clone(node.operand)};
             } else if constexpr (std::is_same_v<T, TryingExpr>) {
                 out->kind = TryingExpr{cloneVec(node.body), clone(node.rescue)};
+            } else if constexpr (std::is_same_v<T, GeneratedDecl>) {
+                // The template is shared, not copied: instantiation clones it
+                // per generated declaration, and it is never mutated in place.
+                out->kind = GeneratedDecl{clone(node.name), node.function};
             } else if constexpr (std::is_same_v<T, UsingExpr>) {
                 UsingExpr copy;
                 copy.module = node.module;
