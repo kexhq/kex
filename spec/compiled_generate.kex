@@ -30,7 +30,17 @@ compiled do
   end
 end
 
+# `type %name = ...` generates a type alias or sum type the same way.
+compiled do
+  ["Small", "Large"].each do |n|
+    type %n = Int
+  end
+end
+
 main do
+  let small: Small = 1
+  let large: Large = 2
+  IO.printLine("${small} ${large}")
   IO.printLine(tagAlpha(7))
   IO.printLine(tagBeta(7))
   IO.printLine(tagGamma(7))

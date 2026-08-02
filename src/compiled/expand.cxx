@@ -40,6 +40,13 @@ auto addError(std::vector<semantic::Diagnostic>& diagnostics,
 
 using Constants = std::unordered_map<std::string, interpreter::ValuePtr>;
 
+// Stable identity for a generation template, whichever declaration shape it
+// holds. Used to map a template back to the scope that declared it.
+auto templateId(const ast::GeneratedTemplate& tmpl) -> const void* {
+    return std::visit([](const auto& held) -> const void* { return held.get(); },
+                      tmpl);
+}
+
 // ---------------------------------------------------------------------------
 // Use-site substitution
 //
@@ -335,7 +342,7 @@ auto expand(ast::Program& program,
     // inside `module M do compiled do ... end end` must produce a method OF M,
     // not a top-level function. The template pointer identifies its block, so
     // map it to the owning module before anything runs. Null means top level.
-    std::unordered_map<const ast::FunctionDef*, ast::ModuleDef*> templateOwner;
+    std::unordered_map<const void*, ast::ModuleDef*> templateOwner;
     {
         auto record = [&](auto& items, ast::ModuleDef* owner) {
             for (auto& item : items) {
@@ -348,7 +355,7 @@ auto expand(ast::Program& program,
                     Constants none;
                     Substituter finder{none, diagnostics, {}, {}, {}};
                     finder.onGenerated = [&](const ast::GeneratedDecl& decl) {
-                        if (decl.function) templateOwner[decl.function.get()] = owner;
+                        templateOwner[templateId(decl.function)] = owner;
                     };
                     finder.substitute(*expr);
                 }
@@ -424,30 +431,47 @@ auto expand(ast::Program& program,
     // which falls out of Substituter skipping any name it does not know.
     // Each entry is appended to the scope that declared its template.
     for (const auto& decl : generated) {
-        if (!decl.function) continue;
         if (decl.name.empty()) {
             addError(diagnostics, decl.location,
                      "generated declaration has an empty name");
             ok = false;
             continue;
         }
-        auto copy = ast::clone(*decl.function);
-        copy->name = decl.name;
-        copy->location = decl.location;
-        // A parameter of the generated function must win over a same-named
-        // compile-time binding, so drop those from the substitution map.
-        Constants captured;
-        for (const auto& [bound, value] : decl.bindings) captured.emplace(bound, value);
-        for (const auto& clause : copy->clauses)
-            for (const auto& param : clause.params)
-                if (param.name) captured.erase(*param.name);
-        Substituter inner{captured, diagnostics, {}, {}, {}};
-        inner.functionBody(*copy);
-        auto owner = templateOwner.find(decl.function.get());
-        if (owner != templateOwner.end() && owner->second)
-            owner->second->body.push_back(std::move(copy));
-        else
-            program.items.push_back(std::move(copy));
+        auto owner = templateOwner.find(templateId(decl.function));
+        auto* into = owner != templateOwner.end() ? owner->second : nullptr;
+
+        if (auto* fnTemplate =
+                std::get_if<std::shared_ptr<ast::FunctionDef>>(&decl.function)) {
+            if (!*fnTemplate) continue;
+            auto copy = ast::clone(**fnTemplate);
+            copy->name = decl.name;
+            copy->location = decl.location;
+            // A parameter of the generated function must win over a same-named
+            // compile-time binding, so drop those from the substitution map.
+            Constants captured;
+            for (const auto& [bound, value] : decl.bindings)
+                captured.emplace(bound, value);
+            for (const auto& clause : copy->clauses)
+                for (const auto& param : clause.params)
+                    if (param.name) captured.erase(*param.name);
+            Substituter inner{captured, diagnostics, {}, {}, {}};
+            inner.functionBody(*copy);
+            if (into) into->body.push_back(std::move(copy));
+            else program.items.push_back(std::move(copy));
+            continue;
+        }
+
+        if (auto* typeTemplate =
+                std::get_if<std::shared_ptr<ast::TypeDef>>(&decl.function)) {
+            if (!*typeTemplate) continue;
+            auto copy = ast::clone(**typeTemplate);
+            copy->name = decl.name;
+            copy->location = decl.location;
+            // A generated type's body is types, not expressions, so there is
+            // nothing for the hygiene substitution to do here.
+            if (into) into->body.push_back(std::move(copy));
+            else program.items.push_back(std::move(copy));
+        }
     }
 
     // --- 4. Drop the definitions. A constant is gone from the emitted module

@@ -409,11 +409,16 @@ struct ErrorNode {
 // needs no new statement grammar, and loops, nesting and conditionals all work
 // because the compile-time sandbox simply runs them. Evaluating one produces no
 // value; it RECORDS a declaration for the expansion pass to splice in.
+// The declaration a splice generates. Exactly one alternative is set; the
+// variant is what keeps that an invariant rather than a convention.
+// shared_ptr because one template yields N declarations, each an independent
+// ast::clone of it.
+using GeneratedTemplate = std::variant<std::shared_ptr<struct FunctionDef>,
+                                       std::shared_ptr<struct TypeDef>>;
+
 struct GeneratedDecl {
     ExprPtr name;                           // `%n` -> Identifier{"n"}
-    // The template. shared_ptr because one template yields N declarations,
-    // each an independent ast::clone of it.
-    std::shared_ptr<struct FunctionDef> function;
+    GeneratedTemplate function;
 };
 
 struct UsingExpr {

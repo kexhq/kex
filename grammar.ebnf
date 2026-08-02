@@ -204,7 +204,8 @@ compiled_item
   | make_def
   | SPLICE_IDENT TYPE_ANNOTATION type_expr
   | SPLICE_IDENT COLON type_expr
-  | LET splice_name function_clause             (* generated declaration *)
+  | LET splice_name function_clause             (* generated function *)
+  | TYPE splice_name EQUALS type_expr ( PIPE type_expr )*  (* generated type *)
   | SPLICE_IDENT LPAREN params RPAREN DO body END
   ;
 

@@ -1953,18 +1953,41 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     // The placeholder could never resolve, so nothing could depend on it —
     // reporting it here loses no working behaviour and gains a diagnostic that
     // names the actual limitation.
+    // `type %name = ...` in EXPRESSION context — i.e. inside a `compiled do`
+    // driver loop, generating a type alias or sum type.
+    if (check(TokenType::Type) && (peekNext().type == TokenType::SpliceIdent ||
+                                   peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // type
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::TypeDef>();
+        def->location = loc;
+        expect(TokenType::Equals, "Expected '=' in generated type");
+        std::vector<ast::TypeExprPtr> variants;
+        variants.push_back(parseTypeExpr());
+        while (match(TokenType::Pipe)) variants.push_back(parseTypeExpr());
+        def->variants = std::move(variants);
+        expr->kind = ast::GeneratedDecl{
+            std::move(nameExpr),
+            std::shared_ptr<ast::TypeDef>(std::move(def))};
+        return expr;
+    }
+
+    // `make` generation is not implemented. Its body holds method definitions
+    // that each need cloning AND hygiene substitution, and the target type is
+    // itself computed — closer in size to function generation than to `type`.
+    //
+    // Recorded rather than thrown: error() throws, and the parser's recovery
+    // then resumes INSIDE the construct and reports a second, confusing error
+    // ("Expected type expression"). Reporting at the keyword and skipping the
+    // construct gives exactly one diagnostic, in the right place. The program
+    // still aborts, because a recorded diagnostic is enough.
     if (check(TokenType::Type) || check(TokenType::Make)) {
-        // Recorded rather than thrown: error() throws, and the parser's
-        // recovery then resumes INSIDE the construct and reports a second,
-        // confusing error ("Expected type name, got SpliceIdent"). Reporting
-        // at the keyword and then skipping the construct gives exactly one
-        // diagnostic, in the right place. The program still aborts, because a
-        // recorded diagnostic is enough.
         m_diagnostics.push_back(
             {currentLocation(),
              "generating a `" + std::string(tokenTypeName(peek().type)) +
-                 "` inside `compiled do` is not implemented yet — only "
-                 "`let %name(...)` function generation is"});
+                 "` inside `compiled do` is not implemented yet — "
+                 "`let %name(...)` and `type %name = ...` are"});
         advance(); // the keyword
         int depth = 0;
         while (!atEnd()) {
@@ -2330,6 +2353,24 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
 
     expr->kind = ast::WhileExpr{std::move(condition), std::move(body)};
     return expr;
+}
+
+// The name of a generated declaration: `%name` splices a variable, `%{expr}`
+// evaluates an arbitrary compile-time expression. Both yield the expression
+// that produces the name.
+auto Parser::parseSpliceName() -> ast::ExprPtr {
+    auto loc = currentLocation();
+    if (check(TokenType::SpliceIdent)) {
+        auto name = std::make_unique<ast::Expr>();
+        name->location = loc;
+        name->kind = ast::Identifier{advance().value};
+        return name;
+    }
+    expect(TokenType::Percent, "Expected a spliced name");
+    expect(TokenType::LBrace, "Expected '{' after '%'");
+    auto computed = parseExpr();
+    expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+    return computed;
 }
 
 auto Parser::isLetFunctionDefAhead() -> bool {

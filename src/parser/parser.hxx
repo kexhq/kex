@@ -60,6 +60,7 @@ private:
     // callable value). Assumes the current token is `Let`. Mirrors
     // parseLetExpr's identical check for body-statement position.
     auto isLetFunctionDefAhead() -> bool;
+    auto parseSpliceName() -> ast::ExprPtr;
 
     // Functions
     auto parseFunctionClause() -> ast::FunctionClause;

@@ -24,5 +24,7 @@ auto clone(const FunctionClause& clause) -> FunctionClause;
 auto clone(const MatchClause& clause) -> MatchClause;
 auto clone(const RescueBlock& rescue) -> RescueBlock;
 auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef>;
+auto clone(const AbstractFunction& fn) -> AbstractFunction;
+auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef>;
 
 } // namespace kex::ast

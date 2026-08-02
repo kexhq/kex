@@ -146,6 +146,28 @@ auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef> {
     return out;
 }
 
+auto clone(const AbstractFunction& fn) -> AbstractFunction {
+    return AbstractFunction{fn.name, clone(fn.type), fn.implicitThis};
+}
+
+auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
+    auto out = std::make_unique<TypeDef>();
+    out->location = type.location;
+    out->name = type.name;
+    out->typeParams = type.typeParams;
+    out->parents = type.parents;
+    if (type.variants) out->variants = cloneVec(*type.variants);
+    if (type.abstractFunctions)
+        out->abstractFunctions = cloneVec(*type.abstractFunctions);
+    if (type.staticBlock) {
+        StaticBlock block;
+        for (const auto& fn : type.staticBlock->functions)
+            if (fn) block.functions.push_back(clone(*fn));
+        out->staticBlock = std::move(block);
+    }
+    return out;
+}
+
 auto clone(const ExprPtr& expr) -> ExprPtr {
     if (!expr) return nullptr;
     auto out = std::make_unique<Expr>();
