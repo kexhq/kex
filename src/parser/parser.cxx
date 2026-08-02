@@ -1942,10 +1942,30 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Type/Make keywords in expression context (compiled blocks)
+    // `type` / `make` in EXPRESSION context, which in practice means inside a
+    // `compiled do` driver loop — i.e. an attempt to generate a type or make
+    // block. Function generation (`let %name(...)`) is implemented; these are
+    // not yet.
+    //
+    // This used to skip the construct entirely and yield a placeholder
+    // identifier, so the declaration was silently discarded at parse time and
+    // the program later died with `Undefined variable: __compiled_type__`.
+    // The placeholder could never resolve, so nothing could depend on it —
+    // reporting it here loses no working behaviour and gains a diagnostic that
+    // names the actual limitation.
     if (check(TokenType::Type) || check(TokenType::Make)) {
-        // Skip until matching 'end' for do blocks or newline
-        auto kw = advance();
+        // Recorded rather than thrown: error() throws, and the parser's
+        // recovery then resumes INSIDE the construct and reports a second,
+        // confusing error ("Expected type name, got SpliceIdent"). Reporting
+        // at the keyword and then skipping the construct gives exactly one
+        // diagnostic, in the right place. The program still aborts, because a
+        // recorded diagnostic is enough.
+        m_diagnostics.push_back(
+            {currentLocation(),
+             "generating a `" + std::string(tokenTypeName(peek().type)) +
+                 "` inside `compiled do` is not implemented yet — only "
+                 "`let %name(...)` function generation is"});
+        advance(); // the keyword
         int depth = 0;
         while (!atEnd()) {
             if (check(TokenType::Do)) depth++;
@@ -1956,8 +1976,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             if (depth == 0 && check(TokenType::Newline)) break;
             advance();
         }
-        if (depth >= 0 && check(TokenType::End)) advance();
-        expr->kind = ast::Identifier{"__compiled_" + kw.value + "__"};
+        if (check(TokenType::End)) advance();
+        expr->kind = ast::NoneLiteral{};
         return expr;
     }
 
