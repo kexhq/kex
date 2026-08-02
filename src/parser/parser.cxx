@@ -3047,24 +3047,17 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
-        // UPPER = expr (compile-time constant definition)
+        // Compile-time constants are written `let NAME = expr`, like every
+        // other binding in the language — the bare `NAME = expr` form that
+        // used to be accepted here was the only place in Kex where a
+        // declaration had no keyword. It is a binding, not a function; it just
+        // shares the AST encoding of a top-level `let NAME = expr`.
         if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
-            auto loc = currentLocation();
-            auto name = advance().value;
-            advance(); // =
-            auto value = parseExpr();
-            // Emit as LetExpr{VarPattern{name}, value} so the evaluator defines
-            // the binding with m_env->define() rather than requiring a mutable
-            // pre-existing variable (AssignExpr would throw "Undefined variable").
-            auto pat = std::make_unique<ast::Pattern>();
-            pat->kind = ast::VarPattern{name};
-            auto expr = std::make_unique<ast::Expr>();
-            expr->location = loc;
-            expr->kind = ast::LetExpr{std::move(pat), std::move(value)};
-            block->items.push_back(std::move(expr));
+            error("Compile-time constants need `let`: write `let " +
+                  peek().value + " = ...`");
         }
         // Function definition (possibly splice: let %name(...) = ...)
-        else if (check(TokenType::Let) || check(TokenType::Foul)) {
+        if (check(TokenType::Let) || check(TokenType::Foul)) {
             bool isFoul = check(TokenType::Foul);
             if (isFoul) advance();
             block->items.push_back(parseFunctionDef(isFoul));

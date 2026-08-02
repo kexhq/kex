@@ -31,8 +31,8 @@ module Html do
     type HtmlFunction = String? -> [String] -> Block<[Node]> -> Element
 
     compiled do
-      HEADERS = (1..6).map { |i| "h${i}" }
-      ELEMENTS = ["html", "head", "body", "div", "p", "span", "footer", "title"] + HEADERS
+      let HEADERS = (1..6).map { |i| "h${i}" }
+      let ELEMENTS = ["html", "head", "body", "div", "p", "span", "footer", "title"] + HEADERS
 
       ELEMENTS.each do |name|
         %name :> HtmlFunction

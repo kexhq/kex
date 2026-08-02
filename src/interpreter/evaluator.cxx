@@ -143,7 +143,7 @@ auto Evaluator::evaluateFunction(
     }
 }
 
-auto Evaluator::evaluateGlobals(
+auto Evaluator::evaluateConstants(
     const ast::Program& program,
     const std::vector<std::string>& names,
     std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
@@ -157,25 +157,26 @@ auto Evaluator::evaluateGlobals(
         defineIntrinsic("System::die", blockedTermination);
         defineIntrinsic("System::exit", blockedTermination);
 
-        // Declarations run on the scheduler for the same reason
-        // evaluateFunction's call does: a top-level initializer may touch
+        // Declarations and calls run on the scheduler for the same reason
+        // evaluateFunction's call does: a constant's initializer may touch
         // anything the runtime offers, and the fiber machinery must be live.
+        std::vector<ValuePtr> values;
         m_scheduler->runToCompletion(
-            [this, &program]() -> ValuePtr {
+            [this, &program, &names, &values]() -> ValuePtr {
                 for (const auto& item : program.items) {
                     checkDeadline();
                     execTopLevel(item);
                 }
                 resolvePendingExports();
+                values.reserve(names.size());
+                for (const auto& name : names) {
+                    checkDeadline();
+                    values.push_back(
+                        callFunction(name, {}, {}, SourceLocation{}));
+                }
                 return Value::unit();
             },
             m_globalEnv);
-
-        std::vector<ValuePtr> values;
-        values.reserve(names.size());
-        for (const auto& name : names)
-            values.push_back(m_globalEnv->has(name) ? m_globalEnv->get(name)
-                                                    : nullptr);
         m_deadline.reset();
         return values;
     } catch (...) {

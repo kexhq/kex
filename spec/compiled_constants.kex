@@ -8,15 +8,15 @@
 # declarations are executed once in the compile-time sandbox.
 
 compiled do
-  BASE       = 10
-  DERIVED    = BASE * 2 + 1
-  NAME       = "kex"
-  GREETING   = "hello ${NAME}"
-  FLAG       = true
-  RATIO      = 1.5
-  SQUARES    = [1, 2, 3].map { |n| n * n }
-  PAIR       = (1, "a")
-  BIG        = 2 * 4611686018427387904
+  let BASE       = 10
+  let DERIVED    = BASE * 2 + 1
+  let NAME       = "kex"
+  let GREETING   = "hello ${NAME}"
+  let FLAG       = true
+  let RATIO      = 1.5
+  let SQUARES    = [1, 2, 3].map { |n| n * n }
+  let PAIR       = (1, "a")
+  let BIG        = 2 * 4611686018427387904
 end
 
 main do

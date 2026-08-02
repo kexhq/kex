@@ -77,13 +77,18 @@ public:
         const std::string& name,
         std::vector<ValuePtr> args,
         std::chrono::milliseconds timeout) -> ValuePtr;
-    // Loads `program`'s declarations under the same cooperative deadline and
-    // termination guard as evaluateFunction, then reads back the named global
-    // bindings. Executing the declarations is what binds a `compiled do`
-    // block's constants, so this is how src/compiled/ recovers their values
-    // without running the program's `main`. A name that ends up unbound yields
-    // a null entry rather than throwing, so the caller can report which one.
-    auto evaluateGlobals(
+    // Loads `program`'s declarations ONCE under the same cooperative deadline
+    // and termination guard as evaluateFunction, then forces each named
+    // binding and returns its value. That is how src/compiled/ evaluates
+    // `compiled do` constants without running the program's `main`.
+    //
+    // "Forces" because a parameterless `let MAX = 3` is a BINDING, but the AST
+    // encodes it as a zero-parameter FunctionDef and the evaluator binds the
+    // name to a function value — so the value only materialises once that is
+    // invoked. Loading once lets a later constant reference an earlier one.
+    // A name that cannot be forced yields a null entry rather than throwing,
+    // so the caller can report which one.
+    auto evaluateConstants(
         const ast::Program& program,
         const std::vector<std::string>& names,
         std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;

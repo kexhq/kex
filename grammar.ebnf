@@ -193,9 +193,11 @@ compiled_block = COMPILED DO compiled_body END ;
 
 compiled_body = compiled_item* ;
 
+(* Compile-time constants are ordinary parameterless `let` bindings; there is
+   no keyword-less `NAME = expr` form. *)
 compiled_item
   = LET LOWER_IDENT EQUALS expr
-  | UPPER_IDENT EQUALS expr
+  | LET UPPER_IDENT EQUALS expr
   | expr DOT EACH DO PIPE LOWER_IDENT PIPE compiled_body END
   | type_def
   | function_def
