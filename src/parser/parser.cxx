@@ -680,9 +680,19 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         expect(TokenType::Let, "Expected 'let'");
     }
 
+    // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
+    // time. Checked before the operator branch below, which would otherwise
+    // take the `%` as a modulo-overload name and then choke on the `{`.
+    if (check(TokenType::Percent) && peekNext().type == TokenType::LBrace) {
+        advance(); // %
+        advance(); // {
+        def->computedName = parseExpr();
+        expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+        def->name = "%";
+    }
     // Function name can be a lower ident, upper ident (static constructors),
     // keyword-as-name, splice ident, or operator
-    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
+    else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
         check(TokenType::Loop) ||
         check(TokenType::Match) || check(TokenType::SpliceIdent)) {
         // A splice keeps its `%` so callers can tell `let %name(...)` (the name
@@ -2305,6 +2315,23 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
 auto Parser::isLetFunctionDefAhead() -> bool {
     // Note: some keywords can be used as function names (e.g. 'loop', 'where')
     auto nextType = peekNext().type;
+    // `let %{expr}(...)` — a computed declaration name. Decided here rather
+    // than by the lookahead below, which advances past the name expecting an
+    // identifier and would land inside the `{...}`.
+    //
+    // Only the `%{` form. A bare `%` after `let` is the modulo OPERATOR being
+    // defined (`let %(other) = ...`, see spec/prelude/operator_overloading),
+    // which is a declaration inside a `make` block — parseMakeDef calls
+    // parseFunctionDef directly and never consults this predicate, so `%`
+    // does not belong in the name list below.
+    if (nextType == TokenType::Percent) {
+        auto saved = m_pos;
+        advance();  // let
+        advance();  // %
+        bool computed = check(TokenType::LBrace);
+        m_pos = saved;
+        if (computed) return true;
+    }
     bool isLowerName = nextType == TokenType::LowerIdent ||
                        nextType == TokenType::Loop ||
                        nextType == TokenType::Match || nextType == TokenType::SpliceIdent ||
@@ -2351,9 +2378,14 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
             // not known yet. Emit a GeneratedDecl for the expansion pass; the
             // `%` prefix was put there by parseFunctionDef.
             if (!funcDef->name.empty() && funcDef->name.front() == '%') {
-                auto nameExpr = std::make_unique<ast::Expr>();
-                nameExpr->location = loc;
-                nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
+                ast::ExprPtr nameExpr;
+                if (funcDef->computedName) {
+                    nameExpr = std::move(funcDef->computedName);  // %{expr}
+                } else {
+                    nameExpr = std::make_unique<ast::Expr>();     // %name
+                    nameExpr->location = loc;
+                    nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
+                }
                 funcDef->name.clear();
                 expr->kind = ast::GeneratedDecl{
                     std::move(nameExpr),

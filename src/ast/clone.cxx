@@ -141,6 +141,7 @@ auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef> {
     out->name = function.name;
     out->isFoul = function.isFoul;
     out->isPredicate = function.isPredicate;
+    out->computedName = clone(function.computedName);
     out->clauses = cloneVec(function.clauses);
     return out;
 }

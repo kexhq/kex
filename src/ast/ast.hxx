@@ -501,6 +501,11 @@ struct FunctionClause {
 struct FunctionDef {
     SourceLocation location;
     std::string name;
+    // Set only while parsing `let %{expr}(...)`: the compile-time expression
+    // that computes this declaration's name. Transient — parseLetExpr moves it
+    // into a GeneratedDecl and clears it, so it never reaches a real
+    // declaration or any backend.
+    ExprPtr computedName;
     bool isFoul = false;
     bool isPredicate = false; // ends with ?
     std::vector<FunctionClause> clauses;

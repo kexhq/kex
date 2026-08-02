@@ -20,8 +20,20 @@ compiled do
   end
 end
 
+# `%{expr}` computes the name from an arbitrary compile-time expression, where
+# `%name` can only splice a variable. Both build the same node.
+compiled do
+  ["one", "two"].each do |base|
+    let %{"get_" + base}(x: Int) -> String do
+      "${base}=${x}"
+    end
+  end
+end
+
 main do
   IO.printLine(tagAlpha(7))
   IO.printLine(tagBeta(7))
   IO.printLine(tagGamma(7))
+  IO.printLine(get_one(1))
+  IO.printLine(get_two(2))
 end

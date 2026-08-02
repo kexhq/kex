@@ -204,8 +204,13 @@ compiled_item
   | make_def
   | SPLICE_IDENT TYPE_ANNOTATION type_expr
   | SPLICE_IDENT COLON type_expr
+  | LET splice_name function_clause             (* generated declaration *)
   | SPLICE_IDENT LPAREN params RPAREN DO body END
   ;
+
+(* A declaration name computed at compile time: `%name` splices a variable,
+   `%{expr}` any expression. *)
+splice_name = SPLICE_IDENT | PERCENT LBRACE expr RBRACE ;
 
 (* ===== Using ===== *)
 

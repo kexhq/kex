@@ -62,6 +62,10 @@ struct Substituter {
     // nothing refers to it any more, so a node kind this walk fails to reach
     // degrades to today's behaviour instead of an undefined name.
     std::vector<std::string> remaining;
+    // Notified for each `let %name(...)` encountered. Used before evaluation to
+    // learn which scope a template belongs to, so its generated declarations
+    // land in the module that declared them rather than at top level.
+    std::function<void(const ast::GeneratedDecl&)> onGenerated;
 
     auto nameOf(const ast::Expr& expr) -> const std::string* {
         if (const auto* upper = std::get_if<ast::UpperIdentifier>(&expr.kind))
@@ -171,6 +175,9 @@ struct Substituter {
                     each(node.values);
                 } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
                     each(node.values);
+                } else if constexpr (std::is_same_v<T, ast::GeneratedDecl>) {
+                    if (onGenerated) onGenerated(node);
+                    substitute(node.name);
                 } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                     substitute(node.receiver);
                     each(node.args);
@@ -324,6 +331,35 @@ auto expand(ast::Program& program,
             if (*mod) scan((*mod)->body);
     if (!hasBlock) return true;
 
+    // Which scope does each generation template belong to? A `let %name(...)`
+    // inside `module M do compiled do ... end end` must produce a method OF M,
+    // not a top-level function. The template pointer identifies its block, so
+    // map it to the owning module before anything runs. Null means top level.
+    std::unordered_map<const ast::FunctionDef*, ast::ModuleDef*> templateOwner;
+    {
+        auto record = [&](auto& items, ast::ModuleDef* owner) {
+            for (auto& item : items) {
+                auto* block =
+                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
+                if (!block || !*block) continue;
+                for (auto& entry : (*block)->items) {
+                    auto* expr = std::get_if<ast::ExprPtr>(&entry);
+                    if (!expr || !*expr) continue;
+                    Constants none;
+                    Substituter finder{none, diagnostics, {}, {}, {}};
+                    finder.onGenerated = [&](const ast::GeneratedDecl& decl) {
+                        if (decl.function) templateOwner[decl.function.get()] = owner;
+                    };
+                    finder.substitute(*expr);
+                }
+            }
+        };
+        record(program.items, nullptr);
+        for (auto& item : program.items)
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod) record((*mod)->body, mod->get());
+    }
+
 
     // --- 2. Run the block once, against the whole program.
     //
@@ -359,7 +395,7 @@ auto expand(ast::Program& program,
     }
 
     // --- 3. Substitute every use with the computed literal.
-    Substituter substituter{constants, diagnostics, {}, {}};
+    Substituter substituter{constants, diagnostics, {}, {}, {}};
     walkBodies(program.items, [&](auto& target) {
         using T = std::decay_t<decltype(target)>;
         if constexpr (std::is_same_v<T, ast::FunctionDef>)
@@ -386,7 +422,7 @@ auto expand(ast::Program& program,
     // a loop variable does not exist at runtime, so it cannot survive as a
     // reference. Parameters of the generated function shadow those bindings,
     // which falls out of Substituter skipping any name it does not know.
-    std::vector<std::unique_ptr<ast::FunctionDef>> instantiated;
+    // Each entry is appended to the scope that declared its template.
     for (const auto& decl : generated) {
         if (!decl.function) continue;
         if (decl.name.empty()) {
@@ -405,17 +441,13 @@ auto expand(ast::Program& program,
         for (const auto& clause : copy->clauses)
             for (const auto& param : clause.params)
                 if (param.name) captured.erase(*param.name);
-        Substituter inner{captured, diagnostics, {}, {}};
+        Substituter inner{captured, diagnostics, {}, {}, {}};
         inner.functionBody(*copy);
-        instantiated.push_back(std::move(copy));
-    }
-    if (!instantiated.empty()) {
-        // Appended at top level. Attributing each back to the scope of the
-        // block that produced it needs the template pointer matched against
-        // each block's subtree; until then, generation inside a `module` body
-        // lands one level out.
-        for (auto& fn : instantiated)
-            program.items.push_back(std::move(fn));
+        auto owner = templateOwner.find(decl.function.get());
+        if (owner != templateOwner.end() && owner->second)
+            owner->second->body.push_back(std::move(copy));
+        else
+            program.items.push_back(std::move(copy));
     }
 
     // --- 4. Drop the definitions. A constant is gone from the emitted module
