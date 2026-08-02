@@ -143,6 +143,47 @@ auto Evaluator::evaluateFunction(
     }
 }
 
+auto Evaluator::evaluateGlobals(
+    const ast::Program& program,
+    const std::vector<std::string>& names,
+    std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
+    m_deadline = std::chrono::steady_clock::now() + timeout;
+    try {
+        auto blockedTermination = [](std::vector<ValuePtr>) -> ValuePtr {
+            throw std::runtime_error(
+                "process termination is not allowed during compile-time evaluation");
+        };
+        definePublic("die", blockedTermination);
+        defineIntrinsic("System::die", blockedTermination);
+        defineIntrinsic("System::exit", blockedTermination);
+
+        // Declarations run on the scheduler for the same reason
+        // evaluateFunction's call does: a top-level initializer may touch
+        // anything the runtime offers, and the fiber machinery must be live.
+        m_scheduler->runToCompletion(
+            [this, &program]() -> ValuePtr {
+                for (const auto& item : program.items) {
+                    checkDeadline();
+                    execTopLevel(item);
+                }
+                resolvePendingExports();
+                return Value::unit();
+            },
+            m_globalEnv);
+
+        std::vector<ValuePtr> values;
+        values.reserve(names.size());
+        for (const auto& name : names)
+            values.push_back(m_globalEnv->has(name) ? m_globalEnv->get(name)
+                                                    : nullptr);
+        m_deadline.reset();
+        return values;
+    } catch (...) {
+        m_deadline.reset();
+        throw;
+    }
+}
+
 auto Evaluator::checkDeadline() const -> void {
     if (m_deadline &&
         std::chrono::steady_clock::now() >= *m_deadline)

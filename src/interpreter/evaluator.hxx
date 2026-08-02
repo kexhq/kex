@@ -77,6 +77,16 @@ public:
         const std::string& name,
         std::vector<ValuePtr> args,
         std::chrono::milliseconds timeout) -> ValuePtr;
+    // Loads `program`'s declarations under the same cooperative deadline and
+    // termination guard as evaluateFunction, then reads back the named global
+    // bindings. Executing the declarations is what binds a `compiled do`
+    // block's constants, so this is how src/compiled/ recovers their values
+    // without running the program's `main`. A name that ends up unbound yields
+    // a null entry rather than throwing, so the caller can report which one.
+    auto evaluateGlobals(
+        const ast::Program& program,
+        const std::vector<std::string>& names,
+        std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
     // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
     // once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
