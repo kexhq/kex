@@ -1366,6 +1366,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             const auto& first = def.clauses[0].params[0];
             if (!first.pattern) return false;
             const auto& kind = (*first.pattern)->kind;
+            // A LIST or TUPLE pattern destructures an ARGUMENT, not the
+            // receiver: `let g([a, b])` and `let g((a, b))` still take `this`
+            // implicitly, so the receiver has to be prepended as usual.
+            // Treating them as receiver matches made every call site
+            // `expects 1 argument(s), got 2` — the shapes that really do match
+            // a receiver are `@...` (which says so) and `x.._`
+            // (spec/range.kex), and neither is spelled this way.
+            if (std::holds_alternative<ast::ListPattern>(kind) ||
+                std::holds_alternative<ast::TuplePattern>(kind))
+                return false;
             return !std::holds_alternative<ast::VarPattern>(kind) &&
                    !std::holds_alternative<ast::ConstructorPattern>(kind);
         }();

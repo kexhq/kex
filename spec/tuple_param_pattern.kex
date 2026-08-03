@@ -26,17 +26,33 @@ let labelled(prefix: String, (a, b)) -> String do
   "${prefix}${a}${b}"
 end
 
-# NOT here: the same thing as a `make` method. A pattern parameter of ANY kind
-# in a make block miscounts arity in the type checker — `let g([a, b])` is
-# `expects 1 argument(s), got 2` just as much as the tuple form — because the
-# implicit receiver is not added to the signature when the parameter is a
-# pattern. Pre-existing, verified against the parent commit, unrelated to the
-# parser change here, and recorded in docs/compiled-todo.md.
+record Point do
+  x : Int = 0
+  y : Int = 0
+end
+
+make Point do
+  # A pattern parameter in a make method still takes `this` implicitly. The
+  # checker treated ANY pattern as a receiver match — which is what the `@...`
+  # and `x.._` idioms are — so a list or tuple parameter, which destructures an
+  # ARGUMENT, made every call site `expects 1 argument(s), got 2`.
+  let shifted((dx, dy)) -> Point do
+    Point { x: @x + dx, y: @y + dy }
+  end
+
+  let spanned([a, b]) -> Int do
+    @x + a + b
+  end
+end
 
 main do
   IO.printLine(pair((1, 2)))
   IO.printLine(nested(("p", (3, 4))))
   IO.printLine(labelled("v", (5, 6)))
+
+  let p = Point { x: 1, y: 1 }.shifted((10, 20))
+  IO.printLine("${p.x},${p.y}")
+  IO.printLine("${Point { x: 5 }.spanned([1, 2])}")
 
   # The forms that already worked, unchanged.
   let (a, b) = (7, 8)
