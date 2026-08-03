@@ -1,0 +1,57 @@
+# A method of your own type owns its name, even when the PRELUDE has a record
+# field spelled the same.
+#
+# The six names below are prelude record fields (`Measure.canonical/value/unit`,
+# `UnitDefinition.conversionFactor/dimension/notation`) that lowering used to
+# route to the owner module unconditionally. `Widget {}.value()` then read
+# element 2 of the widget — returning a plausible `0` rather than crashing — so
+# this is a spec, not just a codegen test: the wrong answer is visible.
+#
+# The interpreter always resolved these correctly, so every case here was a
+# silent backend divergence. Each method returns a value no field read could
+# produce, and each field holds a different number, so a regression to the
+# accessor shows up as a specific wrong answer rather than a crash.
+
+record Widget do
+  a : Int = 1
+  b : Int = 2
+  c : Int = 3
+end
+
+make Widget do
+  let canonical() -> Int do
+    10
+  end
+
+  let value() -> Int do
+    20
+  end
+
+  let unit() -> Int do
+    30
+  end
+
+  let conversionFactor() -> Int do
+    40
+  end
+
+  let dimension() -> Int do
+    50
+  end
+
+  let notation() -> Int do
+    60
+  end
+end
+
+main do
+  let w = Widget {}
+  IO.printLine("${w.canonical()} ${w.value()} ${w.unit()}")
+  IO.printLine("${w.conversionFactor()} ${w.dimension()} ${w.notation()}")
+
+  # The prelude's own records still read those fields — this fixes a collision,
+  # it does not take the names away.
+  let m = Measure { canonical: 1.0, value: 2.5,
+    unit: UnitDefinition { conversionFactor: 1.0, dimension: :length, notation: "m" } }
+  IO.printLine("${m.value} ${m.unit.notation}")
+end

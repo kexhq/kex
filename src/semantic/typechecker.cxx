@@ -815,7 +815,10 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
             paramTypes.push_back(
                 param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar());
         }
-        provisional.push_back(Signature{def.name, std::move(paramTypes), freshTypeVar()});
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue) required--;
+        provisional.push_back(Signature{def.name, std::move(paramTypes),
+                                        freshTypeVar(), false, required});
     }
     if (provisional.empty()) return;
     if (alreadyRegistered)
@@ -1325,8 +1328,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         };
         auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
                           ? effectiveReturnType : resolve(bodyType);
+        // Trailing parameters with a default are optional at the call site.
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue) required--;
         signatures.push_back(
-            Signature{def.name, std::move(paramTypes), resultType, def.isFoul});
+            Signature{def.name, std::move(paramTypes), resultType, def.isFoul,
+                      required});
     }
 
     // Preserve the checked declaration interface before the signatures are
@@ -3420,7 +3427,37 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         };
         auto [argParams, argResult] = flatten(argType);
         auto [paramParams, paramResult] = flatten(paramType);
-        if (argParams.size() != paramParams.size()) return false;
+        // A block may DESTRUCTURE a tuple element instead of naming it:
+        // `pairs.each do |k, v|` over `[(String, Int)]` binds one element
+        // across two parameters, and both backends spread it. The checker was
+        // the only thing that disagreed.
+        //
+        // Decidable from the ARGUMENT alone, which is what makes it cheap:
+        // expected-type propagation has already given the block's first
+        // parameter the element type, so a 2-parameter block over
+        // `[(String, Int)]` arrives here as `((String, Int), T2) -> Void`.
+        // A first parameter that is a tuple of exactly as many elements as the
+        // block has parameters is a destructuring block; anything else is a
+        // real arity error and still reported as one.
+        if (argParams.size() != paramParams.size()) {
+            if (paramParams.size() != 1 || argParams.size() < 2) return false;
+            if (auto* spread = std::get_if<TupleType>(&argParams[0]->kind)) {
+                if (spread->elements.size() != argParams.size()) return false;
+            } else if (!isPermissive(paramParams[0]) ||
+                       !std::all_of(argParams.begin(), argParams.end(),
+                                    [&](const TypePtr& p) {
+                                        return isPermissive(p);
+                                    })) {
+                // Something IS known and it does not line up: a real arity
+                // error, still reported. Only the case where neither side
+                // knows anything is let through — `@conditions.each do |c, v|`
+                // over a record field the checker has not resolved to a tuple.
+                // Rejecting there would fail a program both backends run.
+                return false;
+            }
+            if (isUnitLike(paramResult)) return true;
+            return argMatchesParam(argResult, paramResult);
+        }
         for (size_t i = 0; i < paramParams.size(); i++)
             if (!argMatchesParam(argParams[i], paramParams[i])) return false;
         // Void as the expected return means "result discarded" — accept any body type.
@@ -3952,11 +3989,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::vector<const Signature*> arityMatches;
     std::vector<const Signature*> fullMatches;
     for (const auto& sig : *sigs) {
-        if (sig.params.size() != argTypes.size()) continue;
+        // A trailing parameter with a default may be omitted, so the accepted
+        // range is [requiredParams, params.size()] rather than one number.
+        const std::size_t required =
+            sig.requiredParams ? sig.requiredParams : sig.params.size();
+        if (argTypes.size() < required || argTypes.size() > sig.params.size())
+            continue;
         arityMatches.push_back(&sig);
 
+        // Only the arguments actually PASSED are checked: an omitted
+        // defaulted parameter has no argument to compare against.
         bool allMatch = true;
-        for (size_t i = 0; i < sig.params.size(); i++) {
+        for (size_t i = 0; i < argTypes.size(); i++) {
             if (!argMatchesParam(argTypes[i], sig.params[i])) {
                 allMatch = false;
                 break;

@@ -2464,23 +2464,6 @@ struct Lowering {
         }
         return body;
     }
-    // Guard asserting `sv` is a record whose tag (tuple element 1) is
-    // `typeName`: `is_tuple(sv) andalso element(1, sv) =:= 'typeName`. Used by
-    // named record patterns in `match` arms (`Foo { x }`), which must reject
-    // records of a different type sharing those field names.
-    auto recordTagGuard(const std::string& sv, const std::string& typeName) -> ExprPtr {
-        auto isTuple = callE("erlang", "is_tuple", 1, one(var(sv)));
-        auto elem1 = callE("erlang", "element", 2, two(litInt(1), var(sv)));
-        auto eq = callE("erlang", "=:=", 2,
-                        two(std::move(elem1), lit(LitKind::Atom, typeName)));
-        return callE("erlang", "andalso", 2, two(std::move(isTuple), std::move(eq)));
-    }
-    // Combine two optional guards with `andalso` (either may be null).
-    auto guardAnd(ExprPtr a, ExprPtr b) -> ExprPtr {
-        if (!a) return b;
-        if (!b) return a;
-        return callE("erlang", "andalso", 2, two(std::move(a), std::move(b)));
-    }
     // A top-level destructuring `let` has to expose every name it binds as its
     // own 0-arity function, the same shape a simple `let name = value` gets.
     // Each one re-runs the right-hand side and keeps its own component, which
@@ -5106,15 +5089,41 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // too (collectRecordLayout feeds fieldAccessors), so keeping it local
         // serves both.
         std::unordered_set<std::string> localRecordFields;
+        // ...and every name a `make` block of this program defines as a
+        // METHOD. Same reason, one step further: `make Widget do let value()`
+        // is the owner of `value` here, and routing the call to the prelude's
+        // `Measure` accessor read element 2 of the widget instead — silently,
+        // returning a plausible wrong number rather than crashing. The
+        // interpreter always got this right, so it was a backend divergence
+        // too.
+        std::unordered_set<std::string> localMethodNames;
         std::function<void(const ast::RecordDef&)> noteRecord =
             [&](const ast::RecordDef& rd) {
                 for (const auto& field : rd.fields) localRecordFields.insert(field.name);
+            };
+        std::function<void(const ast::MakeDef&)> noteMake =
+            [&](const ast::MakeDef& mk) {
+                for (const auto& mi : mk.body) {
+                    if (auto* fd =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
+                        if (*fd) localMethodNames.insert((*fd)->name);
+                    } else if (auto* vb = std::get_if<
+                                   std::unique_ptr<ast::VisibilityBlock>>(&mi)) {
+                        if (*vb)
+                            for (const auto& vi : (*vb)->items)
+                                if (auto* vfd = std::get_if<
+                                        std::unique_ptr<ast::FunctionDef>>(&vi))
+                                    if (*vfd) localMethodNames.insert((*vfd)->name);
+                    }
+                }
             };
         std::function<void(const ast::ModuleDef&)> scanModule;
         auto scanItems = [&](const auto& items, auto&& self) -> void {
             for (const auto& item : items) {
                 if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                     if (*rd) noteRecord(**rd);
+                } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                    if (*mk) noteMake(**mk);
                 } else if (auto* md = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                     if (*md) scanModule(**md);
                 }
@@ -5136,6 +5145,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                     field != "conversionFactor" && field != "dimension" && field != "notation")
                     continue;
                 if (localRecordFields.count(field)) continue;
+                if (localMethodNames.count(field)) continue;
                 definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
             }
         }

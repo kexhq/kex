@@ -209,14 +209,19 @@ auto Evaluator::evaluateConstants(
 auto Evaluator::evaluateExpressions(
     const ast::Program& program,
     const std::vector<ExpressionRequest>& requests,
-    std::chrono::milliseconds timeout) -> std::vector<ValuePtr> {
+    std::chrono::milliseconds timeout,
+    std::vector<std::string>* reasons) -> std::vector<ValuePtr> {
     std::vector<ValuePtr> values;
+    auto note = [&](std::string why) {
+        if (reasons) reasons->push_back(std::move(why));
+    };
     runCompileTime(program, timeout, [&] {
         values.reserve(requests.size());
         for (const auto& request : requests) {
             checkDeadline();
             if (!request.expr) {
                 values.push_back(nullptr);
+                note("there is no expression to evaluate");
                 continue;
             }
             // Each request gets its own scope, so one expression's
@@ -232,15 +237,17 @@ auto Evaluator::evaluateExpressions(
                                   std::move(placeholder));
                 }
                 values.push_back(eval(*request.expr));
+                note("");
             } catch (const EvaluationTimeout&) {
                 popEnv();
                 throw;
-            } catch (const std::exception&) {
+            } catch (const std::exception& why) {
                 // Not compile-time evaluable after all — a PlaceholderMisuse
                 // (the builder needed a value only the running program has) or
                 // anything else. Either way the caller keeps the runtime form,
                 // which is always correct.
                 values.push_back(nullptr);
+                note(why.what());
             }
             popEnv();
         }
@@ -1208,9 +1215,30 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                  scope = scope->parent())
                 for (const auto& bound : scope->names())
                     bindings.emplace(bound, scope->get(bound));
+            // A generated `make` may hold driver loops of its own. Run them
+            // HERE, in the scope that has this make's loop variable bound, and
+            // take whatever they declared as this make's methods — they are
+            // not top-level declarations and must not be recorded as such.
+            std::vector<GeneratedDeclaration> nested;
+            if (const auto* makeTemplate =
+                    std::get_if<std::shared_ptr<ast::MakeDef>>(&node.function)) {
+                if (*makeTemplate) {
+                    const auto before = m_generatedDeclarations.size();
+                    for (const auto& item : (*makeTemplate)->body)
+                        if (const auto* driver =
+                                std::get_if<ast::ExprPtr>(&item))
+                            if (*driver) eval(**driver);
+                    nested.assign(
+                        std::make_move_iterator(
+                            m_generatedDeclarations.begin() +
+                            static_cast<long>(before)),
+                        std::make_move_iterator(m_generatedDeclarations.end()));
+                    m_generatedDeclarations.resize(before);
+                }
+            }
             m_generatedDeclarations.push_back(
                 {std::move(name), node.function, std::move(bindings),
-                 expr.location});
+                 expr.location, std::move(nested)});
             return Value::unit();
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {

@@ -127,6 +127,42 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
     return stripAnsi(result);
 }
 
+// `it` bodies run AFTER their `describe` lambda returns, so anything they use
+// has to outlive it — a `[&]` capture of a local here dangles, and silently
+// wrote a truncated source file rather than crashing.
+constexpr const char* kCollapseBuilder =
+    "module Boxes do\n"
+    "  record Box do\n"
+    "    total : Int = 0\n"
+    "  end\n"
+    "  compiled do\n"
+    "    let of(n: Int) -> Box do\n"
+    "      Box { total: n }\n"
+    "    end\n"
+    "    make Box do\n"
+    "      let scaled(by: Int) -> Int do\n"
+    "        @total * by\n"
+    "      end\n"
+    "    end\n"
+    "  end\n"
+    "end\n";
+
+auto collapseReportFor(const std::string& source) -> std::string {
+    char sourcePath[] = "/tmp/kex_collapse_cli_test_XXXXXX.kex";
+    int fd = mkstemps(sourcePath, 4);
+    assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+    {
+        std::ofstream f(sourcePath);
+        f << source;
+    }
+    close(fd);
+    auto out = runCommand(std::string(KEX_BINARY_PATH) +
+                          " --collapse-report --no-colors " + sourcePath +
+                          " 2>&1");
+    std::remove(sourcePath);
+    return out;
+}
+
 auto runBeamFile(const std::string& source, const std::string& argument,
                  bool noCheck = false) -> std::string {
     char sourcePath[] = "/tmp/kex_beam_cli_test_XXXXXX.kex";
@@ -888,6 +924,45 @@ int main() {
             auto beam = runBeamRepl("{ \"a\": 1 }.inspect\n");
             assertTrue(tree.find("{ \"a\": 1 }") != std::string::npos, tree);
             assertTrue(beam.find("{ \"a\": 1 }") != std::string::npos, beam);
+        });
+    });
+
+    // Chain collapse changes only the EMITTED code, so a program that fails to
+    // collapse still runs and prints the right answer. `--collapse-report` is
+    // the only thing that makes the difference visible without decoding Core
+    // Erlang by hand — which is the whole reason it exists.
+    describe("CLI — collapse report", []() {
+        it("says nothing for a program with no compiled block", []() {
+            auto out = collapseReportFor("main do\n  IO.printLine(\"hi\")\nend\n");
+            assertTrue(out.find("collapse:") == std::string::npos, out);
+            assertTrue(out.find("hi") != std::string::npos, out);
+        });
+
+        it("names the value that stopped a collapse", []() {
+            auto out = collapseReportFor(
+                std::string(kCollapseBuilder) +
+                "main do\n"
+                "  let n = 5\n"
+                "  IO.printLine(\"${Boxes.of(n).scaled(10)}\")\n"
+                "end\n");
+            // The reason, not just the verdict: knowing WHICH name is missing
+            // is the difference between a report and a shrug.
+            assertTrue(out.find("kept") != std::string::npos, out);
+            assertTrue(out.find("the value of `n` is not known at compile time")
+                           != std::string::npos, out);
+            // and the program still runs, correctly
+            assertTrue(out.find("50") != std::string::npos, out);
+        });
+
+        it("reports a collapse that did happen", []() {
+            auto out = collapseReportFor(
+                std::string(kCollapseBuilder) +
+                "main do\n"
+                "  IO.printLine(\"${Boxes.of(5).scaled(10)}\")\n"
+                "end\n");
+            assertTrue(out.find("collapsed") != std::string::npos, out);
+            assertTrue(out.find("kept") == std::string::npos, out);
+            assertTrue(out.find("50") != std::string::npos, out);
         });
     });
 

@@ -43,6 +43,12 @@ private:
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
+    // The two halves of a `make` that `make %name` generation reuses: it has a
+    // spliced name where parseMakeDef has a target type, but everything after
+    // is identical, and must stay identical.
+    auto parseMakeImplements(ast::MakeDef& into) -> void;
+    auto parseMakeBody(ast::MakeDef& into, bool allowDrivers = false) -> void;
+    auto isMakeDriverAhead() -> bool;
     auto parseFunctionDef(bool isFoul = false) -> std::unique_ptr<ast::FunctionDef>;
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;

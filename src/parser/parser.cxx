@@ -618,7 +618,15 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     }
 
     def->target = parseTypeExpr();
+    parseMakeImplements(*def);
+    parseMakeBody(*def);
+    return def;
+}
 
+// `, implement: Trait1, Trait2` — optional, and shared with `make %name`
+// generation, which has no target type to parse before it.
+auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
+    auto* def = &into;
     // Optional `, implement: Trait1, Trait2` clause
     // Syntax: `make Something, implement: Showable, Comparable do`
     if (check(TokenType::Comma) && peekNext().type == TokenType::LowerIdent) {
@@ -646,6 +654,11 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
         }
     }
 
+}
+
+// The `do ... end` half of a `make`, shared with `make %name` generation.
+auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
+    auto* def = &into;
     expect(TokenType::Do, "Expected 'do' after make target");
     skipNewlines();
 
@@ -657,8 +670,15 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
             def->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
             def->body.push_back(parseFunctionDef());
-        } else if (check(TokenType::LowerIdent)) {
+        } else if (check(TokenType::LowerIdent) &&
+                   !(allowDrivers && isMakeDriverAhead())) {
             def->body.push_back(parseTypeAnnotation());
+        } else if (allowDrivers) {
+            // A driver loop inside a GENERATED make:
+            // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
+            // bodies never reach here, so a stray expression in one still
+            // reports "Unexpected token in make body" as before.
+            def->body.push_back(parseExpr());
         } else {
             error("Unexpected token in make body: " + std::string(tokenTypeName(peek().type)));
         }
@@ -666,7 +686,6 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     }
 
     expect(TokenType::End, "Expected 'end' to close make");
-    return def;
 }
 
 // ===== Functions =====
@@ -1974,9 +1993,30 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // `make` generation is not implemented. Its body holds method definitions
-    // that each need cloning AND hygiene substitution, and the target type is
-    // itself computed — closer in size to function generation than to `type`.
+    // `make %name do ... end` in EXPRESSION context — generating a make block
+    // whose target type is computed at compile time. Everything after the name
+    // is an ordinary make, so it goes through the same two helpers
+    // parseMakeDef uses; only the target differs, and it is not known yet.
+    if (check(TokenType::Make) && (peekNext().type == TokenType::SpliceIdent ||
+                                   peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // make
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::MakeDef>();
+        def->location = loc;
+        // `target` stays null: expansion fills it in with the resolved name.
+        parseMakeImplements(*def);
+        parseMakeBody(*def, /*allowDrivers=*/true);
+        expr->kind = ast::GeneratedDecl{
+            std::move(nameExpr),
+            std::shared_ptr<ast::MakeDef>(std::move(def))};
+        return expr;
+    }
+
+    // A `type`/`make` in expression position that is NOT a splice. There is no
+    // such construct — a plain `make Foo do ... end` is a declaration, parsed
+    // elsewhere — so reaching here means a generation form that is not
+    // supported.
     //
     // Recorded rather than thrown: error() throws, and the parser's recovery
     // then resumes INSIDE the construct and reports a second, confusing error
@@ -1987,8 +2027,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         m_diagnostics.push_back(
             {currentLocation(),
              "generating a `" + std::string(tokenTypeName(peek().type)) +
-                 "` inside `compiled do` is not implemented yet — "
-                 "`let %name(...)` and `type %name = ...` are"});
+                 "` inside `compiled do` needs a spliced name — "
+                 "`let %name(...)`, `type %name = ...` and "
+                 "`make %name do ... end` are the generation forms"});
         advance(); // the keyword
         int depth = 0;
         while (!atEnd()) {
@@ -2359,6 +2400,14 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
 // The name of a generated declaration: `%name` splices a variable, `%{expr}`
 // evaluates an arbitrary compile-time expression. Both yield the expression
 // that produces the name.
+// Inside a generated `make`, a lower-case name starts either a type annotation
+// (`add :> This -> This`) or a driver expression (`OPS.each do ... end`). The
+// annotation form always has a `:` or `:>` right after the name, and nothing
+// else does — so one token of lookahead separates them.
+auto Parser::isMakeDriverAhead() -> bool {
+    return peekNext().type != TokenType::Colon;
+}
+
 auto Parser::parseSpliceName() -> ast::ExprPtr {
     auto loc = currentLocation();
     if (check(TokenType::SpliceIdent)) {

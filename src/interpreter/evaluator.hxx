@@ -98,6 +98,11 @@ public:
         ast::GeneratedTemplate function;
         std::unordered_map<std::string, ValuePtr> bindings;
         SourceLocation location;
+        // Declarations produced by driver loops in a generated `make`'s own
+        // body — `make %v do OPS.each do |op| let %op ... end end end`. They
+        // are captured here rather than at top level because they belong INSIDE
+        // this make, and because they only exist once its loop variable does.
+        std::vector<GeneratedDeclaration> nested;
     };
     auto generatedDeclarations() const -> const std::vector<GeneratedDeclaration>& {
         return m_generatedDeclarations;
@@ -136,10 +141,15 @@ public:
         const ast::Expr* expr = nullptr;
         std::vector<std::string> placeholders;
     };
+    // `reasons`, when given, receives one entry per request: empty if the
+    // expression evaluated, otherwise the exception's message. Callers use it
+    // to explain WHY a collapse did not happen — the interesting half, since a
+    // program that fails to collapse still runs and prints the right answer.
     auto evaluateExpressions(
         const ast::Program& program,
         const std::vector<ExpressionRequest>& requests,
-        std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
+        std::chrono::milliseconds timeout,
+        std::vector<std::string>* reasons = nullptr) -> std::vector<ValuePtr>;
     // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
     // once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib

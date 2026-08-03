@@ -54,4 +54,8 @@ make test-wasm    # + runs the interpreter test suite via Node
 
 ## Current Status
 
-Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. The BEAM backend matches the interpreter at full spec parity (109/109). Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented. Next: the `.kexo` binary IR/distribution format, a full module system, and packaging.
+Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style process runtime (fibers/scheduler), and BEAM codegen (lowering IR → Core Erlang) are all implemented. Type checker runs by default (`--no-check` to skip). Traits, currying (`~`), arbitrary-precision integers (GMP), and a rich stdlib are implemented.
+
+Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-status.md`.
+
+Next: the `.kexo` binary IR/distribution format, a full module system, and packaging.

@@ -1,0 +1,42 @@
+# A block may DESTRUCTURE a tuple element instead of naming it.
+#
+# `pairs.each do |k, v|` over `[(String, Int)]` binds one element across two
+# parameters, and both backends spread it. The checker was the only thing that
+# disagreed, so this was a type error on a program that ran fine — the same
+# shape `examples/compiled_sql.kex` uses (`@conditions.each do |col, val|`).
+#
+# The Map case always worked; it is here so a regression that fixes one by
+# breaking the other cannot pass.
+
+main do
+  let pairs = [("x", 1), ("y", 2)]
+  pairs.each do |k, v|
+    IO.printLine("${k}=${v}")
+  end
+
+  # ...and through map, whose result type also has to survive the spread.
+  let joined = pairs.map do |k, v|
+    "${k}:${v}"
+  end
+  IO.printLine(joined.join(","))
+
+  # NOT here: a three-element tuple spread. The interpreter does it; BEAM
+  # raises `badarity`, because only the 2-tuple (key, value) shape is wired up
+  # there. Pre-existing, verified against the parent commit, and recorded in
+  # docs/compiled-todo.md — the checker allows it, so such a program now type
+  # checks and then dies on BEAM. Before this change NO spread checked at all,
+  # including the 2-tuple one both backends run, so this is strictly better
+  # with one honest gap rather than a wholesale false error.
+
+  # A Map yields (key, value) to a two-parameter block, which is a different
+  # mechanism reaching the same place.
+  let m = { "one": 1 }
+  m.each do |k, v|
+    IO.printLine("${k}->${v}")
+  end
+
+  # Naming the element instead of destructuring it still works.
+  pairs.each do |pair|
+    IO.printLine("${pair}")
+  end
+end

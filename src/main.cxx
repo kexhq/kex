@@ -716,6 +716,67 @@ auto colorizeMessage(const std::string &msg) -> std::string {
   return out;
 }
 
+// `--collapse-report`: what `compiled do` chain collapse folded away, and why
+// the rest did not.
+//
+// Goes to stderr and says nothing at all for a program with no `compiled`
+// block, so it composes with every other mode — you can ask about a run, a
+// check or an emit without changing what any of them print.
+auto printCollapseReport(const std::vector<kex::compiled::CollapseNote> &notes)
+    -> void {
+  if (notes.empty()) return;
+
+  // Source order, not the order collapse worked in: a chain that failed and
+  // was retried from the inside reports its outer attempt in a later round,
+  // and reading the file top to bottom is what a user wants.
+  auto ordered = notes;
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [](const auto &a, const auto &b) {
+                     if (a.location.file != b.location.file)
+                       return a.location.file < b.location.file;
+                     if (a.location.line != b.location.line)
+                       return a.location.line < b.location.line;
+                     return a.location.column < b.location.column;
+                   });
+
+  // Retrying a failed chain from the inside re-reports the parts it tries
+  // again, and everything written inside one `"${...}"` shares that string's
+  // position — so the same verdict can arrive several times over. Identical
+  // lines say nothing extra. A location with BOTH verdicts keeps both: those
+  // are genuinely different sub-expressions that happen to start together.
+  ordered.erase(std::unique(ordered.begin(), ordered.end(),
+                            [](const auto &a, const auto &b) {
+                              return a.location.file == b.location.file &&
+                                     a.location.line == b.location.line &&
+                                     a.location.column == b.location.column &&
+                                     a.collapsed == b.collapsed &&
+                                     a.reason == b.reason;
+                            }),
+                ordered.end());
+
+  std::size_t collapsed = 0;
+  for (const auto &note : ordered)
+    if (note.collapsed) collapsed++;
+
+  std::cerr << kex::color::apply(kex::color::bold) << "collapse:"
+            << kex::color::apply(kex::color::reset) << " " << collapsed << " of "
+            << ordered.size() << " evaluated at compile time\n";
+  for (const auto &note : ordered) {
+    std::cerr << "  " << kex::color::apply(kex::color::gray)
+              << note.location.file << ":" << note.location.line << ":"
+              << note.location.column << kex::color::apply(kex::color::reset)
+              << " ";
+    if (note.collapsed) {
+      std::cerr << kex::color::apply(kex::color::green) << "collapsed"
+                << kex::color::apply(kex::color::reset) << "\n";
+    } else {
+      std::cerr << kex::color::apply(kex::color::magenta) << "kept"
+                << kex::color::apply(kex::color::reset) << " — " << note.reason
+                << "\n";
+    }
+  }
+}
+
 auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
   bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
   std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
@@ -1507,6 +1568,11 @@ auto printUsage(const char *progName) -> void {
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
+      << "      --collapse-report\n"
+      << "                    Report what `compiled do` chain collapse folded "
+         "away, and why\n"
+      << "                    the rest did not — the feature is invisible at "
+         "runtime\n"
       << "  -o <dir>          Output directory for -c / --emit-core (default: "
          ".)\n"
       << "  -h, --help        Show this help\n"
@@ -1541,6 +1607,10 @@ int main(int argc, char *argv[]) {
       // i.e. what the type checker and both backends actually see. `--parse`
       // shows the AST before it.
       {"expand", no_argument, nullptr, 1004},
+      // Report every chain-collapse attempt and its outcome. Collapse changes
+      // only the EMITTED code, so without this the only way to tell whether it
+      // happened is to decode the Core Erlang by hand.
+      {"collapse-report", no_argument, nullptr, 1005},
       // Compile the sources selected by src/stdlib/prelude.kex into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
@@ -1559,6 +1629,7 @@ int main(int argc, char *argv[]) {
 
   bool compileRun = false;
   bool skipPrelude = false;
+  bool collapseReport = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -1567,6 +1638,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1004:
       mode = "expand";
+      break;
+    case 1005:
+      collapseReport = true;
       break;
     case 1001: {
       std::string dir = optarg;
@@ -3247,8 +3321,12 @@ int main(int argc, char *argv[]) {
     // a second pass once the program is fully assembled.
     {
       std::vector<kex::semantic::Diagnostic> expandDiagnostics;
+      std::vector<kex::compiled::CollapseNote> collapseNotes;
+      kex::compiled::ExpandOptions expandOptions;
+      if (collapseReport) expandOptions.report = &collapseNotes;
       const bool expanded =
-          kex::compiled::expand(program, expandDiagnostics);
+          kex::compiled::expand(program, expandDiagnostics, expandOptions);
+      if (collapseReport) printCollapseReport(collapseNotes);
       for (const auto &diagnostic : expandDiagnostics)
         printSemanticDiagnostic(diagnostic);
       if (!expanded) {

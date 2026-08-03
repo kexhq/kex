@@ -303,10 +303,7 @@ auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
     popScope();
 }
 
-auto ResolvePass::resolveMakeFns(const std::vector<std::variant<
-        std::unique_ptr<ast::FunctionDef>,
-        std::unique_ptr<ast::TypeAnnotation>,
-        std::unique_ptr<ast::VisibilityBlock>>>& body) -> void {
+auto ResolvePass::resolveMakeFns(const decltype(ast::MakeDef::body)& body) -> void {
     for (const auto& item : body) {
         std::visit([this](const auto& ptr) {
             using T = std::decay_t<decltype(*ptr)>;

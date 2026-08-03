@@ -18,15 +18,15 @@ module SQL do
   end
 
   record QueryBuilder do
-    fields     : [Symbol] = []
-    table      : Symbol = :none
+    fields     : [Atom] = []
+    table      : Atom = :none
     conditions : [(String, Any)] = []
     order      : String? = None
     limit_val  : Int? = None
   end
 
   compiled do
-    let select(fields: Symbol | [Symbol]) -> QueryBuilder do
+    let select(fields: Atom | [Atom]) -> QueryBuilder do
       match fields do
         :all -> QueryBuilder { fields: [:all] }
         f    -> QueryBuilder { fields: f }
@@ -34,7 +34,7 @@ module SQL do
     end
 
     make QueryBuilder do
-      let from(table: Symbol) -> QueryBuilder do
+      let from(table: Atom) -> QueryBuilder do
         QueryBuilder { fields: @fields, table: table, conditions: @conditions }
       end
 
@@ -46,7 +46,7 @@ module SQL do
         }
       end
 
-      let orderBy(col: String, dir: Symbol = :asc) -> QueryBuilder do
+      let orderBy(col: String, dir: Atom = :asc) -> QueryBuilder do
         QueryBuilder {
           fields: @fields,
           table: @table,

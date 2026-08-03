@@ -15,6 +15,12 @@ struct Signature {
     std::vector<TypePtr> params;
     TypePtr result;
     bool isFoul = false;
+    // How many of `params` the caller must actually pass. Trailing parameters
+    // with a default are optional, so `let greet(name, punct = "!")` accepts
+    // one argument or two. Zero means "not recorded" and is read as
+    // `params.size()` — every signature that does not come from a FunctionDef
+    // (trait requirements, imported interfaces) leaves it that way.
+    std::size_t requiredParams = 0;
 };
 
 struct TraitDef {

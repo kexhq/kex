@@ -143,6 +143,24 @@ struct Substituter {
         substitute(rescue.inlineReturnExpr);
     }
 
+    // Stamp `at` onto a subtree wholesale, reusing this walk for its
+    // traversal — onSlot returns false, so it marks and keeps descending.
+    //
+    // Column-accurate locations inside an interpolation would need the lexer
+    // to track the offset of each `${`, which it does not; the enclosing
+    // string's position is both honest and useful, where `<stdin>:1:1` is
+    // neither.
+    auto reanchor(ast::ExprPtr& root, const SourceLocation& at) -> void {
+        Constants none;
+        std::vector<semantic::Diagnostic> sink;
+        Substituter stamp{none, sink, {}, {}, {}};
+        stamp.onSlot = [&at](ast::ExprPtr& slot) {
+            if (slot) slot->location = at;
+            return false;
+        };
+        stamp.substitute(root);
+    }
+
     // A plain `"...${x}..."` keeps its interpolations as RAW TEXT: the parser
     // leaves parts/values empty and the evaluator re-parses `${...}` at
     // runtime (see the StringLiteral case in Evaluator::eval). Such a string
@@ -152,7 +170,8 @@ struct Substituter {
     //
     // Only done for strings that actually mention a constant, so programs
     // without compiled constants keep the existing lazy path untouched.
-    auto splitInterpolation(ast::StringLiteral& literal) -> void {
+    auto splitInterpolation(ast::StringLiteral& literal,
+                            const SourceLocation& at) -> void {
         if (!literal.interpolating || !literal.parts.empty()) return;
         const std::string& text = literal.value;
         bool mentions = false;
@@ -182,6 +201,12 @@ struct Substituter {
                     // let the runtime path report it, exactly as today.
                     return;
                 }
+                // The mini-parser starts from a fresh Lexer, so everything it
+                // produces claims `<stdin>:1:N`. Re-anchor it to where the
+                // string actually is, or every diagnostic and every
+                // `--collapse-report` line about an interpolated expression
+                // points at a file that does not exist.
+                reanchor(parsed, at);
                 parts.push_back(current);
                 current.clear();
                 values.push_back(std::move(parsed));
@@ -199,7 +224,7 @@ struct Substituter {
             [&](auto& node) {
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-                    splitInterpolation(node);
+                    splitInterpolation(node, expr.location);
                     each(node.values);
                 } else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
                     each(node.values);
@@ -302,6 +327,90 @@ struct Substituter {
         }
     }
 };
+
+// Turn the driver loops in a generated `make`'s body into the methods they
+// declared. The evaluator already ran them (in the scope that had this make's
+// own loop variable bound) and recorded the results on `decl.nested`; this
+// splices those in and drops the loops, so what reaches a backend is an
+// ordinary `make` full of ordinary methods.
+//
+// Each nested declaration carries its OWN captured bindings — the inner loop's
+// variable — which the outer make's bindings do not include, so the
+// substitution has to happen here rather than being left to the caller's pass.
+auto spliceNestedMethods(ast::MakeDef& make,
+                         const interpreter::Evaluator::GeneratedDeclaration& decl,
+                         std::vector<semantic::Diagnostic>& diagnostics,
+                         bool& ok) -> void {
+    decltype(make.body) kept;
+    for (auto& item : make.body)
+        if (!std::holds_alternative<ast::ExprPtr>(item))
+            kept.push_back(std::move(item));
+    make.body = std::move(kept);
+
+    for (const auto& nested : decl.nested) {
+        const auto* fnTemplate =
+            std::get_if<std::shared_ptr<ast::FunctionDef>>(&nested.function);
+        if (!fnTemplate || !*fnTemplate) {
+            addError(diagnostics, nested.location,
+                     "only `let %name(...)` can be generated inside a "
+                     "generated `make` — a nested `type` or `make` cannot");
+            ok = false;
+            continue;
+        }
+        if (nested.name.empty()) {
+            addError(diagnostics, nested.location,
+                     "generated method has an empty name");
+            ok = false;
+            continue;
+        }
+        auto method = ast::clone(**fnTemplate);
+        method->name = nested.name;
+        method->location = nested.location;
+        Constants captured;
+        for (const auto& [bound, value] : nested.bindings)
+            captured.emplace(bound, value);
+        for (const auto& clause : method->clauses)
+            for (const auto& param : clause.params)
+                if (param.name) captured.erase(*param.name);
+        Substituter inner{captured, diagnostics, {}, {}, {}, {}, {}};
+        inner.functionBody(*method);
+        make.body.push_back(std::move(method));
+    }
+}
+
+// Hygiene substitution over every method of a generated `make`.
+//
+// Each method's own parameters must WIN over a captured loop variable of the
+// same name, and the map is shared across methods, so the erasures have to be
+// undone between them — hence the per-method copy rather than one mutated map.
+auto substituteMakeBodies(ast::MakeDef& make, Substituter& base,
+                          const Constants& captured) -> void {
+    auto forFunction = [&](ast::FunctionDef& fn) {
+        Constants shadowed = captured;
+        for (const auto& clause : fn.clauses)
+            for (const auto& param : clause.params)
+                if (param.name) shadowed.erase(*param.name);
+        Substituter inner{shadowed, base.diagnostics, {}, {}, {}, {}, base.reify};
+        inner.functionBody(fn);
+    };
+    for (auto& item : make.body) {
+        std::visit(
+            [&](auto& node) {
+                using Ptr = std::decay_t<decltype(*node)>;
+                if (!node) return;
+                if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
+                    forFunction(*node);
+                } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
+                    for (auto& inner : node->items)
+                        if (auto* fn = std::get_if<
+                                std::unique_ptr<ast::FunctionDef>>(&inner))
+                            if (*fn) forFunction(**fn);
+                }
+                // TypeAnnotation holds types, not expressions — nothing to do.
+            },
+            item);
+    }
+}
 
 // Applies `visitor` to every function/main body reachable in `items`.
 //
@@ -662,12 +771,14 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             requests.push_back({candidate.slot->get(), candidate.names});
 
         std::vector<interpreter::ValuePtr> values;
+        std::vector<std::string> reasons;
         RecordLayouts layouts;
         try {
             interpreter::Evaluator evaluator;
             evaluator.loadPrelude();
-            values =
-                evaluator.evaluateExpressions(program, requests, options.timeout);
+            values = evaluator.evaluateExpressions(
+                program, requests, options.timeout,
+                options.report ? &reasons : nullptr);
             layouts = evaluator.recordFieldOrder();
         } catch (const std::exception&) {
             // Collapse is an optimization: if the sandbox itself cannot run,
@@ -684,13 +795,22 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
             // Reify into a separate expression first: a placeholder the
             // reifier cannot resolve fails partway, and overwriting the slot
             // before knowing that would leave a half-built literal.
+            const SourceLocation where = (*candidate.slot)->location;
             auto literal =
-                values[i] ? valueToLiteral(values[i], (*candidate.slot)->location,
-                                           why, {&layouts, &candidate.exprs})
+                values[i] ? valueToLiteral(values[i], where, why,
+                                           {&layouts, &candidate.exprs})
                           : nullptr;
             if (literal) {
                 *candidate.slot = std::move(literal);
+                if (options.report) options.report->push_back({where, true, {}});
                 continue;
+            }
+            if (options.report) {
+                // `why` is set when reification failed; otherwise the reason
+                // came from evaluation.
+                if (why.empty() && i < reasons.size()) why = reasons[i];
+                if (why.empty()) why = "it could not be evaluated";
+                options.report->push_back({where, false, std::move(why)});
             }
             grew = rejected.insert(claimed).second || grew;
         }
@@ -835,15 +955,23 @@ auto expand(ast::Program& program,
         // `type %{name}` over lower-case data silently declared a type called
         // `small`, which nothing can ever reference.
         {
+            // A `make`'s name is its TARGET TYPE, so it wants upper-case for
+            // the same reason a `type` does.
             const bool wantsUpper =
-                std::holds_alternative<std::shared_ptr<ast::TypeDef>>(decl.function);
+                std::holds_alternative<std::shared_ptr<ast::TypeDef>>(decl.function) ||
+                std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function);
             const unsigned char lead =
                 static_cast<unsigned char>(decl.name.front());
             const bool isUpper = lead >= 'A' && lead <= 'Z';
             const bool isLower = (lead >= 'a' && lead <= 'z') || lead == '_';
             if (wantsUpper && !isUpper) {
                 addError(diagnostics, decl.location,
-                         "generated type name `" + decl.name +
+                         std::string("generated ") +
+                             (std::holds_alternative<std::shared_ptr<ast::MakeDef>>(
+                                  decl.function)
+                                  ? "make target"
+                                  : "type") +
+                             " name `" + decl.name +
                              "` must start with an upper-case letter" +
                              (isLower ? " — try `%{name.capitalize}`" : ""));
                 ok = false;
@@ -881,6 +1009,33 @@ auto expand(ast::Program& program,
             continue;
         }
 
+        if (auto* makeTemplate =
+                std::get_if<std::shared_ptr<ast::MakeDef>>(&decl.function)) {
+            if (!*makeTemplate) continue;
+            auto copy = ast::clone(**makeTemplate);
+            copy->location = decl.location;
+            // The template's target is null — the name was not known when it
+            // was parsed. Build it now from the resolved name.
+            copy->target = std::make_unique<ast::TypeExpr>();
+            copy->target->location = decl.location;
+            copy->target->kind = ast::TypeName{{decl.name}};
+            // Same hygiene as a generated function, applied to every method:
+            // the loop variables the bodies closed over do not exist at
+            // runtime, so they are baked in as literals. Each method's own
+            // parameters shadow them.
+            Constants captured;
+            for (const auto& [bound, value] : decl.bindings)
+                captured.emplace(bound, value);
+            // Replace the driver loops with the methods they declared, then
+            // apply hygiene to every method the block now has.
+            spliceNestedMethods(*copy, decl, diagnostics, ok);
+            Substituter scope{captured, diagnostics, {}, {}, {}, {}, {&layouts}};
+            substituteMakeBodies(*copy, scope, captured);
+            if (into) into->body.push_back(std::move(copy));
+            else program.items.push_back(std::move(copy));
+            continue;
+        }
+
         if (auto* typeTemplate =
                 std::get_if<std::shared_ptr<ast::TypeDef>>(&decl.function)) {
             if (!*typeTemplate) continue;
@@ -894,20 +1049,40 @@ auto expand(ast::Program& program,
         }
     }
 
-    // --- 4. Drop the definitions. A constant is gone from the emitted module
+    // --- 4. Collapse compiled-builder chains that are already fully known.
+    //
+    // After substitution, so the constants are already literals and "mentions a
+    // lower-case name" is an exact test for "depends on something that only
+    // exists at runtime" — but BEFORE the hoist below, which removes the
+    // `compiled` blocks that tell collapse which methods are its own. Getting
+    // that order wrong disables the feature silently: `compiledNames` returns
+    // an empty set and every chain is left alone.
+    if (ok) collapseChains(program, options);
+
+    // --- 5. Drop the definitions. A constant is gone from the emitted module
     // entirely — no nullary function, nothing exported. Only constants whose
     // uses were all substituted are removed; anything left referenced keeps
     // its definition so the program still resolves.
     std::unordered_map<std::string, bool> keep;
     for (const auto& name : substituter.remaining) keep[name] = true;
 
+    // Every surviving declaration is HOISTED into the enclosing scope and the
+    // block itself removed, so no `CompiledBlock` reaches anything downstream.
+    //
+    // Two things fall out of that, both of which used to be bugs:
+    //  - The type checker walks past a `CompiledBlock`, so declarations inside
+    //    one were never checked. Hoisted, they are ordinary declarations and
+    //    are checked like any other.
+    //  - Top-level lowering has no `CompiledBlock` case, so a block holding a
+    //    `make` outside any module died with "unimplemented top-level item".
+    //    There is no longer a block to lower.
     auto prune = [&](auto& items) {
+        using Item = std::decay_t<decltype(items[0])>;
+        std::vector<Item> hoisted;
         for (std::size_t i = 0; i < items.size();) {
             auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&items[i]);
             if (!block || !*block) { i++; continue; }
-            auto& entries = (*block)->items;
-            std::vector<ast::CompiledItem> kept;
-            for (auto& entry : entries) {
+            for (auto& entry : (*block)->items) {
                 auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry);
                 const bool inlined = fn && *fn && isValueBinding(**fn) &&
                                      constants.count((*fn)->name) &&
@@ -915,27 +1090,25 @@ auto expand(ast::Program& program,
                 // A bare expression in a compiled block is compile-time work
                 // and nothing else — a driver loop, typically. It has already
                 // run, and its generated declarations are now real items, so
-                // keeping it would re-run the loop at runtime (and leave a
-                // CompiledBlock that top-level BEAM lowering cannot handle).
-                const bool consumed = std::holds_alternative<ast::ExprPtr>(entry);
-                if (!inlined && !consumed) kept.push_back(std::move(entry));
+                // keeping it would re-run the loop at runtime.
+                if (inlined || std::holds_alternative<ast::ExprPtr>(entry))
+                    continue;
+                std::visit(
+                    [&](auto& held) {
+                        using Held = std::decay_t<decltype(held)>;
+                        if constexpr (!std::is_same_v<Held, ast::ExprPtr>)
+                            hoisted.push_back(std::move(held));
+                    },
+                    entry);
             }
-            entries = std::move(kept);
-            if (entries.empty()) items.erase(items.begin() + static_cast<long>(i));
-            else i++;
+            items.erase(items.begin() + static_cast<long>(i));
         }
+        for (auto& item : hoisted) items.push_back(std::move(item));
     };
     prune(program.items);
     for (auto& item : program.items)
         if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
             if (*mod) prune((*mod)->body);
-
-    // --- 5. Collapse compiled-builder chains that are already fully known.
-    //
-    // Last, and over the pruned program: by now the constants are literals, so
-    // "mentions a lower-case name" is an exact test for "depends on something
-    // that only exists at runtime".
-    if (ok) collapseChains(program, options);
 
     return ok;
 }

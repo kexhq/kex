@@ -169,6 +169,46 @@ auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
     return out;
 }
 
+auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
+    auto out = std::make_unique<MakeDef>();
+    out->location = make.location;
+    out->target = clone(make.target);
+    out->isFinal = make.isFinal;
+    out->implements = make.implements;
+    for (const auto& item : make.body) {
+        std::visit(
+            [&](const auto& node) {
+                using Ptr = std::decay_t<decltype(*node)>;
+                if (!node) return;
+                if constexpr (std::is_same_v<Ptr, FunctionDef>) {
+                    out->body.push_back(clone(*node));
+                } else if constexpr (std::is_same_v<Ptr, TypeAnnotation>) {
+                    auto copy = std::make_unique<TypeAnnotation>();
+                    copy->name = node->name;
+                    copy->type = clone(node->type);
+                    copy->implicitThis = node->implicitThis;
+                    copy->isFoul = node->isFoul;
+                    out->body.push_back(std::move(copy));
+                } else if constexpr (std::is_same_v<Ptr, VisibilityBlock>) {
+                    auto copy = std::make_unique<VisibilityBlock>();
+                    copy->isPublic = node->isPublic;
+                    for (const auto& inner : node->items)
+                        if (const auto* fn =
+                                std::get_if<std::unique_ptr<FunctionDef>>(&inner))
+                            if (*fn) copy->items.push_back(clone(**fn));
+                    out->body.push_back(std::move(copy));
+                } else if constexpr (std::is_same_v<Ptr, Expr>) {
+                    // A driver loop in a generated make's body. Expansion
+                    // replaces it with the methods it declared, but a clone
+                    // taken before that has to carry it.
+                    out->body.push_back(clone(node));
+                }
+            },
+            item);
+    }
+    return out;
+}
+
 auto clone(const ExprPtr& expr) -> ExprPtr {
     if (!expr) return nullptr;
     auto out = std::make_unique<Expr>();

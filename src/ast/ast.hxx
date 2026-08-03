@@ -414,7 +414,8 @@ struct ErrorNode {
 // shared_ptr because one template yields N declarations, each an independent
 // ast::clone of it.
 using GeneratedTemplate = std::variant<std::shared_ptr<struct FunctionDef>,
-                                       std::shared_ptr<struct TypeDef>>;
+                                       std::shared_ptr<struct TypeDef>,
+                                       std::shared_ptr<struct MakeDef>>;
 
 struct GeneratedDecl {
     ExprPtr name;                           // `%n` -> Identifier{"n"}
@@ -588,10 +589,17 @@ struct MakeDef {
     TypeExprPtr target;
     bool isFinal = false;
     std::vector<std::string> implements;  // trait names claimed by this block
+    // ExprPtr is only ever produced for a GENERATED `make %name do ... end`,
+    // where the body may hold a driver loop declaring methods
+    // (`OPS.each do |op| let %op(...) ... end end`). Expansion evaluates those
+    // and replaces them with the methods they declare, so no `make` that
+    // reaches a backend ever contains one — the ordinary `make Foo do ... end`
+    // parser never produces one at all.
     std::vector<std::variant<
         std::unique_ptr<FunctionDef>,
         std::unique_ptr<TypeAnnotation>,
-        std::unique_ptr<VisibilityBlock>
+        std::unique_ptr<VisibilityBlock>,
+        ExprPtr
     >> body;
 };
 
