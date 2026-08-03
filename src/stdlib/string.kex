@@ -38,6 +38,25 @@ make String, implement: Enumerable, Foldable do
   empty? :> Bool
   let empty? = Kex.Intrinsic.List.length(this) == 0
 
+  # Returns an enclosed string, with +wrapper+ on both ends.
+  # @param wrapper String
+  # @return String
+  # @example
+  #   "hello".enclose("*")   # => "*hello*"
+  #   "hello".enclose("__")   # => "__hello__"
+  enclose :> String -> String
+  let enclose(wrapper) = "${wrapper}${this}${wrapper}"
+
+  # Returns an enclosed string, +left+ and +right+ on the ends.
+  # @param left String
+  # @param right String
+  # @return String
+  # @example
+  #   "hello".enclose("<", ">")   # => "<hello>"
+  #   "hello".enclose("{", "}")   # => "{hello}"
+  enclose :> String -> String -> String
+  let enclose(left, right) = "${left}${this}${right}"
+
   # Returns the character at position +i+ (0-based), or +None+ if out of range.
   #
   # @param i [Integer]
