@@ -1,0 +1,35 @@
+# kex: no-check
+# A RECORD is not a tuple to spread across a block's parameters.
+#
+# On BEAM a record IS a tuple — `One { a: 1 }` is `{'One', 1}` — so a
+# two-parameter block over a list of one-field records used to receive the tag
+# and the field (`One 1`) instead of failing. The walker keeps RecordValue and
+# TupleValue apart and rejected it, so this was a silent backend divergence
+# that produced a plausible-looking wrong answer.
+#
+# `kex_intrinsic_fun:spreadable/2` now consults the record registry that
+# `kex_io:register_display/2` fills — the only thing that can tell `{'One', 1}`
+# from the ordinary 2-tuple `(:one, 1)` at runtime.
+#
+# This spec only checks that a genuine tuple still spreads and a record still
+# arrives whole. The DISCRIMINATING case — a two-parameter block over one-field
+# records — cannot live here: both backends must refuse it and they word the
+# refusal differently, so there is no single expected output. That one is
+# `CLI — records do not spread across block params` in tests/repl_cli_test.cxx.
+
+record One do
+  a : Int = 1
+end
+
+main do
+  # A genuine 2-tuple spreads.
+  [(:one, 1)].each do |tag, n|
+    IO.printLine("tuple spreads: ${tag} ${n}")
+  end
+
+  # A one-field record does not: it is one value, not two, and reaching this
+  # line at all means the record was left whole.
+  [One {}].each do |r|
+    IO.printLine("record stays whole: ${r.a}")
+  end
+end

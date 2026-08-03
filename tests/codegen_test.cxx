@@ -416,6 +416,9 @@ int main() {
                 "      let scaled(by: Int) -> Int do\n"
                 "        @total * by\n"
                 "      end\n"
+                "      let capped(e) -> Box do\n"
+                "        Box { total: @total, extra: e }\n"
+                "      end\n"
                 "    end\n"
                 "  end\n"
                 "end\n"
@@ -571,15 +574,23 @@ int main() {
                 "      let scaled(by: Int) -> Int do\n"
                 "        @total * by\n"
                 "      end\n"
+                "      let capped(e) -> Box do\n"
+                "        Box { total: @total, extra: e }\n"
+                "      end\n"
                 "    end\n"
                 "  end\n"
                 "end\n"
+                "\n"
+                // Upper-case, and top level: the shape that could only be a
+                // qualifier if it appeared as a receiver.
+                "let CAP = 9\n"
                 "\n"
                 "main do\n"
                 "  let seed = 7\n"
                 "  let carried = Boxes.of(2).note(seed)\n"
                 "  let computed = Boxes.of(seed).scaled(3)\n"
-                "  (carried, computed)\n"
+                "  let upper = Boxes.of(3).capped(CAP)\n"
+                "  (carried, computed, upper)\n"
                 "end\n";
             kex::Lexer lexer(source);
             kex::Parser parser(lexer.tokenizeAll());
@@ -596,6 +607,14 @@ int main() {
             // not the value 7, which would bake in a runtime binding.
             assertTrue(out.find("{'Box', 2, Seed}") != std::string::npos,
                        "a carried placeholder reifies back to its expression");
+            // An UPPER-case binding is a placeholder too. It is ambiguous with
+            // a module or type qualifier only in RECEIVER position, which
+            // isCollapsible checks separately, so as an argument it rides
+            // through like any other name.
+            assertTrue(out.find("apply 'CAP'/0()") != std::string::npos,
+                       "an upper-case binding reifies back to a reference");
+            assertEqual(countOccurrences(out, "apply 'capped'"), 0,
+                        "a chain taking an upper-case binding still collapses");
             assertEqual(countOccurrences(out, "apply 'note'"), 0,
                         "the carrying chain collapses");
             // `computed` cannot: multiplying a placeholder has no answer.

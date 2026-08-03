@@ -55,6 +55,8 @@ module Boxes do
   end
 end
 
+let SEED = 4
+
 main do
   # Fully static: every argument is a literal, so the whole chain is gone by
   # the time the backend sees it.
@@ -80,6 +82,16 @@ main do
   # A runtime value the builder COMPUTES with cannot: `scaled` multiplies, so
   # evaluation gives up and the whole chain is left to run. Same answer.
   IO.printLine("${Boxes.of(runtime).add(3).scaled(10)}")
+
+  # An UPPER-case runtime binding is a placeholder too. It is only ambiguous
+  # with a module or type qualifier in receiver position, which is checked
+  # separately — so as an argument it rides through like any other, and reifies
+  # back to a reference rather than being baked in.
+  IO.printLine("${Boxes.of(1).note(SEED).parts}")
+
+  # A nullary variant such as `None` goes the same way, being an
+  # UpperIdentifier too — not shown here only because `parts : [Int]` cannot
+  # hold one, and a second record just for that would be noise.
 
   # Nor can one it STRINGIFIES — and unlike the others, this case is visible
   # from here. A placeholder that were allowed to render as text would print

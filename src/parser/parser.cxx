@@ -807,8 +807,11 @@ auto Parser::parseParams() -> std::vector<ast::Param> {
 auto Parser::parseParam() -> ast::Param {
     ast::Param param;
 
-    // Try pattern first for complex matches
-    if (check(TokenType::At) || check(TokenType::LBrace) || check(TokenType::LBracket)) {
+    // Try pattern first for complex matches. `(` is a TUPLE pattern —
+    // `|(k, v)|`, `let f((a, b))` — the same spelling `match` and `let` use,
+    // so a tuple destructures the same way in every position that binds names.
+    if (check(TokenType::At) || check(TokenType::LBrace) ||
+        check(TokenType::LBracket) || check(TokenType::LParen)) {
         param.pattern = parsePattern();
         return param;
     }

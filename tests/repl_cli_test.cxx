@@ -130,6 +130,21 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
 // `it` bodies run AFTER their `describe` lambda returns, so anything they use
 // has to outlive it — a `[&]` capture of a local here dangles, and silently
 // wrote a truncated source file rather than crashing.
+// File scope, not a `describe` local: `it` bodies run after their `describe`
+// lambda returns, and a captured local dangles. That mistake made this very
+// test pass vacuously — it asserted on the output of a program that was never
+// written.
+constexpr const char* kRecordSpreadProbe =
+    "record One do\n"
+    "  a : Int = 1\n"
+    "end\n"
+    "\n"
+    "main do\n"
+    "  [One {}].each do |x, y|\n"
+    "    IO.printLine(\"spread: ${x} ${y}\")\n"
+    "  end\n"
+    "end\n";
+
 constexpr const char* kCollapseBuilder =
     "module Boxes do\n"
     "  record Box do\n"
@@ -963,6 +978,30 @@ int main() {
             assertTrue(out.find("collapsed") != std::string::npos, out);
             assertTrue(out.find("kept") == std::string::npos, out);
             assertTrue(out.find("50") != std::string::npos, out);
+        });
+    });
+
+    // A record is a TUPLE on BEAM (`One { a: 1 }` is `{'One', 1}`), so without
+    // an explicit check a two-parameter block over a list of one-field records
+    // received the tag and the field and printed a plausible `One 1`. The
+    // walker keeps RecordValue and TupleValue apart and rejects it, so this was
+    // a silent backend divergence producing a wrong answer.
+    //
+    // Not a spec: both backends must now REFUSE this, and they word the refusal
+    // differently (the walker names the unbound variable, BEAM reports
+    // badarity), so there is no single expected output to compare.
+    describe("CLI — records do not spread across block params", []() {
+        it("refuses on BEAM rather than spreading the tag", []() {
+            auto beam = runBeamFile(kRecordSpreadProbe, "", /*noCheck=*/true);
+            // The exact error differs by backend; what must never appear is a
+            // successful spread of the record's tag into the first parameter.
+            assertTrue(beam.find("spread: One 1") == std::string::npos, beam);
+            assertTrue(beam.find("spread:") == std::string::npos, beam);
+        });
+
+        it("refuses in the tree walker too", []() {
+            auto tree = runWalkerFile(kRecordSpreadProbe, /*noCheck=*/true);
+            assertTrue(tree.find("spread:") == std::string::npos, tree);
         });
     });
 

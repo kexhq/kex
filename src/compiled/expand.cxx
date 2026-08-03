@@ -579,14 +579,20 @@ struct ChainCollapser {
     // If the builder actually USES it, evaluation throws PlaceholderMisuse and
     // the whole expression falls back to runtime.
     //
-    // Note what is still NOT here: `UpperIdentifier`. It is ambiguous with a
-    // module or type qualifier, and telling those apart needs name resolution
-    // this pass runs before.
+    // `UpperIdentifier` is a placeholder too, but only where it cannot be a
+    // qualifier — never in receiver position, which `isCollapsible` checks
+    // separately. Telling `Foo` the binding from `Foo` the module apart needs
+    // name resolution this pass runs before, so the sandbox settles it instead:
+    // bind it as a placeholder and let the attempt fail if the builder needed
+    // the real thing. A nullary variant like `None` loses a little precision
+    // that way — it IS knowable — but a chain taking one did not collapse at
+    // all before, so this is never worse.
     auto isStatic(const ast::Expr& expr) const -> bool {
         return std::visit(
             [&](const auto& node) -> bool {
                 using T = std::decay_t<decltype(node)>;
-                if constexpr (std::is_same_v<T, ast::Identifier>) {
+                if constexpr (std::is_same_v<T, ast::Identifier> ||
+                              std::is_same_v<T, ast::UpperIdentifier>) {
                     for (const auto& seen : freeNames)
                         if (seen == node.name) return true;
                     freeNames.push_back(node.name);

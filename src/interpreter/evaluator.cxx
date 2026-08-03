@@ -3388,8 +3388,16 @@ auto Evaluator::registerBuiltins() -> void {
             auto* tuple = std::get_if<TupleValue>(&args[1]->data);
             int arity = -1;
             if (auto* nf = std::get_if<FunctionValue>(&fn.data)) arity = nf->arity;
-            if (arity == 3 && tuple && tuple->elements.size() == 2) {
-                callArgs = {tuple->elements[0], tuple->elements[1], args[2]};
+            // Spread a tuple of ANY arity, not just a Map entry's two: the
+            // block's parameters minus the trailing index have to line up with
+            // the tuple's elements. A RecordValue is a distinct type here, so
+            // unlike BEAM there is nothing to exclude — this is the one place
+            // the walker has it easier.
+            const int spreadWidth = arity - 1;
+            if (spreadWidth > 1 && tuple &&
+                static_cast<int>(tuple->elements.size()) == spreadWidth) {
+                callArgs = tuple->elements;
+                callArgs.push_back(args[2]);
             } else {
                 callArgs = {args[1], args[2]};
             }

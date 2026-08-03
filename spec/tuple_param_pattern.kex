@@ -1,0 +1,48 @@
+# A tuple pattern works in a FUNCTION PARAMETER, the same spelling `match` and
+# `let` already use.
+#
+# This is the one destructuring position that had no equivalent. A named
+# function does not auto-spread the way a block does — `let f(a, b)` is two
+# parameters, not one tuple — so before this there was no way to destructure a
+# tuple argument in a function head at all; you took it whole and matched in the
+# body. `parseParam` already routed `@`, `{` and `[` to the pattern parser (which
+# has handled tuples all along, hence `match`); `(` was simply missing.
+#
+# Deliberately NOT added, because each already has a working spelling and a
+# second one buys nothing:
+#   let a, b = (1, 2)        — `let (a, b) = (1, 2)` does this
+#   [(1,2)].each { |(k,v)| } — `|k, v|` auto-spreads over a tuple already
+
+let pair((a, b)) -> String do
+  "${a}+${b}"
+end
+
+let nested((name, (x, y))) -> String do
+  "${name}@${x},${y}"
+end
+
+# Mixed with an ordinary parameter, and not in first position.
+let labelled(prefix: String, (a, b)) -> String do
+  "${prefix}${a}${b}"
+end
+
+# NOT here: the same thing as a `make` method. A pattern parameter of ANY kind
+# in a make block miscounts arity in the type checker — `let g([a, b])` is
+# `expects 1 argument(s), got 2` just as much as the tuple form — because the
+# implicit receiver is not added to the signature when the parameter is a
+# pattern. Pre-existing, verified against the parent commit, unrelated to the
+# parser change here, and recorded in docs/compiled-todo.md.
+
+main do
+  IO.printLine(pair((1, 2)))
+  IO.printLine(nested(("p", (3, 4))))
+  IO.printLine(labelled("v", (5, 6)))
+
+  # The forms that already worked, unchanged.
+  let (a, b) = (7, 8)
+  IO.printLine("${a}${b}")
+
+  [(9, 10)].each do |k, v|
+    IO.printLine("${k},${v}")
+  end
+end
