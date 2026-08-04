@@ -1,0 +1,104 @@
+# readcore — print an emitted .core file with its binary literals decoded.
+#
+# A Kex String is a BINARY on BEAM, and Core Erlang writes a binary literal one
+# byte at a time:
+#
+#   #{#<83>(8,1,'integer',['unsigned'|['big']]),#<69>(8,1,...)}#
+#
+# which is `<<"SE...">>`. Nothing in the emitted code is readable in that form,
+# and grepping it for text never matches — so checking whether compile-time
+# evaluation actually folded something away meant decoding by hand.
+#
+#   kex tools/readcore.kex out/kex_compiled_sql.core
+#   kex tools/readcore.kex out/kex_compiled_sql.core --fn main
+#   kex tools/readcore.kex out/kex_compiled_sql.core --grep SELECT
+#
+# `--grep` searches the DECODED text, which is the whole point: the same search
+# against the raw file finds nothing.
+
+using Regex
+using FS
+
+# One byte of a Core Erlang binary literal. The tag form is validated at
+# compile time and yields a bare Regex — the call form returns a Result, which
+# would need unwrapping at every use.
+let BYTE_REGEX = regex`#<(\d+)>\(8,1`
+
+# A whole binary literal, from `#{` to `}#`. Non-greedy so two literals on one
+# line stay separate.
+let BINARY_REGEX = regex`#\{.*?\}#`
+
+# The bytes of one matched binary literal, as a readable `<<"...">>`.
+let decodeLiteral(literal: String) -> String do
+  let text = literal
+    .scan(BYTE_REGEX)
+    .map { |b| String.fromCodepoint(b.get(1, "0").to(Integer).or(0)).or("") }
+    .join("")
+  "<<\"${text}\">>"
+end
+
+let decode(source: String) -> String do
+  source.replace(BINARY_REGEX) { |m| decodeLiteral(m.get(0, "")) }
+end
+
+# The definition of `name`, up to the next top-level definition. A definition
+# starts at column 0 with `'name'/arity =`.
+let sliceFunction(source: String, name: String) -> String do
+  let lines = source.lines
+  let startAt = lines.findIndex(&.startsWith?("'${name}'/"))
+
+  match startAt do
+    None -> "(no function named ${name} in this module)"
+    Just(from) -> do
+      let rest = lines.drop(from + 1)
+      let len = rest.findIndex { |l| l.startsWith?("'") && l.contains?("'/") }
+      let body = match len do
+        Just(n) -> lines.drop(from).take(n + 1)
+        None    -> lines.drop(from)
+      end
+      body.join("\n")
+    end
+  end
+end
+
+# `--fn` and `--grep` each take a value, so the token after one is not a file.
+let takesValue?(arg: String) -> Bool = arg == "--fn" || arg == "--grep"
+
+main(args) do
+  # Everything that is neither a flag nor a flag's value.
+  let files = (0..(args.count - 1))
+    .filter do |i|
+      let current = args.at(i).or("")
+      let previous = i > 0 then args.at(i - 1).or("") else ""
+      return !current.startsWith?("--") && !takesValue?(previous)
+    end
+    .map { |i| args.at(i).or("") }
+
+  let fnName = args.dropWhile { |a| a != "--fn" }.at(1)
+  let needle = args.dropWhile { |a| a != "--grep" }.at(1)
+
+  if files.empty?
+    IO.printLine("usage: kex tools/readcore.kex -- FILE.core [--fn NAME] [--grep TEXT]")
+  end
+
+  files.each do |path|
+    match FS.File.read(path) do
+      None -> IO.printError("readcore: cannot read ${path}")
+      Just(source) -> do
+        var body = decode(source)
+
+        if fnName.present?
+          body = sliceFunction(body, fnName.try)
+        end
+
+        if needle.present?
+          body = body.lines.filter(&.contains?(needle)).join("\n")
+        end
+
+        IO.printLine("==> ${path} <==") if files.count > 1
+
+        IO.printLine(body)
+      end
+    end
+  end
+end
