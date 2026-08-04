@@ -2037,8 +2037,19 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                                 result = ret.value();
                             }
                         } else {
+                            // A lambda IS a function, so the same rule applies
+                            // as at a named function's boundary: an unrescued
+                            // `.try` failure makes THIS call's result
+                            // `Error(e)` rather than unwinding past it.
+                            // Rethrowing let the error escape the HOF that
+                            // called the block — `["x"].map { |v| f(v).try }`
+                            // produced a bare `Error(...)` instead of a list
+                            // containing one, and blew past `each` entirely.
                             m_env = prevEnv;
-                            throw;
+                            auto errorVal = std::make_shared<Value>();
+                            errorVal->data =
+                                VariantValue{"Error", "Result", {e.error()}, {}, {}};
+                            return errorVal;
                         }
                     } catch (ReturnException& ret) {
                         result = ret.value();

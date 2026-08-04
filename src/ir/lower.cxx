@@ -781,7 +781,15 @@ struct Lowering {
                 Lambda lam;
                 for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
                 lam.body = lowerBody(n.body);
+                // Same rule a named function gets: an unrescued `.try` failure
+                // makes THIS body's result `Error(e)` rather than unwinding
+                // past it. A lambda is a function, so `["no"].map { |v|
+                // f(v).try }` yields `[Error(...)]` instead of crashing the
+                // process — which is what the walker has always done, and what
+                // `each` relies on to drop the error with the block's result.
                 if (n.rescue) lam.body = wrapWithTryCatch(std::move(lam.body), *n.rescue);
+                else if (irHasEscapingTryThrow(lam.body))
+                    lam.body = wrapPropagateTryError(std::move(lam.body));
                 subst = snap;
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(lam);
@@ -1855,7 +1863,16 @@ struct Lowering {
                 (variantOwner.count(uid->name) &&
                  variantArity.count(uid->name) &&
                  variantArity.at(uid->name) == 0);
-            if (!nullaryConstructorReceiver)
+            // ...and so is an upper-case TOP-LEVEL BINDING. `let NUMS = [1,2,3]`
+            // then `NUMS.map { }` is the same call as `let n = NUMS` then
+            // `n.map { }` — which worked, while the direct form did not, purely
+            // because an UpperIdentifier receiver was assumed to name a module.
+            // Every module and variant lookup above has already missed by the
+            // time we get here, so a name that is a known local value can only
+            // be the value.
+            const bool topLevelBindingReceiver =
+                zeroArgFns.count(uid->name) || topLevelConstants.count(uid->name);
+            if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
         }
@@ -2255,9 +2272,70 @@ struct Lowering {
         e->node = std::move(m);
         return e;
     }
+    // Is this IR expression already a `Bool`, so the truthiness test below can
+    // be skipped? Deliberately a small allowlist of things that cannot be
+    // anything else — every comparison and boolean BIF, and a literal. Missing
+    // a case here costs three comparisons, not correctness.
+    static auto irIsBoolean(const ExprPtr& e) -> bool {
+        if (!e) return false;
+        if (auto* l = std::get_if<Lit>(&e->node))
+            return l->kind == LitKind::Bool;
+        // Comparisons and boolean connectives lower to an Intrinsic, not a
+        // Call — `1 > 2` is `Intrinsic{Op::Gt}`, and only emit_core turns it
+        // into `call 'erlang':'>'`.
+        if (auto* i = std::get_if<Intrinsic>(&e->node)) {
+            switch (i->op) {
+                case Op::Eq: case Op::Neq:
+                case Op::Lt: case Op::Gt: case Op::Lte: case Op::Gte:
+                case Op::And: case Op::Or: case Op::Not:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        if (auto* c = std::get_if<Call>(&e->node)) {
+            if (c->module != "erlang") return false;
+            static const std::unordered_set<std::string> boolBifs = {
+                "==", "/=", "=:=", "=/=", "<", ">", "=<", ">=",
+                "not", "and", "or", "xor",
+                "is_atom", "is_binary", "is_boolean", "is_float", "is_function",
+                "is_integer", "is_list", "is_map", "is_number", "is_pid",
+                "is_reference", "is_tuple",
+            };
+            return boolBifs.count(c->name) > 0;
+        }
+        return false;
+    }
+
+    // Only `false`, `None` and `()` are falsy; everything else is truthy —
+    // Crystal semantics, which `src/stdlib/truthyable.kex` states and the tree
+    // walker has always implemented. BEAM matched `true`/`false` literally, so
+    // `if Ok(1)` was a `case_clause` crash and a `find` whose block returned a
+    // non-Bool died with `bad_filter`.
+    //
+    // Done in the SUBJECT rather than as extra clauses because the else branch
+    // must stay lazy — repeating it under three falsy patterns would either
+    // duplicate its code or force it to be bound eagerly.
+    auto truthyTest(ExprPtr cond) -> ExprPtr {
+        if (irIsBoolean(cond)) return cond;
+        std::string cv = fresh("_Truthy");
+        auto notEq = [&](const char* atom) {
+            return callE("erlang", "=/=", 2,
+                         two(var(cv), lit(LitKind::Atom, atom)));
+        };
+        // `and`, not `andalso`: the latter is a control-flow OPERATOR, so
+        // `erlang:'andalso'/2` does not exist and every condition became
+        // `undef`. Both operands are comparisons, so strictness costs nothing.
+        auto test = callE("erlang", "and", 2,
+                          two(notEq("false"), notEq("None")));
+        test = callE("erlang", "and", 2,
+                     two(std::move(test), notEq("Kex.Unit")));
+        return makeLet(cv, std::move(cond), std::move(test));
+    }
+
     auto matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr {
         Match m;
-        m.subjects.push_back(std::move(cond));
+        m.subjects.push_back(truthyTest(std::move(cond)));
         auto boolPat = [](bool b) {
             auto p = std::make_unique<Pattern>();
             p->kind = PatKind::Lit; p->litKind = LitKind::Bool; p->litBool = b;

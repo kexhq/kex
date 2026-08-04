@@ -1,0 +1,67 @@
+# What an UNRESCUED `.try` failure does — the boundary rule.
+#
+# `.try` on an `Error`/`None` propagates to the nearest enclosing FUNCTION
+# boundary, and with no rescue there the call's result becomes `Error(e)`.
+# That is Rust's `?`, and `evaluator.cxx` states it at the function-clause
+# handler: "No rescue — this call's result IS Error(e)".
+#
+# A LAMBDA is a function, so the same rule applies to a block. It did not:
+#   - BEAM unwound past the block entirely and crashed the process with
+#     `{kex_try_error, ...}`, so `["x"].map { |v| f(v).try }` never returned.
+#   - the interpreter rethrew, so the error escaped the HOF that called the
+#     block — `map` produced a bare `Error(...)` instead of a list containing
+#     one, and `each` swallowed it with no output and exit code 0.
+# Three different answers to the same question, none of them the rule.
+#
+# `spec/try_rescue.kex` covers the RESCUED paths; this file covers only what
+# happens with no handler, which is where the backends disagreed.
+
+type E = Bad(String)
+
+let mk(v: String) -> Result<Int, E> do
+  match v do
+    "ok" -> Ok(1)
+    _    -> Error(Bad(v))
+  end
+end
+
+main do
+  # A named function with no rescue returns Error(e). This always worked on
+  # both backends and is the rule the rest must match.
+  let named(v) = mk(v).try
+  IO.printLine("${named("ok")}")
+  IO.printLine("${named("no")}")
+
+  # A block is a function too, so `map` collects the Error as an ordinary
+  # element — a list of results, not a crash and not a bare error.
+  IO.printLine("${["ok", "no"].map do |v| mk(v).try end}")
+
+  # `each` discards the block's result, so the failure is dropped with it and
+  # iteration continues. Reaching the line after the loop is the assertion.
+  ["no", "ok", "no"].each do |v|
+    IO.printLine("each got ${mk(v).try}")
+  end
+  IO.printLine("each finished")
+
+  # A block inside `trying` is still a function boundary, so the block's own
+  # `.try` never reaches the rescue — it becomes the block's result first.
+  let held = trying do
+    ["no"].map do |v| mk(v).try end
+  rescue
+    _ -> "rescued"
+  end
+  IO.printLine("${held}")
+
+  # ...whereas a `.try` written directly in the `trying` body has no function
+  # boundary between it and the rescue, so the rescue does fire.
+  let caught = trying do
+    mk("no").try
+  rescue
+    _ -> -1
+  end
+  IO.printLine("${caught}")
+
+  # Nesting: the inner lambda's failure is the inner lambda's result, so the
+  # outer one sees a value and completes normally.
+  IO.printLine("${[["no"]].map do |xs| xs.map do |v| mk(v).try end end}")
+end

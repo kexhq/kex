@@ -1,0 +1,45 @@
+# An UPPER-CASE top-level binding is a value, not a namespace.
+#
+# `let NUMS = [1, 2, 3]` then `NUMS.map { }` failed on BEAM with
+# `Undefined function: NUMS.map`, because an UpperIdentifier in receiver
+# position was assumed to name a module. The lower-case spelling worked, and so
+# did assigning to a local first (`let n = NUMS` then `n.map`) — so the value
+# was reachable, just not directly. The interpreter never had the problem, which
+# made this a silent backend divergence in every program using an upper-case
+# constant as a receiver; `examples/read_currency.kex` is the one that found it.
+#
+# Lowering already had this shape for nullary CONSTRUCTORS (`Monday.name` falls
+# through to the value path rather than reporting a missing namespace). A
+# top-level binding now takes the same route, and only after every module and
+# variant lookup has already missed — so a real module still wins.
+
+let NUMS = [1, 2, 3]
+let GREETING = "hello"
+let PAIRS = [("a", 1), ("b", 2)]
+
+module Config do
+  let value() -> Int = 42
+end
+
+main do
+  # Method with a block, the original failing shape.
+  IO.printLine("${NUMS.map { |n| n * 2 }}")
+
+  # Method without one, and a property-style call.
+  IO.printLine("${NUMS.length}")
+  IO.printLine("${GREETING.upperCase}")
+
+  # Chained, and with a block taking a spread tuple.
+  IO.printLine("${NUMS.filter { |n| n > 1 }.length}")
+  PAIRS.each do |k, v|
+    IO.printLine("${k}=${v}")
+  end
+
+  # The route that always worked, unchanged.
+  let n = NUMS
+  IO.printLine("${n.map { |x| x + 1 }}")
+
+  # A real module is still a namespace, not a value — this must not regress
+  # into looking for a `Config` binding.
+  IO.printLine("${Config.value()}")
+end
