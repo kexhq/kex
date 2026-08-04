@@ -22,13 +22,13 @@ end
 # Generate from env
 module Config do
   compiled do
-    let ENV_PREFIX = Env.get("APP_PREFIX").or("app")
+    let ENV_PREFIX = ENV.get("APP_PREFIX").or("app")
 
     let KEYS = ["database_url", "redis_url", "secret_key", "port"]
 
     KEYS.each do |key|
       let %key -> String? do
-        return Env.get("${ENV_PREFIX}_${key}")
+        return ENV.get("${ENV_PREFIX}_${key}")
       end
     end
   end

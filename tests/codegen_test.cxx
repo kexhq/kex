@@ -623,6 +623,48 @@ int main() {
         });
     });
 
+    describe("compile-time expansion — ENV at compile time", []() {
+        it("inlines an environment variable read while compiling", []() {
+            // The one permitted compile-time effect. The spec suite can only
+            // pin the fallback path, since it cannot set a variable for the
+            // compiler's own process; here it can.
+            setenv("KEX_CODEGEN_BUILD_TAG", "baked", 1);
+            const std::string source =
+                "compiled do\n"
+                "  let BUILD_TAG = ENV.get(\"KEX_CODEGEN_BUILD_TAG\", \"dev\")\n"
+                "end\n"
+                "\n"
+                "main do\n"
+                "  BUILD_TAG\n"
+                "end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            assertTrue(kex::compiled::expand(program, diagnostics),
+                       "expansion should succeed");
+            unsetenv("KEX_CODEGEN_BUILD_TAG");
+            auto ext = stdlibExternal();
+            auto out = kex::ir::emitCore(
+                           kex::ir::lowerProgram(program, "envtag", "", &ext))
+                           .source;
+
+            // "baked" as a binary literal, and no ENV call left to make it.
+            const std::string baked =
+                "#<98>(8,1,'integer',['unsigned'|['big']]),"
+                "#<97>(8,1,'integer',['unsigned'|['big']]),"
+                "#<107>(8,1,'integer',['unsigned'|['big']]),"
+                "#<101>(8,1,'integer',['unsigned'|['big']]),"
+                "#<100>(8,1,'integer',['unsigned'|['big']])";
+            assertTrue(out.find(baked) != std::string::npos,
+                       "the environment value should be inlined");
+            assertEqual(countOccurrences(out, "'BUILD_TAG'"), std::size_t{0},
+                        "the constant leaves no definition behind");
+            assertEqual(countOccurrences(out, "Env"), std::size_t{0},
+                        "no ENV read should survive to runtime");
+        });
+    });
+
     describe("compile-time expansion — reification", []() {
         it("writes a reified record's fields in declaration order", []() {
             // A record is a TUPLE on BEAM, so field order is ABI. Declared

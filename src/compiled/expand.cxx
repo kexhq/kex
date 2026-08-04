@@ -351,9 +351,14 @@ auto spliceNestedMethods(ast::MakeDef& make,
         const auto* fnTemplate =
             std::get_if<std::shared_ptr<ast::FunctionDef>>(&nested.function);
         if (!fnTemplate || !*fnTemplate) {
+            // Not a missing feature: a `make` body holds methods, and
+            // `make Foo do type Q = Int end` is "Unexpected token in make
+            // body" in ordinary source too. Generation is held to the same
+            // grammar as what you could write by hand.
             addError(diagnostics, nested.location,
-                     "only `let %name(...)` can be generated inside a "
-                     "generated `make` — a nested `type` or `make` cannot");
+                     "a `make` body holds methods, so only `let %name(...)` "
+                     "can be generated inside one — the same rule an ordinary "
+                     "`make` follows");
             ok = false;
             continue;
         }
