@@ -112,14 +112,14 @@ describe("File — lines and feed (mocked)") do
 
   it("lines splits content into a list") do
     Mock.FS.File("words.txt", "one\ntwo\nthree")
-    let ls = FS.File.lines("words.txt").or([])
+    let ls = FS.File.readLines("words.txt").or([])
     assert(ls.count == 3)
     assert(ls.at(0).or("") == "one")
     assert(ls.at(2).or("") == "three")
   end
 
   it("lines returns None for an unmocked path") do
-    assert(FS.File.lines("/no/such/kex_test_xyz.txt") == None)
+    assert(FS.File.readLines("/no/such/kex_test_xyz.txt") == None)
   end
 
   it("feed produces a stream of lines") do

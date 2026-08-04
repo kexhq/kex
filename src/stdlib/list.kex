@@ -270,6 +270,54 @@ make [X], implement: Enumerable, Foldable do
   indexOf :> X -> Integer?
   let indexOf(elem) = Kex.Intrinsic.List.indexOf(this, elem)
 
+  # Returns the index of the first element satisfying +pred+, wrapped in
+  # +Just+, or +None+ if none does. The predicate counterpart of +indexOf+,
+  # which searches by value.
+  #
+  # @param pred [(X) -> Bool]
+  # @return [Integer?]
+  #
+  # @example
+  #   [10, 25, 30].findIndex { |n| n > 20 }   # => Just(1)
+  #   [10, 25, 30].findIndex { |n| n > 99 }   # => None
+  findIndex :> ((X) -> Bool) -> Integer?
+  let findIndex(pred) = this.map(pred).indexOf(true)
+
+  # Returns the longest leading run of elements satisfying +pred+. Stops at the
+  # first element that does not, so it is not +filter+ — later matches are
+  # dropped with everything after the first failure.
+  #
+  # @param pred [(X) -> Bool]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 9, 1].takeWhile { |n| n < 5 }   # => [1, 2]
+  # Note: +pred+ is applied to every element, not just the leading run, so it
+  # must be pure — which every predicate in Kex should be.
+  takeWhile :> ((X) -> Bool) -> [X]
+  let takeWhile(pred) do
+    match this.map(pred).indexOf(false) do
+      Just(i) -> this.take(i)
+      None    -> this
+    end
+  end
+
+  # Returns what is left after +takeWhile+ — everything from the first element
+  # that does not satisfy +pred+ onwards.
+  #
+  # @param pred [(X) -> Bool]
+  # @return [[X]]
+  #
+  # @example
+  #   [1, 2, 9, 1].dropWhile { |n| n < 5 }   # => [9, 1]
+  dropWhile :> ((X) -> Bool) -> [X]
+  let dropWhile(pred) do
+    match this.map(pred).indexOf(false) do
+      Just(i) -> this.drop(i)
+      None    -> []
+    end
+  end
+
   # Returns a new list with duplicate elements removed, preserving the
   # first occurrence of each element.
   #

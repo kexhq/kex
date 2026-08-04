@@ -710,7 +710,25 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
             if (!sig) return;
             sig->params.insert(sig->params.begin(), receiver);
             m_annotatedMethods.insert(ann->name);
-            m_methodSignatures[ann->name].push_back(std::move(*sig));
+            // Skip a signature already registered with the same parameters —
+            // the same guard checkFunctionDef applies. A prelude type whose
+            // method is registered both from the imported interface and from
+            // the `:>` annotation in its own source otherwise ends up with two
+            // identical entries, and overload resolution reports the call
+            // ambiguous against ITSELF: `m.get(1, "")` on a Regex.Match (the
+            // documented example) failed with the same signature printed twice.
+            auto& existing = m_methodSignatures[ann->name];
+            const bool duplicate =
+                std::any_of(existing.begin(), existing.end(),
+                            [&](const Signature& other) {
+                                if (other.params.size() != sig->params.size())
+                                    return false;
+                                for (size_t i = 0; i < other.params.size(); i++)
+                                    if (!typesEqual(other.params[i], sig->params[i]))
+                                        return false;
+                                return true;
+                            });
+            if (!duplicate) existing.push_back(std::move(*sig));
         };
         if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
             add(*ann);
@@ -4226,7 +4244,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             auto resolved = resolve(argTypes[i]);
             if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                 const auto& param = matched.params[i];
-                if (!typeContainsVar(param)) unifyVar(tv->id, param);
+                // Negative ids are per-signature generic placeholders, not
+                // inference variables, and every signature numbers its own
+                // from -1. Binding one in the global substitution made an
+                // unrelated signature's `A` mean whatever the last such call
+                // passed: after `args.at(i).or("")` (String), `(0..3).filter`
+                // returned [String] and its block param typed as String.
+                if (tv->id >= 0 && !typeContainsVar(param))
+                    unifyVar(tv->id, param);
             }
         }
         // Instantiate interface-level generic placeholders in the result from

@@ -100,6 +100,25 @@ make String, implement: Enumerable, Foldable do
   #   "hi".split           # => ["h", "i"]
   split :> (String | Regex) -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
+
+  # Splits into lines on +\n+, dropping a single trailing newline so a file
+  # ending in one does not yield a final empty line. Windows line endings are
+  # not stripped — split on +\r\n+ explicitly if that matters.
+  #
+  # @return [[String]]
+  #
+  # @example
+  #   "a\nb".lines      # => ["a", "b"]
+  #   "a\nb\n".lines    # => ["a", "b"]
+  #   "".lines          # => []
+  lines :> [String]
+  let lines do
+    let parts = this.split("\n")
+    match parts.last do
+      Just("") -> parts.take(parts.count - 1)
+      _        -> parts
+    end
+  end
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 

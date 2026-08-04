@@ -11,7 +11,7 @@ foul wordCount(path: String) -> [Int] do
     return [0, 0, 0]
   end
 
-  let lines = FS.File.lines(path).or([])
+  let lines = FS.File.readLines(path).or([])
 
   let lineCount = lines.count
   let words = lines.map do |line|

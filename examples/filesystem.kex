@@ -11,7 +11,7 @@ end
 
 # Count non-empty lines in a file.
 foul countLines(path: String) -> Int do
-  match FS.File.lines(path) do
+  match FS.File.readLines(path) do
     None       -> 0
     Just(ls)   -> ls.count { |l| !l.empty? }
     lines      -> lines.count { |l| !l.empty? }
@@ -46,7 +46,7 @@ main do
   # ── Lines and feed ──────────────────────────────────────────────────
   IO.printLine("=== Lines and stream ===")
 
-  let ls = FS.File.lines(tmp).or([])
+  let ls = FS.File.readLines(tmp).or([])
   IO.printLine("line count: ${ls.count}")
   ls.each { |l| IO.printLine("  > ${l}") }
 
@@ -80,7 +80,7 @@ main do
   # reader.write("not allowed")
   # appender.read()
 
-  IO.printLine("after handle writes, lines: ${FS.File.lines(tmp).or([]).count}")
+  IO.printLine("after handle writes, lines: ${FS.File.readLines(tmp).or([]).count}")
 
   # ── Type predicates ─────────────────────────────────────────────────
   IO.printLine("\n=== Type predicates ===")
@@ -137,11 +137,11 @@ main do
   IO.printLine("real file exists?:  ${FS.File.file?("does_not_exist.txt")}")
   IO.printLine("mock dir exists?:   ${FS.Directory.directory?("cache")}")
 
-  let cfg = FS.File.lines("config.txt").or([])
+  let cfg = FS.File.readLines("config.txt").or([])
   IO.printLine("config lines: ${cfg}")
 
   writeLog("config.txt", "server started")
-  IO.printLine("after append, lines: ${FS.File.lines("config.txt").or([]).count}")
+  IO.printLine("after append, lines: ${FS.File.readLines("config.txt").or([]).count}")
 
   IO.printLine("cache files: ${FS.Directory.files("cache").or([])}")
 
