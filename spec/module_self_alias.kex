@@ -1,0 +1,25 @@
+# `let X = X` in a module aliases an outer X. The alias binds the value that
+# name already held, so it stays usable under `using` too: were it left as a
+# body to re-resolve at call time, the import would rebind the bare name to the
+# alias and the alias would then read itself — unbounded recursion.
+type Weekday = Monday | Tuesday | Wednesday
+
+let describe(@Monday) = "start"
+let describe(@Tuesday) = "middle"
+let describe(@Wednesday) = "middle"
+
+module Days do
+  let Monday = Monday
+  let Tuesday = Tuesday
+end
+
+using Days
+
+main do
+  # Aliased, not copied: the same constructor, so it matches the same patterns.
+  IO.printLine("${Days.Monday} ${Days.Monday == Monday}")
+  IO.printLine(describe(Days.Monday))
+  IO.printLine(describe(Days.Tuesday))
+  # The bare name still resolves after the import that shadows it.
+  IO.printLine(describe(Monday))
+end

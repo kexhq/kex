@@ -603,7 +603,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 execRecordDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                execMakeDef(*node);
+                execMakeDef(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
                 execVisibilityBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
@@ -695,7 +695,7 @@ auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block,
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 execFunctionDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                execMakeDef(*node);
+                execMakeDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 execRecordDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
@@ -797,19 +797,26 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
 
 auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
                                     const std::string& typeScope,
-                                    bool hasImplicitReceiver) -> void {
+                                    bool hasImplicitReceiver,
+                                    const std::string& enclosingModule) -> void {
     std::unordered_set<std::string> importsBefore;
     const auto prefix = typeScope.empty() ? std::string{} : typeScope + "::";
     for (const auto& [name, _] : m_moduleImportOrigins)
         if (!prefix.empty() && name.rfind(prefix, 0) == 0) importsBefore.insert(name);
 
+    // A `private do` directly inside a module carries the module in typeScope;
+    // one inside a `make` body is already handed the module explicitly.
+    const auto& module =
+        !enclosingModule.empty() || hasImplicitReceiver ? enclosingModule : typeScope;
+
     for (const auto& item : block.items) {
-        std::visit([this, &typeScope, hasImplicitReceiver](const auto& node) {
+        std::visit([this, &typeScope, hasImplicitReceiver,
+                    &module](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeScope, hasImplicitReceiver);
+                execFunctionDef(*node, typeScope, hasImplicitReceiver, module);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                execMakeDef(*node);
+                execMakeDef(*node, module);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 execTypeDef(*node, typeScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
@@ -835,7 +842,31 @@ auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
 
 auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                                 const std::string& typeScope,
-                                bool hasImplicitReceiver) -> void {
+                                bool hasImplicitReceiver,
+                                const std::string& enclosingModule) -> void {
+    // `let X = X` in a module aliases an outer X. Bind the value it names
+    // right now rather than leaving a body to re-resolve at call time: after
+    // `using M`, the bare name refers to THIS binding, so a lazy body would
+    // read itself — unbounded recursion, and the interpreter has no call-depth
+    // guard to turn that into a diagnostic. Folding it also makes the alias
+    // genuinely the same value, so it matches the same patterns as the
+    // original rather than merely evaluating to something equal.
+    if (!hasImplicitReceiver && !typeScope.empty() && def.clauses.size() == 1) {
+        const auto& clause = def.clauses[0];
+        if (!clause.hasParamList && clause.params.empty()
+            && clause.body.size() == 1 && clause.body[0]) {
+            const auto& referenced = clause.body[0]->kind;
+            const auto* upper = std::get_if<ast::UpperIdentifier>(&referenced);
+            const auto* lower = std::get_if<ast::Identifier>(&referenced);
+            const auto name = upper ? upper->name : lower ? lower->name : std::string{};
+            if (name == def.name)
+                if (auto aliased = m_env->get(def.name)) {
+                    m_env->define(typeScope + "::" + def.name, std::move(aliased));
+                    return;
+                }
+        }
+    }
+
     // Collect clauses: if there's already a function with this name, merge
     auto existing = m_env->get(def.name);
     std::vector<const ast::FunctionClause*> allClauses;
@@ -884,9 +915,11 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     // vector from the map — avoids a dangling pointer when unordered_map
     // rehashes after a new key is inserted for a different function.
     auto funcValue = std::make_shared<Value>();
-    const std::string moduleScope = hasImplicitReceiver ? "" : typeScope;
     // Module functions are namespaced but have no implicit receiver. Only
-    // functions scoped to a make/record type use the UFCS receiver slot.
+    // functions scoped to a make/record type use the UFCS receiver slot, so
+    // for those `typeScope` names the receiver and the module — the scope that
+    // decides which `private do` helpers are reachable — arrives separately.
+    const std::string moduleScope = hasImplicitReceiver ? enclosingModule : typeScope;
     bool isMethod = hasImplicitReceiver;
     std::vector<std::pair<std::string, ValuePtr>> capturedImports;
     if (!moduleScope.empty()) {
@@ -1104,7 +1137,8 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     m_functionValues[regName] = funcValue;
 }
 
-auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
+auto Evaluator::execMakeDef(const ast::MakeDef& def,
+                            const std::string& enclosingModule) -> void {
     // Extract type name from make target
     std::string typeName;
     if (def.target) {
@@ -1149,12 +1183,12 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
 
     // Process the make block's own methods.
     for (const auto& item : def.body) {
-        std::visit([this, &typeName](const auto& node) {
+        std::visit([this, &typeName, &enclosingModule](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node, typeName, true);
+                execFunctionDef(*node, typeName, true, enclosingModule);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                execVisibilityBlock(*node, typeName, true);
+                execVisibilityBlock(*node, typeName, true, enclosingModule);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
                 registerRuntimeSignature(*node, typeName, true);
             }
@@ -2828,6 +2862,26 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
                 auto it = m_functionDefs.find(lookupName);
                 if (it != m_functionDefs.end() && !it->second.empty()) {
                     const auto* selected = findNamedClause(lookupName, namedArgs);
+                    // No clause declares one of these labels. Falling back to
+                    // clause 0 would drop it, turning `m.to(String, in: kWh)`
+                    // into a plain `to(String)` whose answer looks fine and
+                    // ignores what was asked for. Say so, and point at the
+                    // module that does define a matching clause if there is
+                    // one — that is nearly always a missing `using`.
+                    if (!selected)
+                        if (auto unknown = unknownNamedArgument(lookupName, namedArgs)) {
+                            auto message = "unknown named argument `" + *unknown
+                                + ":` for `" + lookupName + "`";
+                            if (auto module =
+                                    moduleSupplyingNamedClause(lookupName, namedArgs)) {
+                                const auto separator = lookupName.rfind("::");
+                                message += " — `" + *module + "` defines a matching `"
+                                    + (separator == std::string::npos
+                                        ? lookupName : lookupName.substr(separator + 2))
+                                    + "`; add `using " + *module + "`";
+                            }
+                            throw RuntimeError(message, loc);
+                        }
                     const auto& clause = selected
                         ? *selected : it->second[0]->clauses[0];
                     const auto receiverOffset =
@@ -2904,6 +2958,41 @@ auto Evaluator::findNamedClause(const std::string& functionName,
         }
     }
     return nullptr;
+}
+
+auto Evaluator::unknownNamedArgument(const std::string& functionName,
+                                     const NamedArgs& namedArgs) const
+    -> std::optional<std::string> {
+    auto definitions = m_functionDefs.find(functionName);
+    if (definitions == m_functionDefs.end()) return std::nullopt;
+
+    for (const auto& [label, _] : namedArgs) {
+        bool declared = false;
+        for (const auto* definition : definitions->second)
+            for (const auto& clause : definition->clauses)
+                for (const auto& param : clause.params)
+                    if (param.name && *param.name == label) declared = true;
+        if (!declared) return label;
+    }
+    return std::nullopt;
+}
+
+auto Evaluator::moduleSupplyingNamedClause(const std::string& functionName,
+                                           const NamedArgs& namedArgs) const
+    -> std::optional<std::string> {
+    const auto separator = functionName.rfind("::");
+    const auto shortName = separator == std::string::npos
+        ? functionName : functionName.substr(separator + 2);
+
+    for (const auto& [key, _] : m_functionDefs) {
+        const auto keySeparator = key.rfind("::");
+        if (keySeparator == std::string::npos) continue;
+        if (key.substr(keySeparator + 2) != shortName) continue;
+        auto scope = key.substr(0, keySeparator);
+        if (key == functionName || !m_moduleRegistry.contains(scope)) continue;
+        if (findNamedClause(key, namedArgs)) return scope;
+    }
+    return std::nullopt;
 }
 
 auto Evaluator::findImportedNamedOverload(const std::string& functionName,

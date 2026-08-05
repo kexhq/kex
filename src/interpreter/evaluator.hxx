@@ -168,10 +168,16 @@ private:
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
     auto execModule(const ast::ModuleDef& mod,
                     const std::string& parentModule = "") -> void;
+    // `enclosingModule` is the module a definition lexically sits in. For a
+    // module-level function it equals `typeScope`; for a `make` body method it
+    // is the only record of the module, since `typeScope` names the receiver
+    // type. Methods need it to reach their module's `private do` helpers.
     auto execFunctionDef(const ast::FunctionDef& def,
                          const std::string& typeScope = "",
-                         bool hasImplicitReceiver = false) -> void;
-    auto execMakeDef(const ast::MakeDef& def) -> void;
+                         bool hasImplicitReceiver = false,
+                         const std::string& enclosingModule = "") -> void;
+    auto execMakeDef(const ast::MakeDef& def,
+                     const std::string& enclosingModule = "") -> void;
     auto execTypeDef(const ast::TypeDef& def,
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
@@ -180,7 +186,8 @@ private:
                            const std::string& moduleScope = "") -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block,
                              const std::string& typeScope = "",
-                             bool hasImplicitReceiver = false) -> void;
+                             bool hasImplicitReceiver = false,
+                             const std::string& enclosingModule = "") -> void;
     auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
@@ -211,6 +218,15 @@ private:
     auto findNamedClause(const std::string& functionName,
                          const NamedArgs& namedArgs) const
         -> const ast::FunctionClause*;
+    // The first label no clause of `functionName` declares, if any.
+    auto unknownNamedArgument(const std::string& functionName,
+                              const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
+    // A module defining a same-named function whose clause does accept the
+    // labels — the `using` a call site is missing.
+    auto moduleSupplyingNamedClause(const std::string& functionName,
+                                    const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
     auto findImportedNamedOverload(const std::string& functionName,
                                    const NamedArgs& namedArgs,
                                    const ValuePtr& receiver) const

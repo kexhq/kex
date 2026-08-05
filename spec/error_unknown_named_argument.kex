@@ -1,0 +1,15 @@
+# A named argument no clause declares is reported, not dropped. Silently
+# ignoring it would run `render` as if the label had never been written and
+# hand back a plausible-looking answer to a question nobody asked.
+#
+# KNOWN BEAM DIVERGENCE: BEAM still drops the label, printing "[hi @None]"
+# instead of reporting it — the same silent-wrong-answer this spec pins down
+# on the walker side. The check lives in the walker's `callFunction`; the IR
+# lowering path has no equivalent.
+let render(text: String) = "[${text}]"
+let render(text: String, width: Integer) = "[${text} @${width}]"
+
+main do
+  IO.printLine(render("hi", width: 8))
+  IO.printLine(render("hi", height: 8))
+end
