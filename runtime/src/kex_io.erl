@@ -152,7 +152,9 @@ inspect_rendered(X, Rendered) ->
         false ->
             put(kex_inspect_stderr, true),
             try
-                inspect_format("~ts" ++ ?GRAY ++ " : " ++ ?RESET ++
+                %% Spaces sit OUTSIDE the coloured spans, byte-for-byte as the
+                %% tree walker writes them (src/interpreter/stdlib/io.cxx).
+                inspect_format("~ts " ++ ?GRAY ++ ":" ++ ?RESET ++ " " ++
                                ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
                                [Rendered, Type]),
                 X

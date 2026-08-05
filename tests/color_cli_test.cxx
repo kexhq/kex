@@ -157,6 +157,25 @@ int main() {
             assertTrue(contains(out, "\x1b[90m:"), "':' separator not gray: " + out);
         });
 
+        // The substring assertions above pass on both backends even when the
+        // two disagree about WHERE the spaces sit relative to the escape
+        // sequences — BEAM used to emit the separator as one gray " : " span
+        // while the walker put the spaces outside it. Visually identical, so
+        // only a byte comparison catches it.
+        it("renders the colored inspect line identically on both backends", []() {
+            auto path = writeTempSource(
+                "main do\n"
+                "  IO.inspect(42)\n"
+                "  IO.inspect(\"hi\")\n"
+                "  IO.inspect([1, 2, 3])\n"
+                "end\n");
+            auto walker = runKex({path}, "");
+            auto beam = runKex({"-R", path}, "");
+            std::remove(path.c_str());
+            assertTrue(hasAnsi(walker), "expected colored output: " + walker);
+            assertEqual(beam, walker);
+        });
+
         it("keeps program inspection on stderr on both backends", []() {
             auto path = writeTempSource(
                 "main do\n"
