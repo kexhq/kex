@@ -281,7 +281,12 @@ make [X], implement: Enumerable, Foldable do
   #   [10, 25, 30].findIndex { |n| n > 20 }   # => Just(1)
   #   [10, 25, 30].findIndex { |n| n > 99 }   # => None
   findIndex :> ((X) -> Bool) -> Integer?
-  let findIndex(pred) = this.map(pred).indexOf(true)
+  let findIndex(pred) do
+    let before = this.takeWhile { |x| !pred(x) }
+    return None if before.count == this.count
+
+    return Just(before.count)
+  end
 
   # Returns the longest leading run of elements satisfying +pred+. Stops at the
   # first element that does not, so it is not +filter+ — later matches are
@@ -292,14 +297,10 @@ make [X], implement: Enumerable, Foldable do
   #
   # @example
   #   [1, 2, 9, 1].takeWhile { |n| n < 5 }   # => [1, 2]
-  # Note: +pred+ is applied to every element, not just the leading run, so it
-  # must be pure — which every predicate in Kex should be.
   takeWhile :> ((X) -> Bool) -> [X]
-  let takeWhile(pred) do
-    match this.map(pred).indexOf(false) do
-      Just(i) -> this.take(i)
-      None    -> this
-    end
+  let takeWhile(@[], _) = []
+  let takeWhile(@[x | xs], pred) do
+    return pred(x) then [x | xs.takeWhile(pred)] else []
   end
 
   # Returns what is left after +takeWhile+ — everything from the first element
@@ -311,11 +312,9 @@ make [X], implement: Enumerable, Foldable do
   # @example
   #   [1, 2, 9, 1].dropWhile { |n| n < 5 }   # => [9, 1]
   dropWhile :> ((X) -> Bool) -> [X]
-  let dropWhile(pred) do
-    match this.map(pred).indexOf(false) do
-      Just(i) -> this.drop(i)
-      None    -> []
-    end
+  let dropWhile(@[], _) = []
+  let dropWhile(@[x | xs], pred) do
+    return pred(x) then xs.dropWhile(pred) else [x | xs]
   end
 
   # Returns a new list with duplicate elements removed, preserving the
@@ -470,9 +469,11 @@ make [X], implement: Enumerable, Foldable do
   sum :> (X -> Number) -> Number
   let sum(f) = Kex.Intrinsic.List.sum(this.map(f))
 
-end
-
-make [String | Char] do
+# Receiver is `[X]`, not `[String | Char]`: the intrinsic renders whatever it
+# is given, so `[1, 2].join(", ")` is "1, 2" on both backends. The narrower
+# receiver only ever fired once element types became precise enough to catch
+# it — until then `map`/`filter` handed `join` an unknown element type and the
+# restriction checked nothing.
   # Concatenates all elements, placing +sep+ between each adjacent pair.
   # With no separator the elements are joined directly.
   #

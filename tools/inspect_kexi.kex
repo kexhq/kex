@@ -1,0 +1,229 @@
+# KexI inspector — print the KexI interface chunk of a compiled Kex .beam.
+#
+# KexI is Kex's module-interface format: a custom BEAM chunk (id "KexI")
+# holding the typed public surface + structural metadata of a module, stored
+# as an Erlang External Term Format (ETF) term. Because it is an ordinary BEAM
+# chunk, we read it straight from the artifact with `beam_lib` and decode it
+# with `binary_to_term` — no compiler tooling required.
+#
+# The decoded term is an ordinary tagged tuple of lists, tuples, and maps.
+# Since Kex shares the BEAM's value representation, we destructure it with
+# native Kex patterns and walk it with the normal List/Map methods; the
+# `Erlang.*` interop namespace is only needed for the four boundary calls that
+# actually reach into Erlang libraries.
+#
+# Run on BEAM (the Erlang.* calls require the BEAM backend):
+#   kex -R tools/inspect_kexi.kex <file.beam>
+#
+# Try it on the prebuilt prelude:
+#   kex -R tools/inspect_kexi.kex build/runtime/beam/kex_prelude.beam
+
+# kex: run-beam
+
+# ── Erlang boundary (the only interop we truly need) ──────────────────
+
+# beam_lib and binary_to_term want charlists (Erlang strings), but Kex strings
+# are binaries, so convert at the boundary.
+foul readKexiChunk(file: FS.FilePath) -> Any do
+  let path = Erlang.Erlang.binary_to_list(file)
+  let id = Erlang.Erlang.binary_to_list("KexI")
+  return Erlang.Beam_lib.chunks(path, [id])
+end
+
+foul decode(bin: Any) -> Any do
+  return Erlang.Erlang.binary_to_term(bin)
+end
+
+foul atomStr(a: Any) -> String do
+  let rendered = a.to(String).or("")
+  return rendered.chars.drop(1).join("") if rendered.startsWith?(":")
+  return rendered
+end
+
+# BEAM tuples are not lists, so the List methods (.first/.at/.map) do not
+# apply to them directly. Convert a tuple to its element list once, then walk
+# it with ordinary Kex list operations.
+foul fields(t: Any) -> [Any] do
+  return Erlang.Erlang.tuple_to_list(t)
+end
+
+# ── Helpers ───────────────────────────────────────────────────────────
+
+foul hex(bin: Any) -> String do
+  # A hash binary → lowercase hex string.
+  return Erlang.Erlang.binary_to_list(bin).map(~byteHex).join("")
+end
+
+foul byteHex(byte: Integer) -> String do
+  let encoded = to(byte, String, radix: 16).or("")
+  return encoded if byte >= 16
+  return "0${encoded}"
+end
+
+# Render a structural KexiType term back into Kex-ish type syntax. Every type
+# is a tagged tuple whose shapes mirror src/beam/kexi.cxx's typeToTerm.
+foul renderType(t: Any) -> String do
+  let f: [Any] = fields(t)
+  let tag = f.first.or(:unknown)
+  return match tag do
+    :prim        -> atomStr(f.second.or(:none))
+    :named       -> renderNamed(t)
+    :func        -> renderFunc(t)
+    :tuple       -> "(" + renderList(f.second.or([])).join(", ") + ")"
+    :list        -> "[" + renderType(f.second.or(:unknown)) + "]"
+    :map         -> renderMap(t)
+    :optional    -> renderType(f.second.or(:unknown)) + "?"
+    :union       -> renderList(f.second.or([])).join(" | ")
+    :constrained -> "${f.second.or(:none)}: ${f.third.or(:none)}"
+    :never       -> "Never"
+    :unknown     -> "_"
+    _            -> atomStr(tag)
+  end
+end
+
+foul renderNamed(t: Any) -> String do
+  let (_tag, name, args) = t
+  return match args.empty? do
+    true  -> name
+    false -> "${name}<${renderList(args).join(", ")}>"
+  end
+end
+
+foul renderMap(t: Any) -> String do
+  let (_tag, key, value) = t
+  return "Map<${renderType(key)}, ${renderType(value)}>"
+end
+
+foul renderFunc(t: Any) -> String do
+  let (_tag, params, result) = t
+  let ps = renderList(params).join(" -> ")
+  return match ps.empty? do
+    true  -> "() -> ${renderType(result)}"
+    false -> "${ps} -> ${renderType(result)}"
+  end
+end
+
+foul renderList(ts: [Any]) -> [String] do
+  return ts.map(~renderType)
+end
+
+foul renderSig(params: [Any], ret: Any) -> String do
+  let ps = renderList(params).join(" -> ")
+  return match ps.empty? do
+    true  -> renderType(ret)
+    false -> "${ps} -> ${renderType(ret)}"
+  end
+end
+
+# {name, arity, foul, paramTypes, returnType, beamFn?, paramNames?} — the last
+# two fields only exist in newer schema versions, so index positionally.
+foul renderExport(e: Any) -> String do
+  let f: [Any] = fields(e)
+  let name = f.first.or("?")
+  let params = f.at(3).or([])
+  let ret = f.at(4).or(:unknown)
+  let mark = match f.at(2).or(false) do
+    true -> "foul "
+    _    -> ""
+  end
+  return "  ${mark}${name} : ${renderSig(params, ret)}"
+end
+
+# {name, receiverType, arity, foul, paramTypes, returnType, beamFn, typeOnly, paramNames}
+foul renderMethod(m: Any) -> String do
+  let f: [Any] = fields(m)
+  let name = f.first.or("?")
+  let recv = renderType(f.second.or(:unknown))
+  let params = f.at(4).or([])
+  let ret = f.at(5).or(:unknown)
+  return "  ${recv}#${name} : ${renderSig(params, ret)}"
+end
+
+# {name, tagAtom, fieldNames, arity}
+foul renderCtor(c: Any) -> String do
+  let (name, _tag, _fields, arity) = c
+  return match arity do
+    0 -> name
+    _ -> "${name}/${arity}"
+  end
+end
+
+# {name, typeParams, [ctor]}
+foul renderAdt(a: Any) -> String do
+  let (name, _tp, ctors) = a
+  return "  ${name} = ${ctors.map(~renderCtor).join(" | ")}"
+end
+
+# {beamAtom, relativePath, expectedHash}
+foul renderCompanion(c: Any) -> String do
+  let (atom, _path, hash) = c
+  return "  ${atom}  (${hex(hash)})"
+end
+
+foul section(title: String, lines: [String]) do
+  IO.printLine("")
+  IO.printLine("── ${title} (${lines.count}) ──")
+  lines.each { |line| IO.printLine(line) }
+end
+
+foul inspect(file: String) do
+  let res = readKexiChunk(file)
+  abort("No KexI chunk in ${file}") if fields(res).first.or(:error) != :ok
+  printKexi(file, res)
+end
+
+foul printKexi(file: String, res: Any) do
+  let (_ok, (_mod, chunks)) = res
+  let (_id, bin) = chunks.first.or(("KexI", ""))
+
+  # The two payload maps are always the last two tuple elements, regardless of
+  # schema version. Older chunks are narrower: v1 is {kexi, version,
+  # interfaceHash, typeInterface, metadata}; v6 adds artifact/source hashes and
+  # an ABI-versions map in between. Index positionally so both decode.
+  let f: [Any] = fields(decode(bin))
+  let n = f.count
+  let typeIf = asMap(f.at(n - 2))
+  let meta = asMap(f.at(n - 1))
+
+  IO.printLine("KexI  ${file}")
+  IO.printLine("  schema version : ${f.at(1).or(:none)}")
+  IO.printLine("  module atom    : ${meta.get(:module).or(:none)}")
+  IO.printLine("  role           : ${meta.get(:role).or(:none)}")
+  IO.printLine("  interfaceHash  : ${hex(f.at(2).or(""))}")
+  printExtraHashes(f) if n >= 8
+
+  section("exports", asList(typeIf.get(:exports)).map(~renderExport))
+  section("methods", asList(typeIf.get(:methods)).map(~renderMethod))
+  section("adts", asList(meta.get(:adts)).map(~renderAdt))
+  section("companions", asList(meta.get(:companions)).map(~renderCompanion))
+  IO.printLine("")
+  IO.printLine("(${asList(typeIf.get(:types)).count} exported type names)")
+end
+
+# Unwrap an Optional map field into a list. The explicit [Any] return type lets
+# the checker see each .map result as a concrete list rather than Optional/None.
+foul asList(v: Any?) -> [Any] do
+  return v.or([])
+end
+
+foul asMap(v: Any?) -> {Any: Any} do
+  return v.or({})
+end
+
+foul printExtraHashes(f: [Any]) do
+  IO.printLine("  artifactHash   : ${hex(f.at(3).or(""))}")
+  IO.printLine("  sourceHash     : ${hex(f.at(4).or(""))}")
+end
+
+foul abort(msg: String) do
+  IO.printError(msg)
+  System.exit(1)
+end
+
+main(args) do
+  abort("Please run on BEAM: kex -R tools/inspect_kexi.kex <file.beam>") if Kex.interpreted?
+
+  abort("Usage: kex -R tools/inspect_kexi.kex <file.beam>") if args.empty?
+
+  inspect(args.first.or(""))
+end

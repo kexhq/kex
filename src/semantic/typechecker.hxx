@@ -5,6 +5,7 @@
 #include "symbol.hxx"
 #include "traits.hxx"
 #include "types.hxx"
+#include <algorithm>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -31,6 +32,22 @@ public:
     // the same constructor→owner relation `satisfiesTrait` uses.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    auto isTrait(const std::string& name) const -> bool {
+        return m_traits.get(name) != nullptr;
+    }
+    auto traitRequires(const std::string& trait,
+                       const std::string& method) const -> bool {
+        const auto* definition = m_traits.get(trait);
+        if (!definition) return false;
+        return std::any_of(
+            definition->requiredMethods.begin(),
+            definition->requiredMethods.end(),
+            [&](const auto& required) { return required.name == method; });
+    }
+    auto traitNeedsDictionary(const std::string& trait) const -> bool {
+        const auto* definition = m_traits.get(trait);
+        return definition && !definition->requiredMethods.empty();
+    }
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
     auto resolvedCalls() const
@@ -75,7 +92,10 @@ private:
     auto registerDeclaredSignatures(const ast::Program& program) -> void;
     auto registerDeclaredSignaturesInModule(
         const ast::ModuleDef& mod, const std::string& parentPath = "") -> void;
-    auto annotationToSignature(const ast::TypeAnnotation& ann) -> std::optional<Signature>;
+    auto annotationToSignature(
+        const ast::TypeAnnotation& ann,
+        std::unordered_map<std::string, TypePtr>* genericVars = nullptr)
+        -> std::optional<Signature>;
     auto registerMakeSignatures(const ast::Program& program) -> void;
     auto registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void;
     auto registerMakeSignature(const ast::MakeDef& def) -> void;
@@ -289,6 +309,13 @@ private:
     std::string m_currentModulePath;
     std::unordered_map<std::string, std::set<size_t>> m_annotationArities;
     bool m_inMakeBlock = false;
+    // How deeply the current expression sits inside blocks/lambdas, and how
+    // many `.try`s have been seen below the block depth a `trying` body
+    // started at. A block is a function boundary, so a `.try` inside one
+    // never reaches the enclosing rescue — see the TryingExpr case.
+    int m_blockDepth = 0;
+    int m_tryingBlockDepth = -1;
+    int m_tryBelowBlock = 0;
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.
     TypePtr m_currentMakeType;

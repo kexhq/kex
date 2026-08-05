@@ -1,0 +1,16 @@
+# takeWhile/dropWhile must stop invoking the predicate at the first rejection.
+# The divisions below make this discriminate against an eager map-based
+# implementation: evaluating the later zero would crash.
+main do
+  assert([10, 25, 30].findIndex { |n| n > 20 } == Just(1))
+  assert([10, 25, 30].findIndex { |n| n > 99 } == None)
+  assert([1, 0].findIndex { |n| n == 1 || 10 / n > 1 } == Just(0))
+  assert([1, 2, 9, 1].takeWhile { |n| n < 5 } == [1, 2])
+  assert([1, 2, 9, 1].dropWhile { |n| n < 5 } == [9, 1])
+  assert([10, 0].takeWhile { |n| n < 5 && 10 / n > 1 } == [])
+  assert([1, 0].dropWhile { |n| n < 1 && 10 / n > 1 } == [1, 0])
+  assert([].takeWhile { |n| n > 0 } == [])
+  assert([].dropWhile { |n| n > 0 } == [])
+  assert([1, 2].join(", ") == "1, 2")
+  IO.printLine("list while helpers ok")
+end

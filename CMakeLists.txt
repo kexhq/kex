@@ -495,6 +495,11 @@ add_test(NAME beam_test COMMAND beam_test)
 add_executable(codegen_test tests/codegen_test.cxx)
 target_link_libraries(codegen_test PRIVATE kex_lib)
 target_include_directories(codegen_test PRIVATE tests)
+if(TARGET kex_prelude_beam)
+    target_compile_definitions(codegen_test PRIVATE
+        KEX_RUNTIME_BEAM_DIR="${KEX_RUNTIME_BEAM_DIR}")
+    add_dependencies(codegen_test kex_prelude_beam)
+endif()
 add_test(NAME codegen_test COMMAND codegen_test)
 
 add_executable(lexer_test tests/lexer_test.cxx)

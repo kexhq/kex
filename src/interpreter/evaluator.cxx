@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../lexer/lexer.hxx"
@@ -345,6 +346,14 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         throw RuntimeError("Failed to parse module " + canonicalName + ": " + diagnostic.message,
                            diagnostic.location);
     }
+    std::vector<semantic::Diagnostic> expandDiagnostics;
+    if (!compiled::expand(*program, expandDiagnostics)) {
+        const auto& diagnostic = expandDiagnostics.front();
+        m_loadingModules.erase(canonicalName);
+        throw RuntimeError("Failed to expand module " + canonicalName + ": " +
+                               diagnostic.message,
+                           diagnostic.location);
+    }
 
     m_loadedModulePaths.push_back(std::move(path));
     auto* ownedProgram = program.get();
@@ -600,7 +609,7 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TraitDef>>) {
                 execTraitDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
-                execCompiledBlock(*node);
+                execCompiledBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 execUsingBlock(*node, moduleName);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ExportDecl>>) {
@@ -659,6 +668,13 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
 }
 
 auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
+    auto& required = m_traitMethods[def.name];
+    required.clear();
+    for (const auto& item : def.body)
+        if (auto* annotation =
+                std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item);
+            annotation && *annotation)
+            required.push_back((*annotation)->name);
     // Register default method implementations from the trait body under
     // the trait name so `make X, implement: Trait` can inherit them.
     for (const auto& item : def.body) {
@@ -668,23 +684,34 @@ auto Evaluator::execTraitDef(const ast::TraitDef& def) -> void {
     }
 }
 
-auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block) -> void {
+auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block,
+                                  const std::string& moduleScope) -> void {
     // Execute compiled block items as if they were regular module items.
     // The interpreter doesn't distinguish compile-time vs runtime evaluation;
     // function defs and make blocks are simply registered in the environment.
     for (const auto& item : block.items) {
-        std::visit([this](const auto& node) {
+        std::visit([this, &moduleScope](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                execFunctionDef(*node);
+                execFunctionDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 execMakeDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                execRecordDef(*node);
+                execRecordDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                execTypeDef(*node);
+                execTypeDef(*node, moduleScope);
             } else if constexpr (std::is_same_v<T, ast::ExprPtr>) {
-                if (node) eval(*node);
+                if (node) {
+                    const auto saved = m_currentModule;
+                    m_currentModule = moduleScope;
+                    try {
+                        eval(*node);
+                    } catch (...) {
+                        m_currentModule = saved;
+                        throw;
+                    }
+                    m_currentModule = saved;
+                }
             }
         }, item);
     }
@@ -890,8 +917,70 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
         const bool dispatchByParamType = typedSignatures.size() > 1;
         for (const auto* funcDef : m_functionDefs.at(regName)) {
             for (const auto& clause : funcDef->clauses) {
+                const bool firstParamIsThisPattern = !clause.params.empty()
+                    && clause.params[0].pattern
+                    && *clause.params[0].pattern
+                    && std::holds_alternative<ast::ThisPattern>(
+                        (*clause.params[0].pattern)->kind);
+                size_t requiredParams = 0;
+                for (const auto& param : clause.params)
+                    if (!param.defaultValue) requiredParams++;
+                size_t argOffset = 0;
+                if (!firstParamIsThisPattern && isMethod && !args.empty() &&
+                    (args.size() == requiredParams + 1 ||
+                     args.size() > clause.params.size()))
+                    argOffset = 1;
+
+                std::vector<std::pair<std::string, ValuePtr>> dictionaries;
+                for (std::size_t i = 0; i < clause.params.size() &&
+                                        i + argOffset < args.size(); ++i) {
+                    const auto& param = clause.params[i];
+                    if (!param.name || !param.type || !*param.type) continue;
+                    const auto* type = std::get_if<ast::TypeName>(
+                        &(*param.type)->kind);
+                    if (!type || type->parts.size() != 1) continue;
+                    auto trait = m_traitMethods.find(type->parts.front());
+                    if (trait == m_traitMethods.end()) continue;
+                    for (const auto& method : trait->second) {
+                        auto methodArgs =
+                            std::vector<ValuePtr>{args[i + argOffset]};
+                        auto resolved = resolveMethodName(args[i + argOffset], method,
+                                                          &methodArgs);
+                        auto target = m_env->get(resolved);
+                        if (!target)
+                            if (auto global = m_functionValues.find(resolved);
+                                global != m_functionValues.end())
+                                target = global->second;
+                        if (!target) {
+                            const auto fallback = type->parts.front() + "::" + method;
+                            target = m_env->get(fallback);
+                            if (!target)
+                                if (auto global = m_functionValues.find(fallback);
+                                    global != m_functionValues.end())
+                                    target = global->second;
+                        }
+                        if (!target) target = m_env->get(method);
+                        if (!target) continue;
+                        auto dictionary = std::make_shared<Value>();
+                        dictionary->data = FunctionValue{
+                            resolved,
+                            [target](std::vector<ValuePtr> callArgs) {
+                                auto* function = std::get_if<FunctionValue>(
+                                    &target->data);
+                                if (!function || !function->native)
+                                    return Value::none();
+                                return function->native(std::move(callArgs));
+                            }};
+                        dictionaries.push_back({
+                            "__trait_dictionary__" + *param.name + "::" +
+                                method,
+                            std::move(dictionary)});
+                    }
+                }
                 pushEnv();
                 for (const auto& [name, value] : capturedImports) m_env->define(name, value);
+                for (const auto& [name, value] : dictionaries)
+                    m_env->define(name, value);
                 bool matched = true;
 
                 // UFCS: if this function is a type-scoped method (name contains "::"),
@@ -911,32 +1000,17 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
                 // 3. Legacy: any extra arg beyond params is the receiver (the
                 //    old `args.size() > clause.params.size()` check). Handles
                 //    pre-@ make-block functions like `let pub(b) = b.priv`.
-                bool firstParamIsThisPattern = !clause.params.empty()
-                    && clause.params[0].pattern
-                    && *clause.params[0].pattern
-                    && std::holds_alternative<ast::ThisPattern>((*clause.params[0].pattern)->kind);
-
-                // Count required params (those without defaults)
-                size_t requiredParams = 0;
-                for (const auto& p : clause.params) {
-                    if (!p.defaultValue) requiredParams++;
-                }
-
-                size_t argOffset = 0;
                 if (firstParamIsThisPattern) {
                     // @Pat: receiver is pattern-matched as first param; bind this for @field access
                     if (!args.empty()) m_env->define("this", args[0]);
-                    argOffset = 0;
                 } else if (isMethod && !args.empty()
                            && args.size() == requiredParams + 1) {
                     // Type-scoped method called with exactly required-params + 1 args:
                     // the extra arg is the receiver.
                     m_env->define("this", args[0]);
-                    argOffset = 1;
                 } else if (isMethod && args.size() > clause.params.size()) {
                     // Legacy fallback: more args than declared params → first is receiver.
                     m_env->define("this", args[0]);
-                    argOffset = 1;
                 }
 
                 for (size_t i = 0; i < clause.params.size(); i++) {
@@ -1027,6 +1101,7 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
     }};
 
     m_env->define(regName, funcValue);
+    m_functionValues[regName] = funcValue;
 }
 
 auto Evaluator::execMakeDef(const ast::MakeDef& def) -> void {
@@ -1559,6 +1634,18 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 if (auto* upperIdent = std::get_if<ast::UpperIdentifier>(&node.receiver->kind)) {
                     bool isKnownVariant = m_variantParent.count(upperIdent->name) > 0;
                     auto existing = m_env->get(upperIdent->name);
+                    // A constant declared inside a module is stored under its
+                    // qualified lexical name (`Validators::TYPES`). Resolve it
+                    // before deciding an uppercase receiver must be a module;
+                    // the ordinary UpperIdentifier evaluator already follows
+                    // this same enclosing-module search.
+                    for (auto scope = m_currentModule;
+                         !existing && !scope.empty();) {
+                        existing = m_env->get(scope + "::" + upperIdent->name);
+                        const auto dot = scope.rfind('.');
+                        if (dot == std::string::npos) break;
+                        scope.resize(dot);
+                    }
                     module::Resolver resolver(m_moduleRoots);
                     const bool sourceModuleExists =
                         resolver.resolve(upperIdent->name,
@@ -1749,12 +1836,27 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 namedArgs.push_back({name, val ? eval(*val) : Value::none()});
             }
 
+            if (const auto* identifier =
+                    std::get_if<ast::Identifier>(&node.receiver->kind)) {
+                auto dictionary = m_env->get(
+                    "__trait_dictionary__" + identifier->name + "::" +
+                    node.method);
+                if (dictionary) {
+                    auto* function =
+                        std::get_if<FunctionValue>(&dictionary->data);
+                    if (function && function->native)
+                        return function->native(std::move(args));
+                }
+            }
+
             // UFCS and free-call syntax share imported overloads.
-            if (auto imported = findImportedNamedOverload(node.method, namedArgs))
+            if (auto imported = findImportedNamedOverload(
+                    node.method, namedArgs, receiver))
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
+            auto specificMethod = resolveMethodName(receiver, node.method, &args);
 
-            auto mangledName = resolveMethodName(receiver, node.method, &args);
+            auto mangledName = std::move(specificMethod);
 
             // For mutating calls, reassign back
             if (node.mutating) {
@@ -2805,7 +2907,8 @@ auto Evaluator::findNamedClause(const std::string& functionName,
 }
 
 auto Evaluator::findImportedNamedOverload(const std::string& functionName,
-                                          const NamedArgs& namedArgs) const
+                                          const NamedArgs& namedArgs,
+                                          const ValuePtr& receiver) const
     -> std::optional<std::string> {
     if (namedArgs.empty()) return std::nullopt;
 
@@ -2814,7 +2917,13 @@ auto Evaluator::findImportedNamedOverload(const std::string& functionName,
         if (imported == scope->end()) continue;
 
         auto qualified = imported->second.module + "::" + functionName;
-        if (findNamedClause(qualified, namedArgs)) return qualified;
+        if (const auto* clause = findNamedClause(qualified, namedArgs)) {
+            if (!clause->params.empty() && clause->params.front().type &&
+                *clause->params.front().type &&
+                !runtimeTypeMatches(receiver, **clause->params.front().type))
+                return std::nullopt;
+            return qualified;
+        }
         return std::nullopt;
     }
     return std::nullopt;
@@ -2955,6 +3064,32 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     auto receiverType = dispatchTypeName(receiver);
     if (receiverType.empty()) return method;
     auto typed = receiverType + "::" + method;
+    const bool protocolMethod = std::any_of(
+        m_traitMethods.begin(), m_traitMethods.end(),
+        [&](const auto& trait) {
+            return std::find(trait.second.begin(), trait.second.end(), method) !=
+                   trait.second.end();
+        });
+    if (protocolMethod && m_functionValues.count(typed) && !args) return typed;
+
+    // A required protocol method may be supplied by the trait's generic make
+    // block. Keep this fallback below a concrete implementation, but make it
+    // available to direct calls as well as to calls through a trait-typed
+    // parameter.
+    std::string protocolFallback;
+    if (protocolMethod) {
+        for (const auto& [traitName, methods] : m_traitMethods) {
+            if (std::find(methods.begin(), methods.end(), method) == methods.end())
+                continue;
+            const auto candidate = traitName + "::" + method;
+            if (!m_functionValues.count(candidate)) continue;
+            if (!protocolFallback.empty()) {
+                protocolFallback.clear();
+                break;
+            }
+            protocolFallback = candidate;
+        }
+    }
 
     if (args) {
         auto matches = [&](const std::string& candidate) {
@@ -2983,6 +3118,9 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         };
 
         const bool typedMatches = matches(typed);
+        const bool typedExists = m_env->get(typed) != nullptr ||
+            m_functionValues.count(typed) > 0;
+        const bool typedHasSignatures = m_runtimeSignatures.count(typed) > 0;
         std::string imported;
         for (auto scope = m_importScopes.rbegin();
              scope != m_importScopes.rend(); ++scope) {
@@ -2992,11 +3130,15 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             if (matches(candidate)) imported = std::move(candidate);
             break;
         }
-        if (!imported.empty() && !typedMatches) return imported;
-        if (typedMatches) return typed;
+        if (!imported.empty()) return imported;
+        if (typedMatches ||
+            (protocolMethod && typedExists && !typedHasSignatures))
+            return typed;
     }
 
     if (m_env->get(typed)) return typed;
+
+    if (!protocolFallback.empty()) return protocolFallback;
 
     // A variant value is tagged with its constructor while methods are
     // registered under the parent ADT's name.
@@ -3018,6 +3160,13 @@ auto Evaluator::autoCallZeroArgConstant(const std::string& name, const ValuePtr&
     if (!func || !func->native) return val;
 
     auto defIt = m_functionDefs.find(name);
+    for (auto scope = m_currentModule;
+         defIt == m_functionDefs.end() && !scope.empty();) {
+        defIt = m_functionDefs.find(scope + "::" + name);
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
     if (defIt == m_functionDefs.end() || defIt->second.empty()) return val;
     if (!defIt->second[0]->clauses[0].params.empty()) return val;
 

@@ -15,7 +15,29 @@ module Tags do
   end
 end
 
+module CompiledOuter do
+  module CompiledInner do
+    compiled do
+      ["nested"].each do |name|
+        let %name(x: Int) -> String = "nested:${x}"
+      end
+    end
+  end
+end
+
+module ConstantDriven do
+  compiled do
+    let GENERATED_NAMES = ["fromConstant"]
+
+    GENERATED_NAMES.each do |name|
+      let %name(x: Int) -> String = "constant:${x}"
+    end
+  end
+end
+
 main do
   IO.printLine("${Tags.alpha(10)}")
   IO.printLine("${Tags.beta(10)}")
+  IO.printLine(CompiledOuter.CompiledInner.nested(4))
+  IO.printLine(ConstantDriven.fromConstant(5))
 end

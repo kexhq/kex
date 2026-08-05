@@ -1,6 +1,7 @@
 #include "test.hxx"
 #include "../src/compiled/expand.hxx"
 #include "../src/compiled/reify.hxx"
+#include "../src/common/prelude_interfaces.hxx"
 #include "../src/ir/emit_core.hxx"
 #include "../src/ir/lower.hxx"
 #include "../src/lexer/lexer.hxx"
@@ -105,6 +106,27 @@ auto emitWithResolvedCalls(
     return kex::ir::emitCore(kex::ir::lowerProgram(
         program, stem, "", nullptr, nullptr, &analyzer.resolvedCalls())).source;
 }
+
+#ifdef KEX_RUNTIME_BEAM_DIR
+// End-to-end fixtures use the same checked interfaces and hidden protocol
+// dictionaries as the compiler. The smaller emit() helper intentionally
+// remains analyzer-free for isolated lowering tests.
+auto emitProduction(const std::string& source,
+                    const std::string& stem) -> std::string {
+    kex::Lexer lexer(source);
+    kex::Parser parser(lexer.tokenizeAll());
+    auto program = parser.parseProgram();
+    const auto& interfaces =
+        kex::preludeSemanticInterfaces(KEX_RUNTIME_BEAM_DIR);
+    kex::semantic::Analyzer analyzer(&interfaces);
+    assertTrue(analyzer.analyze(program), "fixture should pass semantic analysis");
+    auto external =
+        kex::preludeRegistry(KEX_RUNTIME_BEAM_DIR).buildExternalModules();
+    return kex::ir::emitCore(kex::ir::lowerProgram(
+        program, stem, "", &external, nullptr, &analyzer.resolvedCalls(),
+        false, nullptr, &analyzer.staticTypeOfCalls(), &analyzer.typeMap())).source;
+}
+#endif
 
 auto emitWithPrelude(const std::string& source,
                      const std::unordered_set<std::string>& receiverFunctions,
@@ -620,6 +642,40 @@ int main() {
             // `computed` cannot: multiplying a placeholder has no answer.
             assertEqual(countOccurrences(out, "apply 'scaled'"), 1,
                         "a chain that computes with a placeholder keeps running");
+        });
+
+        it("does not collapse an unrelated module's same-named function", []() {
+            const std::string source =
+                "module CompiledOwner do\n"
+                "  compiled do\n"
+                "    let collide() -> Int = 1\n"
+                "  end\n"
+                "end\n"
+                "module RuntimeOwner do\n"
+                "  let collide() -> String = ENV.get(\"KEX_COLLISION_TEST\", \"runtime\")\n"
+                "end\n"
+                "main do RuntimeOwner.collide() end\n";
+            kex::Lexer lexer(source);
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            std::vector<kex::semantic::Diagnostic> diagnostics;
+            std::vector<kex::compiled::CollapseNote> report;
+            assertTrue(kex::compiled::expand(
+                           program, diagnostics, {.report = &report}),
+                       "expansion should succeed");
+            assertTrue(report.empty(),
+                       "a bare-name collision must not opt runtime code into collapse");
+
+            const kex::ast::MainBlock* main = nullptr;
+            for (const auto& item : program.items)
+                if (const auto* found =
+                        std::get_if<std::unique_ptr<kex::ast::MainBlock>>(&item))
+                    main = found->get();
+            assertTrue(main && main->body.size() == 1,
+                       "main call should survive expansion");
+            assertTrue(std::holds_alternative<kex::ast::MethodCall>(
+                           main->body.front()->kind),
+                       "RuntimeOwner.collide must remain a runtime call");
         });
     });
 
@@ -1777,7 +1833,9 @@ int main() {
         it("hello world compiles and runs on BEAM", [&erlcAvailable]() {
             if (!erlcAvailable()) return; // skip
             // Emit .core (ctest runs from build dir, so runtime/beam is a valid relative path)
-            auto out = emit("main do\n  IO.printLine(\"hello from beam\")\nend\n", "e2e_hello");
+            auto out = emitProduction(
+                "main do\n  IO.printLine(\"hello from beam\")\nend\n",
+                "e2e_hello");
             std::ofstream f("/tmp/kex_e2e_hello.core");
             f << out;
             f.close();
@@ -1794,7 +1852,7 @@ int main() {
                 "main do\n"
                 "  IO.printLine(double(21))\n"
                 "end\n";
-            auto out = emit(src, "e2e_double");
+            auto out = emitProduction(src, "e2e_double");
             std::ofstream f("/tmp/kex_e2e_double.core");
             f << out;
             f.close();
@@ -1813,7 +1871,7 @@ int main() {
 
         it("preserves qualified uppercase constants on BEAM", [&erlcAvailable]() {
             if (!erlcAvailable()) return;
-            auto out = emit(
+            auto out = emitProduction(
                 "main do IO.printLine(Math.PI) end\n",
                 "e2e_math_pi");
             std::ofstream file("/tmp/kex_e2e_math_pi.core");

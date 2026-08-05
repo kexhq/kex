@@ -1,0 +1,7 @@
+# IO.inspect is a program operation, not a REPL result printer. Both backends
+# print the value and type without a `=>` prefix; --no-colors also reaches the
+# child BEAM runtime (the mode used by the spec runners).
+main do
+  IO.inspect(42)
+  IO.inspect("hello")
+end

@@ -180,6 +180,26 @@ static auto replDefinitionName(const std::string &source) -> std::string {
   return source.substr(off, end - off);
 }
 
+// `let UPPER = expr` is a zero-arg CONSTANT definition, the same rule the
+// parser applies (parser.cxx, "UpperIdent after `let`"): an uppercase name is
+// a constant unless `(` or `{` follows it, which makes it a constructor or
+// named-record destructuring pattern instead. Both REPLs classify a line
+// before parsing it, and lumping every uppercase name in with the patterns
+// left `let BYTE_REGEX = ...` bound to the constant's own zero-arg function
+// (interpreter) or rejected outright (BEAM).
+static auto replIsUpperConstantBinding(const std::string &source, size_t off)
+    -> bool {
+  if (off == std::string::npos || off >= source.size()) return false;
+  if (!std::isupper((unsigned char)source[off])) return false;
+  size_t end = off;
+  while (end < source.size() &&
+         (std::isalnum((unsigned char)source[end]) || source[end] == '_'))
+    end++;
+  const auto next = source.find_first_not_of(" \t", end);
+  if (next == std::string::npos) return false;
+  return source[next] != '(' && source[next] != '{';
+}
+
 // Readline preserves whitespace typed or pasted before the first token. Kex's
 // parser accepts that indentation, but the REPL classifies definitions before
 // parsing them; comparing the raw line against "let ", "using ", etc. made an
@@ -1103,6 +1123,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportParamNames[name] = names;
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
+  for (const auto &[name, methods] : overrides.traitMethods)
+    result.traitMethods[name] = methods;
   return result;
 }
 
@@ -2225,10 +2247,14 @@ int main(int argc, char *argv[]) {
         // ("Undefined identifier: a").
         const char patternLead =
             (off != std::string::npos && off < source.size()) ? source[off] : '\0';
+        const bool upperConstant = replIsUpperConstantBinding(source, off);
         const bool destructuringPattern =
-            std::isupper((unsigned char)patternLead) || patternLead == '(' ||
-            patternLead == '[' || patternLead == '{';
-        if (destructuringPattern) {
+            !upperConstant &&
+            (std::isupper((unsigned char)patternLead) || patternLead == '(' ||
+             patternLead == '[' || patternLead == '{');
+        if (upperConstant) {
+          isFuncDef = true;
+        } else if (destructuringPattern) {
           // `let Just(x) = ...` binds through the pattern; persist each name.
           patternLetNames = replLetBoundNames(source);
           isLocalLet = !patternLetNames.empty();
@@ -2352,7 +2378,7 @@ int main(int argc, char *argv[]) {
           }
           const auto inspectCall = [&](const std::string &expression) {
             if (!beamSemanticType)
-              return "IO.inspect(" + expression + ")";
+              return "Kex.Intrinsic.IO.inspectRepl(" + expression + ")";
             return "Kex.Intrinsic.IO.inspectTyped(" + expression + ", \"" +
                    *beamSemanticType + "\")";
           };
@@ -2503,7 +2529,8 @@ int main(int argc, char *argv[]) {
               // answers: `Type.of(someFunction)` fell back to the runtime,
               // which lowered the bare function name to an unbound Core
               // Erlang variable and failed to compile.
-              &replAnalyzer.staticTypeOfCalls());
+              &replAnalyzer.staticTypeOfCalls(),
+              &replAnalyzer.typeMap());
           std::vector<kex::ir::EmitResult> results;
           for (const auto& irModule : irModules)
             results.push_back(kex::ir::emitCore(irModule));
@@ -2976,12 +3003,17 @@ int main(int argc, char *argv[]) {
       // one — without the openers, `let (a, b) = ...` matched the
       // `name(params)` shape below and was echoed as "defined". See the
       // matching guard in the BEAM branch above.
+      const bool upperConstantDef =
+          replIsUpperConstantBinding(source, defOffset);
       if (defOffset != std::string::npos && defOffset < source.size() &&
+          !upperConstantDef &&
           (std::isupper((unsigned char)source[defOffset]) ||
            source[defOffset] == '(' || source[defOffset] == '[' ||
            source[defOffset] == '{'))
         defOffset = std::string::npos;
-      if (defOffset != std::string::npos) {
+      if (upperConstantDef) {
+        isFuncDef = true;
+      } else if (defOffset != std::string::npos) {
         // It's a function def if: let/foul name( ... )  with parens before =
         auto parenPos = source.find('(', defOffset);
         auto eqPos = source.find('=', defOffset);
@@ -3319,14 +3351,15 @@ int main(int argc, char *argv[]) {
     // parsed AFTER this point, so their own `compiled` blocks would not be
     // expanded here — they need either their own expand() call at load time or
     // a second pass once the program is fully assembled.
-    {
+    auto expandParsedProgram = [&](kex::ast::Program &target,
+                                   bool reportCollapse) -> bool {
       std::vector<kex::semantic::Diagnostic> expandDiagnostics;
       std::vector<kex::compiled::CollapseNote> collapseNotes;
       kex::compiled::ExpandOptions expandOptions;
-      if (collapseReport) expandOptions.report = &collapseNotes;
+      if (reportCollapse) expandOptions.report = &collapseNotes;
       const bool expanded =
-          kex::compiled::expand(program, expandDiagnostics, expandOptions);
-      if (collapseReport) printCollapseReport(collapseNotes);
+          kex::compiled::expand(target, expandDiagnostics, expandOptions);
+      if (reportCollapse) printCollapseReport(collapseNotes);
       for (const auto &diagnostic : expandDiagnostics)
         printSemanticDiagnostic(diagnostic);
       if (!expanded) {
@@ -3334,9 +3367,11 @@ int main(int argc, char *argv[]) {
                   << kex::color::apply(kex::color::magenta)
                   << "Aborted:" << kex::color::apply(kex::color::reset)
                   << " compile-time expansion failed.\n";
-        return 1;
+        return false;
       }
-    }
+      return true;
+    };
+    if (!expandParsedProgram(program, collapseReport)) return 1;
 
     if (mode == "expand") {
       printAst(program);
@@ -3429,6 +3464,11 @@ int main(int argc, char *argv[]) {
             qualifiedModules);
       }
 
+      // Base files and dependency modules are parsed after the initial source
+      // expansion. Expand the fully assembled compilation unit as well; the
+      // pass is idempotent because an expanded block is removed.
+      if (!expandParsedProgram(program, false)) return 1;
+
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
       // functions visible before names such as `times` are resolved.
@@ -3485,6 +3525,9 @@ int main(int argc, char *argv[]) {
                                                &preludeVariantTags,
                                                compileAnalysis
                                                    ? &compileAnalysis->staticTypeOfCalls()
+                                                   : nullptr,
+                                               compileAnalysis
+                                                   ? &compileAnalysis->typeMap()
                                                    : nullptr);
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
@@ -3749,6 +3792,7 @@ int main(int argc, char *argv[]) {
         program.items = std::move(merged);
         break;
       }
+      if (!expandParsedProgram(program, false)) return 1;
     }
 
     // Retained so the evaluator can use what the checker learned — today the

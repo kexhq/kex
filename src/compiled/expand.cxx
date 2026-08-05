@@ -46,6 +46,12 @@ auto addError(std::vector<semantic::Diagnostic>& diagnostics,
 }
 
 using Constants = std::unordered_map<std::string, interpreter::ValuePtr>;
+using ScopedConstants = std::unordered_map<std::string, Constants>;
+
+auto qualifiedName(const std::string& scope, const std::string& name)
+    -> std::string {
+    return scope.empty() ? name : scope + "::" + name;
+}
 
 // Stable identity for a generation template, whichever declaration shape it
 // holds. Used to map a template back to the scope that declared it.
@@ -85,10 +91,17 @@ struct Substituter {
     // Chain collapse uses this — it replaces a whole call chain, so rewriting
     // the parts underneath would be wasted work at best.
     std::function<bool(ast::ExprPtr&)> onSlot;
+    // Runtime bindings with the same spelling as a compiled constant hide it
+    // in their lexical scope. Substitution must follow the language's scope,
+    // not merely perform a global textual replacement.
+    std::unordered_set<std::string> shadowed;
     // Declared record field order, so a reified record is written in the order
     // its declaration gives — which on BEAM is its tuple layout. Empty until
     // the sandbox has run and can report it.
     ReifyContext reify;
+    // Constants owned by modules, used to replace `A.X` as a whole. Bare-name
+    // substitution alone cannot see that `X` is encoded as a MethodCall name.
+    const ScopedConstants* scoped = nullptr;
     // A second reason to pre-split an interpolated string, beyond "it mentions
     // a constant". Chain collapse needs one: a chain written straight inside
     // `"${...}"` is raw text here, so the walk would never reach it.
@@ -102,12 +115,52 @@ struct Substituter {
         return nullptr;
     }
 
+    auto qualifierPath(const ast::Expr& expr, std::string& out) const -> bool {
+        if (const auto* upper =
+                std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+            out = upper->name;
+            return true;
+        }
+        const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
+        if (!call || !call->receiver || !call->args.empty() ||
+            !call->namedArgs.empty() || call->block || call->parenthesized)
+            return false;
+        if (!qualifierPath(*call->receiver, out)) return false;
+        out += "." + call->method;
+        return true;
+    }
+
     auto substitute(ast::ExprPtr& slot) -> void {
         if (!slot) return;
         if (onSlot && onSlot(slot)) return;
+        if (scoped) {
+            if (const auto* call = std::get_if<ast::MethodCall>(&slot->kind);
+                call && call->receiver && call->args.empty() &&
+                call->namedArgs.empty() && !call->block) {
+                std::string owner;
+                if (qualifierPath(*call->receiver, owner)) {
+                    auto scope = scoped->find(owner);
+                    if (scope != scoped->end()) {
+                        auto found = scope->second.find(call->method);
+                        if (found != scope->second.end()) {
+                            std::string why;
+                            auto literal = valueToLiteral(
+                                found->second, slot->location, why, reify);
+                            if (literal) {
+                                slot = std::move(literal);
+                                return;
+                            }
+                            remaining.push_back(
+                                qualifiedName(owner, call->method));
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         if (const auto* name = nameOf(*slot)) {
             auto found = constants.find(*name);
-            if (found != constants.end()) {
+            if (found != constants.end() && !shadowed.count(*name)) {
                 std::string why;
                 auto literal =
                     valueToLiteral(found->second, slot->location, why, reify);
@@ -124,6 +177,66 @@ struct Substituter {
 
     auto each(std::vector<ast::ExprPtr>& list) -> void {
         for (auto& item : list) substitute(item);
+    }
+
+    auto patternNames(const ast::Pattern& pattern,
+                      std::vector<std::string>& names) -> void {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, ast::VarPattern>) {
+                if (node.name != "_") names.push_back(node.name);
+            } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
+                if (node.inner) patternNames(*node.inner, names);
+            } else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
+                for (const auto& arg : node.args)
+                    if (arg) patternNames(*arg, names);
+            } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                for (const auto& field : node.fields) {
+                    if (field.pattern) patternNames(**field.pattern, names);
+                    else names.push_back(field.name);
+                }
+            } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
+                for (const auto& element : node.elements)
+                    if (element) patternNames(*element, names);
+                if (node.rest) patternNames(**node.rest, names);
+            } else if constexpr (std::is_same_v<T, ast::TuplePattern>) {
+                for (const auto& element : node.elements)
+                    if (element) patternNames(*element, names);
+            } else if constexpr (std::is_same_v<T, ast::RangePattern>) {
+                if (node.start) patternNames(*node.start, names);
+                if (node.end) patternNames(*node.end, names);
+            }
+        }, pattern.kind);
+    }
+
+    template <typename F>
+    auto inScope(const std::vector<std::string>& names, F&& fn) -> void {
+        std::vector<std::string> added;
+        for (const auto& name : names)
+            if (shadowed.insert(name).second) added.push_back(name);
+        fn();
+        for (const auto& name : added) shadowed.erase(name);
+    }
+
+    auto body(std::vector<ast::ExprPtr>& expressions) -> void {
+        std::vector<std::string> locals;
+        inScope(locals, [&] {
+            for (auto& expression : expressions) {
+                substitute(expression);
+                if (!expression) continue;
+                if (auto* let = std::get_if<ast::LetExpr>(&expression->kind)) {
+                    std::vector<std::string> names;
+                    if (let->pattern) patternNames(*let->pattern, names);
+                    for (const auto& name : names) {
+                        if (shadowed.insert(name).second) locals.push_back(name);
+                    }
+                } else if (auto* var = std::get_if<ast::VarExpr>(&expression->kind)) {
+                    if (shadowed.insert(var->name).second)
+                        locals.push_back(var->name);
+                }
+            }
+        });
+        for (const auto& name : locals) shadowed.erase(name);
     }
     auto each(std::optional<ast::ExprPtr>& slot) -> void {
         if (slot) substitute(*slot);
@@ -254,7 +367,7 @@ struct Substituter {
                     if constexpr (std::is_same_v<T, ast::TupleExpr>)
                         each(node.elements);
                     else
-                        each(node.body);
+                        body(node.body);
                 } else if constexpr (std::is_same_v<T, ast::ListExpr>) {
                     each(node.elements);
                     each(node.rest);
@@ -290,8 +403,13 @@ struct Substituter {
                                      std::is_same_v<T, ast::ReturnExpr>) {
                     substitute(node.value);
                 } else if constexpr (std::is_same_v<T, ast::Lambda>) {
-                    each(node.body);
-                    if (node.rescue) each(*node.rescue);
+                    std::vector<std::string> names;
+                    for (const auto& param : node.params)
+                        if (param.name != "_") names.push_back(param.name);
+                    inScope(names, [&] {
+                        body(node.body);
+                        if (node.rescue) each(*node.rescue);
+                    });
                 } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
                     each(node.args);
                 } else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
@@ -320,10 +438,17 @@ struct Substituter {
 
     auto functionBody(ast::FunctionDef& fn) -> void {
         for (auto& clause : fn.clauses) {
-            each(clause.body);
             for (auto& param : clause.params)
                 if (param.defaultValue) substitute(*param.defaultValue);
-            if (clause.rescue) each(*clause.rescue);
+            std::vector<std::string> names;
+            for (const auto& param : clause.params) {
+                if (param.name && *param.name != "_") names.push_back(*param.name);
+                if (param.pattern) patternNames(**param.pattern, names);
+            }
+            inScope(names, [&] {
+                body(clause.body);
+                if (clause.rescue) each(*clause.rescue);
+            });
         }
     }
 };
@@ -395,7 +520,8 @@ auto substituteMakeBodies(ast::MakeDef& make, Substituter& base,
         for (const auto& clause : fn.clauses)
             for (const auto& param : clause.params)
                 if (param.name) shadowed.erase(*param.name);
-        Substituter inner{shadowed, base.diagnostics, {}, {}, {}, {}, base.reify};
+        Substituter inner{
+            shadowed, base.diagnostics, {}, {}, {}, {}, {}, base.reify};
         inner.functionBody(fn);
     };
     for (auto& item : make.body) {
@@ -448,6 +574,34 @@ auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
     }
 }
 
+// Like walkBodies, but deliberately stops at a nested module. Compile-time
+// constants are lexical: a bare `X` in module A must not be substituted with
+// module B's `X`, so each module gets its own Substituter invocation.
+template <typename Items, typename Visit>
+auto walkScopeBodies(Items& items, Visit&& visit) -> void {
+    for (auto& item : items) {
+        std::visit(
+            [&](auto& node) {
+                using Ptr = std::decay_t<decltype(*node)>;
+                if (!node) return;
+                if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
+                    visit(*node);
+                } else if constexpr (std::is_same_v<Ptr, ast::MainBlock>) {
+                    for (auto& expr : node->body) visit(expr);
+                } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
+                    walkScopeBodies(node->body, visit);
+                } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
+                    walkScopeBodies(node->items, visit);
+                } else if constexpr (std::is_same_v<Ptr, ast::CompiledBlock>) {
+                    walkScopeBodies(node->items, visit);
+                }
+                // ModuleDef starts a new lexical constant scope and is walked
+                // by the caller with a different Substituter.
+            },
+            item);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Chain collapse
 //
@@ -473,34 +627,49 @@ auto walkBodies(Items& items, Visit&& visit, bool intoCompiled = true) -> void {
 // block's own functions plus the methods of any `make` it holds. A chain is a
 // candidate only if its outermost call names one of these, so ordinary runtime
 // code is never evaluated at compile time.
-using CompiledNames = std::unordered_set<std::string>;
+struct CompiledNames {
+    // Free/top-level compiled functions.
+    std::unordered_set<std::string> functions;
+    // Functions declared directly in a module's compiled block (`Css::px`).
+    std::unordered_set<std::string> qualified;
+    // Receiver methods declared by a make inside a compiled block. Their
+    // owner is determined by the runtime receiver, not a namespace qualifier.
+    std::unordered_set<std::string> methods;
 
-auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void;
-
-template <typename Items>
-auto collectDeclaredNames(const Items& items, CompiledNames& into) -> void {
-    for (const auto& entry : items) {
-        std::visit(
-            [&](const auto& node) {
-                using Ptr = std::decay_t<decltype(*node)>;
-                if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
-                    if (node && !isValueBinding(*node)) into.insert(node->name);
-                } else if constexpr (std::is_same_v<Ptr, ast::MakeDef>) {
-                    if (node) collectMakeMethods(*node, into);
-                } else if constexpr (std::is_same_v<Ptr, ast::VisibilityBlock>) {
-                    if (node) collectDeclaredNames(node->items, into);
-                }
-            },
-            entry);
+    auto empty() const -> bool {
+        return functions.empty() && qualified.empty() && methods.empty();
     }
+};
+
+auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void {
+    auto collect = [&](auto&& self, const auto& items) -> void {
+        for (const auto& entry : items) {
+            std::visit(
+                [&](const auto& node) {
+                    using Ptr = std::decay_t<decltype(*node)>;
+                    if (!node) return;
+                    if constexpr (std::is_same_v<Ptr, ast::FunctionDef>) {
+                        into.methods.insert(node->name);
+                    } else if constexpr (
+                        std::is_same_v<Ptr, ast::VisibilityBlock>) {
+                        self(self, node->items);
+                    }
+                },
+                entry);
+        }
+    };
+    collect(collect, make.body);
 }
 
-// Overload for the CompiledItem variant, which also holds bare ExprPtr.
 auto collectDeclaredNames(const std::vector<ast::CompiledItem>& items,
+                          const std::string& scope,
                           CompiledNames& into) -> void {
     for (const auto& entry : items) {
-        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
-            if (*fn && !isValueBinding(**fn)) into.insert((*fn)->name);
+        if (const auto* fn =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry)) {
+            if (!*fn || isValueBinding(**fn)) continue;
+            if (scope.empty()) into.functions.insert((*fn)->name);
+            else into.qualified.insert(qualifiedName(scope, (*fn)->name));
         } else if (const auto* make =
                        std::get_if<std::unique_ptr<ast::MakeDef>>(&entry)) {
             if (*make) collectMakeMethods(**make, into);
@@ -508,23 +677,22 @@ auto collectDeclaredNames(const std::vector<ast::CompiledItem>& items,
     }
 }
 
-auto collectMakeMethods(const ast::MakeDef& make, CompiledNames& into) -> void {
-    collectDeclaredNames(make.body, into);
-}
-
 // Every `compiled do` block in the program, at top level or inside a module.
 auto compiledNames(const ast::Program& program) -> CompiledNames {
     CompiledNames names;
-    auto scan = [&](const auto& items) {
-        for (const auto& item : items)
+    auto scan = [&](auto&& self, const auto& items,
+                    const std::string& scope) -> void {
+        for (const auto& item : items) {
             if (const auto* block =
-                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item))
-                if (*block) collectDeclaredNames((*block)->items, names);
+                    std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
+                if (*block) collectDeclaredNames((*block)->items, scope, names);
+            } else if (const auto* mod =
+                           std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
+            }
+        }
     };
-    scan(program.items);
-    for (const auto& item : program.items)
-        if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-            if (*mod) scan((*mod)->body);
+    scan(scan, program.items, std::string{});
     return names;
 }
 
@@ -558,8 +726,19 @@ struct ChainCollapser {
     // value — `SQL.select(...)`. Accepted there and nowhere else: treating it
     // as a value would let a top-level binding be baked in, which is exactly
     // what must keep happening at runtime.
-    static auto isCallQualifier(const ast::Expr& expr) -> bool {
-        return std::holds_alternative<ast::UpperIdentifier>(expr.kind);
+    static auto qualifierPath(const ast::Expr& expr, std::string& out) -> bool {
+        if (const auto* upper =
+                std::get_if<ast::UpperIdentifier>(&expr.kind)) {
+            out = upper->name;
+            return true;
+        }
+        const auto* call = std::get_if<ast::MethodCall>(&expr.kind);
+        if (!call || !call->receiver || !call->args.empty() ||
+            !call->namedArgs.empty() || call->block || call->parenthesized)
+            return false;
+        if (!qualifierPath(*call->receiver, out)) return false;
+        out += "." + call->method;
+        return true;
     }
 
     auto allStatic(const std::vector<ast::ExprPtr>& list) const -> bool {
@@ -653,19 +832,26 @@ struct ChainCollapser {
 
     auto isCollapsible(const ast::Expr& expr) const -> bool {
         if (const auto* call = std::get_if<ast::MethodCall>(&expr.kind)) {
-            if (!compiled.count(call->method) || call->block || !call->receiver)
-                return false;
-            const bool receiverKnown = isCallQualifier(*call->receiver) ||
-                                       isStatic(*call->receiver);
+            if (call->block || !call->receiver) return false;
+            std::string owner;
+            const bool qualified = qualifierPath(*call->receiver, owner);
+            const bool isCompiled = qualified
+                ? compiled.qualified.count(
+                      qualifiedName(owner, call->method)) > 0
+                : compiled.methods.count(call->method) > 0;
+            if (!isCompiled) return false;
+            const bool receiverKnown = qualified || isStatic(*call->receiver);
             return receiverKnown && allStatic(call->args) &&
                    allStatic(call->namedArgs);
         }
         if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind)) {
             const auto dot = call->name.rfind('.');
-            const std::string bare = dot == std::string::npos
-                                         ? call->name
-                                         : call->name.substr(dot + 1);
-            if (!compiled.count(bare) || call->block) return false;
+            const bool isCompiled = dot == std::string::npos
+                ? compiled.functions.count(call->name) > 0
+                : compiled.qualified.count(
+                      qualifiedName(call->name.substr(0, dot),
+                                    call->name.substr(dot + 1))) > 0;
+            if (!isCompiled || call->block) return false;
             return allStatic(call->args) && allStatic(call->namedArgs);
         }
         return false;
@@ -760,8 +946,16 @@ auto collapseChains(ast::Program& program, const ExpandOptions& options) -> void
         Substituter walk{none, unused, {}, {}, {}};
         walk.onSlot = [&](ast::ExprPtr& slot) { return collapser.claim(slot); };
         walk.alsoSplit = [&](const std::string& text) {
-            for (const auto& name : compiled)
+            for (const auto& name : compiled.functions)
                 if (text.find(name) != std::string::npos) return true;
+            for (const auto& name : compiled.methods)
+                if (text.find(name) != std::string::npos) return true;
+            for (const auto& identity : compiled.qualified) {
+                const auto split = identity.rfind("::");
+                const auto name = split == std::string::npos
+                    ? identity : identity.substr(split + 2);
+                if (text.find(name) != std::string::npos) return true;
+            }
             return false;
         };
         walkBodies(
@@ -837,24 +1031,25 @@ auto expand(ast::Program& program,
     std::vector<std::string> names;
     std::vector<SourceLocation> locations;
     bool hasBlock = false;
-    auto scan = [&](auto& items) {
+    auto scan = [&](auto&& self, auto& items, const std::string& scope) -> void {
         for (auto& item : items) {
+            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
+                continue;
+            }
             auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
             if (!block || !*block) continue;
             hasBlock = true;
             for (auto& entry : (*block)->items)
                 if (auto* fn =
-                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry))
                     if (*fn && isValueBinding(**fn)) {
-                        names.push_back((*fn)->name);
+                        names.push_back(qualifiedName(scope, (*fn)->name));
                         locations.push_back((*fn)->location);
                     }
         }
     };
-    scan(program.items);
-    for (auto& item : program.items)
-        if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-            if (*mod) scan((*mod)->body);
+    scan(scan, program.items, "");
     if (!hasBlock) return true;
 
     // Which scope does each generation template belong to? A `let %name(...)`
@@ -863,8 +1058,14 @@ auto expand(ast::Program& program,
     // map it to the owning module before anything runs. Null means top level.
     std::unordered_map<const void*, ast::ModuleDef*> templateOwner;
     {
-        auto record = [&](auto& items, ast::ModuleDef* owner) {
+        auto record = [&](auto&& self, auto& items,
+                          ast::ModuleDef* owner) -> void {
             for (auto& item : items) {
+                if (auto* mod =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                    if (*mod) self(self, (*mod)->body, mod->get());
+                    continue;
+                }
                 auto* block =
                     std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item);
                 if (!block || !*block) continue;
@@ -880,10 +1081,7 @@ auto expand(ast::Program& program,
                 }
             }
         };
-        record(program.items, nullptr);
-        for (auto& item : program.items)
-            if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-                if (*mod) record((*mod)->body, mod->get());
+        record(record, program.items, nullptr);
     }
 
 
@@ -894,7 +1092,7 @@ auto expand(ast::Program& program,
     // a declaration as it runs (Evaluator's GeneratedDecl case). That is why
     // `each`, `eachIndexed`, nesting and conditionals need no support here —
     // they are just code the sandbox runs.
-    Constants constants;
+    ScopedConstants constants;
     std::vector<interpreter::Evaluator::GeneratedDeclaration> generated;
     // Declared field order for every record the sandbox knows, the prelude's
     // included — a reified record has to be written in its declared order,
@@ -921,29 +1119,61 @@ auto expand(ast::Program& program,
                          crash.what());
             return false;
         }
-        for (std::size_t i = 0; i < names.size() && i < values.size(); i++)
-            if (values[i]) constants.emplace(names[i], values[i]);
+        for (std::size_t i = 0; i < names.size() && i < values.size(); i++) {
+            if (!values[i]) continue;
+            const auto split = names[i].rfind("::");
+            const auto scope = split == std::string::npos
+                ? std::string{} : names[i].substr(0, split);
+            const auto bare = split == std::string::npos
+                ? names[i] : names[i].substr(split + 2);
+            constants[scope].emplace(bare, values[i]);
+        }
     }
 
     // --- 3. Substitute every use with the computed literal.
-    Substituter substituter{constants, diagnostics, {}, {}, {}, {}, {&layouts}};
-    walkBodies(program.items, [&](auto& target) {
-        using T = std::decay_t<decltype(target)>;
-        if constexpr (std::is_same_v<T, ast::FunctionDef>)
-            substituter.functionBody(target);
-        else
-            substituter.substitute(target);
-    });
-
+    std::unordered_set<std::string> keep;
     bool ok = true;
-    for (const auto& name : substituter.remaining) {
-        std::string why;
-        (void)valueToLiteral(constants.at(name), SourceLocation{}, why, {&layouts});
-        addError(diagnostics, SourceLocation{},
-                 "compile-time constant `" + name +
-                     "` cannot be inlined: " + why);
-        ok = false;
-    }
+    std::unordered_set<std::string> reportedFailures;
+    auto substituteScope =
+        [&](auto&& self, auto& items, const std::string& scope) -> void {
+            Constants visible = constants[""];
+            if (!scope.empty())
+                for (const auto& [name, value] : constants[scope])
+                    visible[name] = value;
+            Substituter substituter{
+                visible, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+            substituter.scoped = &constants;
+            walkScopeBodies(items, [&](auto& target) {
+                using T = std::decay_t<decltype(target)>;
+                if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                    substituter.functionBody(target);
+                else
+                    substituter.substitute(target);
+            });
+            for (const auto& reference : substituter.remaining) {
+                const auto split = reference.rfind("::");
+                const auto name = split == std::string::npos
+                    ? reference : reference.substr(split + 2);
+                const auto owner = split != std::string::npos
+                    ? reference.substr(0, split)
+                    : (constants[scope].count(name) ? scope : std::string{});
+                const auto identity = qualifiedName(owner, name);
+                keep.insert(identity);
+                if (!reportedFailures.insert(identity).second) continue;
+                std::string why;
+                (void)valueToLiteral(constants[owner].at(name),
+                                     SourceLocation{}, why, {&layouts});
+                addError(diagnostics, SourceLocation{},
+                         "compile-time constant `" + identity +
+                             "` cannot be inlined: " + why);
+                ok = false;
+            }
+            for (auto& item : items)
+                if (auto* mod =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*mod) self(self, (*mod)->body, (*mod)->name);
+        };
+    substituteScope(substituteScope, program.items, "");
 
     // --- 3b. Instantiate the generated declarations.
     //
@@ -1013,7 +1243,8 @@ auto expand(ast::Program& program,
             for (const auto& clause : copy->clauses)
                 for (const auto& param : clause.params)
                     if (param.name) captured.erase(*param.name);
-            Substituter inner{captured, diagnostics, {}, {}, {}, {}, {&layouts}};
+            Substituter inner{
+                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
             inner.functionBody(*copy);
             if (into) into->body.push_back(std::move(copy));
             else program.items.push_back(std::move(copy));
@@ -1040,7 +1271,8 @@ auto expand(ast::Program& program,
             // Replace the driver loops with the methods they declared, then
             // apply hygiene to every method the block now has.
             spliceNestedMethods(*copy, decl, diagnostics, ok);
-            Substituter scope{captured, diagnostics, {}, {}, {}, {}, {&layouts}};
+            Substituter scope{
+                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
             substituteMakeBodies(*copy, scope, captured);
             if (into) into->body.push_back(std::move(copy));
             else program.items.push_back(std::move(copy));
@@ -1074,9 +1306,6 @@ auto expand(ast::Program& program,
     // entirely — no nullary function, nothing exported. Only constants whose
     // uses were all substituted are removed; anything left referenced keeps
     // its definition so the program still resolves.
-    std::unordered_map<std::string, bool> keep;
-    for (const auto& name : substituter.remaining) keep[name] = true;
-
     // Every surviving declaration is HOISTED into the enclosing scope and the
     // block itself removed, so no `CompiledBlock` reaches anything downstream.
     //
@@ -1087,17 +1316,24 @@ auto expand(ast::Program& program,
     //  - Top-level lowering has no `CompiledBlock` case, so a block holding a
     //    `make` outside any module died with "unimplemented top-level item".
     //    There is no longer a block to lower.
-    auto prune = [&](auto& items) {
+    auto prune = [&](auto&& self, auto& items, const std::string& scope) -> void {
         using Item = std::decay_t<decltype(items[0])>;
         std::vector<Item> hoisted;
         for (std::size_t i = 0; i < items.size();) {
+            if (auto* mod =
+                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&items[i])) {
+                if (*mod) self(self, (*mod)->body, (*mod)->name);
+                i++;
+                continue;
+            }
             auto* block = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&items[i]);
             if (!block || !*block) { i++; continue; }
             for (auto& entry : (*block)->items) {
                 auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&entry);
                 const bool inlined = fn && *fn && isValueBinding(**fn) &&
-                                     constants.count((*fn)->name) &&
-                                     !keep.count((*fn)->name);
+                                     constants[scope].count((*fn)->name) &&
+                                     !keep.count(
+                                         qualifiedName(scope, (*fn)->name));
                 // A bare expression in a compiled block is compile-time work
                 // and nothing else — a driver loop, typically. It has already
                 // run, and its generated declarations are now real items, so
@@ -1116,10 +1352,7 @@ auto expand(ast::Program& program,
         }
         for (auto& item : hoisted) items.push_back(std::move(item));
     };
-    prune(program.items);
-    for (auto& item : program.items)
-        if (auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
-            if (*mod) prune((*mod)->body);
+    prune(prune, program.items, "");
 
     return ok;
 }

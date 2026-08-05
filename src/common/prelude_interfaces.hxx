@@ -696,9 +696,24 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         if (inserted) continue;
         for (auto& [exportName, functions] : module.exports) {
             auto& destination = it->second.exports[exportName];
-            destination.insert(destination.end(),
-                               std::make_move_iterator(functions.begin()),
-                               std::make_move_iterator(functions.end()));
+            for (auto& function : functions) {
+                const bool duplicate = std::any_of(
+                    destination.begin(), destination.end(),
+                    [&](const kex::semantic::ImportedFunction& existing) {
+                        return existing.sourceName == function.sourceName &&
+                            (sameSignature(existing.signature,
+                                           function.signature) ||
+                             (existing.backendFunction ==
+                                  function.backendFunction &&
+                              existing.signature.params.size() ==
+                                  function.signature.params.size()));
+                    });
+                // The compiled interface owns backend ABI details such as
+                // hidden protocol dictionaries. Source extraction augments
+                // missing type shapes, but must not append a source-arity
+                // duplicate that can later win overload selection.
+                if (!duplicate) destination.push_back(std::move(function));
+            }
         }
     }
     for (auto& [name, functions] : extra.receiverFunctions) {

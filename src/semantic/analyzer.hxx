@@ -40,6 +40,16 @@ public:
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    auto isTrait(const std::string& name) const -> bool {
+        return m_checker.isTrait(name);
+    }
+    auto traitRequires(const std::string& trait,
+                       const std::string& method) const -> bool {
+        return m_checker.traitRequires(trait, method);
+    }
+    auto traitNeedsDictionary(const std::string& trait) const -> bool {
+        return m_checker.traitNeedsDictionary(trait);
+    }
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
     auto resolvedCalls() const

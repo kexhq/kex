@@ -1,0 +1,6 @@
+# kex: check-only
+# IO.inspect preserves its input type while its implementation still requires
+# Inspectable, so it remains usable in the middle of a typed pipeline.
+main do
+  IO.inspect([1, 2, 3]).filter { |value| value > 1 }
+end

@@ -1,0 +1,30 @@
+# Compile-time constant identity includes its lexical module. Bare names from
+# sibling modules must neither share an evaluated value nor substitute into
+# one another's bodies.
+module CompiledConstA do
+  compiled do
+    let SAME_NAME = 1
+  end
+
+  let value = SAME_NAME
+end
+
+module CompiledConstB do
+  compiled do
+    let SAME_NAME = 2
+  end
+
+  let value = SAME_NAME
+end
+
+module CompiledConstPublic do
+  compiled do
+    let PUBLIC_VALUE = 7
+  end
+end
+
+main do
+  IO.printLine(CompiledConstA.value)
+  IO.printLine(CompiledConstB.value)
+  IO.printLine(CompiledConstPublic.PUBLIC_VALUE)
+end

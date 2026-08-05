@@ -89,6 +89,13 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
                              semanticType(type->typeArgs[1], vars));
         if (type->name == "List" && type->typeArgs.size() == 1)
             return Type::list(semanticType(type->typeArgs[0], vars));
+        // `Any` is the source spelling of "no constraint" — every other path
+        // that reads a type annotation resolves it to Unknown. Carried
+        // through as a named type instead, `JSON.parse`'s `Result<Any, Error>`
+        // yielded an `Any` payload that matched nothing: `config.try["k"]`
+        // was rejected because `Any` is not `[A]`.
+        if (type->name == "Any" && type->typeArgs.empty())
+            return Type::unknown();
         return Type::named(type->name, convertAll(type->typeArgs));
     case KexiType::Func:
         return Type::func(convertAll(type->typeArgs), semanticType(type->result, vars));
@@ -109,7 +116,16 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         return std::make_shared<kex::semantic::Type>(
             kex::semantic::Type{kex::semantic::UnionType{convertAll(type->typeArgs)}});
     case KexiType::Constrained:
-        return Type::constrained(type->name, type->traitName);
+        {
+            int genericId = 0;
+            if (type->name.size() == 1 && type->name[0] >= 'A' &&
+                type->name[0] <= 'Z') {
+                auto [it, _] = vars.try_emplace(
+                    type->name, -static_cast<int>(vars.size() + 1));
+                genericId = it->second;
+            }
+            return Type::constrained(type->name, type->traitName, genericId);
+        }
     case KexiType::Never:
         return Type::voidType();
     case KexiType::Unknown:
@@ -546,6 +562,25 @@ auto KexiRegistry::generateLoadErlang(const LoadedUnit& unit) const
 
 auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
     kex::ir::ExternalModules ext;
+    for (const auto& [_, unit] : m_units)
+        for (const auto& mod : unit.modules)
+            for (const auto& trait : mod.chunk.metadata.traitDefs) {
+                auto& methods = ext.traitMethods[trait.name];
+                for (const auto& required : trait.requiredMethods) {
+                    int arity = 1;
+                    for (const auto& candidate :
+                         mod.chunk.typeInterface.methods)
+                        if (candidate.name == required.name &&
+                            candidate.receiverType &&
+                            candidate.receiverType->kind ==
+                                KexiType::Constrained &&
+                            candidate.receiverType->traitName == trait.name) {
+                            arity = candidate.beamArity;
+                            break;
+                        }
+                    methods.push_back({required.name, arity});
+                }
+            }
     for (const auto& [_, unit] : m_units) {
         for (const auto& mod : unit.modules) {
             const auto& shortName = mod.chunk.metadata.sourceModule;
@@ -576,17 +611,29 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 for (const auto& receiverFn : mod.chunk.typeInterface.methods) {
                     if (receiverFn.typeOnly) continue;
                     auto& vec = ext.receiverFunctions[receiverFn.name];
+                    const bool protocolReceiver = std::any_of(
+                        ext.traitMethods.begin(), ext.traitMethods.end(),
+                        [&](const auto& trait) {
+                            return std::any_of(
+                                trait.second.begin(), trait.second.end(),
+                                [&](const auto& method) {
+                                    return method.name == receiverFn.name;
+                                });
+                        });
                     bool duplicate = false;
                     for (const auto& existing : vec)
                         if (existing.moduleAtom == mod.beamAtom &&
                             existing.beamFunction == receiverFn.beamFunction &&
-                            existing.beamArity == receiverFn.beamArity) {
+                            existing.beamArity == receiverFn.beamArity &&
+                            (!protocolReceiver || existing.receiverType ==
+                                typeNameStr(receiverFn.receiverType))) {
                             duplicate = true; break;
                         }
                     if (!duplicate)
                         vec.push_back({mod.beamAtom, receiverFn.beamFunction,
                                        receiverFn.beamArity,
-                                       receiverFn.paramNames});
+                                       receiverFn.paramNames,
+                                       typeNameStr(receiverFn.receiverType)});
                 }
             }
         }

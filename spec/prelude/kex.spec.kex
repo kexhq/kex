@@ -2,6 +2,11 @@ describe("Kex.BACKEND") do
   it("returns Interpreter on the tree-walk backend") do
     assert(Kex.BACKEND == Kex.Interpreter)
   end
+
+  it("reports the backend through predicates") do
+    assert(Kex.interpreted?)
+    assert(Kex.underBeam? == false)
+  end
 end
 
 describe("Kex.Feature.has?") do

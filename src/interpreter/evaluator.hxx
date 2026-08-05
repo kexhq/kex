@@ -176,7 +176,8 @@ private:
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
-    auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
+    auto execCompiledBlock(const ast::CompiledBlock& block,
+                           const std::string& moduleScope = "") -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block,
                              const std::string& typeScope = "",
                              bool hasImplicitReceiver = false) -> void;
@@ -211,7 +212,8 @@ private:
                          const NamedArgs& namedArgs) const
         -> const ast::FunctionClause*;
     auto findImportedNamedOverload(const std::string& functionName,
-                                   const NamedArgs& namedArgs) const
+                                   const NamedArgs& namedArgs,
+                                   const ValuePtr& receiver) const
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
@@ -224,6 +226,9 @@ private:
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
     auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
+
+    std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
+    std::unordered_map<std::string, ValuePtr> m_functionValues;
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;

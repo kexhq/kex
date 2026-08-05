@@ -107,8 +107,10 @@ auto Type::float64() -> TypePtr {
     return std::make_shared<Type>(Type{SizedFloatType{64}});
 }
 
-auto Type::constrained(const std::string& varName, const std::string& traitName) -> TypePtr {
-    return std::make_shared<Type>(Type{ConstrainedType{varName, traitName}});
+auto Type::constrained(const std::string& varName, const std::string& traitName,
+                       int genericId) -> TypePtr {
+    return std::make_shared<Type>(
+        Type{ConstrainedType{varName, traitName, genericId}});
 }
 
 auto isPrimitiveTypeName(const std::string& name) -> bool {

@@ -19,11 +19,14 @@ let between(low: Int, high: Int = 10, step: Int = 1) -> Int do
   low + high + step
 end
 
+let allDefaulted(name: String = "world") -> String = name
+
 record Box do
   n : Int = 0
 end
 
 make Box do
+  tagged :> String -> Atom -> String
   let tagged(col: String, dir: Atom = :asc) -> String do
     "${col} ${dir}"
   end
@@ -37,6 +40,10 @@ main do
   IO.printLine("${between(1)}")
   IO.printLine("${between(1, 2)}")
   IO.printLine("${between(1, 2, 3)}")
+
+  # Zero is a real required-parameter count, not the sentinel for an imported
+  # or trait signature whose default information is unavailable.
+  IO.printLine(allDefaulted())
 
   # ...and the same on a make method, where the receiver adds one to the arity.
   IO.printLine(Box {}.tagged("name"))

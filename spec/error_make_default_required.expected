@@ -1,0 +1,2 @@
+spec/error_make_default_required.kex:10:40: error: `add` expects 3 argument(s), got 1
+Aborted: 1 type error — fix before running (use --no-check to skip).

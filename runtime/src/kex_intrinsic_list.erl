@@ -97,13 +97,11 @@ length(L) -> erlang:length(L).
 %% binary). Tagged Chars normalize to their codepoints; binaries and nested
 %% lists are chardata already. The old prelude form was non-tail recursive
 %% (`x + sep + xs.join(sep)`).
-join(L)      -> unicode:characters_to_binary(untag(as_list(L))).
-join(L, Sep) -> unicode:characters_to_binary(lists:join(untag_one(Sep), untag(as_list(L)))).
-
-untag(L) -> [untag_one(E) || E <- L].
-untag_one({'Char', C}) -> C;
-untag_one(E) when is_list(E) -> untag(E);
-untag_one(E) -> E.
+join(L) ->
+    iolist_to_binary([kex_io:to_string_bin(E) || E <- as_list(L)]).
+join(L, Sep) ->
+    Text = [kex_io:to_string_bin(E) || E <- as_list(L)],
+    iolist_to_binary(lists:join(kex_io:to_string_bin(Sep), Text)).
 
 %% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
 %% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's

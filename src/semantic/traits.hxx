@@ -1,6 +1,7 @@
 #pragma once
 
 #include "types.hxx"
+#include <optional>
 #include <set>
 #include <string>
 #include <unordered_map>
@@ -17,10 +18,12 @@ struct Signature {
     bool isFoul = false;
     // How many of `params` the caller must actually pass. Trailing parameters
     // with a default are optional, so `let greet(name, punct = "!")` accepts
-    // one argument or two. Zero means "not recorded" and is read as
+    // one argument or two. `nullopt` means "not recorded" and is read as
     // `params.size()` — every signature that does not come from a FunctionDef
-    // (trait requirements, imported interfaces) leaves it that way.
-    std::size_t requiredParams = 0;
+    // (trait requirements, imported interfaces) leaves it that way. A real
+    // zero must remain representable for functions whose every parameter has
+    // a default.
+    std::optional<std::size_t> requiredParams;
 };
 
 struct TraitDef {

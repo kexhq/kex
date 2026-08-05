@@ -24,6 +24,10 @@ struct LowerError : std::runtime_error {
 // modules loaded via /load. Each module's exports/methods are in externalExports
 // keyed by "ModuleName.functionName".
 struct ExternalModules {
+    struct TraitMethod {
+        std::string name;
+        int arity = 1; // receiver plus explicit source parameters
+    };
     struct ReceiverFunction {
         std::string moduleAtom;
         std::string beamFunction;
@@ -31,6 +35,9 @@ struct ExternalModules {
         // Source parameter names excluding the receiver. Used to order named
         // arguments before lowering to the positional BEAM call convention.
         std::vector<std::string> paramNames;
+        // Concrete receiver name when the provider is type-specific. Empty
+        // for generic trait fallbacks and structural receiver families.
+        std::string receiverType;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;
@@ -40,6 +47,9 @@ struct ExternalModules {
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
+    // Trait name -> required method names in declaration order. Dictionaries
+    // use this stable order for their hidden function slots.
+    std::unordered_map<std::string, std::vector<TraitMethod>> traitMethods;
 };
 
 // A variant tag declared outside the module being compiled (the prelude, or
@@ -51,6 +61,8 @@ struct ExternalModules {
 // fallback, which asks the value.
 using StaticTypeOfCalls =
     std::unordered_map<const ast::MethodCall*, semantic::StaticTypeAnswer>;
+using ExpressionTypes =
+    std::unordered_map<const ast::Expr*, semantic::TypePtr>;
 
 struct ExternalVariantTag {
     std::string tag;
@@ -73,7 +85,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
                   bool preferExternalReceivers = false,
                   const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr)
+                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
+                  const ExpressionTypes* expressionTypes = nullptr)
     -> Module;
 
 // Lower a compilation unit using the module-system BEAM mapping. The first
@@ -87,7 +100,8 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                       semantic::ResolvedCallTarget>* resolvedCalls = nullptr,
                   bool preferExternalReceivers = false,
                   const std::vector<ExternalVariantTag>* externalVariants = nullptr,
-                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr)
+                  const StaticTypeOfCalls* staticTypeOfCalls = nullptr,
+                  const ExpressionTypes* expressionTypes = nullptr)
     -> std::vector<Module>;
 
 // Lower the prelude with per-tier awareness. The full AST is used for the

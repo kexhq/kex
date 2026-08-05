@@ -324,6 +324,29 @@ int main() {
             }
         });
 
+        it("binds an ALL-CAPS constant to its value, not its function", []() {
+            // `let UPPER = expr` is a zero-arg constant definition. Classified
+            // with the destructuring patterns (`let Just(x) = ...`), the name
+            // stayed bound to the constant's own function: `UP` echoed
+            // `<function:<lambda>>` on the interpreter and failed to parse at
+            // all on BEAM, so a constant was unusable in either REPL.
+            const std::string input =
+                "let UP = 42\n"
+                "UP\n"
+                "UP + 1\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("function:") == std::string::npos, out);
+                assertTrue(out.find("Expected ')'") == std::string::npos, out);
+                assertTrue(out.find("=> 42 : Int") != std::string::npos, out);
+                assertTrue(out.find("=> 43 : Int") != std::string::npos, out);
+            }
+        });
+
+        it("still destructures an uppercase constructor pattern", []() {
+            auto out = runRepl("let Just(x) = Just(9)\nx\n");
+            assertTrue(out.find("=> 9 : Int") != std::string::npos, out);
+        });
+
         it("accepts indentation before persisted let bindings", []() {
             const std::string input =
                 "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"
