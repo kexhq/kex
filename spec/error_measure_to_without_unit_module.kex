@@ -1,0 +1,11 @@
+# `to(String, in:)` is supplied by a unit module, not the prelude. Without the
+# `using`, the named argument matches no clause — say so, and name the module
+# that does define one, rather than quietly formatting without it.
+#
+# KNOWN BEAM DIVERGENCE: BEAM rejects this at lowering with "named args to
+# receiver function with unknown params: to". It catches the same mistake, but
+# as a compile-time IR error with different wording and no `using` hint.
+main do
+  IO.printLine("before")
+  IO.printLine((Units.SI.watt(11_111) * 1.hour).to(String, in: Units.SI.Kilo(Units.SI.Watt * Hour)))
+end

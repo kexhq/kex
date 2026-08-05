@@ -38,6 +38,25 @@ make String, implement: Enumerable, Foldable do
   empty? :> Bool
   let empty? = Kex.Intrinsic.List.length(this) == 0
 
+  # Returns an enclosed string, with +wrapper+ on both ends.
+  # @param wrapper String
+  # @return String
+  # @example
+  #   "hello".enclose("*")   # => "*hello*"
+  #   "hello".enclose("__")   # => "__hello__"
+  enclose :> String -> String
+  let enclose(wrapper) = "${wrapper}${this}${wrapper}"
+
+  # Returns an enclosed string, +left+ and +right+ on the ends.
+  # @param left String
+  # @param right String
+  # @return String
+  # @example
+  #   "hello".enclose("<", ">")   # => "<hello>"
+  #   "hello".enclose("{", "}")   # => "{hello}"
+  enclose :> String -> String -> String
+  let enclose(left, right) = "${left}${this}${right}"
+
   # Returns the character at position +i+ (0-based), or +None+ if out of range.
   #
   # @param i [Integer]
@@ -81,6 +100,25 @@ make String, implement: Enumerable, Foldable do
   #   "hi".split           # => ["h", "i"]
   split :> (String | Regex) -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
+
+  # Splits into lines on +\n+, dropping a single trailing newline so a file
+  # ending in one does not yield a final empty line. Windows line endings are
+  # not stripped — split on +\r\n+ explicitly if that matters.
+  #
+  # @return [[String]]
+  #
+  # @example
+  #   "a\nb".lines      # => ["a", "b"]
+  #   "a\nb\n".lines    # => ["a", "b"]
+  #   "".lines          # => []
+  lines :> [String]
+  let lines do
+    let parts = this.split("\n")
+    match parts.last do
+      Just("") -> parts.take(parts.count - 1)
+      _        -> parts
+    end
+  end
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 
@@ -123,6 +161,45 @@ make String, implement: Enumerable, Foldable do
   #   "HELLO".lowerCase   # => "hello"
   lowerCase :> String
   let lowerCase = Kex.Intrinsic.String.lowerCase(this)
+
+  # Returns the string with its first character upper-cased and the rest
+  # LOWER-cased, matching Ruby's String#capitalize — so "hELLO" becomes
+  # "Hello", not "HELLO". Unlike +upperCase+, which shouts the whole string.
+  #
+  # Needed to build type names from data: a generated `type %name = ...`
+  # inside a `compiled do` block requires an upper-case identifier, so a list
+  # of lower-case words has to be capitalized first.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "hello".capitalize          # => "Hello"
+  #   "hELLO".capitalize          # => "Hello"   (tail is lower-cased)
+  #   "already Capital".capitalize # => "Already capital"
+  #   "".capitalize               # => ""
+  capitalize :> String
+  # Destructures the characters rather than using `"${at(0).upperCase}${rest}"`:
+  # `rest` returns an empty LIST instead of an empty String when nothing
+  # remains, so that spelling gave "A[]" for "a".capitalize on the BEAM
+  # backend. See the note on `rest` — the bug is there, not here.
+  # The natural spelling is a RECEIVER pattern, matching on `this` directly:
+  #
+  #     let capitalize(@[])       = ""
+  #     let capitalize(@[c | cs]) = "${c.upperCase}${cs.lowerCase}"
+  #
+  # It parses and works in the interpreter, but the backends disagree on what
+  # the tail binds to: a String in the interpreter, a [Char] on BEAM.
+  #
+  # Re-encoding the BEAM side to a binary looks like the fix and is NOT: the
+  # `[Char]`-is-String equivalence is load-bearing for composition. Making
+  # `filter` hand back a binary breaks `["hello","world"].flatMap { |s|
+  # s.filter(~alpha?) }` (spec/list_hof.kex) with a badarg, because flatMap
+  # needs a list to flatten. Any real fix has to keep both readings working.
+  # Until then `chars` is explicit on both backends.
+  let capitalize = match this.chars do
+    []       -> ""
+    [c | cs] -> "${c.upperCase}${cs.join("").lowerCase}"
+  end
 
   # Returns the string with its characters in reverse order.
   #

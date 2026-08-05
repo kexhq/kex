@@ -58,7 +58,9 @@ foldLeft(L, Acc, Fun) -> lists:foldl(fun(Elem, A) -> Fun(A, Elem) end, Acc, as_l
 
 %% partition/2 — splits into {Matching, NonMatching} per predicate. Kex is
 %% receiver-first; Erlang's lists:partition is fun-first, so swap.
-partition(L, Fun) -> lists:partition(Fun, as_list(L)).
+partition(L, Fun) ->
+    lists:partition(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end,
+                    as_list(L)).
 
 %% member/2 — element membership check, backing `.in?` on Integer/Float/Char.
 %% Element is the receiver, container is the arg.
@@ -95,13 +97,11 @@ length(L) -> erlang:length(L).
 %% binary). Tagged Chars normalize to their codepoints; binaries and nested
 %% lists are chardata already. The old prelude form was non-tail recursive
 %% (`x + sep + xs.join(sep)`).
-join(L)      -> unicode:characters_to_binary(untag(as_list(L))).
-join(L, Sep) -> unicode:characters_to_binary(lists:join(untag_one(Sep), untag(as_list(L)))).
-
-untag(L) -> [untag_one(E) || E <- L].
-untag_one({'Char', C}) -> C;
-untag_one(E) when is_list(E) -> untag(E);
-untag_one(E) -> E.
+join(L) ->
+    iolist_to_binary([kex_io:to_string_bin(E) || E <- as_list(L)]).
+join(L, Sep) ->
+    Text = [kex_io:to_string_bin(E) || E <- as_list(L)],
+    iolist_to_binary(lists:join(kex_io:to_string_bin(Sep), Text)).
 
 %% list_get/2,3 — `list[i]` / `list.get(i[, default])`. Returns the raw element
 %% (or none/Default if out of range) — NOT Just(value)-wrapped, unlike Map.get's
@@ -130,18 +130,18 @@ list_product(List) -> lists:foldl(fun(E, A) -> A * E end, 1, List).
 %% mapping over Map.entries), matching the Enumerable trait defaults and
 %% the interpreter's block invocation.
 map(L, Fun)    -> [kex_intrinsic_fun:applyItem(Fun, I) || I <- as_list(L)].
-filter(L, Fun) -> lists:filter(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+filter(L, Fun) -> lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 each(L, Fun)   -> lists:foreach(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)), 'None'.
 flatMap(L, Fun) -> lists:flatmap(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
-reject(L, Fun) -> lists:filter(fun(X) -> not kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
-'all?'(L, Fun)  -> lists:all(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
-'any?'(L, Fun)  -> lists:any(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)).
+reject(L, Fun) -> lists:filter(fun(X) -> not kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
+'all?'(L, Fun)  -> lists:all(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
+'any?'(L, Fun)  -> lists:any(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)).
 find(L, Fun)   ->
-    case lists:search(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L)) of
+    case lists:search(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L)) of
         {value, V} -> {'Just', V};
         false      -> 'None'
     end.
-count(L, Fun)  -> erlang:length(lists:filter(fun(X) -> kex_intrinsic_fun:applyItem(Fun, X) end, as_list(L))).
+count(L, Fun)  -> erlang:length(lists:filter(fun(X) -> kex_intrinsic_fun:applyPredicate(Fun, X) end, as_list(L))).
 
 minBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A < B end).
 maxBy(L, F) -> extreme_by(as_list(L), F, fun(A, B) -> A > B end).

@@ -77,6 +77,79 @@ public:
         const std::string& name,
         std::vector<ValuePtr> args,
         std::chrono::milliseconds timeout) -> ValuePtr;
+    // Loads `program`'s declarations ONCE under the same cooperative deadline
+    // and termination guard as evaluateFunction, then forces each named
+    // binding and returns its value. That is how src/compiled/ evaluates
+    // `compiled do` constants without running the program's `main`.
+    //
+    // "Forces" because a parameterless `let MAX = 3` is a BINDING, but the AST
+    // encodes it as a zero-parameter FunctionDef and the evaluator binds the
+    // name to a function value — so the value only materialises once that is
+    // invoked. Loading once lets a later constant reference an earlier one.
+    // A name that cannot be forced yields a null entry rather than throwing,
+    // so the caller can report which one.
+    // A `let %name(...)` executed during compile-time evaluation. Recorded
+    // rather than acted on: the expansion pass turns each into a real
+    // declaration. `bindings` is the compile-time scope at the moment it ran —
+    // the loop variables a generated body closes over, which must be baked in
+    // as literals since they do not exist at runtime.
+    struct GeneratedDeclaration {
+        std::string name;
+        ast::GeneratedTemplate function;
+        std::unordered_map<std::string, ValuePtr> bindings;
+        SourceLocation location;
+        // Declarations produced by driver loops in a generated `make`'s own
+        // body — `make %v do OPS.each do |op| let %op ... end end end`. They
+        // are captured here rather than at top level because they belong INSIDE
+        // this make, and because they only exist once its loop variable does.
+        std::vector<GeneratedDeclaration> nested;
+    };
+    auto generatedDeclarations() const -> const std::vector<GeneratedDeclaration>& {
+        return m_generatedDeclarations;
+    }
+
+    // Declared field order of every record this Evaluator knows, the prelude's
+    // included, keyed by both the bare and the module-scoped name.
+    //
+    // A RecordValue stores its fields in an unordered_map, which loses the
+    // order — and on BEAM a record IS a tuple, so field order is the ABI. Any
+    // code turning a record value back into source (src/compiled/) has to
+    // recover the declared order from here rather than invent one.
+    auto recordFieldOrder() const
+        -> std::unordered_map<std::string, std::vector<std::string>>;
+
+    auto evaluateConstants(
+        const ast::Program& program,
+        const std::vector<std::string>& names,
+        std::chrono::milliseconds timeout) -> std::vector<ValuePtr>;
+    // Same sandbox, but for arbitrary expressions rather than named bindings:
+    // loads `program`'s declarations once, then evaluates each expression in
+    // the global scope. Used by `compiled` chain collapse, which has to
+    // evaluate a call chain written at a use site, not a declaration.
+    //
+    // An expression that FAILS yields a null entry instead of aborting the
+    // run: collapse is an optimization and falls back to building the value at
+    // runtime, so an expression that turns out not to be compile-time
+    // evaluable is an ordinary outcome, not an error. A timeout still
+    // propagates — that is the sandbox's budget for the whole program, not one
+    // expression's problem.
+    // One expression to evaluate, plus the free names it is allowed to carry
+    // without knowing. Each is bound to a PlaceholderValue whose `index` is
+    // its position in `placeholders`, so the caller can map a placeholder that
+    // survives into the result back to the expression it stands for.
+    struct ExpressionRequest {
+        const ast::Expr* expr = nullptr;
+        std::vector<std::string> placeholders;
+    };
+    // `reasons`, when given, receives one entry per request: empty if the
+    // expression evaluated, otherwise the exception's message. Callers use it
+    // to explain WHY a collapse did not happen — the interesting half, since a
+    // program that fails to collapse still runs and prints the right answer.
+    auto evaluateExpressions(
+        const ast::Program& program,
+        const std::vector<ExpressionRequest>& requests,
+        std::chrono::milliseconds timeout,
+        std::vector<std::string>* reasons = nullptr) -> std::vector<ValuePtr>;
     // Parse the sources selected by src/stdlib/prelude.kex (MainBlocks dropped)
     // once into a shared AST and
     // execute its declarations on this Evaluator, so the Kex-written stdlib
@@ -95,23 +168,34 @@ private:
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
     auto execModule(const ast::ModuleDef& mod,
                     const std::string& parentModule = "") -> void;
+    // `enclosingModule` is the module a definition lexically sits in. For a
+    // module-level function it equals `typeScope`; for a `make` body method it
+    // is the only record of the module, since `typeScope` names the receiver
+    // type. Methods need it to reach their module's `private do` helpers.
     auto execFunctionDef(const ast::FunctionDef& def,
                          const std::string& typeScope = "",
-                         bool hasImplicitReceiver = false) -> void;
-    auto execMakeDef(const ast::MakeDef& def) -> void;
+                         bool hasImplicitReceiver = false,
+                         const std::string& enclosingModule = "") -> void;
+    auto execMakeDef(const ast::MakeDef& def,
+                     const std::string& enclosingModule = "") -> void;
     auto execTypeDef(const ast::TypeDef& def,
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
     auto execTraitDef(const ast::TraitDef& def) -> void;
-    auto execCompiledBlock(const ast::CompiledBlock& block) -> void;
+    auto execCompiledBlock(const ast::CompiledBlock& block,
+                           const std::string& moduleScope = "") -> void;
     auto execVisibilityBlock(const ast::VisibilityBlock& block,
                              const std::string& typeScope = "",
-                             bool hasImplicitReceiver = false) -> void;
+                             bool hasImplicitReceiver = false,
+                             const std::string& enclosingModule = "") -> void;
     auto execUsingBlock(const ast::UsingBlock& block, const std::string& moduleScope = "") -> void;
     auto execMainBlock(const ast::MainBlock& block) -> ValuePtr;
     auto ensureModuleLoaded(const std::string& moduleName, SourceLocation loc,
                             const std::string& currentModule = "") -> std::string;
     auto resolvePendingExports() -> void;
+    auto runCompileTime(const ast::Program& program,
+                        std::chrono::milliseconds timeout,
+                        const std::function<void()>& produce) -> void;
     auto defineImported(const std::string& bindingName, const std::string& logicalName,
                         const std::string& sourceModule, bool explicitImport,
                         const std::string& moduleScope, ValuePtr value,
@@ -134,8 +218,18 @@ private:
     auto findNamedClause(const std::string& functionName,
                          const NamedArgs& namedArgs) const
         -> const ast::FunctionClause*;
+    // The first label no clause of `functionName` declares, if any.
+    auto unknownNamedArgument(const std::string& functionName,
+                              const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
+    // A module defining a same-named function whose clause does accept the
+    // labels — the `using` a call site is missing.
+    auto moduleSupplyingNamedClause(const std::string& functionName,
+                                    const NamedArgs& namedArgs) const
+        -> std::optional<std::string>;
     auto findImportedNamedOverload(const std::string& functionName,
-                                   const NamedArgs& namedArgs) const
+                                   const NamedArgs& namedArgs,
+                                   const ValuePtr& receiver) const
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
@@ -148,6 +242,9 @@ private:
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
     auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
+
+    std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
+    std::unordered_map<std::string, ValuePtr> m_functionValues;
 
     // Pattern matching
     auto matchPattern(const ast::Pattern& pattern, const ValuePtr& value) -> bool;
@@ -264,6 +361,9 @@ private:
     bool m_replMode = false;
     bool m_preludeLoaded = false;
     std::optional<std::chrono::steady_clock::time_point> m_deadline;
+    // Declarations recorded by `let %name(...)` during compile-time
+    // evaluation; drained by src/compiled/expand.cxx.
+    std::vector<GeneratedDeclaration> m_generatedDeclarations;
 
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;

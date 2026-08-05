@@ -37,6 +37,7 @@ REPL commands use a `/` prefix (use `/help` for the full list):
 
 ```
 kex> /help                # show all commands (also: /h)
+kex> /clear               # clear the terminal screen
 kex> /load myfile.kex     # load a module from file
 kex> /unload MyModule     # unload a previously loaded module
 kex> /reload              # reload all loaded modules

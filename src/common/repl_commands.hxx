@@ -19,6 +19,7 @@ struct ReplCommand {
 inline auto replCommands() -> const std::vector<ReplCommand> & {
   static const std::vector<ReplCommand> cmds = {
       {"exit", "", "", "Exit the REPL"},
+      {"/clear", "", "", "Clear the terminal screen"},
       {"/help", "/h", "", "Show this help"},
       {"/set", "", "<opt>", "Enable a feature"},
       {"/unset", "", "<opt>", "Disable a feature"},
@@ -64,6 +65,13 @@ inline auto replCommandCompletions(const std::string &prefix)
 inline auto isReplExit(const std::string &input) -> bool {
   return input == "exit" || input == "/exit" || input == "/quit" ||
          input == "/q";
+}
+
+// ANSI sequence: clear the visible screen and its scrollback, then move the
+// cursor to the top-left. Works on the native REPLs' real terminals and on
+// the web REPL's xterm.js, which renders the same escape codes.
+inline auto replClearScreenSequence() -> std::string {
+  return "\x1b[H\x1b[2J\x1b[3J";
 }
 
 inline auto printReplBanner(std::ostream &out, const std::string &backend)

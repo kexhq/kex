@@ -2,14 +2,14 @@
 
 # Simple constant generation
 compiled do
-  MAX_RETRIES = 3
-  TIMEOUT_MS = 5000
+  let MAX_RETRIES = 3
+  let TIMEOUT_MS = 5000
 end
 
 # Generate functions from a list
 module Validators do
   compiled do
-    TYPES = ["email", "phone", "url", "ip"]
+    let TYPES = ["email", "phone", "url", "ip"]
 
     TYPES.each do |name|
       let %name?(input: String) -> Bool do
@@ -22,13 +22,13 @@ end
 # Generate from env
 module Config do
   compiled do
-    ENV_PREFIX = Env.get("APP_PREFIX").or("app")
+    let ENV_PREFIX = ENV.get("APP_PREFIX").or("app")
 
-    KEYS = ["database_url", "redis_url", "secret_key", "port"]
+    let KEYS = ["database_url", "redis_url", "secret_key", "port"]
 
     KEYS.each do |key|
       let %key -> String? do
-        return Env.get("${ENV_PREFIX}_${key}")
+        return ENV.get("${ENV_PREFIX}_${key}")
       end
     end
   end
@@ -48,13 +48,13 @@ module Html do
 
   module Language do
     compiled do
-      VOID_ELEMENTS = ["br", "hr", "img", "input", "meta", "link"]
-      BLOCK_ELEMENTS = ["html", "head", "body", "div", "p", "span",
+      let VOID_ELEMENTS = ["br", "hr", "img", "input", "meta", "link"]
+      let BLOCK_ELEMENTS = ["html", "head", "body", "div", "p", "span",
                         "footer", "header", "nav", "main", "section",
                         "article", "aside", "ul", "ol", "li", "table",
                         "tr", "td", "th", "form", "a"]
-      HEADERS = (1..6).map { |i| "h${i}" }
-      ALL_ELEMENTS = BLOCK_ELEMENTS + HEADERS
+      let HEADERS = (1..6).map { |i| "h${i}" }
+      let ALL_ELEMENTS = BLOCK_ELEMENTS + HEADERS
 
       ALL_ELEMENTS.each do |name|
         let %name(id = None, classes = [], block: Block<[Node]>) -> Element do
@@ -80,7 +80,7 @@ end
 # Type generation
 module Events do
   compiled do
-    EVENT_NAMES = ["click", "submit", "change", "focus", "blur", "keydown"]
+    let EVENT_NAMES = ["click", "submit", "change", "focus", "blur", "keydown"]
 
     EVENT_NAMES.each do |name|
       type %name = Event { type: "%name", target: Element }
@@ -102,13 +102,13 @@ module Vec do
   end
 
   compiled do
-    OPS = [
+    let OPS = [
       ("add", "+"),
       ("subtract", "-"),
       ("multiply", "*")
     ]
 
-    VECS = ["Vec2", "Vec3"]
+    let VECS = ["Vec2", "Vec3"]
 
     VECS.each do |vecName|
       make %vecName do

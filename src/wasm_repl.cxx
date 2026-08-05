@@ -161,6 +161,11 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             session->lastResult = os.str();
             return;
         }
+        if (source == "/clear") {
+            // xterm.js renders the same ANSI clear sequence as a real terminal.
+            session->lastResult = kex::replClearScreenSequence();
+            return;
+        }
         if (source == "/reset") {
             // Evaluator owns a Scheduler that keeps a reference back to its
             // Evaluator. Move-assignment from a temporary would leave that

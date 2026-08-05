@@ -1,0 +1,33 @@
+# `compiled do` constants are evaluated at COMPILE time and the result is
+# spliced in as a literal. Nothing in the generated code recomputes them:
+# `DOUBLED = 2 * 21` compiles to the literal 42, with no multiplication left in
+# the output (asserted directly against --emit-core in the plan's verification
+# steps; here we check the values are right and identical on both backends).
+#
+# A later constant can see an earlier one, because the whole program's
+# declarations are executed once in the compile-time sandbox.
+
+compiled do
+  let BASE       = 10
+  let DERIVED    = BASE * 2 + 1
+  let NAME       = "kex"
+  let GREETING   = "hello ${NAME}"
+  let FLAG       = true
+  let RATIO      = 1.5
+  let SQUARES    = [1, 2, 3].map { |n| n * n }
+  let PAIR       = (1, "a")
+  let BIG        = 2 * 4611686018427387904
+end
+
+main do
+  IO.printLine("${BASE} ${DERIVED}")
+  IO.printLine("${GREETING} ${FLAG} ${RATIO}")
+  IO.printLine("${BIG}")
+  # Constants keep their structure, not just scalars. Bound to a local first:
+  # an UPPERCASE name in match-subject position is read as a constructor.
+  let pair = PAIR
+  match pair do
+    (n, s) -> IO.printLine("pair ${n}${s}")
+  end
+  IO.printLine("squares ${SQUARES}")
+end

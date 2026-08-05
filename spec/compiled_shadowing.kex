@@ -1,0 +1,16 @@
+compiled do
+  let value = 42
+end
+
+let echo(value) = value
+
+let local() do
+  let value = 7
+  return value
+end
+
+main do
+  IO.printLine(value)
+  IO.printLine(echo(1))
+  IO.printLine(local())
+end

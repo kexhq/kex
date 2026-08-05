@@ -56,6 +56,9 @@ auto TraitRegistry::satisfiesStructurally(const TypePtr& type, const std::string
 
 auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName) const -> bool {
     if (!type) return false;
+    // Every runtime value has structural inspect and plain show fallbacks.
+    // Concrete make blocks may still override either presentation.
+    if (traitName == "Inspectable" || traitName == "Showable") return true;
 
     // A value whose type IS the trait (e.g. NamedType("Shape") against trait "Shape")
     // trivially satisfies that trait — it was already widened to the trait type.
@@ -167,8 +170,10 @@ auto TraitRegistry::withBuiltins() -> TraitRegistry {
     // which no declaration anywhere defines.
     reg.define(TraitDef{"Comparable",
         {Signature{"compare", {Type::typeVar(-1)}, Type::named("Ordering")}}});
+    reg.define(TraitDef{"Inspectable",
+        {Signature{"inspectValue", {Type::boolean()}, Type::string()}}});
     reg.define(TraitDef{"Showable",
-        {Signature{"to_s", {}, Type::string()}}});
+        {Signature{"showValue", {}, Type::string()}}});
 
     // Primitive/sized types implement Equatable/Showable, keyed by their
     // canonical printed name (see implementorKey) — same registry path a

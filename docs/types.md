@@ -288,6 +288,18 @@ Combine one with a unit expression in `to(String, in:)` to format a measure
 without changing its canonical value. Target formatting returns `String?`:
 it is `None` when the target has a different measurement kind.
 
+`to(String, in:)` belongs to the unit module, not the prelude, so it needs the
+`using` — qualifying the arguments alone is not enough. Without it the call
+reports the unmatched `in:` and names the module to import.
+
+Note that `Hour` in that example is *not* an `Units.SI` name. The time units
+(`Nanosecond` through `Week`) are prelude-global, because every unit module
+measures against the same dimensions: `Units.SI` defines `Watt * Hour` in terms
+of the shared `Hour`, and `Units.Data` uses the same units for transfer rates.
+They are also reachable as `Units.Hour`, `Units.Minute`, and so on, for call
+sites that prefer to name where a unit comes from — the qualified spelling is
+an alias for the identical constructor, not a separate one.
+
 Decimal and binary information units are provided separately by `Units.Data`.
 They produce the same `Measure` type; the uppercase names are conversion unit
 values:

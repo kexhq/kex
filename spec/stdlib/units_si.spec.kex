@@ -37,6 +37,22 @@ describe("Units.SI") do
     assert(1.watt.to(String, in: Kilo(Watt * Hour)) == None)
   end
 
+  it("exposes prefix Unit methods to callers outside the module") do
+    # SIPrefix's `make` body reads module-private display helpers. Those are
+    # reachable from a call site outside Units.SI, not just from within it.
+    let target = Kilo(Watt * Hour)
+    assert(target.kind == :energy)
+    assert(target.symbol == "kWh")
+    # Wh already carries 3600, and the prefix multiplies onto it.
+    assert(target.factor == 3600000.0)
+    assert(Micro(Watt).symbol == "μW")
+  end
+
+  it("accepts the Units-qualified spelling of a shared time unit") do
+    let energy = watt(11_111) * 1.hour
+    assert(energy.to(String, in: Kilo(Watt * Units.Hour)) == Just("11.111 kWh"))
+  end
+
   it("formats every decimal prefix") do
     assert(mega(2000000.watt).to(String) == "2.0 MW")
     assert(giga(3000000000.watt).to(String) == "3.0 GW")

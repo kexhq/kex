@@ -1630,8 +1630,9 @@ int main() {
             assertFalse(traits.satisfies(Type::list(Type::named("MysteryType")), "Equatable"));
         });
 
-        it("does not satisfy an unregistered trait for a NamedType", [traits]() {
-            assertFalse(traits.satisfies(Type::named("Ok"), "Showable"));
+        it("uses the universal display fallback for a NamedType", [traits]() {
+            assertTrue(traits.satisfies(Type::named("Ok"), "Showable"));
+            assertTrue(traits.satisfies(Type::named("Ok"), "Inspectable"));
         });
 
         it("exposes built-in trait definitions by name", [traits]() {

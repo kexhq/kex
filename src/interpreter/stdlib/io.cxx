@@ -5,6 +5,22 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerIOBuiltins() -> void {
+    auto protocolText = [this](const ValuePtr& value,
+                               const std::string& method,
+                               std::vector<ValuePtr> extra = {}) {
+        std::vector<ValuePtr> args{value};
+        args.insert(args.end(), extra.begin(), extra.end());
+        auto target = dispatchTypeName(value) + "::" + method;
+        if (!m_functionValues.count(target))
+            target = (method == "showValue" ? "Showable" : "Inspectable") +
+                     std::string("::") + method;
+        if (m_functionValues.count(target)) {
+            auto rendered = callFunction(target, std::move(args), {}, {});
+            if (auto* text = std::get_if<StringValue>(&rendered->data))
+                return text->value;
+        }
+        return method == "inspectValue" ? value->inspect() : value->toString();
+    };
     auto aliasDual = [this](const std::string& alias, const std::string& target) {
         auto value = m_globalEnv->get(target);
         m_globalEnv->define(alias, value);
@@ -14,9 +30,9 @@ auto Evaluator::registerIOBuiltins() -> void {
     defineModule("IO");
 
     // IO.printLine(msg...) — stringify args, write to stdout, trailing newline.
-    defineDual("IO::printLine", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::printLine", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
-        for (const auto& arg : args) out += arg->toString();
+        for (const auto& arg : args) out += protocolText(arg, "showValue");
         out += "\n";
         m_output += out;
         if (m_mockIO) {
@@ -28,9 +44,9 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     // IO.print(msg...) — like printLine but without the trailing newline.
-    defineDual("IO::print", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::print", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
-        for (const auto& arg : args) out += arg->toString();
+        for (const auto& arg : args) out += protocolText(arg, "showValue");
         m_output += out;
         if (m_mockIO) {
             m_mockIOOutput += out;
@@ -40,13 +56,15 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::unit();
     });
 
-    defineDual("IO::inspect", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::inspect", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
+        const auto rendered = protocolText(
+            val, "inspectValue", {Value::boolean(kex::color::enabled)});
         if (m_mockIO) {
-            m_mockIOOutput += val->inspect() + " : " + val->typeName() + "\n";
+            m_mockIOOutput += rendered + " : " + val->typeName() + "\n";
         } else {
-            std::cerr << val->inspect() << " "
+            std::cerr << rendered << " "
                       << kex::color::apply(kex::color::gray) << ":"
                       << kex::color::apply(kex::color::reset) << " "
                       << kex::color::apply(kex::color::cyan) << val->typeName()
@@ -60,9 +78,9 @@ auto Evaluator::registerIOBuiltins() -> void {
     aliasDual("IO::putLine", "IO::printLine");
 
     // IO.printError(msg) — write a line to stderr (no exit).
-    defineDual("IO::printError", [this](std::vector<ValuePtr> args) -> ValuePtr {
+    defineDual("IO::printError", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         std::string out;
-        for (const auto& a : args) out += a->toString();
+        for (const auto& a : args) out += protocolText(a, "showValue");
         out += "\n";
         m_output += out;
         if (m_mockIO) {

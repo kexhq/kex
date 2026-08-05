@@ -29,10 +29,7 @@ private:
     auto resolveUsingBlock(const ast::UsingBlock& block) -> void;
     auto resolveExportDecl(const ast::ExportDecl& decl) -> void;
     auto resolveFunctionDef(const ast::FunctionDef& def) -> void;
-    auto resolveMakeFns(const std::vector<std::variant<
-            std::unique_ptr<ast::FunctionDef>,
-            std::unique_ptr<ast::TypeAnnotation>,
-            std::unique_ptr<ast::VisibilityBlock>>>& body) -> void;
+    auto resolveMakeFns(const decltype(ast::MakeDef::body)& body) -> void;
 
     auto resolveExpr(const ast::Expr& expr) -> void;
     auto resolveBody(const std::vector<ast::ExprPtr>& body) -> void;

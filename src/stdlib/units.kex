@@ -114,9 +114,11 @@ make Measure do
   let kind -> Atom = this.unit.kind
   let symbol -> String = this.unit.symbol
   let to(String) -> String = "${this.value} ${this.unit.symbol}"
-  # A target display unit is optional; unit modules can provide compatible
-  # target formatting through their own Measure overload.
-  let to(String, in) -> String? = None
+  # Formatting into a target display unit deliberately has NO prelude clause.
+  # A unit module (Units.SI, Units.Data, ...) supplies `to(String, in:)` for
+  # the units it owns, and reaching one requires importing it. A catch-all
+  # here would answer `None` for an un-imported module instead — a silently
+  # empty Optional in place of "you need `using Units.SI`".
 
   let scale(multiplier: Number) -> Measure do
     let converted = Kex.Intrinsic.Fun.convertTo(multiplier, Float).or(0.0)
@@ -193,4 +195,22 @@ make Measure do
       false -> return Error("Cannot subtract measures of different kinds")
     end
   end
+end
+
+# The time units are prelude-global, because every unit module measures against
+# the same dimensions — `Units.SI` defines `Watt * Hour` with the `Hour`
+# declared above, and future domains do the same. That makes `Hour` correct but
+# not obviously located, so the same constructors are reachable under `Units`
+# too, for call sites that would rather name where a unit comes from. These are
+# aliases, not copies: each binds the identical constructor, so `Units.Hour`
+# and `Hour` match the same patterns and compare equal.
+module Units do
+  let Nanosecond = Nanosecond
+  let Microsecond = Microsecond
+  let Millisecond = Millisecond
+  let Second = Second
+  let Minute = Minute
+  let Hour = Hour
+  let Day = Day
+  let Week = Week
 end

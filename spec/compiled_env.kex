@@ -1,0 +1,28 @@
+# `ENV.get` inside a `compiled do` block — the one permitted compile-time
+# effect, and it works: the variable is read while compiling and the value
+# inlined, leaving no `ENV` reference in the emitted module at all.
+#
+# The module is `ENV`, not `Env`. `docs/compiled-eval.md` and this project's own
+# todo both said `Env.get` and recorded it as "does not resolve at runtime at
+# all" — it resolves fine under its real name, and always did.
+#
+# This spec runs without the variable set, so it pins the FALLBACK path, which
+# is the half that is reproducible. That the set path bakes the value in is
+# pinned in tests/codegen_test.cxx, where the environment can be controlled.
+
+compiled do
+  # Absent at compile time in a test run, so the default is what gets inlined.
+  let BUILD_TAG = ENV.get("KEX_SPEC_BUILD_TAG", "dev")
+
+  # Composed with other compile-time work: the result is one literal.
+  let BANNER = "kex-${BUILD_TAG}"
+end
+
+main do
+  IO.printLine(BUILD_TAG)
+  IO.printLine(BANNER)
+
+  # Reading the environment at RUNTIME still works and is unaffected — the
+  # compile-time read is an extra, not a replacement.
+  IO.printLine(ENV.get("KEX_SPEC_BUILD_TAG", "runtime-dev"))
+end

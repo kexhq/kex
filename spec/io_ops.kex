@@ -28,7 +28,7 @@ main do
   IO.printLine(FS.File.read(path))
   FS.File.append(path, "cd")
   IO.printLine(FS.File.read(path))
-  IO.printLine(FS.File.lines(path))
+  IO.printLine(FS.File.readLines(path))
   IO.printLine(FS.File.feed(path).or([]).take(1))
   IO.printLine(FS.File.delete(path))
   IO.printLine(FS.File.read(path))

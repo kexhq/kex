@@ -1,5 +1,5 @@
 -module(kex_intrinsic_kex).
--export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, kind/1,
+-export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, inspect/2, show/1, kind/1,
          version/0]).
 
 %% Defined by erlc from CMake (see CMakeLists.txt) so this reports the same
@@ -44,6 +44,11 @@ backend() -> 'Beam'.
 %% --no-colors, which is the mode golden specs run in.
 inspect(Value) ->
     unicode:characters_to_binary(kex_io:inspect_plain(Value)).
+
+inspect(Value, true) -> kex_io:inspect_value(Value);
+inspect(Value, false) -> inspect(Value).
+
+show(Value) -> unicode:characters_to_binary(kex_io:to_string(Value)).
 
 %% Broad language-level categories for source-owned libraries handling Any.
 kind('None') -> none;

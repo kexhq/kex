@@ -26,6 +26,29 @@ describe("time measures") do
     assert(0.5.hour.canonical == 1800.0)
   end
 
+  it("reaches every time unit under Units as well as bare") do
+    assert(Units.Nanosecond == Nanosecond)
+    assert(Units.Microsecond == Microsecond)
+    assert(Units.Millisecond == Millisecond)
+    assert(Units.Second == Second)
+    assert(Units.Minute == Minute)
+    assert(Units.Hour == Hour)
+    assert(Units.Day == Day)
+    assert(Units.Week == Week)
+  end
+
+  it("aliases the constructor itself, not a lookalike") do
+    # The alias has to carry the Unit trait and match the same patterns, or
+    # `Units.Hour` would only look right until something dispatched on it.
+    assert(Units.Hour.factor == 3600.0)
+    assert(Units.Hour.symbol == "h")
+    assert(Units.Hour.kind == :time)
+    match 90.minute.convert(Units.Hour) do
+      Ok(measure) -> assert(measure.value == 1.5)
+      Error(_) -> assert(false)
+    end
+  end
+
   it("is distinct from Duration") do
     let measure = 2.sec
     let duration = Duration { seconds: measure.canonical }

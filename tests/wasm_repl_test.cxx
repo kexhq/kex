@@ -45,6 +45,15 @@ int main() {
             importsUnitsSi(session);
             kex_repl_destroy(session);
         });
+
+        it("clears the screen with an ANSI escape sequence", []() {
+            auto* session = kex_repl_create();
+            auto cleared = eval(session, "/clear");
+            // xterm.js renders the same escape as a real terminal; the bare
+            // \x1b[2J (ED 2) is the part that actually wipes the screen.
+            assertTrue(cleared.find("\x1b[2J") != std::string::npos, cleared);
+            kex_repl_destroy(session);
+        });
     });
 
     return runAll();

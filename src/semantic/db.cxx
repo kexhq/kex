@@ -2,6 +2,7 @@
 #include "analyzer.hxx"
 #include "collect_pass.hxx"
 #include "resolve_pass.hxx"
+#include "../compiled/expand.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
 #include <algorithm>
@@ -45,6 +46,21 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
         fatalParseError = noTokens && !parser.diagnostics().empty();
     }
     if (fatalParseError) return;
+
+    // The DB re-reads and re-parses the file itself, so it would otherwise see
+    // the program BEFORE compile-time expansion and report every generated
+    // declaration as an undefined name — even though codegen is fine, because
+    // main.cxx expands the AST it compiles. Run the same pass here so both
+    // views agree. Diagnostics are dropped: main.cxx reports them once, from
+    // the copy it compiles.
+    //
+    // This does mean a file with `compiled` blocks is expanded twice per
+    // build. Acceptable while expansion is cheap; the alternative is threading
+    // the already-expanded declarations in through updateFile's signature.
+    {
+        std::vector<Diagnostic> ignored;
+        compiled::expand(state.ast, ignored);
+    }
 
     // Companion declarations (see the header): parse each and prepend
     // everything except its `main` block, so the collect/resolve passes below

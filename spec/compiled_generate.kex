@@ -1,0 +1,52 @@
+# Declaration generation: `let %name(...)` inside a `compiled do` block
+# declares a function whose NAME is computed at compile time, so an ordinary
+# loop over data generates a family of functions.
+#
+# Names are deliberately ones the stdlib does NOT define. An earlier version of
+# this spec generated `first`/`second`/`third` — which are real List methods
+# (src/stdlib/list.kex:64,75,86), so with UFCS those calls resolved to the
+# stdlib and the spec passed whether or not generation ran at all. Every name
+# below is absent from src/, and each body returns something no stdlib function
+# would, so these calls can only succeed if OUR declarations exist.
+#
+# The generated body closes over BOTH loop variables, and both are
+# compile-time only — they are baked into each body as literals.
+
+compiled do
+  ["tagAlpha", "tagBeta", "tagGamma"].eachIndexed do |name, index|
+    let %name(x: Int) -> String do
+      "${name}:${x * index}"
+    end
+  end
+end
+
+# `%{expr}` computes the name from an arbitrary compile-time expression, where
+# `%name` can only splice a variable. Both build the same node.
+compiled do
+  ["one", "two"].each do |base|
+    let %{"get_" + base}(x: Int) -> String do
+      "${base}=${x}"
+    end
+  end
+end
+
+# `type %name = ...` generates a type alias or sum type the same way.
+# Type names must be upper-case, so lower-case source data is capitalized —
+# the reason String#capitalize exists. A lower-case generated type name is a
+# compile-time error suggesting exactly this.
+compiled do
+  ["small", "large"].each do |n|
+    type %{n.capitalize} = Int
+  end
+end
+
+main do
+  let small: Small = 1
+  let large: Large = 2
+  IO.printLine("${small} ${large}")
+  IO.printLine(tagAlpha(7))
+  IO.printLine(tagBeta(7))
+  IO.printLine(tagGamma(7))
+  IO.printLine(get_one(1))
+  IO.printLine(get_two(2))
+end

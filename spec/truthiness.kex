@@ -1,0 +1,55 @@
+# kex: no-check
+# Kex truthiness, Crystal semantics: only `false`, `None` and `()` are falsy.
+# Everything else — 0, "", [], {}, Ok(_), Just(_) — is truthy.
+#
+# `src/stdlib/truthyable.kex` states the rule and the tree walker has always
+# implemented it. BEAM matched `true`/`false` LITERALLY, so anything else in
+# condition position crashed rather than being tested:
+#
+#   if Ok(1) then ... end          -> {case_clause,{'Ok',1}}
+#   [1,2].filter { |n| Just(n) }   -> {bad_filter,{'Just',1}}
+#   [1,2].find   { |n| Ok(n) }     -> {case_clause,{'Ok',1}}
+#
+# Two places needed it, because BEAM tests conditions in two different ways:
+# `matchBool` in lowering (every `if`/`then-else`/trailing-if), and the list
+# predicates in `kex_intrinsic_list`, which handed the block's result straight
+# to `lists:filter`/`lists:search`.
+#
+# no-check because passing a non-Bool where a Bool is expected is exactly what
+# the checker objects to — the point here is what the two RUNTIMES do with it.
+
+let show(label: String, v: Bool) -> Void do
+  IO.printLine("${label} ${v}")
+end
+
+main do
+  # The three falsy values, and only these.
+  show("false ", if false then true else false end)
+  show("None  ", if None then true else false end)
+
+  # Everything else is truthy, including the ones other languages call falsy.
+  show("zero  ", if 0 then true else false end)
+  show("empty ", if "" then true else false end)
+  show("nil-l ", if [] then true else false end)
+  show("true  ", if true then true else false end)
+  show("Ok    ", if Ok(1) then true else false end)
+  show("Just  ", if Just(0) then true else false end)
+
+  # A real comparison still takes the direct path — this is the common case and
+  # must not pay for the check above.
+  show("cmp   ", if 1 > 2 then true else false end)
+
+  # Trailing `if` and `then/else` go through the same lowering.
+  IO.printLine("trailing" if Ok(1))
+  IO.printLine(if None then "unreachable" else "then-else" end)
+
+  # List predicates take the block's result as a condition, so they need the
+  # same rule — this is where `bad_filter` came from.
+  IO.printLine("${[1, 2].filter { |n| Just(n) }}")
+  IO.printLine("${[1, 2].filter { |n| None }}")
+  IO.printLine("${[1, 2].find { |n| Ok(n) }}")
+  IO.printLine("${[1, 2].reject { |n| None }}")
+  IO.printLine("${[1, 2].count { |n| Ok(n) }}")
+  IO.printLine("${[1, 2].all? { |n| Just(n) }} ${[1, 2].any? { |n| None }}")
+  IO.printLine("${[1, 2].partition { |n| if n > 1 then Ok(n) else None end }}")
+end

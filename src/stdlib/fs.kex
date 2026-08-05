@@ -39,8 +39,12 @@ module FS do
     rename : FilePath -> FilePath -> Bool
     let rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
 
-    lines : FilePath -> [String]?
-    let lines(path) = Kex.Intrinsic.File.lines(path)
+    # NOT `lines`: FilePath is an alias for String, so a receiver function
+    # named `lines` here is indistinguishable from String's own `lines` at
+    # every call site, and merely saying `using FS` made `text.lines`
+    # ambiguous. `readLines` also says what it does — it reads the file.
+    readLines : FilePath -> [String]?
+    let readLines(path) = Kex.Intrinsic.File.lines(path)
 
     feed : FilePath -> Stream<String>?
     let feed(path) = Kex.Intrinsic.File.feed(path)

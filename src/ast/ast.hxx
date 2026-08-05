@@ -122,6 +122,12 @@ struct FieldPattern {
 };
 
 struct RecordPattern {
+    // Optional type name for a *named* record pattern (`Foo { x, y }`). When
+    // absent, the pattern is purely structural — it matches any record (or map)
+    // carrying the listed fields. When present, the match also asserts the
+    // value's record type, so `ParseError { value, rest }` won't match any
+    // other record that happens to share those field names.
+    std::string typeName;
     std::vector<FieldPattern> fields;
 };
 
@@ -395,6 +401,27 @@ struct ErrorNode {
 
 // `using Module` or `using Module do ... end` inside a function/main body.
 // Brings the module's compiled-block definitions into the current scope.
+// `let %name(...) -> T do ... end` inside a `compiled do` block: a declaration
+// whose NAME is computed at compile time.
+//
+// It is an EXPRESSION rather than a declaration form so that generation can be
+// driven by ordinary code — `NAMES.eachIndexed do |n, i| let %n(...) ... end`
+// needs no new statement grammar, and loops, nesting and conditionals all work
+// because the compile-time sandbox simply runs them. Evaluating one produces no
+// value; it RECORDS a declaration for the expansion pass to splice in.
+// The declaration a splice generates. Exactly one alternative is set; the
+// variant is what keeps that an invariant rather than a convention.
+// shared_ptr because one template yields N declarations, each an independent
+// ast::clone of it.
+using GeneratedTemplate = std::variant<std::shared_ptr<struct FunctionDef>,
+                                       std::shared_ptr<struct TypeDef>,
+                                       std::shared_ptr<struct MakeDef>>;
+
+struct GeneratedDecl {
+    ExprPtr name;                           // `%n` -> Identifier{"n"}
+    GeneratedTemplate function;
+};
+
 struct UsingExpr {
     TypeName module;
     std::optional<std::string> alias;
@@ -449,6 +476,7 @@ struct Expr {
         TryExpr,
         TryingExpr,
         ErrorNode,
+        GeneratedDecl,
         UsingExpr
     > kind;
 };
@@ -474,11 +502,23 @@ struct FunctionClause {
     std::vector<ExprPtr> body;
     std::optional<TypeExprPtr> returnAnnotation;
     std::optional<RescueBlock> rescue;
+    // Whether the source wrote a parameter list at all. `let x = 3` and
+    // `let x() = 3` are otherwise the same node — an empty `params` — and they
+    // are NOT the same thing: the first is a value binding, the second a
+    // nullary function. `compiled do` has to tell them apart, since it
+    // evaluates bindings at compile time and leaves functions alone. Same
+    // distinction MethodCall::parenthesized draws on the call side.
+    bool hasParamList = false;
 };
 
 struct FunctionDef {
     SourceLocation location;
     std::string name;
+    // Set only while parsing `let %{expr}(...)`: the compile-time expression
+    // that computes this declaration's name. Transient — parseLetExpr moves it
+    // into a GeneratedDecl and clears it, so it never reaches a real
+    // declaration or any backend.
+    ExprPtr computedName;
     bool isFoul = false;
     bool isPredicate = false; // ends with ?
     std::vector<FunctionClause> clauses;
@@ -549,10 +589,17 @@ struct MakeDef {
     TypeExprPtr target;
     bool isFinal = false;
     std::vector<std::string> implements;  // trait names claimed by this block
+    // ExprPtr is only ever produced for a GENERATED `make %name do ... end`,
+    // where the body may hold a driver loop declaring methods
+    // (`OPS.each do |op| let %op(...) ... end end`). Expansion evaluates those
+    // and replaces them with the methods they declare, so no `make` that
+    // reaches a backend ever contains one — the ordinary `make Foo do ... end`
+    // parser never produces one at all.
     std::vector<std::variant<
         std::unique_ptr<FunctionDef>,
         std::unique_ptr<TypeAnnotation>,
-        std::unique_ptr<VisibilityBlock>
+        std::unique_ptr<VisibilityBlock>,
+        ExprPtr
     >> body;
 };
 

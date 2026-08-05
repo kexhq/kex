@@ -45,6 +45,35 @@ auto runKex(const std::vector<std::string>& args, const std::string& standardIn)
     return result;
 }
 
+struct CapturedStreams {
+    std::string out;
+    std::string err;
+};
+
+auto runKexStreams(const std::vector<std::string>& args) -> CapturedStreams {
+    char outPath[] = "/tmp/kex_color_stdout_XXXXXX";
+    char errPath[] = "/tmp/kex_color_stderr_XXXXXX";
+    int outFd = mkstemp(outPath);
+    int errFd = mkstemp(errPath);
+    close(outFd);
+    close(errFd);
+
+    std::string cmd = std::string(KEX_BINARY_PATH);
+    for (const auto& arg : args) cmd += " " + arg;
+    cmd += " > " + std::string(outPath) + " 2> " + errPath;
+    std::system(cmd.c_str());
+
+    auto read = [](const char* path) {
+        std::ifstream file(path);
+        return std::string(std::istreambuf_iterator<char>(file),
+                           std::istreambuf_iterator<char>());
+    };
+    CapturedStreams captured{read(outPath), read(errPath)};
+    std::remove(outPath);
+    std::remove(errPath);
+    return captured;
+}
+
 auto writeTempSource(const std::string& source) -> std::string {
     char tmp[] = "/tmp/kex_color_src_XXXXXX";
     int fd = mkstemp(tmp);
@@ -126,6 +155,40 @@ int main() {
             assertTrue(contains(out, "\x1b[32m\"hi\""), "string value not green: " + out);
             assertTrue(contains(out, "\x1b[36mString"), "type name not cyan: " + out);
             assertTrue(contains(out, "\x1b[90m:"), "':' separator not gray: " + out);
+        });
+
+        // The substring assertions above pass on both backends even when the
+        // two disagree about WHERE the spaces sit relative to the escape
+        // sequences — BEAM used to emit the separator as one gray " : " span
+        // while the walker put the spaces outside it. Visually identical, so
+        // only a byte comparison catches it.
+        it("renders the colored inspect line identically on both backends", []() {
+            auto path = writeTempSource(
+                "main do\n"
+                "  IO.inspect(42)\n"
+                "  IO.inspect(\"hi\")\n"
+                "  IO.inspect([1, 2, 3])\n"
+                "end\n");
+            auto walker = runKex({path}, "");
+            auto beam = runKex({"-R", path}, "");
+            std::remove(path.c_str());
+            assertTrue(hasAnsi(walker), "expected colored output: " + walker);
+            assertEqual(beam, walker);
+        });
+
+        it("keeps program inspection on stderr on both backends", []() {
+            auto path = writeTempSource(
+                "main do\n"
+                "  IO.printLine(\"printed\")\n"
+                "  IO.inspect(42)\n"
+                "end\n");
+            for (const auto& backend : {std::vector<std::string>{"--no-colors", path},
+                                        std::vector<std::string>{"-R", "--no-colors", path}}) {
+                auto captured = runKexStreams(backend);
+                assertEqual(captured.out, std::string("printed\n"));
+                assertEqual(captured.err, std::string("42 : Int\n"));
+            }
+            std::remove(path.c_str());
         });
     });
 
@@ -226,6 +289,47 @@ int main() {
             auto out = runKex({"--no-colors"}, "42\n");
             assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
             assertTrue(contains(out, "=> 42 : Int"), "missing plain result line: " + out);
+        });
+
+        it("renders BEAM IO.inspect like the walker, without a REPL prefix", []() {
+            auto path = writeTempSource(
+                "main do\n"
+                "  IO.inspect(42)\n"
+                "end\n");
+            auto walker = runKex({"--no-colors", path}, "");
+            auto beam = runKex({"-R", "--no-colors", path}, "");
+            std::remove(path.c_str());
+            assertEqual(walker, std::string("42 : Int\n"));
+            assertEqual(beam, walker);
+            assertFalse(hasAnsi(beam), "unexpected ANSI escapes in: " + beam);
+            assertFalse(contains(beam, "=> "), "unexpected REPL prefix in: " + beam);
+        });
+
+        it("passes the runtime color decision to Inspectable on both backends", []() {
+            auto path = writeTempSource(
+                "record ColorProbe do\n"
+                "  value : Integer\n"
+                "end\n"
+                "make ColorProbe, implement: Inspectable do\n"
+                "  let inspectValue(colors: Bool) -> String = "
+                    "if colors then \"colors-on\" else \"colors-off\" end\n"
+                "end\n"
+                "main do\n"
+                "  IO.inspect(ColorProbe { value: 1 })\n"
+                "end\n");
+            for (const auto& backend : {std::vector<std::string>{path},
+                                        std::vector<std::string>{"-R", path}}) {
+                auto out = runKex(backend, "");
+                assertTrue(contains(out, "colors-on"), out);
+            }
+            for (const auto& backend : {
+                     std::vector<std::string>{"--no-colors", path},
+                     std::vector<std::string>{"-R", "--no-colors", path}}) {
+                auto out = runKex(backend, "");
+                assertTrue(contains(out, "colors-off"), out);
+                assertFalse(hasAnsi(out), "unexpected ANSI escapes in: " + out);
+            }
+            std::remove(path.c_str());
         });
     });
 

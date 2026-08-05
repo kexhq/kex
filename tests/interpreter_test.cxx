@@ -1345,13 +1345,13 @@ int main() {
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 
-        it("lines materializes a list of lines", [scratchPath]() {
+        it("readLines materializes a list of lines", [scratchPath]() {
             auto path = scratchPath();
             std::filesystem::remove(path);
             auto result = runFS(
                 "main do\n"
                 "  FS.File.write(\"" + path + "\", \"a\\nb\\nc\")\n"
-                "  FS.File.lines(\"" + path + "\").or([])\n"
+                "  FS.File.readLines(\"" + path + "\").or([])\n"
                 "end\n"
             );
             auto& list = std::get<ListValue>(result->data);

@@ -75,6 +75,10 @@ struct VoidType {};
 struct ConstrainedType {
     std::string varName;
     std::string traitName;
+    // Negative interface-generic id when this bound participates in a public
+    // relationship such as `(A: Inspectable) -> A`; zero for ordinary
+    // structural constraints that do not bind a result placeholder.
+    int genericId = 0;
 };
 
 struct Type {
@@ -110,7 +114,9 @@ struct Type {
     static auto map(TypePtr key, TypePtr value) -> TypePtr;
     static auto optional(TypePtr inner) -> TypePtr;
     static auto typeVar(int id) -> TypePtr;
-    static auto constrained(const std::string& varName, const std::string& traitName) -> TypePtr;
+    static auto constrained(const std::string& varName,
+                            const std::string& traitName,
+                            int genericId = 0) -> TypePtr;
 
     // Sized integers — explicit opt-ins for fixed width.
     static auto byte() -> TypePtr;     // UInt8

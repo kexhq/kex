@@ -1635,7 +1635,7 @@ modules. Paths use the `FilePath` type.
 | `FS.File.read(path)` | `String?` — whole file or `None` |
 | `FS.File.write(path, content)` | `Bool` — overwrite |
 | `FS.File.append(path, content)` | `Bool` — append |
-| `FS.File.lines(path)` | `[String]?` — lines |
+| `FS.File.readLines(path)` | `[String]?` — lines |
 | `FS.File.feed(path)` | `Stream<String>?` — lazy lines |
 | `FS.File.exists?(path)`, `file?`, `directory?` | `Bool` |
 | `FS.File.size(path)` | `Integer?` — bytes |

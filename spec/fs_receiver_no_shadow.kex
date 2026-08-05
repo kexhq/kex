@@ -1,0 +1,18 @@
+# `using FS` must not disturb String's own receiver functions. `FilePath` is
+# an alias for `String`, so a file-reading function named `lines` would be
+# indistinguishable from `String.lines` at every call site — importing FS
+# made `text.lines` ambiguous with no way to disambiguate. FS names it
+# `readLines`, and both are callable in one file.
+
+using FS
+
+let firstLine(text: String) -> String = text.lines.at(0).or("")
+
+main do
+  IO.printLine(firstLine("alpha\nbeta"))
+  IO.printLine("alpha\nbeta".lines.count.to(String).or("?"))
+  match FS.File.readLines("/no/such/kex_spec_missing.txt") do
+    None -> IO.printLine("none")
+    Just(ls) -> IO.printLine(ls.count.to(String).or("?"))
+  end
+end

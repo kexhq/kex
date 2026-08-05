@@ -96,6 +96,24 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             if (name == "String") return Type::string();
             if (name == "Bool") return Type::boolean();
             if (name == "Char") return Type::charT();
+            // Without these, an interface signature spelled `Atom` (or a
+            // sized numeric) came back as NamedType while the typechecker's
+            // own path builds a PrimitiveType/SizedIntType for the same name.
+            // Same printed name, different kind: typesEqual said no, so a
+            // signature was not equal to itself and overload dedupe reported
+            // `m.get(1, "")` ambiguous against its own `Atom | Integer`.
+            if (name == "Atom") return Type::atom();
+            if (name == "Byte") return Type::byte();
+            if (name == "Int8") return Type::int8();
+            if (name == "Int16") return Type::int16();
+            if (name == "Int32") return Type::int32();
+            if (name == "Int64") return Type::int64();
+            if (name == "UInt8") return Type::uint8();
+            if (name == "UInt16") return Type::uint16();
+            if (name == "UInt32") return Type::uint32();
+            if (name == "UInt64") return Type::uint64();
+            if (name == "Float32") return Type::float32();
+            if (name == "Float64") return Type::float64();
             if (name == "Float") return Type::constrained("Float", "Float");
             if (name == "Number") return Type::constrained("Number", "Number");
             if (name == "Void") return Type::unit();
@@ -661,6 +679,15 @@ inline auto sourcePreludeSemanticInterfaces()
     return sourceSemanticInterfaces(preludeSourceFiles(), true, false);
 }
 
+inline auto sameSignature(const kex::semantic::Signature& left,
+                          const kex::semantic::Signature& right) -> bool {
+    if (left.params.size() != right.params.size()) return false;
+    for (size_t i = 0; i < left.params.size(); i++)
+        if (!kex::semantic::typesEqual(left.params[i], right.params[i]))
+            return false;
+    return kex::semantic::typesEqual(left.result, right.result);
+}
+
 inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                                     kex::semantic::ImportedInterfaces extra)
     -> kex::semantic::ImportedInterfaces {
@@ -669,16 +696,48 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
         if (inserted) continue;
         for (auto& [exportName, functions] : module.exports) {
             auto& destination = it->second.exports[exportName];
-            destination.insert(destination.end(),
-                               std::make_move_iterator(functions.begin()),
-                               std::make_move_iterator(functions.end()));
+            for (auto& function : functions) {
+                const bool duplicate = std::any_of(
+                    destination.begin(), destination.end(),
+                    [&](const kex::semantic::ImportedFunction& existing) {
+                        return existing.sourceName == function.sourceName &&
+                            (sameSignature(existing.signature,
+                                           function.signature) ||
+                             (existing.backendFunction ==
+                                  function.backendFunction &&
+                              existing.signature.params.size() ==
+                                  function.signature.params.size()));
+                    });
+                // The compiled interface owns backend ABI details such as
+                // hidden protocol dictionaries. Source extraction augments
+                // missing type shapes, but must not append a source-arity
+                // duplicate that can later win overload selection.
+                if (!duplicate) destination.push_back(std::move(function));
+            }
         }
     }
     for (auto& [name, functions] : extra.receiverFunctions) {
         auto& destination = base.receiverFunctions[name];
-        destination.insert(destination.end(),
-                           std::make_move_iterator(functions.begin()),
-                           std::make_move_iterator(functions.end()));
+        for (auto& function : functions) {
+            // Both sides can describe the SAME function: a module compiled
+            // into an entry unit is covered by that unit's interface AND by
+            // its own companion interface. That is one function with two
+            // backend spellings, not two providers — left as two, a call to
+            // it is reported ambiguous against itself. The description that
+            // owns the function wins: it routes to the module the function is
+            // actually written in, and it carries that module as its source,
+            // which is what `using` visibility is decided on.
+            auto duplicate = std::find_if(
+                destination.begin(), destination.end(),
+                [&](const kex::semantic::ImportedFunction& existing) {
+                    return existing.sourceName == function.sourceName &&
+                        sameSignature(existing.signature, function.signature);
+                });
+            if (duplicate == destination.end())
+                destination.push_back(std::move(function));
+            else if (!function.backendModule.empty())
+                *duplicate = std::move(function);
+        }
     }
     base.traitConformances.insert(
         base.traitConformances.end(),

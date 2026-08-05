@@ -1,0 +1,64 @@
+# A tuple pattern works in a FUNCTION PARAMETER, the same spelling `match` and
+# `let` already use.
+#
+# This is the one destructuring position that had no equivalent. A named
+# function does not auto-spread the way a block does — `let f(a, b)` is two
+# parameters, not one tuple — so before this there was no way to destructure a
+# tuple argument in a function head at all; you took it whole and matched in the
+# body. `parseParam` already routed `@`, `{` and `[` to the pattern parser (which
+# has handled tuples all along, hence `match`); `(` was simply missing.
+#
+# Deliberately NOT added, because each already has a working spelling and a
+# second one buys nothing:
+#   let a, b = (1, 2)        — `let (a, b) = (1, 2)` does this
+#   [(1,2)].each { |(k,v)| } — `|k, v|` auto-spreads over a tuple already
+
+let pair((a, b)) -> String do
+  "${a}+${b}"
+end
+
+let nested((name, (x, y))) -> String do
+  "${name}@${x},${y}"
+end
+
+# Mixed with an ordinary parameter, and not in first position.
+let labelled(prefix: String, (a, b)) -> String do
+  "${prefix}${a}${b}"
+end
+
+record Point do
+  x : Int = 0
+  y : Int = 0
+end
+
+make Point do
+  # A pattern parameter in a make method still takes `this` implicitly. The
+  # checker treated ANY pattern as a receiver match — which is what the `@...`
+  # and `x.._` idioms are — so a list or tuple parameter, which destructures an
+  # ARGUMENT, made every call site `expects 1 argument(s), got 2`.
+  let shifted((dx, dy)) -> Point do
+    Point { x: @x + dx, y: @y + dy }
+  end
+
+  let spanned([a, b]) -> Int do
+    @x + a + b
+  end
+end
+
+main do
+  IO.printLine(pair((1, 2)))
+  IO.printLine(nested(("p", (3, 4))))
+  IO.printLine(labelled("v", (5, 6)))
+
+  let p = Point { x: 1, y: 1 }.shifted((10, 20))
+  IO.printLine("${p.x},${p.y}")
+  IO.printLine("${Point { x: 5 }.spanned([1, 2])}")
+
+  # The forms that already worked, unchanged.
+  let (a, b) = (7, 8)
+  IO.printLine("${a}${b}")
+
+  [(9, 10)].each do |k, v|
+    IO.printLine("${k},${v}")
+  end
+end

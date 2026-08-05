@@ -1,0 +1,8 @@
+1
+Error(Bad(no))
+[1, Error(Bad(no))]
+each got 1
+each finished
+[Error(Bad(no))]
+-1
+[[Error(Bad(no))]]
