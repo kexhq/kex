@@ -1,0 +1,53 @@
+# `make %name do ... end` — generating a make block whose target type is
+# computed at compile time, and generating its methods from a second loop
+# nested inside it.
+#
+# Every method name here is deliberately NOT a stdlib or prelude name. An
+# earlier draft used `dimension`, which the prelude already defines as a record
+# accessor; it resolved to that on BEAM and returned a plausible-looking `0`
+# while the interpreter used the generated method. A generated name that the
+# stdlib also has proves nothing on either backend.
+
+record Vec2 do
+  x : Int = 0
+  y : Int = 0
+end
+
+record Vec3 do
+  x : Int = 0
+  y : Int = 0
+end
+
+compiled do
+  let VECS = ["Vec2", "Vec3"]
+  let OPS = ["grow", "shrink"]
+
+  VECS.eachIndexed do |vecName, vi|
+    make %vecName do
+      # A driver loop INSIDE the generated make. Both loop variables have to
+      # survive into the method bodies as literals — neither exists at runtime.
+      OPS.eachIndexed do |opName, oi|
+        let %opName(by: Int) -> String do
+          "${vecName}.${opName}(${by}) v${vi}o${oi}"
+        end
+      end
+
+      # A fixed method alongside the generated ones, closing over the outer
+      # loop variable only.
+      let axisCount() -> Int do
+        vi + 2
+      end
+    end
+  end
+end
+
+main do
+  IO.printLine(Vec2 {}.grow(3))
+  IO.printLine(Vec2 {}.shrink(4))
+  IO.printLine(Vec3 {}.grow(5))
+  IO.printLine(Vec3 {}.shrink(6))
+
+  # Distinct per target: proof the two makes are independent instantiations
+  # rather than one shared block.
+  IO.printLine("${Vec2 {}.axisCount()} ${Vec3 {}.axisCount()}")
+end

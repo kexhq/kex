@@ -1,0 +1,43 @@
+# Generation inside a module produces methods OF that module, not top-level
+# functions. Worth its own spec because the first implementation appended
+# everything at top level, and the interpreter HID that: a qualified
+# `Tags.alpha(10)` fell back to a top-level function and returned the right
+# answer, while BEAM reported `Undefined function: Tags.alpha` and an
+# unqualified `alpha(10)` — which must not resolve at all — happily worked.
+
+module Tags do
+  compiled do
+    ["alpha", "beta"].eachIndexed do |name, index|
+      let %name(x: Int) -> Int do
+        x + index
+      end
+    end
+  end
+end
+
+module CompiledOuter do
+  module CompiledInner do
+    compiled do
+      ["nested"].each do |name|
+        let %name(x: Int) -> String = "nested:${x}"
+      end
+    end
+  end
+end
+
+module ConstantDriven do
+  compiled do
+    let GENERATED_NAMES = ["fromConstant"]
+
+    GENERATED_NAMES.each do |name|
+      let %name(x: Int) -> String = "constant:${x}"
+    end
+  end
+end
+
+main do
+  IO.printLine("${Tags.alpha(10)}")
+  IO.printLine("${Tags.beta(10)}")
+  IO.printLine(CompiledOuter.CompiledInner.nested(4))
+  IO.printLine(ConstantDriven.fromConstant(5))
+end

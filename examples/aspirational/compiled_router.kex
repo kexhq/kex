@@ -7,7 +7,7 @@
 
 module Router do
   record Request do
-    method  : Symbol
+    method  : Atom
     path    : String
     params  : { String: String } = {}
     body    : String = ""

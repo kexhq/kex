@@ -1,0 +1,51 @@
+# The anonymous `{ x, y }` record pattern is purely STRUCTURAL: it matches any
+# record (or map) carrying the listed fields, without asserting a type. This is
+# the counterpart to spec/record_pattern_named.kex.
+#
+# Two known gaps, both pre-existing and both interpreter-only behaviour today —
+# pinned here so a future fix shows up as a spec diff:
+#
+#  1. `match` does not destructure MAPS via `{ k }` (matchPattern's
+#     RecordPattern case only inspects RecordValue; the map branch lives in the
+#     let-destructuring path). A `let { k } = map` does work.
+#  2. The BEAM backend cannot lower an anonymous record pattern in a match arm
+#     or `if let` — with no type name there is no field layout to index. It
+#     reports a clear error rather than miscompiling. Named patterns work on
+#     both backends. So this file is expected to show as "differing" under
+#     `make spec-beam`, which is informational and not a build failure.
+
+record Miss do
+  value : String
+  rest  : String
+end
+
+record Alt do
+  value : String
+  rest  : String
+end
+
+main do
+  let m1 = Miss { value: "12", rest: "EUR" }
+  let a1 = Alt { value: "a", rest: "b" }
+
+  # --- structural: the SAME pattern matches both record types
+  match m1 do
+    { value, rest } -> IO.printLine("anon miss ${value}/${rest}")
+  end
+  match a1 do
+    { value, rest } -> IO.printLine("anon alt ${value}/${rest}")
+  end
+
+  # --- structural in a let destructure
+  let { value, rest } = a1
+  IO.printLine("anon let ${value}/${rest}")
+
+  # --- gap 1: maps destructure in a `let` but not in a `match`
+  let mp = { "value": "mv", "rest": "mr" }
+  let { value, rest } = mp
+  IO.printLine("map let ${value}/${rest}")
+  match mp do
+    { value, rest } -> IO.printLine("map match ${value}/${rest}")
+    _               -> IO.printLine("map match fell through (known gap)")
+  end
+end

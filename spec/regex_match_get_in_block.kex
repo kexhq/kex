@@ -1,0 +1,24 @@
+# `Match.get(key, default)` is documented as `m.get(1, "0")`, and inside a
+# block it was rejected as ambiguous against its OWN signature, printed twice.
+# Two causes, both fixed:
+#
+#   * interface signatures spelled `Atom` came back as a named type while the
+#     typechecker builds a primitive for the same name, so the parameter
+#     `Atom | Integer` was not equal to itself and overload dedupe kept both;
+#   * every opt-in stdlib module is compiled into the `kex_prelude` umbrella
+#     module as well as its own companion module, so `using Regex` sees one
+#     function under two backend modules — not two providers.
+
+using Regex
+
+let firstGroups(text: String) -> [String] do
+  text.scan(regex`(\w)(\d)`)
+    .map do |m|
+      "${m.get(1, "?")}${m.get(2, "?")}"
+    end
+end
+
+main do
+  IO.printLine(firstGroups("a1 b2 c3").join(","))
+  IO.printLine(firstGroups("nothing here").count.to(String).or("?"))
+end

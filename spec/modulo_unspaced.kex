@@ -1,0 +1,26 @@
+# `%` is both the modulo operator and the splice sigil (`%name`). The lexer
+# tells them apart by what precedes: after anything that can END an expression,
+# `%` is modulo. Unspaced `x %y` used to lex `%y` as a SpliceIdent and fail to
+# parse.
+
+main do
+  let x = 10
+  let y = 3
+  let xs = [10, 20]
+  let m = { a: 9 }
+
+  # every spacing of the same expression
+  IO.printLine((x % y).to(String).or("?"))
+  IO.printLine((x %y).to(String).or("?"))
+  IO.printLine((x% y).to(String).or("?"))
+  IO.printLine((x%y).to(String).or("?"))
+
+  # after each kind of expression-ending token
+  IO.printLine((17 %y).to(String).or("?"))          # Integer
+  IO.printLine((xs.at(0).or(0) %y).to(String).or("?"))   # RParen
+  IO.printLine((m.get(:a).or(0) %y).to(String).or("?"))  # RParen
+  IO.printLine((if true then 10 else 0 end %y).to(String).or("?"))  # End
+
+  # chained, to be sure the operator still binds normally
+  IO.printLine((x %y %2).to(String).or("?"))
+end

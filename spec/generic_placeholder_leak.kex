@@ -1,0 +1,18 @@
+# A signature's generic placeholders are per-signature: every one numbers its
+# own from -1. Binding one into the global substitution table made an
+# unrelated signature's `A` mean whatever the last such call passed — after
+# `args.at(i).or("")` bound it to String, `(0..3).filter` returned [String]
+# and its block parameter typed as String, so `|n| n + 1` failed with
+# "Cannot add String and Integer".
+
+let evens(words: [String]) -> [Integer] do
+  (0..(words.count - 1))
+    .filter do |i|
+      words.at(i).or("").startsWith?("e")
+    end
+    .map { |i| i * 10 }
+end
+
+main do
+  IO.printLine(evens(["egg", "ham", "eel"]).map { |n| n.to(String).or("?") }.join(","))
+end

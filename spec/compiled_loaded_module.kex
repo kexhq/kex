@@ -1,0 +1,5 @@
+using Compiled.Late
+
+main do
+  IO.printLine(Compiled.Late.answer())
+end

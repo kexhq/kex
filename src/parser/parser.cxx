@@ -618,7 +618,15 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     }
 
     def->target = parseTypeExpr();
+    parseMakeImplements(*def);
+    parseMakeBody(*def);
+    return def;
+}
 
+// `, implement: Trait1, Trait2` — optional, and shared with `make %name`
+// generation, which has no target type to parse before it.
+auto Parser::parseMakeImplements(ast::MakeDef& into) -> void {
+    auto* def = &into;
     // Optional `, implement: Trait1, Trait2` clause
     // Syntax: `make Something, implement: Showable, Comparable do`
     if (check(TokenType::Comma) && peekNext().type == TokenType::LowerIdent) {
@@ -646,6 +654,11 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
         }
     }
 
+}
+
+// The `do ... end` half of a `make`, shared with `make %name` generation.
+auto Parser::parseMakeBody(ast::MakeDef& into, bool allowDrivers) -> void {
+    auto* def = &into;
     expect(TokenType::Do, "Expected 'do' after make target");
     skipNewlines();
 
@@ -657,8 +670,15 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
             def->body.push_back(parseFunctionDef(true));
         } else if (check(TokenType::Let)) {
             def->body.push_back(parseFunctionDef());
-        } else if (check(TokenType::LowerIdent)) {
+        } else if (check(TokenType::LowerIdent) &&
+                   !(allowDrivers && isMakeDriverAhead())) {
             def->body.push_back(parseTypeAnnotation());
+        } else if (allowDrivers) {
+            // A driver loop inside a GENERATED make:
+            // `OPS.each do |op| let %op(...) ... end end`. Ordinary `make`
+            // bodies never reach here, so a stray expression in one still
+            // reports "Unexpected token in make body" as before.
+            def->body.push_back(parseExpr());
         } else {
             error("Unexpected token in make body: " + std::string(tokenTypeName(peek().type)));
         }
@@ -666,7 +686,6 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
     }
 
     expect(TokenType::End, "Expected 'end' to close make");
-    return def;
 }
 
 // ===== Functions =====
@@ -680,12 +699,26 @@ auto Parser::parseFunctionDef(bool isFoul) -> std::unique_ptr<ast::FunctionDef> 
         expect(TokenType::Let, "Expected 'let'");
     }
 
+    // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
+    // time. Checked before the operator branch below, which would otherwise
+    // take the `%` as a modulo-overload name and then choke on the `{`.
+    if (check(TokenType::Percent) && peekNext().type == TokenType::LBrace) {
+        advance(); // %
+        advance(); // {
+        def->computedName = parseExpr();
+        expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+        def->name = "%";
+    }
     // Function name can be a lower ident, upper ident (static constructors),
     // keyword-as-name, splice ident, or operator
-    if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
+    else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
         check(TokenType::Loop) ||
         check(TokenType::Match) || check(TokenType::SpliceIdent)) {
-        def->name = advance().value;
+        // A splice keeps its `%` so callers can tell `let %name(...)` (the name
+        // is computed at compile time) from an ordinary `let name(...)`. The
+        // lexer strips the sigil, so it is restored here.
+        const bool spliced = check(TokenType::SpliceIdent);
+        def->name = (spliced ? "%" : "") + advance().value;
     } else if (check(TokenType::Plus) || check(TokenType::Minus) ||
                check(TokenType::Star) || check(TokenType::Slash) ||
                check(TokenType::Percent) || check(TokenType::Caret) || check(TokenType::EqEq) ||
@@ -722,6 +755,7 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
         }
         expect(TokenType::RParen, "Expected ')' after parameters");
     }
+    clause.hasParamList = hasParamList;
 
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
@@ -773,8 +807,11 @@ auto Parser::parseParams() -> std::vector<ast::Param> {
 auto Parser::parseParam() -> ast::Param {
     ast::Param param;
 
-    // Try pattern first for complex matches
-    if (check(TokenType::At) || check(TokenType::LBrace) || check(TokenType::LBracket)) {
+    // Try pattern first for complex matches. `(` is a TUPLE pattern —
+    // `|(k, v)|`, `let f((a, b))` — the same spelling `match` and `let` use,
+    // so a tuple destructures the same way in every position that binds names.
+    if (check(TokenType::At) || check(TokenType::LBrace) ||
+        check(TokenType::LBracket) || check(TokenType::LParen)) {
         param.pattern = parsePattern();
         return param;
     }
@@ -1928,10 +1965,75 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
 
-    // Type/Make keywords in expression context (compiled blocks)
+    // `type` / `make` in EXPRESSION context, which in practice means inside a
+    // `compiled do` driver loop — i.e. an attempt to generate a type or make
+    // block. Function generation (`let %name(...)`) is implemented; these are
+    // not yet.
+    //
+    // This used to skip the construct entirely and yield a placeholder
+    // identifier, so the declaration was silently discarded at parse time and
+    // the program later died with `Undefined variable: __compiled_type__`.
+    // The placeholder could never resolve, so nothing could depend on it —
+    // reporting it here loses no working behaviour and gains a diagnostic that
+    // names the actual limitation.
+    // `type %name = ...` in EXPRESSION context — i.e. inside a `compiled do`
+    // driver loop, generating a type alias or sum type.
+    if (check(TokenType::Type) && (peekNext().type == TokenType::SpliceIdent ||
+                                   peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // type
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::TypeDef>();
+        def->location = loc;
+        expect(TokenType::Equals, "Expected '=' in generated type");
+        std::vector<ast::TypeExprPtr> variants;
+        variants.push_back(parseTypeExpr());
+        while (match(TokenType::Pipe)) variants.push_back(parseTypeExpr());
+        def->variants = std::move(variants);
+        expr->kind = ast::GeneratedDecl{
+            std::move(nameExpr),
+            std::shared_ptr<ast::TypeDef>(std::move(def))};
+        return expr;
+    }
+
+    // `make %name do ... end` in EXPRESSION context — generating a make block
+    // whose target type is computed at compile time. Everything after the name
+    // is an ordinary make, so it goes through the same two helpers
+    // parseMakeDef uses; only the target differs, and it is not known yet.
+    if (check(TokenType::Make) && (peekNext().type == TokenType::SpliceIdent ||
+                                   peekNext().type == TokenType::Percent)) {
+        auto loc = currentLocation();
+        advance(); // make
+        auto nameExpr = parseSpliceName();
+        auto def = std::make_unique<ast::MakeDef>();
+        def->location = loc;
+        // `target` stays null: expansion fills it in with the resolved name.
+        parseMakeImplements(*def);
+        parseMakeBody(*def, /*allowDrivers=*/true);
+        expr->kind = ast::GeneratedDecl{
+            std::move(nameExpr),
+            std::shared_ptr<ast::MakeDef>(std::move(def))};
+        return expr;
+    }
+
+    // A `type`/`make` in expression position that is NOT a splice. There is no
+    // such construct — a plain `make Foo do ... end` is a declaration, parsed
+    // elsewhere — so reaching here means a generation form that is not
+    // supported.
+    //
+    // Recorded rather than thrown: error() throws, and the parser's recovery
+    // then resumes INSIDE the construct and reports a second, confusing error
+    // ("Expected type expression"). Reporting at the keyword and skipping the
+    // construct gives exactly one diagnostic, in the right place. The program
+    // still aborts, because a recorded diagnostic is enough.
     if (check(TokenType::Type) || check(TokenType::Make)) {
-        // Skip until matching 'end' for do blocks or newline
-        auto kw = advance();
+        m_diagnostics.push_back(
+            {currentLocation(),
+             "generating a `" + std::string(tokenTypeName(peek().type)) +
+                 "` inside `compiled do` needs a spliced name — "
+                 "`let %name(...)`, `type %name = ...` and "
+                 "`make %name do ... end` are the generation forms"});
+        advance(); // the keyword
         int depth = 0;
         while (!atEnd()) {
             if (check(TokenType::Do)) depth++;
@@ -1942,8 +2044,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             if (depth == 0 && check(TokenType::Newline)) break;
             advance();
         }
-        if (depth >= 0 && check(TokenType::End)) advance();
-        expr->kind = ast::Identifier{"__compiled_" + kw.value + "__"};
+        if (check(TokenType::End)) advance();
+        expr->kind = ast::NoneLiteral{};
         return expr;
     }
 
@@ -2298,9 +2400,52 @@ auto Parser::parseWhileExpr() -> ast::ExprPtr {
     return expr;
 }
 
+// The name of a generated declaration: `%name` splices a variable, `%{expr}`
+// evaluates an arbitrary compile-time expression. Both yield the expression
+// that produces the name.
+// Inside a generated `make`, a lower-case name starts either a type annotation
+// (`add :> This -> This`) or a driver expression (`OPS.each do ... end`). The
+// annotation form always has a `:` or `:>` right after the name, and nothing
+// else does — so one token of lookahead separates them.
+auto Parser::isMakeDriverAhead() -> bool {
+    return peekNext().type != TokenType::Colon;
+}
+
+auto Parser::parseSpliceName() -> ast::ExprPtr {
+    auto loc = currentLocation();
+    if (check(TokenType::SpliceIdent)) {
+        auto name = std::make_unique<ast::Expr>();
+        name->location = loc;
+        name->kind = ast::Identifier{advance().value};
+        return name;
+    }
+    expect(TokenType::Percent, "Expected a spliced name");
+    expect(TokenType::LBrace, "Expected '{' after '%'");
+    auto computed = parseExpr();
+    expect(TokenType::RBrace, "Expected '}' to close %{...} name");
+    return computed;
+}
+
 auto Parser::isLetFunctionDefAhead() -> bool {
     // Note: some keywords can be used as function names (e.g. 'loop', 'where')
     auto nextType = peekNext().type;
+    // `let %{expr}(...)` — a computed declaration name. Decided here rather
+    // than by the lookahead below, which advances past the name expecting an
+    // identifier and would land inside the `{...}`.
+    //
+    // Only the `%{` form. A bare `%` after `let` is the modulo OPERATOR being
+    // defined (`let %(other) = ...`, see spec/prelude/operator_overloading),
+    // which is a declaration inside a `make` block — parseMakeDef calls
+    // parseFunctionDef directly and never consults this predicate, so `%`
+    // does not belong in the name list below.
+    if (nextType == TokenType::Percent) {
+        auto saved = m_pos;
+        advance();  // let
+        advance();  // %
+        bool computed = check(TokenType::LBrace);
+        m_pos = saved;
+        if (computed) return true;
+    }
     bool isLowerName = nextType == TokenType::LowerIdent ||
                        nextType == TokenType::Loop ||
                        nextType == TokenType::Match || nextType == TokenType::SpliceIdent ||
@@ -2311,13 +2456,13 @@ auto Parser::isLetFunctionDefAhead() -> bool {
 
     // UpperIdent after `let` is a zero-arg constant definition
     // (`let MAX_RETRIES = 3`, `let DEFAULT_LEVEL = "info"`), UNLESS it's
-    // followed by `(` which makes it a constructor pattern
-    // (`let Ok((v, r)) = parse(s)` -> pattern binding).
+    // followed by `(` (constructor pattern: `let Ok((v, r)) = parse(s)`) or
+    // `{` (named record pattern: `let Pt { x, y } = point`).
     if (isUpperName) {
         auto savedPos2 = m_pos;
         advance(); // let
         advance(); // UpperIdent name
-        bool isPattern = check(TokenType::LParen);
+        bool isPattern = check(TokenType::LParen) || check(TokenType::LBrace);
         m_pos = savedPos2;
         return !isPattern;
     }
@@ -2342,6 +2487,25 @@ auto Parser::parseLetExpr() -> ast::ExprPtr {
             auto funcDef = parseFunctionDef();
             auto expr = std::make_unique<ast::Expr>();
             expr->location = loc;
+            // `let %name(...)` declares a function whose NAME is computed at
+            // compile time, so it cannot become a local binding — the name is
+            // not known yet. Emit a GeneratedDecl for the expansion pass; the
+            // `%` prefix was put there by parseFunctionDef.
+            if (!funcDef->name.empty() && funcDef->name.front() == '%') {
+                ast::ExprPtr nameExpr;
+                if (funcDef->computedName) {
+                    nameExpr = std::move(funcDef->computedName);  // %{expr}
+                } else {
+                    nameExpr = std::make_unique<ast::Expr>();     // %name
+                    nameExpr->location = loc;
+                    nameExpr->kind = ast::Identifier{funcDef->name.substr(1)};
+                }
+                funcDef->name.clear();
+                expr->kind = ast::GeneratedDecl{
+                    std::move(nameExpr),
+                    std::shared_ptr<ast::FunctionDef>(std::move(funcDef))};
+                return expr;
+            }
             // Represent as a let binding of a lambda with the function name
             ast::PatternPtr pat = std::make_unique<ast::Pattern>();
             pat->location = loc;
@@ -2883,6 +3047,40 @@ auto Parser::parsePattern() -> ast::PatternPtr {
     return first;
 }
 
+// Shared by the anonymous `{ ... }` and named `Foo { ... }` record/map
+// patterns: the `{` has already been consumed; this consumes through `}`.
+auto Parser::parseRecordPatternFields() -> std::vector<ast::FieldPattern> {
+    std::vector<ast::FieldPattern> fields;
+    if (!check(TokenType::RBrace)) {
+        do {
+            skipNewlines();
+            ast::FieldPattern field;
+
+            if (check(TokenType::String) || check(TokenType::RawString)) {
+                field.isStringKey = true;
+                field.name = advance().value;
+            } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
+                       check(TokenType::Type) ||
+                       check(TokenType::Loop) || check(TokenType::Match) ||
+                       check(TokenType::Timeout)) {
+                field.name = advance().value;
+            } else {
+                error("Expected field name");
+            }
+
+            if (match(TokenType::Colon)) {
+                field.pattern = parsePattern();
+            }
+
+            fields.push_back(std::move(field));
+            skipNewlines();
+        } while (match(TokenType::Comma));
+    }
+
+    expect(TokenType::RBrace, "Expected '}'");
+    return fields;
+}
+
 auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     auto loc = currentLocation();
     auto pattern = std::make_unique<ast::Pattern>();
@@ -2916,36 +3114,8 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 
     // Record/map destructuring: { ... }
     if (match(TokenType::LBrace)) {
-        std::vector<ast::FieldPattern> fields;
-
-        if (!check(TokenType::RBrace)) {
-            do {
-                skipNewlines();
-                ast::FieldPattern field;
-
-                if (check(TokenType::String) || check(TokenType::RawString)) {
-                    field.isStringKey = true;
-                    field.name = advance().value;
-                } else if (check(TokenType::LowerIdent) || check(TokenType::End) ||
-                           check(TokenType::Type) ||
-                           check(TokenType::Loop) || check(TokenType::Match) ||
-                           check(TokenType::Timeout)) {
-                    field.name = advance().value;
-                } else {
-                    error("Expected field name");
-                }
-
-                if (match(TokenType::Colon)) {
-                    field.pattern = parsePattern();
-                }
-
-                fields.push_back(std::move(field));
-                skipNewlines();
-            } while (match(TokenType::Comma));
-        }
-
-        expect(TokenType::RBrace, "Expected '}'");
-        pattern->kind = ast::RecordPattern{std::move(fields)};
+        auto fields = parseRecordPatternFields();
+        pattern->kind = ast::RecordPattern{.fields = std::move(fields)};
         return pattern;
     }
 
@@ -2997,6 +3167,15 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     // Constructor pattern: Name(args) or just Name
     if (check(TokenType::UpperIdent)) {
         auto name = advance().value;
+        // Named record pattern: `Foo { x, y }` — same field-list grammar as
+        // the anonymous `{ ... }` form, but the leading type name makes the
+        // match also assert the record's type (see ast::RecordPattern).
+        if (check(TokenType::LBrace)) {
+            advance(); // consume '{'
+            auto fields = parseRecordPatternFields();
+            pattern->kind = ast::RecordPattern{.typeName = name, .fields = std::move(fields)};
+            return pattern;
+        }
         if (match(TokenType::LParen)) {
             std::vector<ast::PatternPtr> args;
             if (!check(TokenType::RParen)) {
@@ -3032,24 +3211,17 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
     skipNewlines();
 
     while (!check(TokenType::End) && !atEnd()) {
-        // UPPER = expr (compile-time constant definition)
+        // Compile-time constants are written `let NAME = expr`, like every
+        // other binding in the language — the bare `NAME = expr` form that
+        // used to be accepted here was the only place in Kex where a
+        // declaration had no keyword. It is a binding, not a function; it just
+        // shares the AST encoding of a top-level `let NAME = expr`.
         if (check(TokenType::UpperIdent) && peekNext().type == TokenType::Equals) {
-            auto loc = currentLocation();
-            auto name = advance().value;
-            advance(); // =
-            auto value = parseExpr();
-            // Emit as LetExpr{VarPattern{name}, value} so the evaluator defines
-            // the binding with m_env->define() rather than requiring a mutable
-            // pre-existing variable (AssignExpr would throw "Undefined variable").
-            auto pat = std::make_unique<ast::Pattern>();
-            pat->kind = ast::VarPattern{name};
-            auto expr = std::make_unique<ast::Expr>();
-            expr->location = loc;
-            expr->kind = ast::LetExpr{std::move(pat), std::move(value)};
-            block->items.push_back(std::move(expr));
+            error("Compile-time constants need `let`: write `let " +
+                  peek().value + " = ...`");
         }
         // Function definition (possibly splice: let %name(...) = ...)
-        else if (check(TokenType::Let) || check(TokenType::Foul)) {
+        if (check(TokenType::Let) || check(TokenType::Foul)) {
             bool isFoul = check(TokenType::Foul);
             if (isFoul) advance();
             block->items.push_back(parseFunctionDef(isFoul));

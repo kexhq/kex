@@ -169,10 +169,38 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
             signatures && !signatures->empty()) {
             const auto& signature = signatures->front();
             exp.beamArity = static_cast<int>(signature.params.size());
-            for (const auto& param : signature.params)
+            for (const auto& param : signature.params) {
                 exp.paramTypes.push_back(convertSemanticType(param));
+                if (const auto* constrained = std::get_if<
+                        kex::semantic::ConstrainedType>(&param->kind);
+                    constrained && analysis->traitNeedsDictionary(
+                        constrained->traitName))
+                        ++exp.beamArity;
+            }
             exp.returnType = convertSemanticType(signature.result);
             exp.isFoul = signature.isFoul || fd.isFoul;
+        }
+    }
+    // A standalone generic annotation may preserve a function's public
+    // result relationship (`A -> A`) while an inline parameter annotation
+    // carries the trait dictionary ABI. Keep the source-facing KexI type
+    // constrained and the backend arity aligned with the lowered function.
+    if (analysis && !fd.clauses.empty()) {
+        const auto& params = fd.clauses[0].params;
+        for (std::size_t i = 0; i < params.size(); ++i) {
+            if (!params[i].type || !*params[i].type) continue;
+            const auto* name = std::get_if<kex::ast::TypeName>(
+                &(*params[i].type)->kind);
+            if (!name || name->parts.size() != 1 ||
+                !analysis->traitNeedsDictionary(name->parts.front()))
+                continue;
+            const bool alreadyConstrained = i < exp.paramTypes.size() &&
+                exp.paramTypes[i] &&
+                exp.paramTypes[i]->kind == KexiType::Constrained;
+            if (i < exp.paramTypes.size())
+                exp.paramTypes[i] =
+                    kexiConstrained(name->parts.front(), name->parts.front());
+            if (!alreadyConstrained) ++exp.beamArity;
         }
     }
     if (!exp.returnType && !fd.clauses.empty()) {
@@ -200,10 +228,24 @@ auto receiverFunctionFromDef(
     const kex::semantic::Analyzer* analysis,
     bool firstParamIsReceiver = false) -> KexiMethod {
     KexiMethod method;
+    std::string receiverTrait;
+    if (analysis && receiverType) {
+        if (receiverType->kind == KexiType::Constrained)
+            receiverTrait = receiverType->traitName;
+        else if (receiverType->kind == KexiType::Named &&
+                 analysis->traitNeedsDictionary(receiverType->name))
+            receiverTrait = receiverType->name;
+    }
+    const bool receiverIsTrait = !receiverTrait.empty();
+    const bool receiverNeedsDictionary = receiverIsTrait &&
+        !analysis->traitRequires(receiverTrait, fd.name);
+    if (receiverIsTrait && receiverType->kind != KexiType::Constrained)
+        receiverType = kexiConstrained(receiverTrait, receiverTrait);
     method.name = fd.name;
     method.receiverType = std::move(receiverType);
     method.isFoul = fd.isFoul;
     method.beamArity = methodBeamArity(fd, firstParamIsReceiver);
+    if (receiverNeedsDictionary) ++method.beamArity;
     // When the first clause uses a receiver pattern (@-pattern) or the
     // first param is the receiver (top-level bare function), skip it
     // since receiverType is stored separately.
@@ -221,10 +263,37 @@ auto receiverFunctionFromDef(
         if (const auto* signatures = analysis->functionSignatures(&fd);
             signatures && !signatures->empty()) {
             const auto& signature = signatures->front();
-            for (size_t i = skipParams; i < signature.params.size(); i++)
+            for (size_t i = skipParams; i < signature.params.size(); i++) {
                 method.paramTypes.push_back(convertSemanticType(signature.params[i]));
+                if (const auto* constrained = std::get_if<
+                        kex::semantic::ConstrainedType>(
+                            &signature.params[i]->kind);
+                    constrained && analysis->traitNeedsDictionary(
+                        constrained->traitName))
+                        ++method.beamArity;
+            }
             method.returnType = convertSemanticType(signature.result);
             method.isFoul = signature.isFoul || fd.isFoul;
+        }
+    }
+    if (analysis && !fd.clauses.empty()) {
+        const auto& params = fd.clauses[0].params;
+        for (std::size_t i = skipParams; i < params.size(); ++i) {
+            if (!params[i].type || !*params[i].type) continue;
+            const auto* name = std::get_if<kex::ast::TypeName>(
+                &(*params[i].type)->kind);
+            if (!name || name->parts.size() != 1 ||
+                !analysis->traitNeedsDictionary(name->parts.front()))
+                continue;
+            const auto methodIndex = i - skipParams;
+            const bool alreadyConstrained =
+                methodIndex < method.paramTypes.size() &&
+                method.paramTypes[methodIndex] &&
+                method.paramTypes[methodIndex]->kind == KexiType::Constrained;
+            if (methodIndex < method.paramTypes.size())
+                method.paramTypes[methodIndex] =
+                    kexiConstrained(name->parts.front(), name->parts.front());
+            if (!alreadyConstrained) ++method.beamArity;
         }
     }
     if (!method.returnType && !fd.clauses.empty()) {
@@ -242,7 +311,9 @@ auto receiverFunctionFromDef(
         for (size_t i = skipParams; i < params.size(); i++)
             method.paramNames.push_back(params[i].name ? *params[i].name : "");
     }
-    method.beamFunction = fd.name;
+    method.beamFunction = receiverIsTrait && !firstParamIsReceiver
+        ? fd.name + "/" + receiverTrait
+        : fd.name;
     return method;
 }
 
@@ -271,6 +342,19 @@ auto makeTargetName(const KexiTypePtr& type) -> std::string {
     return "";
 }
 
+// Whether a type is incomplete anywhere inside it, not just at the top.
+// `[?]` is as unknown a contract as `?` is: an inferred `takeWhile` result of
+// `[?]` beat the declared `-> [X]` under a top-level-only test, so callers saw
+// `[?]`, and `list.takeWhile(...).at(0)` then matched String's `at` and came
+// back as `Char?`.
+auto mentionsUnknown(const KexiTypePtr& type) -> bool {
+    if (!type) return true;
+    if (type->kind == KexiType::Unknown) return true;
+    for (const auto& arg : type->typeArgs)
+        if (mentionsUnknown(arg)) return true;
+    return type->result ? mentionsUnknown(type->result) : false;
+}
+
 // Apply an implicit-this `:>` standalone type annotation to a method whose
 // syntactic/inferred params or return are still Unknown. `sigType` is the
 // raw converted KexiType from the annotation: a Func means a 1+ param
@@ -283,14 +367,16 @@ void patchMethodWithSig(KexiMethod& method, const KexiTypePtr& sigType) {
     if (sigType->kind == KexiType::Func) {
         size_t sigParams = sigType->typeArgs.size();
         if (sigParams != method.paramTypes.size()) return;
-        if (method.returnType && method.returnType->kind == KexiType::Unknown)
+        if (mentionsUnknown(method.returnType) &&
+            !mentionsUnknown(sigType->result))
             method.returnType = sigType->result;
         for (size_t i = 0; i < sigParams; i++)
-            if (method.paramTypes[i]->kind == KexiType::Unknown)
+            if (mentionsUnknown(method.paramTypes[i]) &&
+                !mentionsUnknown(sigType->typeArgs[i]))
                 method.paramTypes[i] = sigType->typeArgs[i];
     } else {
         if (!method.paramTypes.empty()) return;
-        if (method.returnType && method.returnType->kind == KexiType::Unknown)
+        if (mentionsUnknown(method.returnType) && !mentionsUnknown(sigType))
             method.returnType = sigType;
     }
 }
@@ -299,19 +385,61 @@ void patchMethodWithSig(KexiMethod& method, const KexiTypePtr& sigType) {
 // Standalone sigs at module scope use the full function type
 // (`String -> Result<...>`, params and return together). Skips when the
 // sig's arity disagrees with the def's actual arity.
-void patchExportWithSig(KexiExport& exp, const KexiTypePtr& sigType) {
+void patchExportWithSig(KexiExport& exp, const KexiTypePtr& sigType,
+                        bool authoritative = false) {
     if (!sigType) return;
     if (sigType->kind == KexiType::Func) {
         if (sigType->typeArgs.size() != exp.paramTypes.size()) return;
-        if (exp.returnType && exp.returnType->kind == KexiType::Unknown)
+        if (authoritative) {
+            exp.paramTypes = sigType->typeArgs;
+            exp.returnType = sigType->result;
+            return;
+        }
+        if (mentionsUnknown(exp.returnType) && !mentionsUnknown(sigType->result))
             exp.returnType = sigType->result;
         for (size_t i = 0; i < exp.paramTypes.size(); i++)
-            if (exp.paramTypes[i]->kind == KexiType::Unknown)
+            if (mentionsUnknown(exp.paramTypes[i]) &&
+                !mentionsUnknown(sigType->typeArgs[i]))
                 exp.paramTypes[i] = sigType->typeArgs[i];
     } else {
         if (!exp.paramTypes.empty()) return;
-        if (exp.returnType && exp.returnType->kind == KexiType::Unknown)
+        if (mentionsUnknown(exp.returnType) && !mentionsUnknown(sigType))
             exp.returnType = sigType;
+    }
+}
+
+auto hasInlineTraitParam(const kex::ast::FunctionDef& fd,
+                         const kex::semantic::Analyzer* analysis) -> bool {
+    if (!analysis || fd.clauses.empty()) return false;
+    return std::any_of(
+        fd.clauses[0].params.begin(), fd.clauses[0].params.end(),
+        [&](const auto& param) {
+            if (!param.type || !*param.type) return false;
+            const auto* name =
+                std::get_if<kex::ast::TypeName>(&(*param.type)->kind);
+            return name && name->parts.size() == 1 &&
+                analysis->traitNeedsDictionary(name->parts.front());
+        });
+}
+
+void applyInlineTraitConstraints(KexiExport& exp,
+                                 const kex::ast::FunctionDef& fd,
+                                 const kex::semantic::Analyzer* analysis) {
+    if (!analysis || fd.clauses.empty()) return;
+    const auto& params = fd.clauses[0].params;
+    for (std::size_t i = 0; i < params.size() && i < exp.paramTypes.size(); ++i) {
+        if (!params[i].type || !*params[i].type) continue;
+        const auto* trait =
+            std::get_if<kex::ast::TypeName>(&(*params[i].type)->kind);
+        if (!trait || trait->parts.size() != 1 ||
+            !analysis->traitNeedsDictionary(trait->parts.front()))
+            continue;
+        auto variable = exp.paramTypes[i] &&
+                exp.paramTypes[i]->kind == KexiType::Named
+            ? exp.paramTypes[i]->name
+            : trait->parts.front();
+        exp.paramTypes[i] =
+            kexiConstrained(std::move(variable), trait->parts.front());
     }
 }
 
@@ -450,7 +578,16 @@ void collectFromTraitDef(const kex::ast::TraitDef& trait,
         if (auto* fd = std::get_if<std::unique_ptr<kex::ast::FunctionDef>>(&item);
             fd && *fd) {
             seenImpls.insert((*fd)->name);
+            // Trait defaults are spliced into every concrete implementor by
+            // lowering; callers enter through the ordinary runtime dispatcher,
+            // not a nonexistent `method/Trait` function.
             addReceiverFunction(**fd, receiverType, iface, meta, analysis);
+            iface.methods.back().beamFunction = (*fd)->name;
+            iface.methods.back().beamArity = 1 +
+                ((*fd)->clauses.empty()
+                     ? 0
+                     : static_cast<int>((*fd)->clauses[0].params.size()));
+            meta.methodOwnership.back().beamFunction = (*fd)->name;
             auto it = standaloneSigs.find((*fd)->name);
             if (it != standaloneSigs.end()) {
                 auto method = std::move(iface.methods.back());
@@ -552,7 +689,9 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             iface.exports.pop_back();
             for (const auto& sig : it->second) {
                 auto overload = exported;
-                patchExportWithSig(overload, sig);
+                patchExportWithSig(overload, sig,
+                                   hasInlineTraitParam(fd, analysis));
+                applyInlineTraitConstraints(overload, fd, analysis);
                 iface.exports.push_back(std::move(overload));
             }
         }
@@ -604,7 +743,9 @@ void collectFromTopLevel(const kex::ast::Program& program,
             iface.exports.pop_back();
             for (const auto& sig : it->second) {
                 auto overload = exported;
-                patchExportWithSig(overload, sig);
+                patchExportWithSig(overload, sig,
+                                   hasInlineTraitParam(fd, analysis));
+                applyInlineTraitConstraints(overload, fd, analysis);
                 iface.exports.push_back(std::move(overload));
             }
         }
@@ -613,8 +754,23 @@ void collectFromTopLevel(const kex::ast::Program& program,
         // the no-argument postfix form (`x.inspect`), which was previously
         // excluded by requiring two and so failed with "Undefined method" on
         // BEAM while working in the interpreter.
-        if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 1)
-            addReceiverFunction(fd, kexiUnknown(), iface, meta, analysis, true);
+        if (!fd.clauses.empty() && fd.clauses[0].params.size() >= 1) {
+            KexiTypePtr receiver = kexiUnknown();
+            const auto& first = fd.clauses[0].params[0];
+            if (first.type && *first.type) {
+                receiver = convertTypeExpr(*first.type);
+                if (analysis) {
+                    if (const auto* name = std::get_if<kex::ast::TypeName>(
+                            &(*first.type)->kind);
+                        name && name->parts.size() == 1 &&
+                        analysis->traitNeedsDictionary(name->parts.front()))
+                        receiver = kexiConstrained(name->parts.front(),
+                                                   name->parts.front());
+                }
+            }
+            addReceiverFunction(fd, std::move(receiver), iface, meta,
+                                analysis, true);
+        }
     };
 
     for (const auto& item : program.items) {
@@ -678,7 +834,9 @@ void collectFlattenedModuleBody(
                 auto it = standaloneSigs.find(ptr->name);
                 if (it != standaloneSigs.end())
                     for (const auto& sig : it->second)
-                        patchExportWithSig(exp, sig);
+                        patchExportWithSig(exp, sig,
+                                           hasInlineTraitParam(*ptr, analysis));
+                applyInlineTraitConstraints(exp, *ptr, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
                 collectFromMakeDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {

@@ -544,7 +544,9 @@ end
 
 # ── Date ──────────────────────────────────────────────────────────────────
 
-make Date do
+make Date, implement: Inspectable, Showable do
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+  let showValue -> String = this.iso
   let epochDay -> Integer = Time.daysFromCivil(this.year, this.month, this.day)
 
   let weekday -> Weekday = Time.weekdayFromEpochDay(this.epochDay)
@@ -606,7 +608,9 @@ end
 
 # ── Time ──────────────────────────────────────────────────────────────────
 
-make Time do
+make Time, implement: Inspectable, Showable do
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+  let showValue -> String = this.iso
   let secondsSinceMidnight -> Integer = this.hour * 3600 + this.minute * 60 + this.second
 
   let before?(other: Time) -> Bool = this.compareTo(other) == Less
@@ -627,7 +631,9 @@ end
 
 # ── DateTime ──────────────────────────────────────────────────────────────
 
-make DateTime do
+make DateTime, implement: Inspectable, Showable do
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+  let showValue -> String = this.iso
   # Seconds since the Unix epoch. This is the value to compare and subtract:
   # it identifies the instant, independent of the offset rendering it.
   let epochSeconds -> Integer = this.date.epochDay * 86400 + this.time.secondsSinceMidnight - this.offset.wholeSeconds
@@ -670,4 +676,3 @@ make DateTime do
   end
 
 end
-

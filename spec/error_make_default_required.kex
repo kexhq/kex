@@ -1,0 +1,11 @@
+record RequiredBox do
+  n : Integer
+end
+
+make RequiredBox do
+  let add(x: Integer, y: Integer = 1) -> Integer = this.n + x + y
+end
+
+main do
+  IO.printLine(RequiredBox { n: 1 }.add())
+end

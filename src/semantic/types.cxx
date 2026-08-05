@@ -107,8 +107,10 @@ auto Type::float64() -> TypePtr {
     return std::make_shared<Type>(Type{SizedFloatType{64}});
 }
 
-auto Type::constrained(const std::string& varName, const std::string& traitName) -> TypePtr {
-    return std::make_shared<Type>(Type{ConstrainedType{varName, traitName}});
+auto Type::constrained(const std::string& varName, const std::string& traitName,
+                       int genericId) -> TypePtr {
+    return std::make_shared<Type>(
+        Type{ConstrainedType{varName, traitName, genericId}});
 }
 
 auto isPrimitiveTypeName(const std::string& name) -> bool {
@@ -350,6 +352,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     if (a.get() == b.get()) return true;
     if (isUnit(a) && isUnit(b)) return true;
 
+
     return std::visit([&b](const auto& at) -> bool {
         using AT = std::decay_t<decltype(at)>;
         auto* bt = std::get_if<AT>(&b->kind);
@@ -403,6 +406,33 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
         }
         else if constexpr (std::is_same_v<AT, ConstrainedType>) {
             return at.varName == bt->varName && at.traitName == bt->traitName;
+        }
+        else if constexpr (std::is_same_v<AT, UnionType>) {
+            // Compared as a SET: `Atom | Integer` and `Integer | Atom` denote
+            // the same type, and nothing guarantees two spellings of one union
+            // reach here in the same order.
+            //
+            // Without this case a union fell through to `return false`, so a
+            // union-typed parameter was never equal to itself. Every dedupe
+            // built on typesEqual then failed, and overload resolution
+            // reported a call ambiguous against its OWN signature, printed
+            // twice — `m.get(1, "")` on a `Regex.Match`, whose parameter is
+            // `Atom | Integer`, and which is the documented example for that
+            // method.
+            if (at.members.size() != bt->members.size()) return false;
+            std::vector<bool> paired(bt->members.size(), false);
+            for (const auto& mine : at.members) {
+                bool found = false;
+                for (size_t i = 0; i < bt->members.size() && !found; i++) {
+                    if (paired[i]) continue;
+                    if (typesEqual(mine, bt->members[i])) {
+                        paired[i] = true;
+                        found = true;
+                    }
+                }
+                if (!found) return false;
+            }
+            return true;
         }
         else {
             return false;

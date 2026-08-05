@@ -1,0 +1,83 @@
+type CurrencyCode = Eur | Usd | Gbp | Huf
+
+record Currency do
+  code : CurrencyCode
+  name : String
+  symbol: String = None
+  symbolBefore: Bool = true
+end
+
+make Currency do
+  let codeName = @code.to(String).try.upperCase
+end
+
+let ACCEPTED_CURRENCY = [
+  Currency { code: Eur, name: "Euro", symbol: "€" },
+  Currency { code: Usd, name: "Dollar", symbol: "$" },
+  Currency { code: Gbp, name: "Pound", symbol: "£" },
+  Currency { code: Huf, name: "Forint", symbol: "Ft", symbolBefore: false }
+]
+
+module Currency do
+  let fromCode(code: String) -> Currecy? do
+    let c = ACCEPTED_CURRENCY.find { |c| c.codeName == code.upperCase }
+    return None if c.blank?
+
+    return c
+  end
+end
+
+record Money do
+  value : Integer # value in lowest denomination
+  currency : CurrencyCode
+end
+
+module Money do
+  type MoneyError = NoCurrency(Float) | UnsupportedCurrency(String)
+  let fromValue(value: String) -> Money or! MoneyError do
+    match Float.parse(value) do
+      Ok(_) -> Error(NoCurrency(value))
+      Error(ParseError { value, rest }) -> do
+        let rem = rest.trim
+        let curr = Currency.fromCode(rem)
+
+        return Error(UnsupportedCurrency(rem)) if curr.blank?
+
+        return Ok(Money { value, currency: curr.try.code })
+      end
+    end
+  end
+end
+
+make Money do
+  let display(currencies: [Currency]) do
+    let currency = currencies.find { |c| c.code == @currency }
+    match currency do
+      Just(c) -> return this.displayWithCurrency(c)
+      None -> return "${@value} ${@currency.to(String).try.upperCase}"
+    end
+  end
+
+  private do
+    let displayWithCurrency(currency: Currency) do
+      return "${currency.symbol}${@value}" if currency.symbolBefore
+
+      return "${@value} ${currency.symbol}"
+    end
+  end
+end
+
+main(args) do
+  ["15 EUR", "1 USD", "1421 HUF", "nothing", "1500 EUR", "12", "8 GBP", ...args].each do |value|
+    let money = Money.fromValue(value)
+    let currency = ACCEPTED_CURRENCY.find { |c| c.code == money.try.currency }
+    # IO.inspect(money)
+    # IO.inspect(currency)
+    match money do
+      Ok(m) -> IO.printLine(m.display(ACCEPTED_CURRENCY))
+      Error(e) -> IO.inspect(e)
+    end
+    # IO.inspect(Money.fromValue(value))
+    IO.printLine()
+  end
+end

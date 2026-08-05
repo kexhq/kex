@@ -1,0 +1,24 @@
+# kex: check-only
+#
+# A record construction checks each field NAME against the declaration.
+#
+# Unknown names used to be skipped silently, which made renaming a field
+# invisible: the interpreter stored `zebra:` on a record with no such field and
+# `.zebra` read it straight back, so callers kept "working" against a field that
+# no longer existed. BEAM only failed at runtime, and then complained about the
+# accessor ("Undefined method: zebra") rather than the construction.
+#
+# Declaration order here is deliberately NOT alphabetical, so the message's
+# field list is exercised as a sorted rendering rather than an echo of the
+# source order.
+record Rev do
+  zebra    : Int
+  aardvark : Int
+  apple    : Int
+end
+
+main do
+  # `middle` is not a field of Rev
+  let r = Rev { zebra: 1, aardvark: 2, apple: 3, middle: 4 }
+  IO.printLine("${r.zebra}")
+end

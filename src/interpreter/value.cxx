@@ -223,6 +223,11 @@ auto Value::isTrue() const -> bool {
         using T = std::decay_t<decltype(v)>;
         if constexpr (std::is_same_v<T, BoolValue>) return v.value;
         if constexpr (std::is_same_v<T, UnitValue>) return false;
+        // A placeholder has no truth value: answering `true` here would send
+        // compile-time evaluation down a branch the running program might not
+        // take.
+        if constexpr (std::is_same_v<T, PlaceholderValue>)
+            throw PlaceholderMisuse(v.name, "a condition");
         return true;
     }, data);
 }
@@ -230,7 +235,11 @@ auto Value::isTrue() const -> bool {
 auto Value::toString() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, UnitValue>) return "()";
+        // Before anything else: text is the one thing a placeholder must never
+        // produce, since the result would be baked into the emitted program.
+        if constexpr (std::is_same_v<T, PlaceholderValue>)
+            throw PlaceholderMisuse(v.name, "converting it to text");
+        else if constexpr (std::is_same_v<T, UnitValue>) return "()";
         else if constexpr (std::is_same_v<T, IntValue>) return std::to_string(v.value);
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
@@ -343,7 +352,9 @@ auto Value::toString() const -> std::string {
 auto Value::toRepr() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, StringValue>) {
+        if constexpr (std::is_same_v<T, PlaceholderValue>)
+            throw PlaceholderMisuse(v.name, "converting it to text");
+        else if constexpr (std::is_same_v<T, StringValue>) {
             return "\"" + v.value + "\"";
         }
         else if constexpr (std::is_same_v<T, CharValue>) {
@@ -423,7 +434,9 @@ auto Value::toRepr() const -> std::string {
 auto Value::typeName() const -> std::string {
     return std::visit([](const auto& v) -> std::string {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, UnitValue>) return "Void";
+        if constexpr (std::is_same_v<T, PlaceholderValue>)
+            throw PlaceholderMisuse(v.name, "asking for its type");
+        else if constexpr (std::is_same_v<T, UnitValue>) return "Void";
         else if constexpr (std::is_same_v<T, IntValue>) return "Int";
         else if constexpr (std::is_same_v<T, BigIntValue>) return "Integer";
         else if constexpr (std::is_same_v<T, FloatValue>) return "Float";
@@ -518,6 +531,12 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         if (auto bv = asInteger(b)) return *av == *bv;
     }
 
+    // Comparing a placeholder cannot yield `false` — the running program's
+    // value might well be equal — so it must not answer at all.
+    for (const auto* side : {&a, &b})
+        if (const auto* ph = std::get_if<PlaceholderValue>(&(*side)->data))
+            throw PlaceholderMisuse(ph->name, "comparing it");
+
     return std::visit([&b](const auto& av) -> bool {
         using AT = std::decay_t<decltype(av)>;
         auto* bv = std::get_if<AT>(&b->data);
@@ -599,7 +618,9 @@ auto Value::inspect() const -> std::string {
     std::function<std::string(const Value&)> rec = [&](const Value& v) -> std::string {
         return std::visit([&](const auto& node) -> std::string {
             using T = std::decay_t<decltype(node)>;
-            if constexpr (std::is_same_v<T, UnitValue>)
+            if constexpr (std::is_same_v<T, PlaceholderValue>)
+                throw PlaceholderMisuse(node.name, "converting it to text");
+            else if constexpr (std::is_same_v<T, UnitValue>)
                 return std::string(c(gray)) + "()" + c(reset);
             else if constexpr (std::is_same_v<T, IntValue>)
                 return std::string(c(yellow)) + std::to_string(node.value) + c(reset);
@@ -709,7 +730,9 @@ auto Value::inspect() const -> std::string {
 auto dispatchTypeName(const ValuePtr& v) -> std::string {
     return std::visit([](const auto& d) -> std::string {
         using T = std::decay_t<decltype(d)>;
-        if constexpr (std::is_same_v<T, RecordValue>) return d.typeName;
+        if constexpr (std::is_same_v<T, PlaceholderValue>)
+            throw PlaceholderMisuse(d.name, "dispatching a method on it");
+        else if constexpr (std::is_same_v<T, RecordValue>) return d.typeName;
         else if constexpr (std::is_same_v<T, VariantValue>) return d.tag;
         else if constexpr (std::is_same_v<T, ListValue>) return "List";
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";

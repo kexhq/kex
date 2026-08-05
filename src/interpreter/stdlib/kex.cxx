@@ -38,7 +38,30 @@ auto Evaluator::registerKexBuiltins() -> void {
     // interpreter-only and failed with "Undefined method: inspect" on BEAM.
     defineIntrinsic("Kex::inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");
-        return Value::string(args[0]->inspect());
+        auto rendered = args[0]->inspect();
+        if (args.size() > 1) {
+            const auto* colors = std::get_if<BoolValue>(&args[1]->data);
+            if (colors && !colors->value) {
+                std::string plain;
+                for (std::size_t i = 0; i < rendered.size();) {
+                    if (rendered[i] == '\x1b' && i + 1 < rendered.size() &&
+                        rendered[i + 1] == '[') {
+                        i += 2;
+                        while (i < rendered.size() && rendered[i] != 'm') ++i;
+                        if (i < rendered.size()) ++i;
+                    } else {
+                        plain.push_back(rendered[i++]);
+                    }
+                }
+                rendered = std::move(plain);
+            }
+        }
+        return Value::string(std::move(rendered));
+    });
+
+    defineIntrinsic("Kex::show", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::string("");
+        return Value::string(args[0]->toString());
     });
 
     // Generic runtime category reflection used by libraries that operate on

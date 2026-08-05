@@ -1,0 +1,14 @@
+# KexI backend arity counts only dictionaries that actually exist. Number is
+# a structural constraint, so importing a Measure operator must still expose
+# and call its real two-argument BEAM function.
+using Units.SI
+
+main do
+  let area = 3.meter ^ 2
+  IO.printLine(area.canonical)
+  IO.printLine(area.value)
+  IO.printLine(area.unit.notation)
+
+  let energy = 31544.watt * 1.hour
+  IO.printLine(energy.to(String, in: Kilo(Watt * Hour)).or("missing"))
+end

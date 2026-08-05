@@ -1,0 +1,5 @@
+Vec2.grow(3) v0o0
+Vec2.shrink(4) v0o1
+Vec3.grow(5) v1o0
+Vec3.shrink(6) v1o1
+2 3

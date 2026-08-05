@@ -52,7 +52,41 @@ static const std::unordered_map<std::string, TokenType> keywords = {
 Lexer::Lexer(std::string source, std::string_view filename)
     : m_source(std::move(source)), m_filename(filename) {}
 
+// Can a token of this type END an expression? If so, a following `%` is the
+// modulo operator; otherwise `%name` is a splice. Without this, `x %y` lexes
+// the operand as a SpliceIdent and unspaced modulo fails to parse.
+static auto canEndExpression(TokenType type) -> bool {
+    switch (type) {
+        case TokenType::LowerIdent:
+        case TokenType::UpperIdent:
+        case TokenType::Integer:
+        case TokenType::Float:
+        case TokenType::String:
+        case TokenType::RawString:
+        case TokenType::InterpolatedRawString:
+        case TokenType::Char:
+        case TokenType::Atom:
+        case TokenType::RParen:
+        case TokenType::RBracket:
+        case TokenType::RBrace:
+        case TokenType::End:
+        case TokenType::True:
+        case TokenType::False:
+        case TokenType::None:
+        case TokenType::This:
+            return true;
+        default:
+            return false;
+    }
+}
+
 auto Lexer::nextToken() -> Token {
+    Token token = scanToken();
+    m_prevType = token.type;
+    return token;
+}
+
+auto Lexer::scanToken() -> Token {
     skipWhitespace();
 
     if (atEnd()) {
@@ -154,7 +188,11 @@ auto Lexer::nextToken() -> Token {
         case '~': return makeToken(TokenType::Tilde);
 
         case '%':
-            if (isLowerAlpha(peek())) return lexSpliceIdent();
+            // `%name` is a splice only where an expression could START. After
+            // something that can end an expression, `%` is modulo — so `x %y`
+            // is `x % y`, not `x` followed by a splice.
+            if (isLowerAlpha(peek()) && !canEndExpression(m_prevType))
+                return lexSpliceIdent();
             return makeToken(TokenType::Percent);
 
         case '"': return lexString();
@@ -571,7 +609,9 @@ auto Lexer::lexAtom() -> Token {
 
 auto Lexer::lexSpliceIdent() -> Token {
     std::string ident;
-    while (!atEnd() && (isLowerAlpha(peek()) || isDigit(peek()) || peek() == '_')) {
+    // isIdentChar, not lowercase-only: a splice names a compile-time variable,
+    // and those are camelCase like any other. `%vecName` used to stop at `vec`.
+    while (!atEnd() && isIdentChar(peek())) {
         ident += advance();
     }
     return makeToken(TokenType::SpliceIdent, ident);

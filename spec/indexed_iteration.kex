@@ -1,0 +1,60 @@
+# eachIndexed / mapIndexed — iteration with the item's 0-based position.
+#
+# Defined as trait defaults in terms of `reduce`: eachIndexed on Foldable
+# (beside `each`), mapIndexed on Enumerable (beside `map`), so List, Map, Range
+# and String all get them with no per-type work.
+#
+# The index is always the LAST block parameter. That keeps a Map entry
+# readable either whole (`|entry, i|`) or spread (`|k, v, i|`), and leaves the
+# existing each/map arity rules completely untouched.
+
+main do
+  # --- List
+  ["a", "b", "c"].eachIndexed do |s, i|
+    IO.printLine("list ${i}: ${s}")
+  end
+  IO.printLine(["a", "b"].mapIndexed { |s, i| "${i}${s}" }.join(","))
+
+  # --- a 1-parameter block just ignores the index
+  ["x", "y"].eachIndexed { |s| IO.printLine("arity1 ${s}") }
+
+  # --- Range
+  # Blocks below return STRINGS deliberately. `join` is typed
+  # `[String | Char] -> String`, but through `map`/`mapIndexed` the element
+  # type infers loosely enough to slip past the checker — and then the
+  # interpreter coerces numbers to text while BEAM does not, so joining a list
+  # of Integers silently differs by backend. Pre-existing, unrelated to this
+  # work, and avoided here rather than pinned.
+  (10..12).eachIndexed { |n, i| IO.printLine("range ${i} ${n}") }
+  IO.printLine((10..12).mapIndexed { |n, i| "${n * i}" }.join(","))
+
+  # --- String is Enumerable too
+  IO.printLine("ab".mapIndexed { |c, i| "${i}${c}" }.join("-"))
+
+  # --- Map: 3 params spread the entry, 2 params take it whole
+  { a: 1, b: 2 }.eachIndexed do |k, v, i|
+    IO.printLine("map3 ${i} ${k}=${v}")
+  end
+  { a: 1, b: 2 }.eachIndexed do |entry, i|
+    IO.printLine("map2 ${i} ${entry}")
+  end
+
+  # --- mapIndexed over a Map returns a LIST, exactly like `map` does
+  # (Map overrides only filter/reject, which preserve map-ness).
+  IO.printLine({ a: 1, b: 2 }.mapIndexed { |k, v, i| "${i}${k}${v}" }.join(","))
+
+  # --- empty collections
+  let empty: [String] = []
+  empty.eachIndexed { |s, i| IO.printLine("should not print ${s}${i}") }
+  IO.printLine("empty mapIndexed count: ${empty.mapIndexed { |s, i| s }.count}")
+
+  # --- the index really is positional, not derived from the value
+  IO.printLine([9, 9, 9].mapIndexed { |n, i| "${i}" }.join(","))
+
+  # --- existing each/map are unchanged: a 2-param block over a Map still
+  # receives (key, value), with no index appended.
+  { a: 1, b: 2 }.each do |k, v|
+    IO.printLine("plain each ${k}=${v}")
+  end
+  IO.printLine([1, 2, 3].map { |n| "${n * 2}" }.join(","))
+end

@@ -1,0 +1,6 @@
+# kex: run-beam
+
+main do
+  IO.printLine(Kex.interpreted?)
+  IO.printLine(Kex.underBeam?)
+end

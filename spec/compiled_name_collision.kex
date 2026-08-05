@@ -1,0 +1,17 @@
+# A compiled function opts in by scoped identity, not its bare name. If the
+# unrelated RuntimeOwner.backendProbe were collapsed merely because another
+# module has a compiled function with that name, the sandbox would bake in
+# Interpreter and this would print false on BEAM.
+module CompiledNameOwner do
+  compiled do
+    let backendProbe() -> Int = 1
+  end
+end
+
+module RuntimeNameOwner do
+  foul backendProbe() -> Kex.Backend = Kex.BACKEND
+end
+
+main do
+  IO.printLine(RuntimeNameOwner.backendProbe() == Kex.BACKEND)
+end

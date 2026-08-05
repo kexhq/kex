@@ -63,7 +63,7 @@ end
 # Data prefixes select their standard decimal byte unit.  They are targets
 # for formatting, so `Mega` means MB rather than a prefix applied twice to
 # the measure's existing unit.
-let to(measure: Measure, String, in) -> String? do
+let to(measure: Measure, String, in: DataPrefix) -> String? do
   match measure.kind == :data do
     false -> return None
     true -> do

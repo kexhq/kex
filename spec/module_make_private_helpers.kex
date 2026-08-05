@@ -1,0 +1,30 @@
+# A `make` body declared inside a module can reach that module's `private do`
+# helpers, and keeps reaching them when the method is called from OUTSIDE the
+# module. A method's scope names its receiver type, so the module it lives in
+# is what decides which private names are visible — not the receiver.
+module Shipping do
+  record Parcel do
+    grams : Integer
+  end
+
+  make Parcel do
+    let label -> String = "${classify(this.grams)} (${this.grams}g)"
+    let heavy? -> Bool = over?(this.grams, 1000)
+  end
+
+  private do
+    let classify(grams) do
+      return "light" if grams < 1000
+      return "heavy"
+    end
+    let over?(grams, limit) = grams > limit
+  end
+end
+
+main do
+  let light = Shipping.Parcel { grams: 250 }
+  let heavy = Shipping.Parcel { grams: 4000 }
+  IO.printLine(light.label)
+  IO.printLine(heavy.label)
+  IO.printLine("${light.heavy?} ${heavy.heavy?}")
+end

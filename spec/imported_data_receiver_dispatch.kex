@@ -1,0 +1,9 @@
+# An explicitly imported receiver overload must beat the prelude's generic
+# same-name method when its argument type is more specific.
+using Units.Data
+
+main do
+  IO.printLine(5000000.byteSize.to(String, in: Kilo).or("missing"))
+  IO.printLine(5000000.byteSize.to(String, in: Mega).or("missing"))
+  IO.printLine(1.sec.to(String, in: Mega).or("none"))
+end

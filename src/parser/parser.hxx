@@ -43,6 +43,12 @@ private:
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
+    // The two halves of a `make` that `make %name` generation reuses: it has a
+    // spliced name where parseMakeDef has a target type, but everything after
+    // is identical, and must stay identical.
+    auto parseMakeImplements(ast::MakeDef& into) -> void;
+    auto parseMakeBody(ast::MakeDef& into, bool allowDrivers = false) -> void;
+    auto isMakeDriverAhead() -> bool;
     auto parseFunctionDef(bool isFoul = false) -> std::unique_ptr<ast::FunctionDef>;
     auto parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock>;
     auto parseUsingBlock() -> std::unique_ptr<ast::UsingBlock>;
@@ -60,6 +66,7 @@ private:
     // callable value). Assumes the current token is `Let`. Mirrors
     // parseLetExpr's identical check for body-statement position.
     auto isLetFunctionDefAhead() -> bool;
+    auto parseSpliceName() -> ast::ExprPtr;
 
     // Functions
     auto parseFunctionClause() -> ast::FunctionClause;
@@ -114,6 +121,8 @@ private:
     // Patterns
     auto parsePattern() -> ast::PatternPtr;
     auto parsePatternPrimary() -> ast::PatternPtr;
+    // Record/map pattern field list; `{` already consumed, consumes through `}`.
+    auto parseRecordPatternFields() -> std::vector<ast::FieldPattern>;
 
     // Helpers
     auto parseBlock() -> std::optional<ast::ExprPtr>;

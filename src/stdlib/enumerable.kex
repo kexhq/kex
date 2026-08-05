@@ -15,6 +15,20 @@ trait Foldable do
     return ()
   end
 
+  # Applies +f+ to each item together with its 0-based position, for side
+  # effects. Returns unit. The index is the LAST block parameter, so a Map
+  # entry can be taken either whole (`|entry, i|`) or spread (`|k, v, i|`).
+  #
+  # @example
+  #   ["a", "b"].eachIndexed { |s, i| IO.printLine("${i}: ${s}") }
+  let eachIndexed(f) do
+    this.reduce(0) do |i, item|
+      Kex.Intrinsic.Fun.applyIndexed(f, item, i)
+      i + 1
+    end
+    return ()
+  end
+
   # True if every item satisfies +pred+.
   let all?(pred) = this.reduce(true) do |acc, item|
     acc && Kex.Intrinsic.Fun.applyItem(pred, item)
@@ -50,6 +64,22 @@ trait Enumerable do
       [Kex.Intrinsic.Fun.applyItem(f, item) | a]
     end
     return acc.reverse
+  end
+
+  # Transforms each item together with its 0-based position, collecting the
+  # results into a list. Index is the LAST block parameter — see eachIndexed.
+  #
+  # @example
+  #   ["a", "b"].mapIndexed { |s, i| "${i}${s}" }   # => ["0a", "1b"]
+  let mapIndexed(f) do
+    let folded = this.reduce(([], 0)) do |state, item|
+      match state do
+        (acc, i) -> ([Kex.Intrinsic.Fun.applyIndexed(f, item, i) | acc], i + 1)
+      end
+    end
+    return match folded do
+      (acc, _) -> acc.reverse
+    end
   end
 
   # Keeps the items for which +pred+ holds.

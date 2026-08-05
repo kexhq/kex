@@ -1,3 +1,25 @@
+trait Inspectable do
+  inspectValue :> Bool -> String
+end
+
+trait Showable do
+  showValue :> String
+end
+
+# Structural fallback: the runtime only decomposes the value; implementation
+# selection and overrides remain ordinary Kex trait dispatch.
+make Inspectable do
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+end
+
+# Current non-colored presentation for the primitive and standard compound
+# types registered as Showable. Domain types can replace this with what their
+# users care about (Time, Date, and DateTime do so in time.kex).
+make Showable do
+  let showValue -> String = Kex.Intrinsic.Kex.show(this)
+  let to(String) = Just(this.showValue)
+end
+
 foul module Kex do
   type Backend = Interpreter | Beam
 
@@ -5,6 +27,9 @@ foul module Kex do
 
   BACKEND : Backend
   let BACKEND = Kex.Intrinsic.Kex.backend()
+
+  let interpreted? = Kex.BACKEND == Kex.Interpreter
+  let underBeam? = Kex.BACKEND == Kex.Beam
 
   module Kernel do
     # The toolchain a program is running on. `kex --version` and the REPL
@@ -80,4 +105,4 @@ end
 #   [1, 2].inspect          # => "[1, 2]"
 #   { a: 1 }.inspect        # => "{ a: 1 }"
 #   Just("hi").inspect      # => "Just(\"hi\")"
-let inspect(value) = Kex.Intrinsic.Kex.inspect(value)
+let inspect(value: Inspectable) = value.inspectValue(Console.enabled?)

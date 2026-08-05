@@ -1,0 +1,84 @@
+# Named record patterns: `Foo { x, y }` binds fields AND asserts the record's
+# type, so it will not match a different record that happens to share field
+# names. The anonymous `{ x, y }` form stays purely structural.
+#
+# Two records with identical field names, so every "does it discriminate?"
+# check below is meaningful.
+
+record Miss do
+  value : String
+  rest  : String
+end
+
+record Other do
+  value : String
+  rest  : String
+end
+
+type Failure = Miss | Other
+
+let describe(f: Failure) -> String do
+  match f do
+    Miss { value, rest } -> "parse ${value}/${rest}"
+    Other { value, rest }      -> "other ${value}/${rest}"
+  end
+end
+
+# Named record pattern directly in a function clause parameter.
+let takesMiss(Miss { value, rest }) = "clause ${value}/${rest}"
+
+main do
+  let pe: Failure = Miss { value: "12", rest: "EUR" }
+  let ot: Failure = Other { value: "a", rest: "b" }
+
+  # --- match arms: the pattern discriminates by type, not just fields
+  IO.printLine(describe(pe))
+  IO.printLine(describe(ot))
+
+  # --- function clause parameter
+  IO.printLine(takesMiss(Miss { value: "x", rest: "y" }))
+
+  # --- if let, matching
+  if let Miss { value, rest } = pe
+    IO.printLine("iflet ${value}/${rest}")
+  else
+    IO.printLine("iflet no match")
+  end
+
+  # --- if let, NOT matching: same fields, different record, must take else
+  if let Miss { value, rest } = ot
+    IO.printLine("iflet wrongly matched ${value}${rest}")
+  else
+    IO.printLine("iflet correctly rejected Other")
+  end
+
+  # --- if let nested inside a constructor pattern (the read_currency shape)
+  let wrapped = Error(Miss { value: "9", rest: "GBP" })
+  if let Error(Miss { value, rest }) = wrapped
+    IO.printLine("nested ${value}/${rest}")
+  end
+
+  let wrappedOther = Error(Other { value: "9", rest: "GBP" })
+  if let Error(Miss { value, rest }) = wrappedOther
+    IO.printLine("nested wrongly matched ${value}${rest}")
+  else
+    IO.printLine("nested correctly rejected Other")
+  end
+
+  # --- match with a nested named pattern, and a fallback arm
+  match wrappedOther do
+    Error(Miss { value, rest }) -> IO.printLine("match wrong ${value}${rest}")
+    Error(Other { value, rest })      -> IO.printLine("match nested other ${value}/${rest}")
+    _                                 -> IO.printLine("match fallback")
+  end
+
+  # --- let destructuring with a named pattern
+  let Miss { value, rest } = Miss { value: "let", rest: "bound" }
+  IO.printLine("let ${value}/${rest}")
+
+  # --- a named pattern only binds the fields it lists; others are ignored
+  match pe do
+    Miss { value } -> IO.printLine("partial ${value}")
+    _                    -> IO.printLine("partial no match")
+  end
+end

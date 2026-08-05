@@ -1,6 +1,6 @@
 -module(kex_io).
 -export([print_line/1, print/1, print_error/1, read_line/0, read_char/0,
-           inspect/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
+           inspect/1, inspect_rendered/2, inspect_repl/1, inspect_value/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
            mock_stop/0, value_type_name/1]).
@@ -116,18 +116,67 @@ mock_take_char() ->
         _ -> 'None'
     end.
 
-%% IO.inspect — print "=> <value> : <Type>" with ANSI colours, returns value.
--define(GRAY,  "\e[90m").
--define(RESET, "\e[0m").
--define(CYAN,  "\e[36m").
--define(YELL,  "\e[33m").
--define(GREEN, "\e[32m").
--define(WHITE, "\e[97m").
+%% IO.inspect — print "<value> : <Type>" with ANSI colours, returns value.
+-define(GRAY,  color("\e[90m")).
+-define(RESET, color("\e[0m")).
+-define(CYAN,  color("\e[36m")).
+-define(YELL,  color("\e[33m")).
+-define(GREEN, color("\e[32m")).
+-define(WHITE, color("\e[97m")).
+
+color(Code) ->
+    case os:getenv("KEX_COLORS", "1") of
+        "0" -> "";
+        _ -> Code
+    end.
 
 inspect(X) ->
     case mock_active() of
         true -> mock_append(inspect_value(X), <<"\n">>), X;
-        false -> inspect_real(X)
+        false ->
+            put(kex_inspect_stderr, true),
+            try inspect_real(X)
+            after erase(kex_inspect_stderr)
+            end
+    end.
+
+%% The Inspectable implementation owns value rendering; IO only adds the
+%% established diagnostic type suffix and chooses the output stream.
+inspect_rendered(X, Rendered) ->
+    Type = value_type_name(X),
+    case mock_active() of
+        true ->
+            mock_append(Rendered,
+                        unicode:characters_to_binary([" : ", Type, "\n"])),
+            X;
+        false ->
+            put(kex_inspect_stderr, true),
+            try
+                %% Spaces sit OUTSIDE the coloured spans, byte-for-byte as the
+                %% tree walker writes them (src/interpreter/stdlib/io.cxx).
+                inspect_format("~ts " ++ ?GRAY ++ ":" ++ ?RESET ++ " " ++
+                               ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
+                               [Rendered, Type]),
+                X
+            after erase(kex_inspect_stderr)
+            end
+    end.
+
+%% The BEAM REPL historically prefixes evaluated values with `=>`, while
+%% IO.inspect in a program matches the tree walker and prints only the value.
+%% Keep that presentation concern at the REPL boundary instead of baking it
+%% into the public IO operation.
+inspect_repl('Kex.Unit') -> 'Kex.Unit';
+inspect_repl(ok) -> ok;
+inspect_repl(X) ->
+    io:format(?GRAY ++ "=> " ++ ?RESET),
+    inspect_real(X).
+
+inspect_format(Format) -> inspect_format(Format, []).
+inspect_format(Format, Args) ->
+    case get(kex_inspect_stderr) of
+        true -> io:format(standard_error, Format, Args);
+        _ -> io:format(Format, Args)
     end.
 
 %% REPL-only inspection with the compiler's semantic type. Runtime tuples
@@ -142,22 +191,22 @@ inspect_typed(X, Type) ->
     X.
 
 inspect_real(X) when is_integer(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~p" ++ ?RESET
+    inspect_format(?YELL ++ "~p" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Int" ++ ?RESET ++ "~n", [X]), X;
 %% format_float/1, not ~g: ~g rendered 3.0e11 as "3.00000e+11" in the BEAM
 %% REPL while the walker REPL and every non-REPL path printed
 %% "300000000000.0" for the same value.
 inspect_real(X) when is_float(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "~ts" ++ ?RESET
+    inspect_format(?YELL ++ "~ts" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Float" ++ ?RESET ++ "~n", [format_float(X)]), X;
 inspect_real(true) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "true" ++ ?RESET
+    inspect_format(?YELL ++ "true" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), true;
 inspect_real(false) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?YELL ++ "false" ++ ?RESET
+    inspect_format(?YELL ++ "false" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Bool" ++ ?RESET ++ "~n"), false;
 inspect_real('Kex.Unit') ->
@@ -165,64 +214,64 @@ inspect_real('Kex.Unit') ->
 inspect_real(ok) ->
     ok;
 inspect_real('None') ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?WHITE ++ "None" ++ ?RESET
+    inspect_format(?WHITE ++ "None" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Option" ++ ?RESET ++ "~n"), 'None';
 inspect_real(X) when is_atom(X) ->
     Name = atom_to_list(X),
     case Name of
         [C | _] when C >= $A, C =< $Z ->
-            io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+            inspect_format("~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
                       ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
                       [Name, nullary_type_name(X)]);
         _ ->
-            io:format(?GRAY ++ "=> " ++ ?RESET ++ ":~ts"
+            inspect_format(":~ts"
                       ++ " " ++ ?GRAY ++ ":" ++ ?RESET
                       ++ " " ++ ?CYAN ++ "Atom" ++ ?RESET ++ "~n", [Name])
     end,
     X;
 inspect_real(X) when is_binary(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
+    inspect_format(?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [X]), X;
 inspect_real([{'Char', _} | _] = X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "\"~ts\"" ++ ?RESET
+    inspect_format(?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [to_string(X)]), X;
 inspect_real(X) when is_list(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), list_type_name(X)]), X;
 inspect_real({'Char', C}) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "'~ts'" ++ ?RESET
+    inspect_format(?GREEN ++ "'~ts'" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n", [[C]]), {'Char', C};
 inspect_real({'Just', {'Char', C}} = X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ ?GREEN ++ "Just("
+    inspect_format(?GREEN ++ "Just("
               ++ [C] ++ ")" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Char" ++ ?RESET ++ "~n"), X;
 inspect_real(X) when is_tuple(X), tuple_size(X) >= 1,
                    (element(1, X) =:= 'Just' orelse element(1, X) =:= 'Ok' orelse
                     element(1, X) =:= 'Error' orelse element(1, X) =:= 'Some') ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), value_type_name(X)]), X;
 inspect_real(X) when is_tuple(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "~ts" ++ ?RESET ++ "~n",
               [inspect_string(X), value_type_name(X)]), X;
 inspect_real(X) when is_map(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~ts"
+    inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "Map" ++ ?RESET ++ "~n",
               [inspect_string(X)]), X;
 inspect_real(X) ->
-    io:format(?GRAY ++ "=> " ++ ?RESET ++ "~p~n", [X]), X.
+    inspect_format("~p~n", [X]), X.
 
 %% UFCS value.inspect() — return the colored representation as a String.
 inspect_value(X) -> unicode:characters_to_binary(inspect_string(X)).

@@ -421,18 +421,37 @@ auto TypeChecker::check(const ast::Program& program,
 
 auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
     std::unordered_map<std::string, TypePtr> noGenerics;
-    for (const auto& item : program.items) {
+    auto registerRecord = [&](const ast::RecordDef& record) {
+        auto& fields = m_recordFields[record.name];
+        for (const auto& field : record.fields)
+            fields[field.name] = field.type
+                ? resolveTypeExpr(*field.type, noGenerics)
+                : Type::unknown();
+    };
+    std::function<void(const ast::ModuleDef&)> registerModule;
+    registerModule = [&](const ast::ModuleDef& module) {
+      for (const auto& item : module.body) {
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                auto& fields = m_recordFields[node->name];
-                for (const auto& f : node->fields) {
-                    fields[f.name] = f.type ? resolveTypeExpr(*f.type, noGenerics)
-                                            : Type::unknown();
-                }
+                if (node) registerRecord(*node);
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerModule(*node);
             }
         }, item);
-    }
+      }
+    };
+    for (const auto& item : program.items)
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (node) registerRecord(*node);
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) registerModule(*node);
+            }
+        }, item);
 }
 
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
@@ -614,10 +633,14 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
     }
 }
 
-auto TypeChecker::annotationToSignature(const ast::TypeAnnotation& ann) -> std::optional<Signature> {
+auto TypeChecker::annotationToSignature(
+    const ast::TypeAnnotation& ann,
+    std::unordered_map<std::string, TypePtr>* sharedGenericVars)
+    -> std::optional<Signature> {
     if (!ann.type) return std::nullopt;
     // Unroll `A -> B -> C` (right-nested FunctionType) into params=[A,B], result=C.
-    std::unordered_map<std::string, TypePtr> genericVars;
+    std::unordered_map<std::string, TypePtr> ownGenericVars;
+    auto& genericVars = sharedGenericVars ? *sharedGenericVars : ownGenericVars;
     std::vector<TypePtr> params;
     const ast::TypeExpr* cur = ann.type.get();
     while (cur) {
@@ -706,11 +729,29 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
     for (const auto& item : def.body) {
         auto add = [&](const std::unique_ptr<ast::TypeAnnotation>& ann) {
             if (!ann) return;
-            auto sig = annotationToSignature(*ann);
+            auto sig = annotationToSignature(*ann, &targetVars);
             if (!sig) return;
             sig->params.insert(sig->params.begin(), receiver);
             m_annotatedMethods.insert(ann->name);
-            m_methodSignatures[ann->name].push_back(std::move(*sig));
+            // Skip a signature already registered with the same parameters —
+            // the same guard checkFunctionDef applies. A prelude type whose
+            // method is registered both from the imported interface and from
+            // the `:>` annotation in its own source otherwise ends up with two
+            // identical entries, and overload resolution reports the call
+            // ambiguous against ITSELF: `m.get(1, "")` on a Regex.Match (the
+            // documented example) failed with the same signature printed twice.
+            auto& existing = m_methodSignatures[ann->name];
+            const bool duplicate =
+                std::any_of(existing.begin(), existing.end(),
+                            [&](const Signature& other) {
+                                if (other.params.size() != sig->params.size())
+                                    return false;
+                                for (size_t i = 0; i < other.params.size(); i++)
+                                    if (!typesEqual(other.params[i], sig->params[i]))
+                                        return false;
+                                return true;
+                            });
+            if (!duplicate) existing.push_back(std::move(*sig));
         };
         if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
             add(*ann);
@@ -815,7 +856,10 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
             paramTypes.push_back(
                 param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar());
         }
-        provisional.push_back(Signature{def.name, std::move(paramTypes), freshTypeVar()});
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue) required--;
+        provisional.push_back(Signature{def.name, std::move(paramTypes),
+                                        freshTypeVar(), false, required});
     }
     if (provisional.empty()) return;
     if (alreadyRegistered)
@@ -933,12 +977,29 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             std::string name = node.name.parts.empty() ? "" : node.name.parts.back();
             if (name == "Optional" && args.size() == 1)
                 return Type::optional(args[0]);
+            if (name == "Map" && args.size() == 2)
+                return Type::map(args[0], args[1]);
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
-            TypePtr param = node.param ? resolveTypeExpr(*node.param, genericVars) : Type::unknown();
-            TypePtr result = node.result ? resolveTypeExpr(*node.result, genericVars) : Type::unknown();
-            return Type::func({param}, result);
+            std::vector<TypePtr> params;
+            params.push_back(node.param
+                ? resolveTypeExpr(*node.param, genericVars)
+                : Type::unknown());
+            const ast::TypeExpr* resultExpr = node.result.get();
+            while (resultExpr) {
+                const auto* next =
+                    std::get_if<ast::FunctionType>(&resultExpr->kind);
+                if (!next) break;
+                params.push_back(next->param
+                    ? resolveTypeExpr(*next->param, genericVars)
+                    : Type::unknown());
+                resultExpr = next->result.get();
+            }
+            auto result = resultExpr
+                ? resolveTypeExpr(*resultExpr, genericVars)
+                : Type::unknown();
+            return Type::func(std::move(params), std::move(result));
         }
         else if constexpr (std::is_same_v<T, ast::TupleType>) {
             std::vector<TypePtr> elements;
@@ -1017,6 +1078,27 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
         } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) checkPatternArity(*node.inner);
         } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+            // A named record pattern asserts a concrete record type. Verify the
+            // name is a known record and that every listed field belongs to it
+            // (catches typos like `ParseError { valu, rest }`). Imported records
+            // only expose an arity, so field names can't be checked there.
+            if (!node.typeName.empty()) {
+                auto local = m_recordFields.find(node.typeName);
+                bool known = local != m_recordFields.end();
+                if (!known && m_importedInterfaces &&
+                    m_importedInterfaces->recordArities.count(node.typeName))
+                    known = true;
+                if (!known)
+                    error(pattern.location,
+                          "`" + node.typeName + "` is not a record type");
+                else if (local != m_recordFields.end())
+                    for (const auto& field : node.fields)
+                        if (!field.isStringKey &&
+                            !local->second.count(field.name))
+                            error(pattern.location,
+                                  "record `" + node.typeName + "` has no field `" +
+                                  field.name + "`");
+            }
             for (const auto& field : node.fields)
                 if (field.pattern) checkPatternArity(**field.pattern);
         } else if constexpr (std::is_same_v<T, ast::ListPattern>) {
@@ -1049,7 +1131,15 @@ auto TypeChecker::bindPatternVars(
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
             const std::unordered_map<std::string, TypePtr>* fields = nullptr;
-            if (expected)
+            // A named record pattern (`Foo { x }`) pins the record type itself,
+            // so resolve field types from the declared type regardless of what
+            // the scrutinee was inferred to be. Fall back to `expected` for the
+            // anonymous `{ x }` form.
+            if (!node.typeName.empty()) {
+                if (auto found = m_recordFields.find(node.typeName);
+                    found != m_recordFields.end())
+                    fields = &found->second;
+            } else if (expected)
                 if (auto* named = std::get_if<NamedType>(&expected->kind))
                     if (auto found = m_recordFields.find(named->name);
                         found != m_recordFields.end())
@@ -1187,16 +1277,26 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
               "Overloads of `" + def.name +
               "` must all have the same purity");
     }
+    const bool receiverIsFirstParam = [&] {
+        if (!m_inMakeBlock || def.clauses.empty() ||
+            def.clauses[0].params.empty()) return false;
+        const auto& first = def.clauses[0].params[0];
+        if (!first.pattern) return false;
+        const auto& kind = (*first.pattern)->kind;
+        if (std::holds_alternative<ast::ListPattern>(kind) ||
+            std::holds_alternative<ast::TuplePattern>(kind))
+            return false;
+        return !std::holds_alternative<ast::VarPattern>(kind) &&
+               !std::holds_alternative<ast::ConstructorPattern>(kind);
+    }();
     // A "declared" signature is one from a standalone TypeAnnotation
     // (`fact : Integer -> Integer`) — tracked in m_annotationDeclared.
     // Pre-registered provisional sigs (for forward-reference/recursion) are
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
     const auto scopedDeclared = m_scopedDeclaredSignatures.find(purityKey);
-    const bool hasDeclaredContracts =
-        scopedDeclared != m_scopedDeclaredSignatures.end();
     auto* declared = [&]() -> const Signature* {
-        if (!hasDeclaredContracts) return nullptr;
+        if (scopedDeclared == m_scopedDeclaredSignatures.end()) return nullptr;
         // A lone declaration is still the contract even when its arity is
         // wrong; checkFunctionDef then emits the established annotation/body
         // diagnostics instead of silently treating it as unrelated.
@@ -1216,6 +1316,39 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
         return match;
     }();
+
+    // A `:>` declaration inside `make` is the method's contract just as a
+    // standalone annotation is for a top-level function. The registered
+    // receiver signature includes `this`; FunctionDef clauses do not, so use
+    // a receiver-less copy while checking their parameters and return bodies.
+    // Without this, clause-style implementations were inferred from scratch:
+    // a generic callback parameter could collapse to Void and poison calls in
+    // a later method even though the declared interface returned `[X]`.
+    std::optional<Signature> makeDeclared;
+    if (!declared && m_inMakeBlock && m_currentMakeType &&
+        m_annotatedMethods.count(def.name)) {
+        if (auto methods = m_methodSignatures.find(def.name);
+            methods != m_methodSignatures.end()) {
+            const auto arity = def.clauses.empty()
+                ? size_t(0) : def.clauses.front().params.size();
+            const auto receiverOffset = receiverIsFirstParam ? 0u : 1u;
+            for (const auto& signature : methods->second) {
+                if (signature.params.size() != arity + receiverOffset ||
+                    !argMatchesParam(m_currentMakeType, signature.params.front()))
+                    continue;
+                if (makeDeclared) {
+                    makeDeclared.reset();
+                    break;
+                }
+                makeDeclared = signature;
+                if (!receiverIsFirstParam)
+                    makeDeclared->params.erase(makeDeclared->params.begin());
+            }
+        }
+        if (makeDeclared) declared = &*makeDeclared;
+    }
+    const bool hasDeclaredContracts =
+        scopedDeclared != m_scopedDeclaredSignatures.end() || makeDeclared.has_value();
 
     // Resolve inline return type annotation (-> Type on the function def line),
     // present when no separate TypeAnnotation declaration exists.
@@ -1296,13 +1429,37 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         };
         auto resultType = (effectiveReturnType && concrete(effectiveReturnType))
                           ? effectiveReturnType : resolve(bodyType);
+        // Trailing parameters with a default are optional at the call site.
+        std::size_t required = clause.params.size();
+        while (required > 0 && clause.params[required - 1].defaultValue) required--;
         signatures.push_back(
-            Signature{def.name, std::move(paramTypes), resultType, def.isFoul});
+            Signature{def.name, std::move(paramTypes), resultType, def.isFoul,
+                      required});
     }
 
     // Preserve the checked declaration interface before the signatures are
     // moved into the unqualified call-resolution table below.
     m_functionSignatures[&def] = signatures;
+
+    // `:>` signatures are registered before bodies are checked, so defaults
+    // are not known yet. Copy the checked required arity back now. UFCS counts
+    // an implicit receiver as an argument; an explicit @/range receiver
+    // pattern already occupies that slot in the clause.
+    if (m_inMakeBlock && m_currentMakeType &&
+        m_annotatedMethods.count(def.name)) {
+        auto methods = m_methodSignatures.find(def.name);
+        if (methods != m_methodSignatures.end())
+            for (auto& method : methods->second)
+                for (const auto& checked : signatures) {
+                    const auto receiverOffset = receiverIsFirstParam ? 0u : 1u;
+                    if (method.params.size() !=
+                        checked.params.size() + receiverOffset)
+                        continue;
+                    method.requiredParams =
+                        checked.requiredParams.value_or(checked.params.size()) +
+                        receiverOffset;
+                }
+    }
 
     // make-block methods have an implicit `this` receiver, not a regular
     // param — checkCall's UFCS desugaring (receiver as argument 0) would
@@ -1325,21 +1482,16 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         // A constructor pattern in first position is the type-selector idiom
         // (`let to(String) -> String?`), an ARGUMENT naming the conversion
         // target — not a receiver match like `@[x | _]` or `x.._`.
-        const bool firstParamIsReceiverMatch = [&] {
-            if (def.clauses.empty() || def.clauses[0].params.empty()) return false;
-            const auto& first = def.clauses[0].params[0];
-            if (!first.pattern) return false;
-            const auto& kind = (*first.pattern)->kind;
-            return !std::holds_alternative<ast::VarPattern>(kind) &&
-                   !std::holds_alternative<ast::ConstructorPattern>(kind);
-        }();
-        const bool receiverIsFirstParam = firstParamIsReceiverMatch;
         auto& existing = m_methodSignatures[def.name];
         for (const auto& signature : signatures) {
             Signature withReceiver = signature;
             if (!receiverIsFirstParam)
                 withReceiver.params.insert(withReceiver.params.begin(),
                                            m_currentMakeType);
+            if (!receiverIsFirstParam)
+                withReceiver.requiredParams =
+                    withReceiver.requiredParams.value_or(
+                        signature.params.size()) + 1;
             const bool duplicate =
                 std::any_of(existing.begin(), existing.end(),
                             [&](const Signature& other) {
@@ -1372,10 +1524,29 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                                 return false;
                         return true;
                     });
+                auto checkedInterface = signatures[0];
+                const bool hasInlineParamContract = !def.clauses.empty() &&
+                    std::any_of(
+                        def.clauses[0].params.begin(),
+                        def.clauses[0].params.end(),
+                        [](const auto& param) {
+                            return param.type && *param.type;
+                        });
+                if (hasInlineParamContract) {
+                    // The standalone annotation is the public relationship
+                    // (notably A -> A for IO.inspect), while an inline trait
+                    // annotation supplies the implementation's dictionary
+                    // constraint. Do not erase the declared relationship with
+                    // the narrower body-checking parameter type.
+                    checkedInterface = *declared;
+                    checkedInterface.requiredParams =
+                        signatures[0].requiredParams;
+                    checkedInterface.isFoul = signatures[0].isFoul;
+                }
                 if (placeholder != sigs.end())
-                    *placeholder = signatures[0];
+                    *placeholder = checkedInterface;
                 else
-                    sigs.push_back(signatures[0]);
+                    sigs.push_back(std::move(checkedInterface));
             }
         } else {
             if (m_checkedFunctions.count(def.name)) {
@@ -1762,7 +1933,9 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
             paramTypes.push_back(pt);
             if (lam->params[i].name != "_") defineVar(lam->params[i].name, pt);
         }
+        m_blockDepth++;
         auto bodyType = inferBody(lam->body);
+        m_blockDepth--;
         auto resultType = resolve(bodyType);
         if (lam->returnAnnotation) {
             auto declared = resolveTypeExpr(**lam->returnAnnotation, genericVars);
@@ -1911,6 +2084,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return bodyType;
         }
         else if constexpr (std::is_same_v<T, ast::TryExpr>) {
+            if (m_tryingBlockDepth >= 0 && m_blockDepth > m_tryingBlockDepth)
+                m_tryBelowBlock++;
             auto operand = resolve(
                 node.operand ? inferExpr(*node.operand) : Type::unknown());
             if (auto* optional = std::get_if<OptionalType>(&operand->kind))
@@ -1928,7 +2103,19 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
+            auto outerTryingDepth = m_tryingBlockDepth;
+            auto outerTryBelowBlock = m_tryBelowBlock;
+            m_tryingBlockDepth = m_blockDepth;
+            m_tryBelowBlock = 0;
             auto result = resolve(inferBody(node.body));
+            // A block is a function boundary: a `.try` inside one becomes the
+            // BLOCK's result and never reaches this rescue, so the body's type
+            // and the rescue's have no reason to agree — the rescue is dead
+            // for that failure. `.try` is typed optimistically (payload only),
+            // which is what makes the disagreement look real.
+            const bool rescueUnreachable = m_tryBelowBlock > 0;
+            m_tryingBlockDepth = outerTryingDepth;
+            m_tryBelowBlock = outerTryBelowBlock;
             auto merge = [&](TypePtr candidate) {
                 candidate = resolve(candidate);
                 bool resultPermissive =
@@ -1942,6 +2129,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (resultPermissive && !candidatePermissive) {
                     result = candidate;
                 } else if (!resultPermissive && !candidatePermissive &&
+                           !rescueUnreachable &&
                            !argMatchesParam(candidate, result) &&
                            !argMatchesParam(result, candidate)) {
                     error(expr.location,
@@ -2043,6 +2231,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // matching receiver/RHS overload, but leave ordinary operators on
             // the builtin inference path when no local signature applies.
             if (!operatorName.empty()) {
+                // Numeric primitives always use the built-in operator. A
+                // trait-shaped unit overload such as Watt * Hour must not
+                // capture Float * Float merely because both types also occur
+                // in generic receiver tables loaded from the prelude.
+                if (m_traits.satisfies(leftType, "Number") &&
+                    m_traits.satisfies(rightType, "Number"))
+                    return inferBinaryOp(node.op, leftType, rightType,
+                                         expr.location);
                 auto receiver = resolve(leftType);
                 const bool concreteReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
@@ -2617,6 +2813,37 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             checkMatchExhaustiveness(node, expr.location);
             return resultType;
         }
+        else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
+            TypePtr resultType = Type::unknown();
+            for (const auto& clause : node.clauses) {
+                pushScope();
+                if (node.senderBinding)
+                    defineVar(*node.senderBinding,
+                              Type::named("Process", {Type::unknown()}));
+                for (const auto& pattern : clause.patterns)
+                    if (pattern) {
+                        checkPatternArity(*pattern);
+                        bindPatternVars(*pattern);
+                    }
+                if (clause.guard && *clause.guard)
+                    inferExpr(**clause.guard);
+                if (clause.body) {
+                    auto arm = resolve(inferExpr(*clause.body));
+                    if (std::holds_alternative<UnknownType>(
+                            resolve(resultType)->kind))
+                        resultType = arm;
+                }
+                popScope();
+            }
+            if (node.timeout && *node.timeout) inferExpr(**node.timeout);
+            if (node.afterBody && *node.afterBody) {
+                auto after = resolve(inferExpr(**node.afterBody));
+                if (std::holds_alternative<UnknownType>(
+                        resolve(resultType)->kind))
+                    resultType = after;
+            }
+            return resultType;
+        }
         else if constexpr (std::is_same_v<T, ast::ReturnExpr>) {
             return node.value ? inferExpr(*node.value) : Type::unit();
         }
@@ -2625,7 +2852,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // through inferBlock). Infer param types and body, return a proper
             // FuncType so call-site checking can validate the argument types.
             if (node.params.empty()) {
+                m_blockDepth++;
                 auto bodyType = inferBody(node.body);
+                m_blockDepth--;
                 return Type::func({}, resolve(bodyType));
             }
             pushScope();
@@ -2638,7 +2867,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 paramTypes.push_back(pt);
                 if (param.name != "_") defineVar(param.name, pt);
             }
+            m_blockDepth++;
             auto bodyType = inferBody(node.body);
+            m_blockDepth--;
             auto resultType = resolve(bodyType);
             if (node.returnAnnotation) {
                 auto declared =
@@ -2691,7 +2922,35 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 auto valueType = resolve(inferExpr(*val));
                 if (record == m_recordFields.end()) continue;
                 auto declared = record->second.find(fieldName);
-                if (declared == record->second.end()) continue;
+                // An unknown field name used to be skipped, which made a
+                // renamed field silently absorb the old spelling: the
+                // interpreter stored `zebra:` on a record with no such field
+                // and `.zebra` read it straight back, while BEAM only failed at
+                // runtime with "Undefined method: zebra". Renaming a field
+                // therefore broke callers with no diagnostic at all. The
+                // pattern side has always checked this (see checkPatternArity);
+                // construction just never did.
+                if (declared == record->second.end()) {
+                    // List the layout: on a rename or a typo the useful
+                    // question is immediately "then what ARE the fields?".
+                    // Sorted so the message is stable — m_recordFields is a
+                    // hash map.
+                    std::vector<std::string> available;
+                    available.reserve(record->second.size());
+                    for (const auto& [known, _] : record->second)
+                        available.push_back(known);
+                    std::sort(available.begin(), available.end());
+                    std::string layout;
+                    for (std::size_t i = 0; i < available.size(); i++) {
+                        if (i) layout += ", ";
+                        layout += available[i];
+                    }
+                    error(val->location,
+                          "record `" + node.typeName + "` has no field `" +
+                          fieldName + "` — it has " +
+                          (layout.empty() ? "no fields" : layout));
+                    continue;
+                }
                 auto expected = resolve(declared->second);
                 // Stay quiet where either side is open ANYWHERE inside it: a
                 // type variable, a type the checker could not pin down, or a
@@ -3363,7 +3622,37 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         };
         auto [argParams, argResult] = flatten(argType);
         auto [paramParams, paramResult] = flatten(paramType);
-        if (argParams.size() != paramParams.size()) return false;
+        // A block may DESTRUCTURE a tuple element instead of naming it:
+        // `pairs.each do |k, v|` over `[(String, Int)]` binds one element
+        // across two parameters, and both backends spread it. The checker was
+        // the only thing that disagreed.
+        //
+        // Decidable from the ARGUMENT alone, which is what makes it cheap:
+        // expected-type propagation has already given the block's first
+        // parameter the element type, so a 2-parameter block over
+        // `[(String, Int)]` arrives here as `((String, Int), T2) -> Void`.
+        // A first parameter that is a tuple of exactly as many elements as the
+        // block has parameters is a destructuring block; anything else is a
+        // real arity error and still reported as one.
+        if (argParams.size() != paramParams.size()) {
+            if (paramParams.size() != 1 || argParams.size() < 2) return false;
+            if (auto* spread = std::get_if<TupleType>(&argParams[0]->kind)) {
+                if (spread->elements.size() != argParams.size()) return false;
+            } else if (!isPermissive(paramParams[0]) ||
+                       !std::all_of(argParams.begin(), argParams.end(),
+                                    [&](const TypePtr& p) {
+                                        return isPermissive(p);
+                                    })) {
+                // Something IS known and it does not line up: a real arity
+                // error, still reported. Only the case where neither side
+                // knows anything is let through — `@conditions.each do |c, v|`
+                // over a record field the checker has not resolved to a tuple.
+                // Rejecting there would fail a program both backends run.
+                return false;
+            }
+            if (isUnitLike(paramResult)) return true;
+            return argMatchesParam(argResult, paramResult);
+        }
         for (size_t i = 0; i < paramParams.size(); i++)
             if (!argMatchesParam(argParams[i], paramParams[i])) return false;
         // Void as the expected return means "result discarded" — accept any body type.
@@ -3385,6 +3674,16 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
                 if (owner != m_adtOfConstructor.end() &&
                     owner->second == paramNamed->name)
                     return true;
+                // The same constructor/ADT relationship must survive a
+                // `using` boundary. Imported nullary variants are recorded
+                // per provider module rather than in m_adtOfConstructor.
+                for (const auto& [module, constructors] : m_moduleConstructors) {
+                    auto imported = constructors.find(argNamed->name);
+                    if (imported != constructors.end() &&
+                        imported->second.typeName == paramNamed->name &&
+                        moduleMemberImported(module, argNamed->name))
+                        return true;
+                }
             }
             if (isStringType(argType) && isStringType(paramType)) return true;
             return false;
@@ -3526,14 +3825,15 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     bool hasLocalMethods = isMethodCall && methodIt != m_methodSignatures.end();
     // A known record field is not an unrelated imported zero-argument
     // method with the same spelling (`Version.patch` vs HTTP.patch).
-    if (isMethodCall && !hasLocalMethods && argTypes.size() == 1) {
+    if (isMethodCall && argTypes.size() == 1) {
         auto receiver = resolve(argTypes.front());
         if (auto* named = std::get_if<NamedType>(&receiver->kind))
             if (auto record = m_recordFields.find(named->name);
                 record != m_recordFields.end())
                 if (auto field = record->second.find(name);
-                    field != record->second.end())
+                    field != record->second.end()) {
                     return field->second;
+                }
     }
     bool hasReceiverRefinementConflict = false;
     if (hasLocalMethods && !argTypes.empty()) {
@@ -3646,8 +3946,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // retain the existing permissive behavior unless the receiver refinement
     // itself is wrong; generic helper calls in those bodies are not yet
     // sufficiently substituted to validate without false positives.
+    const bool hasConcreteReceiver = !argTypes.empty() && [&] {
+        auto receiver = resolve(argTypes.front());
+        return !std::holds_alternative<TypeVar>(receiver->kind) &&
+               !std::holds_alternative<UnknownType>(receiver->kind);
+    }();
     bool useLocalMethods = hasLocalMethods &&
-        (!m_inMakeBlock || hasReceiverRefinementConflict);
+        (!m_inMakeBlock || hasReceiverRefinementConflict ||
+         hasConcreteReceiver);
     // Local methods come FIRST. When a user type defines a method the prelude
     // also provides and both signatures match, the user's is the more specific
     // one. Ordering imported first let a GENERIC prelude signature win on type
@@ -3895,17 +4201,49 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::vector<const Signature*> arityMatches;
     std::vector<const Signature*> fullMatches;
     for (const auto& sig : *sigs) {
-        if (sig.params.size() != argTypes.size()) continue;
+        // A trailing parameter with a default may be omitted, so the accepted
+        // range is [requiredParams, params.size()] rather than one number.
+        const std::size_t required =
+            sig.requiredParams.value_or(sig.params.size());
+        if (argTypes.size() < required || argTypes.size() > sig.params.size())
+            continue;
         arityMatches.push_back(&sig);
 
+        // Only the arguments actually PASSED are checked: an omitted
+        // defaulted parameter has no argument to compare against.
         bool allMatch = true;
-        for (size_t i = 0; i < sig.params.size(); i++) {
+        for (size_t i = 0; i < argTypes.size(); i++) {
             if (!argMatchesParam(argTypes[i], sig.params[i])) {
                 allMatch = false;
                 break;
             }
         }
         if (allMatch) fullMatches.push_back(&sig);
+    }
+
+    // A trait receiver is a fallback for concrete implementations of the
+    // same method.  Once a concrete receiver signature matches, do not let a
+    // universal trait implementation win merely because another parameter in
+    // its signature is more precise.  In particular, Measure.to(String) must
+    // keep precedence over Showable.to(String).
+    if (isMethodCall && fullMatches.size() > 1 && !argTypes.empty()) {
+        const bool hasConcreteReceiverMatch = std::any_of(
+            fullMatches.begin(), fullMatches.end(),
+            [](const Signature* signature) {
+                return !signature->params.empty() &&
+                    !std::holds_alternative<ConstrainedType>(
+                        signature->params.front()->kind) &&
+                    !std::holds_alternative<TypeVar>(
+                        signature->params.front()->kind) &&
+                    !std::holds_alternative<UnknownType>(
+                        signature->params.front()->kind);
+            });
+        if (hasConcreteReceiverMatch)
+            std::erase_if(fullMatches, [](const Signature* signature) {
+                return !signature->params.empty() &&
+                    std::holds_alternative<ConstrainedType>(
+                        signature->params.front()->kind);
+            });
     }
 
     // 5c: Pick the most-specific full match when there are several.
@@ -3996,7 +4334,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // would permanently specialize the closure to declaration order;
         // keep its intermediate result permissive until the surrounding
         // method chain or a call site supplies a concrete receiver.
-        if (distinct.size() > 1 && !concreteArguments && isMethodCall)
+        if (distinct.size() > 1 && !concreteArguments)
             return Type::unknown();
         if (best) {
             // Rebuild fullMatches with best first so the code below uses it
@@ -4076,7 +4414,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
             }
             if (resolved) {
-                m_resolvedCalls[methodCall] = {
+                ResolvedCallTarget target{
                     resolved->backendModule,
                     resolved->backendFunction,
                     resolved->backendArity,
@@ -4084,6 +4422,37 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     resolved->signature.isFoul,
                     resolved->paramNames,
                 };
+                for (std::size_t i = 0; i < matched.params.size(); ++i) {
+                    const auto resolvedParam = resolve(matched.params[i]);
+                    const auto addRequiredDictionary = [&](const std::string& traitName) {
+                        const bool backendExpectsDictionary =
+                            resolved->backendArity >
+                            static_cast<int>(matched.params.size() +
+                                             target.traitDictionaries.size());
+                        if (!backendExpectsDictionary) return;
+                        const auto* trait = m_traits.get(traitName);
+                        const bool methodIsRequired = trait && std::any_of(
+                            trait->requiredMethods.begin(),
+                            trait->requiredMethods.end(),
+                            [&](const auto& required) {
+                                return required.name == name;
+                            });
+                        const bool callsTraitImplementationDirectly =
+                            i == 0 && isReceiver &&
+                            methodIsRequired &&
+                            resolved->backendFunction == name + "/" + traitName;
+                        if (trait && !trait->requiredMethods.empty() &&
+                            !callsTraitImplementationDirectly)
+                            target.traitDictionaries.push_back({i, traitName});
+                    };
+                    if (const auto* constrained =
+                            std::get_if<ConstrainedType>(&resolvedParam->kind))
+                        addRequiredDictionary(constrained->traitName);
+                    else if (const auto* named =
+                                 std::get_if<NamedType>(&resolvedParam->kind))
+                        addRequiredDictionary(named->name);
+                }
+                m_resolvedCalls[methodCall] = std::move(target);
             } else if (winnerIsMakeMethod) {
                 ResolvedCallTarget target;
                 target.backendFunction = name;
@@ -4115,7 +4484,14 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             auto resolved = resolve(argTypes[i]);
             if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                 const auto& param = matched.params[i];
-                if (!typeContainsVar(param)) unifyVar(tv->id, param);
+                // Negative ids are per-signature generic placeholders, not
+                // inference variables, and every signature numbers its own
+                // from -1. Binding one in the global substitution made an
+                // unrelated signature's `A` mean whatever the last such call
+                // passed: after `args.at(i).or("")` (String), `(0..3).filter`
+                // returned [String] and its block param typed as String.
+                if (tv->id >= 0 && !typeContainsVar(param))
+                    unifyVar(tv->id, param);
             }
         }
         // Instantiate interface-level generic placeholders in the result from
@@ -4130,6 +4506,13 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (auto* tv = std::get_if<TypeVar>(&pattern->kind);
                     tv && tv->id < 0) {
                     genericSubst.try_emplace(tv->id, resolve(actual));
+                    return;
+                }
+                if (auto* constrained =
+                        std::get_if<ConstrainedType>(&pattern->kind);
+                    constrained && constrained->genericId < 0) {
+                    genericSubst.try_emplace(constrained->genericId,
+                                             resolve(actual));
                     return;
                 }
                 if (auto* pn = std::get_if<NamedType>(&pattern->kind)) {
@@ -4165,16 +4548,44 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++)
             bindGenerics(matched.params[i], resolve(argTypes[i]));
 
-        // Keep structured generic results under the existing gradual typing
-        // behavior for now (`map : ... -> [B]`, for example). The dispatch
-        // bug requires only the direct payload-returning form used by
-        // Optional/Result `or`.
-        if (auto* resultVar = std::get_if<TypeVar>(&matched.result->kind);
-            resultVar && resultVar->id < 0) {
-            if (auto it = genericSubst.find(resultVar->id);
-                it != genericSubst.end()) return it->second;
-        }
-        return matched.result;
+        // Substitute INSIDE the result too, not only when the whole result is
+        // a placeholder: `[X].dropWhile : ((X) -> Bool) -> [X]` on a [String]
+        // receiver returns [String]. Leaking `[X]` instead was not merely
+        // vague — String IS [Char] here, so the leaked `[A]` went on to match
+        // String's `at : String -> Integer -> Char?` and a list of strings
+        // indexed as a list of characters. Placeholders the arguments do not
+        // bind (`map : (X -> B) -> [B]`) are left exactly as they were.
+        std::function<TypePtr(const TypePtr&)> applyGenerics =
+            [&](const TypePtr& type) -> TypePtr {
+                if (!type) return type;
+                if (auto* var = std::get_if<TypeVar>(&type->kind)) {
+                    if (var->id >= 0) return type;
+                    auto found = genericSubst.find(var->id);
+                    return found == genericSubst.end() ? type : found->second;
+                }
+                if (auto* list = std::get_if<ListType>(&type->kind))
+                    return Type::list(applyGenerics(list->element));
+                if (auto* optional = std::get_if<OptionalType>(&type->kind))
+                    return Type::optional(applyGenerics(optional->inner));
+                if (auto* map = std::get_if<MapType>(&type->kind))
+                    return Type::map(applyGenerics(map->key),
+                                     applyGenerics(map->value));
+                if (auto* tuple = std::get_if<TupleType>(&type->kind)) {
+                    std::vector<TypePtr> elements;
+                    for (const auto& element : tuple->elements)
+                        elements.push_back(applyGenerics(element));
+                    return Type::tuple(std::move(elements));
+                }
+                if (auto* named = std::get_if<NamedType>(&type->kind)) {
+                    if (named->typeArgs.empty()) return type;
+                    std::vector<TypePtr> args;
+                    for (const auto& arg : named->typeArgs)
+                        args.push_back(applyGenerics(arg));
+                    return Type::named(named->name, std::move(args));
+                }
+                return type;
+            };
+        return applyGenerics(matched.result);
     }
 
     if (arityMatches.empty()) {

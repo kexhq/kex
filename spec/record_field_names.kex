@@ -1,0 +1,34 @@
+# Record fields are resolved by NAME, not by position — the property that makes
+# compile-time reification of a record safe (src/compiled/reify.cxx sorts field
+# names for stable output, which cannot reorder the record itself).
+#
+# Declaration order is deliberately NOT alphabetical, so sorted order and
+# declared order differ and the distinction is actually tested.
+#
+# Why that matters, concretely: RENAMING a field can move its position in the
+# alphabet. `Rev { zebra, apple }` sorts to (apple, zebra); rename `apple` to
+# `zulu` and it sorts to (zebra, zulu) — the order FLIPS. If the sorted order
+# were the tuple layout, that rename would silently change the ABI. It is not:
+# the emitted tuple for `Rev { zebra: 1, apple: 2 }` is {'Rev', 1, 2}, i.e.
+# DECLARATION order, and stays {'Rev', 1, 2} across the rename. Verified
+# against --emit-core. The sort exists only because RecordValue::fields is an
+# unordered_map and unstable output would make identical builds differ.
+record Rev do
+  zebra  : Int
+  apple  : Int
+  middle : Int
+end
+
+compiled do
+  # Written in yet another order again, to pin that construction order is free.
+  let R = Rev { middle: 3, zebra: 1, apple: 2 }
+end
+
+main do
+  # Reads follow the names, whatever order anything was written in.
+  IO.printLine("zebra=${R.zebra} apple=${R.apple} middle=${R.middle}")
+
+  # A runtime construction, fields in a third order
+  let direct = Rev { apple: 20, middle: 30, zebra: 10 }
+  IO.printLine("zebra=${direct.zebra} apple=${direct.apple} middle=${direct.middle}")
+end

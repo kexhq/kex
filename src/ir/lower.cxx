@@ -264,6 +264,11 @@ struct Lowering {
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
     std::unordered_map<std::string, std::vector<std::string>> fnParamNames;
+    // Top-level trailing defaults, used to expand omitted arguments at local
+    // call sites just as methodDefaults does for receiver calls.
+    std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> fnDefaults;
+    std::unordered_map<std::string,
+        std::vector<std::pair<std::size_t, std::string>>> fnTraitParams;
     // Names that are real functions in this module (top-level + make methods).
     // A call to a name NOT in here is an indirect apply through a variable
     // holding a fun (e.g. a `block` parameter).
@@ -272,6 +277,9 @@ struct Lowering {
     // Modules in a single source file still flatten into one BEAM module, so
     // this preserves qualification without a cross-module call.
     std::unordered_map<std::string, std::string> moduleFunctions;
+    // Receiver type -> source module path for make blocks compiled into a
+    // companion module in this same unit.
+    std::unordered_map<std::string, std::string> localTypeModules;
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
@@ -296,6 +304,12 @@ struct Lowering {
     const std::unordered_map<const ast::MethodCall*,
         semantic::ResolvedCallTarget>* resolvedCalls = nullptr;
     const StaticTypeOfCalls* staticTypeOfCalls = nullptr;
+    const ExpressionTypes* expressionTypes = nullptr;
+    // Lexical source binding -> trait -> hidden dictionary IR binding.
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, std::string>> traitDictionaries;
+    std::unordered_map<std::string,
+        std::vector<ExternalModules::TraitMethod>> traitMethods;
     // ADT/variant type → its tag names (e.g. Optional → {"Just","None"}). Used
     // by the dispatcher to wildcard-match any variant of a type, not just the
     // type name itself (which isn't set as element(1) on any variant value).
@@ -781,7 +795,15 @@ struct Lowering {
                 Lambda lam;
                 for (const auto& p : n.params) { lam.params.push_back(p.name); subst[p.name] = p.name; }
                 lam.body = lowerBody(n.body);
+                // Same rule a named function gets: an unrescued `.try` failure
+                // makes THIS body's result `Error(e)` rather than unwinding
+                // past it. A lambda is a function, so `["no"].map { |v|
+                // f(v).try }` yields `[Error(...)]` instead of crashing the
+                // process — which is what the walker has always done, and what
+                // `each` relies on to drop the error with the block's result.
                 if (n.rescue) lam.body = wrapWithTryCatch(std::move(lam.body), *n.rescue);
+                else if (irHasEscapingTryThrow(lam.body))
+                    lam.body = wrapPropagateTryError(std::move(lam.body));
                 subst = snap;
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(lam);
@@ -1258,6 +1280,21 @@ struct Lowering {
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
         // A trailing do-block is passed as the function's last argument.
         if (n.block) args.push_back(atomize(*n.block, binds));
+        else if (auto defaults = fnDefaults.find(n.name);
+                 defaults != fnDefaults.end())
+            for (size_t i = n.args.size(); i < defaults->second.size(); ++i)
+                if (defaults->second[i])
+                    args.push_back(atomize(*defaults->second[i], binds));
+        if (auto requirements = fnTraitParams.find(n.name);
+            requirements != fnTraitParams.end())
+            for (const auto& [index, trait] : requirements->second) {
+                if (index >= n.args.size() || !n.args[index])
+                    throw LowerError(
+                        "IR lower: missing source argument for " + trait +
+                        " dictionary");
+                args.push_back(atomize_ir(
+                    makeTraitDictionary(trait, *n.args[index]), binds));
+            }
         if (n.name == "self" && args.empty() && !knownFns.count("self"))
             return callE("erlang", "self", 0, {});
         if (n.name == "send" && args.size() == 2 && !knownFns.count("send")) {
@@ -1316,6 +1353,87 @@ struct Lowering {
     // Set while lowering a mutating `!` call's VALUE (the rebind itself is
     // handled by the enclosing statement — see lowerBodyFrom/loop handling).
     bool m_lowerMutatingAsValue = false;
+
+    auto makeTraitDictionary(const std::string& trait,
+                             const ast::Expr& value) -> ExprPtr {
+        auto contract = traitMethods.find(trait);
+        if (contract == traitMethods.end())
+            throw LowerError("IR lower: unknown trait dictionary " + trait);
+        std::string concreteType;
+        if (expressionTypes) {
+            if (auto found = expressionTypes->find(&value);
+                found != expressionTypes->end() && found->second)
+                concreteType = semantic::typeToString(found->second);
+        }
+        if (auto owner = variantOwner.find(concreteType);
+            owner != variantOwner.end())
+            concreteType = owner->second;
+        std::vector<ExprPtr> slots;
+        std::vector<Binding> dictionaryBindings;
+        for (const auto& method : contract->second) {
+            std::string module;
+            std::string function = method.name;
+            const auto owners = methodOwners.find(method.name);
+            const bool localOwnsType = owners != methodOwners.end() &&
+                std::find(owners->second.begin(), owners->second.end(),
+                          concreteType) != owners->second.end();
+            if (localOwnsType && localMethodArities.count(
+                    method.name + "/" + std::to_string(method.arity))) {
+                if (collidingMethods.count(method.name) &&
+                    !concreteType.empty())
+                    function = mangleReceiverImplementation(
+                        method.name, concreteType);
+            } else if (auto ownerModule = localTypeModules.find(concreteType);
+                       ownerModule != localTypeModules.end()) {
+                // A source module compiled in this same unit is not in the
+                // external KexI registry yet, so target its companion's
+                // runtime dispatcher directly.
+                module = "Kex." + ownerModule->second;
+                function = method.name;
+            } else if (externalModules) {
+                auto candidates =
+                    externalModules->receiverFunctions.find(method.name);
+                if (candidates !=
+                    externalModules->receiverFunctions.end()) {
+                    auto selected = std::find_if(
+                        candidates->second.begin(), candidates->second.end(),
+                        [&](const auto& candidate) {
+                            return candidate.beamArity == method.arity &&
+                                !concreteType.empty() &&
+                                candidate.receiverType == concreteType;
+                        });
+                    if (selected == candidates->second.end())
+                        selected = std::find_if(
+                            candidates->second.begin(), candidates->second.end(),
+                            [&](const auto& candidate) {
+                                return candidate.beamArity == method.arity;
+                            });
+                    if (selected != candidates->second.end()) {
+                        module = selected->moduleAtom;
+                        function = selected->beamFunction;
+                    }
+                }
+            }
+            if (module.empty() && !localOwnsType)
+                throw LowerError("IR lower: no implementation for " + trait +
+                                 "." + method.name + " on " + concreteType);
+            Lambda lambda;
+            std::vector<ExprPtr> callArgs;
+            for (int i = 0; i < method.arity; ++i) {
+                auto param = fresh("DictArg");
+                lambda.params.push_back(param);
+                callArgs.push_back(var(param));
+            }
+            lambda.body = callE(module, function, method.arity,
+                                std::move(callArgs));
+            auto slot = std::make_unique<Expr>();
+            slot->node = std::move(lambda);
+            slots.push_back(atomize_ir(std::move(slot), dictionaryBindings));
+        }
+        auto dictionary = std::make_unique<Expr>();
+        dictionary->node = MakeTuple{std::move(slots)};
+        return wrapLets(dictionaryBindings, std::move(dictionary));
+    }
     // A module path `A.B.C` (nested modules, encoded by the parser as a chain
     // of MethodCall nodes with no args) flattened to the qualified name
     // ["A","B","C"], or empty if the receiver isn't a pure uppercase path.
@@ -1345,6 +1463,45 @@ struct Lowering {
             }
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
+        }
+        // A method on a trait-typed lexical parameter dispatches through the
+        // hidden dictionary supplied by its caller. The tuple slots follow
+        // the trait declaration's required-method order.
+        std::string dictionaryReceiver;
+        if (const auto* receiver =
+                std::get_if<ast::Identifier>(&n.receiver->kind))
+            dictionaryReceiver = receiver->name;
+        else if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
+            dictionaryReceiver = "this";
+        if (!dictionaryReceiver.empty()) {
+            if (auto dictionaries = traitDictionaries.find(dictionaryReceiver);
+                dictionaries != traitDictionaries.end()) {
+                for (const auto& [trait, dictionary] : dictionaries->second) {
+                    auto methods = traitMethods.find(trait);
+                    if (methods == traitMethods.end()) continue;
+                    auto method = std::find_if(
+                        methods->second.begin(), methods->second.end(),
+                        [&](const auto& candidate) {
+                            return candidate.name == n.method;
+                        });
+                    if (method == methods->second.end()) continue;
+                    std::vector<Binding> binds;
+                    std::vector<ExprPtr> args;
+                    args.push_back(atomize(n.receiver, binds));
+                    for (const auto& arg : n.args)
+                        args.push_back(atomize(arg, binds));
+                    if (n.block) args.push_back(atomize(*n.block, binds));
+                    auto slot = static_cast<int>(
+                        std::distance(methods->second.begin(), method)) + 1;
+                    auto callee = atomize_ir(
+                        callE("erlang", "element", 2,
+                              two(litInt(slot), var(dictionary))), binds);
+                    auto indirect = std::make_unique<Expr>();
+                    indirect->node = CallIndirect{
+                        std::move(callee), std::move(args), false};
+                    return wrapLets(binds, std::move(indirect));
+                }
+            }
         }
         const bool thisReceiver =
             std::holds_alternative<ast::ThisExpr>(n.receiver->kind) ||
@@ -1419,7 +1576,8 @@ struct Lowering {
                     const auto& pnames = resolved->second.paramNames;
                     auto expected = static_cast<size_t>(
                         resolved->second.backendArity -
-                        (resolved->second.passesReceiver ? 1 : 0));
+                        (resolved->second.passesReceiver ? 1 : 0) -
+                        resolved->second.traitDictionaries.size());
                     if (pnames.size() != expected)
                         throw LowerError(
                             "IR lower: named args to imported function with unknown params: " +
@@ -1450,6 +1608,30 @@ struct Lowering {
                     for (const auto& arg : n.args)
                         args.push_back(atomize(arg, binds));
                     if (n.block) args.push_back(atomize(*n.block, binds));
+                    else if (auto defaults = methodDefaults.find(n.method);
+                             defaults != methodDefaults.end())
+                        for (size_t i = n.args.size();
+                             i < defaults->second.size(); ++i)
+                            if (defaults->second[i])
+                                args.push_back(
+                                    atomize(*defaults->second[i], binds));
+                }
+                for (const auto& [argument, trait] :
+                     resolved->second.traitDictionaries) {
+                    const ast::Expr* source = nullptr;
+                    if (resolved->second.passesReceiver) {
+                        if (argument == 0) source = n.receiver.get();
+                        else if (argument - 1 < n.args.size())
+                            source = n.args[argument - 1].get();
+                    } else if (argument < n.args.size()) {
+                        source = n.args[argument].get();
+                    }
+                    if (!source)
+                        throw LowerError(
+                            "IR lower: missing source argument for " + trait +
+                            " dictionary");
+                    args.push_back(atomize_ir(
+                        makeTraitDictionary(trait, *source), binds));
                 }
                 auto backendFunction = resolved->second.backendFunction;
                 if (!resolved->second.localDispatchTypes.empty()) {
@@ -1855,7 +2037,16 @@ struct Lowering {
                 (variantOwner.count(uid->name) &&
                  variantArity.count(uid->name) &&
                  variantArity.at(uid->name) == 0);
-            if (!nullaryConstructorReceiver)
+            // ...and so is an upper-case TOP-LEVEL BINDING. `let NUMS = [1,2,3]`
+            // then `NUMS.map { }` is the same call as `let n = NUMS` then
+            // `n.map { }` — which worked, while the direct form did not, purely
+            // because an UpperIdentifier receiver was assumed to name a module.
+            // Every module and variant lookup above has already missed by the
+            // time we get here, so a name that is a known local value can only
+            // be the value.
+            const bool topLevelBindingReceiver =
+                zeroArgFns.count(uid->name) || topLevelConstants.count(uid->name);
+            if (!nullaryConstructorReceiver && !topLevelBindingReceiver)
                 return wrapLets(binds,
                     runtimeError("Undefined function: " + uid->name + "." + n.method));
         }
@@ -1886,8 +2077,21 @@ struct Lowering {
         // import must win over an identically named prelude receiver method:
         // module compilation merges declarations into one flat IR first, so
         // imported functions also appear in localMethods at this point.
-        if (auto imported = moduleImports.find(m);
-            imported != moduleImports.end()) {
+        auto importedMethod = moduleImports.find(m);
+        bool importedArityMatches = importedMethod != moduleImports.end();
+        if (importedArityMatches) {
+            const auto actual = n.args.size() + n.namedArgs.size() + 1 +
+                (n.block ? 1 : 0);
+            for (const auto& [qualified, emitted] : moduleFunctions) {
+                if (emitted != importedMethod->second) continue;
+                if (auto names = fnParamNames.find(qualified);
+                    names != fnParamNames.end())
+                    importedArityMatches = names->second.size() == actual;
+                break;
+            }
+        }
+        if (importedArityMatches) {
+            auto imported = importedMethod;
                 const std::vector<std::string>* pnames = nullptr;
                 for (const auto& [qualified, emitted] : moduleFunctions) {
                     if (emitted != imported->second) continue;
@@ -1958,12 +2162,18 @@ struct Lowering {
                 int actualArity = static_cast<int>(n.args.size() + n.namedArgs.size()) + 1 +
                                   (n.block ? 1 : 0);
                 const ExternalModules::ReceiverFunction* match = nullptr;
+                bool sameModuleOverloads = false;
                 for (const auto& candidate : found->second) {
                     if (candidate.beamArity != actualArity) continue;
-                    if (match)
+                    if (match) {
+                        if (match->moduleAtom == candidate.moduleAtom) {
+                            sameModuleOverloads = true;
+                            continue;
+                        }
                         return ret(runtimeError(
                             "Ambiguous receiver function: " + m + "/" +
                             std::to_string(actualArity)));
+                    }
                     match = &candidate;
                 }
                 if (match) {
@@ -2004,7 +2214,9 @@ struct Lowering {
                         if (n.block)
                             pargs.push_back(atomize_ir(lower(*n.block), rb));
                     }
-                    return ret(callE(match->moduleAtom, match->beamFunction,
+                    return ret(callE(match->moduleAtom,
+                                     sameModuleOverloads ? m
+                                                         : match->beamFunction,
                                      actualArity, std::move(pargs)));
                 }
             }
@@ -2255,9 +2467,70 @@ struct Lowering {
         e->node = std::move(m);
         return e;
     }
+    // Is this IR expression already a `Bool`, so the truthiness test below can
+    // be skipped? Deliberately a small allowlist of things that cannot be
+    // anything else — every comparison and boolean BIF, and a literal. Missing
+    // a case here costs three comparisons, not correctness.
+    static auto irIsBoolean(const ExprPtr& e) -> bool {
+        if (!e) return false;
+        if (auto* l = std::get_if<Lit>(&e->node))
+            return l->kind == LitKind::Bool;
+        // Comparisons and boolean connectives lower to an Intrinsic, not a
+        // Call — `1 > 2` is `Intrinsic{Op::Gt}`, and only emit_core turns it
+        // into `call 'erlang':'>'`.
+        if (auto* i = std::get_if<Intrinsic>(&e->node)) {
+            switch (i->op) {
+                case Op::Eq: case Op::Neq:
+                case Op::Lt: case Op::Gt: case Op::Lte: case Op::Gte:
+                case Op::And: case Op::Or: case Op::Not:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+        if (auto* c = std::get_if<Call>(&e->node)) {
+            if (c->module != "erlang") return false;
+            static const std::unordered_set<std::string> boolBifs = {
+                "==", "/=", "=:=", "=/=", "<", ">", "=<", ">=",
+                "not", "and", "or", "xor",
+                "is_atom", "is_binary", "is_boolean", "is_float", "is_function",
+                "is_integer", "is_list", "is_map", "is_number", "is_pid",
+                "is_reference", "is_tuple",
+            };
+            return boolBifs.count(c->name) > 0;
+        }
+        return false;
+    }
+
+    // Only `false`, `None` and `()` are falsy; everything else is truthy —
+    // Crystal semantics, which `src/stdlib/truthyable.kex` states and the tree
+    // walker has always implemented. BEAM matched `true`/`false` literally, so
+    // `if Ok(1)` was a `case_clause` crash and a `find` whose block returned a
+    // non-Bool died with `bad_filter`.
+    //
+    // Done in the SUBJECT rather than as extra clauses because the else branch
+    // must stay lazy — repeating it under three falsy patterns would either
+    // duplicate its code or force it to be bound eagerly.
+    auto truthyTest(ExprPtr cond) -> ExprPtr {
+        if (irIsBoolean(cond)) return cond;
+        std::string cv = fresh("_Truthy");
+        auto notEq = [&](const char* atom) {
+            return callE("erlang", "=/=", 2,
+                         two(var(cv), lit(LitKind::Atom, atom)));
+        };
+        // `and`, not `andalso`: the latter is a control-flow OPERATOR, so
+        // `erlang:'andalso'/2` does not exist and every condition became
+        // `undef`. Both operands are comparisons, so strictness costs nothing.
+        auto test = callE("erlang", "and", 2,
+                          two(notEq("false"), notEq("None")));
+        test = callE("erlang", "and", 2,
+                     two(std::move(test), notEq("Kex.Unit")));
+        return makeLet(cv, std::move(cond), std::move(test));
+    }
+
     auto matchBool(ExprPtr cond, ExprPtr thenE, ExprPtr elseE) -> ExprPtr {
         Match m;
-        m.subjects.push_back(std::move(cond));
+        m.subjects.push_back(truthyTest(std::move(cond)));
         auto boolPat = [](bool b) {
             auto p = std::make_unique<Pattern>();
             p->kind = PatKind::Lit; p->litKind = LitKind::Bool; p->litBool = b;
@@ -2394,10 +2667,30 @@ struct Lowering {
                 two(litInt(it->second[0].second), std::move(base)));
         return callE("", fname, 1, one(std::move(base)));
     }
+    // Field read when the record's type IS known — a named pattern `Foo { x }`.
+    // Resolving by field name alone (fieldAccess above) takes the FIRST record
+    // in the program declaring that name, which for common names like `value`
+    // or `rest` is the prelude's 5-field ParseError. That yields silently wrong
+    // tuple offsets for the user's own record. With a type name in hand, index
+    // its declared layout directly.
+    auto fieldAccessIn(const std::string& typeName, const std::string& fname,
+                       ExprPtr base) -> ExprPtr {
+        if (!typeName.empty()) {
+            if (auto rec = records.find(typeName); rec != records.end()) {
+                const auto& fs = rec->second.fields;
+                for (size_t i = 0; i < fs.size(); i++)
+                    if (fs[i] == fname)
+                        return callE("erlang", "element", 2,
+                                     two(litInt(static_cast<int>(i) + 2),
+                                         std::move(base)));
+            }
+        }
+        return fieldAccess(fname, std::move(base));
+    }
     void destructureRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                                   std::vector<std::pair<std::string, ExprPtr>>& prefix) {
         for (const auto& field : rp.fields) {
-            auto acc = fieldAccess(field.name, var(baseVar));
+            auto acc = fieldAccessIn(rp.typeName, field.name, var(baseVar));
             if (!field.pattern) {
                 prefix.push_back({field.name, std::move(acc)});
             } else if (auto* vp = std::get_if<ast::VarPattern>(&(*field.pattern)->kind)) {
@@ -2429,7 +2722,7 @@ struct Lowering {
     auto wrapRecordPattern(const std::string& baseVar, const ast::RecordPattern& rp,
                            ExprPtr body) -> ExprPtr {
         for (auto it = rp.fields.rbegin(); it != rp.fields.rend(); ++it) {
-            auto value = fieldAccess(it->name, var(baseVar));
+            auto value = fieldAccessIn(rp.typeName, it->name, var(baseVar));
             if (!it->pattern) {
                 body = makeLet(it->name, std::move(value), std::move(body));
             } else if (auto* vp = std::get_if<ast::VarPattern>(&(*it->pattern)->kind)) {
@@ -2504,6 +2797,42 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
                 return pn.inner ? lowerPattern(pn.inner)
                                 : [&]{ auto w = std::make_unique<Pattern>(); w->kind = PatKind::Wild; return w; }();
+            } else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
+                // A record is a tagged tuple {'Name', f1, f2, ...} in
+                // declaration order, so a NAMED pattern is just a constructor
+                // pattern: wildcard every field the pattern doesn't mention.
+                // That asserts the record's type structurally, which is exactly
+                // what `Foo { x }` means — no extra guard required.
+                if (pn.typeName.empty())
+                    throw LowerError(
+                        "IR lower: anonymous record pattern `{ ... }` is not "
+                        "supported in match/if-let; name the record "
+                        "(`Foo { ... }`) so its field layout is known");
+                auto rec = records.find(pn.typeName);
+                if (rec == records.end())
+                    throw LowerError("IR lower: unknown record `" + pn.typeName +
+                                     "` in pattern");
+                out->kind = PatKind::Construct;
+                out->tag = pn.typeName;
+                for (const auto& fieldName : rec->second.fields) {
+                    const ast::FieldPattern* bound = nullptr;
+                    for (const auto& f : pn.fields)
+                        if (!f.isStringKey && f.name == fieldName) { bound = &f; break; }
+                    if (!bound) {
+                        auto w = std::make_unique<Pattern>();
+                        w->kind = PatKind::Wild;
+                        out->args.push_back(std::move(w));
+                    } else if (bound->pattern && *bound->pattern) {
+                        out->args.push_back(lowerPattern(*bound->pattern));
+                    } else {
+                        // Shorthand `{ x }` binds the field to its own name.
+                        auto v = std::make_unique<Pattern>();
+                        v->kind = PatKind::Var;
+                        v->name = bound->name;
+                        subst[bound->name] = bound->name;
+                        out->args.push_back(std::move(v));
+                    }
+                }
             } else {
                 throw LowerError("IR lower: unsupported pattern kind");
             }
@@ -3422,11 +3751,35 @@ struct Lowering {
         def.name = nameOverride.empty() ? group[0]->name : nameOverride;
         int explicitArity = group[0]->clauses.empty()
             ? 0 : static_cast<int>(group[0]->clauses[0].params.size());
-        def.arity = explicitArity + (implicitThisName.empty() ? 0 : 1);
+        auto traitNameOf = [&](const ast::Param& param) -> std::string {
+            if (!param.type || !*param.type) return "";
+            const auto* name = std::get_if<ast::TypeName>(&(*param.type)->kind);
+            if (!name || name->parts.size() != 1 ||
+                !traitMethods.count(name->parts.front()))
+                return "";
+            return name->parts.front();
+        };
+        int dictionaryArity = 0;
+        if (!group[0]->clauses.empty())
+            for (const auto& param : group[0]->clauses[0].params)
+                if (!traitNameOf(param).empty()) ++dictionaryArity;
+        const bool implicitThisDictionary = !implicitThisName.empty() &&
+            traitMethods.count(currentMakeType) > 0 &&
+            std::none_of(
+                traitMethods.at(currentMakeType).begin(),
+                traitMethods.at(currentMakeType).end(),
+                [&](const auto& required) {
+                    return required.name == group[0]->name;
+                });
+        if (implicitThisDictionary) ++dictionaryArity;
+        def.arity = explicitArity + dictionaryArity +
+                    (implicitThisName.empty() ? 0 : 1);
         auto savedModulePath = currentModulePath;
+        auto savedTraitDictionaries = traitDictionaries;
         for (const auto* fn : group) {
             for (const auto& clause : fn->clauses) {
                 subst.clear(); // fresh scope per clause
+                traitDictionaries = savedTraitDictionaries;
                 FunClause fc;
                 if (!implicitThisName.empty()) {
                     subst[implicitThisName] = implicitThisName;
@@ -3466,6 +3819,29 @@ struct Lowering {
                     }
                     fc.params.push_back(lowerParam(p));
                 }
+                for (const auto& p : clause.params) {
+                    auto trait = traitNameOf(p);
+                    if (trait.empty()) continue;
+                    if (!p.name)
+                        throw LowerError(
+                            "IR lower: trait-typed dictionary parameter must be named");
+                    auto dictionary = fresh("Dict_" + *p.name + "_" + trait);
+                    auto pat = std::make_unique<Pattern>();
+                    pat->kind = PatKind::Var;
+                    pat->name = dictionary;
+                    fc.params.push_back(std::move(pat));
+                    traitDictionaries[*p.name][trait] = dictionary;
+                }
+                if (implicitThisDictionary) {
+                    auto dictionary = fresh("Dict_" + implicitThisName + "_" +
+                                            currentMakeType);
+                    auto pat = std::make_unique<Pattern>();
+                    pat->kind = PatKind::Var;
+                    pat->name = dictionary;
+                    fc.params.push_back(std::move(pat));
+                    traitDictionaries[implicitThisName][currentMakeType] =
+                        dictionary;
+                }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 ExprPtr body = lowerBody(clause.body);
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
@@ -3478,6 +3854,7 @@ struct Lowering {
                 def.clauses.push_back(std::move(fc));
             }
         }
+        traitDictionaries = std::move(savedTraitDictionaries);
         currentModulePath = std::move(savedModulePath);
         return def;
     }
@@ -3668,8 +4045,28 @@ struct Lowering {
                 localOverloadKey(first.name, typeName, def.arity)))
             def.name = mangleReceiverSignature(
                 first.name, methodDispatchTypes(first, typeName));
-        else if (collidingMethods.count(first.name) && !typeName.empty())
+        else if ((collidingMethods.count(first.name) ||
+                  traitMethods.count(typeName)) && !typeName.empty())
             def.name = mangleReceiverImplementation(first.name, typeName);
+        // A lone local `to(String)` still participates in the language-wide
+        // conversion protocol. Its guarded record clause handles the local
+        // type; unmatched values must continue to the prelude conversion
+        // instead of ending in the emitter's synthetic function_clause.
+        if (first.name == "to" && def.name == "to" &&
+            !preferExternalReceivers) {
+            FunClause fallback;
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < def.arity; ++i) {
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = "_toFallback" + std::to_string(i);
+                fallback.params.push_back(std::move(param));
+                args.push_back(var("_toFallback" + std::to_string(i)));
+            }
+            fallback.body = callE("kex_prelude", "to", def.arity,
+                                  std::move(args));
+            def.clauses.push_back(std::move(fallback));
+        }
         return def;
     }
 
@@ -3716,6 +4113,7 @@ struct Lowering {
     }
 
     auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
+        if (traitMethods.count(ty)) return litBool(true);
         auto it = primGuardBifs().find(ty);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
@@ -3738,7 +4136,8 @@ struct Lowering {
     auto makeArgumentDispatcher(
         const std::string& name, int arity,
         const std::vector<std::pair<std::string, std::vector<std::string>>>&
-            overloads) -> FunDef {
+            overloads,
+        const std::string& fallbackModule = {}) -> FunDef {
         FunDef def;
         def.name = name;
         def.arity = arity;
@@ -3767,11 +4166,27 @@ struct Lowering {
             clause.body = std::move(body);
             def.clauses.push_back(std::move(clause));
         }
+        if (!fallbackModule.empty()) {
+            FunClause fallback;
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < arity; ++i) {
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = "_a" + std::to_string(i);
+                fallback.params.push_back(std::move(param));
+                args.push_back(var("_a" + std::to_string(i)));
+            }
+            fallback.body = callE(fallbackModule, name, arity,
+                                  std::move(args));
+            def.clauses.push_back(std::move(fallback));
+        }
         return def;
     }
 
     auto makeDispatcher(const std::string& name, int arity,
-                        const std::vector<std::string>& owners) -> FunDef {
+                        const std::vector<std::string>& owners,
+                        const std::string& genericFallback = {},
+                        const std::string& genericFallbackModule = {}) -> FunDef {
         FunDef def; def.name = name; def.arity = arity;
         FunClause fc;
         std::vector<ExprPtr> fwdArgs;
@@ -3796,10 +4211,13 @@ struct Lowering {
         // an element-based guard.
         std::vector<std::string> sortedOwners;
         std::vector<std::string> deferredOwners;
+        std::vector<std::string> traitFallbacks;
         std::unordered_set<std::string> seen;
         for (const auto& ty : owners) {
             if (!seen.insert(ty).second) continue;
-            if (primGuardBifs().count(ty) || ty == "Char"
+            if (traitMethods.count(ty))
+                traitFallbacks.push_back(ty);
+            else if (primGuardBifs().count(ty) || ty == "Char"
                 || (typeVariantTags.count(ty) && !typeVariantTags.at(ty).empty()))
                 sortedOwners.push_back(ty);
             else
@@ -3820,6 +4238,13 @@ struct Lowering {
         dropShadowed("List", "Range");
         dropShadowed("Task", "Pid");
         sortedOwners.insert(sortedOwners.end(), deferredOwners.begin(), deferredOwners.end());
+        // A plain generic function is already the dynamic fallback. A trait
+        // receiver guard is unconditional at runtime and would make that
+        // fallback unreachable (and turn a non-matching type-directed clause
+        // inside the trait implementation into function_clause).
+        if (genericFallback.empty())
+            sortedOwners.insert(sortedOwners.end(), traitFallbacks.begin(),
+                                traitFallbacks.end());
         for (const auto& ty : sortedOwners) {
             // ADT types with known variant tags: generate one pattern-match
             // clause per variant instead of a single guard clause. This avoids
@@ -3931,7 +4356,18 @@ struct Lowering {
         // gradual code still reach here, and falling off the end raised a
         // bare `if_clause`: no method name, no receiver, no location. Name it
         // instead, in the walker's wording, with the receiver's runtime type.
-        {
+        if (!genericFallback.empty()) {
+            MatchClause fallback;
+            auto wild = std::make_unique<Pattern>();
+            wild->kind = PatKind::Wild;
+            fallback.patterns.push_back(std::move(wild));
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < arity; ++i)
+                args.push_back(var("_a" + std::to_string(i)));
+            fallback.body = callE(genericFallbackModule, genericFallback, arity,
+                                  std::move(args));
+            m.clauses.push_back(std::move(fallback));
+        } else if (traitFallbacks.empty()) {
             MatchClause fallback;
             auto wild = std::make_unique<Pattern>();
             wild->kind = PatKind::Wild;
@@ -4042,13 +4478,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                       semantic::ResolvedCallTarget>* resolvedCalls,
                   bool preferExternalReceivers,
                   const std::vector<ExternalVariantTag>* externalVariants,
-                  const StaticTypeOfCalls* staticTypeOfCalls)
+                  const StaticTypeOfCalls* staticTypeOfCalls,
+                  const ExpressionTypes* expressionTypes)
     -> Module {
     Lowering L;
     L.sourceFile = sourcePath;
     L.externalModules = externals;
     L.resolvedCalls = resolvedCalls;
     L.preferExternalReceivers = preferExternalReceivers;
+    L.staticTypeOfCalls = staticTypeOfCalls;
+    L.expressionTypes = expressionTypes;
+    if (externals) L.traitMethods = externals->traitMethods;
     if (externals)
         for (const auto& [name, candidates] : externals->receiverFunctions) {
             if (name.empty() ||
@@ -4071,8 +4511,26 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // directly-defined methods (spec/traits.kex: Bot inherits shout/passing?).
     std::unordered_map<std::string, const ast::TraitDef*> traitDefs;
     for (const auto& item : prog.items)
-        if (auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item); td && *td)
+        if (auto* td = std::get_if<std::unique_ptr<ast::TraitDef>>(&item); td && *td) {
             traitDefs[(*td)->name] = td->get();
+            auto& methods = L.traitMethods[(*td)->name];
+            methods.clear();
+            for (const auto& entry : (*td)->body)
+                if (auto* annotation =
+                        std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&entry);
+                    annotation && *annotation) {
+                    int arity = 1;
+                    const ast::TypeExpr* type = (*annotation)->type.get();
+                    while (type) {
+                        const auto* fn =
+                            std::get_if<ast::FunctionType>(&type->kind);
+                        if (!fn) break;
+                        ++arity;
+                        type = fn->result.get();
+                    }
+                    methods.push_back({(*annotation)->name, arity});
+                }
+        }
     // Keyed by (name, BEAM arity): a type overrides a trait default only when it
     // defines the same name at the SAME arity (list.kex's count/1 must NOT block
     // inheriting Enumerable's count/2).
@@ -4152,6 +4610,22 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 pnames.push_back(p.name ? *p.name : "");
             if (pnames.empty()) L.zeroArgFns.insert(fd.name);
             L.fnParamNames[fd.name] = std::move(pnames);
+            std::vector<const ast::ExprPtr*> defaults;
+            for (const auto& p : fd.clauses[0].params)
+                defaults.push_back(p.defaultValue ? &*p.defaultValue : nullptr);
+            if (std::any_of(defaults.begin(), defaults.end(),
+                            [](auto* value) { return value != nullptr; }))
+                L.fnDefaults[fd.name] = std::move(defaults);
+            for (std::size_t i = 0; i < fd.clauses[0].params.size(); ++i) {
+                const auto& param = fd.clauses[0].params[i];
+                if (!param.type || !*param.type) continue;
+                const auto* type =
+                    std::get_if<ast::TypeName>(&(*param.type)->kind);
+                if (type && type->parts.size() == 1 &&
+                    L.traitMethods.count(type->parts.front()))
+                    L.fnTraitParams[fd.name].push_back(
+                        {i, type->parts.front()});
+            }
         }
     };
     auto preType = [&](const ast::TypeDef& td) {
@@ -4299,7 +4773,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 if (*rd) preRecord(**rd);
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-                if (*md) preMake(**md);
+                if (*md) {
+                    preMake(**md);
+                    auto typeName = Lowering::simpleTypeName((*md)->target);
+                    if (!typeName.empty())
+                        L.localTypeModules[typeName] = path;
+                }
             } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
                 preModuleType(td->get());
             } else if (auto* cb = std::get_if<std::unique_ptr<ast::CompiledBlock>>(&item)) {
@@ -4791,8 +5270,50 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             name.front() == '_')
             continue;
         auto arity = std::stoi(key.substr(lastBreak + 1));
-        mod.functions.push_back(
-            L.makeArgumentDispatcher(name, arity, overloads));
+        std::string fallbackModule;
+        if (L.externalModules) {
+            auto external = L.externalModules->receiverFunctions.find(name);
+            if (external != L.externalModules->receiverFunctions.end()) {
+                for (const auto& candidate : external->second)
+                    if (candidate.beamArity == arity &&
+                        candidate.beamFunction == name &&
+                        candidate.moduleAtom != mod.name) {
+                        fallbackModule = candidate.moduleAtom;
+                        break;
+                    }
+                if (fallbackModule.empty())
+                for (const auto& candidate : external->second) {
+                    if (candidate.beamArity != arity ||
+                        candidate.moduleAtom == mod.name)
+                        continue;
+                    if (fallbackModule.empty())
+                        fallbackModule = candidate.moduleAtom;
+                    else if (fallbackModule != candidate.moduleAtom) {
+                        fallbackModule.clear();
+                        break;
+                    }
+                }
+            }
+            if (fallbackModule.empty()) {
+                const auto key = std::string(
+                    semantic::kFileLevelPreludeModule) + "." + name;
+                auto exported = L.externalModules->exportToBeamFn.find(key);
+                auto exportedArity = L.externalModules->exportArity.find(key);
+                auto prelude = L.externalModules->nameToAtom.find(
+                    std::string(semantic::kFileLevelPreludeModule));
+                if (exported != L.externalModules->exportToBeamFn.end() &&
+                    exportedArity != L.externalModules->exportArity.end() &&
+                    exportedArity->second == arity &&
+                    prelude != L.externalModules->nameToAtom.end() &&
+                    prelude->second != mod.name)
+                    fallbackModule = prelude->second;
+            }
+            if (fallbackModule.empty() && name == "to" &&
+                mod.name != "kex_prelude")
+                fallbackModule = "kex_prelude";
+        }
+        mod.functions.push_back(L.makeArgumentDispatcher(
+            name, arity, overloads, fallbackModule));
     }
 
     // Cross-type collision dispatchers (bare name → runtime-type dispatch).
@@ -4841,7 +5362,79 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 mod.functions.push_back(std::move(merged));
             } else {
-                mod.functions.push_back(L.makeDispatcher(name, arity, owners));
+                // A universal top-level function may share a name/arity with
+                // concrete receiver implementations. Preserve it as the last
+                // runtime fallback, behind the receiver dispatcher, instead
+                // of letting its catch-all clause swallow the dispatcher when
+                // duplicate function definitions are merged below.
+                std::string genericFallback;
+                std::string genericFallbackModule;
+                for (auto& function : mod.functions) {
+                    if (function.name != name || function.arity != arity)
+                        continue;
+                    genericFallback = name + "$generic";
+                    function.name = genericFallback;
+                    break;
+                }
+                if (genericFallback.empty() && L.externalModules) {
+                    auto external =
+                        L.externalModules->receiverFunctions.find(name);
+                    if (external !=
+                        L.externalModules->receiverFunctions.end()) {
+                        for (const auto& candidate : external->second)
+                            if (candidate.beamArity == arity &&
+                                candidate.beamFunction == name &&
+                                candidate.moduleAtom != mod.name) {
+                                genericFallbackModule = candidate.moduleAtom;
+                                break;
+                            }
+                        if (genericFallbackModule.empty())
+                        for (const auto& candidate : external->second) {
+                            if (candidate.beamArity != arity ||
+                                candidate.moduleAtom == mod.name)
+                                continue;
+                            if (genericFallbackModule.empty())
+                                genericFallbackModule = candidate.moduleAtom;
+                            else if (genericFallbackModule !=
+                                     candidate.moduleAtom) {
+                                genericFallbackModule.clear();
+                                break;
+                            }
+                        }
+                        if (!genericFallbackModule.empty())
+                            genericFallback = name;
+                    }
+                    if (genericFallback.empty()) {
+                        const auto key = std::string(
+                            semantic::kFileLevelPreludeModule) + "." + name;
+                        auto exported =
+                            L.externalModules->exportToBeamFn.find(key);
+                        auto exportedArity =
+                            L.externalModules->exportArity.find(key);
+                        auto prelude = L.externalModules->nameToAtom.find(
+                            std::string(
+                                semantic::kFileLevelPreludeModule));
+                        if (exported !=
+                                L.externalModules->exportToBeamFn.end() &&
+                            exportedArity !=
+                                L.externalModules->exportArity.end() &&
+                            exportedArity->second == arity &&
+                            prelude !=
+                                L.externalModules->nameToAtom.end() &&
+                            prelude->second != mod.name) {
+                            genericFallbackModule = prelude->second;
+                            genericFallback = name;
+                        }
+                    }
+                    if (genericFallback.empty() && name == "to" &&
+                        mod.name != "kex_prelude") {
+                        genericFallbackModule = "kex_prelude";
+                        genericFallback = name;
+                    }
+                }
+                mod.functions.push_back(
+                    L.makeDispatcher(name, arity, owners, genericFallback,
+                                     genericFallbackModule));
             }
         }
     }
@@ -5008,12 +5601,13 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                       semantic::ResolvedCallTarget>* resolvedCalls,
                   bool preferExternalReceivers,
                   const std::vector<ExternalVariantTag>* externalVariants,
-                  const StaticTypeOfCalls* staticTypeOfCalls)
+                  const StaticTypeOfCalls* staticTypeOfCalls,
+                  const ExpressionTypes* expressionTypes)
     -> std::vector<Module> {
     auto flat = lowerProgram(prog, fileStem, sourcePath, externals,
                              externalRecords, resolvedCalls,
                              preferExternalReceivers, externalVariants,
-                             staticTypeOfCalls);
+                             staticTypeOfCalls, expressionTypes);
 
     struct Definition {
         std::string path;
@@ -5033,15 +5627,41 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // too (collectRecordLayout feeds fieldAccessors), so keeping it local
         // serves both.
         std::unordered_set<std::string> localRecordFields;
+        // ...and every name a `make` block of this program defines as a
+        // METHOD. Same reason, one step further: `make Widget do let value()`
+        // is the owner of `value` here, and routing the call to the prelude's
+        // `Measure` accessor read element 2 of the widget instead — silently,
+        // returning a plausible wrong number rather than crashing. The
+        // interpreter always got this right, so it was a backend divergence
+        // too.
+        std::unordered_set<std::string> localMethodNames;
         std::function<void(const ast::RecordDef&)> noteRecord =
             [&](const ast::RecordDef& rd) {
                 for (const auto& field : rd.fields) localRecordFields.insert(field.name);
+            };
+        std::function<void(const ast::MakeDef&)> noteMake =
+            [&](const ast::MakeDef& mk) {
+                for (const auto& mi : mk.body) {
+                    if (auto* fd =
+                            std::get_if<std::unique_ptr<ast::FunctionDef>>(&mi)) {
+                        if (*fd) localMethodNames.insert((*fd)->name);
+                    } else if (auto* vb = std::get_if<
+                                   std::unique_ptr<ast::VisibilityBlock>>(&mi)) {
+                        if (*vb)
+                            for (const auto& vi : (*vb)->items)
+                                if (auto* vfd = std::get_if<
+                                        std::unique_ptr<ast::FunctionDef>>(&vi))
+                                    if (*vfd) localMethodNames.insert((*vfd)->name);
+                    }
+                }
             };
         std::function<void(const ast::ModuleDef&)> scanModule;
         auto scanItems = [&](const auto& items, auto&& self) -> void {
             for (const auto& item : items) {
                 if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                     if (*rd) noteRecord(**rd);
+                } else if (auto* mk = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
+                    if (*mk) noteMake(**mk);
                 } else if (auto* md = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
                     if (*md) scanModule(**md);
                 }
@@ -5063,6 +5683,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
                     field != "conversionFactor" && field != "dimension" && field != "notation")
                     continue;
                 if (localRecordFields.count(field)) continue;
+                if (localMethodNames.count(field)) continue;
                 definitions.emplace(field, Definition{"", field, true, record.moduleAtom});
             }
         }

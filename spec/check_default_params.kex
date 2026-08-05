@@ -1,0 +1,51 @@
+# kex: check-only
+# A parameter with a default may be omitted at the call site.
+#
+# The checker used to compare against the FULL parameter count, so
+# `greet("hi")` on `let greet(name, punct = "!")` was a type error — while both
+# backends ran it correctly. Every program using a default parameter therefore
+# failed the default `-C` path. Surfaced by type-checking `compiled do` blocks
+# for the first time (`orderBy(col, dir = :asc)` in examples/compiled_sql.kex),
+# but nothing about it is specific to `compiled`.
+#
+# check-only because the point is what the CHECKER accepts; the runtime
+# behaviour has always been right and is covered elsewhere.
+
+let greet(name: String, punct: String = "!") -> String do
+  "${name}${punct}"
+end
+
+let between(low: Int, high: Int = 10, step: Int = 1) -> Int do
+  low + high + step
+end
+
+let allDefaulted(name: String = "world") -> String = name
+
+record Box do
+  n : Int = 0
+end
+
+make Box do
+  tagged :> String -> Atom -> String
+  let tagged(col: String, dir: Atom = :asc) -> String do
+    "${col} ${dir}"
+  end
+end
+
+main do
+  # Every legal arity of each: omitting a default, and passing it.
+  IO.printLine(greet("hi"))
+  IO.printLine(greet("hi", "?"))
+
+  IO.printLine("${between(1)}")
+  IO.printLine("${between(1, 2)}")
+  IO.printLine("${between(1, 2, 3)}")
+
+  # Zero is a real required-parameter count, not the sentinel for an imported
+  # or trait signature whose default information is unavailable.
+  IO.printLine(allDefaulted())
+
+  # ...and the same on a make method, where the receiver adds one to the arity.
+  IO.printLine(Box {}.tagged("name"))
+  IO.printLine(Box {}.tagged("name", :desc))
+end

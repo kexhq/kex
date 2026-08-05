@@ -9,6 +9,7 @@
 #include "ir/emit_core.hxx"
 #include "ir/lower.hxx"
 #include "lexer/lexer.hxx"
+#include "compiled/expand.hxx"
 #include "module/resolver.hxx"
 #include "parser/parser.hxx"
 #include "semantic/analyzer.hxx"
@@ -177,6 +178,26 @@ static auto replDefinitionName(const std::string &source) -> std::string {
           source[end] == '.' || source[end] == '?' || source[end] == '!'))
     end++;
   return source.substr(off, end - off);
+}
+
+// `let UPPER = expr` is a zero-arg CONSTANT definition, the same rule the
+// parser applies (parser.cxx, "UpperIdent after `let`"): an uppercase name is
+// a constant unless `(` or `{` follows it, which makes it a constructor or
+// named-record destructuring pattern instead. Both REPLs classify a line
+// before parsing it, and lumping every uppercase name in with the patterns
+// left `let BYTE_REGEX = ...` bound to the constant's own zero-arg function
+// (interpreter) or rejected outright (BEAM).
+static auto replIsUpperConstantBinding(const std::string &source, size_t off)
+    -> bool {
+  if (off == std::string::npos || off >= source.size()) return false;
+  if (!std::isupper((unsigned char)source[off])) return false;
+  size_t end = off;
+  while (end < source.size() &&
+         (std::isalnum((unsigned char)source[end]) || source[end] == '_'))
+    end++;
+  const auto next = source.find_first_not_of(" \t", end);
+  if (next == std::string::npos) return false;
+  return source[next] != '(' && source[next] != '{';
 }
 
 // Readline preserves whitespace typed or pasted before the first token. Kex's
@@ -715,6 +736,67 @@ auto colorizeMessage(const std::string &msg) -> std::string {
   return out;
 }
 
+// `--collapse-report`: what `compiled do` chain collapse folded away, and why
+// the rest did not.
+//
+// Goes to stderr and says nothing at all for a program with no `compiled`
+// block, so it composes with every other mode — you can ask about a run, a
+// check or an emit without changing what any of them print.
+auto printCollapseReport(const std::vector<kex::compiled::CollapseNote> &notes)
+    -> void {
+  if (notes.empty()) return;
+
+  // Source order, not the order collapse worked in: a chain that failed and
+  // was retried from the inside reports its outer attempt in a later round,
+  // and reading the file top to bottom is what a user wants.
+  auto ordered = notes;
+  std::stable_sort(ordered.begin(), ordered.end(),
+                   [](const auto &a, const auto &b) {
+                     if (a.location.file != b.location.file)
+                       return a.location.file < b.location.file;
+                     if (a.location.line != b.location.line)
+                       return a.location.line < b.location.line;
+                     return a.location.column < b.location.column;
+                   });
+
+  // Retrying a failed chain from the inside re-reports the parts it tries
+  // again, and everything written inside one `"${...}"` shares that string's
+  // position — so the same verdict can arrive several times over. Identical
+  // lines say nothing extra. A location with BOTH verdicts keeps both: those
+  // are genuinely different sub-expressions that happen to start together.
+  ordered.erase(std::unique(ordered.begin(), ordered.end(),
+                            [](const auto &a, const auto &b) {
+                              return a.location.file == b.location.file &&
+                                     a.location.line == b.location.line &&
+                                     a.location.column == b.location.column &&
+                                     a.collapsed == b.collapsed &&
+                                     a.reason == b.reason;
+                            }),
+                ordered.end());
+
+  std::size_t collapsed = 0;
+  for (const auto &note : ordered)
+    if (note.collapsed) collapsed++;
+
+  std::cerr << kex::color::apply(kex::color::bold) << "collapse:"
+            << kex::color::apply(kex::color::reset) << " " << collapsed << " of "
+            << ordered.size() << " evaluated at compile time\n";
+  for (const auto &note : ordered) {
+    std::cerr << "  " << kex::color::apply(kex::color::gray)
+              << note.location.file << ":" << note.location.line << ":"
+              << note.location.column << kex::color::apply(kex::color::reset)
+              << " ";
+    if (note.collapsed) {
+      std::cerr << kex::color::apply(kex::color::green) << "collapsed"
+                << kex::color::apply(kex::color::reset) << "\n";
+    } else {
+      std::cerr << kex::color::apply(kex::color::magenta) << "kept"
+                << kex::color::apply(kex::color::reset) << " — " << note.reason
+                << "\n";
+    }
+  }
+}
+
 auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
   bool isError = diag.level == kex::semantic::Diagnostic::Level::Error;
   std::cerr << kex::color::apply(kex::color::gray) << diag.location.file
@@ -1041,6 +1123,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportParamNames[name] = names;
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
+  for (const auto &[name, methods] : overrides.traitMethods)
+    result.traitMethods[name] = methods;
   return result;
 }
 
@@ -1505,6 +1589,12 @@ auto printUsage(const char *progName) -> void {
       << "  -s, --summary     Print public API signatures (Kex syntax)\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+      << "      --expand      Print the AST after `compiled do` expansion\n"
+      << "      --collapse-report\n"
+      << "                    Report what `compiled do` chain collapse folded "
+         "away, and why\n"
+      << "                    the rest did not — the feature is invisible at "
+         "runtime\n"
       << "  -o <dir>          Output directory for -c / --emit-core (default: "
          ".)\n"
       << "  -h, --help        Show this help\n"
@@ -1535,6 +1625,14 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
+      // Print the AST AFTER compile-time expansion of `compiled do` blocks —
+      // i.e. what the type checker and both backends actually see. `--parse`
+      // shows the AST before it.
+      {"expand", no_argument, nullptr, 1004},
+      // Report every chain-collapse attempt and its outcome. Collapse changes
+      // only the EMITTED code, so without this the only way to tell whether it
+      // happened is to decode the Core Erlang by hand.
+      {"collapse-report", no_argument, nullptr, 1005},
       // Compile the sources selected by src/stdlib/prelude.kex into kex_prelude.core +
       // kex_prelude.beam in the given dir. Used by the build to prebuild the
       // shared stdlib module alongside the runtime beams.
@@ -1553,11 +1651,18 @@ int main(int argc, char *argv[]) {
 
   bool compileRun = false;
   bool skipPrelude = false;
+  bool collapseReport = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
     case 1003:
       skipPrelude = true;
+      break;
+    case 1004:
+      mode = "expand";
+      break;
+    case 1005:
+      collapseReport = true;
       break;
     case 1001: {
       std::string dir = optarg;
@@ -1922,6 +2027,10 @@ int main(int argc, char *argv[]) {
         kex::printReplHelp(std::cout);
         continue;
       }
+      if (input == "/clear") {
+        std::cout << kex::replClearScreenSequence() << std::flush;
+        continue;
+      }
       if (input == "/reset") {
         topDefs.clear();
         localBinds.clear();
@@ -2138,10 +2247,14 @@ int main(int argc, char *argv[]) {
         // ("Undefined identifier: a").
         const char patternLead =
             (off != std::string::npos && off < source.size()) ? source[off] : '\0';
+        const bool upperConstant = replIsUpperConstantBinding(source, off);
         const bool destructuringPattern =
-            std::isupper((unsigned char)patternLead) || patternLead == '(' ||
-            patternLead == '[' || patternLead == '{';
-        if (destructuringPattern) {
+            !upperConstant &&
+            (std::isupper((unsigned char)patternLead) || patternLead == '(' ||
+             patternLead == '[' || patternLead == '{');
+        if (upperConstant) {
+          isFuncDef = true;
+        } else if (destructuringPattern) {
           // `let Just(x) = ...` binds through the pattern; persist each name.
           patternLetNames = replLetBoundNames(source);
           isLocalLet = !patternLetNames.empty();
@@ -2265,7 +2378,7 @@ int main(int argc, char *argv[]) {
           }
           const auto inspectCall = [&](const std::string &expression) {
             if (!beamSemanticType)
-              return "IO.inspect(" + expression + ")";
+              return "Kex.Intrinsic.IO.inspectRepl(" + expression + ")";
             return "Kex.Intrinsic.IO.inspectTyped(" + expression + ", \"" +
                    *beamSemanticType + "\")";
           };
@@ -2416,7 +2529,8 @@ int main(int argc, char *argv[]) {
               // answers: `Type.of(someFunction)` fell back to the runtime,
               // which lowered the bare function name to an unbound Core
               // Erlang variable and failed to compile.
-              &replAnalyzer.staticTypeOfCalls());
+              &replAnalyzer.staticTypeOfCalls(),
+              &replAnalyzer.typeMap());
           std::vector<kex::ir::EmitResult> results;
           for (const auto& irModule : irModules)
             results.push_back(kex::ir::emitCore(irModule));
@@ -2686,6 +2800,10 @@ int main(int argc, char *argv[]) {
         kex::printReplHelp(std::cout, setOptionsHelp);
         continue;
       }
+      if (line == "/clear") {
+        std::cout << kex::replClearScreenSequence() << std::flush;
+        continue;
+      }
       if (line == "/set") {
         std::cout << "  types:  " << (showTypes ? "on" : "off") << "\n"
                   << "  ast:    " << (showAst ? "on" : "off") << "\n"
@@ -2885,12 +3003,17 @@ int main(int argc, char *argv[]) {
       // one — without the openers, `let (a, b) = ...` matched the
       // `name(params)` shape below and was echoed as "defined". See the
       // matching guard in the BEAM branch above.
+      const bool upperConstantDef =
+          replIsUpperConstantBinding(source, defOffset);
       if (defOffset != std::string::npos && defOffset < source.size() &&
+          !upperConstantDef &&
           (std::isupper((unsigned char)source[defOffset]) ||
            source[defOffset] == '(' || source[defOffset] == '[' ||
            source[defOffset] == '{'))
         defOffset = std::string::npos;
-      if (defOffset != std::string::npos) {
+      if (upperConstantDef) {
+        isFuncDef = true;
+      } else if (defOffset != std::string::npos) {
         // It's a function def if: let/foul name( ... )  with parens before =
         auto parenPos = source.find('(', defOffset);
         auto eqPos = source.find('=', defOffset);
@@ -3217,6 +3340,44 @@ int main(int argc, char *argv[]) {
       return 0;
     }
 
+    // Compile-time expansion of `compiled do` blocks. Deliberately the ONE
+    // place every mode passes through, right after parsing and before any
+    // semantic pass — so --check, --run, --compile, --emit-core and -R can
+    // never disagree about what the program contains.
+    //
+    // Note for when this stops being an identity pass: the BEAM path also
+    // merges a `.spec.kex` base file's declarations into program.items further
+    // down, and resolveBeamDeps pulls in dependency modules. Those items are
+    // parsed AFTER this point, so their own `compiled` blocks would not be
+    // expanded here — they need either their own expand() call at load time or
+    // a second pass once the program is fully assembled.
+    auto expandParsedProgram = [&](kex::ast::Program &target,
+                                   bool reportCollapse) -> bool {
+      std::vector<kex::semantic::Diagnostic> expandDiagnostics;
+      std::vector<kex::compiled::CollapseNote> collapseNotes;
+      kex::compiled::ExpandOptions expandOptions;
+      if (reportCollapse) expandOptions.report = &collapseNotes;
+      const bool expanded =
+          kex::compiled::expand(target, expandDiagnostics, expandOptions);
+      if (reportCollapse) printCollapseReport(collapseNotes);
+      for (const auto &diagnostic : expandDiagnostics)
+        printSemanticDiagnostic(diagnostic);
+      if (!expanded) {
+        std::cerr << kex::color::apply(kex::color::bold)
+                  << kex::color::apply(kex::color::magenta)
+                  << "Aborted:" << kex::color::apply(kex::color::reset)
+                  << " compile-time expansion failed.\n";
+        return false;
+      }
+      return true;
+    };
+    if (!expandParsedProgram(program, collapseReport)) return 1;
+
+    if (mode == "expand") {
+      printAst(program);
+      return 0;
+    }
+
   std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
   std::vector<LoadedDep> beamDeps;
   if (mode == "compile" || mode == "emit-core") {
@@ -3303,6 +3464,11 @@ int main(int argc, char *argv[]) {
             qualifiedModules);
       }
 
+      // Base files and dependency modules are parsed after the initial source
+      // expansion. Expand the fully assembled compilation unit as well; the
+      // pass is idempotent because an expanded block is removed.
+      if (!expandParsedProgram(program, false)) return 1;
+
       // Type-check the same dependency-expanded program that lowering will
       // compile.  In particular, `using Units.SI` must make its ordinary
       // functions visible before names such as `times` are resolved.
@@ -3359,6 +3525,9 @@ int main(int argc, char *argv[]) {
                                                &preludeVariantTags,
                                                compileAnalysis
                                                    ? &compileAnalysis->staticTypeOfCalls()
+                                                   : nullptr,
+                                               compileAnalysis
+                                                   ? &compileAnalysis->typeMap()
                                                    : nullptr);
         for (const auto &irMod : irModules)
           moduleResults.push_back(kex::ir::emitCore(irMod));
@@ -3623,6 +3792,7 @@ int main(int argc, char *argv[]) {
         program.items = std::move(merged);
         break;
       }
+      if (!expandParsedProgram(program, false)) return 1;
     }
 
     // Retained so the evaluator can use what the checker learned — today the

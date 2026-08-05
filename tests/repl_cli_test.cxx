@@ -23,8 +23,15 @@ auto stripAnsi(const std::string& s) -> std::string {
     std::string out;
     for (size_t i = 0; i < s.size();) {
         if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+            // CSI sequence: ESC [ <params> <intermediate>* <final>. The final
+            // byte is in 0x40–0x7E (@–~) — e.g. 'm' for color, 'H' for cursor
+            // home, 'J' for screen clear. Stop at the first such byte rather
+            // than scanning only for 'm', which would swallow everything to
+            // EOF when a /clear's ED sequence preceded any later color code.
             size_t j = i + 2;
-            while (j < s.size() && s[j] != 'm') j++;
+            while (j < s.size() &&
+                   !((unsigned char)s[j] >= 0x40 && (unsigned char)s[j] <= 0x7e))
+                j++;
             i = (j < s.size()) ? j + 1 : j;
         } else {
             out += s[i];
@@ -118,6 +125,57 @@ auto runWalkerFile(const std::string& source, bool noCheck = false) -> std::stri
     }
     std::remove(sourcePath);
     return stripAnsi(result);
+}
+
+// `it` bodies run AFTER their `describe` lambda returns, so anything they use
+// has to outlive it — a `[&]` capture of a local here dangles, and silently
+// wrote a truncated source file rather than crashing.
+// File scope, not a `describe` local: `it` bodies run after their `describe`
+// lambda returns, and a captured local dangles. That mistake made this very
+// test pass vacuously — it asserted on the output of a program that was never
+// written.
+constexpr const char* kRecordSpreadProbe =
+    "record One do\n"
+    "  a : Int = 1\n"
+    "end\n"
+    "\n"
+    "main do\n"
+    "  [One {}].each do |x, y|\n"
+    "    IO.printLine(\"spread: ${x} ${y}\")\n"
+    "  end\n"
+    "end\n";
+
+constexpr const char* kCollapseBuilder =
+    "module Boxes do\n"
+    "  record Box do\n"
+    "    total : Int = 0\n"
+    "  end\n"
+    "  compiled do\n"
+    "    let of(n: Int) -> Box do\n"
+    "      Box { total: n }\n"
+    "    end\n"
+    "    make Box do\n"
+    "      let scaled(by: Int) -> Int do\n"
+    "        @total * by\n"
+    "      end\n"
+    "    end\n"
+    "  end\n"
+    "end\n";
+
+auto collapseReportFor(const std::string& source) -> std::string {
+    char sourcePath[] = "/tmp/kex_collapse_cli_test_XXXXXX.kex";
+    int fd = mkstemps(sourcePath, 4);
+    assertTrue(fd >= 0, "mkstemps should create a Kex source file");
+    {
+        std::ofstream f(sourcePath);
+        f << source;
+    }
+    close(fd);
+    auto out = runCommand(std::string(KEX_BINARY_PATH) +
+                          " --collapse-report --no-colors " + sourcePath +
+                          " 2>&1");
+    std::remove(sourcePath);
+    return out;
 }
 
 auto runBeamFile(const std::string& source, const std::string& argument,
@@ -266,6 +324,29 @@ int main() {
             }
         });
 
+        it("binds an ALL-CAPS constant to its value, not its function", []() {
+            // `let UPPER = expr` is a zero-arg constant definition. Classified
+            // with the destructuring patterns (`let Just(x) = ...`), the name
+            // stayed bound to the constant's own function: `UP` echoed
+            // `<function:<lambda>>` on the interpreter and failed to parse at
+            // all on BEAM, so a constant was unusable in either REPL.
+            const std::string input =
+                "let UP = 42\n"
+                "UP\n"
+                "UP + 1\n";
+            for (const auto& out : {runRepl(input), runBeamRepl(input)}) {
+                assertTrue(out.find("function:") == std::string::npos, out);
+                assertTrue(out.find("Expected ')'") == std::string::npos, out);
+                assertTrue(out.find("=> 42 : Int") != std::string::npos, out);
+                assertTrue(out.find("=> 43 : Int") != std::string::npos, out);
+            }
+        });
+
+        it("still destructures an uppercase constructor pattern", []() {
+            auto out = runRepl("let Just(x) = Just(9)\nx\n");
+            assertTrue(out.find("=> 9 : Int") != std::string::npos, out);
+        });
+
         it("accepts indentation before persisted let bindings", []() {
             const std::string input =
                 "  let source = \"{ /* profile */ \\\"name\\\": \\\"Kex\\\" }\"\n"
@@ -360,6 +441,31 @@ int main() {
                 "  1 + 2\n"
                 ")\n");
             assertTrue(out.find("=> 3 : Int") != std::string::npos, out);
+        });
+    });
+
+    describe("REPL CLI — /clear", []() {
+        it("lists /clear in /help", []() {
+            auto out = runRepl("/help\n");
+            assertTrue(out.find("/clear") != std::string::npos, out);
+            assertTrue(out.find("Clear the terminal screen") != std::string::npos,
+                       out);
+        });
+
+        it("clears the screen and keeps evaluating", []() {
+            // Over a pipe the terminal never actually clears — the screen-wipe
+            // escape is just bytes (which stripAnsi removes) — so the testable
+            // contract is that /clear is recognized as a command (no error) and
+            // the loop keeps evaluating subsequent input.
+            auto out = runRepl("1 + 2\n/clear\n3 + 4\n");
+            assertTrue(out.find("error:") == std::string::npos, out);
+            assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
+        });
+
+        it("clears the screen in the BEAM REPL too", []() {
+            auto out = runBeamRepl("/clear\n3 + 4\n");
+            assertTrue(out.find("error:") == std::string::npos, out);
+            assertTrue(out.find("=> 7 : Int") != std::string::npos, out);
         });
     });
 
@@ -856,6 +962,69 @@ int main() {
             auto beam = runBeamRepl("{ \"a\": 1 }.inspect\n");
             assertTrue(tree.find("{ \"a\": 1 }") != std::string::npos, tree);
             assertTrue(beam.find("{ \"a\": 1 }") != std::string::npos, beam);
+        });
+    });
+
+    // Chain collapse changes only the EMITTED code, so a program that fails to
+    // collapse still runs and prints the right answer. `--collapse-report` is
+    // the only thing that makes the difference visible without decoding Core
+    // Erlang by hand — which is the whole reason it exists.
+    describe("CLI — collapse report", []() {
+        it("says nothing for a program with no compiled block", []() {
+            auto out = collapseReportFor("main do\n  IO.printLine(\"hi\")\nend\n");
+            assertTrue(out.find("collapse:") == std::string::npos, out);
+            assertTrue(out.find("hi") != std::string::npos, out);
+        });
+
+        it("names the value that stopped a collapse", []() {
+            auto out = collapseReportFor(
+                std::string(kCollapseBuilder) +
+                "main do\n"
+                "  let n = 5\n"
+                "  IO.printLine(\"${Boxes.of(n).scaled(10)}\")\n"
+                "end\n");
+            // The reason, not just the verdict: knowing WHICH name is missing
+            // is the difference between a report and a shrug.
+            assertTrue(out.find("kept") != std::string::npos, out);
+            assertTrue(out.find("the value of `n` is not known at compile time")
+                           != std::string::npos, out);
+            // and the program still runs, correctly
+            assertTrue(out.find("50") != std::string::npos, out);
+        });
+
+        it("reports a collapse that did happen", []() {
+            auto out = collapseReportFor(
+                std::string(kCollapseBuilder) +
+                "main do\n"
+                "  IO.printLine(\"${Boxes.of(5).scaled(10)}\")\n"
+                "end\n");
+            assertTrue(out.find("collapsed") != std::string::npos, out);
+            assertTrue(out.find("kept") == std::string::npos, out);
+            assertTrue(out.find("50") != std::string::npos, out);
+        });
+    });
+
+    // A record is a TUPLE on BEAM (`One { a: 1 }` is `{'One', 1}`), so without
+    // an explicit check a two-parameter block over a list of one-field records
+    // received the tag and the field and printed a plausible `One 1`. The
+    // walker keeps RecordValue and TupleValue apart and rejects it, so this was
+    // a silent backend divergence producing a wrong answer.
+    //
+    // Not a spec: both backends must now REFUSE this, and they word the refusal
+    // differently (the walker names the unbound variable, BEAM reports
+    // badarity), so there is no single expected output to compare.
+    describe("CLI — records do not spread across block params", []() {
+        it("refuses on BEAM rather than spreading the tag", []() {
+            auto beam = runBeamFile(kRecordSpreadProbe, "", /*noCheck=*/true);
+            // The exact error differs by backend; what must never appear is a
+            // successful spread of the record's tag into the first parameter.
+            assertTrue(beam.find("spread: One 1") == std::string::npos, beam);
+            assertTrue(beam.find("spread:") == std::string::npos, beam);
+        });
+
+        it("refuses in the tree walker too", []() {
+            auto tree = runWalkerFile(kRecordSpreadProbe, /*noCheck=*/true);
+            assertTrue(tree.find("spread:") == std::string::npos, tree);
         });
     });
 

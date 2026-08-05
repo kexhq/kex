@@ -1,0 +1,38 @@
+record Clock do
+  text : String
+end
+
+record Plain do
+  value : Integer
+end
+
+make Clock, implement: Inspectable, Showable do
+  let inspectValue(colors: Bool) -> String = "Clock<${this.text}>"
+  let showValue -> String = this.text
+end
+
+let render(value: Showable) = value.showValue
+
+main do
+  let clock = Clock { text: "11:33:56" }
+  IO.printLine(render(clock))
+  IO.printLine(clock)
+  IO.printLine(clock.inspect)
+  IO.printLine(clock.to(String).or("missing"))
+
+  # Inspectable is universal and preserves the structural fallback.
+  IO.printLine(Plain { value: 7 }.inspect)
+
+  # Primitive and standard constructed values retain today's presentation.
+  IO.printLine(42)
+  IO.printLine("hello")
+  IO.printLine([1, 2])
+  IO.printLine(Just(3))
+
+  let date = Date.of(2026, 7, 30).try
+  let time = Time.of(11, 33, 56).try
+  let dateTime = DateTime.of(date, time, Duration.zero())
+  IO.printLine(date)
+  IO.printLine(time)
+  IO.printLine(dateTime)
+end

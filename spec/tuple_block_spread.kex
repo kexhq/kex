@@ -1,0 +1,50 @@
+# A block may DESTRUCTURE a tuple element instead of naming it.
+#
+# `pairs.each do |k, v|` over `[(String, Int)]` binds one element across two
+# parameters, and both backends spread it. The checker was the only thing that
+# disagreed, so this was a type error on a program that ran fine — the same
+# shape `examples/compiled_sql.kex` uses (`@conditions.each do |col, val|`).
+#
+# The Map case always worked; it is here so a regression that fixes one by
+# breaking the other cannot pass.
+#
+# What must NOT spread is a RECORD, which is also a tuple on BEAM
+# (`{'Point', 1, 2}`) — see spec/record_block_no_spread.kex.
+
+main do
+  let pairs = [("x", 1), ("y", 2)]
+  pairs.each do |k, v|
+    IO.printLine("${k}=${v}")
+  end
+
+  # ...and through map, whose result type also has to survive the spread.
+  let joined = pairs.map do |k, v|
+    "${k}:${v}"
+  end
+  IO.printLine(joined.join(","))
+
+  # Three-element tuples spread too — the rule is the tuple's arity, not two.
+  # BEAM used to raise `badarity` here, since only the (key, value) shape was
+  # wired up; `kex_intrinsic_fun:applyItem/2` now spreads any arity.
+  let triples = [("a", 1, true)]
+  triples.each do |name, count, flag|
+    IO.printLine("${name} ${count} ${flag}")
+  end
+
+  # ...and indexed HOFs spread the same way, with the index last.
+  triples.eachIndexed do |name, count, flag, i|
+    IO.printLine("${i}: ${name} ${count} ${flag}")
+  end
+
+  # A Map yields (key, value) to a two-parameter block, which is a different
+  # mechanism reaching the same place.
+  let m = { "one": 1 }
+  m.each do |k, v|
+    IO.printLine("${k}->${v}")
+  end
+
+  # Naming the element instead of destructuring it still works.
+  pairs.each do |pair|
+    IO.printLine("${pair}")
+  end
+end

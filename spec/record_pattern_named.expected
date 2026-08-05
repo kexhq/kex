@@ -1,0 +1,10 @@
+parse 12/EUR
+other a/b
+clause x/y
+iflet 12/EUR
+iflet correctly rejected Other
+nested 9/GBP
+nested correctly rejected Other
+match nested other 9/GBP
+let let/bound
+partial 12

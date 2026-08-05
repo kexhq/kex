@@ -1,0 +1,25 @@
+# `capitalize` upper-cases the first character and LOWER-cases the rest,
+# matching Ruby's String#capitalize (`"hELLO".capitalize # => "Hello"`), which
+# is the convention Kex follows. Unlike `upperCase`, which shouts everything.
+#
+# Needed to build type names from data: a generated `type %name = ...` requires
+# an upper-case identifier, so lower-case words have to be capitalized first.
+#
+# The single-character case is the interesting one: an earlier implementation
+# spelled this `"${at(0).upperCase}${rest}"`, and `rest` returns an empty LIST
+# rather than an empty String when nothing remains — so "a".capitalize came out
+# as "A" in the interpreter but "A[]" on BEAM. That `rest` bug is pre-existing
+# and still there; capitalize just no longer depends on it.
+
+main do
+  IO.printLine("[${"hello".capitalize}]")
+  IO.printLine("[${"a".capitalize}]")
+  IO.printLine("[${"".capitalize}]")
+  IO.printLine("[${"hELLO".capitalize}]")
+  IO.printLine("[${"already Capital".capitalize}]")
+  IO.printLine("[${"9lives".capitalize}]")
+  IO.printLine("[${"hello world".capitalize}]")
+  IO.printLine("[${"ALREADY".capitalize}]")
+  # upperCase is unchanged and still shouts
+  IO.printLine("[${"hello".upperCase}]")
+end

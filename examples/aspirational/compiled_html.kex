@@ -18,14 +18,14 @@ module Html do
 
   module Language do
     compiled do
-      BLOCK_TAGS = ["html", "head", "body", "div", "p", "section", "article",
+      let BLOCK_TAGS = ["html", "head", "body", "div", "p", "section", "article",
                     "nav", "header", "footer", "ul", "ol", "li", "form",
                     "table", "thead", "tbody", "tr", "td", "th"]
-      INLINE_TAGS = ["span", "a", "strong", "em", "code", "small", "label"]
-      VOID_TAGS = ["br", "hr", "img", "input", "meta", "link"]
-      HEADING_TAGS = (1..6).map { |i| "h${i}" }
+      let INLINE_TAGS = ["span", "a", "strong", "em", "code", "small", "label"]
+      let VOID_TAGS = ["br", "hr", "img", "input", "meta", "link"]
+      let HEADING_TAGS = (1..6).map { |i| "h${i}" }
 
-      ALL_TAGS = BLOCK_TAGS + INLINE_TAGS + HEADING_TAGS
+      let ALL_TAGS = BLOCK_TAGS + INLINE_TAGS + HEADING_TAGS
 
       ALL_TAGS.each do |tag|
         let %tag(id = None, classes = [], block: Block<[Element | String]>) -> Element do

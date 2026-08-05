@@ -58,6 +58,10 @@ struct ResolvedCallTarget {
     // same-receiver, same-name/arity overloads distinct without teaching the
     // semantic layer about backend symbol spelling.
     std::vector<std::string> localDispatchTypes;
+    // Hidden trait dictionaries appended after the source arguments. Each
+    // entry names the zero-based source argument whose concrete value chooses
+    // the implementation and the trait contract the dictionary represents.
+    std::vector<std::pair<std::size_t, std::string>> traitDictionaries;
 };
 
 struct ImportedTraitConformance {

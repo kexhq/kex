@@ -1,0 +1,8 @@
+module Compiled.Late do
+  compiled do
+    let NAMES = ["answer"]
+    NAMES.each do |name|
+      let %name() = 42
+    end
+  end
+end

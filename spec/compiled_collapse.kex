@@ -1,0 +1,119 @@
+# Chain collapse: a builder declared inside `compiled do` and called with
+# nothing but literals is evaluated at COMPILE TIME and the result reified.
+#
+# This spec pins the OBSERVABLE half — that collapsing does not change what the
+# program computes, on either backend. The half that cannot be seen from here,
+# that the emitted module contains a literal and no builder calls at all, is
+# pinned by "collapses a fully static compiled chain" in tests/codegen_test.cxx.
+# Both halves are needed: this file alone passes just as happily when nothing
+# collapses.
+#
+# Each case pairs a chain that MUST collapse with one that must NOT, so a
+# regression in either direction shows up as a wrong answer rather than as
+# silence.
+
+module Boxes do
+  record Box do
+    parts : [Int] = []
+    total : Int = 0
+  end
+
+  compiled do
+    # An explicitly nullary FUNCTION, not a value binding. These look identical
+    # in the AST — same empty parameter list — and reading this one as a
+    # binding evaluated it at compile time, then pruned the definition its
+    # (method-call) uses still needed.
+    let empty() -> Box = Box {}
+
+    let of(n: Int) -> Box do
+      Box { parts: [n], total: n }
+    end
+
+    make Box do
+      let add(n: Int) -> Box do
+        Box { parts: @parts + [n], total: @total + n }
+      end
+
+      let scaled(by: Int) -> Int do
+        @total * by
+      end
+
+      let describe() -> String do
+        "total=${@total} parts=${@parts.length}"
+      end
+
+      let tag(label: String) -> String do
+        "${label}:${@total}"
+      end
+
+      # Only ever STORES what it is given, so a runtime value can pass through
+      # it at compile time as a placeholder.
+      let note(extra) -> Box do
+        Box { parts: @parts + [extra], total: @total }
+      end
+    end
+  end
+end
+
+let SEED = 4
+
+main do
+  # Fully static: every argument is a literal, so the whole chain is gone by
+  # the time the backend sees it.
+  let fixed = Boxes.of(2).add(3).scaled(10)
+  IO.printLine("${fixed}")
+
+  # A record result reifies too, fields and all. Field ORDER is not observable
+  # from here — lowering places fields by name, so a misordered reification
+  # still reads back correctly; that is pinned directly on valueToLiteral in
+  # tests/codegen_test.cxx instead.
+  let built = Boxes.of(4).add(6)
+  IO.printLine("${built.parts} ${built.total}")
+
+  # A runtime value the builder only CARRIES rides through as a placeholder:
+  # the chain still collapses, and the reified result refers back to
+  # `runtime` where it came to rest.
+  let runtime = 5
+  # printLine rather than inspect: IO.inspect ignores --no-colors on BEAM and
+  # prefixes `=> `, which would make this spec differ for reasons that have
+  # nothing to do with collapse.
+  IO.printLine("${Boxes.of(1).note(runtime).parts}")
+
+  # A runtime value the builder COMPUTES with cannot: `scaled` multiplies, so
+  # evaluation gives up and the whole chain is left to run. Same answer.
+  IO.printLine("${Boxes.of(runtime).add(3).scaled(10)}")
+
+  # An UPPER-case runtime binding is a placeholder too. It is only ambiguous
+  # with a module or type qualifier in receiver position, which is checked
+  # separately — so as an argument it rides through like any other, and reifies
+  # back to a reference rather than being baked in.
+  IO.printLine("${Boxes.of(1).note(SEED).parts}")
+
+  # A nullary variant such as `None` goes the same way, being an
+  # UpperIdentifier too — not shown here only because `parts : [Int]` cannot
+  # hold one, and a second record just for that would be noise.
+
+  # Nor can one it STRINGIFIES — and unlike the others, this case is visible
+  # from here. A placeholder that were allowed to render as text would print
+  # `?:1`, with the wrong answer compiled into the program rather than merely
+  # computed late. That is why PlaceholderValue refuses to produce text at all.
+  let who = "abc"
+  IO.printLine(Boxes.of(1).tag(who))
+
+  # Partially static — the collapsible prefix is NOT collapsed on its own,
+  # because the call that terminates the chain is not evaluable.
+  IO.printLine(Boxes.of(1).add(runtime).describe())
+
+  # Interpolation is not a hiding place: a chain written straight inside
+  # `"${...}"` collapses like any other.
+  IO.printLine("${Boxes.of(7).add(1).scaled(2)}")
+
+  # A plain string ARGUMENT is a known value. Every double-quoted string is
+  # flagged interpolating whether or not it embeds anything, so reading that
+  # flag as "unknown" disqualified every chain taking a string at all.
+  IO.printLine(Boxes.empty().add(9).tag("count"))
+
+  # Being fully determined is what matters, not the shape of the outermost
+  # node: a `+` over two known operands collapses as readily as a chain does.
+  IO.printLine("[" + Boxes.empty().add(1).tag("n") + "]")
+end
