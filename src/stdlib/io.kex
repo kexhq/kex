@@ -18,16 +18,6 @@ foul module IO do
   let print(msg: Showable) = Kex.Intrinsic.IO.print(msg.showValue)
   let print = Kex.Intrinsic.IO.print("")
 
-  # Alias for +printLine+.
-  putLine : Showable -> Void
-  let putLine(msg: Showable) = Kex.Intrinsic.IO.putLine(msg.showValue)
-  let putLine = Kex.Intrinsic.IO.putLine("")
-
-  # Alias for +print+.
-  put : Showable -> Void
-  let put(msg: Showable) = Kex.Intrinsic.IO.put(msg.showValue)
-  let put = Kex.Intrinsic.IO.put("")
-
   # Pretty-prints a colored inspect representation of +val+ to stderr.
   # Returns +val+ unchanged so it can be inserted into any pipeline.
   # Treated as pure by the type checker — purity checking ignores this call.
