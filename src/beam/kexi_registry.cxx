@@ -717,6 +717,9 @@ auto KexiRegistry::buildSemanticInterfaces() const
         for (const auto& module : unit.modules)
             for (const auto& record : module.chunk.metadata.records) {
                 interfaces.recordArities[record.name] = record.fields.size();
+                auto& fieldNames = interfaces.recordFieldNames[record.name];
+                for (const auto& field : record.fields)
+                    fieldNames.insert(field.name);
                 interfaces.typeNames.insert(record.name);
             }
 

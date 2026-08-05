@@ -246,7 +246,7 @@ time and no zone, `Time` a time of day with no date and no zone, and
 let due = Date.of(2026, 7, 30).try   # Result<Date, Time.Error>
 due.iso                                  # "2026-07-30"
 due.weekday.name                         # "Thursday"
-due.plus(10.days).iso                    # "2026-08-09"
+(due + 10.days).iso                    # "2026-08-09"
 due.addMonths(1).iso                     # clamps into the target month
 
 let moment = DateTime.parse("2026-07-30T14:03:00+02:00").try

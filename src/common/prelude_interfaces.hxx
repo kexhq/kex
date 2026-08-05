@@ -640,6 +640,9 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                            std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
                 if (*rd) {
                     ifaces.recordArities[(*rd)->name] = (*rd)->fields.size();
+                    auto& fieldNames = ifaces.recordFieldNames[(*rd)->name];
+                    for (const auto& field : (*rd)->fields)
+                        fieldNames.insert(field.name);
                     ifaces.typeNames.insert((*rd)->name);
                 }
             }
@@ -748,6 +751,8 @@ inline auto mergeSemanticInterfaces(kex::semantic::ImportedInterfaces base,
                      std::make_move_iterator(extra.adts.end()));
     for (auto& [name, arity] : extra.recordArities)
         base.recordArities.try_emplace(name, arity);
+    for (auto& [name, fields] : extra.recordFieldNames)
+        base.recordFieldNames.try_emplace(name, std::move(fields));
     base.typeNames.insert(extra.typeNames.begin(), extra.typeNames.end());
     base.traits.insert(base.traits.end(),
                        std::make_move_iterator(extra.traits.begin()),

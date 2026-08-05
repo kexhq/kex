@@ -6,17 +6,30 @@
 #   Time      a time of day, no date and no zone        (14:03:00)
 #   DateTime  both, plus a fixed offset from UTC        (2026-07-30T14:03:00+02:00)
 #
-# `Duration` (declared in units.kex, alongside the unit system) is the elapsed
-# span that connects them. A time `Measure` such as `5.sec` is deliberately
-# NOT a Duration: a Measure describes a measurement, a Duration describes
-# elapsed time. The plural `5.seconds` builds the Duration.
+# Two span types connect them, and which one you want depends on whether the
+# calendar gets a say:
+#
+#   Duration  fixed elapsed time, a count of seconds   (36.hours, 10.days)
+#   Period    a calendar step, resolved by the calendar (1.months, 2.years)
+#
+# `36.hours` is always 129600 seconds; `1.months` is however long that
+# particular month turns out to be. So `date + 1.months` clamps January 31st
+# to the last day of February, while `date + 30.days` counts thirty days.
+#
+# A time `Measure` such as `5.sec` is a third thing and deliberately NOT a
+# Duration: a Measure describes a measurement, a Duration describes elapsed
+# time. The plural `5.seconds` builds the Duration.
 #
 # Values are built through their own module and used through methods:
 #
-#   let due = Date.of(2026, 7, 30).try       # Result<Date, Time.Error>
+#   let due = Date.of(2026, 7, 30).try           # Result<Date, TimeError>
 #   due.weekday.name                             # "Thursday"
-#   due.plus(10.days).iso                        # "2026-08-09"
+#   (due + 10.days).iso                          # "2026-08-09"
+#   (due + 1.months).iso                         # "2026-08-30"
 #   Time.now().iso                               # "2026-07-30T14:03:00+02:00"
+#
+# Anything that reads the clock is mockable — see the test clock section in
+# `module Time` for `Time.frozenAt`.
 #
 # Zones are fixed offsets — UTC, an explicit `+02:00`, or whatever this
 # machine's zone resolves to at a given instant. Named IANA zones and their
@@ -55,6 +68,22 @@ record DateTime do
   offset : Duration
 end
 
+# A calendar span. Months and years have no fixed length — February is 28 days
+# or 29, a year 365 or 366 — so they cannot live in a `Duration`, which is a
+# count of seconds and nothing else. A Period carries the calendar fields
+# themselves and lets the calendar resolve them:
+#
+#   Date.of(2026, 1, 31).try + 1.months        # 2026-02-28, not 2026-03-03
+#   Date.of(2024, 2, 29).try + 1.years         # 2025-02-28
+#
+# Use a Duration for elapsed time (`36.hours` is always 129600 seconds) and a
+# Period for calendar steps (`1.months` is however long that month is).
+record Period do
+  years : Integer
+  months : Integer
+  days : Integer
+end
+
 module Time do
   # ── Constructing ────────────────────────────────────────────────────────
 
@@ -72,9 +101,15 @@ module Time do
 
   let midnight() -> Time = Time { hour: 0, minute: 0, second: 0, nanosecond: 0 }
 
-  let fromSecondsSinceMidnight(count: Integer) -> Time do
+  # Wraps, so 86400 is midnight again and -1 is 23:59:59. Declared before the
+  # two-argument form: the interpreter resolves an overloaded module function
+  # to its LAST definition regardless of arity, so a delegating overload has
+  # to come first or it recurses into itself.
+  let fromSecondsSinceMidnight(count: Integer) -> Time = Time.fromSecondsSinceMidnight(count, 0)
+
+  let fromSecondsSinceMidnight(count: Integer, nanosecond: Integer) -> Time do
     let total = count.modulo(86400)
-    return Time { hour: total / 3600, minute: total.modulo(3600) / 60, second: total.modulo(60), nanosecond: 0 }
+    return Time { hour: total / 3600, minute: total.modulo(3600) / 60, second: total.modulo(60), nanosecond: nanosecond }
   end
 
   # ISO 8601 time of day: `14:03`, `14:03:00`, or `14:03:00.123456789`.
@@ -116,6 +151,109 @@ module Time do
     return Ok(Duration.utcOffset(hours, minutes))
   end
 
+  # ── The test clock ──────────────────────────────────────────────────────
+  # Anything that asks what time it is — `Time.now`, `Date.today`,
+  # `DateTime.utcNow` — reads one primitive, so pinning that primitive pins
+  # the whole calendar. This is what makes code that calls `Date.today()`
+  # testable: freeze the clock, assert against a date you chose.
+  #
+  #   Time.freeze(DateTime.parse("2026-07-30T14:03:00Z").try)
+  #   Date.today().iso                            # "2026-07-30" — always
+  #   Time.release()
+  #
+  # The clock is global, not per-process: a frozen clock stays frozen inside
+  # spawned processes, which is the only behavior that matches a real one.
+  # `release` is not automatic, so a test that freezes must also release —
+  # otherwise every later test in the run inherits the frozen clock.
+
+  # Nanoseconds since the Unix epoch for a civil datetime. A plain function
+  # rather than a `DateTime` method: on BEAM a method named `epochNanos`
+  # flattens onto the same name as the `DateTime.epochNanos()` module
+  # function, and the arity-0 one wins — silently, answering for the host
+  # clock instead of for `moment`.
+  let nanosOf(moment: DateTime) -> Integer do
+    return moment.epochSeconds * 1000000000 + moment.time.nanosecond
+  end
+
+  # The clock counts nanoseconds in a 64-bit integer, on both backends and in
+  # the host clock they stand in for. That is the whole of the instants it can
+  # name: 1677-09-21 to 2262-04-11. A Kex Integer keeps going past that — it
+  # promotes to arbitrary precision — so a date outside the range produces a
+  # number the clock cannot hold, and the check below is what stops it being
+  # truncated into some other instant entirely.
+  let CLOCK_MIN_NANOS = 0 - 9223372036854775808
+  let CLOCK_MAX_NANOS = 9223372036854775807
+
+  let settable?(moment: DateTime) -> Bool do
+    let nanos = Time.nanosOf(moment)
+    return nanos >= Time.CLOCK_MIN_NANOS && nanos <= Time.CLOCK_MAX_NANOS
+  end
+
+  # Pin the clock. Every reading returns this exact instant until `release`.
+  # Returns the moment it pinned, so `Time.freeze(m).try` both sets the clock
+  # and fails loudly on an instant the clock cannot represent.
+  foul freeze(moment: DateTime) -> Result<DateTime, TimeError> do
+    return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
+    Kex.Intrinsic.Time.freezeAt(Time.nanosOf(moment))
+    return Ok(moment)
+  end
+
+  # Move the clock to an instant and let it run from there: readings advance
+  # normally, they just start somewhere else. Use this over `freeze` when the
+  # code under test measures elapsed time.
+  foul travel(moment: DateTime) -> Result<DateTime, TimeError> do
+    return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
+    Kex.Intrinsic.Time.travelTo(Time.nanosOf(moment))
+    return Ok(moment)
+  end
+
+  # Freeze the clock for the length of `body`, then release it. This is the
+  # form to reach for: `freeze` and `release` have to be paired by hand, and a
+  # test that returns early — or fails an assertion — between them leaves the
+  # clock frozen for every test that runs after it.
+  #
+  #   Time.frozenAt(DateTime.parse("2026-07-30T14:03:00Z").try) do
+  #     Date.utcToday().iso                     # "2026-07-30"
+  #   end.try
+  #
+  # Result carries whatever `body` returned. An instant the clock cannot
+  # represent is an Error, and then the clock is never touched and the body
+  # never runs.
+  #
+  # Not nestable: `release` restores the HOST clock, not whatever control was
+  # in effect on entry, so an inner scope ending un-freezes the outer one too.
+  foul frozenAt(moment: DateTime, body) do
+    return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
+    Kex.Intrinsic.Time.freezeAt(Time.nanosOf(moment))
+    let result = body()
+    Kex.Intrinsic.Time.release()
+    return Ok(result)
+  end
+
+  # The same scoping for `travel`: readings start at `moment` and advance
+  # normally, and the clock is released when `body` ends.
+  foul travellingFrom(moment: DateTime, body) do
+    return Error(InvalidDate(moment.date.year, moment.date.month, moment.date.day)) if !Time.settable?(moment)
+    Kex.Intrinsic.Time.travelTo(Time.nanosOf(moment))
+    let result = body()
+    Kex.Intrinsic.Time.release()
+    return Ok(result)
+  end
+
+  # Back to the host clock.
+  foul release() -> Void do
+    return Kex.Intrinsic.Time.release()
+  end
+
+  # True while `freeze` or `travel` is in effect.
+  foul controlled?() -> Bool do
+    return Kex.Intrinsic.Time.clockMode() != 0
+  end
+
+  foul frozen?() -> Bool do
+    return Kex.Intrinsic.Time.clockMode() == 1
+  end
+
   # ── Calendar arithmetic ─────────────────────────────────────────────────
   # Public because the `make` blocks below live at file level and reach them
   # by qualification; they are equally useful on their own.
@@ -126,7 +264,21 @@ module Time do
     return year.modulo(400) == 0
   end
 
-  let daysInMonth(year: Integer, month: Integer) -> Integer do
+  # Year first, matching `Date.of(year, month, day)` and every other
+  # date-shaped signature in this file.
+  #
+  # A month outside 1..12 has no answer, so this is a Result rather than an
+  # Integer: the old version fell through its month tests and returned 28,
+  # which quietly turned `Time.daysInMonth(1, 2026)` — the arguments the wrong
+  # way round — into a plausible-looking wrong number.
+  let daysInMonth(year: Integer, month: Integer) -> Result<Integer, TimeError> do
+    return Error(InvalidDate(year, month, 1)) if month < 1 || month > 12
+    return Ok(Time.daysInValidMonth(year, month))
+  end
+
+  # The same question with the range check already done. Every caller inside
+  # this file has a month it built or validated itself.
+  let daysInValidMonth(year: Integer, month: Integer) -> Integer do
     return 31 if month == 1 || month == 3 || month == 5 || month == 7
     return 31 if month == 8 || month == 10 || month == 12
     return 30 if month == 4 || month == 6 || month == 9 || month == 11
@@ -209,9 +361,22 @@ module Time do
 
   let formatDateTime(value: DateTime) -> String = "${Time.formatDate(value.date)}T${Time.formatTime(value.time)}${Time.formatOffset(value.offset)}"
 
-  # Second resolution: the nanosecond field is kept on the value and used by
-  # comparisons, but ISO output does not carry it.
-  let formatTime(value: Time) -> String = "${Time.pad2(value.hour)}:${Time.pad2(value.minute)}:${Time.pad2(value.second)}"
+  let formatTime(value: Time) -> String = "${Time.pad2(value.hour)}:${Time.pad2(value.minute)}:${Time.pad2(value.second)}${Time.formatFraction(value.nanosecond)}"
+
+  # Fractional seconds, in the 3/6/9-digit groupings ISO 8601 output
+  # conventionally uses — whichever is the shortest that loses nothing. A whole
+  # second renders no fraction at all, so `14:03:00` is unchanged.
+  #
+  # Without this the nanosecond field was kept on the value and compared, but
+  # never rendered: `Time.parse("14:03:00.5")` and `Time.parse("14:03:00")`
+  # produced different values that printed identically, and every parse/format
+  # round-trip silently dropped sub-second precision.
+  let formatFraction(nanosecond: Integer) -> String do
+    return "" if nanosecond == 0
+    return ".${Time.padTo(nanosecond / 1000000, 3)}" if nanosecond.modulo(1000000) == 0
+    return ".${Time.padTo(nanosecond / 1000, 6)}" if nanosecond.modulo(1000) == 0
+    return ".${Time.padTo(nanosecond, 9)}"
+  end
 
   # ±HH:MM, the shape an ISO 8601 offset takes. UTC renders as "Z".
   let formatOffset(offset: Duration) -> String do
@@ -252,9 +417,12 @@ module Time do
     return "${value}"
   end
 
-  let pad9(value: Integer) -> String do
+  # Left-pad with zeros to a fixed width. A value already that wide is left
+  # alone rather than truncated — losing digits would be worse than a field
+  # one character too long.
+  let padTo(value: Integer, width: Integer) -> String do
     var text = "${value}"
-    while text.count < 9
+    while text.count < width
       text = "0${text}"
     end
     return text
@@ -264,11 +432,7 @@ module Time do
   # beyond that, so wider years render as-is.
   let padYear(value: Integer) -> String do
     return "${value}" if value < 0 || value > 9999
-    var text = "${value}"
-    while text.count < 4
-      text = "0${text}"
-    end
-    return text
+    return Time.padTo(value, 4)
   end
 
   # Digits, with the failure reported against the WHOLE input rather than the
@@ -320,7 +484,7 @@ module Date do
   let of(year: Integer, month: Integer, day: Integer) -> Result<Date, TimeError> do
     return Error(InvalidDate(year, month, day)) if month < 1 || month > 12
     return Error(InvalidDate(year, month, day)) if day < 1
-    return Error(InvalidDate(year, month, day)) if day > Time.daysInMonth(year, month)
+    return Error(InvalidDate(year, month, day)) if day > Time.daysInValidMonth(year, month)
     return Ok(Date { year: year, month: month, day: day })
   end
 
@@ -349,6 +513,16 @@ module Date do
   foul today() -> Date do
     let moment = DateTime.now()
     return moment.date
+  end
+
+  foul tomorrow() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(1)
+  end
+
+  foul yesterday() -> Date do
+    let moment = DateTime.now()
+    return moment.date.addDays(0 - 1)
   end
 
   foul utcNow() -> Date do
@@ -432,13 +606,21 @@ make Integer do
   let hours -> Duration = Duration { seconds: this * 3600.0 }
   let days -> Duration = Duration { seconds: this * 86400.0 }
   let weeks -> Duration = Duration { seconds: this * 604800.0 }
+
+  # Calendar spans, not Durations — see the `Period` record above. `4.weeks`
+  # and `1.months` are deliberately different things: the first is exactly 28
+  # days, the second is one calendar month.
+  let months -> Period = Period { years: 0, months: this, days: 0 }
+  let years -> Period = Period { years: this, months: 0, days: 0 }
 end
 
 make Float do
+  let milliseconds -> Duration = Duration { seconds: this / 1000.0 }
   let seconds -> Duration = Duration { seconds: this }
   let minutes -> Duration = Duration { seconds: this * 60.0 }
   let hours -> Duration = Duration { seconds: this * 3600.0 }
   let days -> Duration = Duration { seconds: this * 86400.0 }
+  let weeks -> Duration = Duration { seconds: this * 604800.0 }
 end
 
 make Duration do
@@ -446,16 +628,28 @@ make Duration do
   let -(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
   let negated -> Duration = Duration { seconds: 0.0 - this.seconds }
 
-  # Named forms of `+`/`-`, matching Date and DateTime, which cannot use the
-  # operators (see their `plus`).
-  let plus(other: Duration) -> Duration = Duration { seconds: this.seconds + other.seconds }
-  let minus(other: Duration) -> Duration = Duration { seconds: this.seconds - other.seconds }
+  # Scaling a span by a plain number. `3 * 1.days` is not the same call — the
+  # receiver has to be the Duration — so it is spelled `1.days * 3`.
+  let *(factor: Number) -> Duration = Duration { seconds: this.seconds * factor }
+  let /(divisor: Number) -> Duration = Duration { seconds: this.seconds / divisor }
+
+  let abs -> Duration = Duration { seconds: if this.seconds < 0.0 then 0.0 - this.seconds else this.seconds end }
+  let zero? -> Bool = this.seconds == 0.0
+  let negative? -> Bool = this.seconds < 0.0
+  let positive? -> Bool = this.seconds > 0.0
+
+  # Named for length rather than for order: `before?`/`after?` are about when
+  # something happened, and a Duration is not a point in time.
+  let shorterThan?(other: Duration) -> Bool = this.seconds < other.seconds
+  let longerThan?(other: Duration) -> Bool = this.seconds > other.seconds
 
   # Whole units contained in the span, truncated toward zero.
+  let wholeMilliseconds -> Integer = Time.truncatedBy(this.seconds, 0.001)
   let wholeSeconds -> Integer = this.seconds.toInteger
   let wholeMinutes -> Integer = Time.truncatedBy(this.seconds, 60.0)
   let wholeHours -> Integer = Time.truncatedBy(this.seconds, 3600.0)
   let wholeDays -> Integer = Time.truncatedBy(this.seconds, 86400.0)
+  let wholeWeeks -> Integer = Time.truncatedBy(this.seconds, 604800.0)
 
   # Spelled out rather than delegating to `Number.compare`, which the
   # Comparable trait declares but neither backend implements at runtime.
@@ -468,10 +662,12 @@ end
 
 module Duration do
   let zero() -> Duration = Duration { seconds: 0.0 }
+  let milliseconds(count: Number) -> Duration = Duration { seconds: count / 1000.0 }
   let seconds(count: Number) -> Duration = Duration { seconds: count * 1.0 }
   let minutes(count: Number) -> Duration = Duration { seconds: count * 60.0 }
   let hours(count: Number) -> Duration = Duration { seconds: count * 3600.0 }
   let days(count: Number) -> Duration = Duration { seconds: count * 86400.0 }
+  let weeks(count: Number) -> Duration = Duration { seconds: count * 604800.0 }
 
   # A whole-minute UTC offset, the only kind ISO 8601 can spell. A negative
   # hour or minute puts the whole offset west of UTC.
@@ -479,6 +675,51 @@ module Duration do
     let magnitude = hours.abs * 3600 + minutes.abs * 60
     return Duration { seconds: 0.0 - (magnitude * 1.0) } if hours < 0 || minutes < 0
     return Duration { seconds: magnitude * 1.0 }
+  end
+end
+
+# ── Periods ───────────────────────────────────────────────────────────────
+
+module Period do
+  let zero() -> Period = Period { years: 0, months: 0, days: 0 }
+  let of(years: Integer, months: Integer, days: Integer) -> Period = Period { years: years, months: months, days: days }
+  let years(count: Integer) -> Period = Period { years: count, months: 0, days: 0 }
+  let months(count: Integer) -> Period = Period { years: 0, months: count, days: 0 }
+  let days(count: Integer) -> Period = Period { years: 0, months: 0, days: count }
+  let weeks(count: Integer) -> Period = Period { years: 0, months: 0, days: count * 7 }
+end
+
+make Period, implement: Inspectable, Showable do
+  let inspectValue(colors: Bool) -> String = Kex.Intrinsic.Kex.inspect(this, colors)
+  let showValue -> String = this.iso
+
+  let +(other: Period) -> Period = Period { years: this.years + other.years, months: this.months + other.months, days: this.days + other.days }
+  let -(other: Period) -> Period = Period { years: this.years - other.years, months: this.months - other.months, days: this.days - other.days }
+  let negated -> Period = Period { years: 0 - this.years, months: 0 - this.months, days: 0 - this.days }
+  let *(factor: Integer) -> Period = Period { years: this.years * factor, months: this.months * factor, days: this.days * factor }
+
+  let zero? -> Bool = this.years == 0 && this.months == 0 && this.days == 0
+
+  # Years and months are one quantity for arithmetic — a month is 1/12 of a
+  # year exactly, unlike days, which are not a fixed fraction of a month. This
+  # is why `date + span` applies them together rather than one after the other.
+  let totalMonths -> Integer = this.years * 12 + this.months
+
+  # Carries excess months into years: 14 months becomes 1 year 2 months. Days
+  # are left alone — there is no fixed number of them in a month to carry by.
+  let normalized -> Period do
+    let total = this.totalMonths
+    return Period { years: (total - total.modulo(12)) / 12, months: total.modulo(12), days: this.days }
+  end
+
+  # ISO 8601 duration: `P1Y2M3D`. A zero period is `P0D`, the shortest spelling
+  # the grammar allows — `P` alone is not valid.
+  let iso -> String do
+    return "P0D" if this.zero?
+    let years = if this.years != 0 then "${this.years}Y" else "" end
+    let months = if this.months != 0 then "${this.months}M" else "" end
+    let days = if this.days != 0 then "${this.days}D" else "" end
+    return "P${years}${months}${days}"
   end
 end
 
@@ -496,13 +737,31 @@ make Date, implement: Inspectable, Showable do
 
   let leapYear? -> Bool = Time.leapYear?(this.year)
 
+  # Days in THIS date's month. No Result: a Date's month is in range by
+  # construction, unlike `Time.daysInMonth`'s two loose integers.
+  let daysInMonth -> Integer = Time.daysInValidMonth(this.year, this.month)
+
   # Whole days only: a Duration with a sub-day remainder truncates toward
-  # zero, so `date.plus(36.hours)` advances exactly one day.
-  let plus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
-  let minus(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
+  # zero, so `date + 36.hours` advances exactly one day.
+  let +(span: Duration) -> Date = Date.fromEpochDay(this.epochDay + span.wholeDays)
+  let -(span: Duration) -> Date = Date.fromEpochDay(this.epochDay - span.wholeDays)
+
+  # Calendar steps, so the month length decides the answer: January 31st plus
+  # one month is the last day of February. Months are applied before days, and
+  # years and months together as one count of months — applying years first
+  # would clamp twice and make `2024-02-29 + 1.years + 1.months` land a day
+  # off from `+ 13.months`.
+  let +(span: Period) -> Date = this.addMonths(span.totalMonths).addDays(span.days)
+  let -(span: Period) -> Date = this.addMonths(0 - span.totalMonths).addDays(0 - span.days)
 
   let addDays(count: Integer) -> Date = Date.fromEpochDay(this.epochDay + count)
   let addWeeks(count: Integer) -> Date = this.addDays(count * 7)
+
+  # No `date.tomorrow`/`date.yesterday` methods: on BEAM a make-block method
+  # flattens onto the same name as the `Date.tomorrow()`/`Date.yesterday()`
+  # module functions above and one of the two has to win. The module
+  # functions win — `Date.tomorrow()` is the spelling people reach for, and
+  # `date.addDays(1)` already says the rest.
 
   # Calendar-aware, so the day is clamped into the target month: one month
   # after January 31st is the last day of February, not March 3rd.
@@ -510,16 +769,47 @@ make Date, implement: Inspectable, Showable do
     let total = this.year * 12 + (this.month - 1) + count
     let month = total.modulo(12) + 1
     let year = (total - total.modulo(12)) / 12
-    let last = Time.daysInMonth(year, month)
+    let last = Time.daysInValidMonth(year, month)
     let day = if this.day > last then last else this.day end
     return Date { year: year, month: month, day: day }
   end
 
   let addYears(count: Integer) -> Date = this.addMonths(count * 12)
 
+  # Boundaries of the calendar unit this date falls in. The week runs Monday
+  # to Sunday, matching the ISO weekday numbering `weekday.number` reports.
+  let startOfMonth -> Date = Date { year: this.year, month: this.month, day: 1 }
+  let endOfMonth -> Date = Date { year: this.year, month: this.month, day: this.daysInMonth }
+  let startOfYear -> Date = Date { year: this.year, month: 1, day: 1 }
+  let endOfYear -> Date = Date { year: this.year, month: 12, day: 31 }
+  let startOfWeek -> Date = this.addDays(1 - this.weekday.number)
+  let endOfWeek -> Date = this.addDays(7 - this.weekday.number)
+
   # Whole days from this date to `other`, negative when `other` is earlier.
   let daysUntil(other: Date) -> Integer = other.epochDay - this.epochDay
   let until(other: Date) -> Duration = Duration.days(this.daysUntil(other))
+
+  # Whole calendar months from this date to `other`, negative when `other` is
+  # earlier. Truncated, not rounded: a partial month does not count, so
+  # January 15th to February 14th is 0 months.
+  #
+  # The count is the exact inverse of `addMonths`, which is why the correction
+  # below asks `addMonths` rather than comparing day-of-month fields: January
+  # 31st plus one month IS February 28th, so January 31st to February 28th is
+  # one month, even though 28 < 31. Comparing the day fields answers 0 there
+  # and contradicts the addition this same file performs.
+  let monthsUntil(other: Date) -> Integer do
+    return 0 - other.monthsUntil(this) if other.before?(this)
+    let gross = (other.year * 12 + other.month) - (this.year * 12 + this.month)
+    return gross - 1 if gross > 0 && this.addMonths(gross).after?(other)
+    return gross
+  end
+
+  let yearsUntil(other: Date) -> Integer do
+    let months = this.monthsUntil(other)
+    return (months - months.modulo(12)) / 12 if months >= 0
+    return 0 - ((0 - months) - (0 - months).modulo(12)) / 12
+  end
 
   let before?(other: Date) -> Bool = this.epochDay < other.epochDay
   let after?(other: Date) -> Bool = this.epochDay > other.epochDay
@@ -545,6 +835,26 @@ make Time, implement: Inspectable, Showable do
 
   let before?(other: Time) -> Bool = this.compareTo(other) == Less
   let after?(other: Time) -> Bool = this.compareTo(other) == Greater
+
+  # Wall-clock arithmetic wraps within the day: a Time has no date to carry
+  # into, so 23:00 + 2.hours is 01:00 and midnight - 1.seconds is 23:59:59.
+  # Reach for DateTime when the day rolling over is something you need to see.
+  # The nanosecond field rides along untouched — `wholeSeconds` truncates the
+  # span, so a sub-second Duration shifts nothing.
+  let +(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + span.wholeSeconds, this.nanosecond)
+  let -(span: Duration) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight - span.wholeSeconds, this.nanosecond)
+
+  let addSeconds(count: Integer) -> Time = Time.fromSecondsSinceMidnight(this.secondsSinceMidnight + count, this.nanosecond)
+  let addMinutes(count: Integer) -> Time = this.addSeconds(count * 60)
+  let addHours(count: Integer) -> Time = this.addSeconds(count * 3600)
+
+  # Elapsed time from this time of day to `other`, within the same day.
+  # Negative when `other` is earlier.
+  let until(other: Time) -> Duration do
+    let whole = (other.secondsSinceMidnight - this.secondsSinceMidnight) * 1.0
+    let fraction = (other.nanosecond - this.nanosecond) / 1000000000.0
+    return Duration { seconds: whole + fraction }
+  end
 
   # ISO 8601: `14:03:00`, with fractional seconds only when non-zero.
   let iso -> String = Time.formatTime(this)
@@ -577,8 +887,20 @@ make DateTime, implement: Inspectable, Showable do
   let at(offset: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds, offset), this.time.nanosecond)
   let utc -> DateTime = this.at(Duration.zero())
 
-  let plus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
-  let minus(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
+  let +(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds + span.wholeSeconds, this.offset), this.time.nanosecond)
+  let -(span: Duration) -> DateTime = Time.withNanosecond(DateTime.fromEpochSeconds(this.epochSeconds - span.wholeSeconds, this.offset), this.time.nanosecond)
+
+  # A calendar step moves the DATE and leaves the wall clock where it is:
+  # 09:00 on January 31st plus one month is 09:00 on February 28th. Going
+  # through epoch seconds instead would drift the time of day by whatever the
+  # month happened to be worth in seconds.
+  let +(span: Period) -> DateTime = DateTime { date: this.date + span, time: this.time, offset: this.offset }
+  let -(span: Period) -> DateTime = DateTime { date: this.date - span, time: this.time, offset: this.offset }
+
+  let addDays(count: Integer) -> DateTime = DateTime { date: this.date.addDays(count), time: this.time, offset: this.offset }
+  let addWeeks(count: Integer) -> DateTime = this.addDays(count * 7)
+  let addMonths(count: Integer) -> DateTime = DateTime { date: this.date.addMonths(count), time: this.time, offset: this.offset }
+  let addYears(count: Integer) -> DateTime = this.addMonths(count * 12)
 
   # Elapsed time from this instant to `other`, negative when `other` is
   # earlier. Sub-second precision is kept.

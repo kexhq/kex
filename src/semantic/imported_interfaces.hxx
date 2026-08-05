@@ -88,6 +88,14 @@ struct ImportedInterfaces {
     // wrong number of them is a compile error rather than an opaque runtime
     // failure (`if_clause` on BEAM).
     std::unordered_map<std::string, size_t> recordArities;
+    // The field NAMES behind those counts. Without them a field read on an
+    // imported record could not be told apart from an unrelated method of the
+    // same spelling, and the method won: `moment.time.nanosecond` on the
+    // prelude's Time resolved to units.kex's `Integer.nanosecond` Measure
+    // constructor and failed to typecheck. Names alone settle that question —
+    // the field's TYPE is not carried, so such a read stays gradual.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        recordFieldNames;
     // Every type NAME the imported sources declare: ADTs, records, and
     // constructor-less aliases such as `type List<X> = [X]`. `adts` only
     // carries types that have constructors, and it is indexed by those

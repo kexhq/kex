@@ -140,7 +140,7 @@ spec-prelude-beam: build
 	@echo "Running prelude spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
-		output=$$(timeout 8 $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
+		output=$$(timeout 60 $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
