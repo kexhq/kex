@@ -14,10 +14,17 @@ auto toSeconds(const ValuePtr& val) -> std::time_t {
     return 0;
 }
 
+// The clock is int64 nanoseconds. A Kex Integer is not: it promotes to
+// arbitrary precision, so an instant outside 1677..2262 arrives here as a
+// BigInt. Saturating rather than returning 0 keeps the failure ordered —
+// clamping to the end of the representable range, not to 1970. Time.settable?
+// rejects these before they reach here; this is the backstop.
 auto toNanos(const ValuePtr& val) -> int64_t {
     if (auto* i = std::get_if<IntValue>(&val->data)) return i->value;
     if (auto* f = std::get_if<FloatValue>(&val->data))
         return static_cast<int64_t>(f->value);
+    if (auto* bi = std::get_if<BigIntValue>(&val->data))
+        return bi->value < 0 ? INT64_MIN : INT64_MAX;
     return 0;
 }
 

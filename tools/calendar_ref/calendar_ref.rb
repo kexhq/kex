@@ -110,6 +110,88 @@ module CalendarRef
     (civil(*to) - civil(*from)).to_i
   end
 
+  # Whole calendar months between two dates, truncated toward zero — a partial
+  # month does not count, so January 31st to February 28th is 0.
+  #
+  # Found by SEARCH rather than by arithmetic: the answer is the largest n with
+  # `from >> n` still not past `to`. Kex computes it from the year/month fields
+  # with a day-of-month correction, so deriving it a different way here is what
+  # makes this an independent check instead of the same formula written twice.
+  def months_until(from, to)
+    start = civil(*from)
+    finish = civil(*to)
+    return -months_until(to, from) if finish < start
+
+    count = (finish.year * 12 + finish.month) - (start.year * 12 + start.month)
+    count -= 1 while count.positive? && (start >> count) > finish
+    count
+  end
+
+  # Truncating division, matching Kex's `/` — Ruby's `/` floors, which would
+  # send a negative span the wrong way.
+  def years_until(from, to)
+    months = months_until(from, to)
+    months.negative? ? -(-months / 12) : months / 12
+  end
+
+  # ── Periods ─────────────────────────────────────────────────────────────
+  # Years and months are applied together as one count of months, then days.
+  # Applying years first would clamp twice: 2024-02-29 plus one year plus one
+  # month would land a day off from plus thirteen months.
+
+  def add_period(year, month, day, years, months, days)
+    date = (civil(year, month, day) >> (years * 12 + months)) + days
+    [date.year, date.month, date.day]
+  end
+
+  def period_iso(years, months, days)
+    return "P0D" if years.zero? && months.zero? && days.zero?
+
+    text = +"P"
+    text << "#{years}Y" unless years.zero?
+    text << "#{months}M" unless months.zero?
+    text << "#{days}D" unless days.zero?
+    text
+  end
+
+  # Carries excess months into years. Days are left alone — there is no fixed
+  # number of them in a month to carry by.
+  def period_normalized(years, months, days)
+    total = years * 12 + months
+    [(total - total % 12) / 12, total % 12, days]
+  end
+
+  # ── Calendar boundaries ─────────────────────────────────────────────────
+  # The week runs Monday to Sunday, matching ISO weekday numbering.
+
+  def start_of_month(year, month, _day)
+    [year, month, 1]
+  end
+
+  def end_of_month(year, month, _day)
+    [year, month, days_in_month(year, month)]
+  end
+
+  def start_of_year(year, _month, _day)
+    [year, 1, 1]
+  end
+
+  def end_of_year(year, _month, _day)
+    [year, 12, 31]
+  end
+
+  def start_of_week(year, month, day)
+    date = civil(year, month, day)
+    shifted = date - (date.cwday - 1)
+    [shifted.year, shifted.month, shifted.day]
+  end
+
+  def end_of_week(year, month, day)
+    date = civil(year, month, day)
+    shifted = date + (7 - date.cwday)
+    [shifted.year, shifted.month, shifted.day]
+  end
+
   # ── Formatting ──────────────────────────────────────────────────────────
 
   # ISO 8601 keeps four digits where the year fits; wider or negative years
@@ -124,8 +206,19 @@ module CalendarRef
     "#{format_year(year)}-#{format('%02d', month)}-#{format('%02d', day)}"
   end
 
-  def format_time(hour, minute, second)
-    format("%02d:%02d:%02d", hour, minute, second)
+  def format_time(hour, minute, second, nanosecond = 0)
+    format("%02d:%02d:%02d", hour, minute, second) + format_fraction(nanosecond)
+  end
+
+  # Fractional seconds in the 3/6/9-digit groupings ISO 8601 output
+  # conventionally uses — whichever is the shortest that loses nothing. A whole
+  # second renders no fraction at all.
+  def format_fraction(nanosecond)
+    return "" if nanosecond.zero?
+    return format(".%03d", nanosecond / 1_000_000) if (nanosecond % 1_000_000).zero?
+    return format(".%06d", nanosecond / 1_000) if (nanosecond % 1_000).zero?
+
+    format(".%09d", nanosecond)
   end
 
   # ±HH:MM, the shape ISO 8601 gives an offset. UTC renders as "Z".
@@ -156,6 +249,27 @@ module CalendarRef
   def from_seconds_since_midnight(count)
     total = count % 86_400
     [total / 3600, (total % 3600) / 60, total % 60]
+  end
+
+  # Wall-clock arithmetic wraps within the day and carries the nanosecond field
+  # across untouched. Returns [hour, minute, second, nanosecond].
+  def add_seconds_to_time(time, count)
+    hour, minute, second, nanosecond = *time
+    from_seconds_since_midnight(seconds_since_midnight(hour, minute, second) + count) +
+      [nanosecond || 0]
+  end
+
+  # ── Durations ───────────────────────────────────────────────────────────
+
+  UNIT_SECONDS = {
+    milliseconds: 0.001, seconds: 1.0, minutes: 60.0,
+    hours: 3600.0, days: 86_400.0, weeks: 604_800.0
+  }.freeze
+
+  # Whole units contained in a span, truncated toward zero — the same thing
+  # Kex's `wholeDays` and friends report.
+  def whole_units(seconds, unit)
+    (seconds / UNIT_SECONDS.fetch(unit)).truncate
   end
 
   # ── Instants ────────────────────────────────────────────────────────────

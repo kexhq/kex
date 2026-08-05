@@ -55,10 +55,18 @@ release() ->
 'localOffset'(EpochSeconds) ->
     Universal = calendar:gregorian_seconds_to_datetime(
                   EpochSeconds + epoch_gregorian_seconds()),
-    case calendar:universal_time_to_local_time(Universal) of
+    %% The zone database only answers for instants the host's TZ rules cover.
+    %% Outside that `universal_time_to_local_time` raises badarg, which took
+    %% the whole program down for anything reading `Date.today()` with the
+    %% clock frozen at a historical date. UTC is the honest answer when the
+    %% zone cannot be determined, and it is what the interpreter already
+    %% returns when localtime_r fails — so the two backends now agree.
+    try calendar:universal_time_to_local_time(Universal) of
         Local ->
             calendar:datetime_to_gregorian_seconds(Local) -
                 calendar:datetime_to_gregorian_seconds(Universal)
+    catch
+        _:_ -> 0
     end.
 
 epoch_gregorian_seconds() ->

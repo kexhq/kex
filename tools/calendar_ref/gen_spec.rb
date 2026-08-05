@@ -23,6 +23,17 @@ CASES = (ARGV[ARGV.index("--cases") + 1].to_i if ARGV.include?("--cases")) || 40
 
 RNG = Random.new(SEED)
 
+# The test clock counts int64 nanoseconds, so it can only name instants
+# between 1677-09-21 and 2262-04-11. Clock cases draw from here; ordinary
+# calendar cases use the much wider YEAR_RANGE.
+CLOCK_YEAR_RANGE = (1678..2261).freeze
+
+def random_clock_date
+  year = RNG.rand(CLOCK_YEAR_RANGE)
+  month = RNG.rand(1..12)
+  [year, month, RNG.rand(1..CalendarRef.days_in_month(year, month))]
+end
+
 # Years Kex renders with the plain four-digit ISO spelling. Deliberately
 # straddles the epoch so pre-1970 arithmetic (where truncating division needs
 # a floor correction) is exercised on every run.
@@ -71,6 +82,29 @@ end
 
 def random_time
   [RNG.rand(0..23), RNG.rand(0..59), RNG.rand(0..59)]
+end
+
+# Biased onto the 3/6/9-digit boundaries so every branch of the fractional
+# second formatter is exercised, not just the nine-digit fallback.
+def random_nanosecond
+  [0,
+   RNG.rand(1..999) * 1_000_000,
+   RNG.rand(1..999_999) * 1_000,
+   RNG.rand(1..999_999_999)].sample(random: RNG)
+end
+
+def random_period
+  [RNG.rand(-5..5), RNG.rand(-30..30), RNG.rand(-45..45)]
+end
+
+def kex_period(years, months, days)
+  "Period.of(#{years}, #{months}, #{days})"
+end
+
+# Parenthesised so a negative count stays a receiver: `-5.months` would apply
+# the minus to the Period, which has no unary negation.
+def kex_integer(value)
+  value.negative? ? "(#{value})" : value.to_s
 end
 
 # Whole-minute offsets, the only kind ISO 8601 can spell.
@@ -238,14 +272,89 @@ describe "date arithmetic (vs Ruby)" do
     end
   end
 
-  it "steps to yesterday and tomorrow" do
+  # Date.today/tomorrow/yesterday read the clock, so they are only testable
+  # against a clock we chose. Freezing is what makes that possible — without
+  # it these three have no assertable answer at all.
+  it "steps to yesterday and tomorrow from a frozen clock" do
     CASES.times do
-      date = random_date
-      assert_eq("#{kex_date(*date)}.tomorrow.iso",
-                CalendarRef.format_date(*CalendarRef.add_days(*date, 1)))
-      assert_eq("#{kex_date(*date)}.yesterday.iso",
-                CalendarRef.format_date(*CalendarRef.add_days(*date, -1)))
+      date = random_clock_date
+      time = random_time
+      instant = CalendarRef.format_date_time(date, time, 0)
+      line("    Time.freeze(DateTime.parse(#{instant.inspect}).try).try")
+      # The UTC date is pinned absolutely. `today`/`tomorrow`/`yesterday` are
+      # this machine's zone, which the generator cannot know and a checked-in
+      # spec must not assume, so those are asserted by their relationship —
+      # which is the whole of what they mean.
+      assert_eq("Date.utcToday().iso", CalendarRef.format_date(*date))
+      assert_eq("Date.tomorrow().epochDay - Date.today().epochDay", 1)
+      assert_eq("Date.today().epochDay - Date.yesterday().epochDay", 1)
     end
+    line("    Time.release()")
+  end
+
+  it "refuses instants the clock cannot represent" do
+    assert_true("Time.freeze(DateTime.parse(\"2500-01-01T00:00:00Z\").try).ok? == false")
+    assert_true("Time.freeze(DateTime.parse(\"1600-01-01T00:00:00Z\").try).ok? == false")
+    assert_true("Time.freeze(DateTime.parse(\"2026-01-01T00:00:00Z\").try).ok?")
+    line("    Time.release()")
+  end
+
+  it "leaves the clock alone once released" do
+    line("    Time.freeze(DateTime.parse(\"2026-07-30T14:03:00Z\").try)")
+    assert_true("Time.frozen?()")
+    assert_true("Time.controlled?()")
+    assert_eq("Date.utcToday().iso", "2026-07-30")
+    line("    Time.release()")
+    assert_true("!Time.controlled?()")
+    # Travelling still advances, so only the date it started from is pinned.
+    line("    Time.travel(DateTime.parse(\"2026-07-30T14:03:00Z\").try)")
+    assert_true("Time.controlled?()")
+    assert_true("!Time.frozen?()")
+    assert_eq("Date.utcToday().iso", "2026-07-30")
+    line("    Time.release()")
+  end
+
+  # The scoped form is the one to reach for: `freeze`/`release` have to be
+  # paired by hand, and a spec that fails between them leaves every later spec
+  # in the run on a frozen clock.
+  it "scopes a frozen clock to a block" do
+    CASES.times do
+      date = random_clock_date
+      time = random_time
+      instant = CalendarRef.format_date_time(date, time, 0)
+      assert_eq("Time.frozenAt(DateTime.parse(#{instant.inspect}).try, " \
+                "do Date.utcToday().iso end).try",
+                CalendarRef.format_date(*date))
+      # ...and the clock is the host's again the moment the block ends.
+      assert_true("!Time.controlled?()")
+    end
+  end
+
+  it "scopes a travelling clock to a block" do
+    CASES.times do
+      date = random_clock_date
+      time = random_time
+      instant = CalendarRef.format_date_time(date, time, 0)
+      # Travelling advances, so the date it started from is what is pinned —
+      # a reading taken immediately still lands on that day.
+      assert_eq("Time.travellingFrom(DateTime.parse(#{instant.inspect}).try, " \
+                "do Date.utcToday().iso end).try",
+                CalendarRef.format_date(*date))
+      assert_true("!Time.controlled?()")
+    end
+  end
+
+  it "never touches the clock for an instant it cannot represent" do
+    assert_true("Time.frozenAt(DateTime.parse(\"2500-01-01T00:00:00Z\").try, " \
+                "do 1 end).ok? == false")
+    assert_true("Time.travellingFrom(DateTime.parse(\"1600-01-01T00:00:00Z\").try, " \
+                "do 1 end).ok? == false")
+    assert_true("!Time.controlled?()")
+    # The body does not run either — a failed freeze is not a silent no-op
+    # that still executes the block against the host clock.
+    line("    var ran = false")
+    line("    Time.frozenAt(DateTime.parse(\"2500-01-01T00:00:00Z\").try, do ran = true end)")
+    assert_true("!ran")
   end
 
   it "measures the distance between dates" do
@@ -398,6 +507,236 @@ describe "instants (vs Ruby)" do
                 CalendarRef.format_date_time(shifted_date, shifted_time, offset))
       assert_eq("(#{dt} - #{kex_duration(-span)}).iso",
                 CalendarRef.format_date_time(shifted_date, shifted_time, offset))
+    end
+  end
+end
+
+describe "calendar spans (vs Ruby)" do
+  it "adds and subtracts a Period" do
+    CASES.times do
+      date = random_date
+      years, months, days = random_period
+      period = kex_period(years, months, days)
+      assert_eq("(#{kex_date(*date)} + #{period}).iso",
+                CalendarRef.format_date(*CalendarRef.add_period(*date, years, months, days)))
+      assert_eq("(#{kex_date(*date)} - #{period}).iso",
+                CalendarRef.format_date(*CalendarRef.add_period(*date, -years, -months, -days)))
+    end
+  end
+
+  # The whole reason Period is not a Duration: these land on a day the month
+  # length chose, not a fixed number of days later.
+  it "clamps a month step into short months" do
+    [[[2026, 1, 31], 1], [[2024, 1, 31], 1], [[2026, 3, 31], -1],
+     [[2024, 2, 29], 12], [[2026, 5, 31], 1], [[2026, 8, 31], -1],
+     [[2026, 1, 29], 1], [[2024, 1, 30], 1]].each do |date, months|
+      assert_eq("(#{kex_date(*date)} + #{kex_period(0, months, 0)}).iso",
+                CalendarRef.format_date(*CalendarRef.add_period(*date, 0, months, 0)))
+    end
+  end
+
+  # Years and months clamp once, together. Applying years first would round
+  # 2024-02-29 down to the 28th before the months were added, landing a day off.
+  it "applies years and months as one count of months" do
+    CASES.times do
+      date = random_date
+      years = RNG.rand(-4..4)
+      months = RNG.rand(-11..11)
+      total = years * 12 + months
+      assert_eq("(#{kex_date(*date)} + #{kex_period(years, months, 0)}).iso",
+                CalendarRef.format_date(*CalendarRef.add_period(*date, years, months, 0)))
+      assert_eq("(#{kex_date(*date)} + #{kex_period(0, total, 0)}).iso",
+                CalendarRef.format_date(*CalendarRef.add_period(*date, 0, total, 0)))
+    end
+  end
+
+  it "renders and normalizes periods" do
+    CASES.times do
+      years, months, days = random_period
+      period = kex_period(years, months, days)
+      assert_eq("#{period}.iso", CalendarRef.period_iso(years, months, days))
+      assert_eq("#{period}.normalized.iso",
+                CalendarRef.period_iso(*CalendarRef.period_normalized(years, months, days)))
+      assert_eq("#{period}.totalMonths", years * 12 + months)
+      assert_eq("#{period}.zero?", years.zero? && months.zero? && days.zero?)
+    end
+  end
+
+  it "builds periods from Integer" do
+    CASES.times do
+      count = RNG.rand(-24..24)
+      assert_eq("#{kex_integer(count)}.months.iso", CalendarRef.period_iso(0, count, 0))
+      assert_eq("#{kex_integer(count)}.years.iso", CalendarRef.period_iso(count, 0, 0))
+    end
+  end
+
+  # A DateTime steps by calendar too, and the wall clock stays put.
+  it "steps a DateTime by a Period without moving the time of day" do
+    CASES.times do
+      date = random_date
+      time = random_time
+      years, months, days = random_period
+      moved = CalendarRef.add_period(*date, years, months, days)
+      dt = "DateTime.of(#{kex_date(*date)}, Time.of(#{time.join(', ')}).try, Duration.zero())"
+      assert_eq("(#{dt} + #{kex_period(years, months, days)}).iso",
+                CalendarRef.format_date_time(moved, time, 0))
+    end
+  end
+end
+
+describe "calendar boundaries (vs Ruby)" do
+  it "finds the start and end of month, year, and week" do
+    CASES.times do
+      date = random_date
+      subject = kex_date(*date)
+      assert_eq("#{subject}.startOfMonth.iso",
+                CalendarRef.format_date(*CalendarRef.start_of_month(*date)))
+      assert_eq("#{subject}.endOfMonth.iso",
+                CalendarRef.format_date(*CalendarRef.end_of_month(*date)))
+      assert_eq("#{subject}.startOfYear.iso",
+                CalendarRef.format_date(*CalendarRef.start_of_year(*date)))
+      assert_eq("#{subject}.endOfYear.iso",
+                CalendarRef.format_date(*CalendarRef.end_of_year(*date)))
+      assert_eq("#{subject}.startOfWeek.iso",
+                CalendarRef.format_date(*CalendarRef.start_of_week(*date)))
+      assert_eq("#{subject}.endOfWeek.iso",
+                CalendarRef.format_date(*CalendarRef.end_of_week(*date)))
+    end
+  end
+end
+
+describe "calendar distance (vs Ruby)" do
+  it "counts whole months and years between dates" do
+    CASES.times do
+      from = random_date
+      to = random_date
+      assert_eq("#{kex_date(*from)}.monthsUntil(#{kex_date(*to)})",
+                CalendarRef.months_until(from, to))
+      assert_eq("#{kex_date(*from)}.yearsUntil(#{kex_date(*to)})",
+                CalendarRef.years_until(from, to))
+    end
+  end
+
+  # Truncated, not rounded: a partial month does not count.
+  it "does not count a partial month" do
+    [[[2026, 1, 31], [2026, 2, 28]], [[2026, 1, 31], [2026, 3, 1]],
+     [[2026, 1, 15], [2026, 2, 15]], [[2026, 2, 28], [2026, 1, 31]],
+     [[2026, 1, 1], [2026, 12, 31]], [[2026, 12, 31], [2026, 1, 1]]].each do |from, to|
+      assert_eq("#{kex_date(*from)}.monthsUntil(#{kex_date(*to)})",
+                CalendarRef.months_until(from, to))
+      assert_eq("#{kex_date(*from)}.yearsUntil(#{kex_date(*to)})",
+                CalendarRef.years_until(from, to))
+    end
+  end
+end
+
+describe "fractional seconds (vs Ruby)" do
+  # The nanosecond field used to be kept and compared but never rendered, so
+  # two different times printed identically and every round-trip lost it.
+  it "renders only the digits it needs" do
+    CASES.times do
+      time = random_time
+      nanosecond = random_nanosecond
+      assert_eq("Time.of(#{time.join(', ')}, #{nanosecond}).try.iso",
+                CalendarRef.format_time(*time, nanosecond))
+    end
+  end
+
+  it "round-trips through parse" do
+    CASES.times do
+      time = random_time
+      nanosecond = random_nanosecond
+      text = CalendarRef.format_time(*time, nanosecond)
+      assert_eq("Time.parse(#{text.inspect}).try.iso", text)
+      assert_eq("Time.parse(#{text.inspect}).try.nanosecond", nanosecond)
+    end
+  end
+
+  it "carries fractional seconds through a DateTime" do
+    CASES.times do
+      date = random_date
+      time = random_time
+      nanosecond = random_nanosecond
+      dt = "DateTime.of(#{kex_date(*date)}, Time.of(#{time.join(', ')}, #{nanosecond}).try, " \
+           "Duration.zero())"
+      rendered = "#{CalendarRef.format_date(*date)}T#{CalendarRef.format_time(*time, nanosecond)}Z"
+      assert_eq("#{dt}.iso", rendered)
+      assert_eq("DateTime.parse(#{rendered.inspect}).try.iso", rendered)
+    end
+  end
+end
+
+describe "time of day arithmetic (vs Ruby)" do
+  it "wraps within the day and keeps the nanosecond" do
+    CASES.times do
+      time = random_time
+      nanosecond = random_nanosecond
+      span = RNG.rand(-200_000..200_000)
+      shifted = CalendarRef.add_seconds_to_time(time + [nanosecond], span)
+      subject = "Time.of(#{time.join(', ')}, #{nanosecond}).try"
+      assert_eq("(#{subject} + #{kex_duration(span)}).iso",
+                CalendarRef.format_time(*shifted))
+      assert_eq("(#{subject} - #{kex_duration(-span)}).iso",
+                CalendarRef.format_time(*shifted))
+      assert_eq("#{subject}.addSeconds(#{kex_integer(span)}).iso",
+                CalendarRef.format_time(*shifted))
+    end
+  end
+
+  it "adds whole hours and minutes" do
+    CASES.times do
+      time = random_time
+      hours = RNG.rand(-50..50)
+      minutes = RNG.rand(-500..500)
+      subject = "Time.of(#{time.join(', ')}).try"
+      assert_eq("#{subject}.addHours(#{kex_integer(hours)}).iso",
+                CalendarRef.format_time(*CalendarRef.add_seconds_to_time(time, hours * 3600)))
+      assert_eq("#{subject}.addMinutes(#{kex_integer(minutes)}).iso",
+                CalendarRef.format_time(*CalendarRef.add_seconds_to_time(time, minutes * 60)))
+    end
+  end
+end
+
+describe "durations (vs Ruby)" do
+  it "reports whole units" do
+    CASES.times do
+      seconds = RNG.rand(-40_000_000..40_000_000)
+      subject = kex_duration(seconds)
+      %i[milliseconds seconds minutes hours days weeks].each do |unit|
+        assert_eq("#{subject}.whole#{unit.to_s.capitalize}",
+                  CalendarRef.whole_units(seconds.to_f, unit))
+      end
+    end
+  end
+
+  it "scales, negates, and compares" do
+    CASES.times do
+      seconds = RNG.rand(-100_000..100_000)
+      factor = RNG.rand(-10..10)
+      divisor = [1, 2, 3, 4, 5, -2, -5].sample(random: RNG)
+      subject = kex_duration(seconds)
+      assert_eq("(#{subject} * #{kex_integer(factor)}).wholeSeconds",
+                (seconds.to_f * factor).truncate)
+      assert_eq("(#{subject} / #{kex_integer(divisor)}).wholeSeconds",
+                (seconds.to_f / divisor).truncate)
+      assert_eq("#{subject}.abs.wholeSeconds", seconds.abs)
+      assert_eq("#{subject}.negated.wholeSeconds", -seconds)
+      assert_eq("#{subject}.negative?", seconds.negative?)
+      assert_eq("#{subject}.positive?", seconds.positive?)
+      assert_eq("#{subject}.zero?", seconds.zero?)
+    end
+  end
+
+  it "builds the same span from every spelling" do
+    CASES.times do
+      count = RNG.rand(1..1000)
+      { "milliseconds" => 0.001, "seconds" => 1.0, "minutes" => 60.0,
+        "hours" => 3600.0, "days" => 86_400.0, "weeks" => 604_800.0 }.each do |unit, factor|
+        expected = (count * factor).truncate
+        assert_eq("#{count}.#{unit}.wholeSeconds", expected)
+        assert_eq("Duration.#{unit}(#{count}).wholeSeconds", expected)
+        assert_eq("#{count}.0.#{unit}.wholeSeconds", expected)
+      end
     end
   end
 end

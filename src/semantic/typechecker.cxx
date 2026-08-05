@@ -2243,17 +2243,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 const bool concreteReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
                     !std::holds_alternative<UnknownType>(receiver->kind);
-                if (auto found = m_methodSignatures.find(operatorName);
-                    concreteReceiver && found != m_methodSignatures.end()) {
-                    for (const auto& signature : found->second) {
-                        if (signature.params.size() != size_t(2)) continue;
-                        if (!argMatchesParam(leftType, signature.params[0]) ||
-                            !argMatchesParam(rightType, signature.params[1]))
-                            continue;
-                        return checkCall(
-                            operatorName, {leftType, rightType}, expr.location,
-                            /*isMethodCall=*/true);
-                    }
+                // An operator defined in a make block is visible either as a
+                // local declaration or — for the prelude's own `Date + Duration`
+                // and friends — only through the imported interface. Consulting
+                // just the local table sent every prelude operator down the
+                // builtin numeric/string path below, which rejects any pair of
+                // differing types outright.
+                if (concreteReceiver) {
+                    auto applies = [&](const Signature& signature) {
+                        return signature.params.size() == size_t(2) &&
+                               argMatchesParam(leftType, signature.params[0]) &&
+                               argMatchesParam(rightType, signature.params[1]);
+                    };
+                    bool overloaded = false;
+                    if (auto local = m_methodSignatures.find(operatorName);
+                        local != m_methodSignatures.end())
+                        overloaded = std::any_of(local->second.begin(),
+                                                 local->second.end(), applies);
+                    if (!overloaded)
+                        for (const auto& signature :
+                             importedCandidateSignatures(operatorName))
+                            if (applies(signature)) {
+                                overloaded = true;
+                                break;
+                            }
+                    if (overloaded)
+                        return checkCall(operatorName, {leftType, rightType},
+                                         expr.location, /*isMethodCall=*/true);
                 }
             }
             return inferBinaryOp(node.op, leftType, rightType, expr.location);
@@ -3827,13 +3843,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     // method with the same spelling (`Version.patch` vs HTTP.patch).
     if (isMethodCall && argTypes.size() == 1) {
         auto receiver = resolve(argTypes.front());
-        if (auto* named = std::get_if<NamedType>(&receiver->kind))
+        if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
             if (auto record = m_recordFields.find(named->name);
                 record != m_recordFields.end())
                 if (auto field = record->second.find(name);
                     field != record->second.end()) {
                     return field->second;
                 }
+            // The same rule for a record the PRELUDE declares. Interfaces
+            // carry field names but not their types, so the read is answered
+            // gradually — the point is only that it is a field read at all,
+            // and not a call to some same-named method: `moment.time.nanosecond`
+            // is the Time record's field, never units.kex's `Integer.nanosecond`.
+            if (m_importedInterfaces) {
+                auto record =
+                    m_importedInterfaces->recordFieldNames.find(named->name);
+                if (record != m_importedInterfaces->recordFieldNames.end() &&
+                    record->second.count(name))
+                    return Type::unknown();
+            }
+        }
     }
     bool hasReceiverRefinementConflict = false;
     if (hasLocalMethods && !argTypes.empty()) {
@@ -4607,7 +4636,23 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 return false;
         return true;
     };
-    const Signature* firstPtr = arityMatches[0];
+    // When NO candidate agrees on the receiver — `Result<Date, _>.iso`, where
+    // every `iso` belongs to some other type — the loop below never fires and
+    // the headline names whatever was registered first. That is registration
+    // order, so adding an unrelated overload anywhere in the prelude silently
+    // rewrote the message. Fall back to the same ordering the listing uses.
+    auto signatureOrder = [](const Signature* a, const Signature* b) {
+        if (a->params.size() != b->params.size())
+            return a->params.size() < b->params.size();
+        for (size_t i = 0; i < a->params.size(); ++i) {
+            auto left = typeToString(a->params[i]);
+            auto right = typeToString(b->params[i]);
+            if (left != right) return left < right;
+        }
+        return typeToString(a->result) < typeToString(b->result);
+    };
+    const Signature* firstPtr =
+        *std::min_element(arityMatches.begin(), arityMatches.end(), signatureOrder);
     for (const auto* am : arityMatches) {
         if (isVacuousSig(am)) continue;
         if (isMethodCall && !am->params.empty() &&
