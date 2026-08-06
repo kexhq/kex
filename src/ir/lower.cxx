@@ -510,10 +510,12 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                // The parser splits every interpolating literal, so a
+                // parts-less one is plain text (including a `compiled`-reified
+                // string, which is marked non-interpolating precisely so its
+                // `${...}` is NOT re-expanded).
                 if (!n.parts.empty())
                     return lowerParsedInterpolatedString(n.parts, n.values);
-                if (n.interpolating && n.value.find("${") != std::string::npos)
-                    return lowerInterpolatedString(n.value);
                 return lit(LitKind::String, n.value);
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
                 return litBool(n.value);
@@ -661,9 +663,26 @@ struct Lowering {
                                 return wrapLets(binds, std::move(userCall));
                         }
                     }
+                    // A Char is `{'Char', N}` — a TUPLE, so the test above
+                    // sent every `Char` operand to the user operator, whose
+                    // dispatcher only knows the types that actually define one
+                    // (Measure, Duration) and answers anything else with
+                    // "Undefined method: + for Char". `x.upperCase + rest`
+                    // (spec/my_capitalize.kex) died there while the walker
+                    // concatenated, and `kex_intrinsic_number:add/2` had
+                    // handled every Char/String pairing all along — nothing
+                    // ever reached it. Chars take the builtin, like the
+                    // primitives they stand in for.
+                    auto charTag = callE("kex_intrinsic_number", "eq", 2,
+                        two(callE("erlang", "element", 2,
+                                  two(lit(LitKind::Int, "1"), lRef.get())),
+                            lit(LitKind::Atom, "Char")));
                     auto dispatch = matchBool(
                         callE("erlang", "is_tuple", 1, one(lRef.get())),
-                        std::move(userCall), std::move(builtin));
+                        matchBool(std::move(charTag),
+                                  builtinOp(lRef.get(), rRef.get()),
+                                  std::move(userCall)),
+                        std::move(builtin));
                     return wrapLets(binds, std::move(dispatch));
                 }
                 return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
@@ -1616,6 +1635,38 @@ struct Lowering {
                                 args.push_back(
                                     atomize(*defaults->second[i], binds));
                 }
+                // A local make-method beats an imported TRAIT DEFAULT of the
+                // same name. `make Comparison do let to(@Less, Integer)` never
+                // ran on BEAM: the call bound to `kex_prelude:to/Showable`
+                // (every Comparison value is Showable), which answers only for
+                // `String` — so `Less.to(Integer)` returned the generic
+                // conversion's `None` instead of `Just(-1)`, silently. This is
+                // the rule already stated above for local TYPES, one level
+                // down: semantic analysis picks the imported target because a
+                // trait default matches any receiver, which makes it the least
+                // specific candidate, not the most.
+                //
+                // Only for a trait DEFAULT — a concrete imported target was
+                // chosen on real type evidence and must stand. The local
+                // definition carries its own fallback to the prelude for
+                // receivers it does not match (see the `to` fallback clause
+                // and `makeDispatcher`'s generic arm), so nothing is lost for
+                // the values the default would have handled.
+                const auto traitDefaultOwner = [&]() -> std::string {
+                    auto slash = resolved->second.backendFunction.find('/');
+                    if (slash == std::string::npos) return {};
+                    auto owner =
+                        resolved->second.backendFunction.substr(slash + 1);
+                    return traitMethods.count(owner) ? owner : std::string{};
+                }();
+                const bool localBeatsTraitDefault =
+                    !traitDefaultOwner.empty() && localMethods.count(n.method) &&
+                    knownFns.count(n.method);
+                if (localBeatsTraitDefault)
+                    return wrapLets(
+                        binds,
+                        callE("", n.method, static_cast<int>(args.size()),
+                              std::move(args)));
                 for (const auto& [argument, trait] :
                      resolved->second.traitDictionaries) {
                     const ast::Expr* source = nullptr;
@@ -2284,46 +2335,6 @@ struct Lowering {
         auto ex = std::make_unique<Expr>();
         ex->node = Construct{n.typeName, std::move(args)};
         return wrapLets(binds, std::move(ex));
-    }
-
-    // "text ${expr} more" → a ++ chain of literal segments and to_string'd
-    // sub-expressions. The `${...}` sub-expressions are raw text in the AST,
-    // so they're re-lexed/parsed here and lowered like any other expression
-    // This keeps interpolation evaluation order explicit in IR.
-    auto lowerInterpolatedString(const std::string& raw) -> ExprPtr {
-        std::vector<ExprPtr> parts;
-        size_t pos = 0;
-        while (pos < raw.size()) {
-            auto dollar = raw.find("${", pos);
-            if (dollar == std::string::npos) {
-                if (pos < raw.size()) parts.push_back(lit(LitKind::String, raw.substr(pos)));
-                break;
-            }
-            if (dollar > pos) parts.push_back(lit(LitKind::String, raw.substr(pos, dollar - pos)));
-            size_t close = std::string::npos;
-            int depth = 1;
-            for (size_t k = dollar + 2; k < raw.size(); k++) {
-                if (raw[k] == '{') depth++;
-                else if (raw[k] == '}' && --depth == 0) { close = k; break; }
-            }
-            if (close == std::string::npos) break; // malformed → stop
-            std::string inner = raw.substr(dollar + 2, close - dollar - 2);
-            kex::Lexer lx(inner);
-            kex::Parser ps(lx.tokenizeAll());
-            auto innerAst = ps.parseExpr();
-            if (innerAst)
-                parts.push_back(callE("kex_io", "to_string", 1, one(lower(innerAst))));
-            pos = close + 1;
-        }
-        if (parts.empty()) return lit(LitKind::String, "");
-        // A single literal segment IS the string; otherwise build an iolist
-        // (binary literals + to_string charlists both qualify) and flatten it
-        // to the UTF-8 binary that a Kex String is on BEAM.
-        if (parts.size() == 1 && std::holds_alternative<Lit>(parts[0]->node))
-            return std::move(parts[0]);
-        auto lst = std::make_unique<Expr>();
-        lst->node = MakeList{std::move(parts), std::nullopt};
-        return callE("unicode", "characters_to_binary", 1, one(std::move(lst)));
     }
 
     auto lowerParsedInterpolatedString(
@@ -5430,6 +5441,62 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         mod.name != "kex_prelude") {
                         genericFallbackModule = "kex_prelude";
                         genericFallback = name;
+                    }
+                }
+                // A trait's DEFAULT body is reachable without going through
+                // the dispatcher just built: the interface advertises
+                // `name/Trait` as the backend entry point (collect_metadata's
+                // `receiverIsTrait` branch), so a call site binds to it
+                // directly. That is fine for a total default, but a
+                // type-directed one — `make Showable do let to(String)`, which
+                // answers for `String` and nothing else — then has no way to
+                // reach the generic implementation the dispatcher would have
+                // fallen back to. `"50".to(Integer)` died with
+                // `function_clause` where the walker fell through to the
+                // universal `to`.
+                //
+                // Give such a default the same escape the dispatcher has.
+                // Only when it lacks a total clause of its own: a default that
+                // already answers for everything needs nothing, and the extra
+                // clause would be unreachable. Trailing trait-dictionary
+                // params are not part of the call's arity, so forward just the
+                // leading `arity` of them.
+                if (!genericFallback.empty()) {
+                    for (auto& function : mod.functions) {
+                        if (function.arity < arity) continue;
+                        auto slash = function.name.find('/');
+                        if (slash == std::string::npos ||
+                            function.name.compare(0, slash, name) != 0)
+                            continue;
+                        if (!L.traitMethods.count(function.name.substr(slash + 1)))
+                            continue;
+                        const auto total = [](const FunClause& clause) {
+                            return !clause.guard &&
+                                std::all_of(clause.params.begin(),
+                                            clause.params.end(),
+                                            [](const PatternPtr& p) {
+                                                return p->kind == PatKind::Var ||
+                                                       p->kind == PatKind::Wild;
+                                            });
+                        };
+                        if (std::any_of(function.clauses.begin(),
+                                        function.clauses.end(), total))
+                            continue;
+                        FunClause fallback;
+                        std::vector<ExprPtr> args;
+                        for (int i = 0; i < function.arity; ++i) {
+                            auto param = std::make_unique<Pattern>();
+                            param->kind = PatKind::Var;
+                            param->name = "_traitFallback" + std::to_string(i);
+                            fallback.params.push_back(std::move(param));
+                            if (i < arity)
+                                args.push_back(var(
+                                    "_traitFallback" + std::to_string(i)));
+                        }
+                        fallback.body = L.callE(genericFallbackModule,
+                                                genericFallback, arity,
+                                                std::move(args));
+                        function.clauses.push_back(std::move(fallback));
                     }
                 }
                 mod.functions.push_back(

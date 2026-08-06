@@ -1,0 +1,50 @@
+# `.to(Type)` must reach the universal conversion, not just the trait default.
+#
+# `make Showable do let to(String)` is a type-directed trait DEFAULT: it answers
+# for `String` and nothing else. The interface advertises it as the backend
+# entry point (`to/Showable`), so a call site binds to it DIRECTLY and never
+# consults the generated `to/2` dispatcher — the only thing that knows about
+# the generic `to$generic`. So on BEAM every non-String conversion reached the
+# default's `String`-only clause and raised `function_clause`, while the walker
+# fell through to the universal `to`. It took `spec/fact.kex` and four others
+# down with it, all through `args.first.or("50").to(Integer)`.
+#
+# The shape matters: a conversion used INLINE (interpolated straight into a
+# string) lowered to the dispatcher and worked, so this only reproduced through
+# a binding. Both spellings are here — the inline ones would have passed on
+# their own.
+#
+# NOT pinned here, because the backends still disagree: `badge.to(String)` on a
+# record with its own `showValue` gives `Just(badge:gold)` on the walker and
+# `Just(Badge { kind: gold })` on BEAM. That is the mirror image of the bug
+# above — the call site binds to the DISPATCHER, whose generic arm renders the
+# record instead of reaching the trait default that would have called the
+# type's `showValue`. Pre-existing, and only observable once the crash above
+# was out of the way. `badge.showValue` and `IO.printLine(badge)` agree on both
+# backends, so it is specific to the conversion path.
+
+record Badge do
+  kind : String
+end
+
+make Badge, implement: Showable do
+  let showValue -> String = "badge:${this.kind}"
+end
+
+main do
+  # Bound conversions — each of these raised function_clause on BEAM.
+  let n = "50".to(Integer)
+  let f = "50".to(Float)
+  let s = 42.to(String)
+  let bad = "nope".to(Integer)
+  IO.printLine("${n} ${f} ${s} ${bad}")
+
+  # Inline, for contrast: these took the dispatcher and always worked.
+  IO.printLine("${"7".to(Integer)} ${7.to(Float)}")
+
+  # A conversion with no answer is None, not a crash — this is the clause that
+  # used to raise, reached through a receiver that implements Showable.
+  let badge = Badge { kind: "gold" }
+  IO.printLine("${badge.to(Integer)}")
+  IO.printLine("${badge.showValue}")
+end

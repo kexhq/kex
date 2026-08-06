@@ -1191,7 +1191,9 @@ auto compilePreludeCore(const std::string &dir,
     if (!analyzer.analyze(merged)) {
       for (const auto &diag : analyzer.diagnostics())
         if (diag.level == kex::semantic::Diagnostic::Level::Error)
-          std::cerr << "error: prelude interface: " << diag.message << "\n";
+          std::cerr << "error: prelude interface: " << diag.location.file
+                    << ":" << diag.location.line << ":"
+                    << diag.location.column << ": " << diag.message << "\n";
       return false;
     }
 

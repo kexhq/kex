@@ -1351,56 +1351,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return Value::unit();
         }
         else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
-            if (!node.parts.empty()) {
-                std::string result;
-                for (size_t i = 0; i < node.parts.size(); i++) {
-                    result += node.parts[i];
-                    if (i < node.values.size() && node.values[i])
-                        result += eval(*node.values[i])->toString();
-                }
-                return Value::string(result);
-            }
-            if (!node.interpolating) return Value::string(node.value);
-            // Handle interpolation: find ${...} and evaluate in current scope
+            if (node.parts.empty()) return Value::string(node.value);
+            // The parser already split the body and wrapped each interpolated
+            // expression in its show-protocol call, so every value here
+            // evaluates to a String the prelude produced. Concatenate.
             std::string result;
-            const auto& s = node.value;
-            size_t i = 0;
-            while (i < s.size()) {
-                if (i + 1 < s.size() && s[i] == '$' && s[i + 1] == '{') {
-                    i += 2;
-                    std::string inner;
-                    int depth = 1;
-                    while (i < s.size() && depth > 0) {
-                        if (s[i] == '{') depth++;
-                        else if (s[i] == '}') { depth--; if (depth == 0) break; }
-                        inner += s[i];
-                        i++;
-                    }
-                    if (i < s.size()) i++; // skip }
-                    // Parse and evaluate the interpolated expression.
-                    // Only catch parse failures here — let runtime errors
-                    // propagate so bugs in ${expr} aren't silently hidden.
-                    ast::ExprPtr interpExpr;
-                    try {
-                        kex::Lexer interpLexer(inner);
-                        auto interpTokens = interpLexer.tokenizeAll();
-                        kex::Parser interpParser(std::move(interpTokens));
-                        interpExpr = interpParser.parseExpr();
-                    } catch (...) {
-                        // Parse failed (e.g. a keyword inside ${}) — try
-                        // treating the whole inner string as a variable name.
-                        auto val = m_env->get(inner);
-                        result += val ? val->toString() : inner;
-                        continue;
-                    }
-                    if (interpExpr) {
-                        auto val = eval(*interpExpr);
-                        result += val->toString();
-                    }
-                } else {
-                    result += s[i];
-                    i++;
-                }
+            for (size_t i = 0; i < node.parts.size(); i++) {
+                result += node.parts[i];
+                if (i < node.values.size() && node.values[i])
+                    result += eval(*node.values[i])->toString();
             }
             return Value::string(result);
         }
@@ -3151,7 +3110,6 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                                   const std::vector<ValuePtr>* args) const
     -> std::string {
     auto receiverType = dispatchTypeName(receiver);
-    if (receiverType.empty()) return method;
     auto typed = receiverType + "::" + method;
     const bool protocolMethod = std::any_of(
         m_traitMethods.begin(), m_traitMethods.end(),
@@ -3179,6 +3137,14 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             protocolFallback = candidate;
         }
     }
+
+    // A value kind with no dispatch name of its own (a module, a function) has
+    // nothing to key the name-based lookups below on — `"" + "::" + method`
+    // matches nothing and the import-scope search would resolve the bare name
+    // to some unrelated module's function. It can still be carried by a
+    // trait's generic make block, so offer that and stop.
+    if (receiverType.empty())
+        return protocolFallback.empty() ? method : protocolFallback;
 
     if (args) {
         auto matches = [&](const std::string& candidate) {
@@ -3227,15 +3193,19 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
 
     if (m_env->get(typed)) return typed;
 
-    if (!protocolFallback.empty()) return protocolFallback;
-
     // A variant value is tagged with its constructor while methods are
-    // registered under the parent ADT's name.
+    // registered under the parent ADT's name. This has to be tried before the
+    // trait's generic make block: `make Optional<Showable>, implement:
+    // Showable` is a concrete implementation and must win over the structural
+    // `make Showable` default, exactly as `Date::showValue` does.
     auto parentIt = m_variantParent.find(receiverType);
     if (parentIt != m_variantParent.end()) {
         auto typedByParent = parentIt->second + "::" + method;
         if (m_env->get(typedByParent)) return typedByParent;
     }
+
+    if (!protocolFallback.empty()) return protocolFallback;
+
     return method;
 }
 

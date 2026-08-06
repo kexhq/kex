@@ -51,7 +51,7 @@ module SQL do
           fields: @fields,
           table: @table,
           conditions: @conditions,
-          order: "${col} ${dir}"
+          order: Ok("${col} ${dir}")
         }
       end
 

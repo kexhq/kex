@@ -3,9 +3,9 @@ hi
 false
 true
 true
-Just(ab)
-Just(abcd)
-Just([abcd])
+ab
+abcd
+[abcd]
 [abcd]
 true
-None
+

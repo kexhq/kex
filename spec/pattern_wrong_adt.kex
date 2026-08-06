@@ -1,0 +1,53 @@
+# kex: check-only
+# A constructor pattern that names an arm of a DIFFERENT ADT than the value
+# being matched can never match. It used to be accepted silently: the `if let`
+# just never fired, and `spec/prelude/number.spec.kex` asserted `Just` against
+# `Float.parse`'s `Result` for exactly that reason.
+
+let fromOptional(x: Integer?) -> String do
+  if let Ok(v) = x
+    "ok"
+  else
+    "no"
+  end
+end
+
+let fromResult(x: Result<Integer, String>) -> String do
+  if let Just(v) = x
+    "just"
+  else
+    "no"
+  end
+end
+
+let matchedWrong(x: Integer?) -> String do
+  match x do
+    Ok(v) -> "ok"
+    _     -> "other"
+  end
+end
+
+let noneAgainstResult(x: Result<Integer, String>) -> String do
+  if let None = x
+    "none"
+  else
+    "no"
+  end
+end
+
+# The correct spellings stay accepted.
+let fine(x: Integer?, y: Result<Integer, String>) -> String do
+  if let Just(v) = x
+    if let Ok(w) = y
+      "both"
+    else
+      "just"
+    end
+  else
+    "no"
+  end
+end
+
+main do
+  IO.printLine(fine(Just(1), Ok(2)))
+end

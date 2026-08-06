@@ -169,14 +169,14 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
             signatures && !signatures->empty()) {
             const auto& signature = signatures->front();
             exp.beamArity = static_cast<int>(signature.params.size());
-            for (const auto& param : signature.params) {
+            // Only the KexI TYPE follows inference here; the arity must not.
+            // The emitter (`traitNameOf` in src/ir/lower.cxx) gives a
+            // dictionary parameter to explicitly trait-ANNOTATED parameters
+            // and to nothing else, so counting inferred constraints too made
+            // the interface advertise an arity no emitted function has. The
+            // annotated ones are counted in the loop below.
+            for (const auto& param : signature.params)
                 exp.paramTypes.push_back(convertSemanticType(param));
-                if (const auto* constrained = std::get_if<
-                        kex::semantic::ConstrainedType>(&param->kind);
-                    constrained && analysis->traitNeedsDictionary(
-                        constrained->traitName))
-                        ++exp.beamArity;
-            }
             exp.returnType = convertSemanticType(signature.result);
             exp.isFoul = signature.isFoul || fd.isFoul;
         }
@@ -194,13 +194,10 @@ void collectFromFunctionDef(const kex::ast::FunctionDef& fd,
             if (!name || name->parts.size() != 1 ||
                 !analysis->traitNeedsDictionary(name->parts.front()))
                 continue;
-            const bool alreadyConstrained = i < exp.paramTypes.size() &&
-                exp.paramTypes[i] &&
-                exp.paramTypes[i]->kind == KexiType::Constrained;
             if (i < exp.paramTypes.size())
                 exp.paramTypes[i] =
                     kexiConstrained(name->parts.front(), name->parts.front());
-            if (!alreadyConstrained) ++exp.beamArity;
+            ++exp.beamArity;
         }
     }
     if (!exp.returnType && !fd.clauses.empty()) {
@@ -263,15 +260,11 @@ auto receiverFunctionFromDef(
         if (const auto* signatures = analysis->functionSignatures(&fd);
             signatures && !signatures->empty()) {
             const auto& signature = signatures->front();
-            for (size_t i = skipParams; i < signature.params.size(); i++) {
-                method.paramTypes.push_back(convertSemanticType(signature.params[i]));
-                if (const auto* constrained = std::get_if<
-                        kex::semantic::ConstrainedType>(
-                            &signature.params[i]->kind);
-                    constrained && analysis->traitNeedsDictionary(
-                        constrained->traitName))
-                        ++method.beamArity;
-            }
+            // Same rule as collectFromFunctionDef: the type follows
+            // inference, the arity follows the annotations the emitter reads.
+            for (size_t i = skipParams; i < signature.params.size(); i++)
+                method.paramTypes.push_back(
+                    convertSemanticType(signature.params[i]));
             method.returnType = convertSemanticType(signature.result);
             method.isFoul = signature.isFoul || fd.isFoul;
         }
@@ -286,14 +279,10 @@ auto receiverFunctionFromDef(
                 !analysis->traitNeedsDictionary(name->parts.front()))
                 continue;
             const auto methodIndex = i - skipParams;
-            const bool alreadyConstrained =
-                methodIndex < method.paramTypes.size() &&
-                method.paramTypes[methodIndex] &&
-                method.paramTypes[methodIndex]->kind == KexiType::Constrained;
             if (methodIndex < method.paramTypes.size())
                 method.paramTypes[methodIndex] =
                     kexiConstrained(name->parts.front(), name->parts.front());
-            if (!alreadyConstrained) ++method.beamArity;
+            ++method.beamArity;
         }
     }
     if (!method.returnType && !fd.clauses.empty()) {

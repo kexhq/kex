@@ -20,6 +20,11 @@ make Showable do
   let to(String) = Just(this.showValue)
 end
 
+make Optional<Showable>, implement: Showable do
+  let showValue(@Just(x)) = x.showValue
+  let showValue(@None) = ""
+end
+
 foul module Kex do
   type Backend = Interpreter | Beam
 
