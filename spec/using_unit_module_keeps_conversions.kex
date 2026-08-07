@@ -1,0 +1,27 @@
+# `using` a unit module must not capture unrelated conversions.
+#
+# Units.SI defines its formatting as TOP-LEVEL functions whose first parameter
+# is annotated `Measure` (`let to(measure: Measure, String, in: SIPrefix)`),
+# which is what makes `using` the boundary for reaching them. But a bare-name
+# call cannot consult a parameter annotation: the import simply rebound `to`,
+# so EVERY conversion in the program went to Units.SI and answered None —
+# `42.to(String)`, `42.to(Integer)`, `"7".to(Integer)` — and `undef` on BEAM,
+# where the same capture happened through module-call rewriting and through a
+# trait dictionary aimed at `Kex.Units.SI:showValue/1`, a function that module
+# does not define.
+#
+# Both halves are needed, and each hides the other: with only the walker fix
+# this program still dies on BEAM, and with only the lowering fix the walker
+# still prints None three times.
+using Units.SI
+
+main do
+  # The conversions the import used to swallow.
+  IO.printLine("${42.to(String)} ${42.to(Integer)} ${"7".to(Integer)}")
+
+  # ...while the unit module's own formatting still works, positionally and
+  # by name. This is what `using Units.SI` is FOR, so a fix that restores the
+  # conversions by breaking these is not a fix.
+  IO.printLine("${3.kilo.watt.to(String)}")
+  IO.printLine("${3.kilo.watt.to(String, in: Mega)}")
+end

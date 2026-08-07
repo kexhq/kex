@@ -146,6 +146,23 @@ let or(value, _) = value
 
 # Universal `.to(Type)` conversion. The type argument is a runtime Type
 # value (e.g. String, Integer, Float, List). Returns an Optional result.
+#
+# Optional, NOT Result, and deliberately: `to` is the everyday conversion, and
+# what it can report on failure is almost always derivable from the types
+# alone — `x.to(List)` on a non-list fails because a non-list is not a list,
+# which an error payload saying "cannot convert Int to List" does not improve.
+# When the reason IS information — where a parse gave up and on what —
+# `Integer.parse`/`Float.parse` answer with `Result<_, ParseError>`. So:
+# `to` for every day, `parse` when the failure needs handling.
+#
+# A String target goes through the Showable protocol, exactly as
+# `make Showable do let to(String) = Just(this.showValue)` says it does. The
+# intrinsic below renders the raw runtime term instead, which on BEAM never
+# reached the `Optional` implementation of showValue: `Just(42).to(String)`
+# answered `Just("Just(42)")` there and `Just("42")` on the tree walker, which
+# dispatches to the Showable clause. Intrinsics cannot call back into the
+# prelude (dependency_layering_test), so the protocol has to be honoured here.
+let to(value, String) = Just(value.showValue)
 let to(value, t) = Kex.Intrinsic.Fun.convertTo(value, t)
 
 # Base-aware conversion between Integer and String, in base 2..36:

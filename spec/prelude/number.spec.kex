@@ -102,21 +102,79 @@ end
 
 describe("Integer.parse and Float.parse") do
   it("Integer.parse succeeds on valid input") do
+    assert(Integer.parse("42") == Ok(42))
     assert(Integer.parse("42").ok?)
     assert(Integer.parse("42").or(0) == 42)
   end
 
   it("Integer.parse fails on non-numeric input") do
     assert(Integer.parse("abc").error?)
+    # The payload is a ParseError record, so match it to reach the message.
+    match Integer.parse("abc") do
+      Error(e) -> assert(e.message == "invalid integer")
+      Ok(v) -> assert(false, "expected Error, got ${v}")
+    end
+    # `none?` is Optional's; a Result crosses over with toOptional.
+    assert(Integer.parse("abc").toOptional.none?)
+  end
+
+  it("Integer.parse works in if let") do
+    if let Ok(i) = Integer.parse("42")
+      assert(i == 42)
+    else
+      assert(false, "expected Ok")
+    end
+
+    if let Error(_) = Integer.parse("not a number")
+      assert(true)
+    else
+      assert(false, "expected Error")
+    end
   end
 
   it("Float.parse succeeds on valid input") do
+    assert(Float.parse("1134.11") == Ok(1134.11))
     assert(Float.parse("3.14").ok?)
     assert(Float.parse("3.14").or(0.0) == 3.14)
   end
 
+  it("Float.parse works in if let") do
+    if let Ok(f) = Float.parse("2.718")
+      assert(f == 2.718)
+    else
+      assert(false, "expected Ok")
+    end
+
+    if let Error(_) = Float.parse("not a number")
+      assert(true)
+    else
+      assert(false, "expected Error")
+    end
+  end
+
   it("Float.parse fails on non-numeric input") do
     assert(Float.parse("xyz").error?)
+  end
+
+  it("to(String) shows what a parse result carries, not the wrapper") do
+    # `to(String)` goes through Showable, and Result implements it the way
+    # Optional does: showing a result shows its payload. What `parse` RETURNS
+    # is unchanged — the wrapper is still there to match on, as below.
+    assert(Integer.parse("42").to(String) == Just("42"))
+    assert(Float.parse("3.5").to(String) == Just("3.5"))
+
+    # Still a Result, so the failure is still matchable and still carries its
+    # reason. This is why `parse` exists next to `to`.
+    match Float.parse("xyz") do
+      Error(e) -> assert(e.message == "invalid float")
+      Ok(v) -> assert(false, "expected Error, got ${v}")
+    end
+  end
+
+  it("to(String) converts the parsed number itself") do
+    assert(Integer.parse("42").or(0).to(String) == Just("42"))
+    assert(Float.parse("3.5").or(0.0).to(String) == Just("3.5"))
+    assert(255.to(String, radix: 16) == Just("ff"))
   end
 
   it("Integer.parsePrefix parses leading integer") do

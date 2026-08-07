@@ -396,6 +396,25 @@ auto Evaluator::defineImported(const std::string& bindingName, const std::string
                                + existing->module + "` and `" + sourceModule + "`", loc);
         }
     }
+    // A receiver-typed import does not SHADOW an existing binding of the same
+    // name — it joins the type-directed dispatch instead. `using Units.SI`
+    // otherwise rebound the plain `to` to a function whose first parameter is
+    // annotated `Measure`, and since a bare-name call cannot consult that
+    // annotation, every conversion in the program went there and answered
+    // None. The import stays reachable: resolveMethodName finds it through
+    // m_importScopes when the receiver actually matches.
+    if (m_env->get(bindingName)) {
+        auto defs = m_functionDefs.find(sourceModule + "::" + logicalName);
+        if (defs != m_functionDefs.end())
+            for (const auto* def : defs->second)
+                if (def && !def->clauses.empty() &&
+                    !def->clauses.front().params.empty()) {
+                    const auto& first = def->clauses.front().params.front();
+                    if (first.type && *first.type &&
+                        std::holds_alternative<ast::TypeName>((*first.type)->kind))
+                        return;
+                }
+    }
     m_env->define(bindingName, std::move(value));
 }
 
@@ -3147,9 +3166,38 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         return protocolFallback.empty() ? method : protocolFallback;
 
     if (args) {
+        // A definition with inline parameter annotations and no separate
+        // `name : T -> U` line registers no runtime signature, so the
+        // signature-based test below cannot see it. Units.SI's
+        // `let to(measure: Measure, String, ...)` is exactly that shape, and
+        // without this it claimed EVERY receiver: `using Units.SI` made
+        // `42.to(String)`, `42.to(Integer)` and `"7".to(Integer)` all answer
+        // None. Fall back to the definition's own parameter annotations.
+        auto matchesDefinition = [&](const std::string& candidate) {
+            auto defs = m_functionDefs.find(candidate);
+            if (defs == m_functionDefs.end()) return false;
+            for (const auto* def : defs->second) {
+                if (!def) continue;
+                for (const auto& clause : def->clauses) {
+                    if (clause.params.size() != args->size()) continue;
+                    bool allMatch = true;
+                    for (size_t i = 0; i < clause.params.size(); ++i) {
+                        const auto& param = clause.params[i];
+                        if (!param.type || !*param.type) continue;
+                        if (!runtimeTypeMatches((*args)[i], **param.type)) {
+                            allMatch = false;
+                            break;
+                        }
+                    }
+                    if (allMatch) return true;
+                }
+            }
+            return false;
+        };
         auto matches = [&](const std::string& candidate) {
             auto found = m_runtimeSignatures.find(candidate);
-            if (found == m_runtimeSignatures.end()) return false;
+            if (found == m_runtimeSignatures.end())
+                return matchesDefinition(candidate);
             for (const auto& signature : found->second) {
                 const auto expectedSize =
                     signature.params.size() +
