@@ -126,10 +126,16 @@ private:
 
     // Helpers
     auto parseBlock() -> std::optional<ast::ExprPtr>;
+    // Splits an interpolating literal body into its literal segments and the
+    // expressions between them. `dollarBraceEscape` selects the escape
+    // convention: backtick bodies spell a literal `${` as `$${`, while a
+    // double-quoted string uses `\$` for that and needs `$${x}` to stay a
+    // literal `$` in front of an interpolation.
     auto parseInterpolatedBody(
         const Token& token,
         std::vector<std::string>& parts,
-        std::vector<ast::ExprPtr>& values) -> void;
+        std::vector<ast::ExprPtr>& values,
+        bool dollarBraceEscape) -> void;
     auto parseMatchClause() -> ast::MatchClause;
     auto parseMatchClauseBody() -> ast::ExprPtr;
     auto isAtExprStart() const -> bool;

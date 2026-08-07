@@ -6,9 +6,9 @@ abc
 [1, 3, 5]
 [apple, banana]
 [fig, kiwi]
-Just(1)
-None
-Just(1)
+1
+
+1
 true
 false
 true

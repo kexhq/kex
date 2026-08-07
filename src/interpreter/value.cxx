@@ -734,6 +734,9 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
             throw PlaceholderMisuse(d.name, "dispatching a method on it");
         else if constexpr (std::is_same_v<T, RecordValue>) return d.typeName;
         else if constexpr (std::is_same_v<T, VariantValue>) return d.tag;
+        else if constexpr (std::is_same_v<T, AtomValue>) return "Atom";
+        else if constexpr (std::is_same_v<T, TupleValue>) return "Tuple";
+        else if constexpr (std::is_same_v<T, UnitValue>) return "Void";
         else if constexpr (std::is_same_v<T, ListValue>) return "List";
         else if constexpr (std::is_same_v<T, MapValue>) return "Map";
         else if constexpr (std::is_same_v<T, FileHandleValue>) return "FileHandle";

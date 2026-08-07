@@ -1333,7 +1333,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                 tagged.bodyStartOffset = body.startOffset;
                 tagged.bodyEndOffset = body.endOffset;
                 if (tagged.interpolating)
-                    parseInterpolatedBody(body, tagged.parts, tagged.values);
+                    parseInterpolatedBody(body, tagged.parts, tagged.values, true);
                 else
                     tagged.parts.push_back(body.value);
                 tagExpr->kind = std::move(tagged);
@@ -1443,10 +1443,39 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     return expr;
 }
 
+// In a STRING literal, `${expr}` is sugar for a call to the show protocol, so
+// what an interpolated value looks like is decided entirely by the prelude's
+// `Showable` implementations — nothing downstream of here renders a value
+// itself. This is the one place the protocol is named, the same way an
+// operator names its trait.
+//
+// Tagged literals share the same body syntax but NOT this desugaring: their
+// companion receives the values themselves and decides what to do with them
+// (`regex$` escapes per character, a `sql$` tag would bind parameters), so
+// rendering them to text here would destroy what the tag ABI exists for.
+namespace {
+constexpr const char* kShowMethod = "showValue";
+
+auto wrapInShowCalls(std::vector<ast::ExprPtr>& values,
+                     const SourceLocation& at) -> void {
+    for (auto& value : values) {
+        if (!value) continue;
+        auto call = std::make_unique<ast::Expr>();
+        call->location = at;
+        ast::MethodCall method;
+        method.receiver = std::move(value);
+        method.method = kShowMethod;
+        call->kind = std::move(method);
+        value = std::move(call);
+    }
+}
+} // namespace
+
 auto Parser::parseInterpolatedBody(
     const Token& token,
     std::vector<std::string>& parts,
-    std::vector<ast::ExprPtr>& values) -> void {
+    std::vector<ast::ExprPtr>& values,
+    bool dollarBraceEscape) -> void {
     const auto& body = token.value;
     std::string part;
     size_t i = 0;
@@ -1457,9 +1486,11 @@ auto Parser::parseInterpolatedBody(
     };
 
     while (i < body.size()) {
-        // `$${` is the one escape in an interpolating backtick body. It
-        // produces literal `${` without giving backslash any special role.
-        if (i + 2 < body.size() && body[i] == '$' &&
+        // `$${` is the one escape in an interpolating backtick body, where
+        // backslash has no special role. A double-quoted string escapes with
+        // `\$` instead, so there `$${x}` is a literal `$` followed by an
+        // interpolation — SQL placeholders (`$${idx}` → `$1`) depend on it.
+        if (dollarBraceEscape && i + 2 < body.size() && body[i] == '$' &&
             body[i + 1] == '$' && body[i + 2] == '{') {
             part += "${";
             i += 3;
@@ -1528,14 +1559,14 @@ auto Parser::parseInterpolatedBody(
         }
 
         if (close == std::string::npos)
-            interpolationError("Unterminated interpolation in backtick literal");
+            interpolationError("Unterminated interpolation in string literal");
 
         auto inner = body.substr(i + 2, close - i - 2);
         Lexer lexer(inner, m_filename);
         auto tokens = lexer.tokenizeAll();
         if (!tokens.empty() && tokens.front().type == TokenType::Error)
             interpolationError(
-                "Invalid backtick interpolation: " + tokens.front().value);
+                "Invalid interpolation: " + tokens.front().value);
 
         Parser parser(std::move(tokens), m_filename);
         ast::ExprPtr value;
@@ -1545,11 +1576,11 @@ auto Parser::parseInterpolatedBody(
             parser.skipNewlines();
         } catch (const ParseError& e) {
             interpolationError(
-                "Invalid backtick interpolation: " + e.message);
+                "Invalid interpolation: " + e.message);
         }
         if (!value || !parser.atEnd())
             interpolationError(
-                "Backtick interpolation must contain exactly one expression");
+                "Interpolation must contain exactly one expression");
         values.push_back(std::move(value));
         i = close + 1;
     }
@@ -1571,7 +1602,15 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         return expr;
     }
     if (check(TokenType::String)) {
-        expr->kind = ast::StringLiteral{advance().value};
+        // Split here rather than leaving `${...}` as raw text for someone
+        // downstream to re-lex: the interpolated expressions become ordinary
+        // AST nodes, so every later pass sees them.
+        auto body = advance();
+        ast::StringLiteral literal;
+        literal.interpolating = true;
+        parseInterpolatedBody(body, literal.parts, literal.values, false);
+        wrapInShowCalls(literal.values, body.location);
+        expr->kind = std::move(literal);
         return expr;
     }
     if (check(TokenType::RawString)) {
@@ -1582,7 +1621,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
         auto body = advance();
         ast::StringLiteral literal;
         literal.interpolating = true;
-        parseInterpolatedBody(body, literal.parts, literal.values);
+        parseInterpolatedBody(body, literal.parts, literal.values, true);
+        wrapInShowCalls(literal.values, body.location);
         expr->kind = std::move(literal);
         return expr;
     }
@@ -1866,7 +1906,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
             tagged.bodyStartOffset = body.startOffset;
             tagged.bodyEndOffset = body.endOffset;
             if (tagged.interpolating)
-                parseInterpolatedBody(body, tagged.parts, tagged.values);
+                parseInterpolatedBody(body, tagged.parts, tagged.values, true);
             else
                 tagged.parts.push_back(body.value);
             expr->kind = std::move(tagged);

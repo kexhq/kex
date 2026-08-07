@@ -55,6 +55,19 @@ describe("Optional — flatMap") do
   end
 end
 
+describe("Optional — Implements Showable") do
+  it("showValue returns the value for Just") do
+    assert(Just(42).showValue == "42")
+    assert(Just("hi").showValue == "hi")
+    assert(Just('c').showValue == "c")
+    assert(Just([1,2,3]).showValue == "[1, 2, 3]")
+  end
+
+  it("showValue returns empty string for None") do
+    assert(None.showValue == "")
+  end
+end
+
 describe("Result — ok? and error?") do
   it("ok? returns true for Ok") do
     assert(Ok(42).ok?)

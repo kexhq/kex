@@ -33,6 +33,7 @@ private:
 
     auto resolveExpr(const ast::Expr& expr) -> void;
     auto resolveBody(const std::vector<ast::ExprPtr>& body) -> void;
+    auto resolveRescue(const ast::RescueBlock& rescue) -> void;
     auto resolvePattern(const ast::Pattern& pat) -> void;
     auto bindParams(const std::vector<ast::Param>& params) -> void;
 

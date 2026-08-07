@@ -11,7 +11,7 @@ trailing
 then-else
 [1, 2]
 []
-Just(1)
+1
 [1, 2]
 2
 true false

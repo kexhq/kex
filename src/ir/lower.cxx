@@ -510,10 +510,12 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::FloatLiteral>) {
                 return lit(LitKind::Float, n.value);
             } else if constexpr (std::is_same_v<T, ast::StringLiteral>) {
+                // The parser splits every interpolating literal, so a
+                // parts-less one is plain text (including a `compiled`-reified
+                // string, which is marked non-interpolating precisely so its
+                // `${...}` is NOT re-expanded).
                 if (!n.parts.empty())
                     return lowerParsedInterpolatedString(n.parts, n.values);
-                if (n.interpolating && n.value.find("${") != std::string::npos)
-                    return lowerInterpolatedString(n.value);
                 return lit(LitKind::String, n.value);
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
                 return litBool(n.value);
@@ -661,9 +663,26 @@ struct Lowering {
                                 return wrapLets(binds, std::move(userCall));
                         }
                     }
+                    // A Char is `{'Char', N}` — a TUPLE, so the test above
+                    // sent every `Char` operand to the user operator, whose
+                    // dispatcher only knows the types that actually define one
+                    // (Measure, Duration) and answers anything else with
+                    // "Undefined method: + for Char". `x.upperCase + rest`
+                    // (spec/my_capitalize.kex) died there while the walker
+                    // concatenated, and `kex_intrinsic_number:add/2` had
+                    // handled every Char/String pairing all along — nothing
+                    // ever reached it. Chars take the builtin, like the
+                    // primitives they stand in for.
+                    auto charTag = callE("kex_intrinsic_number", "eq", 2,
+                        two(callE("erlang", "element", 2,
+                                  two(lit(LitKind::Int, "1"), lRef.get())),
+                            lit(LitKind::Atom, "Char")));
                     auto dispatch = matchBool(
                         callE("erlang", "is_tuple", 1, one(lRef.get())),
-                        std::move(userCall), std::move(builtin));
+                        matchBool(std::move(charTag),
+                                  builtinOp(lRef.get(), rRef.get()),
+                                  std::move(userCall)),
+                        std::move(builtin));
                     return wrapLets(binds, std::move(dispatch));
                 }
                 return wrapLets(binds, builtinOp(std::move(l), std::move(r)));
@@ -1402,12 +1421,34 @@ struct Lowering {
                                 !concreteType.empty() &&
                                 candidate.receiverType == concreteType;
                         });
-                    if (selected == candidates->second.end())
-                        selected = std::find_if(
+                    // No implementation for THIS receiver type: take the
+                    // provider's DISPATCHER (`showValue/1`), not whichever
+                    // implementation happens to come first. The dispatcher
+                    // routes on the runtime tag and ends at the trait default,
+                    // so it answers for every receiver — including one whose
+                    // type is not known here, which is exactly when this path
+                    // runs. Picking an implementation instead made
+                    // `IO.printLine(Just(50))` print `Just(50)` on BEAM and
+                    // `50` on the walker, because the dictionary was pinned to
+                    // `showValue/Showable` and never reached the Optional
+                    // implementation the prelude had just gained.
+                    if (selected == candidates->second.end()) {
+                        auto dispatcher = std::find_if(
                             candidates->second.begin(), candidates->second.end(),
                             [&](const auto& candidate) {
-                                return candidate.beamArity == method.arity;
+                                return candidate.beamArity == method.arity &&
+                                    candidate.beamFunction == method.name;
                             });
+                        if (dispatcher != candidates->second.end())
+                            selected = dispatcher;
+                        else
+                            selected = std::find_if(
+                                candidates->second.begin(),
+                                candidates->second.end(),
+                                [&](const auto& candidate) {
+                                    return candidate.beamArity == method.arity;
+                                });
+                    }
                     if (selected != candidates->second.end()) {
                         module = selected->moduleAtom;
                         function = selected->beamFunction;
@@ -1616,6 +1657,38 @@ struct Lowering {
                                 args.push_back(
                                     atomize(*defaults->second[i], binds));
                 }
+                // A local make-method beats an imported TRAIT DEFAULT of the
+                // same name. `make Comparison do let to(@Less, Integer)` never
+                // ran on BEAM: the call bound to `kex_prelude:to/Showable`
+                // (every Comparison value is Showable), which answers only for
+                // `String` — so `Less.to(Integer)` returned the generic
+                // conversion's `None` instead of `Just(-1)`, silently. This is
+                // the rule already stated above for local TYPES, one level
+                // down: semantic analysis picks the imported target because a
+                // trait default matches any receiver, which makes it the least
+                // specific candidate, not the most.
+                //
+                // Only for a trait DEFAULT — a concrete imported target was
+                // chosen on real type evidence and must stand. The local
+                // definition carries its own fallback to the prelude for
+                // receivers it does not match (see the `to` fallback clause
+                // and `makeDispatcher`'s generic arm), so nothing is lost for
+                // the values the default would have handled.
+                const auto traitDefaultOwner = [&]() -> std::string {
+                    auto slash = resolved->second.backendFunction.find('/');
+                    if (slash == std::string::npos) return {};
+                    auto owner =
+                        resolved->second.backendFunction.substr(slash + 1);
+                    return traitMethods.count(owner) ? owner : std::string{};
+                }();
+                const bool localBeatsTraitDefault =
+                    !traitDefaultOwner.empty() && localMethods.count(n.method) &&
+                    knownFns.count(n.method);
+                if (localBeatsTraitDefault)
+                    return wrapLets(
+                        binds,
+                        callE("", n.method, static_cast<int>(args.size()),
+                              std::move(args)));
                 for (const auto& [argument, trait] :
                      resolved->second.traitDictionaries) {
                     const ast::Expr* source = nullptr;
@@ -1633,7 +1706,54 @@ struct Lowering {
                     args.push_back(atomize_ir(
                         makeTraitDictionary(trait, *source), binds));
                 }
+                if (std::getenv("KEX_DEBUG_TO2") && n.method == "to")
+                    std::fprintf(stderr,
+                                 "[to] mod=%s fn=%s arity=%d args=%zu\n",
+                                 resolved->second.backendModule.c_str(),
+                                 resolved->second.backendFunction.c_str(),
+                                 resolved->second.backendArity, args.size());
                 auto backendFunction = resolved->second.backendFunction;
+                // A resolved TRAIT DEFAULT is the least specific answer there
+                // is: it matches any receiver, so semantic analysis lands on
+                // it whenever the receiver's type is not pinned down. Calling
+                // it directly skips the provider's dispatcher and therefore
+                // every implementation the trait has gained. `"${n}"` — the
+                // parser wraps interpolations in `.showValue` — printed
+                // `Just(50)` on BEAM for a bound Optional while the walker
+                // printed `50`, because it reached `showValue/Showable`
+                // instead of `showValue/1` and its Just/None arms. A literal
+                // `${Just(50)}` worked, which is what made it look like a
+                // display bug rather than a dispatch one.
+                //
+                // The dispatcher ends AT the default, so this only adds
+                // routing. Same arity only: a default taking a trait
+                // dictionary (`to/Showable`/3 against `to`/2) is a different
+                // call shape and is handled where that dictionary is built.
+                // No dictionary: with one, the default's arity coincides with
+                // an unrelated overload — `to/Showable`/3 matched the RADIX
+                // `to`/3 and the dictionary arrived as the base, turning
+                // `"50".to(Integer)` into None.
+                if (externalModules && !resolved->second.backendModule.empty() &&
+                    resolved->second.traitDictionaries.empty()) {
+                    auto slash = backendFunction.find('/');
+                    if (slash != std::string::npos &&
+                        traitMethods.count(backendFunction.substr(slash + 1))) {
+                        const auto plain = backendFunction.substr(0, slash);
+                        auto provider =
+                            externalModules->receiverFunctions.find(plain);
+                        if (provider !=
+                            externalModules->receiverFunctions.end())
+                            for (const auto& candidate : provider->second)
+                                if (candidate.beamFunction == plain &&
+                                    candidate.beamArity ==
+                                        static_cast<int>(args.size()) &&
+                                    candidate.moduleAtom ==
+                                        resolved->second.backendModule) {
+                                    backendFunction = plain;
+                                    break;
+                                }
+                    }
+                }
                 if (!resolved->second.localDispatchTypes.empty()) {
                     auto exact = mangleReceiverSignature(
                         backendFunction,
@@ -2214,6 +2334,12 @@ struct Lowering {
                         if (n.block)
                             pargs.push_back(atomize_ir(lower(*n.block), rb));
                     }
+                    if (std::getenv("KEX_DEBUG_TO2") && m == "to")
+                        std::fprintf(stderr,
+                                     "[ufcs] mod=%s fn=%s arity=%d same=%d\n",
+                                     match->moduleAtom.c_str(),
+                                     match->beamFunction.c_str(), actualArity,
+                                     static_cast<int>(sameModuleOverloads));
                     return ret(callE(match->moduleAtom,
                                      sameModuleOverloads ? m
                                                          : match->beamFunction,
@@ -2286,46 +2412,6 @@ struct Lowering {
         return wrapLets(binds, std::move(ex));
     }
 
-    // "text ${expr} more" → a ++ chain of literal segments and to_string'd
-    // sub-expressions. The `${...}` sub-expressions are raw text in the AST,
-    // so they're re-lexed/parsed here and lowered like any other expression
-    // This keeps interpolation evaluation order explicit in IR.
-    auto lowerInterpolatedString(const std::string& raw) -> ExprPtr {
-        std::vector<ExprPtr> parts;
-        size_t pos = 0;
-        while (pos < raw.size()) {
-            auto dollar = raw.find("${", pos);
-            if (dollar == std::string::npos) {
-                if (pos < raw.size()) parts.push_back(lit(LitKind::String, raw.substr(pos)));
-                break;
-            }
-            if (dollar > pos) parts.push_back(lit(LitKind::String, raw.substr(pos, dollar - pos)));
-            size_t close = std::string::npos;
-            int depth = 1;
-            for (size_t k = dollar + 2; k < raw.size(); k++) {
-                if (raw[k] == '{') depth++;
-                else if (raw[k] == '}' && --depth == 0) { close = k; break; }
-            }
-            if (close == std::string::npos) break; // malformed → stop
-            std::string inner = raw.substr(dollar + 2, close - dollar - 2);
-            kex::Lexer lx(inner);
-            kex::Parser ps(lx.tokenizeAll());
-            auto innerAst = ps.parseExpr();
-            if (innerAst)
-                parts.push_back(callE("kex_io", "to_string", 1, one(lower(innerAst))));
-            pos = close + 1;
-        }
-        if (parts.empty()) return lit(LitKind::String, "");
-        // A single literal segment IS the string; otherwise build an iolist
-        // (binary literals + to_string charlists both qualify) and flatten it
-        // to the UTF-8 binary that a Kex String is on BEAM.
-        if (parts.size() == 1 && std::holds_alternative<Lit>(parts[0]->node))
-            return std::move(parts[0]);
-        auto lst = std::make_unique<Expr>();
-        lst->node = MakeList{std::move(parts), std::nullopt};
-        return callE("unicode", "characters_to_binary", 1, one(std::move(lst)));
-    }
-
     auto lowerParsedInterpolatedString(
         const std::vector<std::string>& stringParts,
         const std::vector<ast::ExprPtr>& values) -> ExprPtr {
@@ -2375,6 +2461,9 @@ struct Lowering {
         return var(name);
     }
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
+        if (std::getenv("KEX_DEBUG_TO2") && fn == "to" && mod.rfind("Kex.", 0) == 0)
+            std::fprintf(stderr, "[callE] mod=%s fn=%s arity=%d\n",
+                         mod.c_str(), fn.c_str(), arity);
         auto e = std::make_unique<Expr>();
         e->node = Call{std::move(mod), std::move(fn), arity, std::move(args), false};
         return e;
@@ -4067,6 +4156,80 @@ struct Lowering {
                                   std::move(args));
             def.clauses.push_back(std::move(fallback));
         }
+        // The same escape, for any method that shadows an imported TRAIT
+        // DEFAULT. Call sites prefer a local definition over such a default
+        // (see `localBeatsTraitDefault`), which is only sound if the local
+        // forwards what it does not match — `to` gets that above by name, and
+        // nothing else did. A record with its own `showValue` then crashed the
+        // moment string interpolation began routing through Showable:
+        // `"badge:${this.kind}"` compiles to `showValue(Kind)`, the local
+        // definition claims it, its `is_record(This,'Badge',2)` clause rejects
+        // a String, and the emitter's synthetic arm raises `function_clause`.
+        //
+        // Only for a definition that is not already total, and only when the
+        // prelude actually provides the name at this arity — otherwise the
+        // fallback would be unreachable, or a call to nothing.
+        const bool shadowsTraitDefault =
+            externalModules &&
+            externalModules->receiverFunctions.count(first.name) &&
+            std::any_of(traitMethods.begin(), traitMethods.end(),
+                        [&](const auto& entry) {
+                            return std::any_of(
+                                entry.second.begin(), entry.second.end(),
+                                [&](const auto& method) {
+                                    return method.name == first.name;
+                                });
+                        });
+        if (first.name != "to" && def.name == first.name &&
+            !preferExternalReceivers && shadowsTraitDefault) {
+            const auto alreadyTotal =
+                std::any_of(def.clauses.begin(), def.clauses.end(),
+                            [](const FunClause& clause) {
+                                return !clause.guard &&
+                                    std::all_of(clause.params.begin(),
+                                                clause.params.end(),
+                                                [](const PatternPtr& p) {
+                                                    return p->kind == PatKind::Var ||
+                                                           p->kind == PatKind::Wild;
+                                                });
+                            });
+            const auto& candidates =
+                externalModules->receiverFunctions.at(first.name);
+            // The DISPATCHER, by preference — the same reason the trait
+            // dictionary takes it: it routes to every implementation and ends
+            // at the default, where an implementation picked by list order
+            // ends at whichever one came first. With the default, a local
+            // `showValue` forwarded `Just(50)` to `showValue/Showable` and
+            // rendered the tuple.
+            auto provider = std::find_if(
+                candidates.begin(), candidates.end(),
+                [&](const auto& candidate) {
+                    return candidate.beamArity == def.arity &&
+                        candidate.beamFunction == first.name;
+                });
+            if (provider == candidates.end())
+                provider = std::find_if(
+                    candidates.begin(), candidates.end(),
+                    [&](const auto& candidate) {
+                        return candidate.beamArity == def.arity;
+                    });
+            if (!alreadyTotal && provider != candidates.end()) {
+                FunClause fallback;
+                std::vector<ExprPtr> args;
+                for (int i = 0; i < def.arity; ++i) {
+                    auto param = std::make_unique<Pattern>();
+                    param->kind = PatKind::Var;
+                    param->name = "_traitShadowFallback" + std::to_string(i);
+                    fallback.params.push_back(std::move(param));
+                    args.push_back(
+                        var("_traitShadowFallback" + std::to_string(i)));
+                }
+                fallback.body = callE(provider->moduleAtom,
+                                      provider->beamFunction, def.arity,
+                                      std::move(args));
+                def.clauses.push_back(std::move(fallback));
+            }
+        }
         return def;
     }
 
@@ -5432,6 +5595,62 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         genericFallback = name;
                     }
                 }
+                // A trait's DEFAULT body is reachable without going through
+                // the dispatcher just built: the interface advertises
+                // `name/Trait` as the backend entry point (collect_metadata's
+                // `receiverIsTrait` branch), so a call site binds to it
+                // directly. That is fine for a total default, but a
+                // type-directed one — `make Showable do let to(String)`, which
+                // answers for `String` and nothing else — then has no way to
+                // reach the generic implementation the dispatcher would have
+                // fallen back to. `"50".to(Integer)` died with
+                // `function_clause` where the walker fell through to the
+                // universal `to`.
+                //
+                // Give such a default the same escape the dispatcher has.
+                // Only when it lacks a total clause of its own: a default that
+                // already answers for everything needs nothing, and the extra
+                // clause would be unreachable. Trailing trait-dictionary
+                // params are not part of the call's arity, so forward just the
+                // leading `arity` of them.
+                if (!genericFallback.empty()) {
+                    for (auto& function : mod.functions) {
+                        if (function.arity < arity) continue;
+                        auto slash = function.name.find('/');
+                        if (slash == std::string::npos ||
+                            function.name.compare(0, slash, name) != 0)
+                            continue;
+                        if (!L.traitMethods.count(function.name.substr(slash + 1)))
+                            continue;
+                        const auto total = [](const FunClause& clause) {
+                            return !clause.guard &&
+                                std::all_of(clause.params.begin(),
+                                            clause.params.end(),
+                                            [](const PatternPtr& p) {
+                                                return p->kind == PatKind::Var ||
+                                                       p->kind == PatKind::Wild;
+                                            });
+                        };
+                        if (std::any_of(function.clauses.begin(),
+                                        function.clauses.end(), total))
+                            continue;
+                        FunClause fallback;
+                        std::vector<ExprPtr> args;
+                        for (int i = 0; i < function.arity; ++i) {
+                            auto param = std::make_unique<Pattern>();
+                            param->kind = PatKind::Var;
+                            param->name = "_traitFallback" + std::to_string(i);
+                            fallback.params.push_back(std::move(param));
+                            if (i < arity)
+                                args.push_back(var(
+                                    "_traitFallback" + std::to_string(i)));
+                        }
+                        fallback.body = L.callE(genericFallbackModule,
+                                                genericFallback, arity,
+                                                std::move(args));
+                        function.clauses.push_back(std::move(fallback));
+                    }
+                }
                 mod.functions.push_back(
                     L.makeDispatcher(name, arity, owners, genericFallback,
                                      genericFallbackModule));
@@ -5529,18 +5748,68 @@ auto lowerProgramTiered(
 
 namespace {
 
-auto rewriteModuleCalls(ExprPtr& expr,
-                        const std::unordered_map<std::string, std::pair<std::string, std::string>>& targets)
-    -> void {
+// Where a bare call should be routed, and the arity that routing is valid
+// for. Name alone is not enough: two modules can define the same method name
+// at different arities, and redirecting on the name would send a call to a
+// module that has no such function.
+struct ModuleTarget {
+    std::string module;
+    std::string sourceName;
+};
+using ModuleTargets = std::unordered_map<std::string, ModuleTarget>;
+// (module, name, arity) actually emitted, for the modules built in THIS unit.
+// A redirect to one of them is only valid if it lands on a function that
+// exists: `using Units.SI` publishes a `to` that exists ONLY at arity 3, and
+// redirecting every `to`/2 in the program to it produced `undef` on BEAM and
+// an empty string on the walker for `42.to(String)`. Modules compiled
+// elsewhere are absent here and are trusted, as before.
+using ModuleDefined = std::unordered_map<std::string,
+                                         std::set<std::pair<std::string, int>>>;
+// Where a call goes when its module redirect is rejected: the provider that
+// really exports that name at that arity (the prelude, in practice). Without
+// it a rejected redirect leaves the call bare and it resolves to nothing —
+// `42.to(String)` under `using Units.SI` became `undefined function to/2`.
+using ArityFallback =
+    std::map<std::pair<std::string, int>, ModuleTarget>;
+
+auto rewriteModuleCalls(ExprPtr& expr, const ModuleTargets& targets,
+                        const ModuleDefined& defined,
+                        const ArityFallback& fallback) -> void {
     if (!expr) return;
     std::visit([&](auto& node) {
         using T = std::decay_t<decltype(node)>;
-        auto visit = [&](ExprPtr& child) { rewriteModuleCalls(child, targets); };
+        auto visit = [&](ExprPtr& child) {
+            rewriteModuleCalls(child, targets, defined, fallback);
+        };
         if constexpr (std::is_same_v<T, Call>) {
             if (node.module.empty()) {
                 if (auto it = targets.find(node.name); it != targets.end()) {
-                    node.module = it->second.first;
-                    node.name = it->second.second;
+                    auto built = defined.find(it->second.module);
+                    if (built == defined.end() ||
+                        built->second.count({it->second.sourceName, node.arity})) {
+                        node.module = it->second.module;
+                        node.name = it->second.sourceName;
+                    } else if (auto external =
+                                   fallback.find({node.name, node.arity});
+                               external != fallback.end()) {
+                        node.module = external->second.module;
+                        node.name = external->second.sourceName;
+                    }
+                }
+            } else if (auto built = defined.find(node.module);
+                       built != defined.end() &&
+                       !built->second.count({node.name, node.arity})) {
+                // Already addressed to a module built HERE that turns out not
+                // to define it. A trait dictionary aims at the concrete
+                // type's owner module — right for a type that implements the
+                // method, wrong when the implementation is the trait default:
+                // `Kex.Units.SI:showValue/1` against a module with no
+                // `showValue` at all, i.e. `undef` for any program that says
+                // `using Units.SI`.
+                if (auto external = fallback.find({node.name, node.arity});
+                    external != fallback.end()) {
+                    node.module = external->second.module;
+                    node.name = external->second.sourceName;
                 }
             }
             for (auto& arg : node.args) visit(arg);
@@ -5616,6 +5885,13 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         // External record accessors are already compiled in their owner
         // module (not necessarily `Kex.<path>`).
         std::string beamModule;
+        // Arity this name was recorded at, or -1 when the source does not
+        // pin one (record accessors). A call is only redirected to the
+        // owning module when the arities agree — `using Units.SI` brings a
+        // `to` that exists ONLY at arity 3, and routing every `to`/2 in the
+        // program to it made `42.to(String)` an `undef` on BEAM and an empty
+        // string on the walker.
+        int arity = -1;
     };
     std::unordered_map<std::string, Definition> definitions;
     if (externalRecords) {
@@ -5775,7 +6051,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item); module && *module)
             collect(**module);
 
-    std::unordered_map<std::string, std::pair<std::string, std::string>> targets;
+    ModuleTargets targets;
     for (const auto& [emitted, def] : definitions)
         targets[emitted] = {def.beamModule.empty() ? "Kex." + def.path : def.beamModule,
                             def.sourceName};
@@ -5794,8 +6070,7 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         fn.exported = def.exported;
         moduleBuckets[def.path].push_back(std::move(fn));
     }
-    std::unordered_map<std::string, std::pair<std::string, std::string>>
-        globalTargets;
+    ModuleTargets globalTargets;
     for (const auto& fn : globalFunctions)
         globalTargets[fn.name] = {flat.name, fn.name};
     flat.functions = std::move(globalFunctions);
@@ -5809,16 +6084,38 @@ auto lowerModules(const ast::Program& prog, const std::string& fileStem,
         result.push_back(std::move(module));
     }
 
+    // What each module in this unit actually ends up defining, so a redirect
+    // can be checked against it rather than trusting the name alone.
+    ModuleDefined defined;
+    for (const auto& module : result)
+        for (const auto& fn : module.functions)
+            defined[module.name].insert({fn.name, fn.arity});
+
+    // The provider each name/arity really comes from, dispatcher preferred.
+    ArityFallback fallback;
+    if (externals)
+        for (const auto& [name, candidates] : externals->receiverFunctions)
+            for (const auto& candidate : candidates) {
+                auto key = std::make_pair(name, candidate.beamArity);
+                if (candidate.beamFunction == name || !fallback.count(key))
+                    fallback[key] = {candidate.moduleAtom,
+                                     candidate.beamFunction};
+            }
+
     for (size_t moduleIndex = 0; moduleIndex < result.size(); moduleIndex++) {
         auto& module = result[moduleIndex];
         for (auto& fn : module.functions)
             for (auto& clause : fn.clauses) {
-                if (clause.guard) rewriteModuleCalls(*clause.guard, targets);
-                rewriteModuleCalls(clause.body, targets);
+                if (clause.guard)
+                    rewriteModuleCalls(*clause.guard, targets, defined,
+                                       fallback);
+                rewriteModuleCalls(clause.body, targets, defined, fallback);
                 if (moduleIndex > 0) {
                     if (clause.guard)
-                        rewriteModuleCalls(*clause.guard, globalTargets);
-                    rewriteModuleCalls(clause.body, globalTargets);
+                        rewriteModuleCalls(*clause.guard, globalTargets,
+                                           defined, fallback);
+                    rewriteModuleCalls(clause.body, globalTargets, defined,
+                                       fallback);
                 }
             }
     }

@@ -1,0 +1,4 @@
+spec/pattern_wrong_adt.kex:8:10: error: `Ok` is a constructor of `Result`, but the value being matched has type `Optional` — this pattern can never match
+spec/pattern_wrong_adt.kex:16:10: error: `Just` is a constructor of `Optional`, but the value being matched has type `Result` — this pattern can never match
+spec/pattern_wrong_adt.kex:25:5: error: `Ok` is a constructor of `Result`, but the value being matched has type `Optional` — this pattern can never match
+spec/pattern_wrong_adt.kex:31:10: error: `None` is a constructor of `Optional`, but the value being matched has type `Result` — this pattern can never match

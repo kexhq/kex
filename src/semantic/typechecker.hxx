@@ -248,6 +248,16 @@ private:
     // typeName -> constructor names; constructorName -> owning typeName.
     std::unordered_map<std::string, std::vector<std::string>> m_adtVariants;
     std::unordered_map<std::string, std::string> m_adtOfConstructor;
+    // What applying a constructor produces. `slots[i]` is the index of the
+    // ADT type parameter the i-th payload IS (`Just(X)` → slot 0), or -1 when
+    // the payload is some other type expression and tells us nothing about
+    // the type arguments.
+    struct ConstructorResult {
+        std::string adtName;
+        std::size_t typeParamCount = 0;
+        std::vector<int> slots;
+    };
+    std::unordered_map<std::string, ConstructorResult> m_constructorResult;
     // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to
     // reject a pattern that destructures the wrong number of values.
     std::unordered_map<std::string, size_t> m_constructorArity;
@@ -256,6 +266,22 @@ private:
     // registered alongside it as a second, permissive overload.
     std::unordered_set<std::string> m_annotatedMethods;
     auto checkPatternArity(const ast::Pattern& pattern) -> void;
+    // The ADT a scrutinee type belongs to ("Optional", "Result", …), or ""
+    // when the type is not a closed ADT (a type variable, Any, a record).
+    auto adtNameOfType(const TypePtr& type) const -> std::string;
+    // Whether an expression always exits the enclosing function, so the
+    // match arm / branch it forms hands no value to its surroundings.
+    static auto alwaysReturns(const ast::Expr& expr) -> bool;
+    static auto alwaysReturns(const std::vector<ast::ExprPtr>& body) -> bool;
+    // The type `Ctor(args...)` produces, or nullptr when the name is not a
+    // registered ADT constructor.
+    auto constructorResultType(const std::string& name,
+                               const std::vector<TypePtr>& argTypes) const
+        -> TypePtr;
+    // Errors when a constructor pattern names an arm of a DIFFERENT ADT than
+    // the value being matched — `if let Ok(x) = anOptional`.
+    auto checkPatternConstructorOwner(const ast::Pattern& pattern,
+                                      const TypePtr& expected) -> void;
     std::unordered_set<std::string> m_nullaryConstructors;
 
     // Record field types: typeName -> { fieldName -> TypePtr }.

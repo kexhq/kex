@@ -264,6 +264,28 @@ auto Analyzer::analyzeMainBlock(const ast::MainBlock& block) -> void {
     if (!block.synthetic) m_symbols.popScope();
 }
 
+auto Analyzer::analyzeRescue(const ast::RescueBlock& rescue,
+                             SourceLocation loc) -> void {
+    // A rescue clause binds names exactly like a match clause: its patterns
+    // introduce locals its guard and body can see, and `rescue |e|` binds the
+    // caught error. Each clause gets its own scope.
+    for (const auto& clause : rescue.clauses) {
+        m_symbols.pushScope(m_inFoulContext);
+        for (const auto& pat : clause.patterns)
+            if (pat) bindPatternVars(*pat, loc);
+        if (clause.guard && *clause.guard) analyzeExpr(**clause.guard);
+        if (clause.body) analyzeExpr(*clause.body);
+        m_symbols.popScope();
+    }
+    m_symbols.pushScope(m_inFoulContext);
+    if (!rescue.catchAllParam.empty())
+        m_symbols.define(Symbol{rescue.catchAllParam, SymbolKind::Variable,
+                                false, false, true, loc});
+    analyzeBody(rescue.catchAllBody);
+    if (rescue.inlineReturnExpr) analyzeExpr(*rescue.inlineReturnExpr);
+    m_symbols.popScope();
+}
+
 auto Analyzer::analyzeBody(const std::vector<ast::ExprPtr>& body) -> void {
     for (const auto& expr : body) {
         if (expr) analyzeExpr(*expr);
@@ -477,12 +499,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
             m_loopScopes.push_back(LoopScope::Closure);
             analyzeBody(node.body);
-            if (node.rescue) {
-                for (const auto& clause : node.rescue->clauses)
-                    if (clause.body) analyzeExpr(*clause.body);
-                analyzeBody(node.rescue->catchAllBody);
-                if (node.rescue->inlineReturnExpr) analyzeExpr(*node.rescue->inlineReturnExpr);
-            }
+            if (node.rescue) analyzeRescue(*node.rescue, expr.location);
             m_loopScopes.pop_back();
             m_symbols.popScope();
         }
@@ -538,10 +555,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
             analyzeBody(node.body);
-            for (const auto& clause : node.rescue.clauses)
-                if (clause.body) analyzeExpr(*clause.body);
-            analyzeBody(node.rescue.catchAllBody);
-            if (node.rescue.inlineReturnExpr) analyzeExpr(*node.rescue.inlineReturnExpr);
+            analyzeRescue(node.rescue, expr.location);
         }
         // Literals and other simple nodes need no analysis
     }, expr.kind);

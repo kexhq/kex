@@ -44,11 +44,13 @@ auto ResolvePass::run(SemanticDB& db, const std::string& file) -> void {
             } else if constexpr (std::is_same_v<T, ast::MainBlock>) {
                 if (ptr->synthetic) {
                     resolveBody(ptr->body);
+                    if (ptr->rescue) resolveRescue(*ptr->rescue);
                 } else {
                     pushScope();
                     for (const auto& p : ptr->params)
                         if (p.name) defineLocal(*p.name);
                     resolveBody(ptr->body);
+                    if (ptr->rescue) resolveRescue(*ptr->rescue);
                     popScope();
                 }
             } else if constexpr (std::is_same_v<T, ast::UsingBlock>) {
@@ -294,11 +296,31 @@ auto ResolvePass::resolveUsing(const ast::TypeName& module,
     if (alias) defineLocal(*alias);
 }
 
+auto ResolvePass::resolveRescue(const ast::RescueBlock& rescue) -> void {
+    // A rescue clause binds names exactly like a match clause: its patterns
+    // introduce locals its body (and guard) can see, and `rescue |e|` binds
+    // the caught error. Each clause gets its own scope.
+    for (const auto& clause : rescue.clauses) {
+        pushScope();
+        for (const auto& pat : clause.patterns)
+            if (pat) resolvePattern(*pat);
+        if (clause.guard) resolveExpr(**clause.guard);
+        if (clause.body) resolveExpr(*clause.body);
+        popScope();
+    }
+    pushScope();
+    if (!rescue.catchAllParam.empty()) defineLocal(rescue.catchAllParam);
+    resolveBody(rescue.catchAllBody);
+    if (rescue.inlineReturnExpr) resolveExpr(*rescue.inlineReturnExpr);
+    popScope();
+}
+
 auto ResolvePass::resolveFunctionDef(const ast::FunctionDef& def) -> void {
     pushScope();
     for (const auto& clause : def.clauses) {
         bindParams(clause.params);
         resolveBody(clause.body);
+        if (clause.rescue) resolveRescue(*clause.rescue);
     }
     popScope();
 }
@@ -531,12 +553,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             pushScope();
             for (const auto& p : node.params) defineLocal(p.name);
             resolveBody(node.body);
-            if (node.rescue) {
-                for (const auto& clause : node.rescue->clauses)
-                    if (clause.body) resolveExpr(*clause.body);
-                resolveBody(node.rescue->catchAllBody);
-                if (node.rescue->inlineReturnExpr) resolveExpr(*node.rescue->inlineReturnExpr);
-            }
+            if (node.rescue) resolveRescue(*node.rescue);
             popScope();
         }
         else if constexpr (std::is_same_v<T, ast::SpreadExpr>) {
@@ -588,10 +605,7 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::TryingExpr>) {
             resolveBody(node.body);
-            for (const auto& clause : node.rescue.clauses)
-                if (clause.body) resolveExpr(*clause.body);
-            resolveBody(node.rescue.catchAllBody);
-            if (node.rescue.inlineReturnExpr) resolveExpr(*node.rescue.inlineReturnExpr);
+            resolveRescue(node.rescue);
         }
         // Literals, ThisExpr, BreakExpr, NextExpr,
         // CurryPlaceholder, ShorthandLambda, ErrorNode: nothing to resolve

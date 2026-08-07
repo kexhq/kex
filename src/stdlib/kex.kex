@@ -20,6 +20,30 @@ make Showable do
   let to(String) = Just(this.showValue)
 end
 
+make Optional<Showable>, implement: Showable do
+  let showValue(@Just(x)) = x.showValue
+  let showValue(@None) = ""
+end
+
+# The same for Result, with one deliberate asymmetry: SHOWING a result shows
+# what it carries, so `Ok(42)` reads as `42` rather than leaking the wrapper
+# into text — but an `Error` keeps its marker. Dropping it made a failure and
+# a success print identically, and unlike `None` (which shows as "", visibly
+# not a value) there would be nothing left to tell them apart.
+#
+# The marker is spelled `Error(...)`, matching how the same value renders as
+# an ELEMENT of a collection — `[1, Error(Bad(no))]`. Elements render
+# structurally rather than through showValue (as in Ruby, where `nil.to_s` is
+# "" but `[nil].to_s` is "[nil]"), so this is the one spelling that reads the
+# same at both levels.
+#
+# What functions RETURN is unchanged: `Integer.parse` still answers with a
+# Result, `IO.inspect` still shows `Ok(42)`, and both arms are still matchable.
+make Result<X, E>, implement: Showable do
+  let showValue(@Ok(x)) = x.showValue
+  let showValue(@Error(e)) = "Error(${e.showValue})"
+end
+
 foul module Kex do
   type Backend = Interpreter | Beam
 

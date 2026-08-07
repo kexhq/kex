@@ -115,10 +115,17 @@ int main() {
             assertEqual(literal.parts[1], std::string(", "));
             assertEqual(literal.parts[2], std::string("!"));
             assertEqual(literal.values.size(), size_t(2));
+            // Each interpolation is desugared to a show-protocol call, so the
+            // prelude decides how the value renders. The parsed expression is
+            // the receiver.
+            auto& first = std::get<ast::MethodCall>(literal.values[0]->kind);
+            auto& second = std::get<ast::MethodCall>(literal.values[1]->kind);
+            assertEqual(first.method, std::string("showValue"));
+            assertEqual(second.method, std::string("showValue"));
             assertTrue(std::holds_alternative<ast::Identifier>(
-                literal.values[0]->kind));
+                first.receiver->kind));
             assertTrue(std::holds_alternative<ast::BinaryOp>(
-                literal.values[1]->kind));
+                second.receiver->kind));
         });
 
         it("parses interpolating tags into the parts and values ABI", []() {

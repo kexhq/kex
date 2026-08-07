@@ -5,15 +5,16 @@
 namespace kex::interpreter {
 
 auto Evaluator::registerIOBuiltins() -> void {
+    // Renders a value through a presentation protocol. Which implementation
+    // that is — a concrete one, the owning ADT's, or the trait's generic make
+    // block — is ordinary trait dispatch, so this asks the resolver rather
+    // than naming any trait itself.
     auto protocolText = [this](const ValuePtr& value,
                                const std::string& method,
                                std::vector<ValuePtr> extra = {}) {
         std::vector<ValuePtr> args{value};
         args.insert(args.end(), extra.begin(), extra.end());
-        auto target = dispatchTypeName(value) + "::" + method;
-        if (!m_functionValues.count(target))
-            target = (method == "showValue" ? "Showable" : "Inspectable") +
-                     std::string("::") + method;
+        auto target = resolveMethodName(value, method, nullptr);
         if (m_functionValues.count(target)) {
             auto rendered = callFunction(target, std::move(args), {}, {});
             if (auto* text = std::get_if<StringValue>(&rendered->data))

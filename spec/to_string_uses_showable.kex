@@ -1,0 +1,41 @@
+# `to(String)` goes through the Showable protocol, not the raw runtime term.
+#
+# `make Showable do let to(String) = Just(this.showValue) end` says so, and the
+# tree walker dispatches there. The universal conversion handed the value to an
+# intrinsic renderer instead, which never reaches an implementation of
+# showValue — so on BEAM `Just(42).to(String)` answered `Just("Just(42)")`
+# where the walker answered `Just("42")`. That is the double wrapping: the
+# Optional from `to`, around text that still shows the inner wrapper.
+#
+# Fixed in src/stdlib/optional.kex, in the prelude rather than the intrinsic:
+# a runtime intrinsic cannot call back into the prelude to reach showValue
+# (dependency_layering_test enforces that boundary).
+#
+# `to` stays Optional throughout — it is the everyday conversion, and the
+# reason a conversion failed is derivable from the types. `Integer.parse` is
+# where a failure carries information, and it answers with a Result.
+record Badge do
+  kind : String
+end
+
+make Badge, implement: Showable do
+  let showValue -> String = "badge:${this.kind}"
+end
+
+main do
+  # The case that diverged: an Optional's own showValue, not the raw term.
+  IO.printLine("${Just(42).to(String)}")
+  IO.printLine("[${None.to(String)}]")
+
+  # A type with its own showValue reaches it too.
+  IO.printLine("${Badge { kind: "gold" }.to(String)}")
+
+  # A Result unwraps the same way — `make Result<X, E>, implement: Showable`
+  # in kex.kex is symmetric with Optional's. What `Integer.parse` RETURNS is
+  # unchanged; only what showing it produces.
+  IO.printLine("${Ok(42).to(String)}")
+  IO.printLine("${Error("boom").to(String)}")
+
+  # Plain values are unchanged, and a conversion that cannot be made is None.
+  IO.printLine("${42.to(String)} ${"abc".to(Integer)}")
+end

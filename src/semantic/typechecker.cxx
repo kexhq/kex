@@ -184,12 +184,20 @@ auto TypeChecker::check(const ast::Program& program,
                     m_constructorArity[ctor] = arity->second;
                     if (arity->second == 0) m_nullaryConstructors.insert(ctor);
                 }
+                // NOT registered in m_constructorResult: the interface
+                // carries constructor names and arities but not which payload
+                // fills which type parameter, so `Ok("hi")` could only be
+                // typed as a bare `Result`, losing the `Result<String, ?>`
+                // the REPL reads off the runtime value. Locally declared ADTs
+                // are typed precisely by registerAdt; extending KexI with the
+                // payload slots would do the same for imported ones.
             }
         }
         for (const auto& ctor : ambiguous) {
             m_adtOfConstructor.erase(ctor);
             m_constructorArity.erase(ctor);
             m_nullaryConstructors.erase(ctor);
+            m_constructorResult.erase(ctor);
         }
     }
 
@@ -478,6 +486,65 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     for (const auto& name : names) {
         m_adtOfConstructor[name] = def.name;
     }
+
+    // Record what each constructor produces, so `Just(1)` infers as an
+    // Optional instead of `unknown` — without that, a mismatched pattern in
+    // `if let Ok(x) = Just(1)` has no scrutinee type to be checked against.
+    for (const auto& variant : *def.variants) {
+        auto name = extractConstructorName(variant);
+        if (!name) continue;
+        ConstructorResult result;
+        result.adtName = def.name;
+        result.typeParamCount = def.typeParams.size();
+        if (const auto* generic = std::get_if<ast::GenericType>(&variant->kind)) {
+            for (const auto& payload : generic->args) {
+                int slot = -1;
+                if (payload) {
+                    if (const auto* named =
+                            std::get_if<ast::TypeName>(&payload->kind);
+                        named && named->parts.size() == 1) {
+                        auto found = std::find(def.typeParams.begin(),
+                                               def.typeParams.end(),
+                                               named->parts.front());
+                        if (found != def.typeParams.end())
+                            slot = static_cast<int>(
+                                found - def.typeParams.begin());
+                    } else if (const auto* var =
+                                   std::get_if<ast::GenericVar>(&payload->kind)) {
+                        auto found = std::find(def.typeParams.begin(),
+                                               def.typeParams.end(), var->name);
+                        if (found != def.typeParams.end())
+                            slot = static_cast<int>(
+                                found - def.typeParams.begin());
+                    }
+                }
+                result.slots.push_back(slot);
+            }
+        }
+        m_constructorResult[*name] = std::move(result);
+    }
+}
+
+auto TypeChecker::constructorResultType(
+    const std::string& name, const std::vector<TypePtr>& argTypes) const
+    -> TypePtr {
+    auto found = m_constructorResult.find(name);
+    if (found == m_constructorResult.end()) return nullptr;
+    const auto& info = found->second;
+
+    std::vector<TypePtr> typeArgs(info.typeParamCount, Type::unknown());
+    for (std::size_t i = 0; i < info.slots.size() && i < argTypes.size(); ++i) {
+        const auto slot = info.slots[i];
+        if (slot >= 0 && static_cast<std::size_t>(slot) < typeArgs.size() &&
+            argTypes[i])
+            typeArgs[slot] = argTypes[i];
+    }
+
+    // `X?` is its own type kind everywhere else in the checker, so the
+    // prelude's Optional has to produce that rather than a NamedType.
+    if (info.adtName == "Optional")
+        return Type::optional(typeArgs.empty() ? Type::unknown() : typeArgs[0]);
+    return Type::named(info.adtName, std::move(typeArgs));
 }
 
 auto TypeChecker::registerAdtsInModule(const ast::ModuleDef& mod) -> void {
@@ -1046,6 +1113,58 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
 // the interpreter failed at runtime with "pattern mismatch — expected Just",
 // and BEAM emitted Core Erlang that erlc rejected outright. A constructor's
 // arity is known statically, so this belongs at compile time.
+auto TypeChecker::alwaysReturns(const ast::Expr& expr) -> bool {
+    if (std::holds_alternative<ast::ReturnExpr>(expr.kind)) return true;
+    // A block exits iff its last expression does.
+    if (const auto* block = std::get_if<ast::BlockExpr>(&expr.kind))
+        return alwaysReturns(block->body);
+    return false;
+}
+
+auto TypeChecker::alwaysReturns(const std::vector<ast::ExprPtr>& body) -> bool {
+    return !body.empty() && body.back() && alwaysReturns(*body.back());
+}
+
+auto TypeChecker::adtNameOfType(const TypePtr& type) const -> std::string {
+    if (!type) return "";
+    // `X?` has its own type kind rather than a NamedType, but the arms it can
+    // be matched against are the prelude's `Optional` declaration.
+    if (std::holds_alternative<OptionalType>(type->kind))
+        return m_adtVariants.count("Optional") ? "Optional" : "";
+    if (const auto* named = std::get_if<NamedType>(&type->kind))
+        if (m_adtVariants.count(named->name)) return named->name;
+    return "";
+}
+
+auto TypeChecker::checkPatternConstructorOwner(const ast::Pattern& pattern,
+                                               const TypePtr& expected)
+    -> void {
+    const auto adt = adtNameOfType(expected);
+    if (adt.empty()) return;
+
+    std::string ctorName;
+    if (const auto* ctor = std::get_if<ast::ConstructorPattern>(&pattern.kind)) {
+        ctorName = ctor->name;
+    } else if (const auto* lit = std::get_if<ast::LiteralPattern>(&pattern.kind);
+               lit && lit->literal.type == TokenType::None) {
+        // `None` lexes as its own token, so it arrives as a LiteralPattern
+        // rather than a nullary ConstructorPattern (same quirk
+        // checkMatchExhaustiveness works around).
+        ctorName = "None";
+    } else {
+        return;
+    }
+
+    auto owner = m_adtOfConstructor.find(ctorName);
+    // An unregistered constructor (imported or opaque) proves nothing.
+    if (owner == m_adtOfConstructor.end() || owner->second == adt) return;
+
+    error(pattern.location,
+          "`" + ctorName + "` is a constructor of `" + owner->second +
+              "`, but the value being matched has type `" + adt +
+              "` — this pattern can never match");
+}
+
 auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
     std::visit([this, &pattern](const auto& node) {
         using T = std::decay_t<decltype(node)>;
@@ -1115,6 +1234,7 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
 auto TypeChecker::bindPatternVars(
     const ast::Pattern& pat, TypePtr expected) -> void {
     expected = expected ? resolve(expected) : nullptr;
+    checkPatternConstructorOwner(pat, expected);
     std::visit([this, &expected](const auto& node) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
@@ -2107,7 +2227,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             auto outerTryBelowBlock = m_tryBelowBlock;
             m_tryingBlockDepth = m_blockDepth;
             m_tryBelowBlock = 0;
-            auto result = resolve(inferBody(node.body));
+            auto bodyType = inferBody(node.body);
+            // A body that exits the function hands nothing to the `trying`
+            // expression, so it must not be compared against the rescue arms.
+            auto result = resolve(
+                alwaysReturns(node.body) ? Type::voidType() : bodyType);
             // A block is a function boundary: a `.try` inside one becomes the
             // BLOCK's result and never reaches this rescue, so the body's type
             // and the rescue's have no reason to agree — the rescue is dead
@@ -2137,10 +2261,32 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           " but rescue returns " + typeToString(candidate));
                 }
             };
-            for (const auto& clause : node.rescue.clauses)
-                if (clause.body) merge(inferExpr(*clause.body));
-            if (!node.rescue.catchAllBody.empty())
-                merge(inferBody(node.rescue.catchAllBody));
+            // A rescue clause binds names exactly like a match clause: its
+            // patterns introduce locals its guard and body can see, and
+            // `rescue |e|` binds the caught error.
+            for (const auto& clause : node.rescue.clauses) {
+                pushScope();
+                for (const auto& pat : clause.patterns)
+                    if (pat) {
+                        checkPatternArity(*pat);
+                        bindPatternVars(*pat);
+                    }
+                if (clause.guard && *clause.guard) inferExpr(**clause.guard);
+                if (clause.body) {
+                    auto armType = inferExpr(*clause.body);
+                    if (!alwaysReturns(*clause.body)) merge(armType);
+                }
+                popScope();
+            }
+            if (!node.rescue.catchAllBody.empty()) {
+                pushScope();
+                if (!node.rescue.catchAllParam.empty())
+                    defineVar(node.rescue.catchAllParam, Type::unknown());
+                auto catchAllType = inferBody(node.rescue.catchAllBody);
+                if (!alwaysReturns(node.rescue.catchAllBody))
+                    merge(catchAllType);
+                popScope();
+            }
             // `rescue return` exits the enclosing function, so its expression
             // does not participate in the trying-expression result type.
             if (node.rescue.inlineReturnExpr)
@@ -2350,6 +2496,9 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 return msgType;
             }
+            if (auto constructed =
+                    constructorResultType(node.name, argTypes))
+                return constructed;
             return checkCall(node.name, argTypes, expr.location);
         }
         else if constexpr (std::is_same_v<T, ast::TaggedLiteral>) {
@@ -2741,9 +2890,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 // `if let Pattern = expr` — infer scrutinee, bind pattern vars
                 // in a scope covering only the then-body (already scoped in
                 // resolve pass). Skip Bool check — it's a pattern match.
-                if (node.condition) inferExpr(*node.condition);
+                auto scrutinee = node.condition
+                    ? inferExpr(*node.condition) : nullptr;
                 pushScope();
-                if (node.letPattern) bindPatternVars(*node.letPattern);
+                if (node.letPattern)
+                    bindPatternVars(*node.letPattern, scrutinee);
             } else if (node.condition) {
                 auto condType = inferExpr(*node.condition);
                 auto resolved = resolve(condType);
@@ -2755,12 +2906,18 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           typeToString(resolved));
                 }
             }
-            auto thenType = inferBody(node.thenBody);
+            // A branch that exits the function produces nothing for the
+            // conditional to agree with, so it must not drive the result type.
+            auto branchBodyType = [this](const std::vector<ast::ExprPtr>& body) {
+                auto inferred = inferBody(body);
+                return alwaysReturns(body) ? Type::voidType() : inferred;
+            };
+            auto thenType = branchBodyType(node.thenBody);
             if (node.letPattern) popScope();
             TypePtr branchType = resolve(thenType);  // tracks the first concrete non-Never branch
             for (const auto& [cond, body] : node.elifs) {
                 if (cond) inferExpr(*cond);
-                auto elifType = resolve(inferBody(body));
+                auto elifType = resolve(branchBodyType(body));
                 auto rt = resolve(branchType);
                 bool rtPermissive = std::holds_alternative<TypeVar>(rt->kind) ||
                                     std::holds_alternative<UnknownType>(rt->kind) ||
@@ -2776,7 +2933,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 if (rtPermissive && !rePermissive) branchType = elifType;
             }
             if (node.elseBody) {
-                auto elseType = resolve(inferBody(*node.elseBody));
+                auto elseType = resolve(branchBodyType(*node.elseBody));
                 auto rt = resolve(branchType);
                 bool thenPermissive = std::holds_alternative<TypeVar>(rt->kind) ||
                                       std::holds_alternative<UnknownType>(rt->kind) ||
@@ -2791,6 +2948,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 }
                 if (thenPermissive && !elsePermissive) branchType = elseType;
             }
+            // With no `else` the conditional may produce nothing at all, so it
+            // cannot hand its then-branch's type to the block it closes —
+            // `if done? ... return Error(e) ... end` is not a Result-valued
+            // expression.
+            if (!node.elseBody) return Type::voidType();
             return resolve(branchType);
         }
         else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
@@ -2804,11 +2966,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 for (const auto& pat : clause.patterns) {
                     if (pat) {
                         checkPatternArity(*pat);
-                        bindPatternVars(*pat);
+                        bindPatternVars(*pat, subjectType);
                     }
                 }
                 if (clause.guard && *clause.guard) inferExpr(**clause.guard);
-                if (clause.body) {
+                if (clause.body && alwaysReturns(*clause.body)) {
+                    // The arm exits the function; it produces nothing for the
+                    // match to agree with.
+                    inferExpr(*clause.body);
+                } else if (clause.body) {
                     auto t = resolve(inferExpr(*clause.body));
                     auto rt = resolve(resultType);
                     if (std::holds_alternative<UnknownType>(rt->kind) ||
@@ -2995,7 +3161,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           typeToString(condType));
                 }
             }
-            if (node.expr) return inferExpr(*node.expr);
+            // `expr if cond` is a guarded STATEMENT: when the guard is false
+            // nothing is produced, so it cannot hand its expression's type to
+            // the block it closes. `return Ok(x) if done?` is the shape that
+            // matters — it must not make its branch look like it yields a
+            // Result.
+            if (node.expr) {
+                inferExpr(*node.expr);
+                return Type::voidType();
+            }
             return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::BlockExpr>) {

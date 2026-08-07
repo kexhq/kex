@@ -76,6 +76,7 @@ private:
     // Expressions
     auto analyzeExpr(const ast::Expr& expr) -> void;
     auto analyzeBody(const std::vector<ast::ExprPtr>& body) -> void;
+    auto analyzeRescue(const ast::RescueBlock& rescue, SourceLocation loc) -> void;
 
     // Defines every variable a pattern introduces (VarPattern, shorthand
     // record fields, nested constructor/list/tuple args) as a Symbol in
