@@ -6,15 +6,19 @@
 // (strings are binaries and `string:uppercase/1` is Unicode-aware); the
 // tree-walk interpreter needs these helpers to agree with it.
 //
-// The case tables are the SIMPLE (1:1, locale-independent) mappings, which is
-// what both backends apply — `ß` therefore stays `ß` rather than expanding to
-// `SS`. Coverage is the alphabetic ranges that have regular pair structure:
-// ASCII, Latin-1 Supplement, Latin Extended-A, Greek, and Cyrillic. Anything
-// else maps to itself, which is also correct for scripts without case (`日本語`).
+// Case mapping covers all of Unicode, from the generated tables in
+// unicode_case.hxx, and comes in the two flavours the language needs: a Char
+// maps 1:1 (`Char -> Char` cannot expand), while a String uses the full
+// mapping and may grow — `"straße".upperCase` is `"STRASSE"`. Both are
+// locale-independent and applied per codepoint, which is what BEAM's
+// `string:uppercase/1` does; `tools/unicode_case_gen.py` regenerates them.
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "unicode_case.hxx"
 
 namespace kex::utf8 {
 
@@ -88,65 +92,80 @@ inline auto encodeAll(const std::vector<char32_t>& cps) -> std::string {
     return out;
 }
 
-// ---- Simple case mapping --------------------------------------------------
-// Latin Extended-A is built from alternating upper/lower pairs, but in two
-// different phases, and with a handful of codepoints that break the pattern.
+// ---- Case mapping ---------------------------------------------------------
 namespace detail {
-inline auto latinExtendedAUpper(char32_t c) -> char32_t {
-    if (c == 0x0131) return 0x0049;              // dotless i -> I
-    if (c == 0x017F) return 0x0053;              // long s -> S
-    if (c == 0x00FF) return 0x0178;              // ÿ -> Ÿ
-    if (c >= 0x0100 && c <= 0x0137) return (c % 2 == 1) ? c - 1 : c;
-    if (c >= 0x0139 && c <= 0x0148) return (c % 2 == 0) ? c - 1 : c;
-    if (c >= 0x014A && c <= 0x0177) return (c % 2 == 1) ? c - 1 : c;
-    if (c >= 0x0179 && c <= 0x017E) return (c % 2 == 0) ? c - 1 : c;
-    return c;
+
+template <std::size_t N>
+auto findRun(const tables::CaseRun (&runs)[N], char32_t c)
+    -> const tables::CaseRun* {
+    std::size_t low = 0, high = N;
+    while (low < high) {
+        auto mid = low + (high - low) / 2;
+        if (c < runs[mid].start) high = mid;
+        else if (c > runs[mid].end) low = mid + 1;
+        else return &runs[mid];
+    }
+    return nullptr;
 }
-inline auto latinExtendedALower(char32_t c) -> char32_t {
-    if (c == 0x0178) return 0x00FF;              // Ÿ -> ÿ
-    if (c == 0x0130) return 0x0069;              // İ -> i
-    if (c >= 0x0100 && c <= 0x0137) return (c % 2 == 0) ? c + 1 : c;
-    if (c >= 0x0139 && c <= 0x0148) return (c % 2 == 1) ? c + 1 : c;
-    if (c >= 0x014A && c <= 0x0177) return (c % 2 == 0) ? c + 1 : c;
-    if (c >= 0x0179 && c <= 0x017E) return (c % 2 == 1) ? c + 1 : c;
-    return c;
+
+template <std::size_t N>
+auto mapSimple(const tables::CaseRun (&runs)[N], char32_t c) -> char32_t {
+    const auto* run = findRun(runs, c);
+    // A stride of 2 covers alternating upper/lower pairs, so landing inside
+    // the range is not enough — the codepoint must be ON the step.
+    if (!run || (c - run->start) % run->stride != 0) return c;
+    return static_cast<char32_t>(static_cast<std::int32_t>(c) + run->delta);
 }
+
+template <std::size_t N>
+auto findExpansion(const tables::FullCase (&entries)[N], char32_t c)
+    -> const tables::FullCase* {
+    std::size_t low = 0, high = N;
+    while (low < high) {
+        auto mid = low + (high - low) / 2;
+        if (c < entries[mid].from) high = mid;
+        else if (c > entries[mid].from) low = mid + 1;
+        else return &entries[mid];
+    }
+    return nullptr;
+}
+
 } // namespace detail
 
+// Simple (1:1) mapping — what a Char maps to, since a Char must stay one Char.
 inline auto toUpper(char32_t c) -> char32_t {
-    if (c >= U'a' && c <= U'z') return c - 32;
-    // ÷ (U+00F7) sits inside the Latin-1 lowercase block but is a math sign.
-    if (c >= 0x00E0 && c <= 0x00FE && c != 0x00F7) return c - 32;
-    if (c == 0x00FF || (c >= 0x0100 && c <= 0x017F))
-        return detail::latinExtendedAUpper(c);
-    if (c == 0x03C2) return 0x03A3;              // final sigma -> Σ
-    if (c >= 0x03B1 && c <= 0x03C9) return c - 32;
-    if (c >= 0x0430 && c <= 0x044F) return c - 32;
-    if (c >= 0x0450 && c <= 0x045F) return c - 80;
-    return c;
+    return detail::mapSimple(tables::simpleUpper, c);
 }
-
 inline auto toLower(char32_t c) -> char32_t {
-    if (c >= U'A' && c <= U'Z') return c + 32;
-    // × (U+00D7) is the multiplication sign, not a letter.
-    if (c >= 0x00C0 && c <= 0x00DE && c != 0x00D7) return c + 32;
-    if (c == 0x0178 || (c >= 0x0100 && c <= 0x017F))
-        return detail::latinExtendedALower(c);
-    if (c >= 0x0391 && c <= 0x03A9) return c + 32;
-    if (c >= 0x0410 && c <= 0x042F) return c + 32;
-    if (c >= 0x0400 && c <= 0x040F) return c + 80;
-    return c;
+    return detail::mapSimple(tables::simpleLower, c);
 }
 
+// Full mapping — a String may grow ("straße" -> "STRASSE"). Applied per
+// codepoint, so the context-sensitive rules (Greek final sigma) do NOT fire;
+// that matches BEAM's string:uppercase/1 and string:lowercase/1.
 inline auto toUpper(std::string_view s) -> std::string {
     std::string out;
-    for (auto cp : decode(s)) out += encode(toUpper(cp));
+    for (auto cp : decode(s)) {
+        if (const auto* wide = detail::findExpansion(tables::expandUpper, cp)) {
+            for (std::uint8_t i = 0; i < wide->length; i++)
+                out += encode(wide->to[i]);
+        } else {
+            out += encode(toUpper(cp));
+        }
+    }
     return out;
 }
 
 inline auto toLower(std::string_view s) -> std::string {
     std::string out;
-    for (auto cp : decode(s)) out += encode(toLower(cp));
+    for (auto cp : decode(s)) {
+        if (const auto* wide = detail::findExpansion(tables::expandLower, cp)) {
+            for (std::uint8_t i = 0; i < wide->length; i++)
+                out += encode(wide->to[i]);
+        } else {
+            out += encode(toLower(cp));
+        }
+    }
     return out;
 }
 

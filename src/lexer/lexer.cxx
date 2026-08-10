@@ -573,7 +573,11 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
 auto Lexer::lexChar() -> Token {
     if (atEnd()) return errorToken("Unterminated char literal");
 
-    char c;
+    // The token carries the character's UTF-8 BYTES; a Char is one codepoint,
+    // so a non-ASCII one is several of them. Taking a single byte here made
+    // `'α'` an unterminated literal — the closing quote was still two bytes
+    // away — so every char literal outside ASCII was a syntax error.
+    std::string c;
     if (peek() == '\\') {
         advance();
         if (atEnd()) return errorToken("Unterminated char literal escape");
@@ -590,13 +594,16 @@ auto Lexer::lexChar() -> Token {
     } else if (peek() == '\'') {
         return errorToken("Empty char literal");
     } else {
-        c = advance();
+        c += advance();
+        // Continuation bytes (10xxxxxx) belong to the same character.
+        while (!atEnd() && (static_cast<unsigned char>(peek()) & 0xC0) == 0x80)
+            c += advance();
     }
 
     if (atEnd() || peek() != '\'') return errorToken("Unterminated char literal");
     advance(); // closing '
 
-    return makeToken(TokenType::Char, std::string(1, c));
+    return makeToken(TokenType::Char, std::move(c));
 }
 
 auto Lexer::lexAtom() -> Token {
