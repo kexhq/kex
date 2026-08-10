@@ -3316,10 +3316,8 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                                 SourceLocation loc) -> TypePtr {
     // Type predicates used both in the TypeVar bail-out and the concrete section.
     auto isString = [](const TypePtr& t) {
-        auto* list = std::get_if<ListType>(&t->kind);
-        if (!list) return false;
-        auto* elemPrim = std::get_if<PrimitiveType>(&list->element->kind);
-        return elemPrim && elemPrim->kind == PrimitiveType::Char;
+        auto* prim = std::get_if<PrimitiveType>(&t->kind);
+        return prim && prim->kind == PrimitiveType::String;
     };
     auto isChar = [](const TypePtr& t) {
         auto* prim = std::get_if<PrimitiveType>(&t->kind);
@@ -3805,10 +3803,8 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         if (auto* n = std::get_if<NamedType>(&t->kind))
             return n->typeArgs.empty() &&
                    (n->name == "String" || n->name == "FilePath");
-        if (auto* l = std::get_if<ListType>(&t->kind)) {
-            if (auto* p = std::get_if<PrimitiveType>(&l->element->kind))
-                return p->kind == PrimitiveType::Char;
-        }
+        if (auto* p = std::get_if<PrimitiveType>(&t->kind))
+            return p->kind == PrimitiveType::String;
         return false;
     };
     // FunctionType param — e.g. `(T-1) -> Bool` vs `(T81) -> Bool`. Without

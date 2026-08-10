@@ -5,14 +5,151 @@ make String, implement: Enumerable, Foldable do
   reduce :> A -> (A -> Char -> A) -> A
   let reduce(acc, f) = Kex.Intrinsic.List.foldLeft(this, acc, f)
 
-  map :> (Char -> B) -> [B]
-  let map(f) = Kex.Intrinsic.List.map(this, f)
+  # No `map` override: the Enumerable default collects into a list, which is
+  # what `(Char -> B) -> [B]` says. A String-in/String-out mapping is a
+  # different operation with a different type, so it gets its own name.
+  #
+  # @param f [Char -> Char]
+  # @return [String]
+  #
+  # @example
+  #   "hi".mapChars(&.upperCase)   # => "HI"
+  #   "hi".map(&.upperCase)        # => ['H', 'I']  (a list, per Enumerable)
+  mapChars :> (Char -> Char) -> String
+  let mapChars(f) = Kex.Intrinsic.List.map(this, f)
 
   filter :> (Char -> Bool) -> String
   let filter(pred) = Kex.Intrinsic.List.filter(this, pred)
 
   uniq :> String
   let uniq = Kex.Intrinsic.List.uniq(this)
+
+  # A String is its OWN type, not a [Char] — `chars` converts between them.
+  # So the sequence operations below are declared here rather than inherited
+  # from List, and they answer in String's terms: `take`/`drop`/`sort` hand
+  # back a String, while `first`/`last` hand back a Char. The List intrinsics
+  # they delegate to already understand the String representation, so there is
+  # one implementation for both backends.
+
+  # Returns the first character, or None when the string is empty.
+  #
+  # @return [Char?]
+  #
+  # @example
+  #   "hi".first   # => Just('h')
+  #   "".first     # => None
+  first :> Char?
+  let first = Kex.Intrinsic.List.first(this)
+
+  # Returns the last character, or None when the string is empty.
+  #
+  # @return [Char?]
+  #
+  # @example
+  #   "hi".last   # => Just('i')
+  last :> Char?
+  let last = Kex.Intrinsic.List.last(this)
+
+  # Returns the character at +i+, or None when out of range.
+  #
+  # @param i [Integer]
+  # @return [Char?]
+  #
+  # @example
+  #   "hi".get(1)   # => 'i'
+  get :> Integer -> Char?
+  let get(i) = Kex.Intrinsic.List.get(this, i)
+
+  # Returns the character at +i+, or +default+ when out of range.
+  #
+  # @param i [Integer]
+  # @param default [Char]
+  # @return [Char]
+  get :> Integer -> Char -> Char
+  let get(i, default) = Kex.Intrinsic.List.get(this, i, default)
+
+  # Returns the first +n+ characters.
+  #
+  # @param n [Integer]
+  # @return [String]
+  #
+  # @example
+  #   "hello".take(2)   # => "he"
+  take :> Integer -> String
+  let take(n) = Kex.Intrinsic.List.take(this, n)
+
+  # Returns everything after the first +n+ characters.
+  #
+  # @param n [Integer]
+  # @return [String]
+  #
+  # @example
+  #   "hello".drop(2)   # => "llo"
+  drop :> Integer -> String
+  let drop(n) = Kex.Intrinsic.List.drop(this, n)
+
+  # Returns the characters that do NOT satisfy the predicate — filter's
+  # complement.
+  #
+  # @param pred [Char -> Bool]
+  # @return [String]
+  #
+  # @example
+  #   "hello".reject { |c| c == 'l' }   # => "heo"
+  reject :> (Char -> Bool) -> String
+  let reject(pred) = Kex.Intrinsic.List.reject(this, pred)
+
+  # Returns the characters in ascending order.
+  #
+  # @return [String]
+  #
+  # @example
+  #   "hello".sort   # => "ehllo"
+  sort :> String
+  let sort = Kex.Intrinsic.List.sort(this)
+
+  # Returns the index of the first occurrence of +c+, or None.
+  #
+  # @param c [Char]
+  # @return [Integer?]
+  #
+  # @example
+  #   "hello".indexOf('l')   # => 2
+  indexOf :> Char -> Integer?
+  let indexOf(c) = Kex.Intrinsic.List.indexOf(this, c)
+
+  # Returns the index of the first character satisfying the predicate, or
+  # None. Goes through `chars` because there is no direct intrinsic.
+  #
+  # @param pred [Char -> Bool]
+  # @return [Integer?]
+  #
+  # @example
+  #   "hello".findIndex { |c| c == 'l' }   # => 2
+  findIndex :> ((Char) -> Bool) -> Integer?
+  let findIndex(pred) = this.chars.findIndex(pred)
+
+  # Pairs each character with the element at the same index in +other+,
+  # stopping at the shorter of the two.
+  #
+  # @param other [[Y]]
+  # @return [[(Char, Y)]]
+  #
+  # @example
+  #   "ab".zip([1, 2])   # => [('a', 1), ('b', 2)]
+  zip :> [Y] -> [(Char, Y)]
+  let zip(other) = Kex.Intrinsic.List.zip(this, other)
+
+  # Splits into the characters that satisfy the predicate and those that do
+  # not, in that order.
+  #
+  # @param pred [Char -> Bool]
+  # @return [(String, String)]
+  #
+  # @example
+  #   "hello".partition { |c| c == 'l' }   # => ("ll", "heo")
+  partition :> (Char -> Bool) -> (String, String)
+  let partition(pred) = Kex.Intrinsic.List.partition(this, pred)
 
   # Returns the number of characters in the string.
   #
@@ -247,6 +384,18 @@ make String, implement: Enumerable, Foldable do
 end
 
 make Char do
+  # A Char and a String are distinct types, so converting between them is
+  # explicit. `to(String)` is the fallible protocol and answers `String?` like
+  # every other conversion; `string` is the total one, because a character is
+  # always one character of text and has no failure case to report. It is the
+  # single-character counterpart of `String.chars` and `[Char].join("")`.
+  #
+  #   'a'.string                      # => "a"
+  #   'a'.to(String)                  # => Just("a")
+  #   "hi".chars.map(&.string)        # => ["h", "i"]
+  string :> String
+  let string = this.showValue
+
   # Converts this character to upper/lower case while preserving Char.
   upperCase :> Char
   let upperCase = Kex.Intrinsic.String.upperCase(this)

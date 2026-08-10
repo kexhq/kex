@@ -235,10 +235,6 @@ inspect_real(X) when is_binary(X) ->
     inspect_format(?GREEN ++ "\"~ts\"" ++ ?RESET
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
               ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [X]), X;
-inspect_real([{'Char', _} | _] = X) ->
-    inspect_format(?GREEN ++ "\"~ts\"" ++ ?RESET
-              ++ " " ++ ?GRAY ++ ":" ++ ?RESET
-              ++ " " ++ ?CYAN ++ "String" ++ ?RESET ++ "~n", [to_string(X)]), X;
 inspect_real(X) when is_list(X) ->
     inspect_format("~ts"
               ++ " " ++ ?GRAY ++ ":" ++ ?RESET
@@ -289,6 +285,11 @@ drop_until_m([]) -> [];
 drop_until_m([$m | Rest]) -> Rest;
 drop_until_m([_ | Rest]) -> drop_until_m(Rest).
 
+%% A Char renders as 'c' wherever it appears — on its own, inside a list, or
+%% nested in a Just. Without this clause it reached the generic tuple
+%% formatter and a [Char] printed as [(:Char, 104), (:Char, 105)].
+inspect_string({'Char', C}) when is_integer(C) ->
+    ?GREEN ++ "'" ++ [C] ++ "'" ++ ?RESET;
 inspect_string(X) when is_binary(X) ->
     ?GREEN ++ "\"" ++ unicode:characters_to_list(X) ++ "\"" ++ ?RESET;
 inspect_string(X) when is_integer(X) -> ?YELL ++ integer_to_list(X) ++ ?RESET;
@@ -434,13 +435,10 @@ to_string_optional(X) -> {'Just', to_string_bin(X)}.
 % no spaces) instead of `(Underscore, wooo)` (Kex's own tuple syntax:
 % parens, comma-space, unquoted) — spec/my_starts_with.kex.
 % A Kex String is a UTF-8 binary and a Char is {'Char', N}, so [] is
-% unambiguously an empty LIST ("[]"), an [Int] is unambiguously a list of
-% numbers, and a [Char] — which IS String in Kex — displays as text. No
-% printable-list heuristic remains.
+% unambiguously an empty LIST ("[]") and an [Int] is unambiguously a list of
+% numbers. A [Char] is a LIST too — it is not a String — so it prints as one.
 to_string(X) when is_binary(X)  -> unicode:characters_to_list(X);
 to_string({'Char', C})          -> [C];
-to_string([{'Char', _} | _] = L) ->
-    [C || {'Char', C} <- L];
 to_string(X) when is_list(X) ->
     "[" ++ lists:flatten(lists:join(", ", lists:map(fun to_string/1, X))) ++ "]";
 % Kex's None is capitalized at the source level (an UpperIdentifier, like

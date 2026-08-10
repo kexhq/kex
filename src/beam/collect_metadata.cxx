@@ -93,6 +93,7 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
             switch (node.kind) {
                 case kex::semantic::PrimitiveType::Integer: return kexiPrimitive("Integer");
                 case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
+                case kex::semantic::PrimitiveType::String: return kexiPrimitive("String");
                 case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
                 case kex::semantic::PrimitiveType::Atom: return kexiPrimitive("Atom");
                 case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Void");

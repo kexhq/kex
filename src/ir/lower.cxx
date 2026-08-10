@@ -3343,8 +3343,45 @@ struct Lowering {
             letWrap = std::move(subjIr);
             subjIr = var(ssa);
         }
+        // A list pattern over a STRING subject: a String is a binary here, so
+        // `[c | rest]` can never match it structurally — erlc rejects the
+        // clause as unreachable and then crashes lowering it. Coerce the
+        // subject to its [Char] list, exactly as a `@[...]` receiver pattern
+        // does, and pack the tail back so `rest` keeps the subject's type.
+        //
+        // Only when no clause matches a String LITERAL at that position:
+        // `as_list` would turn the subject into a list those clauses could
+        // never match either, trading one broken shape for another.
+        std::string listCoercedSubject;
+        {
+            const auto firstPattern = [](const ast::MatchClause& c) {
+                return c.patterns.empty() ? nullptr : c.patterns[0].get();
+            };
+            const bool anyListPattern = std::any_of(
+                n.clauses.begin(), n.clauses.end(), [&](const auto& c) {
+                    const auto* p = firstPattern(c);
+                    return p && std::holds_alternative<ast::ListPattern>(p->kind);
+                });
+            const bool anyStringPattern = std::any_of(
+                n.clauses.begin(), n.clauses.end(), [&](const auto& c) {
+                    const auto* p = firstPattern(c);
+                    if (!p) return false;
+                    auto* lit = std::get_if<ast::LiteralPattern>(&p->kind);
+                    return lit && (lit->literal.type == TokenType::String ||
+                                   lit->literal.type == TokenType::RawString);
+                });
+            if (anyListPattern && !anyStringPattern)
+                listCoercedSubject = fresh("LSubj");
+        }
         std::vector<ExprPtr> subjects;
-        subjects.push_back(std::move(subjIr));
+        ExprPtr listSubjectValue;
+        if (!listCoercedSubject.empty()) {
+            listSubjectValue = std::move(subjIr);
+            subjects.push_back(callE("kex_intrinsic_list", "as_list", 1,
+                                     one(var(listCoercedSubject))));
+        } else {
+            subjects.push_back(std::move(subjIr));
+        }
         std::vector<MatchClause> cls;
         for (const auto& cl : n.clauses) {
             auto snap = subst;
@@ -3378,10 +3415,25 @@ struct Lowering {
             // the predicate out of BEAM guard position into a nested match.
             if (cl.guard) mc.guard = lower(*cl.guard);
             mc.body = lower(cl.body);
+            // The tail of a list pattern keeps the SUBJECT's type: over a
+            // String `[c | rest]` binds `rest` to the rest of the string.
+            if (!listCoercedSubject.empty() && !mc.patterns.empty() &&
+                mc.patterns[0] && mc.patterns[0]->kind == PatKind::List &&
+                mc.patterns[0]->rest &&
+                mc.patterns[0]->rest->kind == PatKind::Var) {
+                const auto& tail = mc.patterns[0]->rest->name;
+                mc.body = makeLet(tail,
+                                  callE("kex_intrinsic_list", "repack", 2,
+                                        two(var(listCoercedSubject), var(tail))),
+                                  std::move(mc.body));
+            }
             subst = snap;
             cls.push_back(std::move(mc));
         }
         auto e = expandGuards(std::move(subjects), std::move(cls));
+        if (listSubjectValue)
+            e = makeLet(listCoercedSubject, std::move(listSubjectValue),
+                        std::move(e));
         if (letWrap) {
             auto r = makeLet(currentName(subjVar), std::move(letWrap), std::move(e));
             if (subjPrev) subst[subjVar] = *subjPrev; else subst.erase(subjVar);
@@ -4661,6 +4713,21 @@ struct Lowering {
             mc.patterns = std::move(cl.params);
             mc.guard = std::move(cl.guard);
             mc.body = std::move(cl.body);
+            // `@[x | rest]` against a String binds `rest` to the REST OF THE
+            // STRING, not to a [Char] — the two are different types, and the
+            // receiver's own type is the one to keep. The subject was coerced
+            // to a list above, so the tail comes back as a list and has to be
+            // packed back for a binary receiver.
+            if (!mc.patterns.empty() && mc.patterns[0] &&
+                mc.patterns[0]->kind == PatKind::List && mc.patterns[0]->rest &&
+                mc.patterns[0]->rest->kind == PatKind::Var) {
+                const auto& tail = mc.patterns[0]->rest->name;
+                mc.body = makeLet(
+                    tail,
+                    callE("kex_intrinsic_list", "repack", 2,
+                          two(var("_cr0"), var(tail))),
+                    std::move(mc.body));
+            }
             m.clauses.push_back(std::move(mc));
         }
         auto b = std::make_unique<Expr>();

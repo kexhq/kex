@@ -1,6 +1,5 @@
-# String.chars — the string's characters as a [Char].
-# A [Char] renders as a String, so the round trip is invisible in output;
-# element access shows the pieces are real Chars.
+# String.chars — CONVERTS a String to a [Char]. The two are distinct types,
+# so the result displays as the list it is, and `join("")` converts back.
 
 main do
   IO.printLine("hi".chars)
@@ -8,4 +7,6 @@ main do
   IO.printLine("abc".chars.count)
   IO.printLine("abc".chars.first)
   IO.printLine("abc".chars.reverse)
+  IO.printLine("abc".chars.join(""))
+  IO.printLine("abc".chars.join("") == "abc")
 end

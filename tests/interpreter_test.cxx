@@ -1662,9 +1662,16 @@ int main() {
             assertFalse(std::get<BoolValue>(result->data).value);
         });
 
-        it("but [Char] IS String", []() {
+        it("and [Char] is its own type too, not a String", []() {
             auto result = run("main do\n  ['h', 'i'] == \"hi\"\nend\n");
-            assertTrue(std::get<BoolValue>(result->data).value);
+            assertFalse(std::get<BoolValue>(result->data).value);
+        });
+
+        it("converts between String and [Char] with chars/join", []() {
+            auto toChars = run("main do\n  \"hi\".chars == ['h', 'i']\nend\n");
+            assertTrue(std::get<BoolValue>(toChars->data).value);
+            auto back = run("main do\n  ['h', 'i'].join(\"\") == \"hi\"\nend\n");
+            assertTrue(std::get<BoolValue>(back->data).value);
         });
     });
 

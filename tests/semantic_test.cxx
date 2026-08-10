@@ -1554,17 +1554,19 @@ int main() {
             assertEqual(typeToString(Type::float64()), std::string("Float64"));
         });
 
-        it("prints String for [Char], not [Char]", []() {
+        it("prints String and [Char] as the distinct types they are", []() {
             assertEqual(typeToString(Type::string()), std::string("String"));
-            assertEqual(typeToString(Type::list(Type::charT())), std::string("String"));
+            assertEqual(typeToString(Type::list(Type::charT())),
+                        std::string("[Char]"));
         });
 
         it("prints [Char] verbatim for lists of non-Char types as [T]", []() {
             assertEqual(typeToString(Type::list(Type::integer())), std::string("[Integer]"));
         });
 
-        it("treats String as a list of Char structurally", []() {
-            assertTrue(typesEqual(Type::string(), Type::list(Type::charT())));
+        it("does not equate String with [Char]", []() {
+            assertFalse(typesEqual(Type::string(), Type::list(Type::charT())));
+            assertTrue(typesEqual(Type::string(), Type::string()));
         });
 
         it("distinguishes sized ints by bit width and signedness", []() {

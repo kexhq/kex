@@ -13,6 +13,16 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Bool");
     defineModule("Atom");
 
+    // ASCII ranges, tested on the FULL codepoint. std::isalpha and friends
+    // take a byte, so a codepoint above 255 had to be truncated to reach them
+    // — and 'ő' (U+0151) truncated to 0x51, which is 'Q', so `'ő'.alpha?` was
+    // true here and false on BEAM. These predicates are deliberately
+    // ASCII-only on both backends (see runtime/src/kex_intrinsic_char.erl);
+    // `'é'.alpha?` is false, not a truncation artefact.
+    auto asciiAlpha = [](char32_t c) {
+        return (c >= U'A' && c <= U'Z') || (c >= U'a' && c <= U'z');
+    };
+
     auto regCharPredicate = [this](const std::string& publicName,
                                    const std::string& intrinsicName,
                                    NativeFunc fn) {
@@ -62,46 +72,49 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
-    regCharPredicate("alpha?", "is_alpha", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("alpha?", "is_alpha", [asciiAlpha](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("alpha? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(asciiAlpha(c->value));
     });
 
-    regCharPredicate("letter?", "is_letter", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("letter?", "is_letter", [asciiAlpha](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("letter? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("letter? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(asciiAlpha(c->value));
     });
 
     regCharPredicate("upper?", "is_upper", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("upper? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("upper? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isupper(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(c->value >= U'A' && c->value <= U'Z');
     });
 
     regCharPredicate("lower?", "is_lower", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("lower? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("lower? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::islower(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(c->value >= U'a' && c->value <= U'z');
     });
 
     regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isspace(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(c->value == U' '  || c->value == U'\t' ||
+                              c->value == U'\n' || c->value == U'\r' ||
+                              c->value == U'\v' || c->value == U'\f');
     });
 
     defineIntrinsic("Char::codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) return Value::integer(0);
-        return Value::integer(static_cast<unsigned char>(c->value));
+        // The full codepoint, not a byte: `'日'.codepoint` is 26085.
+        return Value::integer(static_cast<int64_t>(c->value));
     });
 
     defineIntrinsic("String::fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {

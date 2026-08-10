@@ -48,15 +48,16 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::string(std::move(s));
     };
 
-    reg("get", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // getElements, not a ListValue cast: a String IS a [Char], so indexing
+    // one yields its Chars (`"hi".get(1)` is `'i'`), as it does on BEAM.
+    reg("get", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::none();
+        auto fallback = [&] { return args.size() >= 3 ? args[2] : Value::none(); };
         auto* idx = std::get_if<IntValue>(&args[1]->data);
-        if (!idx || idx->value < 0) return args.size() >= 3 ? args[2] : Value::none();
+        if (!idx || idx->value < 0) return fallback();
         auto i = static_cast<size_t>(idx->value);
-        if (auto* list = std::get_if<ListValue>(&args[0]->data))
-            return i < list->elements.size() ? list->elements[i]
-                   : (args.size() >= 3 ? args[2] : Value::none());
-        return args.size() >= 3 ? args[2] : Value::none();
+        auto elems = getElements(args[0]);
+        return i < elems.size() ? elems[i] : fallback();
     });
 
 
@@ -189,18 +190,17 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::none();
     });
 
-    reg("join", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("join", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
-        auto* list = std::get_if<ListValue>(&args[0]->data);
-        if (!list) return Value::string("");
+        auto elems = getElements(args[0]);
         std::string sep;
         if (args.size() >= 2) {
             if (auto* s = std::get_if<StringValue>(&args[1]->data)) sep = s->value;
         }
         std::string result;
-        for (size_t i = 0; i < list->elements.size(); i++) {
+        for (size_t i = 0; i < elems.size(); i++) {
             if (i > 0) result += sep;
-            result += list->elements[i]->toString();
+            result += elems[i]->toString();
         }
         return Value::string(result);
     });
@@ -325,15 +325,14 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list({list->elements.begin() + skip, list->elements.end()});
     });
 
-    reg("zip", [](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("zip", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::list({});
-        auto* a = std::get_if<ListValue>(&args[0]->data);
-        auto* b = std::get_if<ListValue>(&args[1]->data);
-        if (!a || !b) return Value::list({});
-        auto len = std::min(a->elements.size(), b->elements.size());
+        auto a = getElements(args[0]);
+        auto b = getElements(args[1]);
+        auto len = std::min(a.size(), b.size());
         std::vector<ValuePtr> result;
         for (size_t i = 0; i < len; i++)
-            result.push_back(Value::tuple({a->elements[i], b->elements[i]}));
+            result.push_back(Value::tuple({a[i], b[i]}));
         return Value::list(std::move(result));
     });
 
@@ -365,8 +364,9 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
-    reg("partition", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("partition", [getElements, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return Value::tuple({Value::list({}), Value::list({})});
+        const bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
         auto* fn = std::get_if<FunctionValue>(&args[1]->data);
         if (!fn || !fn->native) return Value::tuple({Value::list({}), Value::list({})});
@@ -375,7 +375,11 @@ auto Evaluator::registerListBuiltins() -> void {
             if (fn->native({elem})->isTrue()) yes.push_back(elem);
             else no.push_back(elem);
         }
-        return Value::tuple({Value::list(std::move(yes)), Value::list(std::move(no))});
+        // Both halves keep the receiver's type — see `sort` above.
+        auto pack = [&](std::vector<ValuePtr> v) {
+            return srcIsStr ? repackChars(std::move(v)) : Value::list(std::move(v));
+        };
+        return Value::tuple({pack(std::move(yes)), pack(std::move(no))});
     });
 
     reg("indexOf", [getElements](std::vector<ValuePtr> args) -> ValuePtr {
@@ -440,10 +444,15 @@ auto Evaluator::registerListBuiltins() -> void {
         return "Equal";
     };
 
-    reg("sort", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {
+    reg("sort", [this, getElements, compareVia, repackChars](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::list({});
+        // String-preserving: an operation on a String answers with a String,
+        // as its declared signature says. A String and a [Char] are different
+        // types, so handing back the list would be a different type entirely.
+        const bool srcIsStr = std::holds_alternative<StringValue>(args[0]->data);
         auto elems = getElements(args[0]);
-        if (elems.empty()) return Value::list({});
+        if (elems.empty())
+            return srcIsStr ? Value::string("") : Value::list({});
 
         // 2-arg form: sort(list, comparator) where comparator(a,b) -> Bool
         if (args.size() >= 2) {
@@ -463,7 +472,8 @@ auto Evaluator::registerListBuiltins() -> void {
             [&compareVia](const ValuePtr& a, const ValuePtr& b) {
                 return compareVia(a, b) == "Less";
             });
-        return Value::list(std::move(elems));
+        return srcIsStr ? repackChars(std::move(elems))
+                        : Value::list(std::move(elems));
     });
 
     reg("min", [this, getElements, compareVia](std::vector<ValuePtr> args) -> ValuePtr {

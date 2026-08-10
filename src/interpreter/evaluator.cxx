@@ -2609,12 +2609,12 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (lf && rf) return floatOp(lf->value + rf->value, "Float addition");
             if (leftInt && rf) return floatOp(intToDouble(li, *leftInt) + rf->value, "Float addition");
             if (lf && rightInt) return floatOp(lf->value + intToDouble(ri, *rightInt), "Float addition");
-            // String/Char/[Char] concatenate as text — e.g. 'a' + 'b' ==
-            // "ab", "ab" + 'c' == "abc". This is broader than the Char/
-            // String *equality* rule (Char isn't a String for ==) — here
-            // we just want "what text does this contribute", which a bare
-            // Char answers fine; see textContent vs. stringOrCharListText
-            // in value.cxx.
+            // String and Char concatenate as text — e.g. 'a' + 'b' == "ab",
+            // "ab" + 'c' == "abc". This is broader than the Char/String
+            // *equality* rule (Char isn't a String for ==) — here we just
+            // want "what text does this contribute", which a bare Char
+            // answers fine; see textContent vs. stringText in value.cxx.
+            // A [Char] is a list and concatenates as one, just above.
             {
                 auto* ll = std::get_if<ListValue>(&left->data);
                 auto* rl = std::get_if<ListValue>(&right->data);

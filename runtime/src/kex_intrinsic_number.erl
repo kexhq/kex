@@ -25,25 +25,12 @@ add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
 add(A, B) -> A + B.
 
-%% eq/neq — Kex ==. Strict equality except the one representation split the
-%% language defines away: [Char] IS String, so a list of tagged Chars and a
-%% binary holding the same text are equal. Nothing else coerces (an [Int]
-%% list is NOT a String, and a [String] list is NOT the concatenated string).
-eq(A, B) when is_list(A), is_binary(B) -> charlist_eq(A, B);
-eq(A, B) when is_binary(A), is_list(B) -> charlist_eq(B, A);
+%% eq/neq — Kex ==. Strict: a String is its own type, NOT a [Char], so a
+%% binary and a list of tagged Chars holding the same text are NOT equal.
+%% `chars` converts one to the other and `join("")` converts back.
 eq(A, B) -> A =:= B.
 
 neq(A, B) -> not eq(A, B).
-
-charlist_eq(L, Bin) ->
-    case charlist_opt(L, []) of
-        {ok, Cs} ->
-            case unicode:characters_to_binary(Cs) of
-                B2 when is_binary(B2) -> B2 =:= Bin;
-                _ -> false
-            end;
-        error -> false
-    end.
 
 %% The codepoint list of a [Char] (tagged) — errors on anything else.
 charlist(L) ->
