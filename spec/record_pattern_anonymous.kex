@@ -2,17 +2,15 @@
 # record (or map) carrying the listed fields, without asserting a type. This is
 # the counterpart to spec/record_pattern_named.kex.
 #
-# Two known gaps, both pre-existing and both interpreter-only behaviour today —
-# pinned here so a future fix shows up as a spec diff:
+# One known gap, on BOTH backends: `match` does not destructure MAPS via
+# `{ k }` (the walker's matchPattern RecordPattern case only inspects
+# RecordValue; the map branch lives in the let-destructuring path, and BEAM's
+# structural test admits tuples only to stay in step). A `let { k } = map` does
+# work. Pinned here so a future fix shows up as a spec diff.
 #
-#  1. `match` does not destructure MAPS via `{ k }` (matchPattern's
-#     RecordPattern case only inspects RecordValue; the map branch lives in the
-#     let-destructuring path). A `let { k } = map` does work.
-#  2. The BEAM backend cannot lower an anonymous record pattern in a match arm
-#     or `if let` — with no type name there is no field layout to index. It
-#     reports a clear error rather than miscompiling. Named patterns work on
-#     both backends. So this file is expected to show as "differing" under
-#     `make spec-beam`, which is informational and not a build failure.
+# BEAM matches the walker here: with no type name it tests the subject against
+# every record layout carrying the listed fields and reads each field through
+# that tag's own offset.
 
 record Miss do
   value : String

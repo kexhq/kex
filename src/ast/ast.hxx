@@ -170,7 +170,8 @@ struct StringLiteral {
     std::vector<std::string> parts;
     std::vector<ExprPtr> values;
 };
-struct CharLiteral { char value; };
+// A Unicode codepoint — `'é'` is one Char, not its two UTF-8 bytes.
+struct CharLiteral { char32_t value; };
 struct BoolLiteral { bool value; };
 struct NoneLiteral {};
 struct AtomLiteral { std::string name; };

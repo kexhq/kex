@@ -1,4 +1,5 @@
 #include "parser.hxx"
+#include "../common/utf8.hxx"
 #include <stdexcept>
 
 namespace kex {
@@ -1628,7 +1629,9 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     }
     if (check(TokenType::Char)) {
         auto val = advance().value;
-        expr->kind = ast::CharLiteral{val.empty() ? '\0' : val[0]};
+        auto codepoints = utf8::decode(val);
+        expr->kind =
+            ast::CharLiteral{codepoints.empty() ? U'\0' : codepoints.front()};
         return expr;
     }
     if (match(TokenType::True)) {

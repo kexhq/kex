@@ -1,5 +1,6 @@
 #include "value.hxx"
 #include "../common/color.hxx"
+#include "../common/utf8.hxx"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -163,7 +164,7 @@ auto Value::string(std::string v) -> ValuePtr {
     return std::make_shared<Value>(Value{StringValue{std::move(v)}});
 }
 
-auto Value::character(char v) -> ValuePtr {
+auto Value::character(char32_t v) -> ValuePtr {
     return std::make_shared<Value>(Value{CharValue{v}});
 }
 
@@ -244,7 +245,7 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
         else if constexpr (std::is_same_v<T, StringValue>) return v.value;
-        else if constexpr (std::is_same_v<T, CharValue>) return std::string(1, v.value);
+        else if constexpr (std::is_same_v<T, CharValue>) return utf8::encode(v.value);
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
         else if constexpr (std::is_same_v<T, AtomValue>) return ":" + v.name;
         else if constexpr (std::is_same_v<T, VariantValue>) {
@@ -269,7 +270,8 @@ auto Value::toString() const -> std::string {
             }
             if (allChars) {
                 std::string result;
-                for (const auto& el : v.elements) result += std::get<CharValue>(el->data).value;
+                for (const auto& el : v.elements)
+                    result += utf8::encode(std::get<CharValue>(el->data).value);
                 return result;
             }
             std::string result = "[";
@@ -358,7 +360,7 @@ auto Value::toRepr() const -> std::string {
             return "\"" + v.value + "\"";
         }
         else if constexpr (std::is_same_v<T, CharValue>) {
-            return "'" + std::string(1, v.value) + "'";
+            return "'" + utf8::encode(v.value) + "'";
         }
         else if constexpr (std::is_same_v<T, ListValue>) {
             std::string result = "[";
@@ -499,7 +501,7 @@ auto stringOrCharListText(const ValuePtr& v) -> std::optional<std::string> {
         for (const auto& el : l->elements) {
             auto* ec = std::get_if<CharValue>(&el->data);
             if (!ec) return std::nullopt;
-            out += ec->value;
+            out += utf8::encode(ec->value);
         }
         return out;
     }
@@ -510,7 +512,7 @@ auto stringOrCharListText(const ValuePtr& v) -> std::optional<std::string> {
 // "what text would concatenating/printing this produce" (+ and toString()),
 // not "is this the same type as String" (valuesEqual, pattern matching).
 auto textContent(const ValuePtr& v) -> std::optional<std::string> {
-    if (auto* c = std::get_if<CharValue>(&v->data)) return std::string(1, c->value);
+    if (auto* c = std::get_if<CharValue>(&v->data)) return utf8::encode(c->value);
     return stringOrCharListText(v);
 }
 
@@ -631,7 +633,7 @@ auto Value::inspect() const -> std::string {
             else if constexpr (std::is_same_v<T, StringValue>)
                 return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
             else if constexpr (std::is_same_v<T, CharValue>)
-                return std::string(c(green)) + "'" + std::string(1, node.value) + "'" + c(reset);
+                return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
             else if constexpr (std::is_same_v<T, BoolValue>)
                 return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
             else if constexpr (std::is_same_v<T, AtomValue>)
@@ -658,7 +660,8 @@ auto Value::inspect() const -> std::string {
                     if (!std::holds_alternative<CharValue>(el->data)) { allChars = false; break; }
                 if (allChars) {
                     std::string s;
-                    for (const auto& el : node.elements) s += std::get<CharValue>(el->data).value;
+                    for (const auto& el : node.elements)
+                        s += utf8::encode(std::get<CharValue>(el->data).value);
                     return std::string(c(green)) + "\"" + s + "\"" + c(reset);
                 }
                 std::string result = "[";

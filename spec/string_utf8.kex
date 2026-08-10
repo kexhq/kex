@@ -1,20 +1,11 @@
-# UTF-8 handling in String — and a REAL divergence between the backends.
+# UTF-8 handling in String — a String is TEXT, not bytes, on both backends.
 #
-# The interpreter treats a String as BYTES; BEAM treats it as codepoints:
-#
-#            "école".length   "école".chars.count   "école".capitalize
-#   interp   6                6                     "école"  (unchanged)
-#   BEAM     5                5                     "École"
-#
-# `chars` in the interpreter splits "école" into 6 items because `é` is two
-# bytes, so `chars[0]` is a half-character: upper-casing it does nothing and
-# the pieces reassemble to the original. BEAM splits into 5 codepoints and
-# capitalizes correctly.
-#
-# The .expected here records the INTERPRETER's behaviour (what `make spec`
-# checks), so this file shows up in `make spec-beam`'s differing list. That is
-# accurate, not a test bug: BEAM is right and the interpreter is wrong. Pinned
-# so the fix shows up as a spec diff.
+# `"école".length` is 5, `chars` yields five Chars, and `capitalize` reaches
+# the `é`. The walker used to treat a String as bytes: `chars` split "école"
+# into six items because `é` is two bytes, so `chars[0]` was half a character
+# that upper-cased to nothing and reassembled unchanged. A Char is now a
+# codepoint (interpreter) / `{'Char', N}` (BEAM), and case mapping is the
+# SIMPLE Unicode mapping on both — so `ß` stays `ß` rather than becoming `SS`.
 #
 # ASCII is identical on both backends — see spec/string_capitalize.kex.
 
@@ -33,7 +24,7 @@ main do
   # ASCII lead with a multi-byte tail — the lead capitalizes on both
   IO.printLine("[${"straße".capitalize}]")
 
-  # Where the byte-vs-codepoint split shows up directly
+  # Counted in characters, not bytes
   IO.printLine("length ${"école".length}")
   IO.printLine("chars  ${"école".chars.count}")
   IO.printLine("ascii  ${"cafe".length}")

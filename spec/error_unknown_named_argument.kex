@@ -2,10 +2,10 @@
 # ignoring it would run `render` as if the label had never been written and
 # hand back a plausible-looking answer to a question nobody asked.
 #
-# KNOWN BEAM DIVERGENCE: BEAM still drops the label, printing "[hi @None]"
-# instead of reporting it — the same silent-wrong-answer this spec pins down
-# on the walker side. The check lives in the walker's `callFunction`; the IR
-# lowering path has no equivalent.
+# Both backends report it: the walker in `callFunction`, BEAM by lowering the
+# call to the same runtime error, so a program that never reaches the line
+# still compiles — with the same message and source location on both.
+#
 let render(text: String) = "[${text}]"
 let render(text: String, width: Integer) = "[${text} @${width}]"
 

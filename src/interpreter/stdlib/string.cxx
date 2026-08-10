@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/utf8.hxx"
 #include "regex_support.hxx"
 #include <algorithm>
 #include <cctype>
@@ -33,7 +34,8 @@ auto Evaluator::registerStringBuiltins() -> void {
         }
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::none();
-        return i < str->value.size() ? Value::character(str->value[i]) : Value::none();
+        auto cps = utf8::decode(str->value);
+        return i < cps.size() ? Value::character(cps[i]) : Value::none();
     };
     defineIntrinsic("List::at", std::move(at));
 
@@ -43,9 +45,10 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
+        auto cps = utf8::decode(str->value);
         std::vector<ValuePtr> elems;
-        elems.reserve(str->value.size());
-        for (char c : str->value) elems.push_back(Value::character(c));
+        elems.reserve(cps.size());
+        for (auto cp : cps) elems.push_back(Value::character(cp));
         return Value::list(std::move(elems));
     });
 
@@ -264,24 +267,20 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.upperCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
-            return Value::character(static_cast<char>(std::toupper(cv->value)));
+            return Value::character(utf8::toUpper(cv->value));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
-        std::string result = str->value;
-        for (auto& c : result) c = static_cast<char>(std::toupper(c));
-        return Value::string(result);
+        return Value::string(utf8::toUpper(str->value));
     });
 
     defineIntrinsic("String::lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.lowerCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
-            return Value::character(static_cast<char>(std::tolower(cv->value)));
+            return Value::character(utf8::toLower(cv->value));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
-        std::string result = str->value;
-        for (auto& c : result) c = static_cast<char>(std::tolower(c));
-        return Value::string(result);
+        return Value::string(utf8::toLower(str->value));
     });
 
     // Also handles List (reversing elements), since the same `reverse`
@@ -289,8 +288,10 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineIntrinsic("List::reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            std::string result(str->value.rbegin(), str->value.rend());
-            return Value::string(result);
+            // By codepoint — reversing bytes would shred multi-byte characters.
+            auto cps = utf8::decode(str->value);
+            std::reverse(cps.begin(), cps.end());
+            return Value::string(utf8::encodeAll(cps));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             std::vector<ValuePtr> result(list->elements.rbegin(), list->elements.rend());

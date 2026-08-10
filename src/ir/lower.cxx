@@ -1,4 +1,5 @@
 #include "lower.hxx"
+#include "../common/utf8.hxx"
 #include "../common/type_def_utils.hxx"
 #include "../lexer/token.hxx"
 #include "../lexer/lexer.hxx"
@@ -264,6 +265,11 @@ struct Lowering {
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
     std::unordered_map<std::string, std::vector<std::string>> fnParamNames;
+    // Every parameter name ANY overload of that function declares. fnParamNames
+    // keeps one clause set, which is all the positional reordering needs but
+    // not enough to judge a label unknown: `render(text:)` is valid for the
+    // 1-param overload even when the 2-param one was recorded.
+    std::unordered_map<std::string, std::set<std::string>> fnAllParamNames;
     // Top-level trailing defaults, used to expand omitted arguments at local
     // call sites just as methodDefaults does for receiver calls.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> fnDefaults;
@@ -364,6 +370,70 @@ struct Lowering {
             + std::to_string(currentLoc->column) + ": ";
         return callE("erlang", "error", 1, one(lit(LitKind::String,
             loc + "runtime error: " + msg)));
+    }
+
+    // A named argument no clause of the target declares. Dropping it would run
+    // the call as if the label had never been written and hand back a
+    // plausible-looking answer to a question nobody asked, so both backends
+    // report it — as a RUNTIME error, so a program that never reaches the line
+    // still compiles. When another module does declare that label, name it:
+    // that is nearly always a missing `using`. Mirrors the walker's
+    // Evaluator::callFunction message exactly.
+    auto unknownNamedArgument(const std::string& qualified,
+                              const std::string& label) -> ExprPtr {
+        auto message = "unknown named argument `" + label + ":` for `" +
+                       qualified + "`";
+        const auto separator = qualified.rfind("::");
+        const auto plain = separator == std::string::npos
+            ? qualified : qualified.substr(separator + 2);
+        // A module named `Mod.fn` whose `fn` declares this label. Three places
+        // hold that, depending on where the module came from: compiled in this
+        // same unit (`Units.SI` is, since the program names it), imported as an
+        // ordinary export, or registered as a provider's receiver function.
+        const auto owningModule =
+            [&](const std::string& qualifiedName,
+                const auto& params) -> std::string {
+            auto dot = qualifiedName.rfind('.');
+            if (dot == std::string::npos ||
+                qualifiedName.substr(dot + 1) != plain)
+                return {};
+            if (std::find(params.begin(), params.end(), label) == params.end())
+                return {};
+            return qualifiedName.substr(0, dot);
+        };
+        std::string module;
+        for (const auto& [qualifiedLocal, params] : fnParamNames) {
+            module = owningModule(qualifiedLocal, params);
+            if (!module.empty()) break;
+        }
+        if (externalModules) {
+            if (module.empty())
+                for (const auto& [qualifiedExport, params] :
+                     externalModules->exportParamNames) {
+                    module = owningModule(qualifiedExport, params);
+                    if (!module.empty()) break;
+                }
+            if (module.empty())
+                if (auto found = externalModules->receiverFunctions.find(plain);
+                    found != externalModules->receiverFunctions.end())
+                    for (const auto& candidate : found->second) {
+                        if (std::find(candidate.paramNames.begin(),
+                                      candidate.paramNames.end(),
+                                      label) == candidate.paramNames.end())
+                            continue;
+                        for (const auto& [name, atom] :
+                             externalModules->nameToAtom)
+                            if (atom == candidate.moduleAtom) {
+                                module = name;
+                                break;
+                            }
+                        if (!module.empty()) break;
+                    }
+        }
+        if (!module.empty())
+            message += " — `" + module + "` defines a matching `" + plain +
+                       "`; add `using " + module + "`";
+        return runtimeError(message);
     }
 
     static auto opSymbol(TokenType t) -> std::string {
@@ -520,7 +590,7 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::BoolLiteral>) {
                 return litBool(n.value);
             } else if constexpr (std::is_same_v<T, ast::CharLiteral>) {
-                return lit(LitKind::Char, std::string(1, n.value));
+                return lit(LitKind::Char, utf8::encode(n.value));
             } else if constexpr (std::is_same_v<T, ast::AtomLiteral>) {
                 return lit(LitKind::Atom, n.name);
             } else if constexpr (std::is_same_v<T, ast::NoneLiteral>) {
@@ -1250,6 +1320,11 @@ struct Lowering {
             }
             if (it == fnParamNames.end())
                 throw LowerError("IR lower: named args to unknown function " + n.name);
+            if (auto declared = fnAllParamNames.find(n.name);
+                declared != fnAllParamNames.end())
+                for (const auto& [label, _] : n.namedArgs)
+                    if (!declared->second.count(label))
+                        return unknownNamedArgument(n.name, label);
             const auto& pnames = it->second;
             std::vector<Binding> binds;
             std::vector<ExprPtr> slots(pnames.size());
@@ -1375,9 +1450,6 @@ struct Lowering {
 
     auto makeTraitDictionary(const std::string& trait,
                              const ast::Expr& value) -> ExprPtr {
-        auto contract = traitMethods.find(trait);
-        if (contract == traitMethods.end())
-            throw LowerError("IR lower: unknown trait dictionary " + trait);
         std::string concreteType;
         if (expressionTypes) {
             if (auto found = expressionTypes->find(&value);
@@ -1387,6 +1459,17 @@ struct Lowering {
         if (auto owner = variantOwner.find(concreteType);
             owner != variantOwner.end())
             concreteType = owner->second;
+        return makeTraitDictionaryFor(trait, concreteType);
+    }
+
+    // The dictionary itself, for an already-resolved receiver type. An empty
+    // `concreteType` means "not known here" and yields the provider's generic
+    // dispatcher for every method, which routes on the runtime tag.
+    auto makeTraitDictionaryFor(const std::string& trait,
+                                const std::string& concreteType) -> ExprPtr {
+        auto contract = traitMethods.find(trait);
+        if (contract == traitMethods.end())
+            throw LowerError("IR lower: unknown trait dictionary " + trait);
         std::vector<ExprPtr> slots;
         std::vector<Binding> dictionaryBindings;
         for (const auto& method : contract->second) {
@@ -1475,6 +1558,66 @@ struct Lowering {
         dictionary->node = MakeTuple{std::move(slots)};
         return wrapLets(dictionaryBindings, std::move(dictionary));
     }
+
+    // A trait-typed parameter is compiled as TWO backend arguments: the value
+    // and a dictionary the CALL SITE builds from the argument's static type.
+    // `IO.printLine(msg: Showable)` is therefore `printLine`/2 on BEAM and
+    // there is no `printLine`/1 at all — so every call site that cannot name
+    // the argument's type emits an `undef`. Two shapes reach that state and
+    // neither is a mistake at the source level:
+    //
+    //   - a `~Module.fn` capture, which has no argument to inspect yet, and
+    //   - a call whose argument type is genuinely unknown here, e.g. the
+    //     return of a cross-file function the checker could not infer
+    //     (spec/crossfile_using.kex's recursive `Utils.Strings.repeat`).
+    //
+    // So the definition also publishes the SOURCE arity, filling each
+    // dictionary with the provider's generic dispatcher — exactly what the
+    // call site emits when it knows nothing about the type. Dispatch stays
+    // identical; only the place the dictionary is built moves.
+    auto makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef> {
+        if (def.dictionaryTraits.empty()) return std::nullopt;
+        const int wrapped =
+            def.arity - static_cast<int>(def.dictionaryTraits.size());
+        if (wrapped < 0) return std::nullopt;
+        std::vector<ExprPtr> args;
+        std::vector<std::string> params;
+        for (int i = 0; i < wrapped; ++i) {
+            params.push_back(fresh("Fwd"));
+            args.push_back(var(params.back()));
+        }
+        std::vector<Binding> binds;
+        for (const auto& trait : def.dictionaryTraits) {
+            // A trait whose dictionary cannot be built without a concrete type
+            // has no generic answer to give; leave that arity undefined rather
+            // than emit a call to a function that does not exist.
+            ExprPtr dictionary;
+            try {
+                dictionary = makeTraitDictionaryFor(trait, "");
+            } catch (const LowerError&) {
+                return std::nullopt;
+            }
+            auto name = fresh("FwdDict");
+            binds.push_back({name, std::move(dictionary)});
+            args.push_back(var(name));
+        }
+        FunDef wrapper;
+        wrapper.name = def.name;
+        wrapper.arity = wrapped;
+        wrapper.exported = def.exported;
+        FunClause clause;
+        for (const auto& name : params) {
+            auto pat = std::make_unique<Pattern>();
+            pat->kind = PatKind::Var;
+            pat->name = name;
+            clause.params.push_back(std::move(pat));
+        }
+        clause.body = wrapLets(
+            binds, callE("", def.name, def.arity, std::move(args)));
+        wrapper.clauses.push_back(std::move(clause));
+        return wrapper;
+    }
+
     // A module path `A.B.C` (nested modules, encoded by the parser as a chain
     // of MethodCall nodes with no args) flattened to the qualified name
     // ["A","B","C"], or empty if the receiver isn't a pure uppercase path.
@@ -2345,16 +2488,31 @@ struct Lowering {
                     pargs.push_back(rv());
                     if (!n.namedArgs.empty()) {
                         auto expected = static_cast<size_t>(actualArity - 1);
-                        if (match->paramNames.size() != expected)
-                            throw LowerError(
-                                "IR lower: named args to receiver function with unknown params: " + m);
+                        // The walker names the target as the receiver TYPE
+                        // owns it (`Measure::to`). A generic trait fallback
+                        // carries no receiver type, so fall back to the
+                        // receiver's static type.
+                        std::string owner = match->receiverType;
+                        if (owner.empty() && expressionTypes && n.receiver)
+                            if (auto found =
+                                    expressionTypes->find(n.receiver.get());
+                                found != expressionTypes->end() && found->second)
+                                owner = semantic::typeToString(found->second);
+                        const auto qualified =
+                            owner.empty() ? m : owner + "::" + m;
+                        // The selected clause does not declare the labels it
+                        // was given — the walker's "unknown named argument",
+                        // reported the same way here.
+                        if (match->paramNames.size() != expected) {
+                            const auto& [label, _] = n.namedArgs.front();
+                            return ret(unknownNamedArgument(qualified, label));
+                        }
                         std::vector<ExprPtr> slots(match->paramNames.size());
                         for (const auto& [name, value] : n.namedArgs) {
                             auto it = std::find(match->paramNames.begin(),
                                                 match->paramNames.end(), name);
                             if (it == match->paramNames.end())
-                                throw LowerError("IR lower: unknown named arg " + name +
-                                                 " for receiver function " + m);
+                                return ret(unknownNamedArgument(qualified, name));
                             slots[static_cast<size_t>(it - match->paramNames.begin())] =
                                 atomize_ir(lower(value), rb);
                         }
@@ -2870,6 +3028,130 @@ struct Lowering {
         }
         return body;
     }
+    // The anonymous `{ a, b }` pattern is STRUCTURAL: it matches any record
+    // carrying those fields, asserting no type. A record is a tagged tuple
+    // here, so there is no single Core Erlang pattern for that — but the set
+    // of record layouts is known at compile time, so the test is "the subject
+    // is a tuple tagged with one of the records that has every listed field".
+    // The fields themselves are then read through the generic accessors, which
+    // already dispatch on the tag.
+    //
+    // Deliberately tuple-only: a MAP does not match, matching the walker,
+    // whose `match` arm inspects RecordValue alone (`let { k } = map` is a
+    // different path and does destructure maps — see
+    // spec/record_pattern_anonymous.kex).
+    auto anonymousRecordCandidates(const ast::RecordPattern& rp)
+        -> std::vector<std::string> {
+        std::vector<std::string> names;
+        collectRecordBindings(rp, names);
+        std::vector<std::string> tags;
+        for (const auto& [record, info] : records) {
+            const bool hasAll = std::all_of(
+                rp.fields.begin(), rp.fields.end(), [&](const auto& field) {
+                    return std::find(info.fields.begin(), info.fields.end(),
+                                     field.name) != info.fields.end();
+                });
+            if (hasAll) tags.push_back(record);
+        }
+        std::sort(tags.begin(), tags.end()); // stable output across runs
+        return tags;
+    }
+    auto anonymousRecordTest(const std::string& subject,
+                             const ast::RecordPattern& rp) -> ExprPtr {
+        auto tags = anonymousRecordCandidates(rp);
+        if (tags.empty()) return litBool(false);
+        Match m;
+        m.subjects.push_back(
+            callE("erlang", "element", 2, two(litInt(1), var(subject))));
+        for (const auto& tag : tags) {
+            MatchClause hit;
+            auto pat = std::make_unique<Pattern>();
+            pat->kind = PatKind::Lit;
+            pat->litKind = LitKind::Atom;
+            pat->litText = tag;
+            hit.patterns.push_back(std::move(pat));
+            hit.body = litBool(true);
+            m.clauses.push_back(std::move(hit));
+        }
+        MatchClause miss;
+        miss.patterns.push_back(wildPat());
+        miss.body = litBool(false);
+        m.clauses.push_back(std::move(miss));
+        auto tagTest = std::make_unique<Expr>();
+        tagTest->node = std::move(m);
+        // `element/1` would raise on a non-tuple, so the tuple test has to
+        // guard it rather than sit beside it in a conjunction.
+        return matchBool(callE("erlang", "is_tuple", 1, one(var(subject))),
+                         std::move(tagTest), litBool(false));
+    }
+    // Read `field` off a subject known to be one of `tags`. The by-name
+    // accessor cannot be used here: it resolves to the FIRST record declaring
+    // the name (`value` is the prelude ParseError's fourth field), which is a
+    // silently wrong offset for anyone else's record. The candidate set is
+    // known, so dispatch on the tag and index each layout directly.
+    auto anonymousFieldRead(const std::string& subject,
+                            const std::vector<std::string>& tags,
+                            const std::string& field) -> ExprPtr {
+        Match m;
+        m.subjects.push_back(
+            callE("erlang", "element", 2, two(litInt(1), var(subject))));
+        for (const auto& tag : tags) {
+            const auto& fields = records.at(tag).fields;
+            auto at = std::find(fields.begin(), fields.end(), field);
+            if (at == fields.end()) continue;
+            MatchClause hit;
+            auto pat = std::make_unique<Pattern>();
+            pat->kind = PatKind::Lit;
+            pat->litKind = LitKind::Atom;
+            pat->litText = tag;
+            hit.patterns.push_back(std::move(pat));
+            hit.body = callE(
+                "erlang", "element", 2,
+                two(litInt(static_cast<int>(at - fields.begin()) + 2),
+                    var(subject)));
+            m.clauses.push_back(std::move(hit));
+        }
+        auto byTag = std::make_unique<Expr>();
+        byTag->node = std::move(m);
+        // A `let { k } = someMap` destructures a map too (the walker's
+        // let-binding path does). Match arms never reach this on a map — the
+        // structural test above admits tuples only.
+        return matchBool(callE("erlang", "is_map", 1, one(var(subject))),
+                         callE("maps", "get", 2,
+                               two(lit(LitKind::String, field), var(subject))),
+                         std::move(byTag));
+    }
+    auto wrapAnonymousRecordPattern(const std::string& subject,
+                                    const ast::RecordPattern& rp,
+                                    ExprPtr body) -> ExprPtr {
+        auto tags = anonymousRecordCandidates(rp);
+        for (auto it = rp.fields.rbegin(); it != rp.fields.rend(); ++it) {
+            auto value = anonymousFieldRead(subject, tags, it->name);
+            if (!it->pattern) {
+                body = makeLet(it->name, std::move(value), std::move(body));
+            } else if (auto* vp =
+                           std::get_if<ast::VarPattern>(&(*it->pattern)->kind)) {
+                body = makeLet(vp->name, std::move(value), std::move(body));
+            } else if (auto* nested = std::get_if<ast::RecordPattern>(
+                           &(*it->pattern)->kind);
+                       nested && nested->typeName.empty()) {
+                std::string sub = fresh("Anon");
+                body = wrapAnonymousRecordPattern(sub, *nested, std::move(body));
+                body = makeLet(sub, std::move(value), std::move(body));
+            } else {
+                body = makeMatch1(std::move(value), lowerPattern(*it->pattern),
+                                  std::move(body));
+            }
+        }
+        return body;
+    }
+    // The anonymous record pattern of a single-pattern clause, or null.
+    static auto anonymousRecordPattern(const std::vector<ast::PatternPtr>& pats)
+        -> const ast::RecordPattern* {
+        if (pats.size() != 1 || !pats[0]) return nullptr;
+        auto* rp = std::get_if<ast::RecordPattern>(&pats[0]->kind);
+        return rp && rp->typeName.empty() ? rp : nullptr;
+    }
     // A top-level destructuring `let` has to expose every name it binds as its
     // own 0-arity function, the same shape a simple `let name = value` gets.
     // Each one re-runs the right-hand side and keeps its own component, which
@@ -2877,6 +3159,15 @@ struct Lowering {
     auto topLevelPatternBinding(const ast::LetExpr& le, const std::string& name)
         -> ExprPtr {
         if (auto* rp = std::get_if<ast::RecordPattern>(&le.pattern->kind)) {
+            if (rp->typeName.empty()) {
+                std::string rv = fresh("Anon");
+                std::vector<std::string> names;
+                collectRecordBindings(*rp, names);
+                for (const auto& bound : names) subst[bound] = bound;
+                return makeLet(
+                    rv, lower(le.value),
+                    wrapAnonymousRecordPattern(rv, *rp, var(name)));
+            }
             std::string rv = fresh("rec");
             std::vector<std::pair<std::string, ExprPtr>> prefix;
             destructureRecordPattern(rv, *rp, prefix);
@@ -2988,6 +3279,21 @@ struct Lowering {
         if (n.letPattern) {
             auto subj = lower(n.condition); // condition holds the scrutinee
             auto snap = subst;
+            // `if let { a, b } = x`: same structural test as a match arm.
+            if (auto* rp = std::get_if<ast::RecordPattern>(&n.letPattern->kind);
+                rp && rp->typeName.empty()) {
+                std::string sv = fresh("Anon");
+                std::vector<std::string> names;
+                collectRecordBindings(*rp, names);
+                for (const auto& name : names) subst[name] = name;
+                auto thenP = wrapAnonymousRecordPattern(sv, *rp, lowerBody(n.thenBody));
+                subst = snap;
+                auto elseP = n.elseBody ? lowerBodyScoped(*n.elseBody)
+                                        : lit(LitKind::Atom, "ok");
+                return makeLet(sv, std::move(subj),
+                               matchBool(anonymousRecordTest(sv, *rp),
+                                         std::move(thenP), std::move(elseP)));
+            }
             auto pat = lowerPattern(n.letPattern);
             auto thenP = lowerBody(n.thenBody);
             subst = snap;
@@ -3043,6 +3349,30 @@ struct Lowering {
         for (const auto& cl : n.clauses) {
             auto snap = subst;
             MatchClause mc;
+            if (const auto* anon = anonymousRecordPattern(cl.patterns)) {
+                // Structural: bind the subject, test its tag in the guard, and
+                // read the fields in the body (and in a user `when`, which can
+                // only run once the fields exist).
+                std::string sv = fresh("Anon");
+                auto pv = std::make_unique<Pattern>();
+                pv->kind = PatKind::Var;
+                pv->name = sv;
+                mc.patterns.push_back(std::move(pv));
+                std::vector<std::string> names;
+                collectRecordBindings(*anon, names);
+                for (const auto& name : names) subst[name] = name;
+                auto test = anonymousRecordTest(sv, *anon);
+                if (cl.guard)
+                    test = matchBool(
+                        std::move(test),
+                        wrapAnonymousRecordPattern(sv, *anon, lower(*cl.guard)),
+                        litBool(false));
+                mc.guard = std::move(test);
+                mc.body = wrapAnonymousRecordPattern(sv, *anon, lower(cl.body));
+                subst = snap;
+                cls.push_back(std::move(mc));
+                continue;
+            }
             for (const auto& p : cl.patterns) mc.patterns.push_back(lowerPattern(p));
             // `when` guards lower as ordinary expressions; expandGuards moves
             // the predicate out of BEAM guard position into a nested match.
@@ -3484,6 +3814,19 @@ struct Lowering {
             // Record destructure `let { f, g: { h } } = value`: fields are read
             // by name, not structurally — bind the value then prepend accessors.
             if (auto* rp = std::get_if<ast::RecordPattern>(&le->pattern->kind)) {
+                // Anonymous `{ f, g }`: no type name, so the field offsets are
+                // only knowable per candidate tag (or per map key) at runtime.
+                if (rp->typeName.empty()) {
+                    std::string rv = fresh("Anon");
+                    std::vector<std::string> names;
+                    collectRecordBindings(*rp, names);
+                    for (const auto& name : names) subst[name] = name;
+                    auto rest = isLast ? lit(LitKind::Atom, "ok")
+                                       : lowerBodyFrom(body, i + 1);
+                    return makeLet(
+                        rv, lower(le->value),
+                        wrapAnonymousRecordPattern(rv, *rp, std::move(rest)));
+                }
                 std::string rv = fresh("rec");
                 std::vector<std::pair<std::string, ExprPtr>> prefix;
                 destructureRecordPattern(rv, *rp, prefix);
@@ -3895,7 +4238,10 @@ struct Lowering {
         int dictionaryArity = 0;
         if (!group[0]->clauses.empty())
             for (const auto& param : group[0]->clauses[0].params)
-                if (!traitNameOf(param).empty()) ++dictionaryArity;
+                if (auto trait = traitNameOf(param); !trait.empty()) {
+                    ++dictionaryArity;
+                    def.dictionaryTraits.push_back(trait);
+                }
         const bool implicitThisDictionary = !implicitThisName.empty() &&
             traitMethods.count(currentMakeType) > 0 &&
             std::none_of(
@@ -3904,7 +4250,10 @@ struct Lowering {
                 [&](const auto& required) {
                     return required.name == group[0]->name;
                 });
-        if (implicitThisDictionary) ++dictionaryArity;
+        if (implicitThisDictionary) {
+            ++dictionaryArity;
+            def.dictionaryTraits.push_back(currentMakeType);
+        }
         def.arity = explicitArity + dictionaryArity +
                     (implicitThisName.empty() ? 0 : 1);
         auto savedModulePath = currentModulePath;
@@ -4829,6 +5178,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             for (const auto& p : fd.clauses[0].params)
                 pnames.push_back(p.name ? *p.name : "");
             if (pnames.empty()) L.zeroArgFns.insert(fd.name);
+            for (const auto& pname : pnames)
+                if (!pname.empty()) L.fnAllParamNames[fd.name].insert(pname);
             L.fnParamNames[fd.name] = std::move(pnames);
             std::vector<const ast::ExprPtr*> defaults;
             for (const auto& p : fd.clauses[0].params)
@@ -5774,6 +6125,23 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
         mod.functions.clear();
         for (auto& [_, f] : merged) mod.functions.push_back(std::move(f));
+    }
+    // Publish the source arity of every function that takes hidden trait
+    // dictionaries, for the call sites that cannot build them (see
+    // makeDictionaryWrapper). Never shadows a real definition at that arity.
+    {
+        std::set<std::pair<std::string, int>> defined;
+        for (const auto& f : mod.functions) defined.insert({f.name, f.arity});
+        std::vector<FunDef> wrappers;
+        for (const auto& f : mod.functions) {
+            auto wrapper = L.makeDictionaryWrapper(f);
+            if (!wrapper) continue;
+            if (!defined.insert({wrapper->name, wrapper->arity}).second)
+                continue;
+            wrappers.push_back(std::move(*wrapper));
+        }
+        for (auto& wrapper : wrappers)
+            mod.functions.push_back(std::move(wrapper));
     }
     mod.typeVariantTags = L.typeVariantTags;
     return mod;

@@ -1,4 +1,5 @@
 #include "../evaluator.hxx"
+#include "../../common/utf8.hxx"
 #include <algorithm>
 
 namespace kex::interpreter {
@@ -18,7 +19,7 @@ auto Evaluator::registerListBuiltins() -> void {
     auto rangeToList = [](const RangeValue& r) -> std::vector<ValuePtr> {
         std::vector<ValuePtr> elems;
         for (int64_t i = r.start; i <= r.end; i++)
-            elems.push_back(r.isChar ? Value::character(static_cast<char>(i))
+            elems.push_back(r.isChar ? Value::character(static_cast<char32_t>(i))
                                      : Value::integer(i));
         return elems;
     };
@@ -28,9 +29,8 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* range = std::get_if<RangeValue>(&val->data)) return rangeToList(*range);
         if (auto* str = std::get_if<StringValue>(&val->data)) {
             std::vector<ValuePtr> chars;
-            chars.reserve(str->value.size());
-            for (unsigned char c : str->value)
-                chars.push_back(Value::character(static_cast<char>(c)));
+            for (auto cp : utf8::decode(str->value))
+                chars.push_back(Value::character(cp));
             return chars;
         }
         return {};
@@ -42,7 +42,7 @@ auto Evaluator::registerListBuiltins() -> void {
         std::string s;
         s.reserve(elems.size());
         for (const auto& e : elems) {
-            if (auto* cv = std::get_if<CharValue>(&e->data)) { s += cv->value; }
+            if (auto* cv = std::get_if<CharValue>(&e->data)) { s += utf8::encode(cv->value); }
             else return Value::list(std::move(elems));
         }
         return Value::string(std::move(s));
@@ -209,7 +209,7 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::just(Value::character(str->value[0]));
+            return Value::just(Value::character(utf8::decode(str->value).front()));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
@@ -224,7 +224,7 @@ auto Evaluator::registerListBuiltins() -> void {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
             if (str->value.empty()) return Value::none();
-            return Value::just(Value::character(str->value.back()));
+            return Value::just(Value::character(utf8::decode(str->value).back()));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             if (list->elements.empty()) return Value::none();
@@ -243,7 +243,7 @@ auto Evaluator::registerListBuiltins() -> void {
     reg("count", [this, getElements](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(str->value.size()));
+            return Value::integer(static_cast<int64_t>(utf8::length(str->value)));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         if (auto* range = std::get_if<RangeValue>(&args[0]->data))
@@ -266,7 +266,7 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* list = std::get_if<ListValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(list->elements.size()));
         if (auto* str = std::get_if<StringValue>(&args[0]->data))
-            return Value::integer(static_cast<int64_t>(str->value.size()));
+            return Value::integer(static_cast<int64_t>(utf8::length(str->value)));
         if (auto* map = std::get_if<MapValue>(&args[0]->data))
             return Value::integer(static_cast<int64_t>(map->entries.size()));
         return Value::integer(0);
@@ -288,8 +288,8 @@ auto Evaluator::registerListBuiltins() -> void {
                 if (valuesEqual(e, elem)) return Value::boolean(true);
         }
         if (auto* str = std::get_if<StringValue>(&container->data)) {
-            for (unsigned char c : str->value)
-                if (valuesEqual(Value::character(static_cast<char>(c)), elem))
+            for (auto cp : utf8::decode(str->value))
+                if (valuesEqual(Value::character(cp), elem))
                     return Value::boolean(true);
         }
         return Value::boolean(false);
@@ -300,8 +300,9 @@ auto Evaluator::registerListBuiltins() -> void {
         auto n = std::get_if<IntValue>(&args[1]->data);
         if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            auto cnt = std::min(static_cast<size_t>(n->value), str->value.size());
-            return Value::string(str->value.substr(0, cnt));
+            auto cps = utf8::decode(str->value);
+            auto cnt = std::min(static_cast<size_t>(n->value), cps.size());
+            return Value::string(utf8::encodeAll({cps.begin(), cps.begin() + cnt}));
         }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
@@ -314,8 +315,9 @@ auto Evaluator::registerListBuiltins() -> void {
         auto n = std::get_if<IntValue>(&args[1]->data);
         if (!n) return Value::list({});
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            auto skip = std::min(static_cast<size_t>(n->value), str->value.size());
-            return Value::string(str->value.substr(skip));
+            auto cps = utf8::decode(str->value);
+            auto skip = std::min(static_cast<size_t>(n->value), cps.size());
+            return Value::string(utf8::encodeAll({cps.begin() + skip, cps.end()}));
         }
         auto* list = std::get_if<ListValue>(&args[0]->data);
         if (!list) return Value::list({});
@@ -609,8 +611,8 @@ auto Evaluator::registerListBuiltins() -> void {
             if (auto* inner = std::get_if<ListValue>(&mapped->data))
                 for (const auto& e : inner->elements) result.push_back(e);
             else if (auto* str = std::get_if<StringValue>(&mapped->data))
-                for (unsigned char c : str->value)
-                    result.push_back(Value::character(static_cast<char>(c)));
+                for (auto cp : utf8::decode(str->value))
+                    result.push_back(Value::character(cp));
             else
                 result.push_back(mapped);
         }

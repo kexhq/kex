@@ -1,4 +1,5 @@
 #include "evaluator.hxx"
+#include "../common/utf8.hxx"
 #include "../compiled/expand.hxx"
 #include "../common/prelude_loader.hxx"
 #include "../common/type_def_utils.hxx"
@@ -1996,10 +1997,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             auto* ec = std::get_if<CharValue>(&end->data);
             if (sc && ec) {
                 auto range = std::make_shared<Value>();
-                range->data = RangeValue{
-                    static_cast<int64_t>(static_cast<unsigned char>(sc->value)),
-                    static_cast<int64_t>(static_cast<unsigned char>(ec->value)),
-                    true};
+                range->data = RangeValue{static_cast<int64_t>(sc->value),
+                                         static_cast<int64_t>(ec->value), true};
                 return range;
             }
             auto range = std::make_shared<Value>();
@@ -3330,7 +3329,9 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // Char is its own type, not a 1-character String — a
                 // char-literal pattern only matches a Char value.
                 auto* cv = std::get_if<CharValue>(&value->data);
-                return cv && cv->value == (pat.literal.value.empty() ? '\0' : pat.literal.value[0]);
+                auto literal = utf8::decode(pat.literal.value);
+                return cv && cv->value ==
+                    (literal.empty() ? U'\0' : literal.front());
             }
             if (pat.literal.type == TokenType::True) {
                 auto* bv = std::get_if<BoolValue>(&value->data);
@@ -3360,8 +3361,12 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
         else if constexpr (std::is_same_v<T, ast::RangePattern>) {
             auto* rv = std::get_if<RangeValue>(&value->data);
             if (!rv) return false;
-            auto startVal = rv->isChar ? Value::character(static_cast<char>(rv->start)) : Value::integer(rv->start);
-            auto endVal = rv->isChar ? Value::character(static_cast<char>(rv->end)) : Value::integer(rv->end);
+            auto startVal = rv->isChar
+                ? Value::character(static_cast<char32_t>(rv->start))
+                : Value::integer(rv->start);
+            auto endVal = rv->isChar
+                ? Value::character(static_cast<char32_t>(rv->end))
+                : Value::integer(rv->end);
             if (!matchPattern(*pat.start, startVal)) return false;
             if (!matchPattern(*pat.end, endVal)) return false;
             return true;
@@ -3372,9 +3377,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             std::vector<ValuePtr> chars;
             const std::vector<ValuePtr>* elements = nullptr;
             if (auto* sv = std::get_if<StringValue>(&value->data)) {
-                chars.reserve(sv->value.size());
-                for (unsigned char c : sv->value)
-                    chars.push_back(Value::character(static_cast<char>(c)));
+                for (auto cp : utf8::decode(sv->value))
+                    chars.push_back(Value::character(cp));
                 elements = &chars;
             } else if (auto* lv = std::get_if<ListValue>(&value->data)) {
                 elements = &lv->elements;
@@ -3400,7 +3404,7 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                     std::string tail;
                     for (size_t i = pat.elements.size(); i < elements->size(); i++) {
                         if (auto* cv = std::get_if<CharValue>(&(*elements)[i]->data))
-                            tail += cv->value;
+                            tail += utf8::encode(cv->value);
                     }
                     if (!matchPattern(**pat.rest, Value::string(tail))) return false;
                 } else {
