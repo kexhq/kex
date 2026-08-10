@@ -68,7 +68,7 @@ foul renderType(t: Any) -> String do
   return match tag do
     :prim        -> atomStr(f.second.or(:none))
     :named       -> renderNamed(t)
-    :func        -> renderFunc(t)
+    :func        -> renderFunction(t)
     :tuple       -> "(" + renderList(f.second.or([])).join(", ") + ")"
     :list        -> "[" + renderType(f.second.or(:unknown)) + "]"
     :map         -> renderMap(t)
@@ -94,7 +94,7 @@ foul renderMap(t: Any) -> String do
   return "Map<${renderType(key)}, ${renderType(value)}>"
 end
 
-foul renderFunc(t: Any) -> String do
+foul renderFunction(t: Any) -> String do
   let (_tag, params, result) = t
   let ps = renderList(params).join(" -> ")
   return match ps.empty? do

@@ -1585,6 +1585,50 @@ struct Lowering {
                 localTypeShadows = id->name == "this";
             if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
                 localTypeShadows = true;
+            // A receiver whose STATIC TYPE is a locally-declared type must
+            // reach that type's own `make` block, exactly as `this` does.
+            // Only a literal `this` was recognized above, so binding it to a
+            // local first — `let p = this; p.advance` — fell through to the
+            // prelude-resolved target and emitted
+            // `call 'kex_prelude':'advance'(P)`, whose clauses cannot match a
+            // user record: `function_clause` at runtime, with nothing wrong at
+            // the source level. `examples/json_parser.kex` is built entirely
+            // out of this shape (`var p = this` threaded through a loop) and
+            // could not run on BEAM at all.
+            if (!localTypeShadows && expressionTypes) {
+                if (auto found = expressionTypes->find(n.receiver.get());
+                    found != expressionTypes->end() && found->second) {
+                    std::string receiverType =
+                        semantic::typeToString(found->second);
+                    if (auto owner = variantOwner.find(receiverType);
+                        owner != variantOwner.end())
+                        receiverType = owner->second;
+                    // Require the local `make` block to actually define this
+                    // method FOR THIS TYPE — `localMethods` alone would let an
+                    // unrelated local method of the same name capture calls on
+                    // a prelude-owned receiver.
+                    const auto owners = methodOwners.find(n.method);
+                    // An ARGUMENT-OVERLOADED method is not emitted under its
+                    // plain name — each signature gets a mangled function and
+                    // call sites reach them through a dispatcher. Only a
+                    // receiver whose make type is currently being lowered can
+                    // pick the right mangled name, so taking the local
+                    // shortcut here emitted `apply 'render'/2`, which no
+                    // module defines: erlc rejected the whole file with
+                    // "undefined function render/2" (spec/
+                    // argument_type_dispatch.kex). Leave those to the normal
+                    // resolution path.
+                    const bool overloadedByArgument =
+                        argumentOverloadedMethods.count(localOverloadKey(
+                            n.method, receiverType, n.args.size() + 1)) > 0;
+                    localTypeShadows =
+                        !overloadedByArgument &&
+                        knownTypes.count(receiverType) &&
+                        owners != methodOwners.end() &&
+                        std::find(owners->second.begin(), owners->second.end(),
+                                  receiverType) != owners->second.end();
+                }
+            }
             auto resolved = resolvedCalls->find(&n);
             // Semantic analysis has already applied lexical `using` policy
             // and argument-type specificity. Once it names an imported
@@ -4126,9 +4170,22 @@ struct Lowering {
         // in Core Erlang. Without this guard, a method such as
         // `Measure.to(String)` becomes a catch-all `to/2` clause and shadows
         // the universal conversion function for every other value.
+        // A TYPE-QUALIFIED call — `Parser.parse("null")`, the constructor-style
+        // form the walker has always allowed for a make-block method that
+        // never touches `this` — lowers its receiver to the bare type ATOM
+        // (`apply 'parse'/2('Parser', Input)`). The record guard alone rejects
+        // that, so every such call fell through to the emitter's synthetic
+        // catch-all and raised `function_clause`. Accepting the atom as well
+        // keeps the guard's real job (stopping this clause from shadowing the
+        // universal `to`/`showValue` for unrelated values) while letting the
+        // type-qualified form through.
         if (!receiverPattern && records.count(typeName))
             for (auto& clause : def.clauses)
-                clause.guard = typeGuard(typeName, var("this"));
+                clause.guard = callE(
+                    "erlang", "or", 2,
+                    two(typeGuard(typeName, var("this")),
+                        intrin(Op::Eq, two(var("this"),
+                                           lit(LitKind::Atom, typeName)))));
         if (listReceiver) def = coerceListReceiver(std::move(def));
         if (argumentOverloadedMethods.count(
                 localOverloadKey(first.name, typeName, def.arity)))

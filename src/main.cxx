@@ -3382,6 +3382,10 @@ int main(int argc, char *argv[]) {
 
   std::unique_ptr<kex::semantic::Analyzer> compileAnalysis;
   std::vector<LoadedDep> beamDeps;
+  // The `<name>.spec.kex` base actually merged in below, kept so the gating
+  // semantic check can pass it to SemanticDB as a companion — see its use at
+  // the `runSemanticCheck` call.
+  std::string beamSpecBaseFile;
   if (mode == "compile" || mode == "emit-core") {
       // For `-R file.kex` without explicit `-o`, use a temp dir and clean up
       // after.
@@ -3421,6 +3425,7 @@ int main(int argc, char *argv[]) {
       for (const auto &candidate : specBaseCandidates(filepath)) {
         if (!fileExists(candidate))
           continue;
+        beamSpecBaseFile = candidate;
 
         auto baseSource = readFile(candidate);
         kex::Lexer baseLexer(std::move(baseSource), candidate);
@@ -3482,9 +3487,16 @@ int main(int argc, char *argv[]) {
         // the exact selected target even when errors are non-gating.
         const bool gatingAnalysis = mode == "compile" && !skipCheck;
         int typeErrors = 0;
+        // `beamSpecBaseFile` matters here for the same reason it does on the
+        // walker path: the Analyzer sees the base file's declarations because
+        // they were merged into `program`, but SemanticDB re-reads `filepath`
+        // from disk and would report every constructor defined in the base as
+        // an undefined name. Passing "" made `-c`/`-R` reject
+        // spec/json_parser.spec.kex with 21 phantom errors while `--emit-core`
+        // — which skips the gating check — compiled it fine.
         const bool analysisOk = gatingAnalysis
-            ? runSemanticCheck(program, filepath, compileAnalysis.get(), "",
-                               &typeErrors)
+            ? runSemanticCheck(program, filepath, compileAnalysis.get(),
+                               beamSpecBaseFile, &typeErrors)
             : compileAnalysis->analyze(program);
         if (gatingAnalysis && !analysisOk) {
           std::cerr << kex::color::apply(kex::color::bold)

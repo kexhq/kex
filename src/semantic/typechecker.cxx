@@ -425,6 +425,18 @@ auto TypeChecker::check(const ast::Program& program,
     }
 
     popScope();
+
+    // `m_typeMap` records each expression's type as it was INFERRED, which for
+    // anything inferred before its unification is a bare TypeVar; the concrete
+    // type only lives in `m_subst`. Consumers outside this class (IR lowering,
+    // via Analyzer::typeMap) have no access to the substitution, so they saw
+    // `T1` where the checker itself would say `P` — and BEAM lowering silently
+    // sent `let p = this; p.advance` to the prelude instead of the receiver's
+    // own `make` block. Resolve once, here, so every consumer reads the answer
+    // the checker actually reached. Unbound vars resolve to themselves, so a
+    // genuinely un-inferred expression is unchanged.
+    for (auto& [expr, type] : m_typeMap)
+        type = resolve(type);
 }
 
 auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
@@ -2182,7 +2194,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 importedFunctionVisible(function))
                                 return function.signature.result;
             auto type = lookupVar(node.name);
-            return type ? type : Type::unknown();
+            if (type) return type;
+            // A bare TYPE NAME used as a value — `x.to(Integer)`, the argument
+            // of the conversion protocol. Typing it as the type it names is
+            // what makes the protocol dispatchable: left Unknown, every
+            // `to` overload matched every call, so `"42".to(Integer)` was typed
+            // by whichever came first (`make Showable do let to(String)`) and
+            // came out `String?` no matter the target.
+            if (isPrimitiveTypeName(node.name) || m_recordFields.count(node.name) ||
+                m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
+                return Type::named(node.name);
+            return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;
@@ -4586,6 +4608,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
+        if (std::getenv("KEX_DEBUG_SIG") && name == "to") {
+            std::fprintf(stderr, "[to] params=");
+            for (const auto& p : matched.params)
+                std::fprintf(stderr, "%s ", typeToString(resolve(p)).c_str());
+            std::fprintf(stderr, "=> %s | matches=%zu args=",
+                         typeToString(resolve(matched.result)).c_str(),
+                         fullMatches.size());
+            for (const auto& a : argTypes)
+                std::fprintf(stderr, "%s ", typeToString(resolve(a)).c_str());
+            std::fprintf(stderr, "\n");
+        }
         if (methodCall) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;
