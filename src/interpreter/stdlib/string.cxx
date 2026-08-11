@@ -1,5 +1,6 @@
 #include "../evaluator.hxx"
 #include "../../common/utf8.hxx"
+#include "../../common/unicode_category.hxx"
 #include "regex_support.hxx"
 #include <algorithm>
 #include <cctype>
@@ -13,14 +14,12 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Bool");
     defineModule("Atom");
 
-    // ASCII ranges, tested on the FULL codepoint. std::isalpha and friends
-    // take a byte, so a codepoint above 255 had to be truncated to reach them
-    // — and 'ő' (U+0151) truncated to 0x51, which is 'Q', so `'ő'.alpha?` was
-    // true here and false on BEAM. These predicates are deliberately
-    // ASCII-only on both backends (see runtime/src/kex_intrinsic_char.erl);
-    // `'é'.alpha?` is false, not a truncation artefact.
-    auto asciiAlpha = [](char32_t c) {
-        return (c >= U'A' && c <= U'Z') || (c >= U'a' && c <= U'z');
+    // Unicode categories, tested on the FULL codepoint (see
+    // src/common/unicode_category.hxx). std::isalpha and friends take a byte,
+    // so a codepoint above 255 had to be truncated to reach them — 'ő'
+    // (U+0151) truncated to 0x51, which is 'Q'.
+    auto isLetter = [](char32_t c) {
+        return utf8::categories::inRanges(utf8::categories::letterRanges, c);
     };
 
     auto regCharPredicate = [this](const std::string& publicName,
@@ -72,41 +71,42 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
-    regCharPredicate("alpha?", "is_alpha", [asciiAlpha](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("alpha?", "is_alpha", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("alpha? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(asciiAlpha(c->value));
+        return Value::boolean(isLetter(c->value));
     });
 
-    regCharPredicate("letter?", "is_letter", [asciiAlpha](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("letter?", "is_letter", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("letter? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("letter? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(asciiAlpha(c->value));
+        return Value::boolean(isLetter(c->value));
     });
 
     regCharPredicate("upper?", "is_upper", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("upper? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("upper? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(c->value >= U'A' && c->value <= U'Z');
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::upperRanges, c->value));
     });
 
     regCharPredicate("lower?", "is_lower", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("lower? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("lower? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(c->value >= U'a' && c->value <= U'z');
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::lowerRanges, c->value));
     });
 
     regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(c->value == U' '  || c->value == U'\t' ||
-                              c->value == U'\n' || c->value == U'\r' ||
-                              c->value == U'\v' || c->value == U'\f');
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::spaceRanges, c->value));
     });
 
     defineIntrinsic("Char::codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {

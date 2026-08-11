@@ -2677,6 +2677,34 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         }
                 }
             }
+            // `x.to(T)` answers `T?`. The clauses implementing the protocol
+            // take their target as an ordinary VALUE parameter
+            // (`let to(value, String) = ...`), so every one of them has an
+            // `unknown` second parameter, overload resolution cannot tell them
+            // apart, and the first one wins: `"34".to(Integer)` and
+            // `(1..3).to(List)` both typed as `String?` while evaluating to an
+            // Integer and a list. The target NAMES a type, so read it.
+            //
+            // A String target is left alone: `String?` is already the right
+            // answer for it, and a receiver that declares its own total
+            // conversion (`Measure.to(String) -> String`) must keep it.
+            // Only the bare `to(T)` form. `to(T, radix: n)` carries named
+            // arguments, and answering here would skip the call resolution
+            // lowering needs to place them — it reported `radix:` as an
+            // unknown named argument on BEAM.
+            if (node.method == "to" && node.args.size() == 1 && node.args[0] &&
+                node.namedArgs.empty() && !node.block) {
+                const auto targetIsString = [](const TypePtr& t) {
+                    auto* prim = std::get_if<PrimitiveType>(&t->kind);
+                    return prim && prim->kind == PrimitiveType::String;
+                };
+                if (auto target = typeNameReference(*node.args[0]);
+                    target && !targetIsString(target)) {
+                    for (const auto& argument : node.args) inferExpr(*argument);
+                    if (node.receiver) inferExpr(*node.receiver);
+                    return Type::optional(target);
+                }
+            }
             // `Type.returnedBy(f)`: resolved entirely here — a function value
             // carries no signature at runtime. The argument must NAME a
             // function; an overloaded name has no single answer.
