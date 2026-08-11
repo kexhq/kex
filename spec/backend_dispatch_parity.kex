@@ -75,6 +75,19 @@ main do
   IO.printLine((1..5).take(2))
   IO.printLine((1..5).max)
 
+  IO.printLine("-- modulo takes the divisor's sign, as number.kex states --")
+  IO.printLine(7.modulo(3))
+  IO.printLine((-7).modulo(3))
+  IO.printLine(7.modulo(-3))
+  IO.printLine((-7).modulo(-3))
+  IO.printLine((2 ^ 70).modulo(-3))
+
+  IO.printLine("-- splitting on \"\" is the string form of .chars --")
+  IO.printLine("abc".split(""))
+  IO.printLine("héé".split(""))
+  IO.printLine("abc".split)
+  IO.printLine("a,b".split(","))
+
   IO.printLine("-- UFCS runs both ways --")
   IO.printLine(length([1, 2, 3]))
   IO.printLine(map(["a", "b"], &.upperCase))

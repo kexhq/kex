@@ -651,13 +651,9 @@ make Duration do
   let wholeDays -> Integer = Time.truncatedBy(this.seconds, 86400.0)
   let wholeWeeks -> Integer = Time.truncatedBy(this.seconds, 604800.0)
 
-  # Spelled out rather than delegating to `Number.compare`, which the
-  # Comparable trait declares but neither backend implements at runtime.
-  let compareTo(other: Duration) -> Ordering do
-    return Less if this.seconds < other.seconds
-    return Greater if this.seconds > other.seconds
-    return Equal
-  end
+  # Delegates to `Number.compare` (algebra.kex), which orders the two
+  # Float second counts.
+  let compareTo(other: Duration) -> Ordering = this.seconds.compare(other.seconds)
 end
 
 module Duration do

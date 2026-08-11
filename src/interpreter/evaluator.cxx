@@ -1159,19 +1159,18 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
 
 auto Evaluator::execMakeDef(const ast::MakeDef& def,
                             const std::string& enclosingModule) -> void {
-    // Extract type name from make target
-    std::string typeName;
-    if (def.target) {
-        if (auto* named = std::get_if<ast::TypeName>(&def.target->kind)) {
-            if (!named->parts.empty()) typeName = named->parts[0];
-        } else if (auto* generic = std::get_if<ast::GenericType>(&def.target->kind)) {
-            if (!generic->name.parts.empty()) typeName = generic->name.parts[0];
-        } else if (std::holds_alternative<ast::ListType>(def.target->kind)) {
-            typeName = "List";
-        } else if (std::holds_alternative<ast::MapType>(def.target->kind)) {
-            typeName = "Map";
-        }
-    }
+    // A union target (`make Float | Integer`) applies the block to every
+    // member, so registration runs once per name. A block with no nameable
+    // target still runs once with an empty name, as it always has.
+    auto targetNames = kex::makeTargetNames(def.target);
+    if (targetNames.empty()) targetNames.push_back("");
+    for (const auto& typeName : targetNames)
+        execMakeDefFor(def, typeName, enclosingModule);
+}
+
+auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
+                               const std::string& typeName,
+                               const std::string& enclosingModule) -> void {
 
     // A method's call arity: AST param count, +1 for the implicit `this` unless
     // the first param IS the receiver (an `@`/record/range pattern). So
@@ -2695,6 +2694,11 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value < ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt < *rightInt);
             if (lf && rf) return Value::boolean(lf->value < rf->value);
+            // Mixed Integer/Float promotes, exactly as the arithmetic
+            // operators above do — ordering must not be the one place where
+            // `1 < 1.5` is an error.
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) < rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value < intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value < rs->value);
             if (lc && rc) return Value::boolean(lc->value < rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2703,6 +2707,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value > ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt > *rightInt);
             if (lf && rf) return Value::boolean(lf->value > rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) > rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value > intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value > rs->value);
             if (lc && rc) return Value::boolean(lc->value > rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2711,6 +2717,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value <= ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt <= *rightInt);
             if (lf && rf) return Value::boolean(lf->value <= rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) <= rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value <= intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value <= rs->value);
             if (lc && rc) return Value::boolean(lc->value <= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2719,6 +2727,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value >= ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt >= *rightInt);
             if (lf && rf) return Value::boolean(lf->value >= rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) >= rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value >= intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value >= rs->value);
             if (lc && rc) return Value::boolean(lc->value >= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -3240,6 +3250,14 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
 
     if (m_env->get(typed)) return typed;
 
+    // `make Number do ... end` covers Integer and Float. Below the concrete
+    // lookup above, so a type defining the method itself still wins, and
+    // above the trait fallback, since it is a real implementation.
+    for (const auto& super : dispatchSupertypes(receiverType)) {
+        auto typedBySuper = super + "::" + method;
+        if (m_env->get(typedBySuper)) return typedBySuper;
+    }
+
     // A variant value is tagged with its constructor while methods are
     // registered under the parent ADT's name. This has to be tried before the
     // trait's generic make block: `make Optional<Showable>, implement:
@@ -3317,8 +3335,21 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // mpz_class(string) handles literal patterns too big for
                 // int64_t the same way IntLiteral evaluation does; asInteger
                 // matches against either runtime representation of Integer.
-                auto valueInt = asInteger(value);
-                return valueInt && *valueInt == mpz_class(pat.literal.value);
+                auto literal = mpz_class(pat.literal.value);
+                if (auto valueInt = asInteger(value)) return *valueInt == literal;
+                // A Float scrutinee matches numerically, so patterns agree
+                // with `==` — `safeDiv(_, 0)` catches a 0.0 divisor.
+                if (auto* fv = std::get_if<FloatValue>(&value->data))
+                    return fv->value == literal.get_d();
+                return false;
+            }
+            if (pat.literal.type == TokenType::Float) {
+                const double literal = std::stod(pat.literal.value);
+                if (auto* fv = std::get_if<FloatValue>(&value->data))
+                    return fv->value == literal;
+                if (auto valueInt = asInteger(value))
+                    return valueInt->get_d() == literal;
+                return false;
             }
             if (pat.literal.type == TokenType::String ||
                 pat.literal.type == TokenType::RawString) {

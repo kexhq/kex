@@ -50,5 +50,6 @@ make Range, implement: Enumerable, Foldable do
   let indexOf(value) = this.items.indexOf(value)
   let zip(other) = this.items.zip(other)
   let partition(pred) = this.items.partition(pred)
+  let push(value) = this.items.push(value)
   let reject(pred) = this.items.reject(pred)
 end

@@ -15,6 +15,11 @@ auto Evaluator::registerNumberBuiltins() -> void {
         if (a && b && *b != 0) {
             mpz_class result;
             mpz_mod(result.get_mpz_t(), a->get_mpz_t(), b->get_mpz_t());
+            // `mpz_mod` is always NON-NEGATIVE, but Kex's modulo takes the
+            // divisor's sign (number.kex: "the result has the same sign as
+            // +n+, consistent with mathematical modulo"), which is what the
+            // BEAM runtime computes. `7.modulo(-3)` was 1 here and -2 there.
+            if (*b < 0 && result != 0) result += *b;
             return integerResult(result);
         }
         return Value::integer(0);

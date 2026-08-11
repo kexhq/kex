@@ -515,6 +515,19 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
         if (auto bv = asInteger(b)) return *av == *bv;
     }
 
+    // Mixed Integer/Float compares numerically, matching the promotion the
+    // arithmetic and ordering operators do. Without this `1 <= 1.0` and
+    // `1 >= 1.0` would both hold while `1 == 1.0` was false.
+    {
+        const auto* af = std::get_if<FloatValue>(&a->data);
+        const auto* bf = std::get_if<FloatValue>(&b->data);
+        if (af && !bf) {
+            if (auto bi = asInteger(b)) return af->value == bi->get_d();
+        } else if (bf && !af) {
+            if (auto ai = asInteger(a)) return ai->get_d() == bf->value;
+        }
+    }
+
     // Comparing a placeholder cannot yield `false` — the running program's
     // value might well be equal — so it must not answer at all.
     for (const auto* side : {&a, &b})
@@ -726,6 +739,16 @@ auto dispatchTypeName(const ValuePtr& v) -> std::string {
         else if constexpr (std::is_same_v<T, StreamValue>) return "Stream";
         else return "";
     }, v->data);
+}
+
+auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string> {
+    // Integer and Float are the concrete levels of Number, so a
+    // `make Number do ... end` block applies to both. Listed most- to
+    // least-specific; the concrete type is tried before any of these, so a
+    // type that defines the method itself still wins.
+    if (typeName == "Integer" || typeName == "Int" || typeName == "Float")
+        return {"Number"};
+    return {};
 }
 
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool {

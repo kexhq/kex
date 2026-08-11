@@ -178,6 +178,11 @@ private:
                          const std::string& enclosingModule = "") -> void;
     auto execMakeDef(const ast::MakeDef& def,
                      const std::string& enclosingModule = "") -> void;
+    // One member of the make target — called once per name so a union target
+    // (`make Float | Integer`) registers the block under each.
+    auto execMakeDefFor(const ast::MakeDef& def,
+                        const std::string& typeName,
+                        const std::string& enclosingModule) -> void;
     auto execTypeDef(const ast::TypeDef& def,
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;

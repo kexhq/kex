@@ -117,6 +117,42 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::integer(static_cast<int64_t>(c->value));
     });
 
+    // A String has two views: `chars` is the TEXT view (codepoints) and
+    // `bytes` is the STORAGE view (the UTF-8 encoding). Kex code needed
+    // `Erlang.Erlang.binary_to_list` to reach the latter.
+    defineIntrinsic("String::bytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        auto* str = std::get_if<StringValue>(&args[0]->data);
+        if (!str) return Value::list({});
+        std::vector<ValuePtr> out;
+        out.reserve(str->value.size());
+        for (unsigned char byte : str->value)
+            out.push_back(Value::integer(static_cast<int64_t>(byte)));
+        return Value::list(std::move(out));
+    });
+
+    defineIntrinsic("String::fromBytes", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* list = std::get_if<ListValue>(&args[0]->data);
+        if (!list) return Value::none();
+        std::string out;
+        out.reserve(list->elements.size());
+        for (const auto& element : list->elements) {
+            auto* byte = std::get_if<IntValue>(&element->data);
+            if (!byte || byte->value < 0 || byte->value > 255) return Value::none();
+            out += static_cast<char>(byte->value);
+        }
+        // A String is UTF-8 TEXT, so arbitrary bytes are not a String. Reject
+        // rather than build one that later decodes to replacement characters.
+        for (std::size_t i = 0; i < out.size();) {
+            auto width = utf8::sequenceLength(out, i);
+            auto lead = static_cast<unsigned char>(out[i]);
+            if (width == 1 && lead >= 0x80) return Value::none();
+            i += width;
+        }
+        return Value::just(Value::string(std::move(out)));
+    });
+
     defineIntrinsic("String::fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         auto* value = std::get_if<IntValue>(&args[0]->data);
@@ -209,7 +245,12 @@ auto Evaluator::registerStringBuiltins() -> void {
 
         std::vector<ValuePtr> parts;
         if (sep.empty()) {
-            for (char c : str->value) parts.push_back(Value::string(std::string(1, c)));
+            // One part per CHARACTER, not per byte: splitting on "" is the
+            // string form of `.chars`, and a byte loop cut "é" in half. The
+            // BEAM runtime's separator-less `split/1` has always been
+            // per-codepoint, so this was a backend divergence too.
+            for (auto cp : utf8::decode(str->value))
+                parts.push_back(Value::string(utf8::encode(cp)));
         } else {
             size_t start = 0, pos;
             while ((pos = str->value.find(sep, start)) != std::string::npos) {

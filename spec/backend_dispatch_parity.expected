@@ -18,6 +18,17 @@ invalid float
 1,2,3,4,5
 [1, 2]
 5
+-- modulo takes the divisor's sign, as number.kex states --
+1
+2
+-2
+-1
+-2
+-- splitting on "" is the string form of .chars --
+[a, b, c]
+[h, é, é]
+[a, b, c]
+[a, b]
 -- UFCS runs both ways --
 3
 [A, B]

@@ -212,6 +212,10 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool;
 // Separate from typeName() which is for display.
 auto dispatchTypeName(const ValuePtr& v) -> std::string;
 
+// Type names a receiver's methods may also be registered under, most- to
+// least-specific (Integer/Float -> Number). Lets `make Number` cover both.
+auto dispatchSupertypes(const std::string& typeName) -> std::vector<std::string>;
+
 // Returns true when `name` is a valid type-pattern name for the value's
 // runtime type (e.g. both "Int" and "Integer" match IntValue/BigIntValue).
 auto matchesTypeName(const std::string& name, const ValuePtr& v) -> bool;

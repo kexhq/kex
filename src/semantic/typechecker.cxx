@@ -4993,9 +4993,16 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     bool anyConcreteSig = false;
     for (const auto& sig : sortedSigs)
         if (!isVacuousSig(&sig)) { anyConcreteSig = true; break; }
+    // One line per DISTINCT signature. The same overload can be registered
+    // more than once — from the prelude interface, from the stdlib source, and
+    // again from a merged module — and listing `split : String -> [String]`
+    // four times says nothing the first line did not.
+    std::unordered_set<std::string> shown;
     for (const auto& sig : sortedSigs) {
         if (anyConcreteSig && isVacuousSig(&sig)) continue;
-        message += "\n\n" + displaySignature(name, sig);
+        auto rendered = displaySignature(name, sig);
+        if (!shown.insert(rendered).second) continue;
+        message += "\n\n" + rendered;
     }
     error(loc, message);
     return arityMatches[0]->result;

@@ -356,7 +356,16 @@ nullary_type_name(X) ->
                 'Less' -> "Ordering";
                 'Equal' -> "Ordering";
                 'Greater' -> "Ordering";
-                _ -> "Variant"
+                _ ->
+                    %% Same first-letter-case rule `to_string` uses above: a
+                    %% Kex `:atom` is always lowercase-first, a constructor is
+                    %% capitalized. Without it a plain atom reported "Variant"
+                    %% where the walker said "Atom" — visible in any error that
+                    %% names the type ("Undefined method: count for Atom").
+                    case atom_to_list(X) of
+                        [C | _] when C >= $a, C =< $z -> "Atom";
+                        _ -> "Variant"
+                    end
             end
     end.
 

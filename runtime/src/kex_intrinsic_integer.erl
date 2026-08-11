@@ -7,7 +7,13 @@
 
 %% Mathematical modulo: the result has the divisor's sign, matching the Kex
 %% interpreter rather than Erlang's dividend-signed rem/2.
-modulo(A, B) -> ((A rem B) + B) rem B.
+modulo(A, B) when is_integer(A), is_integer(B) -> ((A rem B) + B) rem B;
+%% `modulo` belongs to `make Integer`, so a non-integer receiver reaches here
+%% only because the call had a single owner and needed no dispatcher. Report it
+%% the way the walker does instead of failing with `badarith`.
+modulo(A, _B) ->
+    erlang:error(iolist_to_binary(["runtime error: Undefined method: modulo for ",
+                                   kex_io:value_type_name(A)])).
 %% n.times { |i| block(i) } — call block with 0..n-1.
 times(N, Fun) -> lists:foreach(Fun, lists:seq(0, N - 1)).
 

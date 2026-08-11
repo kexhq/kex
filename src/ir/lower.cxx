@@ -4742,28 +4742,57 @@ struct Lowering {
             return nullptr;
         // A statically known receiver of exactly the provider's type needs no
         // dispatch — that is the case the direct call already gets right.
+        // "" when the checker has nothing concrete for this receiver — an
+        // inference variable or Unknown is not evidence, and `typeToString`
+        // renders those as ordinary names ("unknown", "T4") that would
+        // otherwise read as a type mismatch.
+        std::string staticReceiver;
         if (expressionTypes && n.receiver) {
             auto found = expressionTypes->find(n.receiver.get());
             if (found != expressionTypes->end() && found->second &&
-                semantic::typeToString(found->second) == receiverType)
-                return nullptr;
+                !std::holds_alternative<semantic::UnknownType>(found->second->kind) &&
+                !std::holds_alternative<semantic::TypeVar>(found->second->kind))
+                staticReceiver = semantic::typeToString(found->second);
         }
+        if (staticReceiver == receiverType) return nullptr;
         // The other provider: the dispatcher of whichever module also answers
-        // this name at this arity (the prelude, in practice).
+        // this name at this arity (the prelude, in practice). There may be
+        // none — `whiteSpaces` belongs to Parsing's `Input` and to nothing
+        // else — and then the second arm is the failure the walker reports.
+        // Calling the provider regardless gave `function_clause` for
+        // `"a b".whiteSpaces` where the walker said "Undefined method:
+        // whiteSpaces for String".
         std::string fallbackModule;
         std::string fallbackFunction;
-        auto candidates = externalModules->receiverFunctions.find(method);
-        if (candidates == externalModules->receiverFunctions.end()) return nullptr;
-        for (const auto& candidate : candidates->second) {
-            if (candidate.beamArity != arity ||
-                candidate.moduleAtom == moduleAtom ||
-                candidate.beamFunction != method)
-                continue;
-            fallbackModule = candidate.moduleAtom;
-            fallbackFunction = candidate.beamFunction;
-            break;
-        }
-        if (fallbackModule.empty()) return nullptr;
+        std::set<std::string> servedReceivers;
+        if (auto candidates = externalModules->receiverFunctions.find(method);
+            candidates != externalModules->receiverFunctions.end())
+            for (const auto& candidate : candidates->second) {
+                if (candidate.beamArity != arity) continue;
+                servedReceivers.insert(candidate.receiverType);
+                // A candidate for the SAME receiver type is this provider
+                // again, addressed another way (`using Parsing` compiles the
+                // module into this unit, so its `whiteSpaces` shows up both as
+                // a local method and as `Kex.Parsing:whiteSpaces`). Routing
+                // the miss there just reaches the same clause and dies with
+                // `function_clause`.
+                if (candidate.receiverType == receiverType ||
+                    candidate.moduleAtom == moduleAtom ||
+                    candidate.beamFunction != method)
+                    continue;
+                fallbackModule = candidate.moduleAtom;
+                fallbackFunction = candidate.beamFunction;
+            }
+        // No other provider: the second arm can only be the failure the walker
+        // reports. Take that route ONLY on positive evidence — this name is
+        // served by exactly one receiver type AND the receiver is statically
+        // some OTHER type. Without both, a call that is merely unprovable here
+        // (a Stream reaching `take`, whose other providers are not listed as
+        // receiver functions) would be rejected out of hand; those stay on the
+        // direct call, exactly as before.
+        if (fallbackModule.empty() &&
+            (servedReceivers.size() != 1 || staticReceiver.empty()))
+            return nullptr;
         std::vector<ExprPtr> fallbackArgs;
         for (const auto& arg : args) {
             try {
@@ -4788,8 +4817,13 @@ struct Lowering {
         arm(typeGuard(receiverType,
                       clone(fallbackArgs[0], "dualProviderDispatch guard")),
             callE(moduleAtom, function, arity, std::move(args)));
-        arm(nullptr, callE(fallbackModule, fallbackFunction, arity,
-                           std::move(fallbackArgs)));
+        if (fallbackModule.empty()) {
+            auto receiver = clone(fallbackArgs[0], "dualProviderDispatch miss");
+            arm(nullptr, undefinedMethod(method, std::move(receiver)));
+        } else {
+            arm(nullptr, callE(fallbackModule, fallbackFunction, arity,
+                               std::move(fallbackArgs)));
+        }
         auto out = std::make_unique<Expr>();
         out->node = std::move(dispatch);
         return out;
