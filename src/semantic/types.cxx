@@ -12,7 +12,7 @@ auto Type::charT() -> TypePtr {
 }
 
 auto Type::string() -> TypePtr {
-    return Type::list(Type::charT());
+    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::String}});
 }
 
 auto Type::boolean() -> TypePtr {
@@ -138,6 +138,7 @@ auto typeToString(const TypePtr& type) -> std::string {
             switch (t.kind) {
                 case PrimitiveType::Integer: return "Integer";
                 case PrimitiveType::Char: return "Char";
+                case PrimitiveType::String: return "String";
                 case PrimitiveType::Bool: return "Bool";
                 case PrimitiveType::Atom: return "Atom";
                 case PrimitiveType::Unit: return "Void";
@@ -200,10 +201,6 @@ auto typeToString(const TypePtr& type) -> std::string {
             return result;
         }
         else if constexpr (std::is_same_v<T, ListType>) {
-            if (auto* elemPrim = std::get_if<PrimitiveType>(&t.element->kind);
-                elemPrim && elemPrim->kind == PrimitiveType::Char) {
-                return "String";
-            }
             return "[" + typeToString(t.element) + "]";
         }
         else if constexpr (std::is_same_v<T, MapType>) {
@@ -276,10 +273,6 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
         } else if constexpr (std::is_same_v<T, NamedType>) {
             return compound(t.name, t.typeArgs);
         } else if constexpr (std::is_same_v<T, ListType>) {
-            // String IS [Char]; report it the way it is written.
-            if (auto* prim = std::get_if<PrimitiveType>(&t.element->kind);
-                prim && prim->kind == PrimitiveType::Char)
-                return StructuredType{"String", {}};
             return compound("List", {t.element});
         } else if constexpr (std::is_same_v<T, OptionalType>) {
             return compound("Option", {t.inner});

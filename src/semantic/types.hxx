@@ -13,7 +13,10 @@ struct Type;
 using TypePtr = std::shared_ptr<Type>;
 
 struct PrimitiveType {
-    enum Kind { Integer, Char, Bool, Atom, Unit };  // Integer = arbitrary precision
+    // String is its OWN kind, not `[Char]`. Modelling it as a list of Char
+    // made the two indistinguishable to the checker, so `contains? : String ->
+    // Bool` silently accepted a Char and `[Char]` reported itself as "String".
+    enum Kind { Integer, Char, String, Bool, Atom, Unit };  // Integer = arbitrary precision
     Kind kind;
 };
 

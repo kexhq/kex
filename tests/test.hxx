@@ -69,6 +69,9 @@ auto toString(const T& val) -> std::string {
         return "\"" + val + "\"";
     } else if constexpr (std::is_enum_v<T>) {
         return std::to_string(static_cast<int>(val));
+    } else if constexpr (std::is_same_v<T, char32_t>) {
+        // No stream inserter for char32_t — report the codepoint.
+        return "U+" + std::to_string(static_cast<unsigned>(val));
     } else {
         std::ostringstream oss;
         oss << val;

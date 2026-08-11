@@ -8,12 +8,19 @@
           'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
-%% ('h'.upperCase → 'H').
-upperCase({'Char', C}) -> {'Char', hd(string:to_upper([C]))};
-upperCase(C) when is_integer(C) -> hd(string:to_upper([C]));
+%% ('h'.upperCase → 'H'). A Char cannot expand, so it takes the SIMPLE
+%% mapping (kex_unicode_case): `ß` stays `ß` as a Char, while the String
+%% "ß" upcases to "SS" through the full mapping below. Same split as the
+%% walker's.
+%%
+%% string:to_upper/1 used to back the Char path, but it is the pre-Unicode
+%% function and only maps ISO-8859-1 — 'α'.upperCase and 'а'.upperCase were
+%% silent no-ops on BEAM while the walker mapped them.
+upperCase({'Char', C}) -> {'Char', kex_unicode_case:simple_upper(C)};
+upperCase(C) when is_integer(C) -> kex_unicode_case:simple_upper(C);
 upperCase(S) -> string:uppercase(S).
-lowerCase({'Char', C}) -> {'Char', hd(string:to_lower([C]))};
-lowerCase(C) when is_integer(C) -> hd(string:to_lower([C]));
+lowerCase({'Char', C}) -> {'Char', kex_unicode_case:simple_lower(C)};
+lowerCase(C) when is_integer(C) -> kex_unicode_case:simple_lower(C);
 lowerCase(S) -> string:lowercase(S).
 trim(S)      -> string:trim(S).
 

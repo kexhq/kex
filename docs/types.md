@@ -9,22 +9,53 @@
 - `Bool` — `true` or `false`
 - `None` — absence of value (not falsy, must be pattern matched)
 
-### `[Char]` is String — but `Char` is not
+### `String`, `Char`, and `[Char]` are three distinct types
 
-`[Char]` (a list of `Char`) *is* `String` — the same type, fully interchangeable for comparison, concatenation, and display. A single `Char`, however, is its own distinct type: `'a'` is not a 1-character `String`, and `==`/ordering between a `Char` and a `String` either return `false` or — for ordering — throw, the same as comparing any other two unrelated types. `Char` only compares/orders against another `Char`.
+A `String` is not a list. `Char` is not a 1-character `String`. And `[Char]` — a list of `Char` — is an ordinary list, not a `String`. Convert between the two with `chars` and `join("")`:
 
 ```kex
-let c = "hello".at(1)        # Char: 'e' — String.at(i) returns the i'th
-                              # element of the list, which is a Char
+let c = "hello".at(1)        # Char: 'e'
 c == 'e'                     # true (Char == Char)
 c == "e"                     # false — Char is not a String
-'a' + 'b'                    # "ab" — concatenation still builds a String
-"ab" + 'c'                   # "abc"
-['h', 'i'] == "hi"           # true — [Char] IS String
-IO.printLine(['h', 'i'])     # prints "hi", not "[h, i]"
+
+['h', 'i'] == "hi"           # false — a [Char] is not a String
+"hi".chars                   # ['h', 'i'] — converts String -> [Char]
+['h', 'i'].join("")          # "hi"       — converts [Char] -> String
+'a'.string                   # "a"        — converts Char   -> String
+IO.printLine(['h', 'i'])     # prints "[h, i]" — it is a list
 ```
 
-Internally `Char` and `String`/`[Char]` stay separate runtime representations — only `String` and `[Char]` are the same type; `Char` is the distinct element type you get from indexing into one.
+`to` is the **fallible** conversion protocol and always answers an `Optional`, whatever the source type. A `Char` converts to a `String` totally — a character is always one character of text — so that conversion gets its own name rather than bending the protocol:
+
+```kex
+'a'.string                   # "a"       : String   — total, no .or("") needed
+'a'.to(String)               # Just("a") : String?  — the protocol, uniform
+5.to(String)                 # Just("5") : String?
+"x".to(Integer)              # None      : Integer?
+```
+
+Concatenation is the exception, and deliberately so: `+` asks "what text does this contribute", which is a different question from "is this the same type".
+
+```kex
+'a' + 'b'                    # "ab"  — two Chars build a String
+"ab" + 'c'                   # "abc"
+```
+
+`String` owns its own sequence methods rather than borrowing List's, so `"hi".first`, `.take`, `.drop`, `.sort` and friends work directly and answer in String's terms — `take` returns a `String`, `first` returns a `Char?`. Reach for `chars` when you want list semantics instead.
+
+`map` is the one place the two readings genuinely differ, so they get separate names: `map` is `Enumerable`'s and collects into a list, while `mapChars` is String-in/String-out.
+
+```kex
+"hi".map(&.upperCase)        # ['H', 'I'] : [Char]
+"hi".mapChars(&.upperCase)   # "HI"       : String
+"hi".map(&.codepoint)        # [104, 105] : [Integer]
+```
+ The distinction is load-bearing for the operations whose meaning differs between the two:
+
+```kex
+"hello".contains?("ell")         # true  — String: substring
+"hello".chars.contains?('e')     # true  — [Char]: membership
+```
 
 ## Generics
 

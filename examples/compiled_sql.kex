@@ -5,11 +5,10 @@
 # compilation and replaced by its result, so no QueryBuilder is ever allocated
 # and `emit` never runs — see q1 below.
 #
-# A chain that depends on a runtime value still builds at runtime today. The
-# intended end state is that free variables become placeholders and even those
-# collapse, to a static string plus a params list (q2/q3); that part is not
-# implemented yet. Its static PREFIX does collapse, so `SQL.select(...)
-# .from(:users)` is a literal even in q2.
+# A chain that depends on a runtime value collapses too: the free variable
+# becomes a placeholder, and what is emitted is a static string plus a params
+# list holding the runtime reference (q2/q3). All three queries below are
+# literals in the generated code — `--collapse-report` says `3 of 3`.
 
 module SQL do
   record Query do
@@ -26,11 +25,16 @@ module SQL do
   end
 
   compiled do
-    let select(fields: Atom | [Atom]) -> QueryBuilder do
-      match fields do
-        :all -> QueryBuilder { fields: [:all] }
-        f    -> QueryBuilder { fields: f }
-      end
+    # Two clauses rather than one union-typed parameter: a `match` catch-all
+    # over `Atom | [Atom]` binds the whole union, so the arm handling the atom
+    # case still has list type and cannot go into `fields : [Atom]`. Type
+    # dispatch narrows at the clause boundary instead.
+    let select(fields: [Atom]) -> QueryBuilder do
+      QueryBuilder { fields: fields }
+    end
+
+    let select(field: Atom) -> QueryBuilder do
+      QueryBuilder { fields: [field] }
     end
 
     make QueryBuilder do
@@ -118,15 +122,15 @@ main do
 
   IO.printLine(q1.text)
 
-  # Free variable — `userId` only exists at runtime, so `where`/`emit` still
-  # run there. The select/from prefix is a QueryBuilder literal.
-  # Intended once placeholders land: userId becomes $1 in a static string.
+  # Free variable — `userId` only exists at runtime, so it rides through the
+  # chain as a placeholder and lands in `params` as a reference. The text is
+  # still computed during compilation, with `$1` written where it goes.
   let q2 = SQL.select([:name, :email])
               .from(:users)
               .where([(:id, userId)])
               .emit()
-  # Intended result: Query { text: "SELECT name, email FROM users WHERE id = $1",
-  #                          params: [userId] }
+  # Emits Query { text: "SELECT :name, :email FROM :users WHERE :id = $1",
+  #               params: [userId] } — string baked, userId still a reference.
 
   IO.printLine(q2.text)
   IO.inspect(q2.params)
@@ -138,8 +142,8 @@ main do
               .orderBy("name")
               .limit(10)
               .emit()
-  # Intended result: Query { text: "SELECT * FROM users WHERE name = $1 AND id = $2 ORDER BY name asc LIMIT $3",
-  #                          params: [userName, userId, 10] }
+  # Emits Query { text: "SELECT * FROM :users WHERE :name = $1 AND :id = $2 ORDER BY name :asc LIMIT $3",
+  #               params: [userName, userId, 10] }
 
   IO.printLine(q3.text)
 end

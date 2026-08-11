@@ -30,8 +30,13 @@ describe("Char — case conversion") do
   end
 
   it("case conversion works as a String mapping callback") do
-    assert("aBc".map(&.upperCase) == "ABC")
-    assert("AbC".map(&.lowerCase) == "abc")
+    assert("aBc".mapChars(&.upperCase) == "ABC")
+    assert("AbC".mapChars(&.lowerCase) == "abc")
+  end
+
+  it("map collects into a list, mapChars keeps the String") do
+    assert("aBc".map(&.upperCase) == ['A', 'B', 'C'])
+    assert("aBc".mapChars(&.upperCase) == "ABC")
   end
 end
 

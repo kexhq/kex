@@ -211,6 +211,14 @@ struct FunDef {
     int arity = 0;
     std::vector<FunClause> clauses;
     bool exported = true;
+    // Traits of the hidden dictionary parameters this function takes, in the
+    // order they were appended after the explicit ones. A call site that knows
+    // the argument's concrete type builds those dictionaries itself; one that
+    // does not (an un-inferred cross-file return, a `~Module.fn` capture)
+    // cannot, and would emit a call at the SOURCE arity. Lowering therefore
+    // also emits a wrapper at that arity which fills the dictionaries with the
+    // provider's generic dispatcher — see makeDictionaryWrapper.
+    std::vector<std::string> dictionaryTraits;
 };
 
 struct Module {

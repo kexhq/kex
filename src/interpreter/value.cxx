@@ -1,5 +1,6 @@
 #include "value.hxx"
 #include "../common/color.hxx"
+#include "../common/utf8.hxx"
 #include <algorithm>
 #include <charconv>
 #include <cmath>
@@ -163,7 +164,7 @@ auto Value::string(std::string v) -> ValuePtr {
     return std::make_shared<Value>(Value{StringValue{std::move(v)}});
 }
 
-auto Value::character(char v) -> ValuePtr {
+auto Value::character(char32_t v) -> ValuePtr {
     return std::make_shared<Value>(Value{CharValue{v}});
 }
 
@@ -244,7 +245,7 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, BigIntValue>) return v.value.get_str();
         else if constexpr (std::is_same_v<T, FloatValue>) return formatFloat(v.value);
         else if constexpr (std::is_same_v<T, StringValue>) return v.value;
-        else if constexpr (std::is_same_v<T, CharValue>) return std::string(1, v.value);
+        else if constexpr (std::is_same_v<T, CharValue>) return utf8::encode(v.value);
         else if constexpr (std::is_same_v<T, BoolValue>) return v.value ? "true" : "false";
         else if constexpr (std::is_same_v<T, AtomValue>) return ":" + v.name;
         else if constexpr (std::is_same_v<T, VariantValue>) {
@@ -260,18 +261,8 @@ auto Value::toString() const -> std::string {
         else if constexpr (std::is_same_v<T, ProcessValue>) return "#Process<" + std::to_string(v.pid) + ">";
         else if constexpr (std::is_same_v<T, TaskValue>) return "#Task<" + std::to_string(v.pid) + ">";
         else if constexpr (std::is_same_v<T, ListValue>) {
-            // A list of nothing but Chars displays as text, not as a
-            // bracketed list — [Char] is meant to look like a String from
-            // the language user's standpoint (see also valuesEqual/+).
-            bool allChars = !v.elements.empty();
-            for (const auto& el : v.elements) {
-                if (!std::holds_alternative<CharValue>(el->data)) { allChars = false; break; }
-            }
-            if (allChars) {
-                std::string result;
-                for (const auto& el : v.elements) result += std::get<CharValue>(el->data).value;
-                return result;
-            }
+            // A [Char] prints as the list it is, so `"hi".chars` is visibly
+            // a conversion rather than looking like a no-op.
             std::string result = "[";
             for (size_t i = 0; i < v.elements.size(); i++) {
                 if (i > 0) result += ", ";
@@ -358,7 +349,7 @@ auto Value::toRepr() const -> std::string {
             return "\"" + v.value + "\"";
         }
         else if constexpr (std::is_same_v<T, CharValue>) {
-            return "'" + std::string(1, v.value) + "'";
+            return "'" + utf8::encode(v.value) + "'";
         }
         else if constexpr (std::is_same_v<T, ListValue>) {
             std::string result = "[";
@@ -485,33 +476,26 @@ auto Value::typeName() const -> std::string {
     }, data);
 }
 
-// String, Char, and [Char] (Char-list) are meant to be interchangeable from
-// `[Char]` (a list of Char) *is* String — same type, fully interchangeable
-// — but a bare Char is its own distinct type, not a 1-character String.
-// Returns text content for StringValue or a ListValue whose elements are
-// *all* CharValue; nullopt for anything else, including a bare CharValue
-// (so e.g. 'a' == "a" is correctly false — see textContent below for the
-// broader version that does include Char, used by + and toString()).
-auto stringOrCharListText(const ValuePtr& v) -> std::optional<std::string> {
+// A String is its OWN type, NOT a [Char] — `chars` converts one to the other
+// and `join("")` converts back. A [Char] is an ordinary list: it prints as a
+// list and is never equal to a String. Char is likewise its own type, not a
+// 1-character String.
+//
+// Keeping String and [Char] as one type would mean String could never own a
+// method whose meaning differs from the list one: `contains?` is substring on
+// a String and membership on a [Char], and there is no single right answer
+// while they share a type.
+auto stringText(const ValuePtr& v) -> std::optional<std::string> {
     if (auto* s = std::get_if<StringValue>(&v->data)) return s->value;
-    if (auto* l = std::get_if<ListValue>(&v->data)) {
-        std::string out;
-        for (const auto& el : l->elements) {
-            auto* ec = std::get_if<CharValue>(&el->data);
-            if (!ec) return std::nullopt;
-            out += ec->value;
-        }
-        return out;
-    }
     return std::nullopt;
 }
 
-// Like stringOrCharListText, but also renders a bare Char as text — for
-// "what text would concatenating/printing this produce" (+ and toString()),
-// not "is this the same type as String" (valuesEqual, pattern matching).
+// Like stringText, but also renders a bare Char as text — for "what text
+// would concatenating this produce" (`'a' + 'b'` is "ab"), not "is this the
+// same type as String" (valuesEqual, pattern matching).
 auto textContent(const ValuePtr& v) -> std::optional<std::string> {
-    if (auto* c = std::get_if<CharValue>(&v->data)) return std::string(1, c->value);
-    return stringOrCharListText(v);
+    if (auto* c = std::get_if<CharValue>(&v->data)) return utf8::encode(c->value);
+    return stringText(v);
 }
 
 auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
@@ -519,8 +503,8 @@ auto valuesEqual(const ValuePtr& a, const ValuePtr& b) -> bool {
     if (!a || !b) return false;
 
     if (std::holds_alternative<StringValue>(a->data) || std::holds_alternative<StringValue>(b->data)) {
-        auto at = stringOrCharListText(a);
-        auto bt = stringOrCharListText(b);
+        auto at = stringText(a);
+        auto bt = stringText(b);
         if (at && bt) return *at == *bt;
     }
 
@@ -631,7 +615,7 @@ auto Value::inspect() const -> std::string {
             else if constexpr (std::is_same_v<T, StringValue>)
                 return std::string(c(green)) + "\"" + node.value + "\"" + c(reset);
             else if constexpr (std::is_same_v<T, CharValue>)
-                return std::string(c(green)) + "'" + std::string(1, node.value) + "'" + c(reset);
+                return std::string(c(green)) + "'" + utf8::encode(node.value) + "'" + c(reset);
             else if constexpr (std::is_same_v<T, BoolValue>)
                 return std::string(c(magenta)) + (node.value ? "true" : "false") + c(reset);
             else if constexpr (std::is_same_v<T, AtomValue>)
@@ -653,14 +637,6 @@ auto Value::inspect() const -> std::string {
             else if constexpr (std::is_same_v<T, TaskValue>)
                 return std::string(c(gray)) + "#Task<" + std::to_string(node.pid) + ">" + c(reset);
             else if constexpr (std::is_same_v<T, ListValue>) {
-                bool allChars = !node.elements.empty();
-                for (const auto& el : node.elements)
-                    if (!std::holds_alternative<CharValue>(el->data)) { allChars = false; break; }
-                if (allChars) {
-                    std::string s;
-                    for (const auto& el : node.elements) s += std::get<CharValue>(el->data).value;
-                    return std::string(c(green)) + "\"" + s + "\"" + c(reset);
-                }
                 std::string result = "[";
                 for (size_t i = 0; i < node.elements.size(); i++) {
                     if (i > 0) result += ", ";

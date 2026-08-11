@@ -13,11 +13,13 @@ main(args) do
     Ok(json) -> do
       let name = json["name"].or(unknown)
       let desc = json["description"].or(unknown)
+      let version = json["version"].or(unknown)
       let license = json["license"].or(unknown)
 
       IO.printLine("Package:")
       IO.printLine("\tName: ${name}")
       IO.printLine("\tDescription: ${desc}")
+      IO.printLine("\tVersion: ${version}")
       IO.printLine("\tLicense: ${license}")
     end
     Error(err) -> do

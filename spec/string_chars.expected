@@ -1,5 +1,7 @@
-hi
+[h, i]
 0
 3
 a
-cba
+[c, b, a]
+abc
+true

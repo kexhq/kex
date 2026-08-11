@@ -1,4 +1,6 @@
 #include "../evaluator.hxx"
+#include "../../common/utf8.hxx"
+#include "../../common/unicode_category.hxx"
 #include "regex_support.hxx"
 #include <algorithm>
 #include <cctype>
@@ -11,6 +13,14 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineModule("Char");
     defineModule("Bool");
     defineModule("Atom");
+
+    // Unicode categories, tested on the FULL codepoint (see
+    // src/common/unicode_category.hxx). std::isalpha and friends take a byte,
+    // so a codepoint above 255 had to be truncated to reach them — 'ő'
+    // (U+0151) truncated to 0x51, which is 'Q'.
+    auto isLetter = [](char32_t c) {
+        return utf8::categories::inRanges(utf8::categories::letterRanges, c);
+    };
 
     auto regCharPredicate = [this](const std::string& publicName,
                                    const std::string& intrinsicName,
@@ -33,7 +43,8 @@ auto Evaluator::registerStringBuiltins() -> void {
         }
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::none();
-        return i < str->value.size() ? Value::character(str->value[i]) : Value::none();
+        auto cps = utf8::decode(str->value);
+        return i < cps.size() ? Value::character(cps[i]) : Value::none();
     };
     defineIntrinsic("List::at", std::move(at));
 
@@ -43,9 +54,10 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::list({});
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::list({});
+        auto cps = utf8::decode(str->value);
         std::vector<ValuePtr> elems;
-        elems.reserve(str->value.size());
-        for (char c : str->value) elems.push_back(Value::character(c));
+        elems.reserve(cps.size());
+        for (auto cp : cps) elems.push_back(Value::character(cp));
         return Value::list(std::move(elems));
     });
 
@@ -59,46 +71,50 @@ auto Evaluator::registerStringBuiltins() -> void {
         return Value::boolean(c->value >= '0' && c->value <= '9');
     });
 
-    regCharPredicate("alpha?", "is_alpha", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("alpha?", "is_alpha", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("alpha? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("alpha? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(isLetter(c->value));
     });
 
-    regCharPredicate("letter?", "is_letter", [](std::vector<ValuePtr> args) -> ValuePtr {
+    regCharPredicate("letter?", "is_letter", [isLetter](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("letter? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("letter? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isalpha(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(isLetter(c->value));
     });
 
     regCharPredicate("upper?", "is_upper", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("upper? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("upper? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isupper(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::upperRanges, c->value));
     });
 
     regCharPredicate("lower?", "is_lower", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("lower? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("lower? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::islower(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::lowerRanges, c->value));
     });
 
     regCharPredicate("space?", "is_space", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) throw std::runtime_error("space? expects a Char, got no argument");
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) throw std::runtime_error("space? expects a Char, got " + args[0]->typeName());
-        return Value::boolean(std::isspace(static_cast<unsigned char>(c->value)) != 0);
+        return Value::boolean(
+            utf8::categories::inRanges(utf8::categories::spaceRanges, c->value));
     });
 
     defineIntrinsic("Char::codepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::integer(0);
         auto* c = std::get_if<CharValue>(&args[0]->data);
         if (!c) return Value::integer(0);
-        return Value::integer(static_cast<unsigned char>(c->value));
+        // The full codepoint, not a byte: `'日'.codepoint` is 26085.
+        return Value::integer(static_cast<int64_t>(c->value));
     });
 
     defineIntrinsic("String::fromCodepoint", [](std::vector<ValuePtr> args) -> ValuePtr {
@@ -264,24 +280,20 @@ auto Evaluator::registerStringBuiltins() -> void {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.upperCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
-            return Value::character(static_cast<char>(std::toupper(cv->value)));
+            return Value::character(utf8::toUpper(cv->value));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
-        std::string result = str->value;
-        for (auto& c : result) c = static_cast<char>(std::toupper(c));
-        return Value::string(result);
+        return Value::string(utf8::toUpper(str->value));
     });
 
     defineIntrinsic("String::lowerCase", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("");
         // Char -> Char (so map(&.lowerCase) on a String round-trips back to String)
         if (auto* cv = std::get_if<CharValue>(&args[0]->data))
-            return Value::character(static_cast<char>(std::tolower(cv->value)));
+            return Value::character(utf8::toLower(cv->value));
         auto* str = std::get_if<StringValue>(&args[0]->data);
         if (!str) return Value::string("");
-        std::string result = str->value;
-        for (auto& c : result) c = static_cast<char>(std::tolower(c));
-        return Value::string(result);
+        return Value::string(utf8::toLower(str->value));
     });
 
     // Also handles List (reversing elements), since the same `reverse`
@@ -289,8 +301,10 @@ auto Evaluator::registerStringBuiltins() -> void {
     defineIntrinsic("List::reverse", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::none();
         if (auto* str = std::get_if<StringValue>(&args[0]->data)) {
-            std::string result(str->value.rbegin(), str->value.rend());
-            return Value::string(result);
+            // By codepoint — reversing bytes would shred multi-byte characters.
+            auto cps = utf8::decode(str->value);
+            std::reverse(cps.begin(), cps.end());
+            return Value::string(utf8::encodeAll(cps));
         }
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
             std::vector<ValuePtr> result(list->elements.rbegin(), list->elements.rend());

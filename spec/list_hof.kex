@@ -14,5 +14,5 @@ main do
   # flatMap
   IO.printLine([[1, 2], [3, 4], [5]].flatMap { |xs| xs })
   IO.printLine([1, 2, 3].flatMap { |n| [n, n * 10] })
-  IO.printLine(["hello", "world"].flatMap { |s| s.filter(~alpha?) })
+  IO.printLine(["hello", "world"].flatMap { |s| s.filter(~alpha?).chars })
 end

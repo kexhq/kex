@@ -1,4 +1,4 @@
-.PHONY: build test spec spec-prelude spec-stdlib spec-stdlib-beam test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build test spec spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -14,7 +14,7 @@ help:
 	@echo "  make build        Build the compiler"
 	@echo "  make test         Run all unit tests (C++ test binaries)"
 	@echo "  make spec         Run spec programs and verify output"
-	@echo "  make test-all     Run unit tests + spec suite (used by CI)"
+	@echo "  make test-all     Run unit tests + spec suites, incl. BEAM (used by CI)"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
@@ -77,7 +77,10 @@ web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
 	@python3 -m http.server 8743
 
-test-all: test spec spec-prelude spec-stdlib
+# `spec-beam` is informational: it reports differing specs but always exits 0,
+# so adding it here surfaces BEAM drift on every run without gating the build
+# on the documented interpreter/BEAM gaps.
+test-all: test spec spec-prelude spec-stdlib spec-beam
 
 SHELL := /bin/bash
 

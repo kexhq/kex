@@ -1,4 +1,5 @@
 #include "emit_core.hxx"
+#include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
 #include <sstream>
@@ -121,8 +122,12 @@ struct Emitter {
             // A Char is a tagged tuple {'Char', Codepoint} — a bare integer
             // is indistinguishable from Int (display, dispatch, [Char] vs
             // [Int]). Works in both expression and pattern position.
-            case LitKind::Char:   return "{'Char'," +
-                std::to_string(static_cast<int>(static_cast<unsigned char>(l.text[0]))) + "}";
+            case LitKind::Char: {
+                auto codepoints = utf8::decode(l.text);
+                return "{'Char'," +
+                    std::to_string(codepoints.empty()
+                        ? 0u : static_cast<unsigned>(codepoints.front())) + "}";
+            }
             case LitKind::String: return erlBinary(l.text);
             case LitKind::Bool:   return l.boolValue ? "'true'" : "'false'";
             case LitKind::None:   return "'None'";

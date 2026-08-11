@@ -425,6 +425,18 @@ auto TypeChecker::check(const ast::Program& program,
     }
 
     popScope();
+
+    // `m_typeMap` records each expression's type as it was INFERRED, which for
+    // anything inferred before its unification is a bare TypeVar; the concrete
+    // type only lives in `m_subst`. Consumers outside this class (IR lowering,
+    // via Analyzer::typeMap) have no access to the substitution, so they saw
+    // `T1` where the checker itself would say `P` — and BEAM lowering silently
+    // sent `let p = this; p.advance` to the prelude instead of the receiver's
+    // own `make` block. Resolve once, here, so every consumer reads the answer
+    // the checker actually reached. Unbound vars resolve to themselves, so a
+    // genuinely un-inferred expression is unchanged.
+    for (auto& [expr, type] : m_typeMap)
+        type = resolve(type);
 }
 
 auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
@@ -2182,7 +2194,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 importedFunctionVisible(function))
                                 return function.signature.result;
             auto type = lookupVar(node.name);
-            return type ? type : Type::unknown();
+            if (type) return type;
+            // A bare TYPE NAME used as a value — `x.to(Integer)`, the argument
+            // of the conversion protocol. Typing it as the type it names is
+            // what makes the protocol dispatchable: left Unknown, every
+            // `to` overload matched every call, so `"42".to(Integer)` was typed
+            // by whichever came first (`make Showable do let to(String)`) and
+            // came out `String?` no matter the target.
+            if (isPrimitiveTypeName(node.name) || m_recordFields.count(node.name) ||
+                m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
+                return Type::named(node.name);
+            return Type::unknown();
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;
@@ -2653,6 +2675,34 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                                 {std::move(function), /*evaluateArgument=*/false};
                             return Type::named("Type");
                         }
+                }
+            }
+            // `x.to(T)` answers `T?`. The clauses implementing the protocol
+            // take their target as an ordinary VALUE parameter
+            // (`let to(value, String) = ...`), so every one of them has an
+            // `unknown` second parameter, overload resolution cannot tell them
+            // apart, and the first one wins: `"34".to(Integer)` and
+            // `(1..3).to(List)` both typed as `String?` while evaluating to an
+            // Integer and a list. The target NAMES a type, so read it.
+            //
+            // A String target is left alone: `String?` is already the right
+            // answer for it, and a receiver that declares its own total
+            // conversion (`Measure.to(String) -> String`) must keep it.
+            // Only the bare `to(T)` form. `to(T, radix: n)` carries named
+            // arguments, and answering here would skip the call resolution
+            // lowering needs to place them — it reported `radix:` as an
+            // unknown named argument on BEAM.
+            if (node.method == "to" && node.args.size() == 1 && node.args[0] &&
+                node.namedArgs.empty() && !node.block) {
+                const auto targetIsString = [](const TypePtr& t) {
+                    auto* prim = std::get_if<PrimitiveType>(&t->kind);
+                    return prim && prim->kind == PrimitiveType::String;
+                };
+                if (auto target = typeNameReference(*node.args[0]);
+                    target && !targetIsString(target)) {
+                    for (const auto& argument : node.args) inferExpr(*argument);
+                    if (node.receiver) inferExpr(*node.receiver);
+                    return Type::optional(target);
                 }
             }
             // `Type.returnedBy(f)`: resolved entirely here — a function value
@@ -3294,10 +3344,8 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                                 SourceLocation loc) -> TypePtr {
     // Type predicates used both in the TypeVar bail-out and the concrete section.
     auto isString = [](const TypePtr& t) {
-        auto* list = std::get_if<ListType>(&t->kind);
-        if (!list) return false;
-        auto* elemPrim = std::get_if<PrimitiveType>(&list->element->kind);
-        return elemPrim && elemPrim->kind == PrimitiveType::Char;
+        auto* prim = std::get_if<PrimitiveType>(&t->kind);
+        return prim && prim->kind == PrimitiveType::String;
     };
     auto isChar = [](const TypePtr& t) {
         auto* prim = std::get_if<PrimitiveType>(&t->kind);
@@ -3783,10 +3831,8 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
         if (auto* n = std::get_if<NamedType>(&t->kind))
             return n->typeArgs.empty() &&
                    (n->name == "String" || n->name == "FilePath");
-        if (auto* l = std::get_if<ListType>(&t->kind)) {
-            if (auto* p = std::get_if<PrimitiveType>(&l->element->kind))
-                return p->kind == PrimitiveType::Char;
-        }
+        if (auto* p = std::get_if<PrimitiveType>(&t->kind))
+            return p->kind == PrimitiveType::String;
         return false;
     };
     // FunctionType param — e.g. `(T-1) -> Bool` vs `(T81) -> Bool`. Without
@@ -4586,6 +4632,17 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
 
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
+        if (std::getenv("KEX_DEBUG_SIG") && name == "to") {
+            std::fprintf(stderr, "[to] params=");
+            for (const auto& p : matched.params)
+                std::fprintf(stderr, "%s ", typeToString(resolve(p)).c_str());
+            std::fprintf(stderr, "=> %s | matches=%zu args=",
+                         typeToString(resolve(matched.result)).c_str(),
+                         fullMatches.size());
+            for (const auto& a : argTypes)
+                std::fprintf(stderr, "%s ", typeToString(resolve(a)).c_str());
+            std::fprintf(stderr, "\n");
+        }
         if (methodCall) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;

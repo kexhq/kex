@@ -1,0 +1,69 @@
+# String, Char and [Char] are three distinct types. This pins the boundary
+# between them: what converts, what compares, and which operations answer in
+# String's terms rather than the list's.
+
+main do
+  let s = "hello"
+  let cs = s.chars
+
+  # --- conversion, both directions
+  IO.printLine(cs)                      # a list, so it prints as one
+  IO.printLine(cs == s)                 # false — different types
+  IO.printLine(s == cs)
+  IO.printLine(cs.join("") == s)        # [Char] -> String
+  IO.printLine(s.chars == cs)           # String -> [Char]
+
+  # --- String's own sequence methods answer in String's terms
+  IO.printLine(s.first)                 # Just('h') — an element, so a Char
+  IO.printLine(s.last)
+  IO.printLine(s.take(2))               # "he" — a slice, so a String
+  IO.printLine(s.drop(2))
+  IO.printLine(s.rest)
+  IO.printLine(s.sort)
+  IO.printLine(s.reverse)
+  IO.printLine(s.uniq)                  # order-preserving, not sorted
+  IO.printLine(s.mapChars(&.upperCase))  # String in, String out
+  IO.printLine(s.map(&.upperCase))       # Enumerable's map collects a list
+  IO.printLine(s.filter { |c| c != 'l' })
+  IO.printLine(s.reject { |c| c == 'l' })
+  IO.printLine(s.partition { |c| c == 'l' })
+  IO.printLine(s.indexOf('l'))
+  IO.printLine(s.findIndex { |c| c == 'l' })
+  IO.printLine(s.get(1))
+  IO.printLine(s.zip([1, 2, 3]))
+  IO.printLine(s.chars.join("-"))       # join is a LIST operation
+
+  # --- the same operations on the [Char] answer in the list's terms
+  IO.printLine(cs.take(2))
+  IO.printLine(cs.sort)
+  IO.printLine(cs.uniq)
+
+  # --- where the two genuinely disagree: contains? is substring on a String
+  # and membership on a [Char]. Distinct types are what let each keep its own
+  # meaning instead of one having to win.
+  IO.printLine(s.contains?("ell"))
+  IO.printLine(cs.contains?('e'))
+
+  # --- Char -> String: `string` is total, `to(String)` is the fallible
+  # protocol and stays Optional like every other conversion
+  IO.printLine('a'.string == "a")
+  IO.printLine('a'.to(String) == Just("a"))
+  IO.printLine(cs.map(&.string))
+
+  # --- Char still concatenates as text; `+` asks what text a value
+  # contributes, not whether it is a String
+  IO.printLine('a' + 'b')
+  IO.printLine("ab" + 'c')
+  IO.printLine('a' + "bc")
+
+  # --- a list pattern keeps the SUBJECT's type in the tail: over a [Char] the
+  # tail is a [Char], and over a String it is a String
+  match cs do
+    [c | rest] -> IO.printLine("list head ${c} tail ${rest}")
+    []         -> IO.printLine("empty")
+  end
+  match s do
+    [c | rest] -> IO.printLine("string head ${c} tail ${rest}")
+    []         -> IO.printLine("empty")
+  end
+end

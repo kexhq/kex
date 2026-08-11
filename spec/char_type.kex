@@ -1,7 +1,9 @@
-# Char ('a', '\n', ...) is its own distinct type — NOT a 1-character
-# String. [Char] (a list of Char), however, *is* String: same type, fully
-# interchangeable for comparison, concatenation, and display. See
-# docs/types.md.
+# Char ('a', '\n', ...) is its own distinct type — NOT a 1-character String.
+# [Char] (a list of Char) is its own type too: a String is NOT a list, and the
+# two are converted with `chars` and `join("")` rather than being
+# interchangeable. Char still CONCATENATES with String, because `+` asks "what
+# text does this contribute", which is a different question from "is this the
+# same type". See docs/types.md.
 main do
   let c = "hello".at(1)
   IO.printLine(c)
@@ -15,10 +17,11 @@ main do
   IO.printLine('a' + "bc")
 
   let letters = ['h', 'i']
-  IO.printLine(letters)         # displays as text, not [h, i]
-  IO.printLine(letters == "hi") # true — [Char] IS String
+  IO.printLine(letters)         # a list, so it displays as one
+  IO.printLine(letters == "hi") # false — a [Char] is not a String
   IO.printLine("hi" == letters)
-  IO.printLine(letters == "hI")
+  IO.printLine(letters.join("") == "hi")   # convert, then compare
+  IO.printLine("hi".chars == letters)      # and the other direction
 
   IO.printLine("abc".at(1) == 'b')
   IO.printLine("abc".at(1) == "b")  # false — Char vs String

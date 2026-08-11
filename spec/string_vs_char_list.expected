@@ -1,0 +1,36 @@
+[h, e, l, l, o]
+false
+false
+true
+true
+h
+o
+he
+llo
+ello
+ehllo
+olleh
+helo
+HELLO
+[H, E, L, L, O]
+heo
+heo
+(ll, heo)
+2
+2
+e
+[(h, 1), (e, 2), (l, 3)]
+h-e-l-l-o
+[h, e]
+[e, h, l, l, o]
+[h, e, l, o]
+true
+true
+true
+true
+[h, e, l, l, o]
+ab
+abc
+abc
+list head h tail [e, l, l, o]
+string head h tail ello

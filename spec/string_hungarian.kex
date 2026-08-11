@@ -1,0 +1,43 @@
+# The Hungarian alphabet, as a case-mapping regression test.
+#
+# Worth its own file because it straddles both halves of the table. Seven of
+# its accented vowels (á é í ó ö ú ü) are Latin-1, but ő and ű are Latin
+# Extended-A (U+0151 / U+0171) — the double-acute pair that ISO-8859-1 does not
+# have. BEAM's Char path used to be `string:to_upper/1`, which maps ISO-8859-1
+# only, so `'ő'.upperCase` was a silent no-op there while the walker mapped it.
+# Those two also sit inside a stride-2 run in the generated tables (each even
+# codepoint is the capital, each odd one its lowercase), so they exercise the
+# run-stepping that a contiguous Latin-1 range does not.
+#
+# Digraphs (cs, gy, ny, sz, ty, zs) and the dzs trigraph are single LETTERS in
+# Hungarian but several characters, so `capitalize` touches only the first —
+# "Csongor", not "CSongor". `length` counts characters, so "cs" is 2.
+
+main do
+  # Every accented vowel, as a Char, both directions
+  IO.printLine("${'á'.upperCase}${'é'.upperCase}${'í'.upperCase}${'ó'.upperCase}${'ö'.upperCase}${'ő'.upperCase}${'ú'.upperCase}${'ü'.upperCase}${'ű'.upperCase}")
+  IO.printLine("${'Á'.lowerCase}${'É'.lowerCase}${'Í'.lowerCase}${'Ó'.lowerCase}${'Ö'.lowerCase}${'Ő'.lowerCase}${'Ú'.lowerCase}${'Ü'.lowerCase}${'Ű'.lowerCase}")
+
+  # The classic pangram — contains every accented vowel
+  let pangram = "árvíztűrő tükörfúrógép"
+  IO.printLine(pangram.upperCase)
+  IO.printLine(pangram.upperCase.lowerCase)
+  IO.printLine(pangram.capitalize)
+
+  # Round trip is lossless for the whole alphabet
+  IO.printLine("round trip ok? ${pangram.upperCase.lowerCase == pangram}")
+
+  # The double acutes specifically — the two BEAM used to miss
+  IO.printLine("${"őrült".upperCase} ${"űrhajó".upperCase} ${"ŐRÜLT".lowerCase} ${"ŰRHAJÓ".lowerCase}")
+
+  # Counted in characters, not bytes: every accented vowel is two bytes,
+  # so a byte count would say 31 here.
+  IO.printLine("length ${pangram.length} chars ${pangram.chars.count}")
+
+  # Digraphs are multi-character, so only the first letter capitalizes
+  IO.printLine("${"csongor".capitalize} ${"gyula".capitalize} ${"zsuzsa".capitalize}")
+  IO.printLine("cs is ${"cs".length} chars, dzs is ${"dzs".length}")
+
+  # Per-character mapping through chars/map keeps a String a String
+  IO.printLine("${"öttusa".chars.map(&.upperCase).join("")}")
+end
