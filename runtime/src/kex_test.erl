@@ -160,11 +160,20 @@ indent(Depth) -> lists:duplicate(Depth * 2, $\s).
 %% exactly: throws (here, erlang:error/1, caught the same way any other
 %% Kex runtime error is) when cond isn't truthy.
 %% Moved from kex_io where testing logic didn't belong.
-assert(Cond) -> assert(Cond, "assertion failed").
+%% The message is a BINARY (a Kex String), never a charlist: a charlist is an
+%% ordinary Kex list of integers here, so `kex_io:to_string/1` renders it as
+%% `[97, 115, …]` — which is exactly what a bare `assert(false)` used to
+%% report, where the walker says just "assertion failed".
+assert(Cond) ->
+    case is_truthy(Cond) of
+        true -> true;
+        false -> erlang:error(<<"assertion failed">>)
+    end.
 assert(Cond, Msg) ->
     case is_truthy(Cond) of
         true -> true;
-        false -> erlang:error(lists:flatten("assertion failed: " ++ kex_io:to_string(Msg)))
+        false -> erlang:error(<<"assertion failed: ",
+                                (kex_io:to_string_bin(Msg))/binary>>)
     end.
 
 %% Same truthiness rule as `if`/`while`/`&&`/`||` throughout this runtime:

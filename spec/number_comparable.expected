@@ -1,0 +1,31 @@
+-- compare on Integer --
+Less
+Greater
+Equal
+-- compare on Float --
+Less
+Greater
+Equal
+-- compare across Integer and Float --
+Equal
+Less
+Greater
+Less
+Equal
+-- make Number covers both --
+n=3
+n=3.5
+-- concrete type wins over Number --
+integer
+number
+-- union make target --
+6
+7.0
+-- Number-annotated free function --
+6
+10.54
+10.440000000000001
+-- Duration.compareTo delegates to Number.compare --
+Less
+Greater
+Equal

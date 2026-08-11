@@ -1,0 +1,38 @@
+# `or!` / `or` bind tighter than `->`, so in a standalone annotation the error
+# channel lands on the RESULT type rather than wrapping the whole function
+# type. `f : A -> B or! E` must mean the same as `let f(a: A) -> B or! E`
+# — before, the annotation parsed as `Result<(A -> B), E>` and every such
+# signature reported "declares 0 parameters".
+
+type MathError = | DivideByZero
+
+# Two parameters, Result return — the arity must agree with the definition.
+divide : Number -> Number -> Number or! MathError
+let divide(_, 0) = Error(DivideByZero)
+let divide(a, b) = Ok(a / b)
+
+# Single parameter.
+half : Number -> Number or! MathError
+let half(n) = Ok(n / 2)
+
+# `or` (Either) has the same precedence.
+pick : Number -> Number or String
+let pick(n) = Right(n)
+
+# A Result-typed PARAMETER still parses; `or!` groups before the arrow.
+unwrapOr : Number or! MathError -> Number -> Number
+let unwrapOr(r, fallback) do
+  return match r do
+    Ok(v) -> v
+    Error(_) -> fallback
+  end
+end
+
+main do
+  IO.printLine(divide(10, 2))
+  IO.printLine(divide(1, 0))
+  IO.printLine(half(8))
+  IO.printLine(pick(3))
+  IO.printLine(unwrapOr(divide(10, 2), -1))
+  IO.printLine(unwrapOr(divide(10, 0), -1))
+end

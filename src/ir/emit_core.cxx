@@ -10,12 +10,26 @@ namespace {
 
 // Kex name / IR fresh name → Core Erlang variable. Fresh names already start
 // with '_' (valid); Kex names get their first letter uppercased.
+//
+// A Kex identifier may also end in `?` or `!` (`required?`, `save!`), neither
+// of which Core Erlang accepts in a variable — emitted raw, a parameter named
+// `required?` made erlc reject the whole module with a syntax error
+// (examples/options.kex). Escape any such character as `@` plus its hex code:
+// `@` cannot appear in a Kex identifier, so the encoding cannot collide with
+// an ordinary name.
 auto erlVar(const std::string& s) -> std::string {
     if (s.empty()) return "_V";
     if (s[0] == '_') return s;
+    static const char* kHex = "0123456789ABCDEF";
+    auto append = [&](std::string& out, unsigned char c) {
+        if (std::isalnum(c) || c == '_' || c == '@') { out += static_cast<char>(c); return; }
+        out += '@';
+        out += kHex[c >> 4];
+        out += kHex[c & 0x0F];
+    };
     std::string out;
     out += static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
-    out += s.substr(1);
+    for (size_t i = 1; i < s.size(); i++) append(out, static_cast<unsigned char>(s[i]));
     return out;
 }
 
@@ -174,12 +188,43 @@ struct Emitter {
         return "call '" + c.module + "':'" + c.name + "'(" + args + ")";
     }
 
+    // Numeric literal patterns compare with `==`, not by Core Erlang's exact
+    // pattern match, so `safeDiv(_, 0)` catches a 0.0 divisor exactly as it
+    // does in the interpreter. Each one emits a fresh variable plus a guard
+    // conjunct collected here; the enclosing clause ANDs them onto its own
+    // guard. Nested positions (tuples, constructors, lists) work because
+    // every path funnels through emitPattern.
+    std::vector<std::string> patGuards;
+
+    auto beginPatGuards() -> void { patGuards.clear(); }
+
+    // Combines the collected conjuncts with a clause's own guard. Guards admit
+    // only BIFs (no `case`), so this nests `erlang:and`. Eager evaluation is
+    // safe: every conjunct compares a variable the pattern already bound, and
+    // a raising guard fails the clause rather than crashing.
+    auto takePatGuards(const std::string& own) -> std::string {
+        std::string acc;
+        for (const auto& g : patGuards) {
+            acc = acc.empty() ? g : "call 'erlang':'and'(" + acc + ", " + g + ")";
+        }
+        patGuards.clear();
+        if (acc.empty()) return own.empty() ? "'true'" : own;
+        if (own.empty()) return acc;
+        return "call 'erlang':'and'(" + acc + ", " + own + ")";
+    }
+
     auto emitPattern(const Pattern& p) -> std::string {
         switch (p.kind) {
             case PatKind::Wild: return freshWild();
             case PatKind::Var:  return erlVar(p.name);
             case PatKind::Lit: {
                 Lit l; l.kind = p.litKind; l.text = p.litText; l.boolValue = p.litBool;
+                if (p.litKind == LitKind::Int || p.litKind == LitKind::Float) {
+                    std::string v = "_Nc" + std::to_string(wildCounter++);
+                    patGuards.push_back("call 'erlang':'=='(" + v + ", " +
+                                        emitLit(l) + ")");
+                    return v;
+                }
                 return emitLit(l);
             }
             case PatKind::Construct: {
@@ -226,12 +271,13 @@ struct Emitter {
             : emit(m.subjects[0]);
         std::string out = "case " + subj + " of\n";
         for (const auto& cl : m.clauses) {
+            beginPatGuards();
             std::string pat = multi
                 ? "<" + seq([&](const PatternPtr& p){ return emitPattern(*p); }, cl.patterns.size(),
                             [&](size_t i)->const PatternPtr&{ return cl.patterns[i]; }) + ">"
                 : emitPattern(*cl.patterns[0]);
             out += "  " + pat;
-            out += cl.guard ? " when " + emit(*cl.guard) : " when 'true'";
+            out += " when " + takePatGuards(cl.guard ? emit(*cl.guard) : "");
             out += " ->\n    " + emit(cl.body) + "\n";
         }
         out += "end";
@@ -244,8 +290,10 @@ struct Emitter {
     auto emitReceive(const Receive& r) -> std::string {
         std::string out = "receive\n";
         for (const auto& cl : r.clauses) {
-            out += "  {'kex_msg', " + emitPattern(*cl.pattern) + ", " + erlVar(r.senderVar) + "}";
-            out += " when 'true' ->\n    " + emit(cl.body) + "\n";
+            beginPatGuards();
+            std::string pat = emitPattern(*cl.pattern);
+            out += "  {'kex_msg', " + pat + ", " + erlVar(r.senderVar) + "}";
+            out += " when " + takePatGuards("") + " ->\n    " + emit(cl.body) + "\n";
         }
         if (r.timeout && r.afterBody)
             out += "after " + emit(*r.timeout) + " ->\n    " + emit(*r.afterBody);
@@ -340,8 +388,11 @@ struct Emitter {
 
                 std::string catchBody = "case " + errVar + " of\n";
                 for (size_t i = 0; i < n.clauses.size(); i++) {
-                    catchBody += "      " + emitPattern(*n.clauses[i].patterns[0]);
-                    catchBody += " when 'true' -> " + emit(n.clauses[i].body);
+                    beginPatGuards();
+                    std::string cpat = emitPattern(*n.clauses[i].patterns[0]);
+                    catchBody += "      " + cpat;
+                    catchBody += " when " + takePatGuards("") + " -> " +
+                                 emit(n.clauses[i].body);
                     if (i + 1 < n.clauses.size()) catchBody += "\n";
                 }
                 // The rescue patterns may not be exhaustive. A non-exhaustive
@@ -411,6 +462,7 @@ struct Emitter {
         out << "  fun " << head << " ->\n";
         out << "    case " << subj << " of\n";
         for (const auto& cl : fn.clauses) {
+            beginPatGuards();
             std::string pats = "<";
             for (size_t i = 0; i < cl.params.size(); i++) {
                 if (i) pats += ", ";
@@ -418,7 +470,7 @@ struct Emitter {
             }
             pats += ">";
             out << "      " << pats;
-            out << (cl.guard ? " when " + emit(*cl.guard) : " when 'true'");
+            out << " when " << takePatGuards(cl.guard ? emit(*cl.guard) : "");
             out << " ->\n        " << emitClauseBody(cl.body) << "\n";
         }
         // Non-exhaustive fallback: distinct fresh wildcards (a bare `_`

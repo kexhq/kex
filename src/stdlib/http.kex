@@ -61,7 +61,7 @@ foul module Mock do
   foul module FS do
     File : FS.FilePath -> String -> Void
     Directory : FS.FilePath -> Void
-    clear : Void -> Void
+    clear : Void
 
     foul File(path: FS.FilePath, content: String) -> Void do
       return Kex.Intrinsic.FS.file(path, content)
@@ -77,10 +77,10 @@ foul module Mock do
   end
 
   foul module Http do
-    start   : Void -> Void
+    start   : Void
     respond : Integer -> String -> Void
     respond : Integer -> String -> Map<String, String> -> Void
-    stop    : Void -> Void
+    stop    : Void
 
     foul start() -> Void do
       return Kex.Intrinsic.Http.mockStart()

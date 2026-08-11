@@ -1,0 +1,53 @@
+# `type X = Y` with a single capitalized name is ambiguous: it could alias an
+# existing type or declare a one-variant ADT. A leading `|` picks the ADT
+# reading; without it the declaration stays a transparent alias.
+
+type FilePath = String            # alias — no constructor introduced
+type SafeDivError = | DivideByZero   # ADT — DivideByZero is a value
+type Unit = | TheOne
+
+# With two or more variants the declaration is already unambiguous, so no
+# leading pipe is used.
+type Color = Red | Green | Blue
+
+# Constructors with arguments, same rule.
+type Shape =
+    Circle(Number)
+  | Square(Number)
+
+let describe(p: FilePath) = "path: ${p}"
+
+let area(s) do
+  return match s do
+    Circle(r) -> 3 * r * r
+    Square(a) -> a * a
+  end
+end
+
+main do
+  IO.printLine("-- alias stays transparent --")
+  IO.printLine(describe("/tmp/x"))
+
+  IO.printLine("-- single-variant ADT --")
+  IO.printLine(DivideByZero)
+  IO.printLine(TheOne)
+
+  IO.printLine("-- single variant is matchable --")
+  match DivideByZero do
+    DivideByZero -> IO.printLine("matched DivideByZero")
+    _ -> IO.printLine("no match")
+  end
+
+  IO.printLine("-- multi-variant, no leading pipe --")
+  IO.printLine(Red)
+  IO.printLine(Green)
+  IO.printLine(Blue)
+
+  IO.printLine("-- constructors with args --")
+  IO.printLine(Circle(2))
+  IO.printLine(area(Circle(2)))
+  IO.printLine(area(Square(3)))
+
+  IO.printLine("-- single variant inside a Result --")
+  IO.printLine(Error(DivideByZero))
+end

@@ -1,0 +1,48 @@
+# User-defined Celsius temperature measure.
+#
+# Temperature is an affine scale, not a proportional one: 0 °C is 273.15 K,
+# not 0 K. The shared `Measure` / `UnitDefinition` model is purely
+# multiplicative (`canonical = value * conversionFactor`), so an offset can't
+# live in the unit's factor. Instead store the reading in Celsius and the
+# canonical value in Kelvin. That keeps display and the Celsius->Kelvin
+# conversion correct; converting *back* through the generic `convertTo` would
+# ignore the offset, so always build Celsius via the `celsius` constructor.
+
+using Units.SI
+
+module Celsius do
+  let measure(degrees: Number) -> Measure do
+  return Measure {
+    canonical: degrees + 273.15,
+    value: degrees,
+    unit: UnitDefinition {
+      conversionFactor: 1.0,
+      dimension: :temperature,
+      notation: "°C"
+    }
+  }
+  end
+end
+
+make Integer | Float do
+  let celsius -> Measure = Celsius.measure(this * 1.0)
+end
+
+# make Float do
+#   let celsius -> Measure = Celsius.measure(this)
+# end
+
+main do
+  let room = 30.celsius
+
+  IO.printLine(room.to(String))
+  # canonical is Kelvin, so it round-trips straight into the SI base unit.
+  let k = kelvin(room.canonical)
+  IO.printLine(k.to(String))
+
+  let s = "29.6"
+  # if let Just(temp) = s.to(Float)
+  if let Ok(temp) = Float.parse(s) 
+    IO.printLine(temp.celsius.to(String))
+  end
+end

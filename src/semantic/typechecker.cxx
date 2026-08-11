@@ -659,7 +659,8 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
                 }
                 // Transparent type alias: single bare TypeName — register
                 // immediately, before falling through to the constructor check.
-                if (node->variants->size() == 1) {
+                // A leading `|` opts out, declaring a one-variant ADT instead.
+                if (node->variants->size() == 1 && !node->leadingPipe) {
                     auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
                     if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
                 }
@@ -697,7 +698,8 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
                 }
                 // Transparent type alias: single bare TypeName — register
                 // immediately, before falling through to the constructor check.
-                if (node->variants->size() == 1) {
+                // A leading `|` opts out, declaring a one-variant ADT instead.
+                if (node->variants->size() == 1 && !node->leadingPipe) {
                     auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
                     if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
                 }
@@ -3767,6 +3769,13 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // then each element is checked against it, or when a trait-typed value is
     // passed to a ConstrainedType param that got resolved to NamedType.
     // argType matches if it implements that trait, or if argType IS that trait.
+    // `make Tuple` names the whole family: a tuple's arity is part of its
+    // type, so there is no single structural spelling for "any tuple" and the
+    // receiver has to be matched by name. Without this a `Tuple` receiver
+    // method never applied to an actual `(Integer, String)`.
+    if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind);
+        paramNamed && paramNamed->name == "Tuple" && paramNamed->typeArgs.empty())
+        return std::holds_alternative<TupleType>(argType->kind);
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         if (m_traits.get(paramNamed->name)) {
             if (auto* argNamed = std::get_if<NamedType>(&argType->kind);
@@ -4643,6 +4652,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 std::fprintf(stderr, "%s ", typeToString(resolve(a)).c_str());
             std::fprintf(stderr, "\n");
         }
+        // Set when this call's receiver type is unknown AND more than one
+        // provider could answer it, so nothing here may be treated as
+        // evidence about the receiver — not the backend target, and not the
+        // receiver's type.
+        bool ambiguousReceiver = false;
         if (methodCall) {
             bool isReceiver = name.find("::") == std::string::npos;
             const ImportedFunction* resolved = nullptr;
@@ -4673,6 +4687,46 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                     }
                 }
             }
+            // Pinning a receiver call to one provider is only sound when the
+            // receiver's type is actually known. It often is not — a binding
+            // from a constructor pattern (`Just(d) ->`) carries no payload
+            // type yet — and then every same-arity signature "matches", so the
+            // winner is whichever came first. `d.get(:year, "?")` on a Map
+            // bound to `Kex.Regex:get/3` (Match's accessor) and died with
+            // function_clause on BEAM, while the walker dispatched on the
+            // runtime value and read the map (examples/regexes.kex).
+            //
+            // Leaving the call unpinned costs nothing: it lowers to the same
+            // runtime-dispatching path the walker takes.
+            const bool receiverUnknown = [&] {
+                if (!isReceiver || argTypes.empty()) return false;
+                const auto receiver = resolve(argTypes[0]);
+                return std::holds_alternative<UnknownType>(receiver->kind) ||
+                       std::holds_alternative<TypeVar>(receiver->kind);
+            }();
+            if (resolved && receiverUnknown)
+                for (const auto* candidate : importedFunctions) {
+                    if (candidate == resolved ||
+                        candidate->backendArity != resolved->backendArity ||
+                        candidate->backendModule == resolved->backendModule)
+                        continue;
+                    resolved = nullptr;
+                    ambiguousReceiver = true;
+                    break;
+                }
+            // Same for a LOCAL make-block method: a module flattened into this
+            // unit owns the name for its own receiver type, and an unknown
+            // receiver is no evidence that this call means that type. Pinning
+            // it sent every `get` in a program that says `using Regex` to
+            // Match's accessor.
+            if (!resolved && winnerIsMakeMethod && receiverUnknown)
+                for (const auto* candidate : importedFunctions)
+                    if (candidate->backendArity ==
+                        static_cast<int>(matched.params.size())) {
+                        winnerIsMakeMethod = false;
+                        ambiguousReceiver = true;
+                        break;
+                    }
             if (resolved) {
                 ResolvedCallTarget target{
                     resolved->backendModule,
@@ -4741,6 +4795,11 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
             return false;
         };
         for (size_t i = 0; i < argTypes.size() && i < matched.params.size(); i++) {
+            // The receiver of an ambiguous call is exactly the argument this
+            // match says nothing about: binding it to the winner's param type
+            // would then TYPE it as that overload's receiver (a Map inferred
+            // as Regex's `Match`), which is worse than leaving it unknown.
+            if (i == 0 && ambiguousReceiver) continue;
             auto resolved = resolve(argTypes[i]);
             if (auto* tv = std::get_if<TypeVar>(&resolved->kind)) {
                 const auto& param = matched.params[i];

@@ -1,0 +1,87 @@
+# Cases where the BEAM backend used to resolve a call differently from the
+# tree-walker. All of these are ordinary programs; the point of the spec is
+# that `kex file` and `kex -R file` agree on every line.
+
+using Regex
+
+# A local record whose name collides with one the prelude declares (`Request`
+# has a `path` field there too, at a different position).
+record Request do
+  path : String
+end
+
+# Same, for a record whose prelude namesake puts the field at a DIFFERENT
+# position (local `message` is element 2; the prelude ParseError's is element 5).
+record ParseError do
+  message : String
+end
+
+# A top-level constant whose name collides with an imported record accessor
+# (`value` is a field of the prelude's Measure and ParseError).
+let thunk = { 42 }
+let value = thunk()
+
+# A parameter name ending in `?` — not a legal Core Erlang variable.
+let describeFlag(required?: Bool) = required? then "required" else "optional"
+
+trait Shape do
+  area :> Float
+  let describe = "area=${this.area}"
+end
+
+record Square do
+  side : Float
+end
+
+make Square, implement: Shape do
+  let area = @side * @side
+end
+
+# A trait-constrained function referenced with `~` — the reference has to
+# carry the hidden trait dictionary too.
+foul printShape(s: Shape) do
+  IO.printLine(s.describe)
+end
+
+let namedGroups = regex`(?<year>\d{4})-(?<month>\d{2})`
+
+main do
+  IO.printLine("-- Ordering is a Monoid with clause-set dispatch --")
+  IO.printLine(Less.combine(Greater) == Less)
+  IO.printLine(Equal.combine(Less) == Less)
+  IO.printLine(Greater.combine(Less) == Greater)
+  IO.printLine(Equal.combine(Equal) == Equal)
+
+  IO.printLine("-- a local record shadows a same-named prelude one --")
+  IO.printLine(Request { path: "/admin/users" }.path)
+  # ...and the prelude's own record of that name still reads correctly: only
+  # the tuple SIZE tells two layouts sharing a tag apart.
+  IO.printLine(ParseError { message: "local" }.message)
+  match Float.parse("abc") do
+    Ok(f)    -> IO.printLine(f)
+    Error(e) -> IO.printLine(e.message)
+  end
+
+  IO.printLine("-- a top-level constant beats an imported accessor --")
+  IO.printLine(value)
+
+  IO.printLine("-- UFCS runs both ways --")
+  IO.printLine(length([1, 2, 3]))
+  IO.printLine(map(["a", "b"], &.upperCase))
+
+  IO.printLine("-- a `?` parameter name --")
+  IO.printLine(describeFlag(true))
+
+  IO.printLine("-- ~f on a trait-constrained function --")
+  [Square { side: 3.0 }].each(~printShape)
+
+  IO.printLine("-- an untyped binding dispatches on its runtime value --")
+  match Just({ year: "2026" }) do
+    Just(entry) -> IO.printLine(entry.get(:year, "?"))
+    None        -> IO.printLine("none")
+  end
+  match "2026-07".matches(namedGroups) do
+    Just(found) -> IO.printLine(found.get(:year, "?"))
+    None        -> IO.printLine("no match")
+  end
+end

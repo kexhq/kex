@@ -1,0 +1,47 @@
+type Invoice = Pending | Paid(Receipt) | Failed(Receipt)
+
+type Currency = USD | EUR | GBP | JPY | AUD | CAD | CHF | CNY | SEK | NZD | HUF
+
+record Money do
+  minorUnits : Integer
+  currency : Currency
+end
+
+record Email do
+  address : String
+end
+
+module Email do
+  let create(address: String) -> Email do
+    if !address.contains?("@") || !address.contains?(".")
+      return Error("Invalid email address format")
+    end
+
+    return Ok(Email { address: address })
+end
+
+type ConnectionState = Connected | Disconnected | Pending
+
+record Connection<ConnectionState> do
+
+end
+
+let sendInvoice(invoice: Invoice, to: Email) -> Result<String, String> do
+  match invoice do
+    Pending -> return Error("Invoice is pending and cannot be sent")
+    Paid(receipt) -> return Ok("Invoice already paid. Receipt: ${receipt.to(String)}")
+    Failed(receipt) -> return Error("Invoice failed. Receipt: ${receipt.to(String)}")
+  end
+end
+
+
+main do
+    let x = Pending
+    let address = Email.create("akoskovacs0@gmail.com")
+
+    match x do
+      Pending -> IO.printLine("Invoice is pending")
+      Paid(receipt) -> IO.printLine("Invoice is paid: ${receipt.to(String)}")
+      Failed(receipt) -> IO.printLine("Invoice failed: ${receipt.to(String)}")
+    end
+end
