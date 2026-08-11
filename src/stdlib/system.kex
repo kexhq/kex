@@ -7,3 +7,16 @@ foul module System do
   exit : Integer -> Void
   let exit(code) = Kex.Intrinsic.System.exit(code)
 end
+
+# Terminates the process with a fatal message: +message+ goes to stderr behind
+# a "fatal: " prefix and the exit status is 1. This is an abort, not an
+# exception — `trying`/`rescue` cannot catch it, so use it only where there is
+# no recoverable answer (the prelude uses it for a negative `repeat` count).
+# Declared bare, like +assert+: it is always in scope.
+# The result type is +Never+, the bottom type: `die` does not return, so a
+# branch that dies takes the other branch's type
+# (`if b == 0 then die("...") else a end` is an Integer).
+die : Never
+die : String -> Never
+let die() -> Never = Kex.Intrinsic.System.die("program terminated")
+let die(message: String) -> Never = Kex.Intrinsic.System.die(message)

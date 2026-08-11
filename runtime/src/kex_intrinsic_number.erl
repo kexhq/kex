@@ -1,7 +1,7 @@
 %% Kex.Intrinsic.Number — BEAM primitive backend for numeric intrinsics shared
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
--export([abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
+-export([lt/3, gt/3, lte/3, gte/3, abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
           float_parse/1, float_parse_prefix/1,
           parse/1, to_integer/1, to_float/1]).
@@ -25,9 +25,35 @@ add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
 add(A, B) -> A + B.
 
+%% lt/gt/lte/gte — Kex's TYPED ordering, used wherever lowering cannot prove
+%% both operands are the same comparable kind. Erlang's `<` orders any two
+%% terms; Kex compares numbers with numbers (promoting Integer/Float), strings
+%% with strings and chars with chars, and raises otherwise — the walker's rule
+%% (src/interpreter/evaluator.cxx), reproduced here down to the message.
+%% `Loc` is the call site ("file:line:col: ", empty when unknown), passed in
+%% by lowering so the raised message matches the walker's exactly.
+lt(A, B, Loc) -> ordering(A, B, Loc, fun(X, Y) -> X < Y end).
+gt(A, B, Loc) -> ordering(A, B, Loc, fun(X, Y) -> X > Y end).
+lte(A, B, Loc) -> ordering(A, B, Loc, fun(X, Y) -> X =< Y end).
+gte(A, B, Loc) -> ordering(A, B, Loc, fun(X, Y) -> X >= Y end).
+
+ordering(A, B, _Loc, Op) when is_number(A), is_number(B) -> Op(A, B);
+ordering(A, B, _Loc, Op) when is_binary(A), is_binary(B) -> Op(A, B);
+ordering({'Char', A}, {'Char', B}, _Loc, Op) -> Op(A, B);
+ordering(A, B, Loc, _Op) ->
+    erlang:error(iolist_to_binary([Loc, "runtime error: Cannot compare ",
+                                   kex_io:value_type_name(A), " and ",
+                                   kex_io:value_type_name(B)])).
+
 %% eq/neq — Kex ==. Strict: a String is its own type, NOT a [Char], so a
 %% binary and a list of tagged Chars holding the same text are NOT equal.
 %% `chars` converts one to the other and `join("")` converts back.
+%%
+%% Numbers are the one deliberate exception: an Integer and a Float compare
+%% numerically (`0 == 0.0`), matching the promotion `+`, `<` and friends
+%% already do, so `1 =< 1.0` and `1 >= 1.0` cannot both hold while `1 == 1.0`
+%% is false. Erlang's `==` is exactly that coercing comparison.
+eq(A, B) when is_number(A), is_number(B) -> A == B;
 eq(A, B) -> A =:= B.
 
 neq(A, B) -> not eq(A, B).

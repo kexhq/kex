@@ -1,0 +1,16 @@
+# kex: no-check
+# A `match` no clause covers raises the same message on both backends. On BEAM
+# an inexhaustive `case` also has to be given this arm to compile at all —
+# without it erlc fails in its SSA pass and the program never runs.
+type Flag = On | Off
+
+let describe(f: Flag) -> String do
+  return match f do
+    Off -> "off"
+  end
+end
+
+main do
+  IO.printLine(describe(Off))
+  IO.printLine(describe(On))
+end

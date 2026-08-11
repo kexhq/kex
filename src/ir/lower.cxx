@@ -418,6 +418,55 @@ struct Lowering {
             loc + "runtime error: " + msg)));
     }
 
+    // The walker's failure for a `match` no clause covers: the same message,
+    // with the subject rendered the same way (`inspect`). Built at runtime
+    // because the value is only known then.
+    //
+    // Core Erlang needs this clause for a second reason: an inexhaustive
+    // `case` is not merely a runtime risk there, it makes erlc's SSA pass
+    // fail outright ("internal error in pass core_to_ssa"), so a program with
+    // one unhandled variant did not compile at all where the walker ran it
+    // and reported the unmatched value.
+    auto noClauseMatched(ExprPtr subject) -> ExprPtr {
+        std::string loc;
+        if (currentLoc) loc = std::string(currentLoc->file) + ":"
+            + std::to_string(currentLoc->line) + ":"
+            + std::to_string(currentLoc->column) + ": ";
+        std::vector<ExprPtr> parts;
+        parts.push_back(lit(LitKind::String,
+                            loc + "runtime error: no matching clause for "));
+        parts.push_back(callE("kex_io", "inspect_plain", 1,
+                              one(std::move(subject))));
+        auto list = std::make_unique<Expr>();
+        list->node = MakeList{std::move(parts), std::nullopt};
+        return callE("erlang", "error", 1,
+                     one(callE("erlang", "iolist_to_binary", 1,
+                               one(std::move(list)))));
+    }
+
+    // "Undefined method: m for T" with the receiver's runtime type, matching
+    // the walker exactly. The type has to be read at runtime (the reason this
+    // call is unresolved is that lowering does not know it), so the message is
+    // built as an iolist the same way the receiver dispatcher builds its own.
+    auto undefinedMethod(const std::string& method, ExprPtr receiver)
+        -> ExprPtr {
+        std::string loc;
+        if (currentLoc) loc = std::string(currentLoc->file) + ":"
+            + std::to_string(currentLoc->line) + ":"
+            + std::to_string(currentLoc->column) + ": ";
+        std::vector<ExprPtr> parts;
+        parts.push_back(lit(LitKind::String,
+                            loc + "runtime error: Undefined method: " +
+                            method + " for "));
+        parts.push_back(callE("kex_io", "value_type_name", 1,
+                              one(std::move(receiver))));
+        auto list = std::make_unique<Expr>();
+        list->node = MakeList{std::move(parts), std::nullopt};
+        return callE("erlang", "error", 1,
+                     one(callE("erlang", "iolist_to_binary", 1,
+                               one(std::move(list)))));
+    }
+
     // A named argument no clause of the target declares. Dropping it would run
     // the call as if the label had never been written and hand back a
     // plausible-looking answer to a question nobody asked, so both backends
@@ -624,6 +673,40 @@ struct Lowering {
         }
     }
 
+    static auto isOrderingOp(Op op) -> bool {
+        return op == Op::Lt || op == Op::Gt || op == Op::Lte || op == Op::Gte;
+    }
+
+    static auto orderingFunction(Op op) -> std::string {
+        switch (op) {
+            case Op::Lt:  return "lt";
+            case Op::Gt:  return "gt";
+            case Op::Lte: return "lte";
+            default:      return "gte";
+        }
+    }
+
+    // Which of the walker's three comparable families this expression is
+    // known to belong to ("num" / "str" / "char"), or "" when lowering cannot
+    // tell. Only used to keep a provably well-typed comparison on the BIF.
+    auto comparableKind(const ast::ExprPtr& e) const -> std::string {
+        if (!e) return {};
+        if (std::holds_alternative<ast::IntLiteral>(e->kind) ||
+            std::holds_alternative<ast::FloatLiteral>(e->kind))
+            return "num";
+        if (std::holds_alternative<ast::StringLiteral>(e->kind)) return "str";
+        if (std::holds_alternative<ast::CharLiteral>(e->kind)) return "char";
+        if (!expressionTypes) return {};
+        auto found = expressionTypes->find(e.get());
+        if (found == expressionTypes->end() || !found->second) return {};
+        const auto name = semantic::typeToString(found->second);
+        if (name == "Integer" || name == "Float" || name == "Number")
+            return "num";
+        if (name == "String") return "str";
+        if (name == "Char") return "char";
+        return {};
+    }
+
     // ---- Expression lowering ---------------------------------------------
     auto lower(const ast::ExprPtr& e) -> ExprPtr {
         if (!e) return litBool(false);
@@ -747,6 +830,32 @@ struct Lowering {
                         return callE("kex_intrinsic_number",
                                      op == Op::Eq ? "eq" : "neq", 2,
                                      two(std::move(a), std::move(b)));
+                    // `<`/`>`/`<=`/`>=` are Erlang's TOTAL term order on BEAM
+                    // but a typed comparison in the walker, which raises
+                    // "Cannot compare String and Int" where BEAM quietly
+                    // answered `false` — and the checker accepts `"x" < 1`,
+                    // so the divergence reaches checked programs.
+                    //
+                    // Route through the runtime check only when the operands
+                    // are not provably the same comparable kind; a numeric or
+                    // string comparison (the hot path) keeps the raw BIF.
+                    if (isOrderingOp(op)) {
+                        const auto kind = comparableKind(n.left);
+                        if (kind.empty() || kind != comparableKind(n.right)) {
+                            std::string loc;
+                            if (currentLoc)
+                                loc = std::string(currentLoc->file) + ":"
+                                    + std::to_string(currentLoc->line) + ":"
+                                    + std::to_string(currentLoc->column) + ": ";
+                            std::vector<ExprPtr> args;
+                            args.push_back(std::move(a));
+                            args.push_back(std::move(b));
+                            args.push_back(lit(LitKind::String, loc));
+                            return callE("kex_intrinsic_number",
+                                         orderingFunction(op), 3,
+                                         std::move(args));
+                        }
+                    }
                     auto ex = std::make_unique<Expr>();
                     ex->node = Intrinsic{op, two(std::move(a), std::move(b))};
                     return ex;
@@ -2697,7 +2806,7 @@ struct Lowering {
             return ret(wrapLets(binds, std::move(ex)));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
-        return ret(runtimeError("Undefined method: " + n.method));
+        return ret(undefinedMethod(n.method, rv()));
     }
 
     // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
@@ -2963,10 +3072,41 @@ struct Lowering {
     // clause bodies are never duplicated. A non-`true` guard result fails the
     // clause, matching native guard semantics. `receive` guards are NOT
     // expanded here (they must stay native; see lowerReceive).
+    // Does any clause match every value, making a trailing fallback dead code
+    // (which erlc warns about)?
+    static auto anyClauseIrrefutable(const std::vector<MatchClause>& clauses)
+        -> bool {
+        for (const auto& clause : clauses) {
+            if (clause.guard) continue;
+            bool irrefutable = true;
+            for (const auto& p : clause.patterns)
+                if (p->kind != PatKind::Var && p->kind != PatKind::Wild)
+                    irrefutable = false;
+            if (irrefutable) return true;
+        }
+        return false;
+    }
+
     auto expandGuards(std::vector<ExprPtr> subjects, std::vector<MatchClause> clauses) -> ExprPtr {
         size_t gi = 0;
         while (gi < clauses.size() && !clauses[gi].guard) ++gi;
         if (gi == clauses.size()) {
+            // Single-subject matches get the walker's "no matching clause"
+            // failure appended; without it erlc cannot even compile an
+            // inexhaustive `case` (see noClauseMatched).
+            if (subjects.size() == 1 && !anyClauseIrrefutable(clauses)) {
+                // The clause's own variable pattern binds the unmatched value,
+                // so the subject expression is neither re-evaluated nor
+                // let-bound — `case {1, 2} of` stays exactly that.
+                MatchClause fallback;
+                auto bound = std::make_unique<Pattern>();
+                bound->kind = PatKind::Var;
+                bound->name = fresh("Nomatch");
+                const auto boundName = bound->name;
+                fallback.patterns.push_back(std::move(bound));
+                fallback.body = noClauseMatched(var(boundName));
+                clauses.push_back(std::move(fallback));
+            }
             auto e = std::make_unique<Expr>();
             Match m; m.subjects = std::move(subjects); m.clauses = std::move(clauses);
             e->node = std::move(m);
@@ -2996,10 +3136,7 @@ struct Lowering {
             std::make_move_iterator(clauses.end()));
         ExprPtr contBody;
         if (rest.empty()) {
-            auto tup = std::make_unique<Expr>();
-            tup->node = MakeTuple{two(lit(LitKind::Atom, "case_clause"), var(subjNames[0]))};
-            contBody = std::make_unique<Expr>();
-            contBody->node = Call{"erlang", "error", 1, one(std::move(tup)), false};
+            contBody = noClauseMatched(var(subjNames[0]));
         } else {
             contBody = expandGuards(subjExprs(), std::move(rest));
         }

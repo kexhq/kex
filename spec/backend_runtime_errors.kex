@@ -1,0 +1,17 @@
+# kex: no-check
+# Ordering is TYPED in Kex: numbers with numbers (promoting), strings with
+# strings, chars with chars — anything else raises. On BEAM `<` used to be
+# Erlang's total term order, which answered `false` for `"x" < 1` where the
+# walker raised, and the checker accepts that program, so the divergence
+# reached checked code. The comparable pairs must keep working (and stay on
+# the plain BIF).
+main do
+  IO.printLine(1 < 2)
+  IO.printLine(1.5 <= 2)
+  IO.printLine(2 > 1.5)
+  IO.printLine(3 >= 3)
+  IO.printLine("a" < "b")
+  IO.printLine('a' < 'b')
+  IO.printLine([3, 1, 2].sort)
+  IO.printLine("x" < 1)
+end

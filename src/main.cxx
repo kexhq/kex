@@ -228,6 +228,18 @@ static auto replTrimLeadingIndent(std::string source) -> std::string {
 // earlier quoted/unquoted flip had already changed the state at that
 // point). Applying this uniformly across the whole string is what makes
 // it position-independent and actually robust (spec/json_parser.spec.kex).
+// `std::system` hands back a wait STATUS, not an exit code — returning it
+// straight from main() truncates to the low 8 bits, which are zero for every
+// normal exit: `System.exit(3)` reported 0 under `-R` where the walker
+// reported 3, and `die` reported 0 where the walker reported 1.
+static auto exitStatusOf(int waitStatus) -> int {
+  if (WIFEXITED(waitStatus))
+    return WEXITSTATUS(waitStatus);
+  if (WIFSIGNALED(waitStatus))
+    return 128 + WTERMSIG(waitStatus);
+  return waitStatus == 0 ? 0 : 1;
+}
+
 static auto shellSingleQuote(const std::string &s) -> std::string {
   std::string out = "'";
   for (char c : s) {
@@ -3254,7 +3266,7 @@ int main(int argc, char *argv[]) {
         runCmd += " " + a;
     }
     int rc = std::system(runCmd.c_str());
-    return rc;
+    return exitStatusOf(rc);
   }
 
   // Reject non-.kex files before trying to parse them.
@@ -3770,7 +3782,7 @@ int main(int argc, char *argv[]) {
         int ret = std::system(runCmd.c_str());
         if (!tempDir.empty())
           std::filesystem::remove_all(tempDir);
-        return ret;
+        return exitStatusOf(ret);
       }
       return 0;
     }

@@ -4,6 +4,7 @@
 #include <gmpxx.h>
 #include <stdexcept>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace kex {
 
@@ -49,8 +50,22 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"while", TokenType::While},
 };
 
+// Every SourceLocation keeps a `string_view` of the file name, and an AST
+// routinely outlives the string its caller passed in — the prelude's most of
+// all, parsed from a local `std::string` that is gone long before a prelude
+// location is ever printed. Reading one then produced garbage instead of a
+// path: `Internal error: !\xef\xbf\xbd.$\xef\xbf\xbdh1` for
+// `(1..5).count`, whose error is raised inside `enumerable.kex`.
+//
+// Interning the name for the process lifetime makes every location printable.
+// The set is node-based, so the views stay valid as it grows.
+static auto internFilename(std::string_view filename) -> std::string_view {
+    static std::unordered_set<std::string> pool;
+    return *pool.emplace(filename).first;
+}
+
 Lexer::Lexer(std::string source, std::string_view filename)
-    : m_source(std::move(source)), m_filename(filename) {}
+    : m_source(std::move(source)), m_filename(internFilename(filename)) {}
 
 // Can a token of this type END an expression? If so, a following `%` is the
 // modulo operator; otherwise `%name` is a splice. Without this, `x %y` lexes

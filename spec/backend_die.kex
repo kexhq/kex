@@ -1,0 +1,15 @@
+# kex: no-check
+# `die` was a walker-only builtin: unknown to the checker (the prelude's own
+# `repeat` calls it) and missing entirely on BEAM, where it raised "Undefined
+# function: die". It now has one declaration both backends share, typed
+# `String -> Never` so a dying branch takes the other branch's type.
+let safeDivide(a: Integer, b: Integer) do
+  if b == 0 then die("division by zero") end
+  return a / b
+end
+
+main do
+  IO.printLine(safeDivide(10, 2))
+  IO.printLine(safeDivide(1, 0))
+  IO.printLine("not reached")
+end

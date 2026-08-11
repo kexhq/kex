@@ -9,6 +9,15 @@ local
 invalid float
 -- a top-level constant beats an imported accessor --
 42
+-- a Range answers the list questions, like on BEAM --
+1
+5
+5
+5
+[5, 4, 3, 2, 1]
+1,2,3,4,5
+[1, 2]
+5
 -- UFCS runs both ways --
 3
 [A, B]

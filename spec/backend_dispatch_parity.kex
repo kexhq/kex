@@ -65,6 +65,16 @@ main do
   IO.printLine("-- a top-level constant beats an imported accessor --")
   IO.printLine(value)
 
+  IO.printLine("-- a Range answers the list questions, like on BEAM --")
+  IO.printLine((1..5).first)
+  IO.printLine((1..5).last)
+  IO.printLine((1..5).length)
+  IO.printLine((1..5).count)
+  IO.printLine((1..5).reverse)
+  IO.printLine((1..5).join(","))
+  IO.printLine((1..5).take(2))
+  IO.printLine((1..5).max)
+
   IO.printLine("-- UFCS runs both ways --")
   IO.printLine(length([1, 2, 3]))
   IO.printLine(map(["a", "b"], &.upperCase))
