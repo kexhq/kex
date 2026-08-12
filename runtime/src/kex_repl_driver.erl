@@ -25,6 +25,16 @@
 %% from a cold VM each line.
 
 loop() ->
+    %% Pin UTF-8 on this node's I/O rather than inheriting it from the locale:
+    %% under a non-UTF-8 LANG (a Linux CI runner, a bare container) `erl` writes
+    %% `\x{2717}` for `✗` and mangles every non-ASCII byte, so the same session
+    %% printed different text on different machines. The CLI runners in
+    %% src/main.cxx do the same for one-shot programs.
+    io:setopts(standard_io, [{encoding, unicode}]),
+    io:setopts(standard_error, [{encoding, unicode}]),
+    loop_lines().
+
+loop_lines() ->
     case io:get_line("") of
         eof ->
             halt(0);
@@ -32,7 +42,7 @@ loop() ->
             halt(1);
         Line ->
             handle(string:trim(Line, both, "\r\n")),
-            loop()
+            loop_lines()
     end.
 
 handle("quit") ->

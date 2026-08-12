@@ -2112,11 +2112,17 @@ struct Lowering {
                 const bool localBeatsTraitDefault =
                     !traitDefaultOwner.empty() && localMethods.count(n.method) &&
                     knownFns.count(n.method);
-                if (localBeatsTraitDefault)
+                if (localBeatsTraitDefault) {
+                    // Do not compute args.size() in the same call expression
+                    // that moves args. Function-argument evaluation order is
+                    // unspecified: GCC/x86_64 moved the vector first and then
+                    // observed size zero, emitting apply showValue/0(...) and
+                    // apply to/0(...) with one or two actual arguments.
+                    const int localArity = static_cast<int>(args.size());
                     return wrapLets(
                         binds,
-                        callE("", n.method, static_cast<int>(args.size()),
-                              std::move(args)));
+                        callE("", n.method, localArity, std::move(args)));
+                }
                 for (const auto& [argument, trait] :
                      resolved->second.traitDictionaries) {
                     const ast::Expr* source = nullptr;
@@ -6078,7 +6084,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     }
     for (const auto& [name, owners] : L.methodOwners)
         if (owners.size() > 1 || L.fieldAccessors.count(name))
-            L.collidingMethods.insert(name);
+            L.collidingMethods.insert(name);  // order-free: a set membership
     // A `.method` may use the local-apply UFCS fallback iff it names a real
     // local function or a record field accessor.
     L.knownFns = definedFns;
@@ -6488,7 +6494,18 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Operators do not have a MethodCall node from which lowering can consume
     // the semantic winner. Keep the readable exact implementations, and make
     // the bare operator a small receiver/RHS-type dispatcher.
-    for (const auto& [key, overloads] : L.argumentOverloadSignatures) {
+    // Sorted for the same reason: `argumentOverloadSignatures` is an
+    // unordered_map, and the operator dispatchers it emits land in
+    // `mod.functions` in iteration order.
+    std::vector<const decltype(L.argumentOverloadSignatures)::value_type*>
+        overloadEntries;
+    for (const auto& entry : L.argumentOverloadSignatures)
+        overloadEntries.push_back(&entry);
+    std::sort(overloadEntries.begin(), overloadEntries.end(),
+              [](const auto* a, const auto* b) { return a->first < b->first; });
+    for (const auto* overloadEntry : overloadEntries) {
+        const auto& key = overloadEntry->first;
+        const auto& overloads = overloadEntry->second;
         auto firstBreak = key.find('\n');
         auto lastBreak = key.rfind('\n');
         if (firstBreak == std::string::npos || firstBreak == lastBreak)
@@ -6550,7 +6567,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // `name/Type` variant at that BEAM arity — a method can be overloaded by arity across
     // types (e.g. `count/1` on List vs `count/2` on List+Map), and one dispatcher
     // per arity avoids referencing a variant that doesn't exist.
-    for (const auto& name : L.collidingMethods) {
+    // Sort the unordered set so generated Core is byte-for-byte reproducible
+    // across standard-library implementations and architectures.
+    std::vector<std::string> collidingNames(L.collidingMethods.begin(),
+                                            L.collidingMethods.end());
+    std::sort(collidingNames.begin(), collidingNames.end());
+    for (const auto& name : collidingNames) {
         std::map<int, std::vector<std::string>> ownersByArity;
         std::string prefix = receiverImplementationPrefix(name);
         for (const auto& fn : mod.functions)

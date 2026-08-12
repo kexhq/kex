@@ -8,6 +8,19 @@ STDLIBDIR ?= $(PREFIX)/share/kex/stdlib
 
 WASM_BUILD_DIR = build-wasm
 
+# GNU `timeout` bounds a backend that hangs, but macOS ships without it
+# (coreutils installs it as `gtimeout`). Fall back to running unbounded rather
+# than failing every spec with "timeout: command not found" — which is what the
+# macOS CI job did the moment `spec-beam` started gating.
+TIMEOUT_CMD := $(shell command -v timeout 2>/dev/null || command -v gtimeout 2>/dev/null)
+# 8s was tuned on a warm dev machine, where a BEAM spec takes ~0.35s. A cold CI
+# runner is far slower, and on Linux `timeout` signals the whole process group —
+# so a spec that overran took erlc down with it and reported `erlc failed`,
+# which reads like a codegen bug rather than a deadline. The bound exists to
+# catch a HUNG backend, so it can be generous.
+TIMEOUT_SPEC := $(if $(TIMEOUT_CMD),$(TIMEOUT_CMD) 30,)
+TIMEOUT_SUITE := $(if $(TIMEOUT_CMD),$(TIMEOUT_CMD) 90,)
+
 help:
 	@echo "Kex Language Compiler"
 	@echo ""
@@ -148,7 +161,7 @@ spec-prelude-beam: build
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
 		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
-		output=$$(timeout 60 $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
+		output=$$($(TIMEOUT_SUITE) $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
 		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
@@ -187,7 +200,7 @@ spec-beam: build
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
-		actual=$$(timeout 8 $(KEX) -R --no-colors "$$f" 2>&1); \
+		actual=$$($(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \
@@ -218,7 +231,7 @@ spec-wasm: build-wasm
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: skip-wasm" "$$f" 2>/dev/null; then continue; fi; \
-		actual=$$(timeout 8 node $(WASM_BUILD_DIR)/kex.js $$kex_flags "$$f" 2>&1); \
+		actual=$$($(TIMEOUT_SPEC) node $(WASM_BUILD_DIR)/kex.js $$kex_flags "$$f" 2>&1); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \

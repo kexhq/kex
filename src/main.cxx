@@ -3242,7 +3242,14 @@ int main(int argc, char *argv[]) {
 
     // Load explicitly — code:load_abs rejects when filename != module name,
     // so use code:load_binary which skips that check.
+    // Force UTF-8 on the node's I/O instead of inheriting it from the locale.
+    // An `erl` started under a non-UTF-8 LANG (the Linux CI runner) writes
+    // `\x{2717}` for `✗` and mangles every non-ASCII byte, so a Kex program's
+    // output depended on the environment: identical source printed `[h, é, é]`
+    // here and `[h, \ufffd, \ufffd]` there.
     std::string mainCall =
+        "io:setopts(standard_io, [{encoding, unicode}]), "
+        "io:setopts(standard_error, [{encoding, unicode}]), "
         "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
         "\"), "
         "code:load_binary('" +
@@ -3651,6 +3658,14 @@ int main(int argc, char *argv[]) {
         }
         erlcRet = std::system(coreCmd.c_str());
         if (erlcRet != 0) {
+          // The quiet mode above swallows erlc's own diagnostic — which is the
+          // only thing that says WHY. Re-run it loudly on failure so the
+          // message reaches the terminal (and CI) instead of a bare
+          // "erlc failed", which is all a failing spec could report.
+          if (!tempDir.empty())
+            std::system(("erlc +from_core -pa " + outputDir + " -o " +
+                         outputDir + " " + corePaths[moduleIndex])
+                            .c_str());
           std::cerr << "error: erlc failed\n";
           if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
           return 1;
@@ -3771,14 +3786,18 @@ int main(int argc, char *argv[]) {
             "io:format(standard_error, \"Internal error: ~ts~n\", [_R]); "
             "_R -> io:format(standard_error, \"Internal error: ~p~n\", [_R]) "
             "end";
+        // Same UTF-8 pinning as the `.beam` runner above.
+        const std::string utf8Io =
+            "io:setopts(standard_io, [{encoding, unicode}]), "
+            "io:setopts(standard_error, [{encoding, unicode}]), ";
         std::string mainCall =
             result.mainArity == 1
-                ? "try " + loadExpr + "'" + result.moduleName +
+                ? utf8Io + "try " + loadExpr + "'" + result.moduleName +
                       "':main([unicode:characters_to_binary(A) || A <- "
                       "init:get_plain_arguments()]) of Result -> halt() catch "
                       "_:Reason:_ -> " +
                       reasonFmt + ", halt(1) end"
-                : "try " + loadExpr + "'" + result.moduleName +
+                : utf8Io + "try " + loadExpr + "'" + result.moduleName +
                       "':main() of Result -> halt() catch _:Reason:_ -> " +
                       reasonFmt + ", halt(1) end";
         // shellSingleQuote (see its own comment) wraps the whole

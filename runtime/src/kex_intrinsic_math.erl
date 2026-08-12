@@ -19,8 +19,19 @@ log(X, Base) -> math:log(X) / math:log(Base).
 hypot(A, B) -> math:sqrt(A * A + B * B).
 
 %% Math.cbrt(x) — cube root.
-cbrt(X) when X < 0 -> -math:pow(-X, 1.0 / 3.0);
-cbrt(X) -> math:pow(X, 1.0 / 3.0).
+cbrt(X) when X < 0 -> -cbrt_positive(-X);
+cbrt(X) -> cbrt_positive(X).
+
+%% Snap a perfect cube to its exact root: `math:pow(27.0, 1/3)` is not required
+%% to land on 3.0, and the walker (std::cbrt) does the same so both answer the
+%% same thing on every platform.
+cbrt_positive(X) ->
+    Root = math:pow(X, 1.0 / 3.0),
+    Rounded = float(round(Root)),
+    case Rounded * Rounded * Rounded == X of
+        true -> Rounded;
+        false -> Root
+    end.
 
 sqrt(X) -> math:sqrt(X).
 sin(X) -> math:sin(X).
