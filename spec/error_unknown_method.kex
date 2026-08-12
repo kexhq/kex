@@ -1,0 +1,27 @@
+# kex: check-only
+# A method name that exists nowhere is a compile error. Both backends already
+# failed on it at runtime; the checker said "No errors found", which is the
+# worst answer for the most common mistake there is — and the one an editor
+# most needs.
+#
+# The report is NAME-based and needs a CONCRETE receiver: a name defined
+# somewhere (even for another type, or by a `make` this call cannot see) is
+# left to runtime dispatch, and a receiver the checker could not infer is no
+# evidence of anything.
+record Box do
+  size : Integer
+end
+
+make Box do
+  let doubled -> Integer = @size * 2
+end
+
+main do
+  let box = Box { size: 2 }
+  IO.printLine(box.doubled)          # a make method — fine
+  IO.printLine(box.size)             # a field — fine
+  IO.printLine("hi".upperCase)       # the prelude — fine
+  IO.printLine(box.nosuchMethod)
+  IO.printLine("hi".alsoNotAMethod)
+  IO.printLine([1, 2].neitherIsThis)
+end

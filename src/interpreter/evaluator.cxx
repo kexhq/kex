@@ -503,6 +503,10 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
 
     const bool scoped = !block.body.empty();
     if (scoped) pushEnv();
+    // Records the import for make-block visibility (see makeMethodInScope) —
+    // after pushEnv, so a `using M do ... end` ends with its block.
+    if (m_usingModules.empty()) m_usingModules.emplace_back();
+    m_usingModules.back().insert(moduleName);
     try {
         for (const auto& requested : block.onlyNames)
             if (imported->second.privateNames.contains(requested))
@@ -549,6 +553,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     // Publish the module shell before its body so a dependency cycle can see
     // already-known module identity while definitions are still registering.
     m_moduleRegistry.try_emplace(moduleName, ModuleEntry{});
+    // The types this module declares — a `make` for one of them is that type's
+    // own interface, not a patch of someone else's (see execMakeDefFor).
+    kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
@@ -1199,6 +1206,19 @@ auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
                 if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                     addOwn(vf->get());
     }
+
+    // A module-scoped `make` is import-gated when it patches a FOREIGN type:
+    // remember which module its methods came from, so resolveMethodName can
+    // skip them where that module is not in scope. A `make` for a type the
+    // same module declares is that type's own interface and travels with its
+    // values (`SQL.select(:all).from(:users)`), so it stays reachable — as does
+    // every top-level `make`.
+    if (!enclosingModule.empty() && !typeName.empty() &&
+        !m_moduleDeclaredTypes[enclosingModule].count(typeName))
+        for (const auto& [method, arity] : ownMethods) {
+            (void)arity;
+            m_makeMethodModule[typeName + "::" + method] = enclosingModule;
+        }
 
     // Process the make block's own methods.
     for (const auto& item : def.body) {
@@ -2513,6 +2533,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     defineImported(name, name, moduleName, !node.onlyNames.empty(), "",
                                    value, expr.location);
                 }
+                if (m_usingModules.empty()) m_usingModules.emplace_back();
+                m_usingModules.back().insert(moduleName);
                 if (node.alias) m_env->define(*node.alias, Value::module(moduleName));
                 for (const auto& e : node.body) {
                     if (e) eval(*e);
@@ -3133,6 +3155,28 @@ auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
     }, type.kind);
 }
 
+// Is the module owning `Type::method` in scope here? A method from a top-level
+// `make` (no owner) always is. Otherwise it takes a `using` — file-level or the
+// lexical block form, both recorded in m_usingModules — or a call from inside
+// the module itself. Before this, a `make` inside a module was the one module
+// member visible everywhere with no import at all.
+auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
+    auto owner = m_makeMethodModule.find(qualified);
+    if (owner == m_makeMethodModule.end()) return true;
+    const auto& module = owner->second;
+    if (module.empty()) return true;
+    if (m_currentModule == module ||
+        m_currentModule.rfind(module + ".", 0) == 0)
+        return true;
+    for (const auto& scope : m_usingModules)
+        for (const auto& imported : scope)
+            if (imported == module ||
+                imported.rfind(module + ".", 0) == 0 ||
+                module.rfind(imported + ".", 0) == 0)
+                return true;
+    return false;
+}
+
 auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                                   const std::string& method,
                                   const std::vector<ValuePtr>* args) const
@@ -3243,19 +3287,21 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             break;
         }
         if (!imported.empty()) return imported;
-        if (typedMatches ||
-            (protocolMethod && typedExists && !typedHasSignatures))
+        if ((typedMatches ||
+             (protocolMethod && typedExists && !typedHasSignatures)) &&
+            makeMethodInScope(typed))
             return typed;
     }
 
-    if (m_env->get(typed)) return typed;
+    if (m_env->get(typed) && makeMethodInScope(typed)) return typed;
 
     // `make Number do ... end` covers Integer and Float. Below the concrete
     // lookup above, so a type defining the method itself still wins, and
     // above the trait fallback, since it is a real implementation.
     for (const auto& super : dispatchSupertypes(receiverType)) {
         auto typedBySuper = super + "::" + method;
-        if (m_env->get(typedBySuper)) return typedBySuper;
+        if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper))
+            return typedBySuper;
     }
 
     // A variant value is tagged with its constructor while methods are
@@ -3716,12 +3762,14 @@ auto Evaluator::registerBuiltins() -> void {
 auto Evaluator::pushEnv() -> void {
     m_env = std::make_shared<Environment>(m_env);
     m_importScopes.emplace_back();
+    m_usingModules.emplace_back();
 }
 
 auto Evaluator::popEnv() -> void {
     if (m_env->parent()) {
         m_env = m_env->parent();
         m_importScopes.pop_back();
+        m_usingModules.pop_back();
     }
 }
 

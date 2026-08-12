@@ -3,6 +3,7 @@
 #include "../ast/ast.hxx"
 #include <algorithm>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -32,6 +33,35 @@ inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
 // each gets its own registration under the same method names. Nested unions
 // flatten. Returns names in source order, deduplicated; an unnameable member
 // (a bare generic, say) is skipped rather than poisoning the whole list.
+// The type names a module DECLARES (records, ADTs/aliases), directly or in a
+// nested module. A `make` targeting one of these is part of that type's own
+// interface — it travels with any value of the type, so it is not import-gated.
+// A `make` targeting anything else is patching a FOREIGN type, which is the
+// action-at-a-distance `using` has to gate (docs/ufcs-dispatch-plan.md
+// "Follow-up", case 1).
+template <typename Items>
+inline auto collectDeclaredTypeNames(const Items& items,
+                                     std::set<std::string>& out) -> void {
+    for (const auto& item : items) {
+        std::visit([&out](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (node) out.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                if (node) out.insert(node->name);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) collectDeclaredTypeNames(node->body, out);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
+                // `compiled do … end` declares into the surrounding scope.
+                if (node) collectDeclaredTypeNames(node->items, out);
+            } else if constexpr (std::is_same_v<T,
+                                                std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectDeclaredTypeNames(node->items, out);
+            }
+        }, item);
+    }
+}
+
 inline auto makeTargetNames(const ast::TypeExprPtr& target)
     -> std::vector<std::string> {
     std::vector<std::string> names;

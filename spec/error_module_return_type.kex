@@ -1,0 +1,36 @@
+# kex: check-only
+# A module function's declared result type applies at its call sites. It did
+# not: signatures were filed under the bare name (`lines`), while a qualified
+# call checks as `M::lines`, so every `M.something(...)` came back Unknown and
+# a declared type bought nothing — `let n: Integer = M.lines("x")` passed with
+# `lines : String -> [String]?` in plain sight.
+#
+# This is also why `-c`/`-R` used to miss type errors `-C`/run caught: those
+# paths merge dependency module SOURCES into the program, and the merged
+# functions lost their declared results.
+module M do
+  lines : String -> [String]?
+  let lines(text: String) = Just([text])
+
+  # An inline annotation is the same story.
+  let width(text: String) -> Integer = text.length
+end
+
+module N do
+  # A same-named function in another module must keep its own result type.
+  let lines(text: String) -> Integer = text.length
+end
+
+main do
+  let ok: [String]? = M.lines("x")
+  IO.printLine(ok)
+  let count: Integer = N.lines("x")
+  IO.printLine(count)
+
+  let wrong: Integer = M.lines("x")
+  IO.printLine(wrong)
+  let alsoWrong: String = M.width("x")
+  IO.printLine(alsoWrong)
+  let crossed: [String]? = N.lines("x")
+  IO.printLine(crossed)
+end

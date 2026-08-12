@@ -1,3 +1,8 @@
+# kex: interpreter-only
+# These assert what the TREE-WALKER reports about itself — `Kex.BACKEND`,
+# `Kex.interpreted?`, and which features it has. Running them through `-R`
+# would assert the walker's answers against BEAM's, so `spec-prelude-beam`
+# skips this file; spec/backend_predicates_beam.kex is its BEAM counterpart.
 describe("Kex.BACKEND") do
   it("returns Interpreter on the tree-walk backend") do
     assert(Kex.BACKEND == Kex.Interpreter)

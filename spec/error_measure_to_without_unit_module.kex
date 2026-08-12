@@ -7,5 +7,10 @@
 # the program still runs up to that point.
 main do
   IO.printLine("before")
-  IO.printLine((Units.SI.watt(11_111) * 1.hour).to(String, in: Units.SI.Kilo(Units.SI.Watt * Hour)))
+  # The receiver is built and annotated rather than multiplied: `Measure * Measure`
+  # is ALSO defined by `Units.SI` (a `make` for a type declared elsewhere), so
+  # without the import that now fails first — which is the same rule this spec
+  # is about, one operator earlier.
+  let power: Measure = Units.SI.watt(11_111)
+  IO.printLine(power.to(String, in: Units.SI.Kilo(Units.SI.Watt)))
 end

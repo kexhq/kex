@@ -1,0 +1,4 @@
+in!!!
+lexical!!!
+6
+Internal error: spec/module_scoped_make.kex:44:31: runtime error: Undefined method: shout for String

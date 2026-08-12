@@ -2351,6 +2351,13 @@ int main(int argc, char *argv[]) {
           kex::Lexer semanticLexer(semanticSource, "<repl>");
           kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
           auto semanticProgram = semanticParser.parseProgram();
+          // Loaded declarations go BEFORE the replayed main block: the
+          // checker registers a module's functions as it checks them, so a
+          // module appended after the call site is registered too late and
+          // `Loaded.values()` came back untyped — the walker REPL, which
+          // prepends the same source, reported `[Integer]` for it while this
+          // one fell back to the runtime `[Int]`.
+          std::vector<kex::ast::TopLevelItem> loadedItems;
           for (const auto& f : loadedBeamFiles) {
             auto fs = readFile(f);
             kex::Lexer fl(std::move(fs), f);
@@ -2359,7 +2366,13 @@ int main(int argc, char *argv[]) {
             for (auto& item : fprog.items)
               if (!std::holds_alternative<
                       std::unique_ptr<kex::ast::MainBlock>>(item))
-                semanticProgram.items.push_back(std::move(item));
+                loadedItems.push_back(std::move(item));
+          }
+          if (!loadedItems.empty()) {
+            loadedItems.reserve(loadedItems.size() + semanticProgram.items.size());
+            for (auto& item : semanticProgram.items)
+              loadedItems.push_back(std::move(item));
+            semanticProgram.items = std::move(loadedItems);
           }
           // Installed stdlib modules already have a typed source interface.
           // Keep them external here: merging their source into the replay

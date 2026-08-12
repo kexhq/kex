@@ -97,8 +97,25 @@ private:
         std::unordered_map<std::string, TypePtr>* genericVars = nullptr)
         -> std::optional<Signature>;
     auto registerMakeSignatures(const ast::Program& program) -> void;
-    auto registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void;
-    auto registerMakeSignature(const ast::MakeDef& def) -> void;
+    auto registerMakeSignaturesInModule(const ast::ModuleDef& mod,
+                                       const std::string& parentPath) -> void;
+    auto registerMakeSignature(const ast::MakeDef& def,
+                               const std::string& modulePath) -> void;
+    auto makeModuleVisible(const std::string& module) const -> bool;
+    auto reportUnknownMethods() -> void;
+    auto publishQualifiedSignatures(const std::string& name,
+                                    const std::vector<Signature>& signatures) -> void;
+    std::unordered_set<std::string> m_qualifiedPublished;
+    // Method calls that resolved to nothing, judged after the whole program is
+    // registered (a make block below the call registers its methods later).
+    struct UnresolvedMethod {
+        std::string name;
+        SourceLocation location;
+        std::string receiver;
+    };
+    std::vector<UnresolvedMethod> m_unresolvedMethods;
+    // Every name any `make` block defines, private methods included.
+    std::unordered_set<std::string> m_makeMethodNames;
 
     // Pre-register provisional signatures (param types from inline annotations,
     // TypeVar result) for all non-annotation-declared FunctionDefs before any
@@ -345,6 +362,8 @@ private:
     // The complete receiver type of the current `make X do` block, used for
     // `this`, `This`, and receiver-aware body inference.
     TypePtr m_currentMakeType;
+    // Module owning the `make` block being checked, "" at top level.
+    std::string m_currentMakeModule;
 
     // Populated by inferExpr; maps each visited Expr node to its inferred type.
     std::unordered_map<const ast::Expr*, TypePtr> m_typeMap;

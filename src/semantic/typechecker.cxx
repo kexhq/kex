@@ -76,6 +76,8 @@ auto TypeChecker::check(const ast::Program& program,
     m_adtOfConstructor.clear();
     m_nullaryConstructors.clear();
     m_methodSignatures.clear();
+    m_makeMethodNames.clear();
+    m_qualifiedPublished.clear();
     m_overloadPurity.clear();
     m_scopedDeclaredSignatures.clear();
     m_currentModulePath.clear();
@@ -437,6 +439,67 @@ auto TypeChecker::check(const ast::Program& program,
     // genuinely un-inferred expression is unchanged.
     for (auto& [expr, type] : m_typeMap)
         type = resolve(type);
+
+    reportUnknownMethods();
+}
+
+// A method call whose NAME is not defined anywhere — the typo case. Both
+// backends already fail on it at runtime ("Undefined method: shout for
+// String"); saying so at check time is what makes an editor useful, and it is
+// the single most common mistake a checker can catch.
+//
+// Deliberately name-based, not receiver-based: reporting "no such method FOR
+// THIS TYPE" would need the receiver's type to be known, and it very often is
+// not (a constructor-pattern binding carries none). A name that exists
+// somewhere — including on a module-scoped `make` the call cannot see — is
+// left to the runtime, which reports it with the receiver's real type.
+auto TypeChecker::reportUnknownMethods() -> void {
+    // With no imported interfaces the checker has never been told what the
+    // standard library contains, so every prelude method would read as
+    // undefined. Analyzers built that way (the tagged-literal validation
+    // tests) are asking a different question entirely.
+    if (!m_importedInterfaces) {
+        m_unresolvedMethods.clear();
+        return;
+    }
+    auto knownSomewhere = [&](const std::string& name) {
+        if (m_methodSignatures.count(name) || m_userSignatures.count(name) ||
+            m_annotatedMethods.count(name) || m_makeMethodNames.count(name))
+            return true;
+        for (const auto& [record, fields] : m_recordFields) {
+            (void)record;
+            if (fields.count(name)) return true;
+        }
+        for (const auto& [traitName, trait] : m_traits.all()) {
+            (void)traitName;
+            for (const auto& required : trait.requiredMethods)
+                if (required.name == name) return true;
+            for (const auto& defaulted : trait.defaultMethods)
+                if (defaulted == name) return true;
+        }
+        if (m_importedInterfaces) {
+            if (m_importedInterfaces->receiverFunctions.count(name)) return true;
+            for (const auto& [moduleName, module] : m_importedInterfaces->modules) {
+                (void)moduleName;
+                if (module.exports.count(name)) return true;
+            }
+            for (const auto& [record, fields] :
+                 m_importedInterfaces->recordFieldNames) {
+                (void)record;
+                if (fields.count(name)) return true;
+            }
+        }
+        return false;
+    };
+    for (const auto& unresolved : m_unresolvedMethods) {
+        if (knownSomewhere(unresolved.name)) continue;
+        error(unresolved.location,
+              "Undefined method `" + unresolved.name + "`" +
+              (unresolved.receiver.empty() || unresolved.receiver == "unknown"
+                   ? std::string{}
+                   : " for `" + unresolved.receiver + "`"));
+    }
+    m_unresolvedMethods.clear();
 }
 
 auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
@@ -802,7 +865,26 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
     }
 }
 
-auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
+auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
+                                       const std::string& modulePath) -> void {
+    // Every method name this block defines, private ones included. Only the
+    // NAME is needed here: it answers "does this method exist anywhere?" for
+    // the unknown-method report, which is name-based by design.
+    auto noteName = [&](const ast::FunctionDef& fn) {
+        m_makeMethodNames.insert(fn.name);
+    };
+    for (const auto& item : def.body) {
+        if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*fn) noteName(**fn);
+        } else if (const auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+            if (!*visibility) continue;
+            for (const auto& inner : (*visibility)->items)
+                if (const auto* vfn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                    if (*vfn) noteName(**vfn);
+        }
+    }
     if (!def.target) return;
     std::unordered_map<std::string, TypePtr> targetVars;
     auto receiver = resolveTypeExpr(*def.target, targetVars);
@@ -832,6 +914,7 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
                                         return false;
                                 return true;
                             });
+            sig->makeModule = modulePath;
             if (!duplicate) existing.push_back(std::move(*sig));
         };
         if (auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
@@ -847,14 +930,17 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def) -> void {
     }
 }
 
-auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod) -> void {
+auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,
+                                                const std::string& parentPath)
+    -> void {
+    const auto path = parentPath.empty() ? mod.name : parentPath + "." + mod.name;
     for (const auto& item : mod.body) {
-        std::visit([this](const auto& node) {
+        std::visit([this, &path](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) registerMakeSignature(*node);
+                if (node) registerMakeSignature(*node, path);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) registerMakeSignaturesInModule(*node);
+                if (node) registerMakeSignaturesInModule(*node, path);
             }
         }, item);
     }
@@ -865,9 +951,9 @@ auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) registerMakeSignature(*node);
+                if (node) registerMakeSignature(*node, "");
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) registerMakeSignaturesInModule(*node);
+                if (node) registerMakeSignaturesInModule(*node, "");
             }
         }, item);
     }
@@ -1619,6 +1705,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         auto& existing = m_methodSignatures[def.name];
         for (const auto& signature : signatures) {
             Signature withReceiver = signature;
+            withReceiver.makeModule = m_currentMakeModule;
             if (!receiverIsFirstParam)
                 withReceiver.params.insert(withReceiver.params.begin(),
                                            m_currentMakeType);
@@ -1642,6 +1729,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     }
 
     if (!m_inMakeBlock) {
+        // What this definition contributes, for the qualified publication
+        // below — NOT the accumulated bare-name set, which holds every
+        // same-named function of every module checked so far.
+        std::vector<Signature> publishable;
         // If a declared signature already exists, update its result type with
         // the inferred one (keeping declared params) and keep one entry.
         if (hasDeclaredContracts) {
@@ -1677,12 +1768,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                         signatures[0].requiredParams;
                     checkedInterface.isFoul = signatures[0].isFoul;
                 }
+                publishable.push_back(checkedInterface);
                 if (placeholder != sigs.end())
                     *placeholder = checkedInterface;
                 else
                     sigs.push_back(std::move(checkedInterface));
             }
         } else {
+            publishable = signatures;
             if (m_checkedFunctions.count(def.name)) {
                 // Additional `let f(...)` with the same name: append to the
                 // overload set rather than replacing (typed overloads).
@@ -1695,8 +1788,58 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                 m_checkedFunctions.insert(def.name);
             }
         }
+        publishQualifiedSignatures(def.name, publishable);
     }
     m_declarationImports = std::move(savedDeclarationImports);
+}
+
+// A module function is also reachable QUALIFIED (`M.lines("x")`), which checks
+// as the call name `M::lines` — but its signatures were only ever filed under
+// the bare `lines`, so every qualified call came back Unknown. A declared
+// result type then bought nothing: `let n: Integer = M.lines("x")` passed with
+// `lines : String -> [String]?` in plain sight.
+//
+// It is not a lookup fallback to the bare name: two modules may each define
+// `lines`, and only this module's belongs under this key.
+auto TypeChecker::publishQualifiedSignatures(
+    const std::string& name, const std::vector<Signature>& signatures) -> void {
+    if (m_currentModulePath.empty() || signatures.empty()) return;
+    const auto key = m_currentModulePath + "::" + name;
+    // Only THIS definition's signatures: `Date.parse` and `Time.parse` share
+    // the bare name `parse`, and publishing the accumulated set gave Date's
+    // qualified key Time's result type.
+    if (m_qualifiedPublished.insert(key).second)
+        m_userSignatures[key] = signatures;
+    else
+        for (const auto& signature : signatures)
+            m_userSignatures[key].push_back(signature);
+}
+
+// A module-scoped `make` is visible only where its module is: inside the module
+// itself (or one nested in it), or under a `using` that names it — top-level or
+// the lexical `using M do ... end` form, both of which land in
+// m_declarationImports for the enclosing declaration. A top-level `make` (empty
+// module) stays global, and so does everything reached through an imported
+// INTERFACE: the prelude is always imported, and its interface signatures never
+// carry a makeModule.
+//
+// Before this, a `make` inside a module was visible everywhere with no `using`
+// at all — the one module member that was not import-gated
+// (docs/ufcs-dispatch-plan.md "Follow-up", case 1).
+auto TypeChecker::makeModuleVisible(const std::string& module) const -> bool {
+    if (module.empty()) return true;
+    // Inside the defining module, or one nested within it.
+    if (m_currentModulePath == module ||
+        m_currentModulePath.rfind(module + ".", 0) == 0)
+        return true;
+    for (const auto& import : m_declarationImports) {
+        if (import.module == module) return true;
+        // `using A` also brings `A.B`'s members into scope, matching how a
+        // qualified member of a nested module resolves.
+        if (import.module.rfind(module + ".", 0) == 0) return true;
+        if (module.rfind(import.module + ".", 0) == 0) return true;
+    }
+    return false;
 }
 
 auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
@@ -1706,7 +1849,10 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
     pushScope();
     bool wasInMakeBlock = m_inMakeBlock;
     auto prevMakeType = m_currentMakeType;
+    auto prevMakeModule = m_currentMakeModule;
     m_inMakeBlock = true;
+    // A `make` inside a module belongs to it, and is import-gated with it.
+    m_currentMakeModule = m_currentModulePath;
     // Preserve the complete receiver type. This keeps primitive targets
     // canonical (Bool is PrimitiveType::Bool), retains Map/List structure,
     // and carries generic arguments for ADT/record receiver functions.
@@ -1721,10 +1867,21 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 checkFunctionDef(*node);
             }
+            // NOTE: `private do … end` methods are deliberately NOT checked
+            // here. They should be — visibility is not a type-system concept —
+            // but registering them exposes an ordering bug: a make block's
+            // methods are registered as they are CHECKED, so a call above a
+            // private definition (`this.timeMeasure(…)` in units.kex's
+            // `make Float`) resolves against the OTHER type's copy and reports
+            // a bogus mismatch. Fixing that needs make-block signatures
+            // pre-registered before any body is checked. Their names are
+            // collected below regardless, so the unknown-method report does not
+            // flag calls to them.
         }, item);
     }
     m_inMakeBlock = wasInMakeBlock;
     m_currentMakeType = prevMakeType;
+    m_currentMakeModule = std::move(prevMakeModule);
     popScope();
 
     checkTraitImplementation(def);
@@ -4223,14 +4380,20 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     size_t localSigCount = 0;
     if (!importedSigs.empty() || useLocalMethods) {
         if (useLocalMethods) {
-            merged.insert(merged.end(), methodIt->second.begin(), methodIt->second.end());
+            for (const auto& method : methodIt->second)
+                if (makeModuleVisible(method.makeModule))
+                    merged.push_back(method);
             localSigCount = merged.size();
         }
         merged.insert(merged.end(), importedSigs.begin(), importedSigs.end());
         if (hasUser)
             merged.insert(
                 merged.end(), userSignatures->begin(), userSignatures->end());
-        sigs = &merged;
+        // Every candidate may have been filtered out as out-of-scope (a
+        // module-scoped `make` with no `using`). That is "no such method", not
+        // "a method with no signatures" — fall through to the record-field
+        // lookup and the undefined-method report below.
+        if (!merged.empty()) sigs = &merged;
     } else if (hasUser) {
         sigs = userSignatures;
     }
@@ -4278,6 +4441,27 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
             }
         }
+        // A method call that resolved to nothing at all. It may still be
+        // legitimate — a make block further down the file registers its `let`
+        // methods as they are CHECKED, so a call above one is simply early —
+        // so record it and decide at the end of the program, when everything
+        // is registered (see reportUnknownMethods).
+        // Reported only with a CONCRETE receiver type. Without one there is
+        // nothing to be sure about: a module-qualified call carries no value
+        // receiver at all (`Compiled.Late.answer()`), and an inferred TypeVar
+        // means the checker simply does not know yet — a constructor-pattern
+        // binding carries no type, and cross-file source modules are invisible
+        // here. Uppercase names are namespaced CONSTRUCTORS, not methods.
+        const bool concreteReceiver = !argTypes.empty() && [&] {
+            const auto receiver = resolve(argTypes[0]);
+            return !std::holds_alternative<TypeVar>(receiver->kind) &&
+                   !std::holds_alternative<UnknownType>(receiver->kind);
+        }();
+        if (isMethodCall && concreteReceiver && !name.empty() &&
+            name.find("::") == std::string::npos &&
+            !std::isupper(static_cast<unsigned char>(name.front())))
+            m_unresolvedMethods.push_back(
+                {name, loc, typeToString(resolve(argTypes[0]))});
         return Type::unknown();  // unknown name, or not yet registered (forward/recursive ref)
     }
 

@@ -1,4 +1,5 @@
 #include "analyzer.hxx"
+#include "receiver_conflicts.hxx"
 
 #include <algorithm>
 #include <functional>
@@ -58,6 +59,12 @@ auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> v
 }
 
 auto Analyzer::analyze(const ast::Program& program) -> bool {
+    // Phase 0: two definitions of one method for one receiver type. Reported
+    // before anything else so the message is not buried under the type errors
+    // an ambiguous method tends to cause downstream.
+    for (auto& conflict : findReceiverConflicts(program))
+        m_diagnostics.push_back(std::move(conflict));
+
     // Phase 1: scope resolution and purity checking
     for (const auto& item : program.items) {
         analyzeTopLevel(item);

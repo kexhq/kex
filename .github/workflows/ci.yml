@@ -48,11 +48,23 @@ jobs:
       - name: Spec suite
         run: make spec
 
-      # Informational — BEAM is a secondary backend; report the match count
-      # without gating CI so BEAM-backend work doesn't block unrelated PRs.
-      - name: Spec suite via BEAM (informational)
+      - name: Prelude spec suite
+        run: make spec-prelude
+
+      - name: Stdlib spec suite
+        run: make spec-stdlib
+
+      # The two backends are expected to agree on every spec, so a difference
+      # fails the build. Known representation-level gaps (pid rendering, a
+      # Range printing as its item list) are outside these suites by design.
+      - name: Spec suite via BEAM
         run: make spec-beam
-        continue-on-error: true
+
+      - name: Prelude spec suite via BEAM
+        run: make spec-prelude-beam
+
+      - name: Stdlib spec suite via BEAM
+        run: make spec-stdlib-beam
 
   wasm:
     runs-on: ubuntu-latest

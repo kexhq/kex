@@ -29,9 +29,9 @@ help:
 	@echo "  make web-demo     Build the wasm target and serve web/index.html locally"
 	@echo "                    (in-browser REPL test page) — Ctrl-C to stop"
 	@echo "  make spec-beam    Run the spec suite through the BEAM backend (-R) and"
-	@echo "                    report how many match the tree-walker's golden output."
-	@echo "                    Informational only — never fails the build (BEAM is a"
-	@echo "                    secondary backend, kept non-gating by design)."
+	@echo "                    check it against the tree-walker's golden output."
+	@echo "                    FAILS on any difference — the two backends are"
+	@echo "                    expected to agree on every spec."
 	@echo "  make spec-wasm    Same, but through the wasm-built kex CLI via Node"
 	@echo "                    (requires build-wasm; expected to match closely,"
 	@echo "                    since it's the same tree-walker as native)."
@@ -77,10 +77,10 @@ web-demo: build-wasm
 	@echo "Demo running at http://localhost:8743/web/index.html (Ctrl-C to stop)"
 	@python3 -m http.server 8743
 
-# `spec-beam` is informational: it reports differing specs but always exits 0,
-# so adding it here surfaces BEAM drift on every run without gating the build
-# on the documented interpreter/BEAM gaps.
-test-all: test spec spec-prelude spec-stdlib spec-beam
+# Every suite gates, on both backends: a walker/BEAM difference is a build
+# failure, not a note.
+test-all: test spec spec-prelude spec-stdlib \
+          spec-beam spec-prelude-beam spec-stdlib-beam
 
 SHELL := /bin/bash
 
@@ -139,10 +139,15 @@ spec-prelude: build
 	echo "  $$passed passed, $$failed failed"; \
 	[ $$failed -eq 0 ]
 
+# Same gating rule as spec-beam. A spec whose subject IS the tree-walker (the
+# backend predicates in kex.spec.kex, whose BEAM counterpart is
+# spec/backend_predicates_beam.kex) marks itself `# kex: interpreter-only` and
+# is skipped here rather than counted as a difference.
 spec-prelude-beam: build
 	@echo "Running prelude spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \
 	for f in spec/prelude/*.kex; do \
+		if grep -q "# kex: interpreter-only" "$$f" 2>/dev/null; then continue; fi; \
 		output=$$(timeout 60 $(KEX) -R --no-check --no-colors "$$f" 2>&1); \
 		rc=$$?; \
 		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
@@ -158,15 +163,20 @@ spec-prelude-beam: build
 		failed=$$((failed + f_failed)); \
 	done; \
 	echo ""; \
-	echo "  $$passed passed, $$failed failed"
+	echo "  $$passed passed, $$failed failed"; \
+	[ $$failed -eq 0 ]
 
 # Runs the whole spec suite through -R (BEAM) instead of the per-file tag
 # system `spec` uses, and diffs against the SAME .expected golden files —
 # any mismatch means the two backends produce different output for that
 # program. Skips check-only specs (those are about semantic checking, not
 # runtime execution — same exclusion `spec` doesn't need since it already
-# dispatches per-tag). Informational only — never fails the build (BEAM is a
-# secondary backend, kept non-gating by design).
+# dispatches per-tag).
+#
+# GATING as of 2026-08-12: the suite has matched the walker on every spec for
+# long enough that a new mismatch means a regression, not a known gap. The
+# remaining walker/BEAM differences are representation-level (pid rendering, a
+# Range printing as its item list) and live outside this suite.
 # Strings are UTF-8 binaries and Chars are tagged {'Char', N}
 # tuples on BEAM, so the old charlist ambiguities ([] vs "", [Int] vs
 # String, Char vs Int) are gone.
@@ -183,12 +193,14 @@ spec-beam: build
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \
 			passed=$$((passed + 1)); \
 		else \
-			printf "  \033[33m~\033[0m %s (BEAM output differs)\n" "$$(basename $$f)"; \
+			printf "  \033[31m✗\033[0m %s (BEAM output differs)\n" "$$(basename $$f)"; \
+			diff <(echo "$$actual") <(echo "$$expected") | head -10 | sed 's/^/    /'; \
 			failed=$$((failed + 1)); \
 		fi; \
 	done; \
 	echo ""; \
-	echo "  $$passed matching, $$failed differing (informational — not a build failure)"
+	echo "  $$passed matching, $$failed differing"; \
+	[ $$failed -eq 0 ]
 
 # Same idea, but through the wasm-built `kex` CLI (via Node, using
 # NODERAWFS for real file access — see CMakeLists.txt) instead of BEAM —

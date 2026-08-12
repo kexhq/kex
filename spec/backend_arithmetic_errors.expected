@@ -1,0 +1,7 @@
+6
+5.0
+4
+2361183241434822606848
+2
+8.0
+Internal error: spec/backend_arithmetic_errors.kex:14:24: runtime error: Float multiplication: result overflowed (Infinity)

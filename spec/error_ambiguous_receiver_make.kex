@@ -1,0 +1,13 @@
+# kex: check-only
+# Two `make String` blocks defining the same method is an equally-specific tie.
+# Declaration form carries no dispatch priority, so nothing picks a winner —
+# and each backend picked a different one: the walker took the first
+# declaration silently ("A:x"), BEAM died with `undef`. Per
+# docs/ufcs-dispatch-plan.md "Decisions (locked)", it is a compile error naming
+# both candidates.
+module A do make String do let shout -> String = "A:" + this end end
+module B do make String do let shout -> String = "B:" + this end end
+
+main do
+  IO.printLine("x".shout)
+end

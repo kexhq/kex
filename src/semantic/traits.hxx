@@ -24,6 +24,11 @@ struct Signature {
     // zero must remain representable for functions whose every parameter has
     // a default.
     std::optional<std::size_t> requiredParams;
+    // The module whose `make` block defines this method, "" for a top-level
+    // one. A module-scoped `make` is import-gated exactly like every other
+    // module member (docs/ufcs-dispatch-plan.md "Follow-up"), so a call site
+    // may only see it with a matching `using` in scope.
+    std::string makeModule;
 };
 
 struct TraitDef {
@@ -76,6 +81,12 @@ public:
     // A registry with Number/Integer/Float/Equatable/Comparable/Showable
     // pre-registered, plus implementations for built-in primitive/sized types.
     static auto withBuiltins() -> TraitRegistry;
+
+    // Every registered trait, for whole-registry questions such as "does any
+    // trait declare a method by this name?" (see reportUnknownMethods).
+    auto all() const -> const std::unordered_map<std::string, TraitDef>& {
+        return m_traits;
+    }
 
     auto implementorKey(const TypePtr& type) const -> std::string;
     auto hasConformances(const std::string& key) const -> bool {

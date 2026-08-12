@@ -1,7 +1,7 @@
 %% Kex.Intrinsic.Number — BEAM primitive backend for numeric intrinsics shared
 %% by Integer and Float. Receiver is the first argument.
 -module(kex_intrinsic_number).
--export([lt/3, gt/3, lte/3, gte/3, abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
+-export([sub/3, mul/3, divide/3, pow/3, lt/3, gt/3, lte/3, gte/3, abs/1, sqrt/1, add/2, divide/2, pow/2, eq/2, neq/2,
           floor/1, ceil/1, round/1, toInteger/1,
           float_parse/1, float_parse_prefix/1,
           parse/1, to_integer/1, to_float/1]).
@@ -23,7 +23,63 @@ add(A, B) when is_list(A), is_binary(B) -> <<(unicode:characters_to_binary(charl
 add(A, B) when is_list(A), is_integer(B) -> A ++ [B];
 add(A, B) when is_integer(A), is_list(B) -> [A | B];
 add(A, B) when is_list(A) -> A ++ B;
-add(A, B) -> A + B.
+add(A, B) when is_integer(A), is_integer(B) -> A + B;
+add(A, B) -> checked(fun() -> A + B end, add, A, B, <<>>, <<"Float addition">>, <<"add">>).
+
+%% `-` and `*` reach here whenever lowering cannot prove both operands are
+%% Integers. Integer arithmetic answers immediately (bignums cannot overflow);
+%% only float/unknown operands take the checked path, so the hot integer loops
+%% pay two guard tests and nothing else.
+%% `Loc` is the call site ("file:line:col: ", empty when unknown), passed in by
+%% lowering so the message matches the walker's down to the location.
+sub(A, B, _Loc) when is_integer(A), is_integer(B) -> A - B;
+sub(A, B, Loc) -> checked(fun() -> A - B end, sub, A, B, Loc, <<"Float subtraction">>, <<"subtract">>).
+
+mul(A, B, _Loc) when is_integer(A), is_integer(B) -> A * B;
+mul(A, B, Loc) -> checked(fun() -> A * B end, mul, A, B, Loc, <<"Float multiplication">>, <<"multiply">>).
+
+divide(A, B, Loc) -> divide_at(A, B, Loc).
+pow(A, B, Loc) -> pow_at(A, B, Loc).
+
+%% A float result that overflows raises `badarith` here and a typed message in
+%% the walker ("Float multiplication: result overflowed (Infinity)"); a
+%% non-number operand raises `badarith` too, where the walker says "Cannot
+%% multiply X and Y". Report what the walker reports, including the sign the
+%% result would have had — `badarith` itself carries neither.
+checked(Fun, Op, A, B, Loc, FloatWhat, Verb) ->
+    case is_number(A) andalso is_number(B) of
+        false ->
+            erlang:error(iolist_to_binary([Loc, "runtime error: Cannot ", Verb,
+                                           " ", kex_io:value_type_name(A),
+                                           " and ", kex_io:value_type_name(B)]));
+        true ->
+            try Fun()
+            catch error:badarith ->
+                erlang:error(iolist_to_binary(
+                    [Loc, "runtime error: ", FloatWhat, ": result overflowed (",
+                     overflow_sign(Op, A, B), "Infinity)"]))
+            end
+    end.
+
+%% `math:pow` overflows to +Infinity except for a negative base with an odd
+%% integral exponent.
+overflow_sign(pow, A, B) ->
+    Odd = is_integer(B) andalso (B rem 2) =/= 0,
+    case A < 0 andalso Odd of true -> "-"; false -> "" end;
+overflow_sign(divide, A, B) ->
+    case (A < 0) =/= (B < 0) of true -> "-"; false -> "" end;
+overflow_sign(mul, A, B) ->
+    case (A < 0) =/= (B < 0) of true -> "-"; false -> "" end;
+overflow_sign(sub, A, B) ->
+    case erlang:abs(A) >= erlang:abs(B) of
+        true -> sign_text(A);
+        false -> case sign_text(B) of "-" -> ""; _ -> "-" end
+    end;
+overflow_sign(_Add, A, B) ->
+    case erlang:abs(A) >= erlang:abs(B) of true -> sign_text(A); false -> sign_text(B) end.
+
+sign_text(X) when X < 0 -> "-";
+sign_text(_) -> "".
 
 %% lt/gt/lte/gte — Kex's TYPED ordering, used wherever lowering cannot prove
 %% both operands are the same comparable kind. Erlang's `<` orders any two
@@ -71,15 +127,26 @@ charlist_opt(_, _) -> error.
 
 %% divide/2 — polymorphic / : integer division when both integers, float
 %% otherwise. Division-by-zero is a runtime error (caught in the emitter).
-divide(A, B) when is_integer(A), is_integer(B), B =:= 0 -> erlang:error("runtime error: Division by zero");
-divide(A, B) when is_integer(A), is_integer(B) -> A div B;
-divide(A, B) -> A / B.
+divide(A, B) -> divide_at(A, B, <<>>).
+
+divide_at(A, B, Loc) when is_integer(A), is_integer(B), B =:= 0 ->
+    erlang:error(iolist_to_binary([Loc, "runtime error: Division by zero"]));
+divide_at(A, B, _Loc) when is_integer(A), is_integer(B) -> A div B;
+%% A float zero divisor is the same error as an integer one — `badarith` said
+%% nothing about which, while the walker names it.
+divide_at(_A, B, Loc) when B == 0 ->
+    erlang:error(iolist_to_binary([Loc, "runtime error: Division by zero"]));
+divide_at(A, B, Loc) -> checked(fun() -> A / B end, divide, A, B, Loc,
+                                <<"Float division">>, <<"divide">>).
 
 %% pow/2 keeps integral bases raised to non-negative integral exponents exact,
 %% matching the interpreter's arbitrary-precision Integer result. Other powers
 %% use Erlang's floating-point math semantics.
-pow(A, B) when is_integer(A), is_integer(B), B >= 0 -> int_pow(A, B, 1);
-pow(A, B) -> math:pow(A, B).
+pow(A, B) -> pow_at(A, B, <<>>).
+
+pow_at(A, B, _Loc) when is_integer(A), is_integer(B), B >= 0 -> int_pow(A, B, 1);
+pow_at(A, B, Loc) -> checked(fun() -> math:pow(A, B) end, pow, A, B, Loc,
+                             <<"Exponentiation">>, <<"raise">>).
 
 int_pow(_, 0, Acc) -> Acc;
 int_pow(Base, Exponent, Acc) when Exponent rem 2 =:= 1 ->

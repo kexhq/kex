@@ -260,6 +260,30 @@ type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 Union variants are constructors: `Circle(5.0)` constructs a `Shape` value.
 Variants with no payload (`Overflow`, `EmptyInput`) are atoms.
 
+A leading `|` is optional, and is what disambiguates a **one-variant** union
+from a transparent type alias — both are otherwise just a single capitalized
+name after the `=`:
+
+```kex
+type FilePath     = String            # alias: FilePath IS String
+type SafeDivError = | DivideByZero     # ADT: DivideByZero is a value
+```
+
+Without the pipe, `type SafeDivError = DivideByZero` aliases a type named
+`DivideByZero` and introduces no constructor.
+
+**Use the leading `|` only for a single constructor.** With two or more variants
+the declaration is already unambiguous, so the pipe is redundant:
+
+```kex
+type Color = Red | Green | Blue        # no leading pipe — two or more variants
+
+type Color =                           # multi-line, still no leading pipe
+    Red
+  | Green
+  | Blue
+```
+
 Pattern matching destructures them:
 
 ```kex
@@ -299,6 +323,17 @@ end
 ```
 
 `Int or! ParseError` is equivalent to `Result<Int, ParseError>`.
+
+`or!` and `or` bind tighter than `->`, so in a standalone annotation the error
+channel attaches to the return type, not to the whole function type:
+
+```kex
+parsePort : String -> Int or! ParseError    # String -> Result<Int, ParseError>
+```
+
+That is the same signature the `let parsePort(s: String) -> Int or! ParseError`
+form declares. Parenthesize to wrap a function type itself:
+`(String -> Int) or! ParseError`.
 
 ### Either
 
@@ -913,6 +948,43 @@ end
 > records**, `@field` access in parameterized make methods is not yet supported —
 > use `match this do ... end` or a parameterless method in those cases.
 
+### Make Targets
+
+A make target may be a **supertype**, in which case the block applies to every
+type beneath it. `Number` covers `Integer` and `Float`:
+
+```kex
+make Number do
+  let doubled -> Number = this * 2
+end
+
+3.doubled     # 6
+3.5.doubled   # 7.0
+```
+
+A more specific block wins over a broader one, so a type that defines the
+method itself keeps its own version:
+
+```kex
+make Number do  let level = "number"  end
+make Integer do let level = "integer" end
+
+3.level    # "integer" — the concrete block wins
+3.5.level  # "number"
+```
+
+A target may also be a **union**, applying the block to each member and to
+nothing else:
+
+```kex
+make Float | Integer do
+  let doubled -> Number = this * 2
+end
+```
+
+The union's receiver is typed as the union, so a method there may be declared
+at any trait all members satisfy (`Number`, above).
+
 ### `@` Shorthand
 
 Inside make blocks, `@field` is shorthand for `this.field`, and `@method(args)`
@@ -1501,6 +1573,22 @@ Either<L, R> = Left(L) | Right(R)   # sugar: L or R
 
 ### 23.6 Integer / Float / Number
 
+`Integer` and `Float` are distinct types but one numeric tower for comparison:
+mixed operands promote, so `0` and `0.0` are the same number everywhere.
+
+```kex
+1 + 1.0     # 2.0   — arithmetic promotes
+1 < 1.5     # true  — ordering promotes
+0 == 0.0    # true  — equality is numeric, not representational
+
+let safeDiv(_, 0) = Error(DivideByZero)   # also catches a 0.0 divisor
+```
+
+Literal patterns follow `==`, so an integer-literal pattern matches an equal
+`Float` scrutinee and vice versa. Anything else would let `1 <= 1.0` and
+`1 >= 1.0` both hold while `1 == 1.0` was false. Collections stay
+homogeneous — `[1, 2.0]` is still a type error.
+
 **Integer** (implements `Blankable`, `Monoid`, `Group`):
 
 | Method | Description |
@@ -1866,6 +1954,25 @@ trait Truthyable do
   falsy? = !this.truthy?  # default
 end
 ```
+
+### Comparable
+
+```
+trait Comparable do
+  compare :> This -> Ordering    # Less | Equal | Greater
+end
+```
+
+`Number` implements it, so `Integer` and `Float` both inherit `compare` —
+including across the two, since the ordering operators promote:
+
+```kex
+1.compare(2)      # Less
+2.0.compare(1.5)  # Greater
+1.compare(1.0)    # Equal
+```
+
+`==` stays independent: a type may be `Equatable` without being ordered.
 
 ### Algebraic
 

@@ -335,10 +335,21 @@ struct Lowering {
     // Current module path while lowering a module body. Nested module-relative
     // qualified calls (`Router.get` inside `module Http`) resolve against it.
     std::string currentModulePath;
+    // Declared types of the parameters in scope, by source name — the
+    // annotation a call site cannot see. Saved and restored per clause.
+    std::unordered_map<std::string, std::string> declaredParamTypes;
     // Receiver type of the make block currently being lowered. Record field
     // names are not globally unique, so `this.field` must select the layout
     // owned by this type rather than the first same-named field in the file.
     std::string currentMakeType;
+    // Method name → the module whose `make` block is its ONLY definition. Such a
+    // method is import-gated like every other module member, so a call may only
+    // reach it under a matching `using` (see makeMethodInScope). A name any
+    // top-level `make` also defines never lands here and stays global.
+    std::unordered_map<std::string, std::string> moduleScopedMethods;
+    // Modules a `using` has brought into scope at this point. The block form
+    // saves and restores it around its body, exactly as it does moduleImports.
+    std::set<std::string> usingModules;
     // Bare imported function name → mangled name. Populated by `using M, only:`
     // inside module bodies so bare calls resolve to the correct cross-module fn.
     std::unordered_map<std::string, std::string> moduleImports;
@@ -686,6 +697,21 @@ struct Lowering {
         }
     }
 
+    // Is this expression statically an Integer? Only then may an arithmetic
+    // operator stay on the raw BIF — see the `-`/`*` routing in lowerBinary.
+    auto isIntegerOperand(const ast::ExprPtr& e) const -> bool {
+        if (!e) return false;
+        if (std::holds_alternative<ast::IntLiteral>(e->kind)) return true;
+        if (auto* id = std::get_if<ast::Identifier>(&e->kind))
+            if (auto declared = declaredParamTypes.find(id->name);
+                declared != declaredParamTypes.end())
+                return declared->second == "Integer";
+        if (!expressionTypes) return false;
+        auto found = expressionTypes->find(e.get());
+        if (found == expressionTypes->end() || !found->second) return false;
+        return semantic::typeToString(found->second) == "Integer";
+    }
+
     // Which of the walker's three comparable families this expression is
     // known to belong to ("num" / "str" / "char"), or "" when lowering cannot
     // tell. Only used to keep a provably well-typed comparison on the BIF.
@@ -839,6 +865,33 @@ struct Lowering {
                     // Route through the runtime check only when the operands
                     // are not provably the same comparable kind; a numeric or
                     // string comparison (the hot path) keeps the raw BIF.
+                    // `-` and `*` are raw Erlang ops, which answer
+                    // `badarith` for a float overflow and for a non-number
+                    // operand alike — where the walker says "Float
+                    // multiplication: result overflowed (Infinity)" or
+                    // "Cannot multiply Int and String". Provably-integer
+                    // operands keep the BIF (integer arithmetic cannot
+                    // overflow on BEAM); anything else takes the checked
+                    // runtime path, which reports what the walker reports.
+                    const bool arithmetic = op == Op::Sub || op == Op::Mul ||
+                                            op == Op::Div || op == Op::Pow;
+                    if (arithmetic &&
+                        !(isIntegerOperand(n.left) && isIntegerOperand(n.right))) {
+                        std::string loc;
+                        if (currentLoc)
+                            loc = std::string(currentLoc->file) + ":"
+                                + std::to_string(currentLoc->line) + ":"
+                                + std::to_string(currentLoc->column) + ": ";
+                        std::vector<ExprPtr> args;
+                        args.push_back(std::move(a));
+                        args.push_back(std::move(b));
+                        args.push_back(lit(LitKind::String, loc));
+                        return callE("kex_intrinsic_number",
+                                     op == Op::Sub ? "sub"
+                                     : op == Op::Mul ? "mul"
+                                     : op == Op::Div ? "divide" : "pow",
+                                     3, std::move(args));
+                    }
                     if (isOrderingOp(op)) {
                         const auto kind = comparableKind(n.left);
                         if (kind.empty() || kind != comparableKind(n.right)) {
@@ -1126,6 +1179,8 @@ struct Lowering {
                 }
                 auto saved = moduleImports;
                 auto savedAliases = moduleAliases;
+                auto savedUsing = usingModules;
+                usingModules.insert(srcMod);
                 if (n.alias) moduleAliases[*n.alias] = srcMod;
                 if (!n.onlyNames.empty()) {
                     for (const auto& name : n.onlyNames) {
@@ -1146,6 +1201,7 @@ struct Lowering {
                 auto result = lowerBody(n.body);
                 moduleImports = std::move(saved);
                 moduleAliases = std::move(savedAliases);
+                usingModules = std::move(savedUsing);
                 return result;
             } else if constexpr (std::is_same_v<T, ast::TryExpr>) {
                 // .try desugars to: case operand of Ok(v) -> v; Error(e) -> return Error(e)
@@ -2776,6 +2832,11 @@ struct Lowering {
         // because the name alone matched. Falling through lets the prelude's
         // receiver function (Map.get here) handle it, which is what the
         // interpreter already does.
+        if (localMethods.count(n.method) && localArityExists &&
+            !makeMethodInScope(n.method))
+            // Defined only by a `make` inside a module this call cannot see —
+            // the same "Undefined method" the walker now raises for it.
+            return ret(undefinedMethod(n.method, rv()));
         if (localMethods.count(n.method) && localArityExists) {
             std::vector<Binding> binds;
             std::vector<ExprPtr> args;
@@ -4602,6 +4663,15 @@ struct Lowering {
                     }
                     fc.params.push_back(lowerParam(p));
                 }
+                // Declared parameter types, for the arithmetic routing in
+                // lowerBinary: `let double(n: Integer) = n * 2` must keep the
+                // raw BIF, and the annotation says so even when no type
+                // information from the checker is available (the codegen tests
+                // lower without it).
+                auto savedParamTypes = declaredParamTypes;
+                for (const auto& p : clause.params)
+                    if (p.name && p.type && *p.type)
+                        declaredParamTypes[*p.name] = renderDispatchType(**p.type);
                 for (const auto& p : clause.params) {
                     auto trait = traitNameOf(p);
                     if (trait.empty()) continue;
@@ -4634,6 +4704,7 @@ struct Lowering {
                 if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
                 else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
                 fc.body = std::move(body);
+                declaredParamTypes = std::move(savedParamTypes);
                 def.clauses.push_back(std::move(fc));
             }
         }
@@ -4712,6 +4783,55 @@ struct Lowering {
             else if (single != candidate.moduleAtom) return {};
         }
         return single;
+    }
+
+    // Remember (or clear) the import gate for a make block's method names.
+    // A top-level block passes "" and un-gates every name it defines, so a
+    // module block cannot restrict a method the file also defines globally.
+    void noteModuleScopedMake(const ast::MakeDef& make, const std::string& module,
+                              const std::set<std::string>& declaredTypes = {}) {
+        // Only a make for a FOREIGN type is gated. One for a type the module
+        // declares is that type's own interface and travels with its values —
+        // `SQL.select(:all).from(:users)` must keep working without a `using`.
+        const auto targets = makeTargetNameList(make.target);
+        const bool ownType = std::any_of(
+            targets.begin(), targets.end(),
+            [&](const std::string& target) { return declaredTypes.count(target) > 0; });
+        auto note = [&](const ast::FunctionDef& def) {
+            if (module.empty() || ownType) moduleScopedMethods[def.name] = "";
+            else if (!moduleScopedMethods.count(def.name))
+                moduleScopedMethods[def.name] = module;
+        };
+        for (const auto& item : make.body) {
+            if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn) note(**fn);
+            } else if (auto* visibility =
+                           std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                if (!*visibility) continue;
+                for (const auto& inner : (*visibility)->items)
+                    if (auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&inner))
+                        if (*fn) note(**fn);
+            }
+        }
+    }
+
+    // Is a module-scoped `make` method reachable from here? Inside its own
+    // module, or under a `using` that names it — the same rule the walker's
+    // makeMethodInScope applies.
+    auto makeMethodInScope(const std::string& method) const -> bool {
+        auto owner = moduleScopedMethods.find(method);
+        if (owner == moduleScopedMethods.end() || owner->second.empty())
+            return true;
+        const auto& module = owner->second;
+        if (currentModulePath == module ||
+            currentModulePath.rfind(module + ".", 0) == 0)
+            return true;
+        for (const auto& imported : usingModules)
+            if (imported == module ||
+                imported.rfind(module + ".", 0) == 0 ||
+                module.rfind(imported + ".", 0) == 0)
+                return true;
+        return false;
     }
 
     // The single receiver type a method of a module compiled in THIS unit
@@ -5834,6 +5954,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     std::function<void(const ast::ModuleDef&)> preModule;
     preModule = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
+        std::set<std::string> declaredTypes;
+        kex::collectDeclaredTypeNames(module.body, declaredTypes);
         auto preModuleFn = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
@@ -5870,6 +5992,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*md) {
                     preMake(**md);
+                    L.noteModuleScopedMake(**md, path, declaredTypes);
                     for (const auto& typeName :
                          Lowering::makeTargetNameList((*md)->target))
                         if (!typeName.empty())
@@ -5945,7 +6068,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         } else if (auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item)) {
             if (*td) preType(**td);
         } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
-            if (*md) preMake(**md);
+            if (*md) {
+                preMake(**md);
+                L.noteModuleScopedMake(**md, "");  // top level: never gated
+            }
         } else if (auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
             if (*module) preModule(**module);
         }
@@ -6301,6 +6427,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (i) srcMod += ".";
                     srcMod += node->module.parts[i];
                 }
+                L.usingModules.insert(srcMod);
                 if (node->alias) L.moduleAliases[*node->alias] = srcMod;
                 if (!node->onlyNames.empty()) {
                     for (const auto& name : node->onlyNames) {

@@ -74,7 +74,7 @@ end
 
 ### Compiled Rules
 
-- Same Kex syntax, pure only (+ `Env.get`)
+- Same Kex syntax, pure only (+ `ENV.get`)
 - `%variable` splices a string as an identifier
 - Sees all declarations in scope (types, functions, etc.)
 - Can produce: functions, types, constants, `make` blocks
