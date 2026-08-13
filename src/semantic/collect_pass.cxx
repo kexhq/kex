@@ -1,8 +1,78 @@
 #include "collect_pass.hxx"
+#include "../common/type_def_utils.hxx"
 #include <variant>
 #include <cctype>
 
 namespace kex::semantic {
+namespace {
+
+auto typeExprText(const ast::TypeExpr& type) -> std::string;
+
+auto typeNameText(const ast::TypeName& name) -> std::string {
+    std::string result;
+    for (const auto& part : name.parts) {
+        if (!result.empty()) result += ".";
+        result += part;
+    }
+    return result;
+}
+
+auto typeExprText(const ast::TypeExpr& type) -> std::string {
+    return std::visit([](const auto& node) -> std::string {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, ast::TypeName>) {
+            return typeNameText(node);
+        } else if constexpr (std::is_same_v<T, ast::GenericType>) {
+            std::string result = typeNameText(node.name) + "<";
+            for (size_t i = 0; i < node.args.size(); ++i) {
+                if (i) result += ", ";
+                result += node.args[i] ? typeExprText(*node.args[i]) : "?";
+            }
+            return result + ">";
+        } else if constexpr (std::is_same_v<T, ast::FunctionType>) {
+            return (node.param ? typeExprText(*node.param) : "?") + " -> " +
+                   (node.result ? typeExprText(*node.result) : "?");
+        } else if constexpr (std::is_same_v<T, ast::TupleType>) {
+            std::string result = "(";
+            for (size_t i = 0; i < node.elements.size(); ++i) {
+                if (i) result += ", ";
+                result += node.elements[i] ? typeExprText(*node.elements[i]) : "?";
+            }
+            return result + ")";
+        } else if constexpr (std::is_same_v<T, ast::ListType>) {
+            return "[" + (node.element ? typeExprText(*node.element) : "?") + "]";
+        } else if constexpr (std::is_same_v<T, ast::MapType>) {
+            return "Map<" + (node.key ? typeExprText(*node.key) : "?") + ", " +
+                   (node.value ? typeExprText(*node.value) : "?") + ">";
+        } else if constexpr (std::is_same_v<T, ast::UnionType>) {
+            return (node.left ? typeExprText(*node.left) : "?") + " | " +
+                   (node.right ? typeExprText(*node.right) : "?");
+        } else if constexpr (std::is_same_v<T, ast::OptionalType>) {
+            return (node.inner ? typeExprText(*node.inner) : "?") + "?";
+        } else if constexpr (std::is_same_v<T, ast::BlockType>) {
+            return "Block<" + (node.inner ? typeExprText(*node.inner) : "?") + ">";
+        } else if constexpr (std::is_same_v<T, ast::AtomType>) {
+            return ":" + node.name;
+        } else if constexpr (std::is_same_v<T, ast::GenericVar>) {
+            return node.name;
+        }
+        return "?";
+    }, type.kind);
+}
+
+auto variantText(const ast::TypeExpr& variant) -> std::string {
+    if (const auto* generic = std::get_if<ast::GenericType>(&variant.kind)) {
+        std::string result = typeNameText(generic->name) + "(";
+        for (size_t i = 0; i < generic->args.size(); ++i) {
+            if (i) result += ", ";
+            result += generic->args[i] ? typeExprText(*generic->args[i]) : "?";
+        }
+        return result + ")";
+    }
+    return typeExprText(variant);
+}
+
+} // namespace
 
 auto CollectPass::run(SemanticDB& db, const std::string& file) -> void {
     m_state = db.fileState(file);
@@ -31,7 +101,7 @@ auto CollectPass::collectTopLevel(const ast::TopLevelItem& item) -> void {
         } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
             SymbolInfo info;
             info.name = ptr->name;
-            info.kind = SymbolKind::Type;
+            info.kind = SymbolKind::Trait;
             info.definition = ptr->location;
             info.module = "";
             info.type = Type::unknown();
@@ -115,7 +185,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
             } else if constexpr (std::is_same_v<T, ast::TraitDef>) {
                 SymbolInfo info;
                 info.name = ptr->name;
-                info.kind = SymbolKind::Type;
+                info.kind = SymbolKind::Trait;
                 info.definition = ptr->location;
                 info.module = m_currentModule;
                 info.type = Type::unknown();
@@ -184,6 +254,25 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
     info.definition = def.location;
     info.module = module;
     info.type = Type::unknown();
+    info.detail = "type " + def.name;
+    if (!def.typeParams.empty()) {
+        info.detail += "<";
+        for (size_t i = 0; i < def.typeParams.size(); ++i) {
+            if (i) info.detail += ", ";
+            info.detail += def.typeParams[i];
+        }
+        info.detail += ">";
+    }
+    if (def.variants && !def.variants->empty()) {
+        info.detail += " =";
+        for (size_t i = 0; i < def.variants->size(); ++i) {
+            const auto& variant = (*def.variants)[i];
+            if (!variant) continue;
+            info.detail += i == 0 ? "\n  " : "\n| ";
+            info.detail += kex::isTransparentTypeAlias(def)
+                ? typeExprText(*variant) : variantText(*variant);
+        }
+    }
     m_state->symbols.push_back(std::move(info));
 
     // Variant constructors are also top-level names
@@ -199,6 +288,15 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     ctor.definition = variant->location;
                     ctor.module = module;
                     ctor.type = Type::unknown();
+                    ctor.detail = ctor.name + " : " + def.name;
+                    if (!def.typeParams.empty()) {
+                        ctor.detail += "<";
+                        for (size_t i = 0; i < def.typeParams.size(); ++i) {
+                            if (i) ctor.detail += ", ";
+                            ctor.detail += def.typeParams[i];
+                        }
+                        ctor.detail += ">";
+                    }
                     m_state->symbols.push_back(std::move(ctor));
                 }
             } else if (const auto* gt = std::get_if<ast::GenericType>(&variant->kind)) {
@@ -209,6 +307,18 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
                     ctor.definition = variant->location;
                     ctor.module = module;
                     ctor.type = Type::unknown();
+                    ctor.detail = ctor.name + " : ";
+                    for (const auto& arg : gt->args)
+                        ctor.detail += (arg ? typeExprText(*arg) : "?") + " -> ";
+                    ctor.detail += def.name;
+                    if (!def.typeParams.empty()) {
+                        ctor.detail += "<";
+                        for (size_t i = 0; i < def.typeParams.size(); ++i) {
+                            if (i) ctor.detail += ", ";
+                            ctor.detail += def.typeParams[i];
+                        }
+                        ctor.detail += ">";
+                    }
                     m_state->symbols.push_back(std::move(ctor));
                 }
             }
@@ -223,6 +333,20 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
     info.definition = def.location;
     info.module = module;
     info.type = Type::unknown();
+    info.detail = "record " + def.name;
+    if (!def.typeParams.empty()) {
+        info.detail += "<";
+        for (size_t i = 0; i < def.typeParams.size(); ++i) {
+            if (i) info.detail += ", ";
+            info.detail += def.typeParams[i];
+        }
+        info.detail += ">";
+    }
+    info.detail += " do";
+    for (const auto& field : def.fields)
+        info.detail += "\n  " + field.name + " : " +
+                       (field.type ? typeExprText(*field.type) : "?");
+    info.detail += "\nend";
     m_state->symbols.push_back(std::move(info));
 
     // Fields are accessible as instance members (record.fieldName)

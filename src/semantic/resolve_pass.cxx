@@ -359,6 +359,7 @@ auto ResolvePass::resolveBody(const std::vector<ast::ExprPtr>& body) -> void {
 }
 
 auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
+    recordCompletionScope(expr.location);
     std::visit([this, &expr](const auto& node) {
         using T = std::decay_t<decltype(node)>;
 
@@ -768,6 +769,16 @@ auto ResolvePass::popScope() -> void {
 auto ResolvePass::defineLocal(const std::string& name) -> void {
     if (m_scopes.empty()) m_scopes.emplace_back();
     m_scopes.back().insert(name);
+}
+
+auto ResolvePass::recordCompletionScope(SourceLocation location) -> void {
+    if (!m_state) return;
+    std::unordered_set<std::string> unique;
+    for (const auto& scope : m_scopes)
+        unique.insert(scope.begin(), scope.end());
+    std::vector<std::string> names(unique.begin(), unique.end());
+    std::sort(names.begin(), names.end());
+    m_state->completionScopes.push_back({location, std::move(names)});
 }
 
 auto ResolvePass::error(SourceLocation loc, const std::string& msg) -> void {

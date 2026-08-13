@@ -388,6 +388,35 @@ int main() {
             assertTrue(has(fields, "Version.major"), "Version.major missing");
             assertTrue(has(fields, "Version.number"), "Version.number missing");
         });
+        it("replaces module exports safely when an editor updates a file", []() {
+            SemanticDB db;
+            const std::string path = "/tmp/kex-lsp-reload.kex";
+            db.updateFile(path,
+                "module Old do\n"
+                "  let alpha() = 1\n"
+                "end\n");
+            assertTrue(has(db.completionsFor("Old.al"), "Old.alpha"));
+
+            db.updateFile(path,
+                "module New do\n"
+                "  let beta() = 2\n"
+                "end\n");
+            assertTrue(db.completionsFor("Old.al").empty(),
+                       "stale module export survived an in-memory update");
+            assertTrue(has(db.completionsFor("New.be"), "New.beta"));
+        });
+        it("offers lexical bindings at the requested editor position", []() {
+            SemanticDB db;
+            const std::string path = "/tmp/kex-lsp-scope.kex";
+            db.updateFile(path,
+                "main do\n"
+                "  let localValue = 1\n"
+                "  localValue\n"
+                "end\n");
+            auto matches = db.completionsAt(path, 3, 7, "loc");
+            assertTrue(has(matches, "localValue"),
+                       "position-aware completion lost a local let binding");
+        });
     });
 
     return runAll();

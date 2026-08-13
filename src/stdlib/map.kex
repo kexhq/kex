@@ -144,7 +144,7 @@ make Map<K, V>, implement: Enumerable, Foldable, Monoid do
     return Kex.Intrinsic.Map.fromEntries(kept)
   end
 
-  # Returns a new map combining +self+ and +other+.
+  # Returns a new map combining +this+ and +other+.
   # On key conflict, +other+'s value wins.
   #
   # @example

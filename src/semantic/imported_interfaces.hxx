@@ -45,6 +45,10 @@ struct ImportedModuleInterface {
 // Exact backend ownership selected by semantic analysis for an imported call.
 // The AST remains backend-neutral; lowering consumes this side table.
 struct ResolvedCallTarget {
+    // Source owner selected by overload resolution (for example `Optional`
+    // rather than an unrelated same-named `Bits` export). Tooling uses this
+    // identity for documentation and navigation.
+    std::string sourceModule;
     std::string backendModule;
     std::string backendFunction;
     int backendArity = 0;
@@ -73,6 +77,17 @@ struct ImportedADT {
     std::string name;
     std::vector<std::string> constructors;
     std::unordered_map<std::string, int> constructorArities;
+    // Generic result reconstruction for source-derived interfaces. Each
+    // constructor payload records the ADT type-parameter slot it fills, or -1
+    // for a payload unrelated to a type parameter (`Just(X)` -> {0}).
+    size_t typeParamCount = 0;
+    std::unordered_map<std::string, std::vector<int>> constructorTypeParamSlots;
+    // Source-derived interfaces retain spelling and complete payload types so
+    // editor tooling can present the declaration rather than only its runtime
+    // arity. Prebuilt interfaces may leave these empty; callers can still use
+    // the generic-slot/arity information above as a faithful fallback.
+    std::vector<std::string> typeParamNames;
+    std::unordered_map<std::string, std::vector<TypePtr>> constructorParamTypes;
 };
 
 // Backend-neutral checked interface snapshot. Ordinary module exports retain

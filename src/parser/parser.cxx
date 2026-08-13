@@ -1,5 +1,6 @@
 #include "parser.hxx"
 #include "../common/utf8.hxx"
+#include <algorithm>
 #include <stdexcept>
 
 namespace kex {
@@ -1578,6 +1579,38 @@ auto Parser::parseInterpolatedBody(
         auto inner = body.substr(i + 2, close - i - 2);
         Lexer lexer(inner, m_filename);
         auto tokens = lexer.tokenizeAll();
+        // The interpolation is lexed as a small standalone source, but its
+        // AST participates in diagnostics and editor features for the outer
+        // file. Relocate every inner token back to its real source position
+        // before parsing so nested calls retain usable hover/reference spans.
+        const auto innerOffsetInBody = i + 2;
+        const auto prefix = std::string_view(body).substr(0, innerOffsetInBody);
+        const auto newlineCount = static_cast<int>(
+            std::count(prefix.begin(), prefix.end(), '\n'));
+        const auto lastNewline = prefix.rfind('\n');
+        const int delimiterWidth = token.type == TokenType::InterpolatedRawString
+            ? 2 : 1;
+        const int innerLine = token.location.line + newlineCount;
+        const int innerColumn = newlineCount == 0
+            ? token.location.column + delimiterWidth +
+                  static_cast<int>(innerOffsetInBody)
+            : static_cast<int>(prefix.size() - lastNewline);
+        const int absoluteInnerOffset = token.startOffset < 0 ? -1
+            : token.startOffset + delimiterWidth +
+                  static_cast<int>(innerOffsetInBody);
+        for (auto& innerToken : tokens) {
+            const auto relativeLine = innerToken.location.line;
+            innerToken.location.line = innerLine + relativeLine - 1;
+            if (relativeLine == 1)
+                innerToken.location.column = innerColumn +
+                    innerToken.location.column - 1;
+            if (absoluteInnerOffset >= 0) {
+                if (innerToken.startOffset >= 0)
+                    innerToken.startOffset += absoluteInnerOffset;
+                if (innerToken.endOffset >= 0)
+                    innerToken.endOffset += absoluteInnerOffset;
+            }
+        }
         if (!tokens.empty() && tokens.front().type == TokenType::Error)
             interpolationError(
                 "Invalid interpolation: " + tokens.front().value);

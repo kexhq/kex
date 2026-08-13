@@ -371,6 +371,19 @@ Start the REPL:
 make repl
 ```
 
+### Editor support
+
+The compiler includes a Language Server Protocol mode with completion, inferred
+type/declaration hover, and live compiler diagnostics for unsaved buffers:
+
+```sh
+kex --lsp
+```
+
+The VS Code extension in [`editors/vscode`](editors/vscode) adds Kex syntax
+highlighting and launches this server. See its README for development and
+installation instructions.
+
 Install the binary somewhere on your `PATH`:
 
 ```sh

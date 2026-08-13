@@ -38,7 +38,7 @@ make Integer do
   sqrt :> Float
   let sqrt = Kex.Intrinsic.Number.sqrt(this)
 
-  # Returns +self+ modulo +n+. The result has the same sign as +n+,
+  # Returns +this+ modulo +n+. The result has the same sign as +n+,
   # consistent with mathematical modulo (not C remainder).
   #
   # @param n [Integer]
@@ -61,7 +61,7 @@ make Integer do
   in? :> Range<Integer> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-  # Calls +f+ exactly +self+ times, passing the current index (0-based).
+  # Calls +f+ exactly +this+ times, passing the current index (0-based).
   #
   # @param f [Integer -> Void]
   # @return [Void]
@@ -71,11 +71,11 @@ make Integer do
   times :> (Integer -> Void) -> Void
   let times(block) = Kex.Intrinsic.Integer.times(this, block)
 
-  # Returns the greatest integer ≤ self. No-op on integers.
+  # Returns the greatest integer ≤ this. No-op on integers.
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer ≥ self. No-op on integers.
+  # Returns the smallest integer ≥ this. No-op on integers.
   ceil :> Integer
   let ceil = Kex.Intrinsic.Number.ceil(this)
 
@@ -116,11 +116,11 @@ make Float do
 
 
 
-  # Returns the greatest integer ≤ self.
+  # Returns the greatest integer ≤ this.
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)
 
-  # Returns the smallest integer ≥ self.
+  # Returns the smallest integer ≥ this.
   ceil :> Integer
   let ceil = Kex.Intrinsic.Number.ceil(this)
 
