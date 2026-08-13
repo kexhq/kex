@@ -4993,12 +4993,21 @@ struct Lowering {
         return nullptr;
     }
 
-    auto makeAccessors(const std::unordered_set<std::string>& definedFns) -> std::vector<FunDef> {
+    auto makeAccessors(const std::unordered_set<std::string>& definedFns,
+                       const std::unordered_set<std::string>& definedFnArities)
+        -> std::vector<FunDef> {
         std::vector<FunDef> out;
         for (const auto& [field, entries] : fieldAccessors) {
             // A local function of this name owns the symbol; its dispatcher
             // carries the record clauses instead (see appendFieldClauses).
-            if (definedFns.count(field)) continue;
+            // Only an ARITY-1 one can: appendFieldClauses declines any other
+            // arity, so suppressing on the name alone left the field with no
+            // reader at all. `value` became exactly that the moment
+            // OptionParser joined the prelude with `value/2,3` on
+            // ParsedOptions — every `measure.value` then called a
+            // `kex_prelude:value/1` that was never emitted, and died `undef`.
+            if (definedFns.count(field) && definedFnArities.count(field + "/1"))
+                continue;
 
             bool blocked = false;
             const auto* delegate = fieldAccessorDelegate(field, blocked);
@@ -5791,6 +5800,10 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // Factored into per-kind lambdas so the flattened module items go
     // through the exact same collection as top-level items.
     std::unordered_set<std::string> definedFns;
+    // The same names keyed by the arity they are actually EMITTED with. A
+    // field accessor is arity 1, so only an arity-1 function of that name
+    // can own the symbol (see makeAccessors).
+    std::unordered_set<std::string> definedFnArities;
     std::unordered_set<std::string> staticMethodNames; // record static blocks
     auto preRecord = [&](const ast::RecordDef& rd) {
         L.collectRecord(rd);
@@ -5818,9 +5831,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
-        if (!fd.clauses.empty())
-            L.localMethodArities.insert(
-                fd.name + "/" + std::to_string(fd.clauses[0].params.size()));
+        if (!fd.clauses.empty()) {
+            const auto arity = std::to_string(fd.clauses[0].params.size());
+            definedFnArities.insert(fd.name + "/" + arity);
+            L.localMethodArities.insert(fd.name + "/" + arity);
+        }
         if (!fd.clauses.empty()) {
             std::vector<std::string> pnames;
             for (const auto& p : fd.clauses[0].params)
@@ -5894,6 +5909,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             definedFns.insert(fd->name);
+            definedFnArities.insert(
+                fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->clauses.empty()) {
                 // A make-block method reaches its receiver one of two ways:
                 // implicitly through `this` (params exclude it), or as its
@@ -6747,7 +6764,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     }
 
     // Field accessors last (so definedFns is fully known).
-    for (auto& acc : L.makeAccessors(definedFns)) mod.functions.push_back(std::move(acc));
+    for (auto& acc : L.makeAccessors(definedFns, definedFnArities))
+        mod.functions.push_back(std::move(acc));
 
     // Merge duplicate function definitions (same name + arity) by concatenating
     // their clauses. The prelude legitimately repeats a method across make blocks
