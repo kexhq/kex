@@ -571,6 +571,12 @@ auto computeContentHash(const std::vector<uint8_t>& bytes) -> Hash128 {
     return hash;
 }
 
+auto computeSha256(const std::vector<uint8_t>& bytes) -> std::array<uint8_t, 32> {
+    std::array<uint8_t, 32> digest{};
+    sha256(bytes.data(), bytes.size(), digest.data());
+    return digest;
+}
+
 auto computeArtifactHash(const BeamFile& beam) -> Hash128 {
     auto implementation = beam;
     implementation.removeChunk(KEXI_CHUNK_ID);

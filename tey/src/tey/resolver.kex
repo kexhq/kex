@@ -1,0 +1,46 @@
+foul module Tey.Resolver
+using Tey.Cache, only: [fetch]
+using Tey.Git, only: [execute, pinRef]
+using Tey.Lockfile, only: [LockState, LockedDependency]
+using Tey.Manifest, only: [ManifestPackage, ManifestDependency]
+using Tey.Semver, only: [satisfies]
+  let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
+    if !Tey.Semver.satisfies(Kex.Kernel.VERSION.number, manifest.packageKexRequirement)
+      return Error("Kex ${Kex.Kernel.VERSION.number} does not satisfy ${manifest.packageKexRequirement}")
+    end
+    let locked = match Tey.Resolver.resolveDependencies(manifest.manifestDependencies, []) do
+      Error(error) -> return Error(error)
+      Ok(dependencies) -> dependencies
+    end
+    Ok(LockState { kexRequirement: manifest.packageKexRequirement,
+                 kexVersion: Kex.Kernel.VERSION.number, lockedDependencies: locked })
+  end
+
+  private do
+    let resolveDependencies([], locked: [LockedDependency]) -> Result<[LockedDependency], String> = Ok(locked)
+    let resolveDependencies([dependency | rest], locked: [LockedDependency]) -> Result<[LockedDependency], String> do
+      match Tey.Resolver.resolveDependency(dependency) do
+        Error(error) -> Error(error)
+        Ok(resolved) -> Tey.Resolver.resolveDependencies(rest, [...locked, resolved])
+      end
+    end
+
+    let resolveDependency(dependency: ManifestDependency) -> Result<LockedDependency, String> do
+      let (resolved, commit) = match Tey.Git.pinRef(dependency.manifestGit, dependency.manifestSelector, dependency.manifestRequested) do
+        Error(error) -> return Error(error)
+        Ok(pin) -> pin
+      end
+      let candidate = LockedDependency { name: dependency.manifestName, git: dependency.manifestGit,
+        resolved: resolved, commit: commit, sha256: "", groups: dependency.manifestGroups }
+      let path = match Tey.Cache.fetch(candidate) do
+        Error(error) -> return Error(error)
+        Ok(value) -> value
+      end
+      let sha = match Tey.Git.execute(["-C", path, "archive", "--format=tar", commit]) do
+        Ok(result) -> Digest.sha256(result.stdout)
+        Error(error) -> return Error(error)
+      end
+      Ok(LockedDependency { name: dependency.manifestName, git: dependency.manifestGit,
+        resolved: resolved, commit: commit, sha256: sha, groups: dependency.manifestGroups })
+    end
+  end

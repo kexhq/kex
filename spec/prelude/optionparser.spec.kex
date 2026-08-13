@@ -1,0 +1,54 @@
+let OPTION_PARSER = OptionParser.define("testapp", "A test CLI")
+  .string("name", Just('n'), "Your name", None, true)
+  .integer("port", Just('p'), "Port number", Just("3000"), false)
+  .flag("verbose", Just('v'), "Enable verbose output")
+
+describe("OptionParser") do
+  it("parses long, short, typed, and flag options") do
+    match OPTION_PARSER.parse(["--name", "Alice", "-p", "8080", "-v"]) do
+      Ok(parsed) -> do
+        assert(parsed.value("name", "") == "Alice")
+        assert(parsed.integerValue("port") == Just(8080))
+        assert(parsed.flagEnabled?("verbose"))
+      end
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("accepts --name=value and preserves positional arguments") do
+    match OPTION_PARSER.parse(["run", "--name=Alice", "--", "--literal"]) do
+      Ok(parsed) -> do
+        assert(parsed.value("name", "") == "Alice")
+        assert(parsed.arguments == ["run", "--literal"])
+      end
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("fills defaults") do
+    match OPTION_PARSER.parse(["--name", "Alice"]) do
+      Ok(parsed) -> do
+        assert(parsed.value("port", "") == "3000")
+        assert(!parsed.flagEnabled?("verbose"))
+      end
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("reports unknown, missing, required, and invalid values") do
+    assert(OPTION_PARSER.parse(["--wat"]) == Error(UnknownOption("--wat")))
+    assert(OPTION_PARSER.parse(["--name"]) == Error(MissingValue("name")))
+    assert(OPTION_PARSER.parse(["--port", "7"]) == Error(MissingRequired("name")))
+    assert(OPTION_PARSER.parse(["--name", "A", "--port", "x"]) == Error(InvalidInteger("port", "x")))
+    assert(OPTION_PARSER.parse(["--name", "A", "--verbose=yes"]) == Error(UnexpectedValue("verbose")))
+  end
+
+  it("renders options in declaration order") do
+    let help = OPTION_PARSER.help
+    assert(help.contains?("testapp — A test CLI"))
+    assert(help.indexOf('-') != None)
+    assert(help.contains?("-n, --name"))
+    assert(help.contains?("(required)"))
+    assert(help.contains?("[default: 3000]"))
+  end
+end

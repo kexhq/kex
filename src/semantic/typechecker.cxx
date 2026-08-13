@@ -3713,6 +3713,13 @@ auto TypeChecker::inferBinaryOp(TokenType op, const TypePtr& left, const TypePtr
                     if (int id = varId(lhs); id >= 0) unifyVar(id, nc);
                     if (int id = varId(rhs); id >= 0) unifyVar(id, nc);
                     if (isConcrete(lhs)) return lhs;
+                    // A left operand that is UNKNOWN (as opposed to a type
+                    // variable the substitution can still learn about) makes
+                    // the right one no evidence at all: `3.meter ^ 2` is a
+                    // Measure, and typing it as the exponent's Integer sent
+                    // the following `.value` to Integer, where it became a
+                    // bogus arity error against an unrelated prelude method.
+                    if (lhsIsUnk) return Type::unknown();
                     if (isConcrete(rhs)) return rhs;
                     return resolve(lhs);
                 }
@@ -5292,6 +5299,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     }
 
     if (arityMatches.empty()) {
+        // A receiver whose type is not known proves nothing about arity. The
+        // NamedType permissive guard above never sees these, so without this
+        // an unrelated same-named method anywhere in the prelude turns every
+        // gradual field read into an error: `e.value` on the `Error(e)` of
+        // `Integer.parse` (a ParseError field) was reported as a bad call to
+        // OptionParser's `value/2` the moment OptionParser joined the prelude.
+        if (isMethodCall && !argTypes.empty()) {
+            auto receiver = resolve(argTypes.front());
+            if (std::holds_alternative<UnknownType>(receiver->kind) ||
+                std::holds_alternative<TypeVar>(receiver->kind))
+                return Type::unknown();
+        }
         error(loc, "`" + name + "` expects " + std::to_string((*sigs)[0].params.size()) +
               " argument(s), got " + std::to_string(argTypes.size()));
         return (*sigs)[0].result;

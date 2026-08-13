@@ -4,7 +4,29 @@
 -module(kex_intrinsic_process).
 -export(['send'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1]).
+          self/0, exit/2, register/2, whereis/1, run/2]).
+
+%% Execute directly (never through a shell) and capture output. Erlang ports
+%% combine stderr into stdout portably; the native walker can keep the streams
+%% separate, but callers must be prepared for BEAM's stderr field to be empty.
+run(Command, Args) ->
+    Executable = os:find_executable(unicode:characters_to_list(Command)),
+    case Executable of
+        false -> {'Error', <<"executable not found">>};
+        _ ->
+            Port = open_port({spawn_executable, Executable},
+                             [binary, exit_status, use_stdio, stderr_to_stdout,
+                              hide, {args, [unicode:characters_to_list(A) || A <- Args]}]),
+            collect_port(Port, [])
+    end.
+
+collect_port(Port, Chunks) ->
+    receive
+        {Port, {data, Data}} -> collect_port(Port, [Data | Chunks]);
+        {Port, {exit_status, Status}} ->
+            {'Ok', {'ProcessResult', Status,
+                    iolist_to_binary(lists:reverse(Chunks)), <<>>}}
+    end.
 
 %% pid.send(msg) — send a Kex-formatted message.
 'send'(Pid, Msg) -> erlang:send(Pid, {'kex_msg', Msg, erlang:self()}).

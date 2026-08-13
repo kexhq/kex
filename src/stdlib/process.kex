@@ -3,6 +3,18 @@
 # spawned process with an awaitable result.
 
 foul module Process do
+  # Run an executable directly with an argv vector. No shell is involved.
+  # Output is captured as UTF-8 strings; a non-zero child status is still a
+  # successful ProcessResult, while failure to start the child is Error.
+  run : String -> [String] -> Result<ProcessResult, String>
+  let run(command, args) = Kex.Intrinsic.Process.run(command, args)
+
+  exec : String -> [String] -> Integer
+  let exec(command, args) = match Process.run(command, args) do
+    Ok(result) -> result.exitCode
+    Error(_) -> 127
+  end
+
   # Returns the calling process's Pid.
   self : Pid
   let self = Kex.Intrinsic.Process.self
@@ -18,6 +30,12 @@ foul module Process do
   # Returns the Pid registered under +name+, or None.
   whereis : Atom -> Pid?
   let whereis(name) = Kex.Intrinsic.Process.whereis(name)
+end
+
+record ProcessResult do
+  exitCode : Integer
+  stdout : String
+  stderr : String
 end
 
 make Pid do

@@ -310,6 +310,7 @@ private:
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;
     auto registerProcessBuiltins() -> void;
+    auto registerDigestBuiltins() -> void;
     auto registerParserBuiltins() -> void;
     auto registerEvalBuiltins() -> void;
     auto registerHttpBuiltins() -> void;

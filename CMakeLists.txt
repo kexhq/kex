@@ -165,6 +165,7 @@ add_library(kex_lib
     src/interpreter/stdlib/stream.cxx
     src/interpreter/stdlib/map.cxx
     src/interpreter/stdlib/process.cxx
+    src/interpreter/stdlib/digest.cxx
     src/interpreter/stdlib/env.cxx
     src/interpreter/stdlib/math.cxx
     src/interpreter/stdlib/time.cxx

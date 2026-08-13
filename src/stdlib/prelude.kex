@@ -9,6 +9,7 @@ using Algebra
 using Bits
 using Blankable
 using Console
+using Digest
 using Enumerable
 using Env
 using Errorable
@@ -22,6 +23,7 @@ using Map
 using Math
 using Number
 using Optional
+using OptionParser
 using Parser
 using Process
 using Range

@@ -11,8 +11,8 @@
 
 namespace kex {
 
-inline constexpr std::array<std::string_view, 14> kPreludeTier0 = {
-    "algebra.kex", "bits.kex", "console.kex", "errorable.kex", "io.kex",
+inline constexpr std::array<std::string_view, 15> kPreludeTier0 = {
+    "algebra.kex", "bits.kex", "console.kex", "digest.kex", "errorable.kex", "io.kex",
     "kex.kex", "math.kex", "optional.kex", "process.kex",
     "range.kex", "stream.kex", "system.kex", "test.kex",
     "taggedvalidation.kex",
@@ -26,8 +26,9 @@ inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
 };
 // time.kex comes after units.kex: Date/Time/DateTime are built on the
 // Duration record the unit system declares.
-inline constexpr std::array<std::string_view, 5> kPreludeTier3 = {
+inline constexpr std::array<std::string_view, 6> kPreludeTier3 = {
     "list.kex", "map.kex", "units.kex", "time.kex", "type.kex",
+    "optionparser.kex",
 };
 
 inline auto orderPreludeSourcesByTier(const std::vector<std::string>& files)
