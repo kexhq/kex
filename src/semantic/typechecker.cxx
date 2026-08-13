@@ -1023,8 +1023,27 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
 
     std::vector<Signature> provisional;
     for (const auto& clause : def.clauses) {
-        if (hasArity(clause.params.size())) continue;
         std::unordered_map<std::string, TypePtr> genericVars;
+        if (hasArity(clause.params.size())) {
+            // Retain an annotated sibling alongside an earlier untyped
+            // provisional clause. Do not mutate the earlier signature: these
+            // may be genuine same-arity overloads. Literal clauses consult
+            // this candidate narrowly while they are checked below.
+            const bool annotated = std::any_of(
+                clause.params.begin(), clause.params.end(),
+                [](const auto& param) { return bool(param.type); });
+            if (annotated) {
+                std::vector<TypePtr> paramTypes;
+                for (const auto& param : clause.params)
+                    paramTypes.push_back(param.type
+                        ? resolveTypeExpr(**param.type, genericVars)
+                        : freshTypeVar());
+                provisional.push_back(Signature{
+                    def.name, std::move(paramTypes), freshTypeVar(), false,
+                    clause.params.size()});
+            }
+            continue;
+        }
         std::vector<TypePtr> paramTypes;
         for (const auto& param : clause.params) {
             paramTypes.push_back(
@@ -1590,6 +1609,41 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
                     : freshTypeVar();
     defineVar(def.name, returnType);
 
+    // A concrete annotation on one clause is the public parameter contract
+    // for sibling pattern clauses too (`factorial(0)` beside
+    // `factorial(n: Int)`). A literal by itself is only a match condition,
+    // however: numeric patterns deliberately match across the Integer/Float
+    // tower, so `classify(0)` beside an unannotated catch-all must not narrow
+    // the whole function to Integer.
+    std::vector<TypePtr> siblingParamContracts;
+    for (const auto& clause : def.clauses) {
+        if (siblingParamContracts.size() < clause.params.size())
+            siblingParamContracts.resize(clause.params.size());
+        std::unordered_map<std::string, TypePtr> clauseGenerics;
+        for (size_t pi = 0; pi < clause.params.size(); ++pi)
+            if (!siblingParamContracts[pi] && clause.params[pi].type)
+                siblingParamContracts[pi] = resolveTypeExpr(
+                    **clause.params[pi].type, clauseGenerics);
+    }
+    if (auto provisional = m_userSignatures.find(def.name);
+        provisional != m_userSignatures.end())
+        for (const auto& signature : provisional->second) {
+            if (signature.params.size() != siblingParamContracts.size())
+                continue;
+            for (size_t pi = 0; pi < signature.params.size(); ++pi)
+                if (!siblingParamContracts[pi] &&
+                    std::any_of(def.clauses.begin(), def.clauses.end(),
+                        [&](const auto& clause) {
+                            return pi < clause.params.size() &&
+                                clause.params[pi].pattern &&
+                                std::holds_alternative<ast::LiteralPattern>(
+                                    (*clause.params[pi].pattern)->kind);
+                        }) &&
+                    !std::holds_alternative<TypeVar>(signature.params[pi]->kind) &&
+                    !std::holds_alternative<UnknownType>(signature.params[pi]->kind))
+                    siblingParamContracts[pi] = signature.params[pi];
+        }
+
     std::vector<Signature> signatures;
     for (size_t ci = 0; ci < def.clauses.size(); ci++) {
         const auto& clause = def.clauses[ci];
@@ -1603,28 +1657,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             TypePtr paramType;
             if (declared && pi < declared->params.size() && !param.type) {
                 paramType = declared->params[pi];
+            } else if (!param.type && pi < siblingParamContracts.size() &&
+                       siblingParamContracts[pi]) {
+                paramType = siblingParamContracts[pi];
             } else {
                 paramType = param.type ? resolveTypeExpr(**param.type, genericVars) : freshTypeVar();
             }
-            // A literal clause head is itself a complete type constraint.
-            // `fib(0)` and `fib(1)` accept Integers, not an unconstrained A;
-            // leaving their fresh variables untouched made editor signatures
-            // claim `A -> Integer` even though those clauses cannot match A.
-            if (!param.type && !declared && param.pattern)
-                if (const auto* literal =
-                        std::get_if<ast::LiteralPattern>(&(*param.pattern)->kind)) {
-                    switch (literal->literal.type) {
-                    case TokenType::Integer: paramType = Type::integer(); break;
-                    case TokenType::Float: paramType = Type::float64(); break;
-                    case TokenType::String:
-                    case TokenType::RawString: paramType = Type::string(); break;
-                    case TokenType::Char: paramType = Type::charT(); break;
-                    case TokenType::True:
-                    case TokenType::False: paramType = Type::boolean(); break;
-                    case TokenType::Atom: paramType = Type::atom(); break;
-                    default: break;
-                    }
-                }
             paramTypes.push_back(paramType);
             if (param.name.has_value() && *param.name != "_") {
                 defineVar(*param.name, paramType);
@@ -3518,7 +3556,16 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         });
                     if (!duplicate) distinct.push_back(&signature);
                 }
-                if (distinct.size() > 1) {
+                const bool sameArityAmbiguity = std::any_of(
+                    distinct.begin(), distinct.end(), [&](const Signature* left) {
+                        return std::any_of(
+                            distinct.begin(), distinct.end(),
+                            [&](const Signature* right) {
+                                return left != right &&
+                                    left->params.size() == right->params.size();
+                            });
+                    });
+                if (sameArityAmbiguity) {
                     std::string message = "Cannot reference overloaded function `" +
                         node.name + "` without disambiguating arguments";
                     for (const auto* signature : distinct)
