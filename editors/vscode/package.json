@@ -12,6 +12,10 @@
   "main": "./out/extension.js",
   "files": ["out/**", "syntaxes/**", "language-configuration.json", "README.md", "LICENSE"],
   "contributes": {
+    "commands": [{
+      "command": "kex.restartLanguageServer",
+      "title": "Kex: Restart Language Server"
+    }],
     "languages": [{
       "id": "kex",
       "aliases": ["Kex", "kex"],

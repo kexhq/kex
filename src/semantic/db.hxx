@@ -74,6 +74,8 @@ public:
     auto hasModule(const std::string& moduleName) const -> bool;
     auto symbolInModule(const std::string& moduleName,
                         const std::string& name) -> SymbolInfo*;
+    auto receiverSymbol(const std::string& receiver,
+                        const std::string& name) const -> const SymbolInfo*;
     auto isModuleLoading(const std::string& moduleName,
                          const std::string& fromFile = "") const -> bool;
     auto shadowedModulePaths(const std::string& moduleName) const

@@ -3,6 +3,8 @@
 
 #include <sstream>
 #include <string>
+#include <filesystem>
+#include <fstream>
 
 using namespace test;
 
@@ -11,6 +13,30 @@ namespace {
 auto frame(const std::string& json) -> std::string {
     return "Content-Length: " + std::to_string(json.size()) +
            "\r\n\r\n" + json;
+}
+
+auto responseForId(const std::string& output, int id) -> std::string {
+    const auto needle = "\"id\":" + std::to_string(id);
+    size_t cursor = 0;
+    while ((cursor = output.find("\r\n\r\n", cursor)) != std::string::npos) {
+        const auto body = cursor + 4;
+        const auto next = output.find("Content-Length:", body);
+        auto message = output.substr(body, next == std::string::npos
+            ? std::string::npos : next - body);
+        if (message.find(needle) != std::string::npos) return message;
+        cursor = body;
+    }
+    return {};
+}
+
+auto occurrences(const std::string& text, std::string_view needle) -> size_t {
+    size_t count = 0;
+    size_t cursor = 0;
+    while ((cursor = text.find(needle, cursor)) != std::string::npos) {
+        ++count;
+        cursor += needle.size();
+    }
+    return count;
 }
 
 } // namespace
@@ -198,6 +224,31 @@ int main() {
             assertTrue(result.find("You : String -> Hello") != std::string::npos,
                        "ADT constructor hover omitted its full type");
         });
+        it("does not attach same-named stdlib docs to a local binding", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-wc.kex","languageId":"kex","version":1,"text":"main do\n  let lines = [\"one\", \"two\"]\n  let words = lines.map { |line| line }\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-wc.kex"},"position":{"line":2,"character":16}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto hover = responseForId(output.str(), 2);
+            assertTrue(hover.find("lines : [String]") != std::string::npos,
+                       "local lines hover omitted its inferred list type");
+            assertTrue(hover.find("Splits into lines") == std::string::npos &&
+                       hover.find("String.lines") == std::string::npos,
+                       "local lines hover included String.lines documentation");
+        });
         it("uses imported signatures for standard-library method hovers", []() {
             std::string messages;
             messages += frame(
@@ -362,9 +413,11 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex","languageId":"kex","version":1,"text":"foul readAll(file: FileHandle<CanRead, W>) -> String do\n  file.read().or(\"\")\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex","languageId":"kex","version":1,"text":"foul readAll(file: FileHandle<CanRead, W>) -> String do\n  file.read().or(\"\")\nend\nmain do\n  let maybe: String? = None\n  IO.printLine(\"value: ${maybe.or(\"\")}\")\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex"},"position":{"line":1,"character":15}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex"},"position":{"line":5,"character":31}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
             messages += frame(
@@ -376,6 +429,8 @@ int main() {
             const auto result = output.str();
             assertTrue(result.find("Unwraps the value") != std::string::npos,
                        "Optional.or hover omitted the selected fallback documentation");
+            assertEqual(occurrences(result, "Selected overload"), size_t{2},
+                        "interpolated Optional.or lost its selected overload");
             assertTrue(result.find("Bitwise OR") == std::string::npos &&
                        result.find("Bits.or") == std::string::npos,
                        "Optional.or hover used Bits.or documentation");
@@ -563,6 +618,113 @@ int main() {
                            R"("uri":"file:///tmp/kex-lsp-parameter-dot.kex")") !=
                            std::string::npos,
                        "parameter navigation did not resolve to its declaration");
+        });
+        it("finds semantic and shadow-safe local references", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex","languageId":"kex","version":1,"text":"let double(value: Integer) = value + value\nmain do\n  let value = 2\n  IO.inspect(value)\n  IO.inspect(double(value))\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex"},"position":{"line":3,"character":14},"context":{"includeDeclaration":true}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex"},"position":{"line":4,"character":14},"context":{"includeDeclaration":true}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-references.kex"},"position":{"line":4,"character":14},"context":{"includeDeclaration":false}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto result = output.str();
+            assertTrue(result.find(R"("referencesProvider":true)") !=
+                           std::string::npos,
+                       "server did not advertise find-references support");
+            const auto local = responseForId(result, 2);
+            assertEqual(occurrences(local, R"("uri":)"), size_t{3},
+                        "local references crossed into the shadowed parameter");
+            assertTrue(local.find(
+                           R"("start":{"character":6,"line":2})") !=
+                           std::string::npos,
+                       "local references omitted the declaration");
+            const auto globalWithDeclaration = responseForId(result, 3);
+            assertEqual(occurrences(globalWithDeclaration, R"("uri":)"),
+                        size_t{2},
+                        "function references omitted its call or declaration");
+            const auto globalWithoutDeclaration = responseForId(result, 4);
+            assertEqual(occurrences(globalWithoutDeclaration, R"("uri":)"),
+                        size_t{1},
+                        "includeDeclaration=false still returned the definition");
+        });
+        it("keeps receiver overload references separate", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-receiver-references.kex","languageId":"kex","version":1,"text":"main do\n  let first: String? = None\n  let second: String? = None\n  first.or(\"\")\n  second.or(\"\")\n  Bits.or(1, 2)\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-receiver-references.kex"},"position":{"line":3,"character":9},"context":{"includeDeclaration":false}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto references = responseForId(output.str(), 2);
+            assertEqual(occurrences(references, R"("uri":)"), size_t{2},
+                        "Optional.or references included Bits.or");
+            assertTrue(references.find(R"("line":5)") == std::string::npos,
+                       "receiver references included a different overload owner");
+        });
+        it("finds references in unopened workspace files", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-reference-workspace";
+            fs::create_directories(root);
+            {
+                std::ofstream tools(root / "tools.kex");
+                tools << "module Tools do\n"
+                         "  let double(value: Integer) = value * 2\n"
+                         "end\n";
+                std::ofstream consumer(root / "z_consumer.kex");
+                consumer << "using Tools\n"
+                            "main do\n"
+                            "  IO.inspect(double(21))\n"
+                            "end\n";
+            }
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-reference-workspace","capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-reference-workspace/tools.kex","languageId":"kex","version":1,"text":"module Tools do\n  let double(value: Integer) = value * 2\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/references","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-reference-workspace/tools.kex"},"position":{"line":1,"character":7},"context":{"includeDeclaration":true}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto references = responseForId(output.str(), 2);
+            assertEqual(occurrences(references, R"("uri":)"), size_t{2},
+                        "unopened workspace reference was not indexed cleanly");
+            assertTrue(references.find("z_consumer.kex") != std::string::npos,
+                       "find references omitted the unopened consumer file");
+            fs::remove(root / "tools.kex");
+            fs::remove(root / "z_consumer.kex");
+            fs::remove(root);
         });
     });
     return runAll();

@@ -1227,7 +1227,9 @@ public:
           m_standardDocumentation(standardLibraryDocumentation()),
           m_standardParameterNames(standardLibraryParameterNames()) {
         m_db.setImportedInterfaces(&m_interfaces);
+        m_referenceDb.setImportedInterfaces(&m_interfaces);
         loadDiscoveredPrelude(m_db);
+        loadDiscoveredPrelude(m_referenceDb);
         registerHandlers();
     }
 
@@ -1237,11 +1239,24 @@ public:
     }
 
 private:
-    auto initialize(::lsp::InitializeParams&&) -> ::lsp::requests::Initialize::Result {
+    struct IndexedCallReference {
+        std::string ownerKey;
+        SourceLocation location;
+    };
+
+    auto initialize(::lsp::InitializeParams&& params)
+        -> ::lsp::requests::Initialize::Result {
         if (m_initialized)
             throw ::lsp::RequestError(::lsp::MessageError::InvalidRequest,
                                       "Kex language server is already initialized");
         m_initialized = true;
+        if (params.workspaceFolders && !params.workspaceFolders->isNull()) {
+            for (const auto& folder : params.workspaceFolders->value())
+                if (folder.uri.isFileUri())
+                    m_workspaceRoots.push_back(folder.uri.fsPath());
+        } else if (!params.rootUri.isNull() && params.rootUri->isFileUri()) {
+            m_workspaceRoots.push_back(params.rootUri->fsPath());
+        }
         return {
             .capabilities = {
                 .positionEncoding = ::lsp::PositionEncodingKind::UTF16,
@@ -1255,6 +1270,7 @@ private:
                 },
                 .hoverProvider = true,
                 .definitionProvider = true,
+                .referencesProvider = true,
             },
             .serverInfo = ::lsp::ServerInfo{
                 .name = "kex",
@@ -1272,6 +1288,151 @@ private:
                                       "Kex language server has shut down");
     }
 
+    void ensureReferenceIndex(std::string_view requestedName) {
+        if ((m_referenceIndexReady && m_referenceIndexWord == requestedName) ||
+            m_workspaceRoots.empty())
+            return;
+        for (const auto& path : m_referenceIndexedPaths)
+            m_referenceDb.removeFile(path);
+        m_referenceIndexedPaths.clear();
+        m_indexedCallReferences.clear();
+        m_referenceIndexWord = std::string(requestedName);
+        std::vector<std::string> moduleRoots;
+        std::vector<std::pair<std::string, std::string>> sources;
+        for (const auto& root : m_workspaceRoots) {
+            moduleRoots.push_back(root);
+            for (const auto* child : {"lib", "src"}) {
+                const auto candidate = std::filesystem::path(root) / child;
+                std::error_code error;
+                if (std::filesystem::is_directory(candidate, error) && !error)
+                    moduleRoots.push_back(candidate.string());
+            }
+        }
+        for (const auto& root : standardLibraryModuleRoots())
+            if (std::find(moduleRoots.begin(), moduleRoots.end(), root) ==
+                moduleRoots.end())
+                moduleRoots.push_back(root);
+        m_referenceDb.setModuleRoots(std::move(moduleRoots));
+
+        const std::unordered_set<std::string> ignored{
+            ".git", ".claude", ".opencode", "build", "build-wasm",
+            "node_modules", "third_party", "Testing"};
+        std::unordered_set<std::string> preindexedPaths;
+        for (const auto& path : standardLibrarySourceFiles())
+            preindexedPaths.insert(std::filesystem::path(path).lexically_normal().string());
+        for (const auto& path : preludeSourceFiles())
+            preindexedPaths.insert(std::filesystem::path(path).lexically_normal().string());
+        for (const auto& root : m_workspaceRoots) {
+            std::error_code error;
+            std::filesystem::recursive_directory_iterator iterator(
+                root, std::filesystem::directory_options::skip_permission_denied,
+                error);
+            const std::filesystem::recursive_directory_iterator end;
+            while (!error && iterator != end) {
+                const auto entry = *iterator;
+                if (entry.is_directory(error) &&
+                    ignored.count(entry.path().filename().string())) {
+                    iterator.disable_recursion_pending();
+                } else if (entry.is_regular_file(error) &&
+                           entry.path().extension() == ".kex") {
+                    if (preindexedPaths.count(
+                            entry.path().lexically_normal().string())) {
+                        iterator.increment(error);
+                        continue;
+                    }
+                    std::ifstream input(entry.path(), std::ios::binary);
+                    if (input) {
+                        std::string source(
+                            (std::istreambuf_iterator<char>(input)),
+                            std::istreambuf_iterator<char>());
+                        const auto path = entry.path().string();
+                        for (const auto& [_, open] : m_documents)
+                            if (open.path == path) {
+                                source = open.text;
+                                break;
+                            }
+                        auto containsIdentifier = [&] {
+                            auto position = source.find(requestedName);
+                            auto identifier = [](unsigned char c) {
+                                return std::isalnum(c) || c == '_' ||
+                                       c == '?' || c == '!';
+                            };
+                            while (position != std::string::npos) {
+                                const auto after = position + requestedName.size();
+                                if ((position == 0 || !identifier(
+                                         static_cast<unsigned char>(
+                                             source[position - 1]))) &&
+                                    (after >= source.size() || !identifier(
+                                         static_cast<unsigned char>(
+                                             source[after]))))
+                                    return true;
+                                position = source.find(requestedName,
+                                                       position + 1);
+                            }
+                            return false;
+                        };
+                        if (!containsIdentifier()) {
+                            iterator.increment(error);
+                            continue;
+                        }
+                        sources.emplace_back(path, std::move(source));
+                    }
+                }
+                iterator.increment(error);
+            }
+        }
+        // Collect module declarations before their consumers so references
+        // attach to the final indexed SymbolInfo rather than a transient
+        // symbol loaded on demand by `using`.
+        std::stable_sort(sources.begin(), sources.end(),
+            [](const auto& left, const auto& right) {
+                const bool leftModule = left.second.find("module ") !=
+                    std::string::npos;
+                const bool rightModule = right.second.find("module ") !=
+                    std::string::npos;
+                return leftModule != rightModule ? leftModule :
+                    left.first < right.first;
+            });
+        if (sources.size() > 64) {
+            sources.erase(std::remove_if(
+                sources.begin(), sources.end(), [&](const auto& candidate) {
+                    return std::none_of(
+                        m_documents.begin(), m_documents.end(),
+                        [&](const auto& open) {
+                            return open.second.path == candidate.first;
+                        });
+                }), sources.end());
+        }
+        for (auto& [path, source] : sources) {
+            m_referenceDb.updateFile(path, std::move(source));
+            m_referenceIndexedPaths.push_back(path);
+        }
+        for (const auto& [path, _] : sources) {
+            auto* state = m_referenceDb.fileState(path);
+            if (!state) continue;
+            semantic::Analyzer analyzer(&m_interfaces);
+            analyzer.analyze(state->ast);
+            for (const auto& [call, target] : analyzer.resolvedCalls()) {
+                if (!call || target.sourceModule.empty()) continue;
+                for (const auto& [expression, _] :
+                     analyzer.selectedCallSignatures()) {
+                    const auto* method = expression
+                        ? std::get_if<ast::MethodCall>(&expression->kind)
+                        : nullptr;
+                    if (method != call) continue;
+                    if (auto location = callNameLocation(
+                            state->source, *expression, call->method, true))
+                        m_indexedCallReferences.push_back({
+                            target.sourceModule + "." + call->method,
+                            *location,
+                        });
+                    break;
+                }
+            }
+        }
+        m_referenceIndexReady = true;
+    }
+
     void update(const ::lsp::DocumentUri& uri, std::string text, int version) {
         verifyInitialized();
         const auto key = uri.toString();
@@ -1286,6 +1447,8 @@ private:
         document.documentation = sourceDocumentation(document.text);
         m_db.setModuleRoots(moduleRootsFor(path));
         m_db.updateFile(path, document.text, specCompanions(path));
+        m_referenceIndexReady = false;
+        m_referenceIndexWord.clear();
         publishDiagnostics(uri, document);
     }
 
@@ -1710,6 +1873,19 @@ private:
         const semantic::SymbolInfo* symbol = m_db.symbolAt(
             document.path, params.position.line + 1, word.byteColumn);
         const bool resolvedSymbolAtPosition = symbol != nullptr;
+        size_t hoverLineStart = 0;
+        for (unsigned int current = 0; current < params.position.line;
+             ++current) {
+            const auto newline = document.text.find('\n', hoverLineStart);
+            if (newline == std::string::npos) break;
+            hoverLineStart = newline + 1;
+        }
+        const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
+        const bool lexicalReference = !resolvedSymbolAtPosition &&
+            moduleQualifier.empty() &&
+            sourceLocalDefinition(
+                document.text, document.path, word.text,
+                hoverWordOffset ? hoverWordOffset - 1 : 0).has_value();
         const bool symbolDefinitionAtPosition = symbol &&
             symbol->definition.file == document.path &&
             symbol->definition.line == static_cast<int>(params.position.line + 1) &&
@@ -1917,7 +2093,7 @@ private:
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty()) {
+        if (documentation.empty() && !lexicalReference) {
             const auto standardName = moduleQualifier.empty()
                 ? word.text : moduleQualifier + "." + word.text;
             if (auto docs = m_standardDocumentation.find(standardName);
@@ -2023,6 +2199,199 @@ private:
         }};
     }
 
+    auto references(::lsp::ReferenceParams&& params)
+        -> ::lsp::requests::TextDocument_References::Result {
+        verifyInitialized();
+        const auto key = params.textDocument.uri.toString();
+        const auto found = m_documents.find(key);
+        if (found == m_documents.end()) return ::lsp::Array<::lsp::Location>{};
+        const auto& document = found->second;
+        const auto word = wordAt(document.text, params.position.line,
+                                 params.position.character);
+        if (word.text.empty()) return ::lsp::Array<::lsp::Location>{};
+
+        auto locationFor = [&](const SourceLocation& location,
+                               std::string_view name) -> ::lsp::Location {
+            const auto* state = m_db.fileState(std::string(location.file));
+            if (!state)
+                state = m_referenceDb.fileState(std::string(location.file));
+            const std::string* source = state ? &state->source : nullptr;
+            auto end = location;
+            end.column += static_cast<int>(name.size());
+            return {
+                .uri = ::lsp::Uri::fileUriFromPath(location.file),
+                .range = {
+                    .start = protocolPosition(location, source),
+                    .end = protocolPosition(end, source),
+                },
+            };
+        };
+        auto sameLocation = [](const SourceLocation& left,
+                               const SourceLocation& right) {
+            return left.file == right.file && left.line == right.line &&
+                   left.column == right.column;
+        };
+
+        const auto qualifier = moduleQualifierBeforeWord(
+            document.text, params.position.line, word.byteColumn);
+        const semantic::SymbolInfo* symbol = m_db.symbolAt(
+            document.path, params.position.line + 1, word.byteColumn);
+        if (!qualifier.empty()) {
+            symbol = m_db.symbolInModule(qualifier, word.text);
+            if (!symbol)
+                if (const auto dot = qualifier.rfind('.');
+                    dot != std::string::npos)
+                    symbol = m_db.symbolInModule(
+                        qualifier.substr(dot + 1), word.text);
+        }
+
+        ensureReferenceIndex(word.text);
+        if (m_referenceIndexReady) {
+            const semantic::SymbolInfo* indexed = nullptr;
+            if (symbol) {
+                if (!symbol->module.empty())
+                    indexed = m_referenceDb.symbolInModule(
+                        symbol->module, symbol->name);
+                else if (!symbol->makeTarget.empty())
+                    indexed = m_referenceDb.receiverSymbol(
+                        symbol->makeTarget, symbol->name);
+                else
+                    indexed = m_referenceDb.findSymbol(
+                        symbol->name, std::string(symbol->definition.file));
+            } else if (!qualifier.empty()) {
+                indexed = m_referenceDb.symbolInModule(qualifier, word.text);
+                if (!indexed)
+                    if (const auto dot = qualifier.rfind('.');
+                        dot != std::string::npos)
+                        indexed = m_referenceDb.symbolInModule(
+                            qualifier.substr(dot + 1), word.text);
+            }
+            if (indexed) symbol = indexed;
+        }
+
+        ::lsp::Array<::lsp::Location> result;
+        std::unordered_set<std::string> seen;
+        auto append = [&](const SourceLocation& location) {
+            const auto identity = std::string(location.file) + ":" +
+                std::to_string(location.line) + ":" +
+                std::to_string(location.column);
+            if (seen.insert(identity).second)
+                result.push_back(locationFor(location, word.text));
+        };
+        auto spellsWord = [&](const SourceLocation& location) {
+            const auto* state = m_db.fileState(std::string(location.file));
+            if (!state)
+                state = m_referenceDb.fileState(std::string(location.file));
+            if (!state || location.line < 1 || location.column < 1) return false;
+            size_t offset = 0;
+            for (int line = 1; line < location.line; ++line) {
+                const auto newline = state->source.find('\n', offset);
+                if (newline == std::string::npos) return false;
+                offset = newline + 1;
+            }
+            offset += static_cast<size_t>(location.column - 1);
+            return offset + word.text.size() <= state->source.size() &&
+                   state->source.compare(offset, word.text.size(), word.text) == 0;
+        };
+        if (symbol) {
+            if (params.context.includeDeclaration) append(symbol->definition);
+            for (const auto& reference : symbol->references)
+                if (spellsWord(reference)) append(reference);
+
+            // Qualified method calls are resolved by the type checker rather
+            // than ResolvePass, so supplement the symbol index from open,
+            // unsaved documents using the exact module qualifier.
+            if (!qualifier.empty())
+                for (const auto& [_, open] : m_documents) {
+                    Lexer lexer(open.text, open.path);
+                    for (const auto& token : lexer.tokenizeAll()) {
+                        if ((token.type != TokenType::LowerIdent &&
+                             token.type != TokenType::UpperIdent) ||
+                            token.value != word.text)
+                            continue;
+                        if (moduleQualifierBeforeWord(
+                                open.text,
+                                static_cast<unsigned int>(token.location.line - 1),
+                                static_cast<uint32_t>(token.location.column)) ==
+                            qualifier)
+                            append(token.location);
+                    }
+                }
+            if (!qualifier.empty()) {
+                const auto ownerKey = qualifier + "." + word.text;
+                for (const auto& reference : m_indexedCallReferences)
+                    if (reference.ownerKey == ownerKey)
+                        append(reference.location);
+            }
+            return result;
+        }
+
+
+        // Imported receiver methods have no source SymbolInfo in the current
+        // compilation unit. The analyzer still records the exact selected
+        // owner for every call; use it to keep overload families such as
+        // Optional.or and Bits.or separate.
+        const Document::HoverEntry* selectedCall = nullptr;
+        for (const auto& entry : document.selectedCallEntries)
+            if (entry.line == params.position.line + 1 &&
+                word.byteColumn >= entry.byteColumn &&
+                word.byteColumn < entry.byteColumn + entry.byteLength) {
+                selectedCall = &entry;
+                break;
+            }
+        if (selectedCall && !selectedCall->documentationKey.empty()) {
+            const auto separator = selectedCall->documentationKey.rfind('.');
+            if (params.context.includeDeclaration &&
+                separator != std::string::npos)
+                if (const auto* declaration = m_db.receiverSymbol(
+                        selectedCall->documentationKey.substr(0, separator),
+                        word.text))
+                    append(declaration->definition);
+            for (const auto& [_, open] : m_documents)
+                for (const auto& entry : open.selectedCallEntries)
+                    if (entry.documentationKey ==
+                        selectedCall->documentationKey)
+                        append(SourceLocation{
+                            open.path, static_cast<int>(entry.line),
+                            static_cast<int>(entry.byteColumn)});
+            for (const auto& reference : m_indexedCallReferences)
+                if (reference.ownerKey == selectedCall->documentationKey)
+                    append(reference.location);
+            return result;
+        }
+
+        size_t lineStart = 0;
+        for (unsigned int current = 0; current < params.position.line;
+             ++current) {
+            const auto newline = document.text.find('\n', lineStart);
+            if (newline == std::string::npos) break;
+            lineStart = newline + 1;
+        }
+        const auto wordOffset = lineStart + word.byteColumn - 1;
+        auto declaration = sourceLocalDefinition(
+            document.text, document.path, word.text,
+            std::min(document.text.size() - 1,
+                     wordOffset + word.text.size()));
+        if (!declaration) return result;
+        if (params.context.includeDeclaration) append(*declaration);
+
+        Lexer lexer(document.text, document.path);
+        for (const auto& token : lexer.tokenizeAll()) {
+            if ((token.type != TokenType::LowerIdent &&
+                 token.type != TokenType::UpperIdent) ||
+                token.value != word.text || token.startOffset < 0)
+                continue;
+            if (sameLocation(token.location, *declaration)) continue;
+            const auto before = token.startOffset == 0
+                ? 0 : static_cast<size_t>(token.startOffset - 1);
+            if (auto owner = sourceLocalDefinition(
+                    document.text, document.path, word.text, before);
+                owner && sameLocation(*owner, *declaration))
+                append(token.location);
+        }
+        return result;
+    }
+
     void registerHandlers() {
         m_handler
             .add<::lsp::requests::Initialize>(
@@ -2063,6 +2432,8 @@ private:
                     if (auto found = m_documents.find(key); found != m_documents.end()) {
                         m_db.removeFile(found->second.path);
                         m_documents.erase(found);
+                        m_referenceIndexReady = false;
+                        m_referenceIndexWord.clear();
                     }
                     m_handler.sendNotification<
                         ::lsp::notifications::TextDocument_PublishDiagnostics>({
@@ -2081,6 +2452,10 @@ private:
             .add<::lsp::requests::TextDocument_Definition>(
                 [this](::lsp::DefinitionParams&& params) {
                     return definition(std::move(params));
+                })
+            .add<::lsp::requests::TextDocument_References>(
+                [this](::lsp::ReferenceParams&& params) {
+                    return references(std::move(params));
                 });
     }
 
@@ -2093,7 +2468,13 @@ private:
     std::unordered_map<std::string, std::vector<std::vector<std::string>>>
         m_standardParameterNames;
     semantic::SemanticDB m_db;
+    semantic::SemanticDB m_referenceDb;
     std::unordered_map<std::string, Document> m_documents;
+    std::vector<std::string> m_workspaceRoots;
+    std::vector<IndexedCallReference> m_indexedCallReferences;
+    std::vector<std::string> m_referenceIndexedPaths;
+    bool m_referenceIndexReady = false;
+    std::string m_referenceIndexWord;
     bool m_running = true;
     bool m_initialized = false;
     bool m_cleanShutdown = false;

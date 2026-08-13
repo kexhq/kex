@@ -20,3 +20,7 @@ kex --lsp
 ```
 
 It communicates over standard input/output using LSP `Content-Length` frames.
+
+When the configured executable is inside the workspace (for example
+`build/kex`), rebuilding it automatically restarts the language server. You can
+also run **Kex: Restart Language Server** from the command palette.

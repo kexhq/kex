@@ -192,6 +192,16 @@ auto SemanticDB::symbolInModule(const std::string& moduleName,
     return nullptr;
 }
 
+auto SemanticDB::receiverSymbol(const std::string& receiver,
+                                const std::string& name) const
+    -> const SymbolInfo* {
+    for (const auto& [_, state] : m_files)
+        for (const auto& symbol : state.symbols)
+            if (symbol.name == name && symbol.makeTarget == receiver)
+                return &symbol;
+    return nullptr;
+}
+
 auto SemanticDB::isModuleLoading(const std::string& moduleName,
                                  const std::string& fromFile) const -> bool {
     if (m_loadingModules.count(moduleName)) return true;
