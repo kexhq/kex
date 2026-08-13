@@ -1,0 +1,9 @@
+describe("Digest") do
+  it("computes SHA-256 as lowercase hex") do
+    assert(Digest.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+  end
+
+  it("returns None for a missing file") do
+    assert(Digest.fileSha256("/this/path/does/not/exist") == None)
+  end
+end

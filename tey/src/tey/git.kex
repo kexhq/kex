@@ -1,0 +1,26 @@
+foul module Tey.Git
+  let execute(args: [String]) -> Result<ProcessResult, String> do
+    match Process.run("git", args) do
+      Error(error) -> Error(error)
+      Ok(result) -> result.exitCode == 0 then Ok(result) else Error(result.stderr + result.stdout)
+    end
+  end
+
+  let pinRef(url: String, selector: String, requested: String) -> Result<(String, String), String> do
+    let refName = match selector do
+      "tag" -> "refs/tags/${requested}^{}"
+      "branch" -> "refs/heads/${requested}"
+      _ -> requested
+    end
+    match Tey.Git.execute(["ls-remote", url, refName]) do
+      Error(error) -> Error(error)
+      Ok(result) -> do
+        let line = result.stdout.lines.first.or("")
+        let commit = line.split("\t").first.or("")
+        if commit == "" && selector == "tag"
+          return Tey.Git.pinRef(url, "ref", "refs/tags/${requested}")
+        end
+        commit == "" then Error("git ref '${requested}' was not found for ${url}") else Ok((requested, commit))
+      end
+    end
+  end

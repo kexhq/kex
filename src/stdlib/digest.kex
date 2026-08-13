@@ -1,0 +1,9 @@
+# Cryptographic content digests. Hex strings are used at the public boundary
+# so Kex programs never need to handle backend-specific binary values.
+module Digest do
+  sha256 : String -> String
+  let sha256(content) = Kex.Intrinsic.Digest.sha256(content)
+
+  fileSha256 : String -> String?
+  let fileSha256(path) = Kex.Intrinsic.Digest.fileSha256(path)
+end

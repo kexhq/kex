@@ -1,0 +1,9 @@
+#!/bin/sh
+set -eu
+
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PREFIX=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
+TEY_EBIN=${TEY_EBIN:-"$PREFIX/lib/kex/tey/ebin"}
+exec erl -noshell -pa "$TEY_EBIN" \
+  -eval 'io:setopts(standard_io, [{encoding, unicode}]), io:setopts(standard_error, [{encoding, unicode}]), try kex_main:main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) catch _:Reason:_ -> io:format(standard_error, "tey: ~p~n", [Reason]), halt(1) end' \
+  -extra "$@"

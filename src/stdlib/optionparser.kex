@@ -1,0 +1,186 @@
+# Declarative command-line parsing shared by Kex tools and applications.
+type OptionKind = StringValue | IntegerValue | FlagValue
+
+record OptionSpec do
+  long : String
+  short : Char? = None
+  kind : OptionKind = StringValue
+  description : String = ""
+  default : String? = None
+  required? : Bool = false
+end
+
+record OptionConfig do
+  name : String = "app"
+  description : String = ""
+  options : [OptionSpec] = []
+end
+
+record ParsedOptions do
+  values : { String: String }
+  arguments : [String]
+end
+
+type OptionParseError = UnknownOption(String)
+                      | MissingValue(String)
+                      | UnexpectedValue(String)
+                      | MissingRequired(String)
+                      | InvalidInteger(String, String)
+
+make ParsedOptions do
+  let value(name: String) -> String? = @values.get(name)
+  let value(name: String, default: String) -> String = @values.get(name, default)
+  let flagEnabled?(name: String) -> Bool = @values.get(name, "false") == "true"
+  let integerValue(name: String) -> Integer? do
+    match @values.get(name) do
+      None -> None
+      Just(value) -> match Integer.parse(value) do
+        Ok(number) -> Just(number)
+        Error(_) -> None
+      end
+    end
+  end
+end
+
+make OptionConfig do
+  let string(long: String, short: Char?, description: String,
+                   default: String?, required?: Bool) -> OptionConfig do
+    let option = OptionSpec { long: long, short: short, kind: StringValue,
+                              description: description, default: default,
+                              required?: required? }
+    OptionConfig { name: @name, description: @description,
+                   options: [...@options, option] }
+  end
+
+  let integer(long: String, short: Char?, description: String,
+                    default: String?, required?: Bool) -> OptionConfig do
+    let option = OptionSpec { long: long, short: short, kind: IntegerValue,
+                              description: description, default: default,
+                              required?: required? }
+    OptionConfig { name: @name, description: @description,
+                   options: [...@options, option] }
+  end
+
+  let flag(long: String, short: Char?, description: String) -> OptionConfig do
+    let option = OptionSpec { long: long, short: short, kind: FlagValue,
+                              description: description, default: Just("false") }
+    OptionConfig { name: @name, description: @description,
+                   options: [...@options, option] }
+  end
+
+  let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
+    OptionParser.parse(@options, args)
+  end
+
+  let help -> String do
+    let title = @description == "" then @name else "${@name} — ${@description}"
+    let lines = @options.map do |option|
+      let short = match option.short do
+        Just(value) -> "-${value}, "
+        None -> "    "
+      end
+      let required = option.required? then " (required)" else ""
+      let default = match option.default do
+        Just(value) -> option.kind == FlagValue then "" else " [default: ${value}]"
+        None -> ""
+      end
+      "  ${short}--${option.long}  ${option.description}${required}${default}"
+    end
+    "${title}\n\nOptions:\n${lines.join("\n")}"
+  end
+end
+
+module OptionParser do
+  let define(name: String, description: String) -> OptionConfig do
+    OptionConfig { name: name, description: description }
+  end
+
+  let errorMessage(error: OptionParseError) -> String = match error do
+    UnknownOption(option) -> "unknown option '${option}'"
+    MissingValue(option) -> "--${option} requires a value"
+    UnexpectedValue(option) -> "--${option} does not take a value"
+    MissingRequired(option) -> "--${option} is required"
+    InvalidInteger(option, value) -> "--${option} expects an integer, got '${value}'"
+  end
+
+  let parse(options: [OptionSpec], args: [String]) -> Result<ParsedOptions, OptionParseError> do
+    walk(options, args, {}, [], false)
+  end
+
+  private do
+    let findOption(options: [OptionSpec], argument: String) -> OptionSpec? do
+      options.find do |option|
+        "--${option.long}" == argument || match option.short do
+          Just(short) -> "-${short}" == argument
+          None -> false
+        end
+      end
+    end
+
+    let finish(options: [OptionSpec], values: { String: String },
+               arguments: [String]) -> Result<ParsedOptions, OptionParseError> do
+      let missing = options.find { |option| option.required? && !values.has?(option.long) }
+      OptionParser.finishRequired(missing, options, values, arguments)
+    end
+
+    let finishRequired(Just(option), _, _, _) = Error(MissingRequired(option.long))
+    let finishRequired(None, options, values, arguments) do
+      let complete = options.reduce(values) do |result, option|
+        match option.default do
+          Just(value) -> result.has?(option.long) then result else Kex.Intrinsic.Map.put(result, option.long, value)
+          None -> result
+        end
+      end
+      Ok(ParsedOptions { values: complete, arguments: arguments })
+    end
+
+    walk : [OptionSpec] -> [String] -> { String: String } -> [String] -> Bool -> Result<ParsedOptions, OptionParseError>
+    let walk(options, [], values, arguments, _) = OptionParser.finish(options, values, arguments)
+    let walk(options, [argument | rest], values, arguments, stopped?: Bool) do
+      if stopped?
+        return OptionParser.walk(options, rest, values, [...arguments, argument], true)
+      end
+      if argument == "--"
+        return OptionParser.walk(options, rest, values, arguments, true)
+      end
+      if !argument.startsWith?("-") || argument == "-"
+        return OptionParser.walk(options, rest, values, [...arguments, argument], false)
+      end
+
+      let equals = argument.startsWith?("--") then argument.split("=") else [argument]
+      let spelling = equals.first.or(argument)
+      OptionParser.consume(OptionParser.findOption(options, spelling), options, rest,
+                           values, arguments, equals.second, spelling)
+    end
+
+    let consume(None, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
+    let consume(Just(option), options, rest, values, arguments, inlineValue, _) do
+      match option.kind do
+        FlagValue -> OptionParser.consumeFlag(inlineValue, option, options,
+                                               rest, values, arguments)
+        _ -> OptionParser.consumeValue(
+               OptionParser.valueAndRest(inlineValue, rest), option,
+               options, values, arguments)
+      end
+    end
+
+    let consumeFlag(Just(_), option, _, _, _, _) = Error(UnexpectedValue(option.long))
+    let consumeFlag(None, option, options, rest, values, arguments) do
+      OptionParser.walk(options, rest,
+        Kex.Intrinsic.Map.put(values, option.long, "true"), arguments, false)
+    end
+
+    let consumeValue(None, option, _, _, _) = Error(MissingValue(option.long))
+    let consumeValue(Just((value, remaining)), option, options, values, arguments) do
+      if option.kind == IntegerValue && Integer.parse(value).error?
+        return Error(InvalidInteger(option.long, value))
+      end
+      OptionParser.walk(options, remaining,
+        Kex.Intrinsic.Map.put(values, option.long, value), arguments, false)
+    end
+
+    let valueAndRest(Just(value), rest) = Just((value, rest))
+    let valueAndRest(None, []) = None
+    let valueAndRest(None, [value | remaining]) = Just((value, remaining))
+  end
+end

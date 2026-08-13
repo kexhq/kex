@@ -3603,6 +3603,7 @@ auto Evaluator::registerBuiltins() -> void {
     registerConsoleBuiltins();
     registerTestBuiltins();
     registerProcessBuiltins();
+    registerDigestBuiltins();
     registerParserBuiltins();
     registerEvalBuiltins();
     registerHttpBuiltins();

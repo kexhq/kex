@@ -1,0 +1,10 @@
+bundle "kex" do
+  version("0.3.0")
+  kex(">= 0.3.0")
+  license("MIT")
+
+  # A toolchain package is installed atomically: compiler executable,
+  # runtime/*.beam and stdlib/*.kex always come from this same version.
+  toolchain("kex", compiler: "bin/kex", runtime: "share/kex/runtime",
+            stdlib: "share/kex/stdlib")
+end

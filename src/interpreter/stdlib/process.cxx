@@ -1,5 +1,23 @@
 #include "../evaluator.hxx"
 
+#ifndef __EMSCRIPTEN__
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
+#include <cstdio>
+#include <fstream>
+
+namespace {
+
+auto readCapturedFile(const char* path) -> std::string {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), {}};
+}
+
+} // namespace
+
 namespace kex::interpreter {
 
 // spawn/receive themselves are handled directly in Evaluator::eval (they
@@ -12,6 +30,74 @@ auto Evaluator::registerProcessBuiltins() -> void {
     // the ModuleValue namespace-dispatch branch in eval() (ast::MethodCall),
     // the same convention used by the remaining public-native namespaces.
     defineModule("Process");
+
+    defineIntrinsic("Process::run", [](std::vector<ValuePtr> args) -> ValuePtr {
+#ifdef __EMSCRIPTEN__
+        return Value::error(Value::string("process execution is unavailable in wasm"));
+#else
+        if (args.size() != 2)
+            return Value::error(Value::string("Process.run expects a command and argument list"));
+        const auto* command = std::get_if<StringValue>(&args[0]->data);
+        const auto* list = std::get_if<ListValue>(&args[1]->data);
+        if (!command || !list)
+            return Value::error(Value::string("Process.run expects (String, [String])"));
+
+        std::vector<std::string> strings;
+        strings.reserve(list->elements.size() + 1);
+        strings.push_back(command->value);
+        for (const auto& value : list->elements) {
+            const auto* string = std::get_if<StringValue>(&value->data);
+            if (!string)
+                return Value::error(Value::string("Process.run arguments must be strings"));
+            strings.push_back(string->value);
+        }
+
+        char stdoutPath[] = "/tmp/kex_process_stdout_XXXXXX";
+        char stderrPath[] = "/tmp/kex_process_stderr_XXXXXX";
+        const int stdoutFd = mkstemp(stdoutPath);
+        const int stderrFd = mkstemp(stderrPath);
+        if (stdoutFd < 0 || stderrFd < 0) {
+            if (stdoutFd >= 0) { close(stdoutFd); std::remove(stdoutPath); }
+            if (stderrFd >= 0) { close(stderrFd); std::remove(stderrPath); }
+            return Value::error(Value::string("could not create process output files"));
+        }
+
+        const pid_t child = fork();
+        if (child == 0) {
+            dup2(stdoutFd, STDOUT_FILENO);
+            dup2(stderrFd, STDERR_FILENO);
+            close(stdoutFd);
+            close(stderrFd);
+            std::vector<char*> argv;
+            argv.reserve(strings.size() + 1);
+            for (auto& string : strings) argv.push_back(string.data());
+            argv.push_back(nullptr);
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+        close(stdoutFd);
+        close(stderrFd);
+        if (child < 0) {
+            std::remove(stdoutPath);
+            std::remove(stderrPath);
+            return Value::error(Value::string("could not start process"));
+        }
+
+        int status = 0;
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        const auto stdoutText = readCapturedFile(stdoutPath);
+        const auto stderrText = readCapturedFile(stderrPath);
+        std::remove(stdoutPath);
+        std::remove(stderrPath);
+        const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
+                                              : 128 + WTERMSIG(status);
+        return Value::ok(Value::record("ProcessResult", {
+            {"exitCode", Value::integer(exitCode)},
+            {"stdout", Value::string(stdoutText)},
+            {"stderr", Value::string(stderrText)},
+        }));
+#endif
+    });
 
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the

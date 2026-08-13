@@ -10,6 +10,17 @@ Kex is a small functional programming language with Ruby-like syntax, immutable 
 
 It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
+Kex ships with **Tey**, its package, compiler, runtime, and standard-library
+manager. During the HEAD-only bootstrap period it can be installed with the
+repository formula:
+
+```sh
+brew install --HEAD ./Formula/tey.rb
+```
+
+Tey itself is written in Kex; its implementation lives entirely under the
+`Tey` supermodule in `tey/src/tey/`.
+
 ```rb
 record Vector2D do
   x : Float

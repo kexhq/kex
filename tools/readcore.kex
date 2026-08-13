@@ -61,24 +61,25 @@ let sliceFunction(source: String, name: String) -> String do
   end
 end
 
-# `--fn` and `--grep` each take a value, so the token after one is not a file.
-let takesValue?(arg: String) -> Bool = arg == "--fn" || arg == "--grep"
+let READCORE_OPTIONS = OptionParser.define("readcore", "Decode Core Erlang binary literals")
+  .string("fn", None, "Show only the named function", None, false)
+  .string("grep", None, "Keep decoded lines containing text", None, false)
 
 main(args) do
-  # Everything that is neither a flag nor a flag's value.
-  let files = (0..(args.count - 1))
-    .filter do |i|
-      let current = args.at(i).or("")
-      let previous = i > 0 then args.at(i - 1).or("") else ""
-      return !current.startsWith?("--") && !takesValue?(previous)
+  let parsed = match READCORE_OPTIONS.parse(args) do
+    Error(error) -> do
+      IO.printError("readcore: ${OptionParser.errorMessage(error)}\n${READCORE_OPTIONS.help}\n")
+      return 1
     end
-    .map { |i| args.at(i).or("") }
-
-  let fnName = args.dropWhile { |a| a != "--fn" }.at(1)
-  let needle = args.dropWhile { |a| a != "--grep" }.at(1)
+    Ok(options) -> options
+  end
+  let files = parsed.arguments
+  let fnName = parsed.value("fn")
+  let needle = parsed.value("grep")
 
   if files.empty?
     IO.printLine("usage: kex tools/readcore.kex -- FILE.core [--fn NAME] [--grep TEXT]")
+    return 1
   end
 
   files.each do |path|
@@ -101,4 +102,5 @@ main(args) do
       end
     end
   end
+  0
 end

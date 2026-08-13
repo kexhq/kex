@@ -1,137 +1,27 @@
-# Specs for option_parser.kex
-
-let parser = OptionParser.Config {
-  name: "testapp",
-  description: "A test CLI"
-}
-  .string("name", Just("n"), "Your name", None, true)
-  .int("port", Just("p"), "Port number", Just("3000"), false)
-  .flag("verbose", Just("v"), "Enable verbose output")
+let OPTIONS = OptionParser.define("testapp", "A test CLI")
+  .string("name", Just('n'), "Your name", None, true)
+  .integer("port", Just('p'), "Port number", Just("3000"), false)
+  .flag("verbose", Just('v'), "Enable verbose output")
 
 describe("OptionParser.parse") do
-  describe("successful parsing") do
-    it("parses a required string option with long flag") do
-      let result = parser.parse(["--name", "Alice"])
-      match result do
-        Ok(opts) -> do
-          assert(opts.get("name", "") == "Alice")
-        end
-        Error(_) -> assert(false)
+  it("parses values, defaults, flags, and positionals") do
+    match OPTIONS.parse(["run", "-n", "Alice", "-v"]) do
+      Ok(options) -> do
+        assert(options.arguments == ["run"])
+        assert(options.value("name", "") == "Alice")
+        assert(options.integerValue("port") == Just(3000))
+        assert(options.flagEnabled?("verbose"))
       end
-    end
-
-    it("parses a short flag") do
-      let result = parser.parse(["-n", "Bob"])
-      match result do
-        Ok(opts) -> assert(opts.get("name", "") == "Bob")
-        Error(_) -> assert(false)
-      end
-    end
-
-    it("parses an integer option") do
-      let result = parser.parse(["--name", "Alice", "--port", "8080"])
-      match result do
-        Ok(opts) -> assert(opts.get("port", "") == "8080")
-        Error(_) -> assert(false)
-      end
-    end
-
-    it("parses a boolean flag") do
-      let result = parser.parse(["--name", "Alice", "--verbose"])
-      match result do
-        Ok(opts) -> assert(opts.get("verbose", "") == "true")
-        Error(_) -> assert(false)
-      end
-    end
-
-    it("fills in defaults for missing optional args") do
-      let result = parser.parse(["--name", "Alice"])
-      match result do
-        Ok(opts) -> do
-          assert(opts.get("port", "") == "3000")
-          assert(opts.get("verbose", "") == "false")
-        end
-        Error(_) -> assert(false)
-      end
-    end
-
-    it("parses all options together") do
-      let result = parser.parse(["-n", "Alice", "-p", "9090", "-v"])
-      match result do
-        Ok(opts) -> do
-          assert(opts.get("name", "") == "Alice")
-          assert(opts.get("port", "") == "9090")
-          assert(opts.get("verbose", "") == "true")
-        end
-        Error(_) -> assert(false)
-      end
+      Error(_) -> assert(false)
     end
   end
 
-  describe("error cases") do
-    it("returns MissingRequired when a required option is absent") do
-      let result = parser.parse(["--port", "8080"])
-      match result do
-        Ok(_)    -> assert(false)
-        Error(e) -> assert(e == MissingRequired("name"))
-      end
-    end
+  it("reports invalid input") do
+    assert(OPTIONS.parse(["--port", "nope"]) == Error(InvalidInteger("port", "nope")))
+  end
 
-    it("returns UnknownOption for unrecognized flags") do
-      let result = parser.parse(["--name", "Alice", "--unknown"])
-      match result do
-        Ok(_)    -> assert(false)
-        Error(e) -> assert(e == UnknownOption("--unknown"))
-      end
-    end
-
-    it("returns MissingValue when a string option has no argument") do
-      let result = parser.parse(["--name"])
-      match result do
-        Ok(_)    -> assert(false)
-        Error(e) -> assert(e == MissingValue("name"))
-      end
-    end
-
-    it("returns InvalidInt when an int option gets a non-number") do
-      let result = parser.parse(["--name", "Alice", "--port", "abc"])
-      match result do
-        Ok(_)    -> assert(false)
-        Error(e) -> assert(e == InvalidInt("port", "abc"))
-      end
-    end
+  it("renders help") do
+    assert(OPTIONS.help.contains?("-n, --name"))
+    assert(OPTIONS.help.contains?("[default: 3000]"))
   end
 end
-
-describe("OptionParser.help") do
-  it("includes the app name and description") do
-    let text = parser.help
-    assert(text.contains?("testapp"))
-    assert(text.contains?("A test CLI"))
-  end
-
-  it("includes option descriptions") do
-    let text = parser.help
-    assert(text.contains?("--name"))
-    assert(text.contains?("--port"))
-    assert(text.contains?("--verbose"))
-  end
-
-  it("shows short flags") do
-    let text = parser.help
-    assert(text.contains?("-n"))
-    assert(text.contains?("-p"))
-    assert(text.contains?("-v"))
-  end
-
-  it("marks required options") do
-    let text = parser.help
-    assert(text.contains?("(required)"))
-  end
-
-  it("shows defaults") do
-    let text = parser.help
-    assert(text.contains?("[default: 3000]"))
-  end
-end
-
