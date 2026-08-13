@@ -355,6 +355,31 @@ int main() {
             assertTrue(result.find("Selected overload") != std::string::npos,
                        "selected overload was not visually separated");
         });
+        it("uses the selected receiver overload documentation", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex","languageId":"kex","version":1,"text":"foul readAll(file: FileHandle<CanRead, W>) -> String do\n  file.read().or(\"\")\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/file_modes.kex"},"position":{"line":1,"character":15}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto result = output.str();
+            assertTrue(result.find("Unwraps the value") != std::string::npos,
+                       "Optional.or hover omitted the selected fallback documentation");
+            assertTrue(result.find("Bitwise OR") == std::string::npos &&
+                       result.find("Bits.or") == std::string::npos,
+                       "Optional.or hover used Bits.or documentation");
+        });
         it("infers literal function clause parameters", []() {
             std::string messages;
             messages += frame(

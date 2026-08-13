@@ -38,6 +38,7 @@ struct Document {
         unsigned int byteColumn = 1;
         unsigned int byteLength = 0;
         std::string detail;
+        std::string documentationKey;
         bool completeDetail = false;
     };
 
@@ -796,6 +797,41 @@ auto qualifiedSourceDocumentation(const std::string& source,
                                         node->type->location);
             }, item);
     };
+    auto makeTargetName = [](const ast::MakeDef& make) -> std::string {
+        if (!make.target) return {};
+        if (const auto* name = std::get_if<ast::TypeName>(&make.target->kind))
+            return name->parts.empty() ? std::string{} : name->parts.back();
+        if (const auto* generic =
+                std::get_if<ast::GenericType>(&make.target->kind))
+            return generic->name.parts.empty() ? std::string{}
+                                                : generic->name.parts.back();
+        if (std::holds_alternative<ast::ListType>(make.target->kind))
+            return "List";
+        if (std::holds_alternative<ast::MapType>(make.target->kind))
+            return "Map";
+        return {};
+    };
+    auto collectMake = [&](const ast::MakeDef& make,
+                           const std::string& owner) {
+        const auto target = owner.empty() ? makeTargetName(make) : owner;
+        if (target.empty()) return;
+        for (const auto& item : make.body)
+            std::visit([&](const auto& node) {
+                using T = std::decay_t<decltype(node)>;
+                if (!node) return;
+                if constexpr (std::is_same_v<T,
+                                  std::unique_ptr<ast::FunctionDef>>)
+                    add(target, node->name, node->location);
+                else if constexpr (std::is_same_v<T,
+                                       std::unique_ptr<ast::TypeAnnotation>>) {
+                    if (node->type)
+                        add(target, node->name, node->type->location);
+                }
+                else if constexpr (std::is_same_v<T,
+                                       std::unique_ptr<ast::VisibilityBlock>>)
+                    collectVisibility(*node, target);
+            }, item);
+    };
     std::function<void(const ast::ModuleDef&, const std::string&)> collectModule;
     collectModule = [&](const ast::ModuleDef& module,
                         const std::string& parent) {
@@ -819,6 +855,9 @@ auto qualifiedSourceDocumentation(const std::string& source,
                 } else if constexpr (std::is_same_v<T,
                                        std::unique_ptr<ast::VisibilityBlock>>)
                     collectVisibility(*node, qualified);
+                else if constexpr (std::is_same_v<T,
+                                       std::unique_ptr<ast::MakeDef>>)
+                    collectMake(*node, qualified);
             }, item);
     };
     for (const auto& item : program.items)
@@ -826,6 +865,10 @@ auto qualifiedSourceDocumentation(const std::string& source,
                 std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
             module && *module)
             collectModule(**module, "");
+        else if (const auto* make =
+                     std::get_if<std::unique_ptr<ast::MakeDef>>(&item);
+                 make && *make)
+            collectMake(**make, "");
     return result;
 }
 
@@ -1390,12 +1433,21 @@ private:
                 auto location = callNameLocation(
                     document.text, *expression, name, method);
                 if (!location) continue;
+                std::string documentationKey;
+                if (const auto* methodCall =
+                        std::get_if<ast::MethodCall>(&expression->kind))
+                    if (auto resolved = analyzer.resolvedCalls().find(methodCall);
+                        resolved != analyzer.resolvedCalls().end() &&
+                        !resolved->second.sourceModule.empty())
+                        documentationKey =
+                            resolved->second.sourceModule + "." + name;
                 document.selectedCallEntries.push_back({
                     .line = static_cast<unsigned int>(location->line),
                     .byteColumn = static_cast<unsigned int>(location->column),
                     .byteLength = static_cast<unsigned int>(name.size()),
                     .detail = (signature.isFoul ? "foul " : "") +
                               analyzer.displaySignature(name, signature),
+                    .documentationKey = std::move(documentationKey),
                     .completeDetail = true,
                 });
             }
@@ -1847,6 +1899,16 @@ private:
                 remaining += overload;
             }
             detail = std::move(remaining);
+            if (!selectedCallHover->documentationKey.empty())
+                if (auto docs = m_standardDocumentation.find(
+                        selectedCallHover->documentationKey);
+                    docs != m_standardDocumentation.end()) {
+                    documentation.clear();
+                    for (const auto& entry : docs->second) {
+                        if (!documentation.empty()) documentation += "\n\n---\n\n";
+                        documentation += entry;
+                    }
+                }
         }
         if (documentation.empty())
             if (auto docs = document.documentation.find(word.text);

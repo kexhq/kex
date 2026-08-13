@@ -5052,6 +5052,7 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         owner != m_importedInterfaces->modules.end())
                         resolvedFoul = resolvedFoul || owner->second.isFoul;
                 ResolvedCallTarget target{
+                    resolved->sourceModule,
                     resolved->backendModule,
                     resolved->backendFunction,
                     resolved->backendArity,

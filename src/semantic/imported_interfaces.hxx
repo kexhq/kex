@@ -45,6 +45,10 @@ struct ImportedModuleInterface {
 // Exact backend ownership selected by semantic analysis for an imported call.
 // The AST remains backend-neutral; lowering consumes this side table.
 struct ResolvedCallTarget {
+    // Source owner selected by overload resolution (for example `Optional`
+    // rather than an unrelated same-named `Bits` export). Tooling uses this
+    // identity for documentation and navigation.
+    std::string sourceModule;
     std::string backendModule;
     std::string backendFunction;
     int backendArity = 0;
