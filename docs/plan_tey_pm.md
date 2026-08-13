@@ -283,6 +283,17 @@ and every install surface routes through it:
 | AUR / Debian | post-install message equivalents |
 | Any time later | `tey setup merge-driver` / `--remove` |
 
+Until the first tagged release, install from the repository tap rather than a
+local formula path (current Homebrew rejects formula files outside a tap):
+
+```sh
+brew tap kexhq/tey
+brew install --HEAD kexhq/tey/tey
+```
+
+The tap lives in the conventional `kexhq/homebrew-tey` repository. Its
+`Formula/tey.rb` tracks the Kex source repository, where Tey itself is built.
+
 Optional polish (later milestone): a one-time hint on the first `tey` invocation in a repo
 whose `.gitattributes` references `merge=tey` but whose `~/.gitconfig` lacks the driver,
 gated by a marker under `~/.config/kex/` (already used for REPL history, `src/main.cxx:510`).

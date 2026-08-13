@@ -11,11 +11,12 @@ Kex is a small functional programming language with Ruby-like syntax, immutable 
 It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
 Kex ships with **Tey**, its package, compiler, runtime, and standard-library
-manager. During the HEAD-only bootstrap period it can be installed with the
-repository formula:
+manager. During the HEAD-only bootstrap period, add the Kex repository as a
+tap and install its Tey formula:
 
 ```sh
-brew install --HEAD ./Formula/tey.rb
+brew tap kexhq/tey
+brew install --HEAD kexhq/tey/tey
 ```
 
 Tey itself is written in Kex; its implementation lives entirely under the
