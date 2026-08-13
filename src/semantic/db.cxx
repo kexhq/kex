@@ -7,6 +7,7 @@
 #include "../module/resolver.hxx"
 #include <algorithm>
 #include <fstream>
+#include <iterator>
 #include "../parser/parser.hxx"
 #include <stdexcept>
 
@@ -19,17 +20,34 @@ const std::vector<std::string> SemanticDB::s_emptyPaths;
 auto SemanticDB::updateFile(const std::string& path, std::string source,
                             const std::vector<std::string>& companionDeclFiles)
     -> void {
+    // Module export entries point directly into FileState::symbols. An editor
+    // updates the same file repeatedly, so discard those pointers while the
+    // old vector is still alive, before clear()/reallocation can invalidate
+    // them. Batch compiler use rarely exercised this lifecycle; LSP use does
+    // on every keystroke.
+    if (m_files.contains(path)) {
+        for (auto& [_, exports] : m_moduleExports) {
+            exports.erase(
+                std::remove_if(exports.begin(), exports.end(),
+                               [&](const SymbolInfo* symbol) {
+                                   return symbol->definition.file == path;
+                               }),
+                exports.end());
+        }
+    }
     FileState& state = m_files[path];
     state.path = path;
+    state.source = source;
     state.version++;
     state.diagnostics.clear();
     state.symbols.clear();
+    state.completionScopes.clear();
 
     // Parse — errors are recovered from internally; the partial AST is still
     // analyzable for the well-formed portions of the file.
     bool fatalParseError = false;
     {
-        Lexer lexer(std::move(source), state.path);
+        Lexer lexer(source, state.path);
         auto tokens = lexer.tokenizeAll();
         bool noTokens = tokens.empty();
         Parser parser(std::move(tokens), state.path);
@@ -51,15 +69,20 @@ auto SemanticDB::updateFile(const std::string& path, std::string source,
     // the program BEFORE compile-time expansion and report every generated
     // declaration as an undefined name — even though codegen is fine, because
     // main.cxx expands the AST it compiles. Run the same pass here so both
-    // views agree. Diagnostics are dropped: main.cxx reports them once, from
-    // the copy it compiles.
+    // views agree. Keep expansion diagnostics for non-CLI consumers such as
+    // the language server. The CLI exits while expanding its primary AST, so
+    // these do not create duplicate terminal diagnostics.
     //
     // This does mean a file with `compiled` blocks is expanded twice per
     // build. Acceptable while expansion is cheap; the alternative is threading
     // the already-expanded declarations in through updateFile's signature.
     {
-        std::vector<Diagnostic> ignored;
-        compiled::expand(state.ast, ignored);
+        std::vector<Diagnostic> expansionDiagnostics;
+        compiled::expand(state.ast, expansionDiagnostics);
+        state.diagnostics.insert(
+            state.diagnostics.end(),
+            std::make_move_iterator(expansionDiagnostics.begin()),
+            std::make_move_iterator(expansionDiagnostics.end()));
     }
 
     // Companion declarations (see the header): parse each and prepend
@@ -244,17 +267,21 @@ auto SemanticDB::findSymbol(const std::string& name,
 
 auto SemanticDB::symbolAt(const std::string& file,
                            uint32_t line, uint32_t col) const -> const SymbolInfo* {
+    auto contains = [line, col](const SourceLocation& location,
+                                std::string_view name) {
+        return location.line == static_cast<int>(line) &&
+               col >= static_cast<uint32_t>(location.column) &&
+               col < static_cast<uint32_t>(location.column) + name.size();
+    };
     for (const auto& [path, state] : m_files) {
         for (const auto& sym : state.symbols) {
             // Check definition site
-            if (sym.definition.file == file
-                    && sym.definition.line == line
-                    && sym.definition.column == col) {
+            if (sym.definition.file == file && contains(sym.definition, sym.name)) {
                 return &sym;
             }
             // Check reference sites
             for (const auto& ref : sym.references) {
-                if (ref.file == file && ref.line == line && ref.column == col) {
+                if (ref.file == file && contains(ref, sym.name)) {
                     return &sym;
                 }
             }
@@ -287,6 +314,27 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                 }
             }
         }
+        if (m_imports) {
+            // Installed/compiled standard-library modules are represented by
+            // ImportedInterfaces rather than FileState entries.  Include both
+            // their exports (`FS.File.read`) and immediate nested modules
+            // (`FS.` -> `FS.File`, `FS.Directory`) in editor completion.
+            if (auto imported = m_imports->modules.find(qualifier);
+                imported != m_imports->modules.end()) {
+                for (const auto& [name, overloads] : imported->second.exports)
+                    if (!overloads.empty() && name.rfind(memberPrefix, 0) == 0)
+                        results.push_back(qualifier + "." + name);
+            }
+            const auto nestedPrefix = qualifier + ".";
+            for (const auto& [moduleName, interface] : m_imports->modules) {
+                if (moduleName.rfind(nestedPrefix, 0) != 0) continue;
+                const auto remainder = moduleName.substr(nestedPrefix.size());
+                const auto separator = remainder.find('.');
+                const auto child = remainder.substr(0, separator);
+                if (child.rfind(memberPrefix, 0) == 0)
+                    results.push_back(nestedPrefix + child);
+            }
+        }
     } else {
         // Top-level names only — module-scoped and make-scoped symbols
         // require a dot qualifier (e.g. Math.sin, List.map)
@@ -299,6 +347,36 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
             }
         }
     }
+
+    std::sort(results.begin(), results.end());
+    results.erase(std::unique(results.begin(), results.end()), results.end());
+    return results;
+}
+
+auto SemanticDB::completionsAt(const std::string& file, uint32_t line,
+                               uint32_t col, const std::string& prefix) const
+    -> std::vector<std::string> {
+    auto results = completionsFor(prefix);
+    // Qualified lookup is handled by module/make-target exports above. Scope
+    // snapshots contain bare lexical names and must not be offered after '.'.
+    if (prefix.find('.') != std::string::npos) return results;
+
+    const auto state = m_files.find(file);
+    if (state == m_files.end()) return results;
+    const FileState::ScopeSnapshot* nearest = nullptr;
+    for (const auto& snapshot : state->second.completionScopes) {
+        const bool before = snapshot.location.line < static_cast<int>(line) ||
+            (snapshot.location.line == static_cast<int>(line) &&
+             snapshot.location.column <= static_cast<int>(col));
+        if (!before) continue;
+        if (!nearest || snapshot.location.line > nearest->location.line ||
+            (snapshot.location.line == nearest->location.line &&
+             snapshot.location.column >= nearest->location.column))
+            nearest = &snapshot;
+    }
+    if (nearest)
+        for (const auto& name : nearest->names)
+            if (name.rfind(prefix, 0) == 0) results.push_back(name);
 
     std::sort(results.begin(), results.end());
     results.erase(std::unique(results.begin(), results.end()), results.end());

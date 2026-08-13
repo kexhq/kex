@@ -26,14 +26,27 @@ struct SymbolInfo {
     std::vector<std::pair<std::string, TypePtr>> params;
     int clauseCount = 1;
     std::string makeTarget; // set for functions inside a `make TypeName do` block
+    // Kex source-shaped declaration text used by editor hover. This is
+    // populated when syntax alone carries useful structure (notably records)
+    // and enriched with inferred function signatures after type checking.
+    std::string detail;
 };
 
 struct FileState {
     std::string path;
+    std::string source;
     uint64_t version = 0;
     ast::Program ast;
     std::vector<Diagnostic> diagnostics;
     std::vector<SymbolInfo> symbols;
+    // Names visible at expression boundaries, retained by ResolvePass for
+    // position-aware editor completion after its transient scope stack is
+    // gone. Entries are in source traversal order.
+    struct ScopeSnapshot {
+        SourceLocation location;
+        std::vector<std::string> names;
+    };
+    std::vector<ScopeSnapshot> completionScopes;
 };
 
 class SemanticDB {
@@ -86,6 +99,9 @@ public:
     // Returns all known symbol names (across all indexed files) whose name
     // starts with `prefix`. Used for REPL tab completion.
     auto completionsFor(const std::string& prefix) const -> std::vector<std::string>;
+    auto completionsAt(const std::string& file, uint32_t line, uint32_t col,
+                       const std::string& prefix) const
+        -> std::vector<std::string>;
 
     // Access to raw file state for passes
     auto fileState(const std::string& path) -> FileState*;

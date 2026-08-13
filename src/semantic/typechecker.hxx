@@ -50,8 +50,16 @@ public:
     }
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
+    // Canonical source-facing rendering. Internal inference variable IDs are
+    // deliberately normalized to A, B, C, ... for diagnostics and tooling.
+    auto displaySignature(const std::string& name,
+                          const Signature& sig) const -> std::string;
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto selectedCallSignatures() const
+        -> const std::unordered_map<const ast::Expr*, Signature>& {
+        return m_selectedCallSignatures;
+    }
     // `Type.of(x)` call sites whose argument the checker typed concretely.
     // Both backends materialize the recorded shape instead of asking the
     // value, which is what lets `Type.of` see a Result's unused half and an
@@ -193,7 +201,8 @@ private:
     // would mis-count arity for them (see checkMakeDef).
     auto checkCall(const std::string& name, const std::vector<TypePtr>& argTypes,
                    SourceLocation loc, bool isMethodCall = false,
-                   const ast::MethodCall* methodCall = nullptr) -> TypePtr;
+                   const ast::MethodCall* methodCall = nullptr,
+                   const ast::Expr* callExpr = nullptr) -> TypePtr;
     auto argMatchesParam(const TypePtr& argType, const TypePtr& paramType) const -> bool;
     auto resolveTypeQuery(const ast::TypeQuery& query) -> TypePtr;
     auto namedFunctionSignature(const ast::Expr& expr) -> const Signature*;
@@ -216,8 +225,6 @@ private:
     // Trait conformance for a value type, lifting a nullary ADT constructor
     // (`Dog`) to the ADT that declares the conformance (`Animal`).
     auto satisfiesTrait(const TypePtr& type, const std::string& traitName) const -> bool;
-    auto displaySignature(const std::string& name, const Signature& sig) const -> std::string;
-
     // Scope management
     auto pushScope() -> void;
     auto popScope() -> void;
@@ -248,6 +255,7 @@ private:
     TraitRegistry m_traits = TraitRegistry::withBuiltins();
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     std::unordered_map<const ast::MethodCall*, ResolvedCallTarget> m_resolvedCalls;
+    std::unordered_map<const ast::Expr*, Signature> m_selectedCallSignatures;
     std::unordered_map<const ast::MethodCall*, StaticTypeAnswer> m_staticTypeOfCalls;
     std::unordered_set<std::string> m_referencedModules;
     // Source module identities declared by the current compilation unit.
@@ -293,7 +301,7 @@ private:
     // The type `Ctor(args...)` produces, or nullptr when the name is not a
     // registered ADT constructor.
     auto constructorResultType(const std::string& name,
-                               const std::vector<TypePtr>& argTypes) const
+                               const std::vector<TypePtr>& argTypes)
         -> TypePtr;
     // Errors when a constructor pattern names an arm of a DIFFERENT ADT than
     // the value being matched — `if let Ok(x) = anOptional`.

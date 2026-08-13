@@ -12,6 +12,7 @@ enum class SymbolKind {
     Variable,
     Function,
     Type,
+    Trait,
     Record,
     Module,
     TypeParam,

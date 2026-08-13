@@ -48,6 +48,7 @@ private:
     auto pushScope() -> void;
     auto popScope() -> void;
     auto defineLocal(const std::string& name) -> void;
+    auto recordCompletionScope(SourceLocation location) -> void;
 
     auto error(SourceLocation loc, const std::string& msg) -> void;
     auto warning(SourceLocation loc, const std::string& msg) -> void;

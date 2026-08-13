@@ -73,6 +73,17 @@ struct ImportedADT {
     std::string name;
     std::vector<std::string> constructors;
     std::unordered_map<std::string, int> constructorArities;
+    // Generic result reconstruction for source-derived interfaces. Each
+    // constructor payload records the ADT type-parameter slot it fills, or -1
+    // for a payload unrelated to a type parameter (`Just(X)` -> {0}).
+    size_t typeParamCount = 0;
+    std::unordered_map<std::string, std::vector<int>> constructorTypeParamSlots;
+    // Source-derived interfaces retain spelling and complete payload types so
+    // editor tooling can present the declaration rather than only its runtime
+    // arity. Prebuilt interfaces may leave these empty; callers can still use
+    // the generic-slot/arity information above as a faithful fallback.
+    std::vector<std::string> typeParamNames;
+    std::unordered_map<std::string, std::vector<TypePtr>> constructorParamTypes;
 };
 
 // Backend-neutral checked interface snapshot. Ordinary module exports retain

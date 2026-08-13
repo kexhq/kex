@@ -52,8 +52,16 @@ public:
     }
     auto functionSignatures(const ast::FunctionDef* function) const
         -> const std::vector<Signature>*;
+    auto displaySignature(const std::string& name,
+                          const Signature& signature) const -> std::string {
+        return m_checker.displaySignature(name, signature);
+    }
     auto resolvedCalls() const
         -> const std::unordered_map<const ast::MethodCall*, ResolvedCallTarget>&;
+    auto selectedCallSignatures() const
+        -> const std::unordered_map<const ast::Expr*, Signature>& {
+        return m_checker.selectedCallSignatures();
+    }
     auto staticTypeOfCalls() const
         -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
         return m_checker.staticTypeOfCalls();

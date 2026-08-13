@@ -1,0 +1,28 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kex",
+  "scopeName": "source.kex",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "name": "keyword.control.kex", "match": "\\b(after|break|compiled|do|elif|else|end|export|final|foul|if|let|loop|main|match|next|private|public|receive|rescue|return|spawn|static|then|timeout|try|trying|using|var|when|while)\\b" },
+    { "name": "constant.language.kex", "match": "\\b(true|false|None|this)\\b" },
+    { "name": "storage.type.kex", "match": "\\b(record|type|trait|make|module)\\b" },
+    { "name": "support.type.builtin.kex", "match": "\\b(Any|Atom|Bool|Byte|Char|Float|Float32|Float64|Int|Integer|Int8|Int16|Int32|Int64|List|Map|Optional|Process|Result|Stream|String|UInt8|UInt16|UInt32|UInt64|Void)\\b" },
+    { "name": "entity.name.function.kex", "match": "(?<=\\blet\\s)[a-z_][A-Za-z0-9_?!]*(?=\\s*\\()" },
+    { "name": "entity.name.type.kex", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
+    { "name": "constant.other.symbol.kex", "match": ":[a-zA-Z_][A-Za-z0-9_?!]*" },
+    { "name": "variable.other.member.kex", "match": "@[a-z_][A-Za-z0-9_?!]*" },
+    { "name": "constant.numeric.kex", "match": "(?<![A-Za-z0-9_])(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|(?:[0-9][0-9_]*\\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][+-]?[0-9_]+)?)(?![A-Za-z0-9_])" },
+    { "name": "keyword.operator.kex", "match": "->|:>|\\.\\.\\.?|==|!=|<=|>=|&&|\\|\\||[+\\-*/%=<>!?&|~^]" }
+  ],
+  "repository": {
+    "comments": { "patterns": [{ "name": "comment.line.number-sign.kex", "begin": "#", "end": "$" }] },
+    "strings": { "patterns": [
+      { "name": "string.quoted.other.raw.interpolated.kex", "begin": "\\$`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``|\\$\\$\\{" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
+      { "name": "string.quoted.other.raw.kex", "begin": "`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``" }] },
+      { "name": "string.quoted.double.kex", "begin": "\"", "end": "\"", "patterns": [{ "name": "constant.character.escape.kex", "match": "\\\\(?:[nrt0\\\"'\\\\]|u\\{[0-9a-fA-F]+\\})" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
+      { "name": "string.quoted.single.kex", "begin": "'", "end": "'", "patterns": [{ "name": "constant.character.escape.kex", "match": "\\\\." }] }
+    ] }
+  }
+}

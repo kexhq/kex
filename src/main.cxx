@@ -42,6 +42,9 @@
 // readline — every native dev machine so far has had it available via
 // Homebrew.
 #include "common/completion.hxx"
+#ifdef KEX_HAS_LSP
+#include "lsp/server.hxx"
+#endif
 #include "common/prelude_interfaces.hxx"
 #include "common/prelude_loader.hxx"
 #include "common/repl_commands.hxx"
@@ -1600,6 +1603,7 @@ auto printUsage(const char *progName) -> void {
       << "  -l, --lex         Print token stream\n"
       << "  -p, --parse       Print AST\n"
       << "  -j, --json        With --check: output diagnostics as JSON\n"
+      << "      --lsp         Run the Kex language server over stdio\n"
       << "  -s, --summary     Print public API signatures (Kex syntax)\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
@@ -1639,6 +1643,7 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
+      {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
       // shows the AST before it.
@@ -1677,6 +1682,14 @@ int main(int argc, char *argv[]) {
       break;
     case 1005:
       collapseReport = true;
+      break;
+    case 1007:
+#ifdef KEX_HAS_LSP
+      mode = "lsp";
+#else
+      std::cerr << "error: LSP support is unavailable in this build\n";
+      return 1;
+#endif
       break;
     case 1001: {
       std::string dir = optarg;
@@ -1813,6 +1826,12 @@ int main(int argc, char *argv[]) {
   // explicitly. Console constants and the spec reporter share this setting.
   setenv("KEX_COLORS", kex::color::enabled ? "1" : "0", 1);
 #endif
+
+  if (mode == "lsp") {
+#ifdef KEX_HAS_LSP
+    return kex::lsp::run(std::cin, std::cout);
+#endif
+  }
 
   if (mode == "complete") {
     kex::semantic::SemanticDB db;

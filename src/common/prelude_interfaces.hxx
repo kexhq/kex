@@ -487,6 +487,8 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             // rejected.
             kex::semantic::ImportedADT adt;
             adt.name = td.name;
+            adt.typeParamCount = td.typeParams.size();
+            adt.typeParamNames = td.typeParams;
             ifaces.typeNames.insert(td.name);
             for (const auto& constructor : *constructors) {
                 adt.constructors.push_back(constructor.name);
@@ -513,10 +515,34 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         std::unordered_map<std::string,
                                            kex::semantic::TypePtr>
                             vars;
+                        for (size_t i = 0; i < td.typeParams.size(); ++i)
+                            vars[td.typeParams[i]] =
+                                kex::semantic::Type::typeVar(
+                                    -(static_cast<int>(i) + 1));
                         for (const auto& arg : generic->args)
-                            function.signature.params.push_back(
-                                resolveSourceType(*arg, vars,
-                                                  &typeAliases));
+                            function.signature.params.push_back(arg
+                                ? resolveSourceType(*arg, vars, &typeAliases)
+                                : kex::semantic::Type::unknown());
+                        adt.constructorParamTypes[constructor.name] =
+                            function.signature.params;
+                        for (const auto& arg : generic->args) {
+                            int slot = -1;
+                            if (arg) {
+                                std::string variable;
+                                if (const auto* named =
+                                        std::get_if<ast::TypeName>(&arg->kind);
+                                    named && named->parts.size() == 1)
+                                    variable = named->parts.front();
+                                else if (const auto* genericVar =
+                                             std::get_if<ast::GenericVar>(&arg->kind))
+                                    variable = genericVar->name;
+                                if (auto parameter = std::find(td.typeParams.begin(),
+                                                               td.typeParams.end(), variable);
+                                    parameter != td.typeParams.end())
+                                    slot = static_cast<int>(parameter - td.typeParams.begin());
+                            }
+                            adt.constructorTypeParamSlots[constructor.name].push_back(slot);
+                        }
                         break;
                     }
                 if (directBackendOwnership) {
@@ -618,6 +644,8 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (kex::isTransparentTypeAlias(**td)) return;
                 kex::semantic::ImportedADT adt;
                 adt.name = (*td)->name;
+                adt.typeParamCount = (*td)->typeParams.size();
+                adt.typeParamNames = (*td)->typeParams;
                 for (const auto& variant : *(*td)->variants) {
                     if (!variant) continue;
                     if (const auto* tn = std::get_if<ast::TypeName>(&variant->kind)) {
@@ -630,6 +658,33 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                         adt.constructors.push_back(gt->name.parts[0]);
                         adt.constructorArities[gt->name.parts[0]] =
                             static_cast<int>(gt->args.size());
+                        std::unordered_map<std::string,
+                                           kex::semantic::TypePtr> vars;
+                        for (size_t i = 0; i < (*td)->typeParams.size(); ++i)
+                            vars[(*td)->typeParams[i]] =
+                                kex::semantic::Type::typeVar(
+                                    -(static_cast<int>(i) + 1));
+                        for (const auto& arg : gt->args) {
+                            adt.constructorParamTypes[gt->name.parts[0]].push_back(
+                                arg ? resolveSourceType(*arg, vars, &typeAliases)
+                                    : kex::semantic::Type::unknown());
+                            int slot = -1;
+                            if (arg) {
+                                std::string variable;
+                                if (const auto* named =
+                                        std::get_if<ast::TypeName>(&arg->kind);
+                                    named && named->parts.size() == 1)
+                                    variable = named->parts.front();
+                                else if (const auto* genericVar =
+                                             std::get_if<ast::GenericVar>(&arg->kind))
+                                    variable = genericVar->name;
+                                if (auto parameter = std::find((*td)->typeParams.begin(),
+                                                               (*td)->typeParams.end(), variable);
+                                    parameter != (*td)->typeParams.end())
+                                    slot = static_cast<int>(parameter - (*td)->typeParams.begin());
+                            }
+                            adt.constructorTypeParamSlots[gt->name.parts[0]].push_back(slot);
+                        }
                     }
                 }
                 if (adt.constructors.empty()) return;

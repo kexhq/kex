@@ -328,6 +328,12 @@ endif()
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     find_package(Boost REQUIRED COMPONENTS context)
     target_link_libraries(kex_lib PUBLIC Boost::context)
+
+    # The language server is part of the kex executable. Keep its protocol
+    # implementation vendored so configuring a source checkout stays offline.
+    set(LSP_INSTALL OFF CACHE BOOL "" FORCE)
+    set(LSP_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    add_subdirectory(third_party/lsp-framework EXCLUDE_FROM_ALL)
 endif()
 
 # Optional readline support
@@ -373,6 +379,11 @@ endif()
 
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    target_sources(kex PRIVATE src/lsp/server.cxx)
+    target_compile_definitions(kex PRIVATE KEX_HAS_LSP=1)
+    target_link_libraries(kex PRIVATE lsp)
+endif()
 if(KEX_HAS_RUNTIME_BEAMS)
     add_dependencies(kex kex_runtime_beams)
 endif()
@@ -554,6 +565,13 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_link_libraries(wasm_repl_test PRIVATE kex_lib)
     target_include_directories(wasm_repl_test PRIVATE tests)
     add_test(NAME wasm_repl_test COMMAND wasm_repl_test)
+
+    add_executable(lsp_test
+        tests/lsp_test.cxx
+        src/lsp/server.cxx)
+    target_link_libraries(lsp_test PRIVATE kex_lib lsp)
+    target_include_directories(lsp_test PRIVATE tests)
+    add_test(NAME lsp_test COMMAND lsp_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
 endif()
 
 add_executable(examples_test tests/examples_test.cxx)
