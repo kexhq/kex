@@ -4,6 +4,25 @@ set -eu
 SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PREFIX=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 TEY_EBIN=${TEY_EBIN:-"$PREFIX/lib/kex/tey/ebin"}
-exec erl -noshell -pa "$TEY_EBIN" \
-  -eval 'io:setopts(standard_io, [{encoding, unicode}]), io:setopts(standard_error, [{encoding, unicode}]), try kex_main:main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) catch _:Reason:_ -> io:format(standard_error, "tey: ~p~n", [Reason]), halt(1) end' \
+export TEY_EBIN
+
+# Tey's .beam files are compiled at install time by whichever erlc was on PATH
+# then, and a BEAM file cannot be loaded by an older runtime than the one that
+# produced it (OTP 28 changed the atom table encoding, so an OTP 27 `erl`
+# rejects OTP 29 output with "corrupt atom table"). `make install` bakes the
+# matching `erl` in below; TEY_ERL overrides it, PATH is the last resort.
+# Left as the literal placeholder in the source tree; `make install` rewrites
+# it to an absolute path, which is why the guard below tests for a leading `/`
+# rather than comparing against the placeholder (sed would rewrite that too).
+BAKED_ERL='@ERL@'
+ERL=erl
+case "$BAKED_ERL" in
+  /*)
+    if [ -x "$BAKED_ERL" ]; then ERL=$BAKED_ERL; fi
+    ;;
+esac
+if [ -n "${TEY_ERL:-}" ]; then ERL=$TEY_ERL; fi
+
+exec "$ERL" -noshell -pa "$TEY_EBIN" \
+  -eval 'io:setopts(standard_io, [{encoding, unicode}]), io:setopts(standard_error, [{encoding, unicode}]), case code:ensure_loaded(kex_main) of {error, LoadErr} -> io:format(standard_error, "tey: cannot load kex_main from ~ts (~p).~nThis usually means tey was built with a newer Erlang/OTP than the one running it (~s). Set TEY_ERL to the erl that built it, or reinstall.~n", [os:getenv("TEY_EBIN", "?"), LoadErr, erlang:system_info(otp_release)]), halt(1); _ -> ok end, try kex_main:main([unicode:characters_to_binary(A) || A <- init:get_plain_arguments()]) catch _:Reason:_ -> io:format(standard_error, "tey: ~p~n", [Reason]), halt(1) end' \
   -extra "$@"
