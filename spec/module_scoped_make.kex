@@ -1,0 +1,45 @@
+# kex: no-check
+# A `make` inside a module is import-gated, like every other module member.
+# It used to be the one exception: visible everywhere with no `using` at all,
+# and escaping `using X do ... end` in both directions
+# (docs/ufcs-dispatch-plan.md "Follow-up", case 1).
+#
+# The gate applies to a make for a FOREIGN type — patching someone else's type
+# is the action-at-a-distance `using` has to scope. A make for a type the same
+# module DECLARES is that type's own interface and travels with its values, so
+# a builder chain entered through the module (`Shapes.box(2).grown`) keeps
+# working without an import.
+module Patcher do
+  make String do
+    let shout -> String = this + "!!!"
+  end
+
+  # Inside the module itself, no `using` is needed.
+  let selfTest() -> String = "in".shout
+end
+
+module Shapes do
+  record Box do
+    size : Integer
+  end
+
+  let box(size: Integer) -> Box = Box { size: size }
+
+  make Box do
+    let grown -> Box = Box { size: @size * 2 }
+  end
+end
+
+main do
+  IO.printLine(Patcher.selfTest())
+
+  using Patcher do
+    IO.printLine("lexical".shout)
+  end
+
+  # The module declares Box, so its methods need no import.
+  IO.printLine(Shapes.box(3).grown.size)
+
+  # ...and outside the block, the String patch is gone again.
+  IO.printLine("outside".shout)
+end

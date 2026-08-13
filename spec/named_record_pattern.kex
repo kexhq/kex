@@ -1,0 +1,35 @@
+# Named record patterns: `Foo { x }` asserts the record's TYPE, not just its
+# fields — so it won't match a different record that happens to share field
+# names. Works in `match` arms and `let` bindings, on both backends. The BEAM
+# backend lowers `Foo { x }` to a positional tuple pattern `{'Foo', X, _}`,
+# so the tag discriminates arms without any runtime type guard (the checker
+# has already validated the type and fields).
+
+record Pt do
+  x : Integer
+  y : Integer
+end
+record Qt do
+  x : Integer
+  y : Integer
+end
+
+let describe(p: Pt) -> String do
+  match p do
+    Pt { x, y } -> "${x}+${y}"
+  end
+end
+
+main do
+  IO.printLine(describe(Pt { x: 3, y: 4 }))
+
+  # A Pt-pattern must NOT match a Qt, even though both carry x and y.
+  match Qt { x: 1, y: 2 } do
+    Pt { x } -> IO.printLine("matched Pt ${x}")
+    _        -> IO.printLine("rejected Pt-pattern")
+  end
+
+  # Named destructure in a `let` binding.
+  let Pt { x: px } = Pt { x: 9, y: 8 }
+  IO.printLine(px)
+end

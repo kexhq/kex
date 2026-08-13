@@ -1,0 +1,3 @@
+spec/error_unknown_method.kex:24:32: error: Undefined method `nosuchMethod` for `Box`
+spec/error_unknown_method.kex:25:35: error: Undefined method `alsoNotAMethod` for `String`
+spec/error_unknown_method.kex:26:36: error: Undefined method `neitherIsThis` for `[Integer]`

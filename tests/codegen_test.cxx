@@ -1187,7 +1187,11 @@ int main() {
         it("tuple subject remains a tuple in the case expression", []() {
             auto out = emit("main do\n  match (1, 2) do\n    (1, 2) -> true\n    (_, _) -> false\n  end\nend\n");
             assertTrue(contains(out, "case {1, 2}"), out);
-            assertTrue(contains(out, "{1, 2} when"), out);
+            // The pattern stays a 2-tuple; its numeric elements bind fresh
+            // vars compared with `==` in the guard, so `0` matches `0.0`.
+            assertTrue(contains(out, "{_Nc0, _Nc1} when"), out);
+            assertTrue(contains(out, "'=='(_Nc0, 1)"), out);
+            assertTrue(contains(out, "'=='(_Nc1, 2)"), out);
         });
 
         it("no semicolons between match clauses", []() {

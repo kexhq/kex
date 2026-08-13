@@ -35,7 +35,16 @@ auto Evaluator::registerMathBuiltins() -> void {
         return finite(std::sqrt(args.empty() ? 0.0 : toDouble(args[0])), "Math.sqrt");
     });
     reg("Math::cbrt", [](std::vector<ValuePtr> args) -> ValuePtr {
-        return finite(std::cbrt(args.empty() ? 0.0 : toDouble(args[0])), "Math.cbrt");
+        const double x = args.empty() ? 0.0 : toDouble(args[0]);
+        double root = std::cbrt(x);
+        // Snap a perfect cube to its exact root. libm implementations differ
+        // by an ulp here, so `Math.cbrt(27.0) == 3.0` held on macOS and failed
+        // on Linux — a platform-dependent answer to an exact question. The
+        // BEAM runtime does the same (kex_intrinsic_math:cbrt/1), where the
+        // pow-based computation is even likelier to land just off.
+        const double rounded = std::round(root);
+        if (rounded * rounded * rounded == x) root = rounded;
+        return finite(root, "Math.cbrt");
     });
     reg("Math::sin", [](std::vector<ValuePtr> args) -> ValuePtr {
         return finite(std::sin(args.empty() ? 0.0 : toDouble(args[0])), "Math.sin");

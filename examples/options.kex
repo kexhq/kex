@@ -1,0 +1,164 @@
+# Option parser — declarative CLI argument parsing
+#
+# Usage: kex examples/option_parser.kex --name Alice --port 8080 --verbose
+
+# kex: no-check
+
+module OptionParser do
+  type OptKind = :string | :int | :bool | :flag
+
+  record Opt do
+    long : String
+    short : String? = None
+    kind : OptKind = :string
+    description : String = ""
+    default : String? = None
+    required? : Bool = false
+  end
+
+  record Config do
+    name : String = "app"
+    description : String = ""
+    opts : [Opt] = []
+  end
+
+  type ParseError = UnknownOption(String)
+                  | MissingValue(String)
+                  | MissingRequired(String)
+                  | InvalidInt(String, String)
+
+  make Config do
+    let option(long: String, short: String?, kind: OptKind, description: String, default: String?, required?: Bool) -> Config do
+      let opt = Opt {
+        long: long,
+        short: short,
+        kind: kind,
+        description: description,
+        default: default,
+        required?: required?
+      }
+      return Config { name: this.name, description: this.description, opts: [opt | this.opts] }
+    end
+
+    let string(long: String, short: String?, description: String, default: String?, required?: Bool) -> Config do
+      return this.option(long, short, :string, description, default, required?)
+    end
+
+    let int(long: String, short: String?, description: String, default: String?, required?: Bool) -> Config do
+      return this.option(long, short, :int, description, default, required?)
+    end
+
+    let flag(long: String, short: String?, description: String) -> Config do
+      return this.option(long, short, :flag, description, Just("false"), false)
+    end
+
+    let parse(args: [String]) -> Result<{ String: String }, ParseError> do
+      return doParse(this.opts, args, {})
+    end
+
+    let help -> String do
+      let header = "${@name} — ${@description}\n\nOptions:"
+      let lines = this.opts.map do |opt|
+        let shortStr = match opt.short do
+          Just(s) -> "-${s}, "
+          None    -> "    "
+        end
+        let reqStr = match opt.required? do
+          true  -> " (required)"
+          false -> ""
+        end
+        let defStr = match opt.default do
+          Just(d) -> " [default: ${d}]"
+          None    -> ""
+        end
+        "  ${shortStr}--${opt.long}  ${opt.description}${reqStr}${defStr}"
+      end
+      return header + "\n" + lines.join("\n")
+    end
+  end
+end
+
+let findOpt(opts: [OptionParser.Opt], arg: String) -> OptionParser.Opt? do
+  return opts.find do |opt|
+    "--${opt.long}" == arg || match opt.short do
+      Just(s) -> "-${s}" == arg
+      None    -> false
+    end
+  end
+end
+
+let doParse(opts: [OptionParser.Opt], args: [String], result: { String: String }) -> Result<{ String: String }, OptionParser.ParseError> do
+  match args do
+    [] -> do
+      let missing = opts.find { |o| o.required? && !result.has?(o.long) }
+      match missing do
+        Just(opt) -> Error(MissingRequired(opt.long))
+        None      -> do
+          let withDefaults = opts.reduce(result) do |acc, opt|
+            match opt.default do
+              Just(d) -> match acc.has?(opt.long) do
+                true  -> acc
+                false -> acc.put(opt.long, d)
+              end
+              None -> acc
+            end
+          end
+          return Ok(withDefaults)
+        end
+      end
+    end
+
+    [arg | rest] -> do
+      match findOpt(opts, arg) do
+        None -> Error(UnknownOption(arg))
+        Just(opt) -> do
+          match opt.kind do
+            :flag -> doParse(opts, rest, result.put(opt.long, "true"))
+            _     -> do
+              match rest do
+                []           -> Error(MissingValue(opt.long))
+                [val | rest2] -> do
+                  match opt.kind do
+                    :int -> do
+                      match Integer.parse(val) do
+                        Ok(_)    -> doParse(opts, rest2, result.put(opt.long, val))
+                        Error(_) -> Error(InvalidInt(opt.long, val))
+                      end
+                    end
+                    _ -> doParse(opts, rest2, result.put(opt.long, val))
+                  end
+                end
+              end
+            end
+          end
+        end
+      end
+    end
+  end
+end
+
+# ─── Example usage ───────────────────────────────────────────────────────────
+
+main(args) do
+  let parser = OptionParser.Config {
+    name: "myapp",
+    description: "A sample CLI application"
+  }
+    .string("name", Just("n"), "Your name", None, true)
+    .int("port", Just("p"), "Port to listen on", Just("3000"), false)
+    .flag("verbose", Just("v"), "Enable verbose output")
+
+  match parser.parse(args) do
+    Ok(opts) -> do
+      IO.printLine("Parsed options:")
+      IO.printLine("  name:    ${opts.get("name", "")}")
+      IO.printLine("  port:    ${opts.get("port", "")}")
+      IO.printLine("  verbose: ${opts.get("verbose", "false")}")
+    end
+    Error(UnknownOption(o))   -> IO.printLine("Error: unknown option '${o}'\n\n${parser.help}")
+    Error(MissingValue(o))    -> IO.printLine("Error: --${o} requires a value")
+    Error(MissingRequired(o)) -> IO.printLine("Error: --${o} is required")
+    Error(InvalidInt(o, v))   -> IO.printLine("Error: --${o} expects an integer, got '${v}'")
+  end
+end
+

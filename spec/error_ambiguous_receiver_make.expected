@@ -1,0 +1,2 @@
+spec/error_ambiguous_receiver_make.kex:9:28: error: `shout` is defined twice for receiver `String` — declaration form carries no dispatch priority, so neither definition can claim the call
+spec/error_ambiguous_receiver_make.kex:8:28: note: the other definition is here

@@ -1,0 +1,12 @@
+# kex: no-check
+# A method that belongs to ANOTHER module's type must not claim a call whose
+# receiver is plainly something else. `whiteSpaces` is Parsing's, on its Input
+# record; BEAM used to hand it a String and die with `function_clause` where
+# the walker reported the method as undefined for that receiver.
+using Parsing
+
+main do
+  let input = Input { input: "  42", pos: 0 }
+  IO.printLine(input.whiteSpaces.pos)
+  IO.printLine("a b".whiteSpaces)
+end

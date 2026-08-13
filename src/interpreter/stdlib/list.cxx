@@ -62,6 +62,17 @@ auto Evaluator::registerListBuiltins() -> void {
 
 
 
+    // A tuple is not a list — its arity is part of its type — so the List
+    // methods do not apply to one. `items` is the explicit conversion, and
+    // the only way to walk a tuple generically without reaching for
+    // `Erlang.Erlang.tuple_to_list`.
+    defineIntrinsic("Tuple::items", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::list({});
+        if (auto* tuple = std::get_if<TupleValue>(&args[0]->data))
+            return Value::list(tuple->elements);
+        return Value::list({});
+    });
+
     reg("push", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.size() < 2) return args.empty() ? Value::list({}) : args[0];
         if (auto* list = std::get_if<ListValue>(&args[0]->data)) {
@@ -420,6 +431,26 @@ auto Evaluator::registerListBuiltins() -> void {
         if (auto* af = std::get_if<FloatValue>(&a->data))
             if (auto* bf = std::get_if<FloatValue>(&b->data))
                 return af->value < bf->value ? "Less" : (af->value > bf->value ? "Greater" : "Equal");
+        // One numeric tower: an Integer and a Float compare by value, the same
+        // promotion `<` performs. Without this a mixed list fell through to
+        // the record/variant path below, answered "" for every pair — read as
+        // "not Less" — and came back UNSORTED, while BEAM sorted it.
+        // Bignums compare exactly; only a mixed pair goes through double.
+        {
+            auto ai = asInteger(a);
+            auto bi = asInteger(b);
+            if (ai && bi)
+                return *ai < *bi ? "Less" : (*ai > *bi ? "Greater" : "Equal");
+            auto asDouble = [](const ValuePtr& v) -> std::optional<double> {
+                if (auto* f = std::get_if<FloatValue>(&v->data)) return f->value;
+                if (auto i = asInteger(v)) return i->get_d();
+                return std::nullopt;
+            };
+            auto ad = asDouble(a);
+            auto bd = asDouble(b);
+            if (ad && bd)
+                return *ad < *bd ? "Less" : (*ad > *bd ? "Greater" : "Equal");
+        }
         if (auto* as = std::get_if<StringValue>(&a->data))
             if (auto* bs = std::get_if<StringValue>(&b->data))
                 return as->value < bs->value ? "Less" : (as->value > bs->value ? "Greater" : "Equal");

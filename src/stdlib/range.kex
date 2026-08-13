@@ -21,4 +21,35 @@ make Range, implement: Enumerable, Foldable do
   #   (1..3).items      # => [1, 2, 3]
   #   ('a'..'c').items  # => ['a', 'b', 'c']
   let items = Kex.Intrinsic.Range.items(this)
+
+  # The list operations, over the materialized items. A range is an ordered
+  # collection, so `(1..5).first` and `(1..5).length` are questions it can
+  # answer — and on the BEAM backend, where a range IS its item list, they
+  # already worked. Only the walker rejected them ("Undefined method: first
+  # for Range"), so every one of these was a backend divergence rather than a
+  # deliberate restriction.
+  let first = this.items.first
+  let second = this.items.second
+  let third = this.items.third
+  let last = this.items.last
+  let rest = this.items.rest
+  let length = this.items.length
+  let count = this.items.length
+  let empty? = this.items.empty?
+  let max = this.items.max
+  let min = this.items.min
+  let reverse = this.items.reverse
+  let sort = this.items.sort
+  let sort(comparator) = this.items.sort(comparator)
+  let uniq = this.items.uniq
+  let join(separator) = this.items.join(separator)
+  let at(index) = this.items.at(index)
+  let at(index, fallback) = this.items.at(index, fallback)
+  let take(n) = this.items.take(n)
+  let drop(n) = this.items.drop(n)
+  let indexOf(value) = this.items.indexOf(value)
+  let zip(other) = this.items.zip(other)
+  let partition(pred) = this.items.partition(pred)
+  let push(value) = this.items.push(value)
+  let reject(pred) = this.items.reject(pred)
 end

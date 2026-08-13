@@ -226,6 +226,20 @@ make String, implement: Enumerable, Foldable do
   chars :> [Char]
   let chars = Kex.Intrinsic.String.chars(this)
 
+  # Returns the string's UTF-8 encoding, one Byte per byte.
+  #
+  # `chars` is the TEXT view of a String and `bytes` is the STORAGE view, so
+  # they differ for anything outside ASCII: "é" is one Char and two Bytes.
+  #
+  # @return [[Byte]]
+  #
+  # @example
+  #   "hi".bytes    # => [104, 105]
+  #   "é".bytes     # => [195, 169]
+  #   "é".chars     # => ['é']
+  bytes :> [Byte]
+  let bytes = Kex.Intrinsic.String.bytes(this)
+
   # Splits on every occurrence of +sep+. With no argument, splits into
   # individual characters.
   #
@@ -235,6 +249,14 @@ make String, implement: Enumerable, Foldable do
   # @example
   #   "a,b,c".split(",")   # => ["a", "b", "c"]
   #   "hi".split           # => ["h", "i"]
+  # Separator-less: one part per character, as the example above shows. Only
+  # the intrinsic had this form, so the walker answered `"hi".split` with
+  # "'this' used outside of a method context" while BEAM returned the parts.
+  # Declared BEFORE the separator form, as `sort` is in list.kex: the walker
+  # resolves a no-argument call against the first clause of that name.
+  split :> [String]
+  let split = Kex.Intrinsic.String.split(this)
+
   split :> (String | Regex) -> [String]
   let split(sep) = Kex.Intrinsic.String.split(this, sep)
 
@@ -443,4 +465,28 @@ module String do
   # the Unicode scalar range return None.
   fromCodepoint : Integer -> String?
   let fromCodepoint(value) = Kex.Intrinsic.String.fromCodepoint(value)
+
+  # Rebuilds a String from its UTF-8 bytes — the inverse of `bytes`. A String
+  # is TEXT, so bytes outside 0..255 or a malformed encoding return None
+  # rather than a string that would decode to replacement characters.
+  #
+  #   String.fromBytes([104, 105])    # => Just("hi")
+  #   String.fromBytes([195, 169])    # => Just("é")
+  #   String.fromBytes([255])         # => None
+  fromBytes : [Byte] -> String?
+  let fromBytes(values) = Kex.Intrinsic.String.fromBytes(values)
+end
+
+make Tuple do
+  # Returns the tuple's elements as a list.
+  #
+  # A tuple is not a list — its arity is part of its type — so the List
+  # methods do not apply to it. This is the explicit conversion.
+  #
+  # @return [[Any]]
+  #
+  # @example
+  #   (1, "a").items   # => [1, "a"]
+  items :> [Any]
+  let items = Kex.Intrinsic.Tuple.items(this)
 end

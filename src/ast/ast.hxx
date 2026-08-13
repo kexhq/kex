@@ -541,6 +541,10 @@ struct TypeDef {
     std::vector<std::string> typeParams;
     std::vector<TypeName> parents;
     std::optional<std::vector<TypeExprPtr>> variants; // sum type
+    // A leading `|` (`type E = | DivideByZero`) forces the ADT reading of an
+    // otherwise ambiguous single bare name, which would otherwise be a
+    // transparent alias like `type FilePath = String`.
+    bool leadingPipe = false;
     std::optional<std::vector<AbstractFunction>> abstractFunctions;
     std::optional<StaticBlock> staticBlock;
 };

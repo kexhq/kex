@@ -1,0 +1,29 @@
+# A String has two views and a Tuple has one conversion. Before these, Kex
+# code had to reach through `Erlang.Erlang.binary_to_list` / `tuple_to_list`
+# to get at either — see tools/inspect_kexi.kex.
+
+main do
+  # --- chars is the TEXT view, bytes is the STORAGE view. They agree on
+  # ASCII and diverge everywhere else.
+  IO.printLine("hi".chars)
+  IO.printLine("hi".bytes)
+  IO.printLine("é".chars)
+  IO.printLine("é".bytes)
+  IO.printLine("é".chars.count)
+  IO.printLine("é".bytes.count)
+
+  # --- round trip
+  IO.printLine(String.fromBytes("héllo".bytes))
+  IO.printLine(String.fromBytes("héllo".bytes) == Just("héllo"))
+  IO.printLine(String.fromBytes([104, 105]))
+
+  # --- a String is TEXT, so bytes that are not valid UTF-8 are not a String
+  IO.printLine(String.fromBytes([255]))
+  IO.printLine(String.fromBytes([104, 300]))
+
+  # --- a tuple is not a list; `items` is the explicit conversion
+  IO.printLine((1, "a").items)
+  IO.printLine((1, 2, 3).items.count)
+  IO.printLine((1, 2, 3).items.map { |n| n })
+  IO.printLine(("x", :y, 3).items.first)
+end

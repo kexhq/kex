@@ -61,7 +61,7 @@ let stringify(value: Any) -> String do
     :map -> do
       let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
         let (key, item) = entry
-        "${encodeString(key)}:${stringify(item)}"
+        "${encodeString(objectKey(key))}:${stringify(item)}"
       end
       return "{${fields.join(",")}}"
     end
@@ -70,6 +70,16 @@ let stringify(value: Any) -> String do
 end
 
 private do
+  # A JSON object key is a string, but a Kex map literal is written with ATOM
+  # keys (`{ n: 1 }`) — the shape most values being stringified actually have.
+  # Rendering one gives `:n`, so drop the leading colon; anything else goes
+  # through its ordinary text form.
+  let objectKey(key: Any) -> String do
+    if Kex.Intrinsic.Kex.kind(key) == :string then return key end
+    let text = "${key}"
+    return text.startsWith?(":") then text.drop(1) else text
+  end
+
   let validateOptions(options: {Atom: Bool}) -> Error? do
     match Kex.Intrinsic.Map.keys(options).find { |key| key != allowCommentsKey() } do
       Just(key) -> return Just(UnknownOption(key))

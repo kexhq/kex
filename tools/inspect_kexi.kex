@@ -2,37 +2,15 @@
 #
 # KexI is Kex's module-interface format: a custom BEAM chunk (id "KexI")
 # holding the typed public surface + structural metadata of a module, stored
-# as an Erlang External Term Format (ETF) term. Because it is an ordinary BEAM
-# chunk, we read it straight from the artifact with `beam_lib` and decode it
-# with `binary_to_term` — no compiler tooling required.
+# as an Erlang External Term Format (ETF) term. `Kex.Interface.read` locates
+# and decodes it, so this needs no Erlang interop and runs on either backend.
 #
-# The decoded term is an ordinary tagged tuple of lists, tuples, and maps.
-# Since Kex shares the BEAM's value representation, we destructure it with
-# native Kex patterns and walk it with the normal List/Map methods; the
-# `Erlang.*` interop namespace is only needed for the four boundary calls that
-# actually reach into Erlang libraries.
-#
-# Run on BEAM (the Erlang.* calls require the BEAM backend):
-#   kex -R tools/inspect_kexi.kex <file.beam>
+# The decoded term is an ordinary tagged tuple of lists, tuples, and maps, so
+# it is destructured with native Kex patterns and walked with the normal
+# List/Map methods — `Tuple.items` where a tuple has to become a list.
 #
 # Try it on the prebuilt prelude:
-#   kex -R tools/inspect_kexi.kex build/runtime/beam/kex_prelude.beam
-
-# kex: run-beam
-
-# ── Erlang boundary (the only interop we truly need) ──────────────────
-
-# beam_lib and binary_to_term want charlists (Erlang strings), but Kex strings
-# are binaries, so convert at the boundary.
-foul readKexiChunk(file: FS.FilePath) -> Any do
-  let path = Erlang.Erlang.binary_to_list(file)
-  let id = Erlang.Erlang.binary_to_list("KexI")
-  return Erlang.Beam_lib.chunks(path, [id])
-end
-
-foul decode(bin: Any) -> Any do
-  return Erlang.Erlang.binary_to_term(bin)
-end
+#   kex tools/inspect_kexi.kex build/runtime/beam/kex_prelude.beam
 
 foul atomStr(a: Any) -> String do
   let rendered = a.to(String).or("")
@@ -40,18 +18,17 @@ foul atomStr(a: Any) -> String do
   return rendered
 end
 
-# BEAM tuples are not lists, so the List methods (.first/.at/.map) do not
-# apply to them directly. Convert a tuple to its element list once, then walk
-# it with ordinary Kex list operations.
+# A tuple is not a list, so the List methods (.first/.at/.map) do not apply to
+# it directly. `items` is the conversion; walk the result normally.
 foul fields(t: Any) -> [Any] do
-  return Erlang.Erlang.tuple_to_list(t)
+  return t.items
 end
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
-foul hex(bin: Any) -> String do
-  # A hash binary → lowercase hex string.
-  return Erlang.Erlang.binary_to_list(bin).map(~byteHex).join("")
+foul hex(bin: String) -> String do
+  # A hash string → lowercase hex, over its raw bytes.
+  return bin.bytes.map(~byteHex).join("")
 end
 
 foul byteHex(byte: Integer) -> String do
@@ -167,20 +144,18 @@ foul section(title: String, lines: [String]) do
 end
 
 foul inspect(file: String) do
-  let res = readKexiChunk(file)
-  abort("No KexI chunk in ${file}") if fields(res).first.or(:error) != :ok
-  printKexi(file, res)
+  match Kex.Interface.read(file) do
+    Just(term) -> printKexi(file, term)
+    None       -> abort("No KexI chunk in ${file}")
+  end
 end
 
-foul printKexi(file: String, res: Any) do
-  let (_ok, (_mod, chunks)) = res
-  let (_id, bin) = chunks.first.or(("KexI", ""))
-
+foul printKexi(file: String, term: Any) do
   # The two payload maps are always the last two tuple elements, regardless of
   # schema version. Older chunks are narrower: v1 is {kexi, version,
   # interfaceHash, typeInterface, metadata}; v6 adds artifact/source hashes and
   # an ABI-versions map in between. Index positionally so both decode.
-  let f: [Any] = fields(decode(bin))
+  let f: [Any] = fields(term)
   let n = f.count
   let typeIf = asMap(f.at(n - 2))
   let meta = asMap(f.at(n - 1))
@@ -221,9 +196,7 @@ foul abort(msg: String) do
 end
 
 main(args) do
-  abort("Please run on BEAM: kex -R tools/inspect_kexi.kex <file.beam>") if Kex.interpreted?
-
-  abort("Usage: kex -R tools/inspect_kexi.kex <file.beam>") if args.empty?
+  abort("Usage: kex tools/inspect_kexi.kex <file.beam>") if args.empty?
 
   inspect(args.first.or(""))
 end

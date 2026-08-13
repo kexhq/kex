@@ -1,0 +1,6 @@
+assert failure messages
+  ✗ reports the bare failure: assertion failed
+  ✗ reports the failure with its message: assertion failed: one is not two
+  ✓ says nothing when it passes
+
+1 passed, 2 failed

@@ -5,7 +5,8 @@
 %% (src/stdlib/string.kex). Receiver is the first argument.
 -module(kex_intrinsic_string).
 -export([upperCase/1, lowerCase/1, trim/1, split/1, split/2, replace/3, chars/1,
-          'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1]).
+          'startsWith?'/2, 'endsWith?'/2, 'contains?'/2, fromCodepoint/1,
+          bytes/1, fromBytes/1]).
 
 %% upperCase/lowerCase also take a Char ({'Char', N}) — Char in, Char out
 %% ('h'.upperCase → 'H'). A Char cannot expand, so it takes the SIMPLE
@@ -27,6 +28,27 @@ trim(S)      -> string:trim(S).
 %% chars/1 — the string's characters as a real [Char] (tagged tuples).
 chars(S) -> kex_intrinsic_list:as_list(S).
 
+%% bytes/1 — the string's UTF-8 encoding, one integer per byte. `chars` is the
+%% TEXT view and this is the STORAGE view: "é" is one Char and two bytes.
+bytes(S) when is_binary(S) -> binary_to_list(S);
+bytes(_) -> [].
+
+%% fromBytes/1 — the inverse. A String is TEXT, so bytes outside 0..255 or a
+%% malformed UTF-8 sequence answer None rather than building a binary that
+%% would decode to replacement characters.
+fromBytes(Values) when is_list(Values) ->
+    case lists:all(fun(B) -> is_integer(B) andalso B >= 0 andalso B =< 255 end,
+                   Values) of
+        false -> 'None';
+        true ->
+            Bin = list_to_binary(Values),
+            case unicode:characters_to_binary(Bin, utf8, utf8) of
+                Valid when is_binary(Valid) -> {'Just', Valid};
+                _ -> 'None'
+            end
+    end;
+fromBytes(_) -> 'None'.
+
 fromCodepoint(Value)
   when is_integer(Value), Value >= 0, Value =< 16#10ffff,
        not (Value >= 16#d800 andalso Value =< 16#dfff) ->
@@ -40,6 +62,10 @@ split(S) -> [<<C/utf8>> || C <- unicode:characters_to_list(S)].
 %% src/interpreter/stdlib/string.cxx. Constructing a Regex needs `using Regex`,
 %% so this clause is unreachable without it.
 split(S, {'Regex', _} = Regex) -> kex_intrinsic_regex:split(S, Regex, 0);
+%% An empty separator is the string form of `.chars` — one part per character,
+%% the same answer `split/1` gives. `string:split/3` returns the whole string
+%% for it instead, which is where the walker and BEAM disagreed.
+split(S, <<>>) -> split(S);
 split(S, Sep) -> string:split(S, Sep, all).
 
 %% Global literal replacement. Empty pattern follows Ruby's boundary

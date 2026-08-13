@@ -228,6 +228,18 @@ static auto replTrimLeadingIndent(std::string source) -> std::string {
 // earlier quoted/unquoted flip had already changed the state at that
 // point). Applying this uniformly across the whole string is what makes
 // it position-independent and actually robust (spec/json_parser.spec.kex).
+// `std::system` hands back a wait STATUS, not an exit code — returning it
+// straight from main() truncates to the low 8 bits, which are zero for every
+// normal exit: `System.exit(3)` reported 0 under `-R` where the walker
+// reported 3, and `die` reported 0 where the walker reported 1.
+static auto exitStatusOf(int waitStatus) -> int {
+  if (WIFEXITED(waitStatus))
+    return WEXITSTATUS(waitStatus);
+  if (WIFSIGNALED(waitStatus))
+    return 128 + WTERMSIG(waitStatus);
+  return waitStatus == 0 ? 0 : 1;
+}
+
 static auto shellSingleQuote(const std::string &s) -> std::string {
   std::string out = "'";
   for (char c : s) {
@@ -2339,6 +2351,13 @@ int main(int argc, char *argv[]) {
           kex::Lexer semanticLexer(semanticSource, "<repl>");
           kex::Parser semanticParser(semanticLexer.tokenizeAll(), "<repl>");
           auto semanticProgram = semanticParser.parseProgram();
+          // Loaded declarations go BEFORE the replayed main block: the
+          // checker registers a module's functions as it checks them, so a
+          // module appended after the call site is registered too late and
+          // `Loaded.values()` came back untyped — the walker REPL, which
+          // prepends the same source, reported `[Integer]` for it while this
+          // one fell back to the runtime `[Int]`.
+          std::vector<kex::ast::TopLevelItem> loadedItems;
           for (const auto& f : loadedBeamFiles) {
             auto fs = readFile(f);
             kex::Lexer fl(std::move(fs), f);
@@ -2347,7 +2366,13 @@ int main(int argc, char *argv[]) {
             for (auto& item : fprog.items)
               if (!std::holds_alternative<
                       std::unique_ptr<kex::ast::MainBlock>>(item))
-                semanticProgram.items.push_back(std::move(item));
+                loadedItems.push_back(std::move(item));
+          }
+          if (!loadedItems.empty()) {
+            loadedItems.reserve(loadedItems.size() + semanticProgram.items.size());
+            for (auto& item : semanticProgram.items)
+              loadedItems.push_back(std::move(item));
+            semanticProgram.items = std::move(loadedItems);
           }
           // Installed stdlib modules already have a typed source interface.
           // Keep them external here: merging their source into the replay
@@ -3217,7 +3242,14 @@ int main(int argc, char *argv[]) {
 
     // Load explicitly — code:load_abs rejects when filename != module name,
     // so use code:load_binary which skips that check.
+    // Force UTF-8 on the node's I/O instead of inheriting it from the locale.
+    // An `erl` started under a non-UTF-8 LANG (the Linux CI runner) writes
+    // `\x{2717}` for `✗` and mangles every non-ASCII byte, so a Kex program's
+    // output depended on the environment: identical source printed `[h, é, é]`
+    // here and `[h, \ufffd, \ufffd]` there.
     std::string mainCall =
+        "io:setopts(standard_io, [{encoding, unicode}]), "
+        "io:setopts(standard_error, [{encoding, unicode}]), "
         "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
         "\"), "
         "code:load_binary('" +
@@ -3254,7 +3286,7 @@ int main(int argc, char *argv[]) {
         runCmd += " " + a;
     }
     int rc = std::system(runCmd.c_str());
-    return rc;
+    return exitStatusOf(rc);
   }
 
   // Reject non-.kex files before trying to parse them.
@@ -3626,6 +3658,14 @@ int main(int argc, char *argv[]) {
         }
         erlcRet = std::system(coreCmd.c_str());
         if (erlcRet != 0) {
+          // The quiet mode above swallows erlc's own diagnostic — which is the
+          // only thing that says WHY. Re-run it loudly on failure so the
+          // message reaches the terminal (and CI) instead of a bare
+          // "erlc failed", which is all a failing spec could report.
+          if (!tempDir.empty())
+            std::system(("erlc +from_core -pa " + outputDir + " -o " +
+                         outputDir + " " + corePaths[moduleIndex])
+                            .c_str());
           std::cerr << "error: erlc failed\n";
           if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
           return 1;
@@ -3746,14 +3786,18 @@ int main(int argc, char *argv[]) {
             "io:format(standard_error, \"Internal error: ~ts~n\", [_R]); "
             "_R -> io:format(standard_error, \"Internal error: ~p~n\", [_R]) "
             "end";
+        // Same UTF-8 pinning as the `.beam` runner above.
+        const std::string utf8Io =
+            "io:setopts(standard_io, [{encoding, unicode}]), "
+            "io:setopts(standard_error, [{encoding, unicode}]), ";
         std::string mainCall =
             result.mainArity == 1
-                ? "try " + loadExpr + "'" + result.moduleName +
+                ? utf8Io + "try " + loadExpr + "'" + result.moduleName +
                       "':main([unicode:characters_to_binary(A) || A <- "
                       "init:get_plain_arguments()]) of Result -> halt() catch "
                       "_:Reason:_ -> " +
                       reasonFmt + ", halt(1) end"
-                : "try " + loadExpr + "'" + result.moduleName +
+                : utf8Io + "try " + loadExpr + "'" + result.moduleName +
                       "':main() of Result -> halt() catch _:Reason:_ -> " +
                       reasonFmt + ", halt(1) end";
         // shellSingleQuote (see its own comment) wraps the whole
@@ -3770,7 +3814,7 @@ int main(int argc, char *argv[]) {
         int ret = std::system(runCmd.c_str());
         if (!tempDir.empty())
           std::filesystem::remove_all(tempDir);
-        return ret;
+        return exitStatusOf(ret);
       }
       return 0;
     }

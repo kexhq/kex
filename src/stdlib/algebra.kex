@@ -10,6 +10,23 @@
 # bindings the type checker and name resolver cannot see.
 type Ordering = Less | Equal | Greater
 
+trait Comparable do
+  # A total order: `compare` answers Less, Equal or Greater. `==` stays
+  # independent — a type may be Equatable without being ordered.
+  compare :> This -> Ordering
+end
+
+# Number carries the implementation, so Integer and Float both inherit it
+# rather than repeating the same three comparisons. Mixed receivers work
+# because `<` and `>` promote across the two (`1.compare(1.0)` is Equal).
+make Number, implement: Comparable do
+  let compare(other: Number) -> Ordering do
+    return Less if this < other
+    return Greater if this > other
+    return Equal
+  end
+end
+
 trait Monoid do
   # `combine` must be associative and `identity` neutral on both sides.
   identity :> This

@@ -1,0 +1,67 @@
+# Comparable is defined once on Number; Integer and Float inherit it rather
+# than each repeating the comparisons. Mixed receivers work because `<` and
+# `>` promote across the two.
+
+# A `make Number` block reaches both concrete levels of the hierarchy.
+make Number do
+  let describe -> String = "n=${this}"
+end
+
+# A more specific implementation still wins over the Number one.
+make Number do
+  let level -> String = "number"
+end
+
+make Integer do
+  let level -> String = "integer"
+end
+
+# A union target applies the block to every member — and to nothing else.
+make Float | Integer do
+  let doubled -> Number = this * 2
+end
+
+# A Number-annotated free function takes either concrete type.
+add : Number -> Number -> Number
+let add(x, y) = x + y
+
+main do
+  IO.printLine("-- compare on Integer --")
+  IO.printLine(1.compare(2))
+  IO.printLine(2.compare(1))
+  IO.printLine(1.compare(1))
+
+  IO.printLine("-- compare on Float --")
+  IO.printLine(1.5.compare(2.5))
+  IO.printLine(2.5.compare(1.5))
+  IO.printLine(3.5.compare(3.5))
+
+  IO.printLine("-- compare across Integer and Float --")
+  IO.printLine(1.compare(1.0))
+  IO.printLine(1.compare(1.5))
+  IO.printLine(2.compare(1.5))
+  IO.printLine(1.5.compare(2))
+  IO.printLine(2.0.compare(2))
+
+  IO.printLine("-- make Number covers both --")
+  IO.printLine(3.describe)
+  IO.printLine(3.5.describe)
+
+  IO.printLine("-- concrete type wins over Number --")
+  IO.printLine(3.level)
+  IO.printLine(3.5.level)
+
+  IO.printLine("-- union make target --")
+  IO.printLine(3.doubled)
+  IO.printLine(3.5.doubled)
+
+  IO.printLine("-- Number-annotated free function --")
+  IO.printLine(add(4, 2))
+  IO.printLine(add(4.1, 6.44))
+  IO.printLine(add(4, 6.44))
+
+  IO.printLine("-- Duration.compareTo delegates to Number.compare --")
+  IO.printLine(Duration.seconds(1).compareTo(Duration.seconds(2)))
+  IO.printLine(Duration.seconds(2).compareTo(Duration.seconds(1)))
+  IO.printLine(Duration.seconds(1).compareTo(Duration.seconds(1)))
+end

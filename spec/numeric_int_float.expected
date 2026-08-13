@@ -1,0 +1,39 @@
+-- equality --
+true
+true
+false
+false
+true
+-- ordering promotes --
+true
+true
+true
+true
+true
+true
+true
+true
+-- arithmetic promotes (unchanged) --
+2.0
+2.5
+0.5
+-- integer literal patterns --
+int-zero pattern
+int-zero pattern
+other: 1
+-- float literal patterns --
+float-zero pattern
+float-zero pattern
+other: 1.5
+-- nested patterns --
+true
+true
+false
+-- literal pattern with guard --
+zero then positive
+zero then positive
+zero
+nonzero
+-- match expression --
+0.0 matched the 0 arm
+3 matched the 3.0 arm

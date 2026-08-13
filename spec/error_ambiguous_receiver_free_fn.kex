@@ -1,0 +1,15 @@
+# kex: check-only
+# The same tie, one declaration form apart: a free function and a `make` method
+# for the same receiver type. The walker chose the make method, BEAM the free
+# function — a silent backend divergence, and a direct violation of the rule
+# that declaration form carries no dispatch priority.
+tag : String -> String
+let tag(s) = "free/String"
+
+make String do
+  let tag -> String = "make/String"
+end
+
+main do
+  IO.printLine("x".tag)
+end

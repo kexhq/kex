@@ -494,7 +494,11 @@ int main() {
                                "\nlet t = Loaded.values()\nt\n");
             std::remove(sourcePath);
             assertTrue(out.find("loaded ") != std::string::npos, out);
-            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
+            // `[Integer]`, not the runtime-inspected `[Int]`: the checker now
+            // knows a loaded module function's signature (see
+            // publishQualifiedSignatures), so the REPL reports the static type
+            // here exactly as it does for every other known binding.
+            assertTrue(out.find("=> [5, 6, 7] : [Integer]") != std::string::npos, out);
         });
     });
 
@@ -611,7 +615,11 @@ int main() {
                                    "\nlet t = Loaded.values()\nt\n");
             std::remove(sourcePath);
             assertTrue(out.find("loaded ") != std::string::npos, out);
-            assertTrue(out.find("=> [5, 6, 7] : [Int]") != std::string::npos, out);
+            // `[Integer]`, not the runtime-inspected `[Int]`: the checker now
+            // knows a loaded module function's signature (see
+            // publishQualifiedSignatures), so the REPL reports the static type
+            // here exactly as it does for every other known binding.
+            assertTrue(out.find("=> [5, 6, 7] : [Integer]") != std::string::npos, out);
         });
 
         it("keeps imported unit modules and lambda bindings live across reloads", []() {

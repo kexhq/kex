@@ -1,0 +1,11 @@
+# kex: no-check
+# An undefined method names the RECEIVER'S TYPE and the call site. BEAM used
+# to report the method alone, with no type and (for a dispatcher) no location.
+record Box do
+  size : Integer
+end
+
+main do
+  IO.printLine(Box { size: 1 }.size)
+  IO.printLine([1, 2, 3].nosuchMethod)
+end

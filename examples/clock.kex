@@ -1,0 +1,13 @@
+foul tick do
+ let now = Time.now()
+ IO.printLine(now.iso.enclose(Console.BLUE, Console.RESET))
+ receive timeout: 1000 do
+    _ -> IO.warning("say what?")
+  end
+  tick()
+end
+
+
+main do
+  tick()
+end

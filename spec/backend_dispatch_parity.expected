@@ -1,0 +1,41 @@
+-- Ordering is a Monoid with clause-set dispatch --
+true
+true
+true
+true
+-- a local record shadows a same-named prelude one --
+/admin/users
+local
+invalid float
+-- a top-level constant beats an imported accessor --
+42
+-- a Range answers the list questions, like on BEAM --
+1
+5
+5
+5
+[5, 4, 3, 2, 1]
+1,2,3,4,5
+[1, 2]
+5
+-- modulo takes the divisor's sign, as number.kex states --
+1
+2
+-2
+-1
+-2
+-- splitting on "" is the string form of .chars --
+[a, b, c]
+[h, é, é]
+[a, b, c]
+[a, b]
+-- UFCS runs both ways --
+3
+[A, B]
+-- a `?` parameter name --
+required
+-- ~f on a trait-constrained function --
+area=9.0
+-- an untyped binding dispatches on its runtime value --
+2026
+2026

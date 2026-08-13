@@ -1,7 +1,54 @@
 #include "../../common/version.hxx"
+#include "../../beam/beam_file.hxx"
+#include "../../beam/etf.hxx"
 #include "../evaluator.hxx"
 
 namespace kex::interpreter {
+
+namespace {
+
+// An Erlang external term as a Kex value. The KexI chunk is a plain tree of
+// tuples, lists, atoms, integers and binaries, so it maps across directly and
+// a Kex program can walk it with ordinary pattern matching.
+auto termToValue(const beam::TermPtr& term) -> ValuePtr {
+    if (!term) return Value::none();
+    return std::visit([](const auto& node) -> ValuePtr {
+        using T = std::decay_t<decltype(node)>;
+        if constexpr (std::is_same_v<T, beam::Term::Atom>) {
+            // The KexI schema uses `true`/`false` as booleans, not atoms.
+            if (node.name == "true") return Value::boolean(true);
+            if (node.name == "false") return Value::boolean(false);
+            return Value::atom(node.name);
+        } else if constexpr (std::is_same_v<T, beam::Term::Int>) {
+            return Value::integer(node.value);
+        } else if constexpr (std::is_same_v<T, beam::Term::Bin>) {
+            return Value::string(std::string(node.data.begin(), node.data.end()));
+        } else if constexpr (std::is_same_v<T, beam::Term::Tuple>) {
+            std::vector<ValuePtr> elements;
+            elements.reserve(node.elements.size());
+            for (const auto& element : node.elements)
+                elements.push_back(termToValue(element));
+            return Value::tuple(std::move(elements));
+        } else if constexpr (std::is_same_v<T, beam::Term::List>) {
+            std::vector<ValuePtr> elements;
+            elements.reserve(node.elements.size());
+            for (const auto& element : node.elements)
+                elements.push_back(termToValue(element));
+            return Value::list(std::move(elements));
+        } else if constexpr (std::is_same_v<T, beam::Term::Map>) {
+            MapValue map;
+            for (const auto& [key, value] : node.pairs)
+                map.entries.push_back({termToValue(key), termToValue(value)});
+            auto out = std::make_shared<Value>();
+            out->data = std::move(map);
+            return out;
+        } else {
+            return Value::list({});
+        }
+    }, term->value);
+}
+
+} // namespace
 
 auto Evaluator::registerKexBuiltins() -> void {
     auto makeVariant = [](const std::string& tag) -> ValuePtr {
@@ -102,6 +149,27 @@ auto Evaluator::registerKexBuiltins() -> void {
         return Value::tuple({Value::integer(kVersionMajor),
                              Value::integer(kVersionMinor),
                              Value::integer(kVersionPatch), revision});
+    });
+
+    // Kex.Intrinsic.Interface.read — the KexI chunk of a compiled module,
+    // decoded. Reading a BEAM chunk and decoding an Erlang external term are
+    // both things the compiler already does natively, so this works on the
+    // tree walker as well as on BEAM; a Kex program needed
+    // `Erlang.Beam_lib.chunks` plus `Erlang.Erlang.binary_to_term` for it.
+    defineIntrinsic("Interface::read", [](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        auto* path = std::get_if<StringValue>(&args[0]->data);
+        if (!path) return Value::none();
+        try {
+            auto beam = beam::readBeamFile(path->value);
+            const auto* chunk = beam.findChunk("KexI");
+            if (!chunk) return Value::none();
+            return Value::just(termToValue(beam::decodeEtf(chunk->data)));
+        } catch (const std::exception&) {
+            // A missing file, a non-BEAM file, or a chunk this build cannot
+            // decode all mean the same thing to the caller: no interface here.
+            return Value::none();
+        }
     });
 
     defineIntrinsic("Kex::featureHas?", hasFeature);

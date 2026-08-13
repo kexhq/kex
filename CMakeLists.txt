@@ -137,6 +137,7 @@ add_library(kex_lib
     src/parser/parser.cxx
     src/semantic/symbol.cxx
     src/semantic/analyzer.cxx
+    src/semantic/receiver_conflicts.cxx
     src/semantic/types.cxx
     src/semantic/traits.cxx
     src/semantic/typechecker.cxx

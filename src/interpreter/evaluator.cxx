@@ -503,6 +503,10 @@ auto Evaluator::execUsingBlock(const ast::UsingBlock& block,
 
     const bool scoped = !block.body.empty();
     if (scoped) pushEnv();
+    // Records the import for make-block visibility (see makeMethodInScope) —
+    // after pushEnv, so a `using M do ... end` ends with its block.
+    if (m_usingModules.empty()) m_usingModules.emplace_back();
+    m_usingModules.back().insert(moduleName);
     try {
         for (const auto& requested : block.onlyNames)
             if (imported->second.privateNames.contains(requested))
@@ -549,6 +553,9 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     // Publish the module shell before its body so a dependency cycle can see
     // already-known module identity while definitions are still registering.
     m_moduleRegistry.try_emplace(moduleName, ModuleEntry{});
+    // The types this module declares — a `make` for one of them is that type's
+    // own interface, not a patch of someone else's (see execMakeDefFor).
+    kex::collectDeclaredTypeNames(mod.body, m_moduleDeclaredTypes[moduleName]);
     std::unordered_set<std::string> publicNames;
     std::unordered_set<std::string> privateNames;
     for (const auto& item : mod.body) {
@@ -1159,19 +1166,18 @@ auto Evaluator::execFunctionDef(const ast::FunctionDef& def,
 
 auto Evaluator::execMakeDef(const ast::MakeDef& def,
                             const std::string& enclosingModule) -> void {
-    // Extract type name from make target
-    std::string typeName;
-    if (def.target) {
-        if (auto* named = std::get_if<ast::TypeName>(&def.target->kind)) {
-            if (!named->parts.empty()) typeName = named->parts[0];
-        } else if (auto* generic = std::get_if<ast::GenericType>(&def.target->kind)) {
-            if (!generic->name.parts.empty()) typeName = generic->name.parts[0];
-        } else if (std::holds_alternative<ast::ListType>(def.target->kind)) {
-            typeName = "List";
-        } else if (std::holds_alternative<ast::MapType>(def.target->kind)) {
-            typeName = "Map";
-        }
-    }
+    // A union target (`make Float | Integer`) applies the block to every
+    // member, so registration runs once per name. A block with no nameable
+    // target still runs once with an empty name, as it always has.
+    auto targetNames = kex::makeTargetNames(def.target);
+    if (targetNames.empty()) targetNames.push_back("");
+    for (const auto& typeName : targetNames)
+        execMakeDefFor(def, typeName, enclosingModule);
+}
+
+auto Evaluator::execMakeDefFor(const ast::MakeDef& def,
+                               const std::string& typeName,
+                               const std::string& enclosingModule) -> void {
 
     // A method's call arity: AST param count, +1 for the implicit `this` unless
     // the first param IS the receiver (an `@`/record/range pattern). So
@@ -1200,6 +1206,19 @@ auto Evaluator::execMakeDef(const ast::MakeDef& def,
                 if (auto* vf = std::get_if<std::unique_ptr<ast::FunctionDef>>(&vi))
                     addOwn(vf->get());
     }
+
+    // A module-scoped `make` is import-gated when it patches a FOREIGN type:
+    // remember which module its methods came from, so resolveMethodName can
+    // skip them where that module is not in scope. A `make` for a type the
+    // same module declares is that type's own interface and travels with its
+    // values (`SQL.select(:all).from(:users)`), so it stays reachable — as does
+    // every top-level `make`.
+    if (!enclosingModule.empty() && !typeName.empty() &&
+        !m_moduleDeclaredTypes[enclosingModule].count(typeName))
+        for (const auto& [method, arity] : ownMethods) {
+            (void)arity;
+            m_makeMethodModule[typeName + "::" + method] = enclosingModule;
+        }
 
     // Process the make block's own methods.
     for (const auto& item : def.body) {
@@ -2514,6 +2533,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     defineImported(name, name, moduleName, !node.onlyNames.empty(), "",
                                    value, expr.location);
                 }
+                if (m_usingModules.empty()) m_usingModules.emplace_back();
+                m_usingModules.back().insert(moduleName);
                 if (node.alias) m_env->define(*node.alias, Value::module(moduleName));
                 for (const auto& e : node.body) {
                     if (e) eval(*e);
@@ -2695,6 +2716,11 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value < ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt < *rightInt);
             if (lf && rf) return Value::boolean(lf->value < rf->value);
+            // Mixed Integer/Float promotes, exactly as the arithmetic
+            // operators above do — ordering must not be the one place where
+            // `1 < 1.5` is an error.
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) < rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value < intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value < rs->value);
             if (lc && rc) return Value::boolean(lc->value < rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2703,6 +2729,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value > ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt > *rightInt);
             if (lf && rf) return Value::boolean(lf->value > rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) > rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value > intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value > rs->value);
             if (lc && rc) return Value::boolean(lc->value > rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2711,6 +2739,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value <= ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt <= *rightInt);
             if (lf && rf) return Value::boolean(lf->value <= rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) <= rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value <= intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value <= rs->value);
             if (lc && rc) return Value::boolean(lc->value <= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -2719,6 +2749,8 @@ auto Evaluator::evalBinaryOp(TokenType op, const ValuePtr& left, const ValuePtr&
             if (li && ri) return Value::boolean(li->value >= ri->value);
             if (leftInt && rightInt) return Value::boolean(*leftInt >= *rightInt);
             if (lf && rf) return Value::boolean(lf->value >= rf->value);
+            if (leftInt && rf) return Value::boolean(intToDouble(li, *leftInt) >= rf->value);
+            if (lf && rightInt) return Value::boolean(lf->value >= intToDouble(ri, *rightInt));
             if (ls && rs) return Value::boolean(ls->value >= rs->value);
             if (lc && rc) return Value::boolean(lc->value >= rc->value);
             throw RuntimeError("Cannot compare " + left->typeName() + " and " + right->typeName(), loc);
@@ -3123,6 +3155,28 @@ auto Evaluator::runtimeTypeKey(const ast::TypeExpr& type) const -> std::string {
     }, type.kind);
 }
 
+// Is the module owning `Type::method` in scope here? A method from a top-level
+// `make` (no owner) always is. Otherwise it takes a `using` — file-level or the
+// lexical block form, both recorded in m_usingModules — or a call from inside
+// the module itself. Before this, a `make` inside a module was the one module
+// member visible everywhere with no import at all.
+auto Evaluator::makeMethodInScope(const std::string& qualified) const -> bool {
+    auto owner = m_makeMethodModule.find(qualified);
+    if (owner == m_makeMethodModule.end()) return true;
+    const auto& module = owner->second;
+    if (module.empty()) return true;
+    if (m_currentModule == module ||
+        m_currentModule.rfind(module + ".", 0) == 0)
+        return true;
+    for (const auto& scope : m_usingModules)
+        for (const auto& imported : scope)
+            if (imported == module ||
+                imported.rfind(module + ".", 0) == 0 ||
+                module.rfind(imported + ".", 0) == 0)
+                return true;
+    return false;
+}
+
 auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                                   const std::string& method,
                                   const std::vector<ValuePtr>* args) const
@@ -3233,12 +3287,22 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             break;
         }
         if (!imported.empty()) return imported;
-        if (typedMatches ||
-            (protocolMethod && typedExists && !typedHasSignatures))
+        if ((typedMatches ||
+             (protocolMethod && typedExists && !typedHasSignatures)) &&
+            makeMethodInScope(typed))
             return typed;
     }
 
-    if (m_env->get(typed)) return typed;
+    if (m_env->get(typed) && makeMethodInScope(typed)) return typed;
+
+    // `make Number do ... end` covers Integer and Float. Below the concrete
+    // lookup above, so a type defining the method itself still wins, and
+    // above the trait fallback, since it is a real implementation.
+    for (const auto& super : dispatchSupertypes(receiverType)) {
+        auto typedBySuper = super + "::" + method;
+        if (m_env->get(typedBySuper) && makeMethodInScope(typedBySuper))
+            return typedBySuper;
+    }
 
     // A variant value is tagged with its constructor while methods are
     // registered under the parent ADT's name. This has to be tried before the
@@ -3317,8 +3381,21 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
                 // mpz_class(string) handles literal patterns too big for
                 // int64_t the same way IntLiteral evaluation does; asInteger
                 // matches against either runtime representation of Integer.
-                auto valueInt = asInteger(value);
-                return valueInt && *valueInt == mpz_class(pat.literal.value);
+                auto literal = mpz_class(pat.literal.value);
+                if (auto valueInt = asInteger(value)) return *valueInt == literal;
+                // A Float scrutinee matches numerically, so patterns agree
+                // with `==` — `safeDiv(_, 0)` catches a 0.0 divisor.
+                if (auto* fv = std::get_if<FloatValue>(&value->data))
+                    return fv->value == literal.get_d();
+                return false;
+            }
+            if (pat.literal.type == TokenType::Float) {
+                const double literal = std::stod(pat.literal.value);
+                if (auto* fv = std::get_if<FloatValue>(&value->data))
+                    return fv->value == literal;
+                if (auto valueInt = asInteger(value))
+                    return valueInt->get_d() == literal;
+                return false;
             }
             if (pat.literal.type == TokenType::String ||
                 pat.literal.type == TokenType::RawString) {
@@ -3685,12 +3762,14 @@ auto Evaluator::registerBuiltins() -> void {
 auto Evaluator::pushEnv() -> void {
     m_env = std::make_shared<Environment>(m_env);
     m_importScopes.emplace_back();
+    m_usingModules.emplace_back();
 }
 
 auto Evaluator::popEnv() -> void {
     if (m_env->parent()) {
         m_env = m_env->parent();
         m_importScopes.pop_back();
+        m_usingModules.pop_back();
     }
 }
 

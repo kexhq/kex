@@ -424,6 +424,16 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
             return variant;
         };
 
+        // An optional leading `|` marks the list as variants even when only
+        // one follows — the one thing that distinguishes
+        // `type E = | DivideByZero` (ADT) from `type FilePath = String`
+        // (transparent alias).
+        skipNewlines();
+        if (match(TokenType::Pipe)) {
+            def->leadingPipe = true;
+            skipNewlines();
+        }
+
         // Parse using variant parser that handles constructors with args
         // First variant, then check for | (with newline support)
         def->variants->push_back(parseVariant());
@@ -898,21 +908,24 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
 // ===== Type Expressions =====
 
 auto Parser::parseTypeExpr() -> ast::TypeExprPtr {
-    return parseTypeOr();
+    return parseTypeUnion();
 }
 
 // `T or! E`  →  Result<T, E>   (Ok/Error constructors)
 // `T or L`   →  Either<T, L>   (Right/Left constructors)
-// Lower precedence than `|` (ADT union) and `->` (function type).
+// Binds TIGHTER than `->` (function type) and `|` (ADT union), so a standalone
+// annotation `f : A -> B or! E` gives the RESULT the error channel
+// (`A -> Result<B, E>`) rather than wrapping the whole function type — which is
+// what the same signature means when written as `let f(a: A) -> B or! E`.
 auto Parser::parseTypeOr() -> ast::TypeExprPtr {
-    auto left = parseTypeUnion();
+    auto left = parseTypePostfix();
 
     // `or` is context-sensitive: only a keyword in type position (stays as
     // LowerIdent in expression position so `.or(...)` and `let or = ...` work).
     if (check(TokenType::LowerIdent) && peek().value == "or") {
         advance();
         bool isResult = match(TokenType::Bang); // consume `!` if present
-        auto right = parseTypeUnion();
+        auto right = parseTypePostfix();
 
         auto result = std::make_unique<ast::TypeExpr>();
         result->location = left->location;
@@ -944,7 +957,7 @@ auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
 }
 
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
-    auto left = parseTypePostfix();
+    auto left = parseTypeOr();
 
     if (match(TokenType::Arrow)) {
         auto funcType = std::make_unique<ast::TypeExpr>();

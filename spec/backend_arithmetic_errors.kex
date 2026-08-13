@@ -1,0 +1,15 @@
+# kex: no-check
+# Arithmetic failures report the same thing on both backends. `-` and `*` are
+# raw Erlang ops on BEAM, which answer `badarith` for a float overflow and for
+# a non-number operand alike; the walker names which happened, and with what
+# sign. Provably-integer operands keep the raw BIF, so this costs the hot path
+# nothing (see the routing in lowerBinary).
+main do
+  IO.printLine(2 * 3)
+  IO.printLine(2.5 * 2)
+  IO.printLine(7 - 3)
+  IO.printLine((2 ^ 70) * 2)
+  IO.printLine(5 / 2)
+  IO.printLine(2.0 ^ 3)
+  IO.printLine(1e308 * 10)
+end

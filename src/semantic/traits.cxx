@@ -75,6 +75,17 @@ auto TraitRegistry::satisfies(const TypePtr& type, const std::string& traitName)
         return false;
     }
 
+    // A union satisfies a trait exactly when every member does — every value
+    // it can hold implements the trait. This is what lets a union `make`
+    // target be used at the trait: `make Float | Integer` has a `Number`
+    // receiver, so a method there may be declared to return `Number`.
+    if (auto* uni = std::get_if<UnionType>(&type->kind)) {
+        if (uni->members.empty()) return false;
+        for (const auto& member : uni->members)
+            if (!satisfies(member, traitName)) return false;
+        return true;
+    }
+
     if (traitName == "Number" || traitName == "Integer" || traitName == "Float") {
         return satisfiesStructurally(type, traitName);
     }

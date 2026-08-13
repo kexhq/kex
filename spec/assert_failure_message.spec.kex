@@ -1,0 +1,19 @@
+# kex: no-check
+# A failing `assert` reports the same message on both backends. The BEAM
+# runtime used to build the default message as an Erlang charlist, which is an
+# ordinary list of integers in Kex — it printed as `[97, 115, ...]` there while
+# the walker said "assertion failed".
+
+describe("assert failure messages") do
+  it("reports the bare failure") do
+    assert(1 == 2)
+  end
+
+  it("reports the failure with its message") do
+    assert(1 == 2, "one is not two")
+  end
+
+  it("says nothing when it passes") do
+    assert(1 == 1)
+  end
+end

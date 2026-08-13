@@ -9,6 +9,7 @@
 #include <deque>
 #include <memory>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -178,6 +179,11 @@ private:
                          const std::string& enclosingModule = "") -> void;
     auto execMakeDef(const ast::MakeDef& def,
                      const std::string& enclosingModule = "") -> void;
+    // One member of the make target — called once per name so a union target
+    // (`make Float | Integer`) registers the block under each.
+    auto execMakeDefFor(const ast::MakeDef& def,
+                        const std::string& typeName,
+                        const std::string& enclosingModule) -> void;
     auto execTypeDef(const ast::TypeDef& def,
                      const std::string& moduleScope = "") -> void;
     auto execRecordDef(const ast::RecordDef& def, const std::string& moduleScope = "") -> void;
@@ -233,6 +239,7 @@ private:
         -> std::optional<std::string>;
     auto receiverArgumentOffset(const std::string& functionName,
                                 const std::vector<ValuePtr>& args) const -> size_t;
+    auto makeMethodInScope(const std::string& qualified) const -> bool;
     auto resolveMethodName(const ValuePtr& receiver, const std::string& method,
                            const std::vector<ValuePtr>* args = nullptr) const
         -> std::string;
@@ -344,6 +351,16 @@ private:
     std::vector<std::unique_ptr<std::string>> m_loadedModulePaths;
     std::vector<std::unique_ptr<ast::Program>> m_loadedModulePrograms;
     std::string m_currentModule;
+    // `Type::method` of every method a module-scoped `make` defines -> that
+    // module. A module-scoped `make` is import-gated like every other module
+    // member, so resolution skips one whose module is not in scope; a
+    // top-level `make` never appears here and stays global.
+    std::unordered_map<std::string, std::string> m_makeMethodModule;
+    // Type names each module declares, for the rule above.
+    std::unordered_map<std::string, std::set<std::string>> m_moduleDeclaredTypes;
+    // Modules brought into scope by `using`, one set per environment scope so
+    // the lexical `using M do ... end` form ends with its block.
+    std::vector<std::set<std::string>> m_usingModules;
     struct ImportOrigin { std::string module; bool explicitImport = false; };
     std::vector<std::unordered_map<std::string, ImportOrigin>> m_importScopes{{}};
     std::unordered_map<std::string, ImportOrigin> m_moduleImportOrigins;

@@ -1,0 +1,9 @@
+let sayHello() = IO.printLine("Hello World!")
+
+foul actuallySayHello() = IO.printLine("Hello World!")
+
+main do
+  10.times { actuallySayHello }
+
+  10.times { sayHello }
+end

@@ -1,6 +1,23 @@
 # Compile-Time Expression Evaluation
 
-> 📋 **Design doc — not yet implemented.** `compiled do` blocks and compile-time `.emit()`/`.compile()` evaluation are not built yet.
+> 📋 **Design doc — mostly built.** This is the original sketch, kept for its
+> reasoning. What actually exists (and where it deviates) is
+> `docs/compiled-status.md`; what is left is `docs/compiled-todo.md`.
+>
+> Built since: `compiled do` blocks, compile-time constants, `let %name` /
+> `type %name` / `make %name` generation, chain collapse including
+> placeholders for free runtime variables, and `--collapse-report`.
+>
+> Deviations worth knowing before trusting the text below:
+> - **`.emit()` is not a special name.** Any method of a `compiled` block
+>   terminating an all-known expression collapses; the trigger is "fully
+>   determined", not the chain shape or the method's name.
+> - **Placeholder misuse is not an error.** Where this doc specifies a hard
+>   error at the call site, the implementation falls back to building at
+>   runtime and reports it under `--collapse-report`. Failing the build for a
+>   program that is merely un-optimizable was the wrong trade.
+> - **`Symbol` is not a Kex type.** The examples below said `Symbol`; atoms are
+>   `Atom`, and that is what they now say.
 
 ## Summary
 
@@ -15,8 +32,8 @@ A module defines its builder methods inside a `compiled do...end` block:
 ```kex
 module SQL do
   record QueryBuilder do
-    fields     : [Symbol] = []
-    table      : Symbol = :none
+    fields     : [Atom] = []
+    table      : Atom = :none
     conditions : [(String, Any)] = []
   end
 
@@ -31,7 +48,7 @@ module SQL do
     end
 
     make QueryBuilder do
-      let from(table: Symbol) -> QueryBuilder do
+      let from(table: Atom) -> QueryBuilder do
         QueryBuilder { fields: @fields, table: table }
       end
 
@@ -113,11 +130,11 @@ let builder = SQL.select(:all).from(:users)
 # produces a final result.
 ```
 
-Wait — actually all the methods (`select`, `from`, `where`) are also in the compiled block. The distinction is:
+All the methods (`select`, `from`, `where`) are in the compiled block, so what decides is the *expression*, not which method ends it:
 
-> Compile-time evaluation is triggered when the **entire chain is evaluable** — all arguments are either compile-time constants or free variables (which become placeholders). If the chain is used as an intermediate value that gets further method calls with dynamic arguments, it stays runtime.
+> Compile-time evaluation is triggered when the **whole expression is determined** — every argument is a compile-time constant or a free runtime variable (which becomes a placeholder).
 
-The practical rule: a complete expression statement or binding like `let q = ...chain....emit()` where the chain terminates, triggers evaluation. An intermediate variable that gets more calls later doesn't.
+As built, this is narrower than "the chain terminates" in one direction and wider in another: a static PREFIX collapses even when the terminal call cannot (`SQL.select(...).from(:users)` becomes a literal inside a chain that still calls `.where(...)` at runtime), and an expression whose outermost node is not a call at all collapses too (`"0 " + Css.px(24)`).
 
 ## Routing Example
 
@@ -126,7 +143,7 @@ For frameworks that generate dispatch logic:
 ```kex
 module Router do
   record Route do
-    method  : Symbol
+    method  : Atom
     path    : String
     handler : (Request) -> Response
   end
@@ -176,7 +193,7 @@ At compile time, the router knows all routes statically. `.compile()` produces a
 
 ### Purity
 
-Code inside `compiled do...end` must be pure (no IO, no process spawning, no mutable global state). The only permitted side effect is `Env.get()` for reading environment variables at compile time.
+Code inside `compiled do...end` must be pure (no IO, no process spawning, no mutable global state). The only permitted side effect is `ENV.get()` for reading environment variables at compile time.
 
 ### Totality
 

@@ -1,0 +1,81 @@
+# Integer and Float are one numeric tower for comparison and matching:
+# `0` and `0.0` denote the same number, so ==, the ordering operators, and
+# literal patterns must all agree on that. Arithmetic already promoted; these
+# are the paths that used to disagree with it.
+
+let classify(0) = "int-zero pattern"
+let classify(x) = "other: ${x}"
+
+let classifyF(0.0) = "float-zero pattern"
+let classifyF(x) = "other: ${x}"
+
+# Nested numeric literals: the tuple shape still matches structurally while
+# each element compares numerically.
+let origin?((0, 0)) = true
+let origin?(_) = false
+
+# A numeric literal pattern next to a real guard — both must hold, and the
+# literal's own comparison must not clobber the user's guard.
+let step(pair) do
+  return match pair do
+    (0, n) when n > 0 -> "zero then positive"
+    (0, _) -> "zero"
+    _ -> "nonzero"
+  end
+end
+
+main do
+  IO.printLine("-- equality --")
+  IO.printLine(0 == 0.0)
+  IO.printLine(1 == 1.0)
+  IO.printLine(1 != 1.0)
+  IO.printLine(1 == 1.5)
+  IO.printLine(2.0 == 2)
+
+  IO.printLine("-- ordering promotes --")
+  IO.printLine(1 < 1.5)
+  IO.printLine(1.5 < 2)
+  IO.printLine(2 > 1.5)
+  IO.printLine(1.5 > 1)
+  IO.printLine(1 <= 1.0)
+  IO.printLine(1 >= 1.0)
+  IO.printLine(1.0 <= 1)
+  IO.printLine(1.0 >= 1)
+
+  IO.printLine("-- arithmetic promotes (unchanged) --")
+  IO.printLine(1 + 1.0)
+  IO.printLine(1 * 2.5)
+  IO.printLine(1 / 2.0)
+
+  IO.printLine("-- integer literal patterns --")
+  IO.printLine(classify(0))
+  IO.printLine(classify(0.0))
+  IO.printLine(classify(1))
+
+  IO.printLine("-- float literal patterns --")
+  IO.printLine(classifyF(0.0))
+  IO.printLine(classifyF(0))
+  IO.printLine(classifyF(1.5))
+
+  IO.printLine("-- nested patterns --")
+  IO.printLine(origin?((0, 0)))
+  IO.printLine(origin?((0.0, 0)))
+  IO.printLine(origin?((0, 1)))
+
+  IO.printLine("-- literal pattern with guard --")
+  IO.printLine(step((0, 1)))
+  IO.printLine(step((0.0, 1)))
+  IO.printLine(step((0, 0)))
+  IO.printLine(step((1, 1)))
+
+  IO.printLine("-- match expression --")
+  match 0.0 do
+    0 -> IO.printLine("0.0 matched the 0 arm")
+    _ -> IO.printLine("0.0 fell through")
+  end
+
+  match 3 do
+    3.0 -> IO.printLine("3 matched the 3.0 arm")
+    _ -> IO.printLine("3 fell through")
+  end
+end

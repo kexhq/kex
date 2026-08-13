@@ -1,0 +1,17 @@
+-- alias stays transparent --
+path: /tmp/x
+-- single-variant ADT --
+DivideByZero
+TheOne
+-- single variant is matchable --
+matched DivideByZero
+-- multi-variant, no leading pipe --
+Red
+Green
+Blue
+-- constructors with args --
+Circle(2)
+12
+9
+-- single variant inside a Result --
+Error(DivideByZero)

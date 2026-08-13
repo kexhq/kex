@@ -1,0 +1,29 @@
+type SafeDivError = | DivideByZero
+safeDiv : Number -> Number -> Number or! SafeDivError
+let safeDiv(_, 0) = Error(DivideByZero)
+let safeDiv(a, b) = Ok(a / b)
+
+let safeCalc(a, b) do
+  let r = a * safeDiv(b, a).try
+
+  return Ok(r)
+  rescue return Error(DivideByZero)
+end
+
+main do
+  IO.printLine(safeDiv(10, 2))
+  IO.printLine(safeDiv(8.1, 3))
+  IO.printLine(safeDiv(1, 2.0))
+  IO.printLine(safeDiv(1, 0))
+  IO.printLine(safeDiv(4, 0.0))
+  IO.printLine(safeDiv(8.0, 0))
+
+  IO.printLine(safeCalc(10, 2))
+  IO.printLine(safeCalc(0, 2))
+  IO.printLine(safeCalc(10, 0))
+  IO.printLine(safeCalc(0, 0))
+  IO.printLine(safeCalc(1, 2.0))
+  IO.printLine(safeCalc(1, 0))
+  IO.printLine(safeCalc(4, 0.0))
+  IO.printLine(safeCalc(8.0, 0))
+end
