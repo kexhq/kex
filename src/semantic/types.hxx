@@ -173,6 +173,15 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType>;
 // declaration. These are the type names that resolve without any `type`
 // declaration behind them; everything else must be declared.
 auto isPrimitiveTypeName(const std::string& name) -> bool;
+
+// Whether two named-type identities denote the same type. Record and ADT
+// identity is module-qualified (`Tey.Manifest.Dependency`), so two qualified
+// names must match in full — that is what keeps same-named records in sibling
+// modules apart. A BARE name is an identity the checker could not qualify
+// (an interface signature it read back, a type it never saw declared), so it
+// matches any qualified name ending in that segment rather than spuriously
+// mismatching against the qualified spelling of the same type.
+auto namedTypesMatch(const std::string& a, const std::string& b) -> bool;
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool;
 
 // True when a type is fully determined — no Unknown, no type variable, and no

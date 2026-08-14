@@ -5,39 +5,10 @@ They are kept explicit so temporary workarounds do not become accidental API.
 
 ## Kex compiler and module-system limitations
 
-- A qualified reference such as `Tey.Git.execute(...)` does not currently make
-  the cross-file BEAM compiler load and emit `tey/git.kex`. Tey must also write
-  `using Tey.Git, as: Git` to establish the source dependency. Qualified module
-  references should become sufficient dependency edges.
-- Cross-file dependency discovery currently stops before all transitive Tey
-  modules are emitted as companions of `main.kx.beam`. The Tey Makefile
-  compiles every lowercase `src/tey/*.kex` file explicitly, and the launcher
-  places the complete ebin directory on the BEAM code path.
-- `using Module, only: []` can force dependency loading without importing
-  members, but it is an implementation-shaped workaround and is not used by
-  Tey. Explicit named imports establish dependency edges until qualified
-  references load source files by themselves.
-- Record/type resolution can confuse same-named nested records and same-named
-  fields imported from sibling modules. Tey therefore uses distinctive names
-  such as `ManifestDependency` and `LockedDependency`. Nested type identity
-  should be fully module-qualified so `Tey.Manifest.Dependency` and
-  `Tey.Lockfile.Dependency` can coexist.
-- Named record patterns in function parameters currently generate invalid BEAM
-  field accessor calls for Tey's imported records. Resolver functions accept a
-  typed parameter and destructure it immediately in the body until parameter
-  pattern lowering is fixed.
-- An `if`/`elif` chain inside the mutable `text.lines.each` manifest fold
-  currently lowers only its first branch on BEAM. The bootstrap reader uses
-  independent, mutually exclusive `if` blocks until `elif` lowering in captured
-  mutable folds is fixed.
-- Compiling a nested source file directly chooses that file's directory as the
-  module root. For example, compiling `tey/src/tey/commands.kex` searches for
-  `Tey.Lockfile` below `tey/src/tey/tey/`. Building from `tey/src/main.kex`
-  works. The compiler needs an explicit source-root option for tools and build
-  systems.
 - `Process.run` keeps stdout and stderr separate in the tree walker, while the
   BEAM port backend currently combines stderr into stdout. Its public result is
   stable, but stream fidelity differs by backend.
+- Everything is built under the root folder of the new package, instead of having an output folder and putting it there (maybe it should also be included in the `.gitignore`, too)
 
 ## Tey package-manager limitations
 
@@ -63,4 +34,5 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - Source toolchain installation builds compiler, runtime, and stdlib together,
   but does not yet stage and atomically rename the completed installation.
 - The Homebrew formula is HEAD-only until the first tagged Tey/Kex release has
-  a stable source URL and checksum.
+  a stable source URL and checksum. During bootstrap it follows the
+  `package-management` branch and should switch back to `main` after merge.

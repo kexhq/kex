@@ -636,8 +636,13 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     iface.types.push_back(std::move(te));
 }
 
+// `owner` is the module path the record is declared in, or empty for a
+// file's top level. It decides the tuple tag: lowering qualifies a record
+// declared inside a `module` block and leaves a top-level one bare, and the
+// metadata has to agree or nothing can match the runtime value.
 void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& iface,
-                          KexiStructuralMetadata& meta) {
+                          KexiStructuralMetadata& meta,
+                          const std::string& owner = std::string{}) {
     KexiTypeExport te;
     te.name = rd.name;
     te.genericParams = rd.typeParams;
@@ -645,6 +650,7 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
 
     KexiRecord rec;
     rec.name = rd.name;
+    rec.tagAtom = owner.empty() ? rd.name : owner + "." + rd.name;
     for (const auto& f : rd.fields) {
         KexiRecordField rf;
         rf.name = f.name;
@@ -661,7 +667,8 @@ void collectFromRecordDef(const kex::ast::RecordDef& rd, KexiTypeInterface& ifac
 void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                            KexiTypeInterface& iface,
                            KexiStructuralMetadata& meta,
-                           const kex::semantic::Analyzer* analysis) {
+                           const kex::semantic::Analyzer* analysis,
+                           const std::string& modulePath = std::string{}) {
     std::unordered_map<std::string, std::vector<KexiTypePtr>> standaloneSigs;
     for (const auto& item : body)
         if (auto* ann = std::get_if<std::unique_ptr<kex::ast::TypeAnnotation>>(&item);
@@ -700,7 +707,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
-                collectFromRecordDef(*ptr, iface, meta);
+                collectFromRecordDef(*ptr, iface, meta, modulePath);
             }
         }, item);
     }
@@ -834,7 +841,7 @@ void collectFlattenedModuleBody(
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
                 collectFromTypeDef(*ptr, iface, meta);
             } else if constexpr (std::is_same_v<T, kex::ast::RecordDef>) {
-                collectFromRecordDef(*ptr, iface, meta);
+                collectFromRecordDef(*ptr, iface, meta, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::ModuleDef>) {
                 collectFlattenedModuleBody(ptr->body, ptr->name, iface, meta,
                                            analysis);
@@ -875,7 +882,8 @@ auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
                 std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
             module && *module) {
             if ((*module)->name == moduleName) {
-                collectFromModuleBody((*module)->body, iface, meta, analysis);
+                collectFromModuleBody((*module)->body, iface, meta, analysis,
+                                      moduleName);
                 meta.isFoul = (*module)->isFoul;
                 return true;
             }
@@ -897,7 +905,8 @@ auto findAndCollectModule(const kex::ast::Program& program,
                 std::get_if<std::unique_ptr<kex::ast::ModuleDef>>(&item);
             module && *module) {
             if ((*module)->name == moduleName) {
-                collectFromModuleBody((*module)->body, iface, meta, analysis);
+                collectFromModuleBody((*module)->body, iface, meta, analysis,
+                                      moduleName);
                 meta.isFoul = (*module)->isFoul;
                 return true;
             }

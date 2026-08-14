@@ -1,49 +1,51 @@
 foul module Tey.Toolchain
-using Tey.Cache, only: [root]
-  let home -> String do
-    let userHome = ENV.get("HOME", ".")
-    ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
-  end
 
-  let installedKex -> String? do
-    match ENV.get("TEY_KEX") do
-      Just(path) -> Just(path)
-      None -> do
-        match FS.File.read("${Tey.Toolchain.home}/current") do
-          Just(version) -> Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
-          None -> None
-        end
+using Tey.Cache, only: [root]
+
+let home -> String do
+  let userHome = ENV.get("HOME", ".")
+  ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
+end
+
+let installedKex -> String? do
+  match ENV.get("TEY_KEX") do
+    Just(path) -> Just(path)
+    None -> do
+      match FS.File.read("${Tey.Toolchain.home}/current") do
+        Just(version) -> Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
+        None -> None
       end
     end
   end
+end
 
-  let kex -> String = Tey.Toolchain.installedKex.or("kex")
+let kex -> String = Tey.Toolchain.installedKex.or("kex")
 
-  # Installs compiler, runtime BEAM modules and stdlib sources together. The
-  # source tree's CMake install layout is the toolchain ABI Tey manages.
-  let installSource(source: String, version: String) -> Result<String, String> do
-    let home = Tey.Toolchain.home
-    let prefix = "${home}/toolchains/${version}"
-    let build = "${Tey.Cache.root}/build/kex-${version}"
-    return Error("could not create Tey home") if !FS.Directory.create(home)
-    return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
-    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
-    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
-    let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${prefix}"]) do
-      Error(error) -> return Error(error)
-      Ok(result) -> result
-    end
-    return Error(configured.stderr + configured.stdout) if configured.exitCode != 0
-    let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
-      Error(error) -> return Error(error)
-      Ok(result) -> result
-    end
-    return Error(installed.stderr + installed.stdout) if installed.exitCode != 0
-    return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
-    Ok(prefix)
+# Installs compiler, runtime BEAM modules and stdlib sources together. The
+# source tree's CMake install layout is the toolchain ABI Tey manages.
+let installSource(source: String, version: String) -> Result<String, String> do
+  let home = Tey.Toolchain.home
+  let prefix = "${home}/toolchains/${version}"
+  let build = "${Tey.Cache.root}/build/kex-${version}"
+  return Error("could not create Tey home") if !FS.Directory.create(home)
+  return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
+  return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
+  return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
+  let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${prefix}"]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> result
   end
-
-  let use(version: String) -> Bool do
-    let home = Tey.Toolchain.home
-    FS.File.file?("${home}/toolchains/${version}/bin/kex") && FS.File.write("${home}/current", "${version}\n")
+  return Error(configured.stderr + configured.stdout) if configured.exitCode != 0
+  let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> result
   end
+  return Error(installed.stderr + installed.stdout) if installed.exitCode != 0
+  return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+  Ok(prefix)
+end
+
+let use(version: String) -> Bool do
+  let home = Tey.Toolchain.home
+  FS.File.file?("${home}/toolchains/${version}/bin/kex") && FS.File.write("${home}/current", "${version}\n")
+end

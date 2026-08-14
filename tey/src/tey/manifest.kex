@@ -1,95 +1,89 @@
 module Tey.Manifest
-  record ManifestDependency do
-    manifestName : String
-    manifestGit : String
-    manifestSelector : String
-    manifestRequested : String
-    manifestGroups : [String] = []
-  end
 
-  record Target do
-    name : String
-    entrypoint : String
-  end
+record Dependency do
+  manifestName : String
+  manifestGit : String
+  manifestSelector : String
+  manifestRequested : String
+  manifestGroups : [String] = []
+end
 
-  record ManifestPackage do
-    name : String
-    version : String = "0.1.0"
-    packageKexRequirement : String = ">= 0.3.0"
-    entrypoint : String = "src/main.kex"
-    manifestDependencies : [ManifestDependency] = []
-    targets : [Target] = []
-  end
+record Target do
+  name : String
+  entrypoint : String
+end
 
-  let read(text: String) -> Result<ManifestPackage, String> do
-    var name = ""
-    var version = "0.1.0"
-    var kexRequirement = ">= 0.3.0"
-    var entrypoint = "src/main.kex"
-    var dependencies: [ManifestDependency] = []
-    var targets: [Target] = []
-    var group = ""
+record ManifestPackage do
+  name : String
+  version : String = "0.1.0"
+  packageKexRequirement : String = ">= 0.3.0"
+  entrypoint : String = "src/main.kex"
+  manifestDependencies : [Dependency] = []
+  targets : [Target] = []
+end
 
-    text.lines.each do |raw|
-      let line = raw.trim
-      if line.startsWith?("bundle ")
-        name = Tey.Manifest.quoted(line).or("")
-      end
-      if line.startsWith?("version(")
-        version = Tey.Manifest.quoted(line).or(version)
-      end
-      if line.startsWith?("kex(")
-        kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
-      end
-      if line.startsWith?("entrypoint(")
-        entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
-      end
-      if line.startsWith?("group ")
-        group = line.split(":").second.or("").split(" ").first.or("")
-      end
-      if line == "end" && group != ""
-        group = ""
-      end
-      if line.startsWith?("target(")
-        targets.push!(Target {
-          name: Tey.Manifest.quoted(line).or("default"),
-          entrypoint: Tey.Manifest.attribute(line, "entrypoint").or(entrypoint)
-        })
-        ()
-      end
-      if line.startsWith?("tey(")
-        var selector = "ref"
-        if line.contains?("tag:")
-          selector = "tag"
-        elif line.contains?("branch:")
-          selector = "branch"
-        end
-        let requested = Tey.Manifest.attribute(line, selector).or("HEAD")
-        let groups = group == "" then [] else [group]
-        dependencies.push!(ManifestDependency {
-          manifestName: Tey.Manifest.quoted(line).or(""),
-          manifestGit: Tey.Manifest.attribute(line, "git").or(""),
-          manifestSelector: selector,
-          manifestRequested: requested,
-          manifestGroups: groups
-        })
-        ()
-      end
-    end
-    return Error("package.kex must declare bundle \"name\"") if name == ""
-    return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
-    Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
-                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
-  end
+let read(text: String) -> Result<ManifestPackage, String> do
+  var name = ""
+  var version = "0.1.0"
+  var kexRequirement = ">= 0.3.0"
+  var entrypoint = "src/main.kex"
+  var dependencies: [Dependency] = []
+  var targets: [Target] = []
+  var group = ""
 
-  private do
-    let quoted(line: String) -> String? = line.split("\"").second
-
-    let attribute(line: String, key: String) -> String? do
-      let parts = line.split("${key}: \"")
-      match parts.second do
-        Just(rest) -> rest.split("\"").first
-        None -> None
+  text.lines.each do |raw|
+    let line = raw.trim
+    if line.startsWith?("bundle ")
+      name = Tey.Manifest.quoted(line).or("")
+    elif line.startsWith?("version(")
+      version = Tey.Manifest.quoted(line).or(version)
+    elif line.startsWith?("kex(")
+      kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
+    elif line.startsWith?("entrypoint(")
+      entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
+    elif line.startsWith?("group ")
+      group = line.split(":").second.or("").split(" ").first.or("")
+    elif line == "end" && group != ""
+      group = ""
+    elif line.startsWith?("target(")
+      targets.push!(Target {
+        name: Tey.Manifest.quoted(line).or("default"),
+        entrypoint: Tey.Manifest.attribute(line, "entrypoint").or(entrypoint)
+      })
+      ()
+    elif line.startsWith?("tey(")
+      var selector = "ref"
+      if line.contains?("tag:")
+        selector = "tag"
+      elif line.contains?("branch:")
+        selector = "branch"
       end
+      let requested = Tey.Manifest.attribute(line, selector).or("HEAD")
+      let groups = group == "" then [] else [group]
+      dependencies.push!(Dependency {
+        manifestName: Tey.Manifest.quoted(line).or(""),
+        manifestGit: Tey.Manifest.attribute(line, "git").or(""),
+        manifestSelector: selector,
+        manifestRequested: requested,
+        manifestGroups: groups
+      })
+      ()
     end
   end
+  return Error("package.kex must declare bundle \"name\"") if name == ""
+  return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
+  Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
+                    entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
+end
+
+private do
+  let quoted(line: String) -> String? = line.split("\"").second
+
+  let attribute(line: String, key: String) -> String? do
+    let parts = line.split("${key}: \"")
+    match parts.second do
+      Just(rest) -> rest.split("\"").first
+      None -> None
+    end
+  end
+end

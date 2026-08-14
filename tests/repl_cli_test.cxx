@@ -207,6 +207,122 @@ auto runBeamFile(const std::string& source, const std::string& argument,
 } // namespace
 
 int main() {
+    describe("CLI — qualified source-module discovery", []() {
+        it("loads qualified-only dependencies transitively for BEAM", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_qualified_deps_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            const auto modules = src / "chain";
+            fs::create_directories(modules);
+
+            std::ofstream(modules / "leaf.kex")
+                << "module Chain.Leaf\n"
+                   "let value() -> Integer = 42\n";
+            std::ofstream(modules / "middle.kex")
+                << "module Chain.Middle\n"
+                   "let value() -> Integer = Chain.Leaf.value()\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "main do\n"
+                   "  IO.printLine(Chain.Middle.value())\n"
+                   "end\n";
+
+            const auto output = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            const auto directOut = root / "direct-out";
+            fs::create_directories(directOut);
+            const auto directOutput = runCommand(
+                std::string(KEX_BINARY_PATH) + " --compile --no-colors " +
+                "--source-root " + src.string() + " -o " +
+                directOut.string() + " " +
+                (modules / "middle.kex").string() + " 2>&1");
+            const bool emittedLeaf = fs::exists(
+                directOut / "Kex.Chain.Leaf.beam");
+            fs::remove_all(root);
+            assertEqual(output, std::string("42\n"));
+            assertTrue(directOutput.find("done") != std::string::npos,
+                       directOutput);
+            assertTrue(emittedLeaf,
+                       "explicit source root should discover sibling module");
+        });
+
+        it("lowers named imported-record parameter patterns", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_imported_record_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            const auto pair = src / "pair";
+            fs::create_directories(pair);
+            std::ofstream(pair / "types.kex")
+                << "module Pair.Types\n"
+                   "record Dependency do\n"
+                   "  name : String\n"
+                   "end\n";
+            std::ofstream(pair / "use.kex")
+                << "module Pair.Use\n"
+                   "using Pair.Types, only: [Dependency]\n"
+                   "let dependencyName(Dependency { name }) -> String = name\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "using Pair.Types, only: [Dependency]\n"
+                   "using Pair.Use, only: [dependencyName]\n"
+                   "main do\n"
+                   "  IO.printLine(dependencyName(Dependency { name: \"ok\" }))\n"
+                   "end\n";
+
+            const auto output = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            assertEqual(output, std::string("ok\n"));
+        });
+
+        it("keeps same-named records in sibling modules distinct", []() {
+            namespace fs = std::filesystem;
+            char rootTemplate[] = "/tmp/kex_record_identity_test_XXXXXX";
+            const auto root = fs::path(mkdtemp(rootTemplate));
+            const auto src = root / "src";
+            const auto records = src / "records";
+            fs::create_directories(records);
+            std::ofstream(records / "manifest.kex")
+                << "module Records.Manifest\n"
+                   "record Dependency do\n"
+                   "  name : String\n"
+                   "end\n"
+                   "let create(name: String) -> Dependency = Dependency { name: name }\n"
+                   "let label(dep: Dependency) -> String = dep.name\n";
+            std::ofstream(records / "lockfile.kex")
+                << "module Records.Lockfile\n"
+                   "record Dependency do\n"
+                   "  git : String\n"
+                   "  commit : String\n"
+                   "end\n"
+                   "let create(git: String, commit: String) -> Dependency = "
+                   "Dependency { git: git, commit: commit }\n"
+                   "let label(dep: Dependency) -> String = "
+                   "\"${dep.git}@${dep.commit}\"\n";
+            const auto entry = src / "main.kex";
+            std::ofstream(entry)
+                << "main do\n"
+                   "  IO.printLine(Records.Manifest.label(Records.Manifest.create(\"manifest\")))\n"
+                   "  IO.printLine(Records.Lockfile.label(Records.Lockfile.create(\"repo\", \"abc\")))\n"
+                   "end\n";
+
+            const auto walker = runCommand(
+                std::string(KEX_BINARY_PATH) + " --no-colors " +
+                entry.string() + " 2>&1");
+            const auto beam = runCommand(
+                std::string(KEX_BINARY_PATH) + " -R --no-colors " +
+                entry.string() + " 2>&1");
+            fs::remove_all(root);
+            const std::string expected = "manifest\nrepo@abc\n";
+            assertEqual(walker, expected);
+            assertEqual(beam, expected);
+        });
+    });
+
     describe("CLI — installed stdlib discovery", []() {
         it("loads interpreter and BEAM stdlib from executable-relative share directories", []() {
             namespace fs = std::filesystem;
@@ -272,6 +388,27 @@ int main() {
                            != std::string::npos, out);
                 assertTrue(out.find("if_clause") == std::string::npos, out);
             }
+        });
+    });
+
+    describe("CLI — mutable captured if/elif", []() {
+        it("threads the selected elif branch through a closure on BEAM", []() {
+            const std::string source =
+                "main do\n"
+                "  var selected = \"none\"\n"
+                "  [\"branch\"].each do |line|\n"
+                "    if line == \"tag\"\n"
+                "      selected = \"tag\"\n"
+                "    elif line == \"branch\"\n"
+                "      selected = \"branch\"\n"
+                "    else\n"
+                "      selected = \"other\"\n"
+                "    end\n"
+                "  end\n"
+                "  IO.printLine(selected)\n"
+                "end\n";
+            assertEqual(runWalkerFile(source), std::string("branch\n"));
+            assertEqual(runBeamFile(source, ""), std::string("branch\n"));
         });
     });
 

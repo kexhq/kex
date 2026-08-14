@@ -627,7 +627,10 @@ int main() {
 
             // `carried` is the literal record with Seed still a REFERENCE —
             // not the value 7, which would bake in a runtime binding.
-            assertTrue(out.find("{'Box', 2, Seed}") != std::string::npos,
+            // A record declared inside a module is tagged with its qualified
+            // identity, so `Boxes.Box` cannot collide with a `Box` declared
+            // in a sibling module.
+            assertTrue(out.find("{'Boxes.Box', 2, Seed}") != std::string::npos,
                        "a carried placeholder reifies back to its expression");
             // An UPPER-case binding is a placeholder too. It is ambiguous with
             // a module or type qualifier only in RECEIVER position, which

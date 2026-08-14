@@ -10,7 +10,8 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-static constexpr int KEXI_SCHEMA_VERSION = 6;
+// 7: KexiRecord carries its tuple tag alongside its source name.
+static constexpr int KEXI_SCHEMA_VERSION = 7;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -112,6 +113,14 @@ struct KexiRecordField {
 
 struct KexiRecord {
     std::string name;
+    // The atom this record's tuples are actually tagged with. A record
+    // declared inside a `module` block carries its module-qualified identity
+    // (`Parsing.Input`) so same-named records in sibling modules stay
+    // distinct; one declared at a file's top level keeps its bare name even
+    // though the file itself compiles to a module. Consumers that must match
+    // a RUNTIME tuple — display registration, lowering's record layouts —
+    // key on this, not on `name`.
+    std::string tagAtom;
     std::vector<KexiRecordField> fields;
 };
 

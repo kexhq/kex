@@ -100,6 +100,25 @@ auto TypeChecker::check(const ast::Program& program,
         selection.exceptNames = block.exceptNames;
         return selection;
     };
+    // A `private do ... end` / `visible do ... end` block is a plain
+    // container: the declarations inside it see exactly the imports that are
+    // active around it. Without this, annotations on those functions resolved
+    // record names without the enclosing `using`, so the same record came out
+    // qualified in one signature and bare in another.
+    auto collectVisibilityImports =
+        [&](const ast::VisibilityBlock& block,
+            const std::vector<ImportSelection>& active) {
+            for (const auto& visible : block.items) {
+                if (const auto* fn =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible);
+                    fn && *fn)
+                    m_functionImports[fn->get()] = active;
+                else if (const auto* make =
+                             std::get_if<std::unique_ptr<ast::MakeDef>>(&visible);
+                         make && *make)
+                    m_makeImports[make->get()] = active;
+            }
+        };
     std::function<void(const ast::ModuleDef&, std::vector<ImportSelection>)>
         collectModuleImports;
     collectModuleImports = [&](const ast::ModuleDef& module,
@@ -116,6 +135,9 @@ auto TypeChecker::check(const ast::Program& program,
                 } else if constexpr (
                     std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                     if (node) m_makeImports[node.get()] = active;
+                } else if constexpr (
+                    std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (node) collectVisibilityImports(*node, active);
                 } else if constexpr (
                     std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                     if (node) collectModuleImports(*node, active);
@@ -139,6 +161,9 @@ auto TypeChecker::check(const ast::Program& program,
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::MainBlock>>) {
                 if (node) m_mainImports[node.get()] = topLevelImports;
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (node) collectVisibilityImports(*node, topLevelImports);
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) collectModuleImports(*node, topLevelImports);
@@ -208,7 +233,7 @@ auto TypeChecker::check(const ast::Program& program,
     }
 
     for (const auto& item : program.items) {
-        std::visit([this](const auto& node) {
+        std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 registerAdt(*node);
@@ -223,6 +248,7 @@ auto TypeChecker::check(const ast::Program& program,
                 std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
             function && *function)
             m_functionDeclarations.emplace((*function)->name, function->get());
+    registerRecordFields(program, /*namesOnly=*/true);
     registerTypeAliases(program);
 
     // Register built-in types
@@ -506,14 +532,26 @@ auto TypeChecker::reportUnknownMethods() -> void {
     m_unresolvedMethods.clear();
 }
 
-auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
+// `namesOnly` runs the same traversal for its record IDENTITIES alone. Type
+// aliases are registered before field types can be resolved (a field may BE an
+// alias), yet an alias body names records too — so the names have to exist
+// first, and the field types are filled in on the second pass.
+auto TypeChecker::registerRecordFields(const ast::Program& program,
+                                       bool namesOnly) -> void {
     std::unordered_map<std::string, TypePtr> noGenerics;
-    auto registerRecord = [&](const ast::RecordDef& record) {
-        auto& fields = m_recordFields[record.name];
+    auto registerRecord = [&](const ast::RecordDef& record,
+                              const std::string& owner = std::string{}) {
+        const auto name = owner.empty()
+            ? record.name : owner + "." + record.name;
+        auto& fields = m_recordFields[name];
+        if (namesOnly) return;
+        const auto previousModule = m_currentModulePath;
+        m_currentModulePath = owner;
         for (const auto& field : record.fields)
             fields[field.name] = field.type
                 ? resolveTypeExpr(*field.type, noGenerics)
                 : Type::unknown();
+        m_currentModulePath = previousModule;
     };
     std::function<void(const ast::ModuleDef&)> registerModule;
     registerModule = [&](const ast::ModuleDef& module) {
@@ -521,7 +559,18 @@ auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
-                if (node) registerRecord(*node);
+                if (node) registerRecord(*node, module.name);
+            } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                // A `private do ... end` record is still the module's own
+                // record, and its identity has to be the qualified one its
+                // module constructs.
+                if (!node) return;
+                for (const auto& visible : node->items)
+                    if (const auto* record =
+                            std::get_if<std::unique_ptr<ast::RecordDef>>(&visible);
+                        record && *record)
+                        registerRecord(**record, module.name);
             } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) registerModule(*node);
@@ -535,10 +584,72 @@ auto TypeChecker::registerRecordFields(const ast::Program& program) -> void {
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 if (node) registerRecord(*node);
             } else if constexpr (
+                std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
+                if (!node) return;
+                for (const auto& visible : node->items)
+                    if (const auto* record =
+                            std::get_if<std::unique_ptr<ast::RecordDef>>(&visible);
+                        record && *record)
+                        registerRecord(**record);
+            } else if constexpr (
                 std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                 if (node) registerModule(*node);
             }
         }, item);
+}
+
+auto TypeChecker::resolveRecordName(const std::string& name) const
+    -> std::string {
+    auto recordExists = [&](const std::string& candidate) {
+        return m_recordFields.count(candidate) ||
+               (m_importedInterfaces &&
+                m_importedInterfaces->recordArities.count(candidate));
+    };
+    if (!m_currentModulePath.empty()) {
+        auto scope = m_currentModulePath;
+        while (!scope.empty()) {
+            const auto candidate = scope + "." + name;
+            if (recordExists(candidate)) return candidate;
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+    }
+    auto importedRecord = [&](const ImportSelection& import)
+        -> std::optional<std::string> {
+        const auto candidate = import.module + "." + name;
+        if (!recordExists(candidate)) return std::nullopt;
+        if (!import.onlyNames.empty() &&
+            std::find(import.onlyNames.begin(), import.onlyNames.end(), name) ==
+                import.onlyNames.end())
+            return std::nullopt;
+        if (std::find(import.exceptNames.begin(), import.exceptNames.end(),
+                      name) != import.exceptNames.end())
+            return std::nullopt;
+        return candidate;
+    };
+    for (auto scope = m_importScopeStack.rbegin();
+         scope != m_importScopeStack.rend(); ++scope)
+        for (auto import = scope->rbegin(); import != scope->rend(); ++import)
+            if (auto found = importedRecord(*import)) return *found;
+    for (auto import = m_declarationImports.rbegin();
+         import != m_declarationImports.rend(); ++import)
+        if (auto found = importedRecord(*import)) return *found;
+    if (m_importedInterfaces) {
+        std::optional<std::string> unique;
+        const auto suffix = "." + name;
+        for (const auto& [candidate, _] :
+             m_importedInterfaces->recordArities) {
+            if (candidate.size() <= suffix.size() ||
+                candidate.compare(candidate.size() - suffix.size(),
+                                  suffix.size(), suffix) != 0)
+                continue;
+            if (unique && *unique != candidate) return name;
+            unique = candidate;
+        }
+        if (unique) return *unique;
+    }
+    return name;
 }
 
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
@@ -747,6 +858,14 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
 }
 
 auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void {
+    // An alias body names types the way its own module sees them: `type
+    // Handler = Request -> Response` inside `module Http` means Http's
+    // records, not a same-named record some other module exports.
+    const auto previousModule = m_currentModulePath;
+    m_currentModulePath = previousModule.empty() ||
+                                  mod.name.rfind(previousModule + ".", 0) == 0
+        ? mod.name
+        : previousModule + "." + mod.name;
     for (const auto& item : mod.body) {
         std::visit([this](const auto& node) {
             using T = std::decay_t<decltype(node)>;
@@ -782,6 +901,7 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
             }
         }, item);
     }
+    m_currentModulePath = previousModule;
 }
 
 auto TypeChecker::annotationToSignature(
@@ -840,9 +960,39 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
     const ast::ModuleDef& mod, const std::string& parentPath) -> void {
     const auto modulePath =
         parentPath.empty() ? mod.name : parentPath + "." + mod.name;
-    auto add = [this, &modulePath](
+    const auto previousModule = m_currentModulePath;
+    m_currentModulePath = modulePath;
+    auto importsFor = [&](const std::string& name)
+        -> const std::vector<ImportSelection>* {
+        for (const auto& item : mod.body) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item);
+                fn && *fn && (*fn)->name == name) {
+                if (auto found = m_functionImports.find(fn->get());
+                    found != m_functionImports.end())
+                    return &found->second;
+            }
+            if (const auto* visibility =
+                    std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                visibility && *visibility) {
+                for (const auto& visible : (*visibility)->items)
+                    if (const auto* fn = std::get_if<
+                            std::unique_ptr<ast::FunctionDef>>(&visible);
+                        fn && *fn && (*fn)->name == name)
+                        if (auto found = m_functionImports.find(fn->get());
+                            found != m_functionImports.end())
+                            return &found->second;
+            }
+        }
+        return nullptr;
+    };
+    auto add = [this, &modulePath, &importsFor](
                    const ast::TypeAnnotation& ann, bool exposeUnqualified) {
+        const auto previousImports = m_declarationImports;
+        if (const auto* imports = importsFor(ann.name))
+            m_declarationImports = *imports;
         auto sig = annotationToSignature(ann);
+        m_declarationImports = previousImports;
         if (!sig) return;
         m_annotationDeclared.insert(ann.name);
         const auto key = modulePath + "\n" + ann.name;
@@ -870,6 +1020,7 @@ auto TypeChecker::registerDeclaredSignaturesInModule(
             registerDeclaredSignaturesInModule(**nested, modulePath);
         }
     }
+    m_currentModulePath = previousModule;
 }
 
 auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
@@ -967,31 +1118,42 @@ auto TypeChecker::registerMakeSignatures(const ast::Program& program) -> void {
 }
 
 auto TypeChecker::preRegisterFunctionSigs(const ast::Program& program) -> void {
+    std::function<void(const ast::ModuleDef&)> registerModule;
+    registerModule = [&](const ast::ModuleDef& module) {
+        const auto previousModule = m_currentModulePath;
+        m_currentModulePath = previousModule.empty() ||
+                                      module.name.rfind(previousModule + ".", 0) == 0
+            ? module.name
+            : previousModule + "." + module.name;
+        for (const auto& item : module.body) {
+            std::visit([&](const auto& member) {
+                using M = std::decay_t<decltype(member)>;
+                if constexpr (std::is_same_v<
+                                  M, std::unique_ptr<ast::FunctionDef>>) {
+                    if (member) preRegisterFunctionDef(*member);
+                } else if constexpr (std::is_same_v<
+                                         M, std::unique_ptr<ast::ModuleDef>>) {
+                    if (member) registerModule(*member);
+                } else if constexpr (std::is_same_v<
+                                         M, std::unique_ptr<ast::VisibilityBlock>>) {
+                    if (!member) return;
+                    for (const auto& visible : member->items)
+                        if (auto* def = std::get_if<
+                                std::unique_ptr<ast::FunctionDef>>(&visible);
+                            def && *def)
+                            preRegisterFunctionDef(**def);
+                }
+            }, item);
+        }
+        m_currentModulePath = previousModule;
+    };
     for (const auto& item : program.items) {
-        std::visit([this](const auto& node) {
+        std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
                 if (node) preRegisterFunctionDef(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (!node) return;
-                for (const auto& modItem : node->body) {
-                    std::visit([this](const auto& mn) {
-                        using MT = std::decay_t<decltype(mn)>;
-                        if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                            if (mn) preRegisterFunctionDef(*mn);
-                        } else if constexpr (std::is_same_v<
-                                                 MT,
-                                                 std::unique_ptr<ast::VisibilityBlock>>) {
-                            if (!mn) return;
-                            for (const auto& visible : mn->items)
-                                if (auto* def =
-                                        std::get_if<std::unique_ptr<ast::FunctionDef>>(
-                                            &visible);
-                                    def && *def)
-                                    preRegisterFunctionDef(**def);
-                        }
-                    }, modItem);
-                }
+                if (node) registerModule(*node);
             }
         }, item);
     }
@@ -1005,6 +1167,10 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
     // populated m_userSignatures for these and checkFunctionDef will use the
     // annotation as ground truth.
     if (m_annotationDeclared.count(def.name)) return;
+    const auto previousImports = m_declarationImports;
+    if (auto imports = m_functionImports.find(&def);
+        imports != m_functionImports.end())
+        m_declarationImports = imports->second;
     // A name may be pre-registered more than once: clauses of one definition
     // share a def.name, but so do separate definitions that overload by arity
     // (common for module functions, e.g. `let f(a)` and `let f(a, b)`).
@@ -1054,12 +1220,16 @@ auto TypeChecker::preRegisterFunctionDef(const ast::FunctionDef& def) -> void {
         provisional.push_back(Signature{def.name, std::move(paramTypes),
                                         freshTypeVar(), false, required});
     }
-    if (provisional.empty()) return;
+    if (provisional.empty()) {
+        m_declarationImports = previousImports;
+        return;
+    }
     if (alreadyRegistered)
         for (auto& signature : provisional)
             existing->second.push_back(std::move(signature));
     else
         m_userSignatures[def.name] = std::move(provisional);
+    m_declarationImports = previousImports;
 }
 
 auto TypeChecker::checkMatchExhaustiveness(const ast::MatchExpr& node, SourceLocation loc) -> void {
@@ -1128,6 +1298,11 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
         else if constexpr (std::is_same_v<T, ast::TypeName>) {
             if (node.parts.empty()) return Type::unknown();
             const std::string& last = node.parts.back();
+            std::string qualified;
+            for (std::size_t i = 0; i < node.parts.size(); ++i) {
+                if (i) qualified += ".";
+                qualified += node.parts[i];
+            }
             // `This` inside a make block refers to the implementing type.
             if (last == "This" && node.parts.size() == 1 && m_inMakeBlock && m_currentMakeType)
                 return m_currentMakeType;
@@ -1151,6 +1326,10 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 genericVars[last] = var;
                 return var;
             }
+            if (node.parts.size() == 1) {
+                const auto recordName = resolveRecordName(last);
+                if (recordName != last) return Type::named(recordName);
+            }
             if (auto known = m_globals.get(last)) return known;
             // Trait-only names (Float, Number, Comparable, ...) have no
             // concrete Type — m_globals deliberately has no entry for them
@@ -1160,7 +1339,14 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // User type alias (e.g. `type Level = :debug | :info | ...`)
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
-            return Type::named(last);  // unregistered record/ADT name — nameable, not yet structurally known
+            if (node.parts.size() > 1) {
+                m_referencedModules.insert(qualified);
+                const bool isRecord = m_recordFields.count(qualified) ||
+                    (m_importedInterfaces &&
+                     m_importedInterfaces->recordArities.count(qualified));
+                return Type::named(isRecord ? qualified : last);
+            }
+            return Type::named(resolveRecordName(last));
         }
         else if constexpr (std::is_same_v<T, ast::GenericType>) {
             std::vector<TypePtr> args;
@@ -1328,10 +1514,11 @@ auto TypeChecker::checkPatternArity(const ast::Pattern& pattern) -> void {
             // (catches typos like `ParseError { valu, rest }`). Imported records
             // only expose an arity, so field names can't be checked there.
             if (!node.typeName.empty()) {
-                auto local = m_recordFields.find(node.typeName);
+                const auto recordName = resolveRecordName(node.typeName);
+                auto local = m_recordFields.find(recordName);
                 bool known = local != m_recordFields.end();
                 if (!known && m_importedInterfaces &&
-                    m_importedInterfaces->recordArities.count(node.typeName))
+                    m_importedInterfaces->recordArities.count(recordName))
                     known = true;
                 if (!known)
                     error(pattern.location,
@@ -1382,12 +1569,14 @@ auto TypeChecker::bindPatternVars(
             // the scrutinee was inferred to be. Fall back to `expected` for the
             // anonymous `{ x }` form.
             if (!node.typeName.empty()) {
-                if (auto found = m_recordFields.find(node.typeName);
+                if (auto found = m_recordFields.find(
+                        resolveRecordName(node.typeName));
                     found != m_recordFields.end())
                     fields = &found->second;
             } else if (expected)
                 if (auto* named = std::get_if<NamedType>(&expected->kind))
-                    if (auto found = m_recordFields.find(named->name);
+                    if (auto found = m_recordFields.find(
+                            resolveRecordName(named->name));
                         found != m_recordFields.end())
                         fields = &found->second;
             for (const auto& field : node.fields) {
@@ -1451,7 +1640,8 @@ auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
 
 auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
     auto previousModulePath = m_currentModulePath;
-    m_currentModulePath = previousModulePath.empty()
+    m_currentModulePath = previousModulePath.empty() ||
+                                  mod.name.rfind(previousModulePath + ".", 0) == 0
         ? mod.name
         : previousModulePath + "." + mod.name;
     pushScope();
@@ -2429,7 +2619,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // `to` overload matched every call, so `"42".to(Integer)` was typed
             // by whichever came first (`make Showable do let to(String)`) and
             // came out `String?` no matter the target.
-            if (isPrimitiveTypeName(node.name) || m_recordFields.count(node.name) ||
+            if (isPrimitiveTypeName(node.name) ||
+                m_recordFields.count(resolveRecordName(node.name)) ||
                 m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
                 return Type::named(node.name);
             return Type::unknown();
@@ -2860,9 +3051,46 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             };
             auto importedPath = node.receiver
                 ? importedModulePath(*node.receiver) : std::nullopt;
-            if (importedPath && m_importedInterfaces &&
-                m_importedInterfaces->modules.count(*importedPath))
-                m_referencedModules.insert(*importedPath);
+            // Keep the syntactic qualified module path even when it is not in
+            // the prebuilt interface registry. Source modules are discovered
+            // from these references before their interfaces exist (for
+            // example, `Tey.Git.execute()` must cause tey/git.kex to load).
+            // The module resolver later discards paths that do not map to a
+            // source module, so ordinary static/type namespaces remain safe.
+            if (importedPath) {
+                auto dependencyPath = *importedPath;
+                // A receiver chain can continue past the module into a
+                // constant or record field (`Kex.Kernel.VERSION.number`). If
+                // an interface identifies a module prefix, record that prefix
+                // rather than asking source discovery to interpret VERSION as
+                // another module segment and recompiling the prelude source.
+                if (m_importedInterfaces) {
+                    auto candidate = dependencyPath;
+                    std::string interfaceModule;
+                    while (!candidate.empty()) {
+                        if (m_importedInterfaces->modules.count(candidate)) {
+                            interfaceModule = candidate;
+                            break;
+                        }
+                        // KexI source-module identities currently retain the
+                        // backend's leading `Kex.` (logical Kex.Kernel is
+                        // stored as Kex.Kex.Kernel). Accept that identity at
+                        // this boundary so an automatic prelude module is
+                        // still recognized as already compiled.
+                        const auto backendPrefixed = "Kex." + candidate;
+                        if (m_importedInterfaces->modules.count(backendPrefixed)) {
+                            interfaceModule = backendPrefixed;
+                            break;
+                        }
+                        const auto dot = candidate.rfind('.');
+                        if (dot == std::string::npos) break;
+                        candidate.resize(dot);
+                    }
+                    if (!interfaceModule.empty())
+                        dependencyPath = std::move(interfaceModule);
+                }
+                m_referencedModules.insert(std::move(dependencyPath));
+            }
             bool isImportedNamespace = importedPath && m_importedInterfaces &&
                 m_importedInterfaces->modules.count(*importedPath) > 0;
             bool isNamespaceCall = node.receiver &&
@@ -3377,7 +3605,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // Check each value against the field's DECLARED type. Without
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
-            auto record = m_recordFields.find(node.typeName);
+            const auto recordName = resolveRecordName(node.typeName);
+            auto record = m_recordFields.find(recordName);
             for (const auto& [fieldName, val] : node.fields) {
                 if (!val) continue;
                 auto valueType = resolve(inferExpr(*val));
@@ -3428,7 +3657,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                           "` expects " + typeToString(expected) + ", but got " +
                           typeToString(valueType));
             }
-            return Type::named(node.typeName);
+            // `recordName` is `node.typeName` itself when no declaration was
+            // found, so the resolved identity is always the right answer here:
+            // a literal must have the same type name that annotations
+            // mentioning the same record resolve to.
+            return Type::named(recordName);
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
             if (node.condition) {
@@ -4247,7 +4480,7 @@ auto TypeChecker::argMatchesParam(const TypePtr& argType, const TypePtr& paramTy
     // trait-relaxation treatment (argMatchesParam, not typesEqual).
     if (auto* paramNamed = std::get_if<NamedType>(&paramType->kind)) {
         auto* argNamed = std::get_if<NamedType>(&argType->kind);
-        if (!argNamed || argNamed->name != paramNamed->name) {
+        if (!argNamed || !namedTypesMatch(argNamed->name, paramNamed->name)) {
             // A nullary ADT constructor is a refined value of its parent
             // type. This relationship comes from the ADT registry rather
             // than from any constructor spelling.
@@ -4416,7 +4649,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     if (isMethodCall && argTypes.size() == 1) {
         auto receiver = resolve(argTypes.front());
         if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
-            if (auto record = m_recordFields.find(named->name);
+            if (auto record = m_recordFields.find(
+                    resolveRecordName(named->name));
                 record != m_recordFields.end())
                 if (auto field = record->second.find(name);
                     field != record->second.end()) {
@@ -4591,10 +4825,22 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         if (!argTypes.empty()) {
             auto receiver = resolve(argTypes[0]);
             if (auto* named = std::get_if<NamedType>(&receiver->kind)) {
-                auto ri = m_recordFields.find(named->name);
+                auto ri = m_recordFields.find(resolveRecordName(named->name));
                 if (ri != m_recordFields.end()) {
                     auto fi = ri->second.find(name);
-                    if (fi != ri->second.end()) return fi->second;
+                    if (fi != ri->second.end()) {
+                        // A field holding a function is APPLIED when arguments
+                        // follow it: `route.handler(request)` is a call, and
+                        // its type is the handler's result, not the handler.
+                        auto fieldType = fi->second;
+                        for (size_t applied = 1; applied < argTypes.size();) {
+                            auto* fn = std::get_if<FuncType>(&fieldType->kind);
+                            if (!fn) break;
+                            applied += std::max<size_t>(fn->params.size(), 1);
+                            fieldType = fn->result;
+                        }
+                        return fieldType;
+                    }
                 }
             }
             // Trait-bounded receiver: `item.method()` where `item: SomeTrait`.
@@ -4622,6 +4868,15 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 if (!matchedRecord.empty()) {
                     if (auto* tv = std::get_if<TypeVar>(&receiver->kind)) {
                         unifyVar(tv->id, Type::named(matchedRecord));
+                    }
+                    // Applied for the same reason as the named-receiver path
+                    // above: arguments after a function-valued field make the
+                    // expression a call.
+                    for (size_t applied = 1; applied < argTypes.size();) {
+                        auto* fn = std::get_if<FuncType>(&matchedFieldType->kind);
+                        if (!fn) break;
+                        applied += std::max<size_t>(fn->params.size(), 1);
+                        matchedFieldType = fn->result;
                     }
                     return matchedFieldType;
                 }
@@ -4792,7 +5047,8 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         const bool receiverIsField = [&] {
             auto* named = std::get_if<NamedType>(&argTypes[0]->kind);
             if (!named) return false;
-            if (auto record = m_recordFields.find(named->name);
+            if (auto record = m_recordFields.find(
+                    resolveRecordName(named->name));
                 record != m_recordFields.end())
                 return record->second.count(name) > 0;
             return m_importedInterfaces &&

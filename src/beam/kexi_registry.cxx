@@ -716,11 +716,18 @@ auto KexiRegistry::buildSemanticInterfaces() const
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
             for (const auto& record : module.chunk.metadata.records) {
-                interfaces.recordArities[record.name] = record.fields.size();
-                auto& fieldNames = interfaces.recordFieldNames[record.name];
+                const auto qualified = record.tagAtom.empty()
+                    ? record.name : record.tagAtom;
+                interfaces.recordArities[qualified] = record.fields.size();
+                interfaces.recordArities.try_emplace(record.name,
+                                                     record.fields.size());
+                auto& fieldNames = interfaces.recordFieldNames[qualified];
                 for (const auto& field : record.fields)
                     fieldNames.insert(field.name);
+                interfaces.recordFieldNames.try_emplace(
+                    record.name, fieldNames);
                 interfaces.typeNames.insert(record.name);
+                interfaces.typeNames.insert(qualified);
             }
 
     for (const auto& [_, unit] : m_units)
@@ -756,13 +763,18 @@ auto KexiRegistry::generateDisplayRegistration(const LoadedUnit& unit) const
         if (sn.empty()) continue;
 
         for (const auto& rec : mod.chunk.metadata.records) {
-            if (!records.empty()) records += ", ";
-            records += "'" + rec.name + "' => [";
+            std::string fields;
             for (size_t i = 0; i < rec.fields.size(); i++) {
-                if (i) records += ", ";
-                records += "'" + rec.fields[i].name + "'";
+                if (i) fields += ", ";
+                fields += "'" + rec.fields[i].name + "'";
             }
-            records += "]";
+            // Keyed by the value's RUNTIME tag: a record declared inside a
+            // `module` block is tagged with its qualified identity, one
+            // declared at a file's top level with its bare name even though
+            // the file itself is a module.
+            if (!records.empty()) records += ", ";
+            records += "'" + (rec.tagAtom.empty() ? rec.name : rec.tagAtom) +
+                "' => [" + fields + "]";
         }
 
         for (const auto& adt : mod.chunk.metadata.adts) {

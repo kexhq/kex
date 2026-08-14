@@ -6,7 +6,7 @@
 -define(BODY_LIMIT, 10485760).
 -define(RECV_TIMEOUT, 30000).
 
-serve({'Server', Port, Routes}) when is_integer(Port), is_list(Routes) ->
+serve({'Web.Server', Port, Routes}) when is_integer(Port), is_list(Routes) ->
     Options = [binary, {packet, raw}, {active, false}, {reuseaddr, true},
                {nodelay, true}, {backlog, 128}],
     case gen_tcp:listen(Port, Options) of
@@ -52,7 +52,7 @@ connection_wait() ->
 
 handle_connection(Socket, Routes) ->
     case read_request(Socket) of
-        {ok, Request = {'Request', Method, _, _, _, _, _}} ->
+        {ok, Request = {'Web.Request', Method, _, _, _, _, _}} ->
             send_response(Socket, dispatch(Request, Routes), Method);
         {error, too_large} ->
             send_response(Socket, text_response(413, <<"Payload Too Large\n">>), <<"GET">>);
@@ -60,12 +60,12 @@ handle_connection(Socket, Routes) ->
             send_response(Socket, text_response(400, <<"Bad Request\n">>), <<"GET">>)
     end.
 
-dispatch(Request = {'Request', Method, Path, _, _, _, _}, Routes) ->
+dispatch(Request = {'Web.Request', Method, Path, _, _, _, _}, Routes) ->
     case find_route(Method, Path, Routes) of
         none -> text_response(404, <<"Not Found\n">>);
-        {'Route', _, _, Handler} when is_function(Handler, 1) ->
+        {'Web.Route', _, _, Handler} when is_function(Handler, 1) ->
             try Handler(Request) of
-                Response = {'Response', _, _, _} -> Response;
+                Response = {'Web.Response', _, _, _} -> Response;
                 _ -> internal_error()
             catch
                 Class:Reason:Stack ->
@@ -77,7 +77,7 @@ dispatch(Request = {'Request', Method, Path, _, _, _, _}, Routes) ->
     end.
 
 find_route(_, _, []) -> none;
-find_route(Method, Path, [Route = {'Route', RouteMethod, RoutePath, _} | Rest]) ->
+find_route(Method, Path, [Route = {'Web.Route', RouteMethod, RoutePath, _} | Rest]) ->
     case RoutePath =:= Path andalso
          (RouteMethod =:= <<"*">> orelse RouteMethod =:= Method orelse
           (Method =:= <<"HEAD">> andalso RouteMethod =:= <<"GET">>)) of
@@ -120,7 +120,7 @@ parse_request(Socket, HeaderBlock, BufferedBody) ->
                                 {ok, Body} ->
                                     {Path, Query} = split_target(Target),
                                     QueryParams = parse_query(Query),
-                                    {ok, {'Request', Method, Path, Query,
+                                    {ok, {'Web.Request', Method, Path, Query,
                                           QueryParams, Headers, Body}};
                                 Error -> Error
                             end;
@@ -179,7 +179,7 @@ url_decode(Value) ->
     catch _:_ -> WithSpaces
     end.
 
-send_response(Socket, {'Response', Status, Headers0, Body0}, Method)
+send_response(Socket, {'Web.Response', Status, Headers0, Body0}, Method)
   when is_integer(Status), is_map(Headers0) ->
     Body = kex_io:to_string_bin(Body0),
     Headers1 = remove_header_ci(<<"content-length">>, Headers0),
@@ -204,7 +204,7 @@ remove_header_ci(Name, Headers) ->
     end, Headers).
 
 text_response(Status, Body) ->
-    {'Response', Status, #{<<"Content-Type">> => <<"text/plain; charset=utf-8">>}, Body}.
+    {'Web.Response', Status, #{<<"Content-Type">> => <<"text/plain; charset=utf-8">>}, Body}.
 
 internal_error() -> text_response(500, <<"Internal Server Error\n">>).
 

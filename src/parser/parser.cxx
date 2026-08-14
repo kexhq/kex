@@ -254,7 +254,7 @@ auto Parser::parseModuleDef(bool allowStandalone, const std::string& parentModul
         error("standalone 'module' must be the first statement in a file");
     skipNewlines();
 
-    while (!check(TokenType::End) && !atEnd()) {
+    while (!atEnd() && (standalone || !check(TokenType::End))) {
         if (check(TokenType::Module) ||
             (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
             mod->body.push_back(parseModuleDef(false, mod->name));
@@ -781,6 +781,21 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     else if (!hasParamList && check(TokenType::Colon)) {
         advance();
         clause.returnAnnotation = parseTypeExpr();
+    }
+
+    // An `=` body may open on the line AFTER the signature:
+    //
+    //     let add(a, b)
+    //       = a + b
+    //
+    // Nothing else may follow a signature across a newline, so looking past
+    // the newlines for an `=` cannot swallow the start of an unrelated
+    // statement — if the next real token is anything else, the cursor goes
+    // back and the usual `do ... end` / annotation-only handling applies.
+    if (check(TokenType::Newline)) {
+        const auto savedPos = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Equals)) m_pos = savedPos;
     }
 
     // = expr (single expression body)
@@ -1813,6 +1828,23 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     // Upper ident (type constructor or record creation)
     if (check(TokenType::UpperIdent)) {
         auto name = advance().value;
+
+        // A record's canonical source identity may include its owning module:
+        // `Tey.Manifest.Dependency { ... }`. Consume the dotted uppercase
+        // path only when it terminates in `{`; ordinary namespace calls keep
+        // flowing through parsePostfixTail unchanged.
+        int pathOffset = 0;
+        while (peekAt(pathOffset).type == TokenType::Dot &&
+               peekAt(pathOffset + 1).type == TokenType::UpperIdent)
+            pathOffset += 2;
+        if (pathOffset > 0 &&
+            peekAt(pathOffset).type == TokenType::LBrace) {
+            while (match(TokenType::Dot)) {
+                name += ".";
+                name += expect(TokenType::UpperIdent,
+                               "Expected record type name").value;
+            }
+        }
 
         // Record construction: Type { field: value }
         if (check(TokenType::LBrace)) {
@@ -3256,6 +3288,18 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     // Constructor pattern: Name(args) or just Name
     if (check(TokenType::UpperIdent)) {
         auto name = advance().value;
+        int pathOffset = 0;
+        while (peekAt(pathOffset).type == TokenType::Dot &&
+               peekAt(pathOffset + 1).type == TokenType::UpperIdent)
+            pathOffset += 2;
+        if (pathOffset > 0 &&
+            peekAt(pathOffset).type == TokenType::LBrace) {
+            while (match(TokenType::Dot)) {
+                name += ".";
+                name += expect(TokenType::UpperIdent,
+                               "Expected record type name").value;
+            }
+        }
         // Named record pattern: `Foo { x, y }` — same field-list grammar as
         // the anonymous `{ ... }` form, but the leading type name makes the
         // match also assert the record's type (see ast::RecordPattern).

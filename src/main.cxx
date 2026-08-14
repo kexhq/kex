@@ -542,6 +542,12 @@ auto readFile(const std::string &path) -> std::string {
 
 namespace {
 
+// Additional project roots supplied by repeatable `--source-root` options.
+// Keeping this at the CLI boundary lets every existing consumer of
+// moduleRootsFor (semantic checks, discovery, validation and both runtimes)
+// observe exactly the same search path.
+std::vector<std::string> cliSourceRoots;
+
 auto isIdentChar(char c) -> bool {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
 }
@@ -947,17 +953,34 @@ struct LoadedDep {
 
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
+                     const kex::semantic::ImportedInterfaces *interfaces,
                      const std::unordered_set<std::string> &qualifiedModules = {})
     -> std::vector<LoadedDep> {
   std::vector<LoadedDep> deps;
   std::unordered_set<std::string> loaded;
   kex::module::Resolver resolver(roots);
 
-  std::function<void(const kex::ast::Program &)> resolve =
-      [&](const kex::ast::Program &prog) {
+  std::function<void(const kex::ast::Program &,
+                     const std::unordered_set<std::string> &)> resolve =
+      [&](const kex::ast::Program &prog,
+          const std::unordered_set<std::string> &seedModules) {
     auto modules = collectUsingModules(prog);
-    modules.insert(modules.end(),
-                   qualifiedModules.begin(), qualifiedModules.end());
+    modules.insert(modules.end(), seedModules.begin(), seedModules.end());
+
+    // Each newly parsed source file can introduce qualified-only dependency
+    // edges of its own. Analyze it here rather than only analyzing the entry
+    // program; otherwise discovery stops after one qualified-reference hop.
+    kex::semantic::Analyzer dependencyAnalysis(interfaces);
+    (void)dependencyAnalysis.analyze(prog);
+    for (const auto &name : dependencyAnalysis.referencedModules()) {
+      const bool automatic = interfaces && [&] {
+        const auto imported = interfaces->modules.find(name);
+        return imported != interfaces->modules.end() &&
+               imported->second.automaticImport;
+      }();
+      if (!automatic)
+        modules.push_back(name);
+    }
     for (const auto &modName : modules) {
       auto resolved = resolver.resolve(modName);
       if (!resolved) continue;
@@ -969,13 +992,13 @@ auto resolveBeamDeps(kex::ast::Program &program,
       kex::Parser parser(lexer.tokenizeAll(), *path);
       auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
       if (parser.diagnostics().empty()) {
-        resolve(*depProg);
+        resolve(*depProg, {});
         deps.push_back(
             {std::move(src), std::move(path), std::move(depProg)});
       }
     }
   };
-  resolve(program);
+  resolve(program, qualifiedModules);
 
   if (!deps.empty()) {
     std::vector<kex::ast::TopLevelItem> merged;
@@ -1000,6 +1023,14 @@ auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
   namespace fs = std::filesystem;
   const auto srcDir = fs::weakly_canonical(filepath).parent_path();
   std::vector<std::string> roots;
+  for (const auto &configured : cliSourceRoots) {
+    std::error_code ec;
+    auto root = fs::weakly_canonical(configured, ec);
+    const auto normalized = ec ? fs::path(configured).lexically_normal() : root;
+    const auto value = normalized.string();
+    if (std::find(roots.begin(), roots.end(), value) == roots.end())
+      roots.push_back(value);
+  }
   for (const auto &relative : {"lib", "src"}) {
     const auto candidate = srcDir / relative;
     std::error_code ec;
@@ -1301,7 +1332,9 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   for (const auto *module : registry.allLoadedModules())
     for (const auto &record : module->chunk.metadata.records) {
       kex::ir::ExternalRecordLayout layout;
-      layout.name = record.name;
+      // The layout is keyed by the tuple tag the record's own module emits,
+      // so a construction here agrees with a pattern match there.
+      layout.name = record.tagAtom.empty() ? record.name : record.tagAtom;
       layout.moduleAtom = module->beamAtom;
       for (const auto &field : record.fields)
         layout.fields.push_back(field.name);
@@ -1354,13 +1387,18 @@ auto preludeDisplayRegistration() -> std::string {
   const auto &registry = kex::preludeRegistry(runtimeDir);
   for (const auto *module : registry.allLoadedModules()) {
     for (const auto &record : module->chunk.metadata.records) {
-      if (!records.empty()) records += ", ";
-      records += "'" + record.name + "' => [";
+      std::string fields;
       for (size_t i = 0; i < record.fields.size(); i++) {
-        if (i) records += ", ";
-        records += "'" + record.fields[i].name + "'";
+        if (i) fields += ", ";
+        fields += "'" + record.fields[i].name + "'";
       }
-      records += "]";
+      // Keyed by the value's RUNTIME tag, which the metadata records: a
+      // record declared inside a `module` block is tagged with its qualified
+      // identity, one at a file's top level with its bare name.
+      if (!records.empty()) records += ", ";
+      records += "'" +
+                 (record.tagAtom.empty() ? record.name : record.tagAtom) +
+                 "' => [" + fields + "]";
     }
     for (const auto &adt : module->chunk.metadata.adts)
       for (const auto &constructor : adt.constructors) {
@@ -1615,6 +1653,8 @@ auto printUsage(const char *progName) -> void {
          "runtime\n"
       << "  -o <dir>          Output directory for -c / --emit-core (default: "
          ".)\n"
+      << "      --source-root <dir>\n"
+      << "                    Add a module source root (repeatable)\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "  --no-colors       Disable ANSI color output\n";
@@ -1643,6 +1683,7 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
+      {"source-root", required_argument, nullptr, 1008},
       {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
@@ -1690,6 +1731,9 @@ int main(int argc, char *argv[]) {
       std::cerr << "error: LSP support is unavailable in this build\n";
       return 1;
 #endif
+      break;
+    case 1008:
+      cliSourceRoots.emplace_back(optarg);
       break;
     case 1001: {
       std::string dir = optarg;
@@ -2558,6 +2602,7 @@ int main(int argc, char *argv[]) {
           }
           auto replDeps = resolveBeamDeps(
               program, kex::standardLibraryModuleRoots(),
+              &preludeSemanticInterfaces(),
               replQualifiedModules);
           (void)replDeps;
           auto extMods = mergeExternalModules(
@@ -3519,6 +3564,7 @@ int main(int argc, char *argv[]) {
         }
         beamDeps = resolveBeamDeps(
             program, moduleRootsFor(filepath),
+            &preludeSemanticInterfaces(),
             qualifiedModules);
       }
 

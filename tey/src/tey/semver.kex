@@ -1,77 +1,78 @@
 module Tey.Semver
-  record SemanticVersion do
-    major : Integer
-    minor : Integer
-    patch : Integer
-  end
 
-  let parseVersion(text: String) -> SemanticVersion? do
-    let clean = text.startsWith?("v") then text.drop(1) else text
-    let parts = clean.split(".")
-    let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: clean, rest: clean }) end
-    let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
-    let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0").split("-").first.or("0")) _ -> Ok(0) end
-    match (major, minor, patch) do
-      (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c })
-      _ -> None
+record SemanticVersion do
+  major : Integer
+  minor : Integer
+  patch : Integer
+end
+
+let parseVersion(text: String) -> SemanticVersion? do
+  let clean = text.startsWith?("v") then text.drop(1) else text
+  let parts = clean.split(".")
+  let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: clean, rest: clean }) end
+  let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
+  let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0").split("-").first.or("0")) _ -> Ok(0) end
+  match (major, minor, patch) do
+    (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c })
+    _ -> None
+  end
+end
+
+let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
+  return -1 if a.major < b.major
+  return 1 if a.major > b.major
+  return -1 if a.minor < b.minor
+  return 1 if a.minor > b.minor
+  return -1 if a.patch < b.patch
+  return 1 if a.patch > b.patch
+  0
+end
+
+let satisfies(versionText: String, requirement: String) -> Bool do
+  let version = Tey.Semver.parseVersion(versionText)
+  return false if version == None
+  let req = requirement.trim
+    .replace(">= ", ">=")
+    .replace("<= ", "<=")
+    .replace("~> ", "~>")
+    .replace("^ ", "^")
+    .replace("> ", ">")
+    .replace("< ", "<")
+    .replace("= ", "=")
+  return true if req == "" || req == "*"
+  let clauses = req.split(" ").filter { |part| part != "" }
+  clauses.all? { |clause| satisfiesClause(version.try, clause) }
+end
+
+private do
+  let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
+    var op = "="
+    if clause.startsWith?(">=")
+      op = ">="
+    elif clause.startsWith?("<=")
+      op = "<="
+    elif clause.startsWith?("~>")
+      op = "~>"
+    elif clause.startsWith?("^")
+      op = "^"
+    elif clause.startsWith?(">")
+      op = ">"
+    elif clause.startsWith?("<")
+      op = "<"
+    end
+    let raw = clause.drop(op.count)
+    let wanted = Tey.Semver.parseVersion(raw)
+    return false if wanted == None
+    let order = Tey.Semver.compareVersions(version, wanted.try)
+    match op do
+      ">=" -> order >= 0
+      "<=" -> order <= 0
+      ">" -> order > 0
+      "<" -> order < 0
+      "=" -> order == 0
+      "^" -> order >= 0 && version.major == wanted.try.major
+      "~>" -> order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
+      _ -> false
     end
   end
-
-  let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
-    return -1 if a.major < b.major
-    return 1 if a.major > b.major
-    return -1 if a.minor < b.minor
-    return 1 if a.minor > b.minor
-    return -1 if a.patch < b.patch
-    return 1 if a.patch > b.patch
-    0
-  end
-
-  let satisfies(versionText: String, requirement: String) -> Bool do
-    let version = Tey.Semver.parseVersion(versionText)
-    return false if version == None
-    let req = requirement.trim
-      .replace(">= ", ">=")
-      .replace("<= ", "<=")
-      .replace("~> ", "~>")
-      .replace("^ ", "^")
-      .replace("> ", ">")
-      .replace("< ", "<")
-      .replace("= ", "=")
-    return true if req == "" || req == "*"
-    let clauses = req.split(" ").filter { |part| part != "" }
-    clauses.all? { |clause| satisfiesClause(version.try, clause) }
-  end
-
-  private do
-    let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
-      var op = "="
-      if clause.startsWith?(">=")
-        op = ">="
-      elif clause.startsWith?("<=")
-        op = "<="
-      elif clause.startsWith?("~>")
-        op = "~>"
-      elif clause.startsWith?("^")
-        op = "^"
-      elif clause.startsWith?(">")
-        op = ">"
-      elif clause.startsWith?("<")
-        op = "<"
-      end
-      let raw = clause.drop(op.count)
-      let wanted = Tey.Semver.parseVersion(raw)
-      return false if wanted == None
-      let order = Tey.Semver.compareVersions(version, wanted.try)
-      match op do
-        ">=" -> order >= 0
-        "<=" -> order <= 0
-        ">" -> order > 0
-        "<" -> order < 0
-        "=" -> order == 0
-        "^" -> order >= 0 && version.major == wanted.try.major
-        "~>" -> order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
-        _ -> false
-      end
-    end
-  end
+end

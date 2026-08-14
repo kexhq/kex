@@ -597,6 +597,21 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                     }
                 if (const auto* make = std::get_if<std::unique_ptr<ast::MakeDef>>(&item))
                     if (*make) collectMakeAnnotations(**make, mod.name);
+                if (const auto* record =
+                        std::get_if<std::unique_ptr<ast::RecordDef>>(&item);
+                    record && *record) {
+                    const auto qualified = mod.name + "." + (*record)->name;
+                    ifaces.recordArities[qualified] = (*record)->fields.size();
+                    ifaces.recordArities.try_emplace(
+                        (*record)->name, (*record)->fields.size());
+                    auto& fields = ifaces.recordFieldNames[qualified];
+                    for (const auto& field : (*record)->fields)
+                        fields.insert(field.name);
+                    ifaces.recordFieldNames.try_emplace((*record)->name,
+                                                        fields);
+                    ifaces.typeNames.insert((*record)->name);
+                    ifaces.typeNames.insert(qualified);
+                }
                 if (const auto* nested = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
                     if (*nested) collectModule(**nested);
                 if (const auto* td = std::get_if<std::unique_ptr<ast::TypeDef>>(&item))
