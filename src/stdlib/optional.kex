@@ -21,7 +21,17 @@ trait Eitherable do
 end
 
 make Optional<X>, implement: Optionable do
-  # (+present?+ comes from the +Blankable+ default: +!this.blank?+.)
+  # Returns +true+ if this optional has value.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Just(42).set?    # => true
+  #   None.set?        # => false
+  set? :> Bool
+  let set?(@Just(_)) = true
+  let set?(@None) = false
+
   # Returns +true+ if this optional is empty.
   #
   # @return [Bool]
