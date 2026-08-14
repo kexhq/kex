@@ -1,13 +1,13 @@
 # kex: no-check
 
-describe("Optional — present? and none?") do
-  it("present? returns true for Just") do
-    assert(Just(42).present?)
-    assert(Just("hello").present?)
+describe("Optional — set? and none?") do
+  it("set? returns true for Just") do
+    assert(Just(42).set?)
+    assert(Just("hello").set?)
   end
 
-  it("present? returns false for bare None") do
-    assert(!None.present?)
+  it("set? returns false for bare None") do
+    assert(!None.set?)
   end
 
   it("none? returns true for bare None") do
@@ -115,12 +115,12 @@ describe("Result — flatMap") do
   end
 end
 
-describe("Result — toOptional") do
-  it("toOptional converts Ok to Just") do
-    assert(Ok(42).toOptional == Just(42))
+describe("Result — optional") do
+  it("optional converts Ok to Just") do
+    assert(Ok(42).optional == Just(42))
   end
 
-  it("toOptional converts Error to None") do
-    assert(Error("oops").toOptional == None)
+  it("optional converts Error to None") do
+    assert(Error("oops").optional == None)
   end
 end

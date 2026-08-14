@@ -143,11 +143,11 @@ make Result<X, E>, implement: Resultable do
   # @return [X?]
   #
   # @example
-  #   Ok(42).toOptional        # => Just(42)
-  #   Error("oops").toOptional # => None
-  toOptional :> X?
-  let toOptional(@Ok(x)) = Just(x)
-  let toOptional(@Error(_)) = None
+  #   Ok(42).optional        # => Just(42)
+  #   Error("oops").optional # => None
+  optional :> X?
+  let optional(@Ok(x)) = Just(x)
+  let optional(@Error(_)) = None
 end
 
 # Universal `.or(default)` catch-all: a value that is neither Optional nor
