@@ -341,10 +341,19 @@ dir_home() ->
 'dir_exists?'(P) -> mocked_dir(P) orelse filelib:is_dir(pth(P)).
 'dir_file?'(P)   -> exists(P).
 
+%% Creates missing parents, and succeeds for a directory that is already
+%% there — the same contract as the tree walker's create_directories. A plain
+%% make_dir/1 instead failed on an existing path, so on BEAM the second
+%% `tey install` into a populated cache reported a cache it could not create.
 dir_create(P) ->
-    case file:make_dir(pth(P)) of
-        ok -> true;
-        _  -> false
+    Path = pth(P),
+    case mocked_dir(Path) of
+        true -> true;
+        false ->
+            case filelib:ensure_path(Path) of
+                ok -> true;
+                _  -> false
+            end
     end.
 
 dir_delete(P) ->

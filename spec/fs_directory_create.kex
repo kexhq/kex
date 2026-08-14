@@ -1,0 +1,20 @@
+# `FS.Directory.create` means mkdir -p on every backend: it creates missing
+# parents and reports success for a directory that is already there. The BEAM
+# runtime used a plain make_dir, which failed on an existing path — so a
+# program that ensures its own directories (Tey's package cache) worked once
+# and then refused to run again.
+
+using FS
+
+main do
+  let root = "${FS.Directory.current}/.kex_spec_dir_create"
+  FS.Directory.deleteAll(root)
+
+  IO.printLine("fresh: ${FS.Directory.create(root)}")
+  IO.printLine("again: ${FS.Directory.create(root)}")
+  IO.printLine("nested: ${FS.Directory.create("${root}/one/two")}")
+  IO.printLine("nested exists: ${FS.Directory.directory?("${root}/one/two")}")
+
+  FS.Directory.deleteAll(root)
+  IO.printLine("removed: ${!FS.Directory.directory?(root)}")
+end

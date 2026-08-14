@@ -30,11 +30,32 @@ let fetch(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
     return Error("cannot create Tey cache at ${Tey.Cache.root}")
   end
 
-  match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", Tey.Lockfile.dependencyGit(dep), path]) do
-    Error(error) -> Error(error)
-    Ok(_) -> match Tey.Git.execute(["-C", path, "checkout", "--detach", Tey.Lockfile.dependencyCommit(dep)]) do
-      Error(error) -> Error(error)
-      Ok(_) -> Ok(path)
+  # Clone into a staging directory and move it into place only once the
+  # checkout is complete: the presence of `path` is what every other command
+  # reads as "this dependency is cached", so a half-finished clone must never
+  # be reachable under that name. The staging directory is a sibling, which
+  # keeps the move within one filesystem and therefore atomic.
+  let staging = stagingPath(dep)
+  FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+
+  match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", Tey.Lockfile.dependencyGit(dep), staging]) do
+    Error(error) -> do
+      FS.Directory.deleteAll(staging)
+      return Error(error)
+    end
+    Ok(_) -> match Tey.Git.execute(["-C", staging, "checkout", "--detach", Tey.Lockfile.dependencyCommit(dep)]) do
+      Error(error) -> do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(_) -> do
+        return Ok(path) if FS.File.rename(staging, path)
+        # Another run may have finished the same checkout first. Its result
+        # is this one's result — the path is content-addressed by commit.
+        FS.Directory.deleteAll(staging)
+        return Ok(path) if FS.Directory.directory?(path)
+        return Error("could not move the ${Tey.Lockfile.dependencyName(dep)} checkout into ${path}")
+      end
     end
   end
 end
@@ -58,5 +79,11 @@ end
 private do
   let sourceRoot(dep: Tey.Lockfile.Dependency) -> String do
     return "${Tey.Cache.root}/src/${Digest.sha256(Tey.Lockfile.dependencyGit(dep))}"
+  end
+
+  # Sibling of the final path so the move that publishes it stays on one
+  # filesystem, and named so a leftover from a killed run is recognizable.
+  let stagingPath(dep: Tey.Lockfile.Dependency) -> String do
+    return "${Tey.Cache.packagePath(dep)}.partial"
   end
 end
