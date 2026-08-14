@@ -57,9 +57,9 @@ Commands:
   test                     run spec/*.spec.kex
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
-  toolchain install <src> <version>
+  kex install <src> <version>
                            build/install compiler + runtime + stdlib
-  toolchain use <version>  select an installed Kex toolchain
+  kex use <version>        select an installed Kex toolchain
 `)
     return 0
   end
@@ -86,7 +86,7 @@ Commands:
     Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
   end
 
-  let dispatchCommand(["toolchain", "install", source, version], _) -> Integer do
+  let dispatchCommand(["kex", "install", source, version], _) -> Integer do
     match Tey.Toolchain.installSource(source, version) do
       Ok(prefix) -> do
         IO.printLine("Installed and selected Kex ${version} at ${prefix}")
@@ -99,7 +99,7 @@ Commands:
     end
   end
 
-  let dispatchCommand(["toolchain", "use", version], _) -> Integer do
+  let dispatchCommand(["kex", "use", version], _) -> Integer do
     if Tey.Toolchain.use(version)
       IO.printLine("Using Kex ${version}")
       0

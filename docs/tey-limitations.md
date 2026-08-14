@@ -8,7 +8,11 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - `Process.run` keeps stdout and stderr separate in the tree walker, while the
   BEAM port backend currently combines stderr into stdout. Its public result is
   stable, but stream fidelity differs by backend.
-- Everything is built under the root folder of the new package, instead of having an output folder and putting it there (maybe it should also be included in the `.gitignore`, too)
+- A built entry module's FILE name does not match its BEAM module name
+  (`main.kx.beam` holds module `kex_main`), so `erl -pa ebin` cannot load it
+  without a renamed copy — which is why `tey/Makefile` copies it by hand.
+  Either the compiler should name the file after the module, or `tey build`
+  needs a launcher that knows the entry module.
 
 ## Tey package-manager limitations
 

@@ -109,7 +109,15 @@ end
 
 let build -> Integer do
   let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-  match Process.run(Tey.Toolchain.kex, ["--compile", package.entrypoint]) do
+  # Compiling the entry module also emits a companion for every module it
+  # reaches — the prelude and runtime included — so a build left ~80 `.beam`
+  # files sitting next to package.kex. They go under `ebin/` instead, which
+  # is both the BEAM convention and where a package's launcher expects its
+  # code path to point.
+  if !FS.Directory.create(Tey.Commands.outputDirectory)
+    return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
+  end
+  match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory, package.entrypoint]) do
     Error(error) -> Tey.Commands.fail(error)
     Ok(result) -> do
       if result.stdout != ""
@@ -200,11 +208,19 @@ __ENTRY__end
     return Tey.Commands.fail("could not write project '${name}'")
   end
   FS.File.write("${name}/.gitattributes", "tey.lock merge=tey\n")
+  # tey.lock IS committed — only build output is ignored.
+  FS.File.write("${name}/.gitignore", "${Tey.Commands.outputDirectory}/\n")
   IO.printLine("Created ${name}")
   0
 end
 
 private do
+  # Where `tey build` puts compiled artifacts, and what `tey init` tells Git
+  # to ignore.
+  let outputDirectory -> String do
+    return "ebin"
+  end
+
   let readLock -> Result<LockState, String> do
     match FS.File.read("tey.lock") do
       None -> Error("tey.lock not found; run `tey lock`")
