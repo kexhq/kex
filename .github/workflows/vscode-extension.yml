@@ -1,0 +1,154 @@
+name: VS Code extension
+
+# The editor extension is released by an ordinary reviewed commit, like the
+# compiler's VERSION file: bump "version" in editors/vscode/package.json and
+# merge to main. This workflow picks that up and publishes. Its number is its
+# own — extension-facing changes, not compiler releases — so it deliberately
+# has no hook in release.yml: a compiler release must not republish the
+# extension, and an extension release must not tag the compiler.
+#
+# Marketplace versions are immutable, so the run first asks the gallery
+# whether this version already exists and skips instead of failing when it
+# does (same contract as release.yml's npm job). That is also what makes a
+# push that touches editors/vscode without bumping the version cheap: the
+# workflow runs, repackages nothing far, and exits with "already published".
+#
+# Pre-release flagging follows the version number, exactly like release.yml
+# reads Kex's channel from VERSION: a version with a pre-release suffix
+# (0.2.0-rc.1) is packaged and published as a pre-release, a plain one is
+# stable. The dispatch input exists for the one case the string cannot say —
+# republishing a stable-numbered build as pre-release is impossible either
+# way (versions are immutable), so it only ever forces prerelease ON, never
+# off, and its default ("auto") just takes what the version says.
+#
+# Secrets:
+#   VSCE_PAT  required — Azure DevOps PAT, Marketplace/Manage scope, created
+#             under the Kex publisher's organization.
+#   OVSX_PAT  optional — open-vsx.org token. Without it the Open VSX step
+#             skips with a note; VSCodium/Cursor users just stay a version
+#             behind until one is configured.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "editors/vscode/**"
+      - ".github/workflows/vscode-extension.yml"
+  workflow_dispatch:
+    inputs:
+      prerelease:
+        description: "Publish as a pre-release (auto: from the version's -suffix)"
+        type: choice
+        default: "auto"
+        options: ["auto", "true", "false"]
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Reads "packageManager": "bun@1.3.13" from editors/vscode/package.json,
+      # so the CI build uses the same bun the local `bun run package` does.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          repository: editors/vscode
+
+      - name: Read the extension version
+        id: version
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          version=$(bun -e 'console.log(require("./package.json").version)')
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "vsix=kex-language-${version}.vsix" >> "$GITHUB_OUTPUT"
+
+          # Pre-release if the version carries a -suffix, unless the dispatch
+          # input overrides. "false" as an input cannot un-pre-release a
+          # suffixed version: the Marketplace would then offer it as stable,
+          # so that combination is rejected instead of guessed.
+          choice="${{ inputs.prerelease || 'auto' }}"
+          case "$version" in
+            *-*) from_version=true ;;
+            *)   from_version=false ;;
+          esac
+          case "$choice" in
+            auto) prerelease="$from_version" ;;
+            true) prerelease=true ;;
+            false)
+              if [ "$from_version" = true ]; then
+                echo "::error::${version} has a pre-release suffix but prerelease=false was requested."
+                exit 1
+              fi
+              prerelease=false ;;
+          esac
+          echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+
+      # vsce show answers from the gallery with the PAT; --json yields a
+      # versions array, and membership there means this number is already
+      # somebody's installed extension — not to be rebuilt.
+      - name: Check whether the version is already published
+        id: check
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          version="${{ steps.version.outputs.version }}"
+          if bunx --bun vsce show Kex.kex-language --json 2>/dev/null \
+             | jq -e --arg v "$version" '[.versions[].version] | index($v) != null' >/dev/null; then
+            echo "published=true" >> "$GITHUB_OUTPUT"
+            echo "Kex.kex-language@${version} is already on the Marketplace; skipping."
+          else
+            echo "published=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install dependencies
+        if: steps.check.outputs.published == 'false'
+        working-directory: editors/vscode
+        run: bun install --frozen-lockfile
+
+      # The repo's own pipeline — tsc, bun build, then vsce package — so the
+      # published bytes are the ones `bun run package` produces locally, and
+      # the README's screenshots/metadata are validated before any upload.
+      # --pre-release must be given here (it stamps a
+      # Microsoft.VisualStudio.Code.PreRelease property into the VSIX) or
+      # `vsce publish --pre-release` will refuse the package.
+      - name: Package
+        if: steps.check.outputs.published == 'false'
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          flag=""
+          if [ "${{ steps.version.outputs.prerelease }}" = true ]; then flag="--pre-release"; fi
+          bun run compile
+          bunx --bun vsce package --no-dependencies $flag
+
+      # Publishing the packaged .vsix (--packagePath) rather than letting
+      # publish repackage: both stores below receive the identical bytes this
+      # workflow tested.
+      - name: Publish to the Marketplace
+        if: steps.check.outputs.published == 'false'
+        working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          set -euo pipefail
+          flag=""
+          if [ "${{ steps.version.outputs.prerelease }}" = true ]; then flag="--pre-release"; fi
+          bunx --bun vsce publish --no-dependencies $flag --packagePath "${{ steps.version.outputs.vsix }}"
+
+      - name: Publish to Open VSX
+        if: steps.check.outputs.published == 'false'
+        working-directory: editors/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OVSX_PAT}" ]; then
+            echo "OVSX_PAT is not configured; skipping Open VSX."
+            exit 0
+          fi
+          bunx --bun ovsx publish --no-dependencies ${{ steps.version.outputs.prerelease == 'true' && '--pre-release' || '' }} -p "${OVSX_PAT}" "${{ steps.version.outputs.vsix }}"
