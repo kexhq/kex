@@ -16,12 +16,22 @@ It is designed for code that reads like a scripting language without giving up t
 > to edit code when you move off it.
 
 Kex ships with **Tey**, its package, compiler, runtime, and standard-library
-manager. During the HEAD-only bootstrap period, add the Homebrew tap and
-install its Tey formula:
+manager. Installing Tey installs a working `kex`:
 
 ```sh
 brew tap kexhq/tey
-brew install --HEAD kexhq/tey/tey
+brew install --HEAD kexhq/tey/tey   # --HEAD until the first stable tag
+kex --version
+```
+
+The `kex` on your PATH is Tey's dispatcher: it runs whichever toolchain Tey has
+selected, so there is only ever one compiler command and Tey decides what it
+means.
+
+```sh
+tey kex list [--pre]        # released and installed versions
+tey kex install [<version>] # newest stable, or the one you name
+tey kex use <version>       # switch what `kex` runs
 ```
 
 The tap follows the stable line, so `--HEAD` stays necessary until the first

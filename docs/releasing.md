@@ -129,6 +129,12 @@ Without it, only the `formula` job fails, and only on a stable release.
    Tey is compiled to BEAM modules, which are architecture-independent, so one
    archive serves every platform — that is what lets Homebrew install Tey
    without being able to build Kex at all.
+
+   Both halves of the Homebrew formula come from these five archives: the keg
+   installs Tey from the `tey-` one and the compiler for the installing machine
+   from the matching `kex-` one. A platform whose archive is missing is a
+   platform that cannot `brew install tey`, which is the other reason a red
+   suite stops the release.
 3. **`image`** (3 variants × 2 architectures) — each built on a runner of its
    own architecture, not under QEMU, because the image build runs the spec
    suites inside itself. Pushed to GHCR by digest.
@@ -156,13 +162,16 @@ Without it, only the `formula` job fails, and only on a stable release.
    so a fixed run is not stuck with the first attempt's text. That flag is what keeps `/releases/latest` meaning "the current stable
    Kex" — the endpoint kex.run reads, and what `tey kex install` resolves to
    when given no version.
-6. **`formula`** — **stable only**. Rewrites `url`/`sha256` in
-   `kexhq/homebrew-tey`'s `Formula/tey.rb` to the new `tey-<version>.tar.gz`
-   and opens a pull request on the tap. It edits only the region between the
-   `# <<STABLE` and `# STABLE>>` markers, so anything else in the formula
-   survives. Nothing pushes to a branch people install from — a formula that
-   cannot build is a broken `brew install` for everyone — so **a release
-   reaches Homebrew when a maintainer merges that pull request**.
+6. **`formula`** — **stable only**. Points `kexhq/homebrew-tey`'s
+   `Formula/tey.rb` at the new release and opens a pull request on the tap. It
+   fills two marked regions and nothing else: `# <<STABLE-TEY` with the Tey
+   archive's `url`/`sha256`, and `# <<STABLE-KEX` with one `resource` per
+   platform, so brew downloads the compiler for the machine doing the
+   installing. Checksums are read from the `.sha256` files published beside the
+   assets rather than recomputed. Nothing pushes to a branch people install
+   from — a formula that cannot build is a broken `brew install` for everyone —
+   so **a release reaches Homebrew when a maintainer merges that pull
+   request**.
 7. **`bump`** — opens a pull request raising `VERSION` to the next number, on a
    `bump/v<next>` branch. It does nothing if `VERSION` has already moved past
    the released version while the run was going. Needs "Allow GitHub Actions to
