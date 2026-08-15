@@ -48,12 +48,13 @@ struct Document {
     // and a chain continued on the next line do not, because there is no name
     // to look up. These spans answer positionally instead, which is what a
     // call result or a multi-line builder chain needs.
-    struct ReceiverSpan {
-        unsigned int line = 0;        // 0-based, as LSP positions are
-        unsigned int endByteColumn = 0;  // one past the expression's last byte
-        unsigned int byteLength = 0;
-        std::string qualifier;
-    };
+    // Where a completable expression STARTS -> what to complete against.
+    // Keyed by start because that is what the AST records (nodes carry no end
+    // position) and what a backwards scan from the cursor can recover.
+    static auto receiverKey(unsigned int line, unsigned int byteColumn)
+        -> uint64_t {
+        return (static_cast<uint64_t>(line) << 32) | byteColumn;
+    }
 
     std::string path;
     std::string text;
@@ -61,7 +62,12 @@ struct Document {
     std::vector<HoverEntry> hoverEntries;
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
-    std::vector<ReceiverSpan> receiverSpans;
+    std::unordered_map<uint64_t, std::string> receiverSpans;
+    // Receivers that needed the full re-analysis, by start offset. A call
+    // result (`Date.of(2026, 7, 30).weekday`) has no recorded span, and an
+    // editor asks about the same site repeatedly — once per keystroke during
+    // completion. Dropped whenever the text changes, so it cannot go stale.
+    mutable std::unordered_map<size_t, std::string> recoveredReceivers;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
 };
 
@@ -1262,6 +1268,11 @@ auto documentImports(const std::string& source)
 struct DotReceiver {
     size_t start = 0;  // first byte of the receiver expression
     size_t dot = 0;    // the '.' the member being typed hangs off
+    // Where the AST records the OUTERMOST expression of the receiver. A call
+    // is recorded at its argument list's `(`, not at the receiver it hangs
+    // off: in a builder chain `Web.Server.new(0)\n  .get("/", ~h)` the last
+    // `.get(…)` call sits at that `(`. Zero when the receiver ends in no call.
+    size_t callOpen = 0;
     bool valid = false;
 };
 
@@ -1295,6 +1306,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     if (i == 0 || source[i - 1] != '.') return {};
     const size_t dot = i - 1;
 
+    size_t callOpen = 0;
     i = skipSpaceBack(dot);
     while (i > 0) {
         const char c = source[i - 1];
@@ -1303,6 +1315,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == ')' || c == ']') {
             const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
             if (open == std::string::npos) return {};
+            if (c == ')' && callOpen == 0) callOpen = open;
             i = open;
             continue;
         }
@@ -1317,13 +1330,18 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         }
         if (!isWord(static_cast<unsigned char>(c))) break;
         while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        // `@size` is one expression and the AST records it starting at the
+        // `@`. Stopping at the sigil pointed one byte too far right, so the
+        // recorded type could not be found and every `@field.method` fell back
+        // to re-analyzing the whole buffer.
+        if (i > 0 && source[i - 1] == '@') --i;
         // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
         const size_t before = skipSpaceBack(i);
         if (before == 0 || source[before - 1] != '.') break;
         i = skipSpaceBack(before - 1);
     }
     if (i >= dot) return {};
-    return {.start = i, .dot = dot, .valid = true};
+    return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
 }
 
 // The type of an arbitrary receiver expression, by re-parsing the buffer with
@@ -1344,26 +1362,99 @@ auto recoveredReceiverQualifier(
     analyzer.analyze(program);
 
     // Everything before the deletion keeps its position, so the receiver's
-    // line/column are the ones it had in the original buffer.
-    int line = 1;
-    size_t lineStart = 0;
-    for (size_t i = 0; i < receiver.start; ++i)
-        if (source[i] == '\n') { ++line; lineStart = i + 1; }
-    const int column = static_cast<int>(receiver.start - lineStart) + 1;
+    // line/column are the ones it had in the original buffer. A CALL is
+    // recorded at its argument list's `(`, so a builder chain
+    // (`Web.Server.new(0).get(…).post(…)`) has nothing at all at the start of
+    // the receiver — that position is where `Web` is, and the chain's own type
+    // lives at the last call's paren.
+    const auto positionOf = [&](size_t offset) {
+        int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < offset; ++i)
+            if (source[i] == '\n') { ++line; lineStart = i + 1; }
+        return std::pair<int, int>{
+            line, static_cast<int>(offset - lineStart) + 1};
+    };
+    std::vector<std::pair<int, int>> candidates;
+    if (receiver.callOpen) candidates.push_back(positionOf(receiver.callOpen));
+    candidates.push_back(positionOf(receiver.start));
 
     // Several expressions can start at one column — `makeBox` the identifier
     // and `makeBox(3)` the call both start at `m`. Only the call has a type
     // worth completing against, so take the first that yields a qualifier.
-    for (const auto& [expression, _] : analyzer.typeMap()) {
-        if (!expression || expression->location.line != line ||
-            expression->location.column != column)
-            continue;
-        if (auto qualifier =
-                completionQualifierForType(analyzer.displayTypeOf(expression));
-            !qualifier.empty())
-            return qualifier;
-    }
+    for (const auto& [candidateLine, candidateColumn] : candidates)
+        for (const auto& [expression, _] : analyzer.typeMap()) {
+            if (!expression || expression->location.line != candidateLine ||
+                expression->location.column != candidateColumn)
+                continue;
+            if (auto qualifier =
+                    completionQualifierForType(analyzer.displayTypeOf(expression));
+                !qualifier.empty())
+                return qualifier;
+        }
     return {};
+}
+
+// The receiver's type, cheaply where possible. `recoveredReceiverQualifier`
+// re-lexes, re-parses and re-analyzes the WHOLE buffer, which is fine once but
+// not per keystroke: hovering in a 900-line file cost ~18ms a request, all of
+// it that re-analysis. A receiver that is a plain identifier already has its
+// type recorded from the last good analysis, so answer from that map first and
+// keep the re-analysis for receivers it cannot describe — a call result, an
+// index, a chain.
+template <typename Document>
+auto receiverQualifier(const Document& document, const DotReceiver& receiver,
+                       size_t cursor,
+                       const semantic::ImportedInterfaces* interfaces)
+    -> std::string {
+    if (!receiver.valid) return {};
+    // The last good analysis already typed this expression; find it by where
+    // it starts.
+    const auto spanAt = [&](size_t offset) -> std::string {
+        unsigned int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < offset; ++i)
+            if (document.text[i] == '\n') { ++line; lineStart = i + 1; }
+        auto span = document.receiverSpans.find(Document::receiverKey(
+            line, static_cast<unsigned int>(offset - lineStart) + 1));
+        return span == document.receiverSpans.end() ? std::string{} : span->second;
+    };
+    // The call's `(` first: for a chain that is where the OUTERMOST expression
+    // is recorded, and its type is the one being completed against. The
+    // receiver's start answers the plain `identifier.` case.
+    if (receiver.callOpen)
+        if (auto qualifier = spanAt(receiver.callOpen); !qualifier.empty())
+            return qualifier;
+    if (auto qualifier = spanAt(receiver.start); !qualifier.empty())
+        return qualifier;
+
+
+    const auto text = document.text.substr(receiver.start,
+                                           receiver.dot - receiver.start);
+    // A literal receiver needs no analysis to type: `36.hours` is an Integer
+    // with a method on it, and time.kex is full of them. They were the bulk of
+    // the misses that fell through to re-analysis.
+    if (!text.empty()) {
+        if (text.front() == '"') return "String";
+        if (std::isdigit(static_cast<unsigned char>(text.front()))) {
+            const bool fractional = text.find('.') != std::string::npos;
+            return fractional ? "Float" : "Integer";
+        }
+    }
+    if (!text.empty() &&
+        text.find_first_of(" \t\n()[]{}.\"'`") == std::string::npos)
+        if (auto known = document.localReceiverTypes.find(text);
+            known != document.localReceiverTypes.end() && !known->second.empty())
+            return known->second;
+    // Nothing recorded — the buffer may not have parsed since this expression
+    // was written. Re-analyze with the half-typed member removed, once.
+    if (auto cached = document.recoveredReceivers.find(receiver.start);
+        cached != document.recoveredReceivers.end())
+        return cached->second;
+    auto recovered = recoveredReceiverQualifier(document.text, document.path,
+                                                receiver, cursor, interfaces);
+    document.recoveredReceivers.insert_or_assign(receiver.start, recovered);
+    return recovered;
 }
 
 auto recoveredDotReceiverQualifier(
@@ -1651,6 +1742,7 @@ private:
         auto& document = m_documents[key];
         auto previousReceiverTypes = std::move(document.localReceiverTypes);
         document = {path, std::move(text), version};
+        document.recoveredReceivers.clear();
         // Keep the last valid receiver types while the user is typing syntax
         // that temporarily cannot be parsed, most notably the trailing dot
         // that triggers member completion.
@@ -1675,10 +1767,25 @@ private:
             enrichFunctionSymbols(*state, analyzer);
             document.hoverEntries.clear();
             document.selectedCallEntries.clear();
-            if (analyzed) document.localReceiverTypes.clear();
+            if (analyzed) {
+                document.localReceiverTypes.clear();
+                document.receiverSpans.clear();
+            }
             for (const auto& [expression, _] : analyzer.typeMap()) {
                 if (!expression || expression->location.file != document.path)
                     continue;
+                // Every expression that could be completed against, by where
+                // it starts. Answering a member completion from this costs a
+                // hash lookup; re-deriving it by re-analyzing the buffer cost
+                // ~18ms a keystroke in a 900-line file.
+                if (auto spanQualifier =
+                        completionQualifierForType(analyzer.displayTypeOf(expression));
+                    !spanQualifier.empty())
+                    document.receiverSpans.insert_or_assign(
+                        Document::receiverKey(
+                            static_cast<unsigned int>(expression->location.line),
+                            static_cast<unsigned int>(expression->location.column)),
+                        std::move(spanQualifier));
                 if (const auto* binding =
                         std::get_if<ast::LetExpr>(&expression->kind);
                     binding && binding->pattern && binding->value) {
@@ -1943,9 +2050,8 @@ private:
                     text, lineStart, lineEnd, params.position.character);
                 if (const auto receiver = scanDotReceiver(text, cursor);
                     receiver.valid) {
-                    if (auto qualifier = recoveredReceiverQualifier(
-                            text, found->second.path, receiver, cursor,
-                            &m_interfaces);
+                    if (auto qualifier = receiverQualifier(
+                            found->second, receiver, cursor, &m_interfaces);
                         !qualifier.empty()) {
                         query.dbQuery = qualifier + "." +
                             text.substr(receiver.dot + 1,
@@ -2256,9 +2362,8 @@ private:
                                  word.byteLength;
             if (const auto receiver = scanDotReceiver(document.text, wordEnd);
                 receiver.valid)
-                if (auto qualifier = recoveredReceiverQualifier(
-                        document.text, document.path, receiver, wordEnd,
-                        &m_interfaces);
+                if (auto qualifier = receiverQualifier(
+                        document, receiver, wordEnd, &m_interfaces);
                     !qualifier.empty())
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
