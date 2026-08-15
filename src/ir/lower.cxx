@@ -244,6 +244,53 @@ struct Lowering {
         std::vector<const ast::ExprPtr*> defaults;
     };
     std::unordered_map<std::string, RecordInfo> records;
+
+    // Resolve a source spelling to the canonical runtime record identity.
+    // Module-owned records are tagged `Module.Record`; top-level records keep
+    // their historical bare name. Prefer the innermost lexical module before
+    // a same-named top-level record.
+    auto canonicalRecordName(const std::string& name) const -> std::string {
+        if (!currentModulePath.empty()) {
+            auto scope = currentModulePath;
+            while (!scope.empty()) {
+                const auto candidate = scope + "." + name;
+                if (records.count(candidate)) return candidate;
+                const auto dot = scope.rfind('.');
+                if (dot == std::string::npos) break;
+                scope.resize(dot);
+            }
+        }
+        if (records.count(name)) return name;
+        // A qualified identity the record table does not know under that
+        // spelling (a reified value carries the interpreter's `Boxes.Box`)
+        // still names the record declared as its last segment.
+        if (const auto dot = name.rfind('.'); dot != std::string::npos) {
+            if (const auto bare = name.substr(dot + 1); records.count(bare))
+                return bare;
+            return name;
+        }
+        // A bare name written against an IMPORTED record: `Input` inside JSON
+        // is Parsing's record, and it must be tagged with the same qualified
+        // identity Parsing itself constructs, or the two modules disagree
+        // about the tuple's tag. A `using` names the owner outright; failing
+        // that, a suffix match settles it only when it is unambiguous —
+        // ambiguity is exactly the case that needs qualifying at the source.
+        for (const auto& imported : usingModules)
+            if (records.count(imported + "." + name))
+                return imported + "." + name;
+        const auto suffix = "." + name;
+        std::string unique;
+        for (const auto& [candidate, _] : records) {
+            if (candidate.size() <= suffix.size() ||
+                candidate.compare(candidate.size() - suffix.size(),
+                                  suffix.size(), suffix) != 0)
+                continue;
+            if (!unique.empty()) return name;
+            unique = candidate;
+        }
+        if (!unique.empty()) return unique;
+        return name;
+    }
     // field name → the record slots holding it. A field can live in several
     // records at (possibly different) positions; the emitted accessor
     // dispatches on the tag when they differ. Mirrors the string emitter.
@@ -1056,8 +1103,13 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
                 return lowerMatch(n);
             } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                // `expr if cond` → cond ? expr : ok
-                return matchBool(lower(n.condition), lower(n.expr), lit(LitKind::Atom, "ok"));
+                // `expr if cond` → cond ? expr : None. The walker answers
+                // None for the failed case, and the value is observable:
+                // `let x = value if cond` binds it. Answering `:ok` here made
+                // the same binding print `:ok` on BEAM and nothing in the
+                // walker.
+                return matchBool(lower(n.condition), lower(n.expr),
+                                 lit(LitKind::None, "none"));
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
@@ -2882,7 +2934,8 @@ struct Lowering {
     auto lowerRecordConstruction(const ast::RecordConstruction& n) -> ExprPtr {
         std::vector<Binding> binds;
         std::vector<ExprPtr> args;
-        auto it = records.find(n.typeName);
+        const auto recordName = canonicalRecordName(n.typeName);
+        auto it = records.find(recordName);
         if (it == records.end()) {
             // Unknown record — fall back to fields as written.
             for (const auto& [name, v] : n.fields) args.push_back(atomize(v, binds));
@@ -2898,7 +2951,7 @@ struct Lowering {
             }
         }
         auto ex = std::make_unique<Expr>();
-        ex->node = Construct{n.typeName, std::move(args)};
+        ex->node = Construct{recordName, std::move(args)};
         return wrapLets(binds, std::move(ex));
     }
 
@@ -3283,7 +3336,8 @@ struct Lowering {
     auto fieldAccessIn(const std::string& typeName, const std::string& fname,
                        ExprPtr base) -> ExprPtr {
         if (!typeName.empty()) {
-            if (auto rec = records.find(typeName); rec != records.end()) {
+            if (auto rec = records.find(canonicalRecordName(typeName));
+                rec != records.end()) {
                 const auto& fs = rec->second.fields;
                 for (size_t i = 0; i < fs.size(); i++)
                     if (fs[i] == fname)
@@ -3548,12 +3602,13 @@ struct Lowering {
                         "IR lower: anonymous record pattern `{ ... }` is not "
                         "supported in match/if-let; name the record "
                         "(`Foo { ... }`) so its field layout is known");
-                auto rec = records.find(pn.typeName);
+                const auto recordName = canonicalRecordName(pn.typeName);
+                auto rec = records.find(recordName);
                 if (rec == records.end())
                     throw LowerError("IR lower: unknown record `" + pn.typeName +
                                      "` in pattern");
                 out->kind = PatKind::Construct;
-                out->tag = pn.typeName;
+                out->tag = recordName;
                 for (const auto& fieldName : rec->second.fields) {
                     const ast::FieldPattern* bound = nullptr;
                     for (const auto& f : pn.fields)
@@ -3958,10 +4013,24 @@ struct Lowering {
                 auto r = lowerLoopBodyFrom(bb, 0, loopFn, mutVars, branchEnd);
                 subst = snap; return r;
             };
+            auto fallthrough = [&]() {
+                auto snap = subst;
+                auto r = cont();
+                subst = snap;
+                return r;
+            };
+            ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody)
+                                         : fallthrough();
+            for (auto it = ie->elifs.rbegin(); it != ie->elifs.rend(); ++it) {
+                auto c = lower(it->first);
+                auto body = branch(it->second);
+                elseP = matchBool(std::move(c), std::move(body),
+                                  std::move(elseP));
+            }
             auto c = lower(ie->condition);
             auto thenP = branch(ie->thenBody);
-            ExprPtr elseP = ie->elseBody ? branch(*ie->elseBody) : cont();
-            return matchBool(std::move(c), std::move(thenP), std::move(elseP));
+            return matchBool(std::move(c), std::move(thenP),
+                             std::move(elseP));
         }
         if (auto* me = std::get_if<ast::MatchExpr>(&e->kind)) {
             if (me->subjectBinding)
@@ -4360,7 +4429,6 @@ struct Lowering {
                 collectMutated(e, muts);
                 std::vector<std::string> mutVars;
                 for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
-                for (const auto& v : muts) if (subst.count(v)) mutVars.push_back(v);
                 std::sort(mutVars.begin(), mutVars.end());
                 if (!mutVars.empty()) {
                     std::function<ExprPtr()> yieldState =
@@ -4758,16 +4826,18 @@ struct Lowering {
         records[name] = std::move(info);
     }
 
-    void collectRecord(const ast::RecordDef& rec) {
+    void collectRecord(const ast::RecordDef& rec,
+                       const std::string& owner = {}) {
+        const auto name = owner.empty() ? rec.name : owner + "." + rec.name;
         RecordInfo info;
         for (int i = 0; i < static_cast<int>(rec.fields.size()); i++) {
             info.fields.push_back(rec.fields[i].name);
             info.defaults.push_back(rec.fields[i].defaultValue ? &*rec.fields[i].defaultValue
                                                                : nullptr);
-            addFieldAccessor(rec.fields[i].name, rec.name, i + 2,
+            addFieldAccessor(rec.fields[i].name, name, i + 2,
                              static_cast<int>(rec.fields.size()) + 1, true);
         }
-        records[rec.name] = std::move(info);
+        records[name] = std::move(info);
     }
 
     // The BEAM module providing `name/arity` as a plain prefix call, or "" if
@@ -4861,10 +4931,15 @@ struct Lowering {
                               const std::string& function, int arity,
                               std::vector<ExprPtr>& args) -> ExprPtr {
         if (!externalModules || receiverType.empty()) return nullptr;
+        // Method metadata names the receiver as it was WRITTEN; the record
+        // table is keyed by canonical identity. Compare the two in the same
+        // spelling, here and against the checker's static type below.
+        const auto canonicalReceiver = canonicalRecordName(receiverType);
         // Only a guard-safe type test qualifies: the tagged-tuple fallback in
         // `typeGuard` calls element/2 eagerly, which badargs rather than
         // soft-failing for the primitive receivers this exists to route.
-        if (!records.count(receiverType) && !primGuardBifs().count(receiverType))
+        if (!records.count(canonicalReceiver) &&
+            !primGuardBifs().count(receiverType))
             return nullptr;
         // A statically known receiver of exactly the provider's type needs no
         // dispatch — that is the case the direct call already gets right.
@@ -4880,7 +4955,8 @@ struct Lowering {
                 !std::holds_alternative<semantic::TypeVar>(found->second->kind))
                 staticReceiver = semantic::typeToString(found->second);
         }
-        if (staticReceiver == receiverType) return nullptr;
+        if (canonicalRecordName(staticReceiver) == canonicalReceiver)
+            return nullptr;
         // The other provider: the dispatcher of whichever module also answers
         // this name at this arity (the prelude, in practice). There may be
         // none — `whiteSpaces` belongs to Parsing's `Input` and to nothing
@@ -4895,14 +4971,20 @@ struct Lowering {
             candidates != externalModules->receiverFunctions.end())
             for (const auto& candidate : candidates->second) {
                 if (candidate.beamArity != arity) continue;
-                servedReceivers.insert(candidate.receiverType);
+                // Canonical identity: the same record reaches this table
+                // both as its module-qualified name and as the bare one it is
+                // written with, and counting those as two providers hid the
+                // single-provider case this check exists to find.
+                servedReceivers.insert(
+                    canonicalRecordName(candidate.receiverType));
                 // A candidate for the SAME receiver type is this provider
                 // again, addressed another way (`using Parsing` compiles the
                 // module into this unit, so its `whiteSpaces` shows up both as
                 // a local method and as `Kex.Parsing:whiteSpaces`). Routing
                 // the miss there just reaches the same clause and dies with
                 // `function_clause`.
-                if (candidate.receiverType == receiverType ||
+                if (canonicalRecordName(candidate.receiverType) ==
+                        canonicalReceiver ||
                     candidate.moduleAtom == moduleAtom ||
                     candidate.beamFunction != method)
                     continue;
@@ -4918,6 +5000,15 @@ struct Lowering {
         // direct call, exactly as before.
         if (fallbackModule.empty() &&
             (servedReceivers.size() != 1 || staticReceiver.empty()))
+            return nullptr;
+        // And only for a NOMINAL sole provider — a record some module owns,
+        // like Parsing's `Input`. For a builtin receiver (List, String, Map)
+        // the receiver-function table is an incomplete view of who answers:
+        // while the prelude itself is being compiled, String's own `empty?`
+        // is not in it yet, so "nobody else provides this" is wrong and the
+        // failure arm would reject every String at runtime.
+        if (fallbackModule.empty() &&
+            !records.count(canonicalRecordName(*servedReceivers.begin())))
             return nullptr;
         std::vector<ExprPtr> fallbackArgs;
         for (const auto& arg : args) {
@@ -5131,13 +5222,19 @@ struct Lowering {
         // keeps the guard's real job (stopping this clause from shadowing the
         // universal `to`/`showValue` for unrelated values) while letting the
         // type-qualified form through.
-        if (!receiverPattern && records.count(typeName))
+        const bool guardedRecordReceiver =
+            !receiverPattern && records.count(canonicalRecordName(typeName));
+        if (guardedRecordReceiver)
             for (auto& clause : def.clauses)
                 clause.guard = callE(
                     "erlang", "or", 2,
                     two(typeGuard(typeName, var("this")),
                         intrin(Op::Eq, two(var("this"),
                                            lit(LitKind::Atom, typeName)))));
+        // Set when a later branch appends a clause that forwards an
+        // unmatched receiver somewhere else (the prelude's `to`, a shadowed
+        // trait default); such a definition must not also end in an error.
+        bool forwarded = false;
         if (listReceiver) def = coerceListReceiver(std::move(def));
         if (argumentOverloadedMethods.count(
                 localOverloadKey(first.name, typeName, def.arity)))
@@ -5164,6 +5261,7 @@ struct Lowering {
             fallback.body = callE("kex_prelude", "to", def.arity,
                                   std::move(args));
             def.clauses.push_back(std::move(fallback));
+            forwarded = true;
         }
         // The same escape, for any method that shadows an imported TRAIT
         // DEFAULT. Call sites prefer a local definition over such a default
@@ -5237,7 +5335,58 @@ struct Lowering {
                                       provider->beamFunction, def.arity,
                                       std::move(args));
                 def.clauses.push_back(std::move(fallback));
+                forwarded = true;
             }
+        }
+        // A receiver the guard rejects is a call that should not have
+        // compiled — `"a b".whiteSpaces`, where the method belongs to
+        // Parsing's Input record. Falling off the end raises a bare
+        // `function_clause`; name the method and the receiver instead, in the
+        // walker's wording, exactly as the multi-owner dispatcher does. Only
+        // when nothing else already forwards the unmatched case onward.
+        if (guardedRecordReceiver && !forwarded && def.arity >= 1 &&
+            def.name == first.name) {
+            FunClause fallback;
+            std::vector<ExprPtr> args;
+            for (int i = 0; i < def.arity; ++i) {
+                auto param = std::make_unique<Pattern>();
+                param->kind = PatKind::Var;
+                param->name = "_noReceiver" + std::to_string(i);
+                fallback.params.push_back(std::move(param));
+                args.push_back(var("_noReceiver" + std::to_string(i)));
+            }
+            // Another module may own the same method name for a receiver this
+            // one does not cover — `get` is Regex.Match's here and Map's in
+            // the prelude. Forwarding keeps that call working; only a name
+            // nobody else provides is a genuine "no such method".
+            const ExternalModules::ReceiverFunction* provider = nullptr;
+            if (externalModules) {
+                auto candidates =
+                    externalModules->receiverFunctions.find(first.name);
+                if (candidates != externalModules->receiverFunctions.end())
+                    for (const auto& candidate : candidates->second)
+                        if (candidate.beamArity == def.arity &&
+                            candidate.beamFunction == first.name) {
+                            provider = &candidate;
+                            break;
+                        }
+            }
+            if (provider)
+                fallback.body = callE(provider->moduleAtom,
+                                      provider->beamFunction, def.arity,
+                                      std::move(args));
+            else {
+                auto message = callE("erlang", "iolist_to_binary", 1,
+                    one(makeListOf(
+                        lit(LitKind::String,
+                            "runtime error: Undefined method: " + first.name +
+                            " for "),
+                        callE("kex_io", "value_type_name", 1,
+                              one(var("_noReceiver0"))))));
+                fallback.body =
+                    callE("erlang", "error", 1, one(std::move(message)));
+            }
+            def.clauses.push_back(std::move(fallback));
         }
         return def;
     }
@@ -5313,13 +5462,17 @@ struct Lowering {
                            litInt(slot.tupleSize)));
     }
 
-    auto typeGuard(const std::string& ty, ExprPtr v) -> ExprPtr {
-        if (traitMethods.count(ty)) return litBool(true);
-        auto it = primGuardBifs().find(ty);
+    auto typeGuard(const std::string& written, ExprPtr v) -> ExprPtr {
+        if (traitMethods.count(written)) return litBool(true);
+        auto it = primGuardBifs().find(written);
         if (it != primGuardBifs().end())
             return callE("erlang", it->second, 1, one(std::move(v)));
         // Tagged record. Core Erlang exposes the guard-safe is_record/3 BIF
         // (the source-level is_record/2 form is a compiler macro).
+        // The guard tests the value's TAG, so it is the record's canonical
+        // identity that has to appear here — `make Version` inside
+        // Kex.Kernel guards values tagged 'Kex.Kernel.Version'.
+        const auto ty = canonicalRecordName(written);
         if (auto record = records.find(ty); record != records.end())
             return callE("erlang", "is_record", 3,
                          three(std::move(v), lit(LitKind::Atom, ty),
@@ -5805,9 +5958,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // can own the symbol (see makeAccessors).
     std::unordered_set<std::string> definedFnArities;
     std::unordered_set<std::string> staticMethodNames; // record static blocks
-    auto preRecord = [&](const ast::RecordDef& rd) {
-        L.collectRecord(rd);
+    auto preRecord = [&](const ast::RecordDef& rd,
+                         const std::string& owner = std::string{}) {
+        L.collectRecord(rd, owner);
         L.knownTypes.insert(rd.name);
+        if (!owner.empty()) L.knownTypes.insert(owner + "." + rd.name);
         if (rd.staticBlock)
             for (const auto& sf : rd.staticBlock->functions)
                 if (sf) {
@@ -6011,7 +6166,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             if (auto* fd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                 preModuleFn(fd->get());
             else if (auto* rd = std::get_if<std::unique_ptr<ast::RecordDef>>(&item)) {
-                if (*rd) preRecord(**rd);
+                if (*rd) preRecord(**rd, path);
             } else if (auto* md = std::get_if<std::unique_ptr<ast::MakeDef>>(&item)) {
                 if (*md) {
                     preMake(**md);
@@ -6028,7 +6183,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (auto* cfd = std::get_if<std::unique_ptr<ast::FunctionDef>>(&ci))
                         preModuleFn(cfd->get());
                     else if (auto* crd = std::get_if<std::unique_ptr<ast::RecordDef>>(&ci)) {
-                        if (*crd) preRecord(**crd);
+                        if (*crd) preRecord(**crd, path);
                     } else if (auto* cmd = std::get_if<std::unique_ptr<ast::MakeDef>>(&ci)) {
                         if (*cmd) preMake(**cmd);
                     } else if (auto* ctd = std::get_if<std::unique_ptr<ast::TypeDef>>(&ci)) {

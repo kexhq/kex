@@ -1,26 +1,53 @@
 foul module Tey.Git
-  let execute(args: [String]) -> Result<ProcessResult, String> do
-    match Process.run("git", args) do
-      Error(error) -> Error(error)
-      Ok(result) -> result.exitCode == 0 then Ok(result) else Error(result.stderr + result.stdout)
-    end
-  end
 
-  let pinRef(url: String, selector: String, requested: String) -> Result<(String, String), String> do
-    let refName = match selector do
-      "tag" -> "refs/tags/${requested}^{}"
-      "branch" -> "refs/heads/${requested}"
-      _ -> requested
-    end
-    match Tey.Git.execute(["ls-remote", url, refName]) do
-      Error(error) -> Error(error)
-      Ok(result) -> do
-        let line = result.stdout.lines.first.or("")
-        let commit = line.split("\t").first.or("")
-        if commit == "" && selector == "tag"
-          return Tey.Git.pinRef(url, "ref", "refs/tags/${requested}")
-        end
-        commit == "" then Error("git ref '${requested}' was not found for ${url}") else Ok((requested, commit))
+let execute(args: [String]) -> Result<ProcessResult, String> do
+  match Process.run("git", args) do
+    Error(error) -> Error(error)
+    Ok(result) -> result.exitCode == 0 then Ok(result) else Error(result.stderr + result.stdout)
+  end
+end
+
+let pinRef(url: String, selector: String, requested: String) -> Result<(String, String), String> do
+  let refName = match selector do
+    "tag" -> "refs/tags/${requested}^{}"
+    "branch" -> "refs/heads/${requested}"
+    _ -> requested
+  end
+  match Tey.Git.execute(["ls-remote", url, refName]) do
+    Error(error) -> Error(error)
+    Ok(result) -> do
+      let line = result.stdout.lines.first.or("")
+      let commit = line.split("\t").first.or("")
+      if commit == "" && selector == "tag"
+        return Tey.Git.pinRef(url, "ref", "refs/tags/${requested}")
       end
+      return commit == "" then Error("git ref '${requested}' was not found for ${url}") else Ok((requested, commit))
     end
   end
+end
+
+# Every version-shaped tag a repository publishes, newest first. Used to
+# answer a range requirement, and to list installable Kex toolchains.
+let tags(url: String) -> Result<[String], String> do
+  match Tey.Git.execute(["ls-remote", "--tags", "--refs", url]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> do
+      let names = result.stdout.lines.collect do |line|
+        Tey.Git.tagName(line)
+      end
+      return Ok(Tey.Semver.newestFirst(names))
+    end
+  end
+end
+
+private do
+  # "<sha>\trefs/tags/v0.3.0" → Just("v0.3.0"). A line that is not a tag ref
+  # is None, which `collect` drops.
+  let tagName(line: String) -> String? do
+    let ref = line.split("\t").second.or("")
+    return None if !ref.startsWith?("refs/tags/")
+    let name = ref.drop("refs/tags/".count)
+    return None if name.empty?
+    return Just(name)
+  end
+end

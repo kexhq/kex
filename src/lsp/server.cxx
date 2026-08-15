@@ -95,9 +95,22 @@ auto moduleRootsFor(const std::string& filepath) -> std::vector<std::string> {
     return roots;
 }
 
+// A `package.kex` manifest is written in a vocabulary the stdlib describes
+// but no program imports (`bundle`, `version`, `tey`, ...). Loading those
+// declarations alongside it is what turns an editor's wall of "undefined
+// function" into hover and completion — the same companion mechanism a
+// `.spec.kex` uses for its base file.
+auto manifestCompanion(const std::string& filepath) -> std::vector<std::string> {
+    if (std::filesystem::path(filepath).filename() != "package.kex") return {};
+    if (auto vocabulary = kex::manifestVocabularyFile(); !vocabulary.empty())
+        return {vocabulary};
+    return {};
+}
+
 auto specCompanions(const std::string& filepath) -> std::vector<std::string> {
     constexpr std::string_view suffix = ".spec.kex";
-    if (!std::string_view(filepath).ends_with(suffix)) return {};
+    if (!std::string_view(filepath).ends_with(suffix))
+        return manifestCompanion(filepath);
     const auto stem = filepath.substr(0, filepath.size() - suffix.size());
     std::vector<std::string> candidates{stem + ".kex"};
     const auto directory = std::filesystem::path(stem).parent_path();

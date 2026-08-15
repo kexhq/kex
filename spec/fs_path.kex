@@ -1,0 +1,49 @@
+# FS.Path — lexical path algebra. Nothing here touches the filesystem, so
+# every answer holds for a path that does not exist.
+
+using FS
+
+main do
+  # join concatenates and normalizes; joinAll is the list form (a second
+  # one-argument `join` would be indistinguishable from List.join).
+  IO.printLine(FS.Path.join("src", "main.kex"))
+  IO.printLine(FS.Path.join("src", "tey", "cli.kex"))
+  IO.printLine(FS.Path.joinAll(["a", "b", "c", "d.txt"]))
+  IO.printLine(FS.Path.join("src/", "/main.kex"))
+  IO.printLine(FS.Path.joinAll([]))
+  IO.printLine(FS.Path.join("/etc", "hosts"))
+
+  # `.` and `..` resolve lexically. A leading `..` survives in a relative
+  # path; an absolute path has no parent above the root.
+  IO.printLine(FS.Path.normalize("a/./b/../c"))
+  IO.printLine(FS.Path.normalize("../a/b"))
+  IO.printLine(FS.Path.normalize("/../a"))
+  IO.printLine(FS.Path.normalize("a/b/../.."))
+  IO.printLine(FS.Path.normalize("/"))
+
+  IO.printLine("${FS.Path.absolute?("/tmp")} ${FS.Path.absolute?("tmp")}")
+  IO.printLine("${FS.Path.relative?("tmp")}")
+  IO.printLine(FS.Path.segments("/tmp/foo/bar.txt").join(","))
+
+  IO.printLine(FS.Path.dirname("/tmp/foo/bar.txt"))
+  IO.printLine(FS.Path.dirname("bare.kex"))
+  IO.printLine(FS.Path.dirname("/only"))
+  IO.printLine(FS.Path.basename("/tmp/foo/bar.txt"))
+  IO.printLine(FS.Path.basename("/"))
+
+  # A leading dot is part of the name, so `.gitignore` has no extension.
+  IO.printLine("[${FS.Path.extension("archive.tar.gz")}]")
+  IO.printLine("[${FS.Path.extension("Makefile")}]")
+  IO.printLine("[${FS.Path.extension(".gitignore")}]")
+  IO.printLine(FS.Path.stem("src/archive.tar.gz"))
+  IO.printLine(FS.Path.stem("Makefile"))
+
+  IO.printLine(FS.Path.withExtension("src/main.kex", "beam"))
+  IO.printLine(FS.Path.withExtension("src/main.kex", ".o"))
+  IO.printLine(FS.Path.withExtension("notes.txt", ""))
+
+  IO.printLine(FS.Path.relativeTo("/a/b/c/d.txt", "/a/b/x"))
+  IO.printLine(FS.Path.relativeTo("/a/b/c", "/a/b"))
+  IO.printLine(FS.Path.relativeTo("/a/b", "/a/b"))
+  IO.printLine(FS.Path.relativeTo("src/main.kex", "/etc"))
+end

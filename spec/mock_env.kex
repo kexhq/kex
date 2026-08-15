@@ -1,0 +1,26 @@
+# `Mock.ENV` overlays the process environment for a test, so a program that
+# reads `ENV` can be exercised without launching it differently.
+#
+# The overlay covers the whole snapshot, not just lookups: `has?`, `keys` and
+# `count` see the same environment `get` does. `unset` is separate from `set`
+# because a variable being ABSENT is an answer programs act on — a default
+# path, a disabled feature — and a test has to be able to produce it.
+
+main do
+  # A variable that only the mock provides.
+  IO.printLine(ENV.get("KEX_SPEC_MOCKED", "absent"))
+  Mock.ENV.set("KEX_SPEC_MOCKED", "yes")
+  IO.printLine(ENV.get("KEX_SPEC_MOCKED", "absent"))
+  IO.printLine("${ENV.has?("KEX_SPEC_MOCKED")}")
+
+  # Hiding a variable the process really has.
+  IO.printLine("${ENV.has?("PATH")}")
+  Mock.ENV.unset("PATH")
+  IO.printLine("${ENV.has?("PATH")}")
+  IO.printLine(ENV.get("PATH", "absent"))
+
+  # Clearing hands the real environment back.
+  Mock.ENV.clear()
+  IO.printLine(ENV.get("KEX_SPEC_MOCKED", "absent"))
+  IO.printLine("${ENV.has?("PATH")}")
+end

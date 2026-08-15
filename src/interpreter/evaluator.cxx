@@ -765,6 +765,18 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     // Skip transparent type aliases (single bare TypeName, e.g.
     // `type FilePath = String`) — they declare a name for an existing
     // type rather than introducing new variant constructors.
+    // Remember what an alias stands for. Only single-target aliases — a bare
+    // name (`type FilePath = String`) or a callable shape
+    // (`type Handler = Request -> Response`) — since those are the ones a
+    // parameter annotation names when the runtime has no such type of its
+    // own to match against.
+    if (def.variants && def.variants->size() == 1 && (*def.variants)[0]) {
+        const auto& only = (*def.variants)[0];
+        if (std::holds_alternative<ast::FunctionType>(only->kind) ||
+            std::holds_alternative<ast::BlockType>(only->kind) ||
+            kex::isTransparentTypeAlias(def))
+            m_typeAliases[def.name] = only.get();
+    }
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
         for (const auto& variant : *def.variants) {
@@ -808,18 +820,66 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
 }
 
 auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& moduleScope) -> void {
-    m_env->define(def.name, Value::record(def.name, {}));
-    m_recordDefs[def.name] = &def;
+    const auto typeName = moduleScope.empty()
+        ? def.name : moduleScope + "." + def.name;
+    if (moduleScope.empty()) {
+        m_env->define(def.name, Value::record(typeName, {}));
+        m_recordDefs[def.name] = &def;
+    }
     if (!moduleScope.empty()) {
         const auto scoped = moduleScope + "::" + def.name;
-        m_env->define(scoped, Value::record(def.name, {}));
+        m_env->define(scoped, Value::record(typeName, {}));
         m_recordDefs[scoped] = &def;
+        m_recordDefs[typeName] = &def;
     }
     if (def.staticBlock) {
         for (const auto& func : def.staticBlock->functions) {
             execFunctionDef(*func, def.name);
         }
     }
+}
+
+auto Evaluator::resolveRecordTypeName(const std::string& name) const
+    -> std::string {
+    if (m_recordDefs.count(name)) return name;
+    if (!m_currentModule.empty()) {
+        auto scope = m_currentModule;
+        while (!scope.empty()) {
+            const auto candidate = scope + "." + name;
+            if (m_recordDefs.count(candidate)) return candidate;
+            const auto dot = scope.rfind('.');
+            if (dot == std::string::npos) break;
+            scope.resize(dot);
+        }
+    }
+    // An imported record may be written partially qualified: `Router.Config`
+    // inside `using Http` is `Http.Router.Config`. Getting this wrong is not
+    // a lookup miss but a wrong VALUE — the construction would carry an
+    // unknown type name, skip its field defaults, and then look like a
+    // namespace placeholder to method dispatch.
+    for (auto scope = m_usingModules.rbegin(); scope != m_usingModules.rend();
+         ++scope)
+        for (const auto& imported : *scope)
+            if (m_recordDefs.count(imported + "." + name))
+                return imported + "." + name;
+    if (auto value = m_env->get(name))
+        if (const auto* record = std::get_if<RecordValue>(&value->data))
+            if (record->fields.empty() && m_recordDefs.count(record->typeName))
+                return record->typeName;
+    // Last resort: an unambiguous suffix match. Ambiguity is the case that
+    // module-qualified identity exists to keep apart, so it stays unresolved.
+    const auto suffix = "." + name;
+    std::string unique;
+    for (const auto& [candidate, _] : m_recordDefs) {
+        if (candidate.size() <= suffix.size() ||
+            candidate.compare(candidate.size() - suffix.size(), suffix.size(),
+                              suffix) != 0)
+            continue;
+        if (!unique.empty() && unique != candidate) return name;
+        unique = candidate;
+    }
+    if (!unique.empty()) return unique;
+    return name;
 }
 
 auto Evaluator::execVisibilityBlock(const ast::VisibilityBlock& block,
@@ -2209,13 +2269,14 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             return node.elseExpr ? eval(*node.elseExpr) : Value::none();
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
+            const auto typeName = resolveRecordTypeName(node.typeName);
             std::unordered_map<std::string, ValuePtr> fields;
             for (const auto& [name, val] : node.fields) {
                 fields[name] = val ? eval(*val) : Value::none();
             }
             // Apply declared field defaults (e.g. `pos : Int = 0`) for any
             // field this construction didn't specify explicitly.
-            auto defIt = m_recordDefs.find(node.typeName);
+            auto defIt = m_recordDefs.find(typeName);
             if (defIt != m_recordDefs.end()) {
                 for (const auto& field : defIt->second->fields) {
                     if (fields.count(field.name)) continue;
@@ -2224,7 +2285,7 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     }
                 }
             }
-            return Value::record(node.typeName, std::move(fields));
+            return Value::record(typeName, std::move(fields));
         }
         else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {
             if (node.kind == ast::ShorthandLambda::Kind::Method) {
@@ -3077,6 +3138,11 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
             if (auto parent = m_variantParent.find(actual);
                 parent != m_variantParent.end() && parent->second == expected)
                 return true;
+            // An alias is whatever it stands for: `handler: CommandHandler`
+            // has to accept a closure, and `path: FilePath` a String.
+            if (auto alias = m_typeAliases.find(expected);
+                alias != m_typeAliases.end() && alias->second)
+                return runtimeTypeMatches(value, *alias->second);
             return expected == "Int" && actual == "Integer";
         } else if constexpr (std::is_same_v<T, ast::GenericType>) {
             if (node.name.parts.empty()) return true;
@@ -3182,6 +3248,16 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
                                   const std::vector<ValuePtr>* args) const
     -> std::string {
     auto receiverType = dispatchTypeName(receiver);
+    // A record declared inside a module carries a module-qualified identity
+    // (`Boxes.Box`) so same-named records in sibling modules stay distinct,
+    // but a `make Box` written inside that module registers its methods under
+    // the name as written. Prefer a qualified registration when one exists,
+    // and otherwise dispatch on the last segment.
+    if (const auto dot = receiverType.rfind('.'); dot != std::string::npos) {
+        const auto qualified = receiverType + "::" + method;
+        if (!m_env->get(qualified) && !m_functionValues.count(qualified))
+            receiverType = receiverType.substr(dot + 1);
+    }
     auto typed = receiverType + "::" + method;
     const bool protocolMethod = std::any_of(
         m_traitMethods.begin(), m_traitMethods.end(),
@@ -3562,7 +3638,8 @@ auto Evaluator::matchPattern(const ast::Pattern& pattern, const ValuePtr& value)
             if (auto* rv = std::get_if<RecordValue>(&value->data)) {
                 // A named record pattern (`Foo { x }`) additionally asserts the
                 // value's record type; the anonymous `{ x }` matches any record.
-                if (!pat.typeName.empty() && rv->typeName != pat.typeName)
+                if (!pat.typeName.empty() &&
+                    rv->typeName != resolveRecordTypeName(pat.typeName))
                     return false;
                 for (const auto& field : pat.fields) {
                     auto it = rv->fields.find(field.name);

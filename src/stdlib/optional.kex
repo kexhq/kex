@@ -21,7 +21,17 @@ trait Eitherable do
 end
 
 make Optional<X>, implement: Optionable do
-  # (+present?+ comes from the +Blankable+ default: +!this.blank?+.)
+  # Returns +true+ if this optional has value.
+  #
+  # @return [Bool]
+  #
+  # @example
+  #   Just(42).set?    # => true
+  #   None.set?        # => false
+  set? :> Bool
+  let set?(@Just(_)) = true
+  let set?(@None) = false
+
   # Returns +true+ if this optional is empty.
   #
   # @return [Bool]
@@ -133,11 +143,11 @@ make Result<X, E>, implement: Resultable do
   # @return [X?]
   #
   # @example
-  #   Ok(42).toOptional        # => Just(42)
-  #   Error("oops").toOptional # => None
-  toOptional :> X?
-  let toOptional(@Ok(x)) = Just(x)
-  let toOptional(@Error(_)) = None
+  #   Ok(42).optional        # => Just(42)
+  #   Error("oops").optional # => None
+  optional :> X?
+  let optional(@Ok(x)) = Just(x)
+  let optional(@Error(_)) = None
 end
 
 # Universal `.or(default)` catch-all: a value that is neither Optional nor

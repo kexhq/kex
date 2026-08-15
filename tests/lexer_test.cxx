@@ -102,6 +102,43 @@ int main() {
             assertEqual(firstToken("_").type, TokenType::Underscore);
         });
 
+        it("tokenizes a lowercase letter from another script", []() {
+            // Greek is the everyday case — `α` reads as a variable, the same
+            // as `a`, and stays one token with its ASCII neighbours.
+            auto tok = firstToken("\u03b1");
+            assertEqual(tok.type, TokenType::LowerIdent);
+            assertEqual(tok.value, std::string("\u03b1"));
+
+            auto mixed = firstToken("\u03b1Rate2");
+            assertEqual(mixed.type, TokenType::LowerIdent);
+            assertEqual(mixed.value, std::string("\u03b1Rate2"));
+        });
+
+        it("tokenizes an uppercase letter from another script as a type", []() {
+            // Case picks the kind for every script that HAS case: capital
+            // alpha names a type, exactly as `String` does.
+            auto tok = firstToken("\u0391");
+            assertEqual(tok.type, TokenType::UpperIdent);
+            assertEqual(tok.value, std::string("\u0391"));
+        });
+
+        it("treats a caseless script as a value name", []() {
+            // Han has no uppercase form, and types are the rarer
+            // declaration, so a caseless name reads as a value.
+            auto tok = firstToken("\u5408\u8a08");
+            assertEqual(tok.type, TokenType::LowerIdent);
+            assertEqual(tok.value, std::string("\u5408\u8a08"));
+        });
+
+        it("does not swallow a non-letter symbol into an identifier", []() {
+            // `→` is a symbol, not a letter: it ends the name rather than
+            // becoming part of it.
+            auto tokens = kex::Lexer("a\u2192b").tokenizeAll();
+            assertEqual(tokens[0].type, TokenType::LowerIdent);
+            assertEqual(tokens[0].value, std::string("a"));
+            assertEqual(tokens[1].type, TokenType::Error);
+        });
+
         it("tokenizes splice identifiers", []() {
             auto tok = firstToken("%name");
             assertEqual(tok.type, TokenType::SpliceIdent);

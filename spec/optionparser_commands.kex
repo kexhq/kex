@@ -1,0 +1,40 @@
+# OptionParser parses COMMANDS, not just options, and runs the one the line
+# names. A command's handler receives the parsed options with its own words
+# already removed, and returns the exit code.
+#
+# A name may be several words (`kex install`), and the longest declared match
+# wins — so a group and its subcommands can both exist, with the group
+# handling whatever its subcommands do not.
+
+# `foul` because the handlers print — a command does something.
+foul cli -> OptionConfig do
+  return OptionParser.define("demo", "A tool with commands")
+    .flag("help", Just('h'), "Show this help")
+    .string("out", Just('o'), "Output directory", Just("build"), false)
+    .command("init", "<name>", "create a package") do |options|
+      IO.printLine("init ${options.arguments.first.or("?")} into ${options.value("out", "")}")
+      0
+    end
+    .command("kex install", "<src> <version>", "install a toolchain") do |options|
+      IO.printLine("install ${options.arguments.join(" ")}")
+      7
+    end
+    .command("kex", "<subcommand>", "manage toolchains") do |options|
+      IO.printLine("kex fallback ${options.arguments.join(" ")}")
+      0
+    end
+end
+
+main do
+  IO.printLine("${cli.run(["init", "demo"])}")
+  IO.printLine("${cli.run(["init", "demo", "--out", "dist"])}")
+  # The handler's exit code is the command's answer.
+  IO.printLine("${cli.run(["kex", "install", "/src", "1.0"])}")
+  IO.printLine("${cli.run(["kex", "use", "1.0"])}")
+
+  # An option may appear before the command as well as after it.
+  IO.printLine("${cli.run(["--out", "lib", "init", "thing"])}")
+
+  # Help lists the commands it knows, aligned, with their usage.
+  IO.printLine(cli.help)
+end

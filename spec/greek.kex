@@ -1,0 +1,14 @@
+main do
+    let α = 2
+    let β = 3
+    
+    IO.printLine(Math.hypot(α, β))
+    IO.printLine(Math.sqrt(α^2 + β^2))
+
+    let φ = Math.PI / 2
+    let ξ = Math.E ^ 2
+    let λ = 3
+
+    IO.printLine(Math.sin(φ))
+    IO.printLine(Math.exp(ξ * λ))
+end

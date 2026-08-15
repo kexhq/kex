@@ -24,15 +24,15 @@ main do
 
   let p = "/home/user/projects/app/src/main.kex"
   IO.printLine("path:      ${p}")
-  IO.printLine("basename:  ${FS.File.basename(p)}")
-  IO.printLine("dirname:   ${FS.File.dirname(p)}")
-  IO.printLine("extension: ${FS.File.extension(p)}")
-  IO.printLine("join:      ${FS.File.join("src", "utils.kex")}")
+  IO.printLine("basename:  ${FS.Path.basename(p)}")
+  IO.printLine("dirname:   ${FS.Path.dirname(p)}")
+  IO.printLine("extension: ${FS.Path.extension(p)}")
+  IO.printLine("join:      ${FS.Path.join("src", "utils.kex")}")
 
   # ── File read/write ─────────────────────────────────────────────────
   IO.printLine("\n=== File read / write ===")
 
-  let tmp = FS.File.join(FS.Directory.current(), "kex_demo_tmp.txt")
+  let tmp = FS.Path.join(FS.Directory.current(), "kex_demo_tmp.txt")
   FS.File.write(tmp, "Hello from Kex!\nLine two.\nLine three.\n")
   IO.printLine("wrote to:  ${tmp}")
   IO.printLine("exists?:   ${FS.File.file?(tmp)}")
@@ -93,11 +93,11 @@ main do
   # ── Copy, rename, delete ────────────────────────────────────────────
   IO.printLine("\n=== Copy / rename / delete ===")
 
-  let copy = FS.File.join(FS.Directory.current(), "kex_demo_copy.txt")
+  let copy = FS.Path.join(FS.Directory.current(), "kex_demo_copy.txt")
   FS.File.copy(tmp, copy)
   IO.printLine("copied, copy exists?: ${FS.File.file?(copy)}")
 
-  let moved = FS.File.join(FS.Directory.current(), "kex_demo_moved.txt")
+  let moved = FS.Path.join(FS.Directory.current(), "kex_demo_moved.txt")
   FS.File.rename(copy, moved)
   IO.printLine("renamed — copy gone?: ${!FS.File.file?(copy)}")
   IO.printLine("moved exists?:        ${FS.File.file?(moved)}")
@@ -109,16 +109,16 @@ main do
   # ── Directory operations ─────────────────────────────────────────────
   IO.printLine("\n=== Directory operations ===")
 
-  let dir = FS.File.join(FS.Directory.current(), "kex_demo_dir")
+  let dir = FS.Path.join(FS.Directory.current(), "kex_demo_dir")
   FS.Directory.create(dir)
   IO.printLine("created dir:  ${FS.Directory.directory?(dir)}")
 
-  FS.File.write(FS.File.join(dir, "a.txt"), "alpha")
-  FS.File.write(FS.File.join(dir, "b.txt"), "beta")
+  FS.File.write(FS.Path.join(dir, "a.txt"), "alpha")
+  FS.File.write(FS.Path.join(dir, "b.txt"), "beta")
   IO.printLine("files in dir: ${FS.Directory.files(dir).or([])}")
   IO.printLine("dirs in dir:  ${FS.Directory.directories(dir).or([])}")
 
-  let sub = FS.File.join(dir, "sub")
+  let sub = FS.Path.join(dir, "sub")
   FS.Directory.create(sub)
   IO.printLine("after mkdir sub, dirs: ${FS.Directory.directories(dir).or([])}")
   IO.printLine("current:      ${FS.Directory.current()}")

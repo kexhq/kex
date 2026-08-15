@@ -1,11 +1,48 @@
 # Operations concerning the running Kex system process.
 foul module System do
+  # The operating system family the program is running on. A union of atoms
+  # rather than an ADT: these are plain tags, and a `match` over them is
+  # still exhaustive. Anything unmodelled is `:unknown` — the union is
+  # closed, so callers can cover it.
+  type OperatingSystem = :macos | :linux | :windows | :freebsd
+    | :openbsd | :netbsd | :wasm | :unknown
+
   # Terminates the process with the given numeric exit code.
   # The invoking shell receives this code.
   #
   # @example  System.exit(1)
   exit : Integer -> Void
   let exit(code) = Kex.Intrinsic.System.exit(code)
+
+  # Both backends answer with the same atom for the same machine.
+  #
+  # @example  match System.OS do
+  # @example    :windows -> "\\"
+  # @example    _        -> "/"
+  # @example  end
+  OS : OperatingSystem
+  let OS = Kex.Intrinsic.System.os()
+
+  # The machine's pointer width in bits — 64 on anything current, 32 on a
+  # small target. Reported by the emulator on BEAM and by the pointer size in
+  # the tree walker, so both agree for one machine.
+  BITWIDTH : Integer
+  let BITWIDTH = Kex.Intrinsic.System.bitWidth()
+
+  macOS? : Bool
+  let macOS? = System.OS == :macos
+
+  linux? : Bool
+  let linux? = System.OS == :linux
+
+  windows? : Bool
+  let windows? = System.OS == :windows
+
+  # Everything the toolchain runs on except Windows behaves POSIX-ly enough
+  # for paths, separators and shell conventions. An unknown system is NOT
+  # assumed to be POSIX.
+  posix? : Bool
+  let posix? = !System.windows? && System.OS != :wasm && System.OS != :unknown
 end
 
 # Terminates the process with a fatal message: +message+ goes to stderr behind

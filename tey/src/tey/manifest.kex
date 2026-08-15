@@ -1,95 +1,161 @@
 module Tey.Manifest
-  record ManifestDependency do
-    manifestName : String
-    manifestGit : String
-    manifestSelector : String
-    manifestRequested : String
-    manifestGroups : [String] = []
+
+record Dependency do
+  manifestName : String
+  manifestGit : String
+  manifestSelector : String
+  manifestRequested : String
+  manifestGroups : [String] = []
+end
+
+record Target do
+  name : String
+  entrypoint : String
+end
+
+record ManifestPackage do
+  name : String
+  version : String = "0.1.0"
+  packageKexRequirement : String = ">= 0.3.0"
+  entrypoint : String = "src/main.kex"
+  manifestDependencies : [Dependency] = []
+  targets : [Target] = []
+end
+
+# Reads a `package.kex`.
+#
+# Still a line reader rather than a grammar — see docs/tey-limitations.md —
+# but a strict one: it knows which line each declaration came from, joins a
+# declaration whose arguments span several lines, and refuses a declaration
+# it does not recognize instead of skipping it.
+let read(text: String) -> Result<ManifestPackage, String> do
+  var name = ""
+  var version = "0.1.0"
+  var kexRequirement = ">= 0.3.0"
+  var entrypoint = "src/main.kex"
+  var dependencies: [Dependency] = []
+  var targets: [Target] = []
+  var group = ""
+  var failure = ""
+
+  Tey.Manifest.statements(text).each do |statement|
+    let (number, line) = statement
+    if line.startsWith?("bundle ")
+      name = Tey.Manifest.quoted(line).or("")
+    elif line.startsWith?("version(")
+      version = Tey.Manifest.quoted(line).or(version)
+    elif line.startsWith?("kex(")
+      kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
+    elif line.startsWith?("entrypoint(")
+      entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
+    elif line.startsWith?("group ")
+      group = line.split(":").second.or("").split(" ").first.or("")
+    elif line == "end"
+      # Closes the group it is in, or the bundle itself.
+      group = ""
+    elif line.startsWith?("target(")
+      targets.push!(Target {
+        name: Tey.Manifest.quoted(line).or("default"),
+        entrypoint: Tey.Manifest.attribute(line, "entrypoint").or(entrypoint)
+      })
+      ()
+    elif line.startsWith?("tey(")
+      var selector = "ref"
+      if line.contains?("tag:")
+        selector = "tag"
+      elif line.contains?("branch:")
+        selector = "branch"
+      end
+      let requested = Tey.Manifest.attribute(line, selector).or("HEAD")
+      let groups = group == "" then [] else [group]
+      dependencies.push!(Dependency {
+        manifestName: Tey.Manifest.quoted(line).or(""),
+        manifestGit: Tey.Manifest.attribute(line, "git").or(""),
+        manifestSelector: selector,
+        manifestRequested: requested,
+        manifestGroups: groups
+      })
+      ()
+    else
+      # A line nobody recognizes is a mistake, not a comment. Reporting the
+      # FIRST one keeps the message about the manifest rather than about the
+      # cascade a typo causes.
+      if failure == ""
+        failure = "line ${number}: unknown declaration `${Tey.Manifest.head(line)}`"
+      end
+    end
   end
+  return Error(failure) if failure != ""
+  return Error("package.kex must declare bundle \"name\"") if name == ""
+  return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
+  Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
+                    entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
+end
 
-  record Target do
-    name : String
-    entrypoint : String
-  end
-
-  record ManifestPackage do
-    name : String
-    version : String = "0.1.0"
-    packageKexRequirement : String = ">= 0.3.0"
-    entrypoint : String = "src/main.kex"
-    manifestDependencies : [ManifestDependency] = []
-    targets : [Target] = []
-  end
-
-  let read(text: String) -> Result<ManifestPackage, String> do
-    var name = ""
-    var version = "0.1.0"
-    var kexRequirement = ">= 0.3.0"
-    var entrypoint = "src/main.kex"
-    var dependencies: [ManifestDependency] = []
-    var targets: [Target] = []
-    var group = ""
-
+private do
+  # The declarations to read, each with the line it started on. Blank lines
+  # and comments are dropped; a declaration whose parentheses are still open
+  # continues onto the next line, so an argument list may be written across
+  # several.
+  let statements(text: String) -> [(Integer, String)] do
+    var found: [(Integer, String)] = []
+    var pending = ""
+    var startedAt = 0
+    var number = 0
     text.lines.each do |raw|
+      number = number + 1
       let line = raw.trim
-      if line.startsWith?("bundle ")
-        name = Tey.Manifest.quoted(line).or("")
-      end
-      if line.startsWith?("version(")
-        version = Tey.Manifest.quoted(line).or(version)
-      end
-      if line.startsWith?("kex(")
-        kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
-      end
-      if line.startsWith?("entrypoint(")
-        entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
-      end
-      if line.startsWith?("group ")
-        group = line.split(":").second.or("").split(" ").first.or("")
-      end
-      if line == "end" && group != ""
-        group = ""
-      end
-      if line.startsWith?("target(")
-        targets.push!(Target {
-          name: Tey.Manifest.quoted(line).or("default"),
-          entrypoint: Tey.Manifest.attribute(line, "entrypoint").or(entrypoint)
-        })
-        ()
-      end
-      if line.startsWith?("tey(")
-        var selector = "ref"
-        if line.contains?("tag:")
-          selector = "tag"
-        elif line.contains?("branch:")
-          selector = "branch"
+      if pending == ""
+        if !line.empty? && !line.startsWith?("#")
+          pending = line
+          startedAt = number
         end
-        let requested = Tey.Manifest.attribute(line, selector).or("HEAD")
-        let groups = group == "" then [] else [group]
-        dependencies.push!(ManifestDependency {
-          manifestName: Tey.Manifest.quoted(line).or(""),
-          manifestGit: Tey.Manifest.attribute(line, "git").or(""),
-          manifestSelector: selector,
-          manifestRequested: requested,
-          manifestGroups: groups
-        })
-        ()
+      else
+        pending = "${pending} ${line}"
       end
+      if pending != "" && Tey.Manifest.balanced?(pending)
+        found.push!((startedAt, pending))
+        pending = ""
+      end
+      ()
     end
-    return Error("package.kex must declare bundle \"name\"") if name == ""
-    return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
-    Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
-                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
+    # An unclosed declaration is still worth reporting, and the reader below
+    # will reject it by name rather than lose it silently.
+    if pending != ""
+      found.push!((startedAt, pending))
+      ()
+    end
+    return found
   end
 
-  private do
-    let quoted(line: String) -> String? = line.split("\"").second
-
-    let attribute(line: String, key: String) -> String? do
-      let parts = line.split("${key}: \"")
-      match parts.second do
-        Just(rest) -> rest.split("\"").first
-        None -> None
+  let balanced?(line: String) -> Bool do
+    var depth = 0
+    var quoted? = false
+    line.chars.each do |c|
+      if c == '"'
+        quoted? = !quoted?
+      elif !quoted?
+        depth = depth + 1 if c == '('
+        depth = depth - 1 if c == ')'
       end
+      ()
+    end
+    return depth <= 0
+  end
+
+  # The leading word of a declaration, for naming it in an error.
+  let head(line: String) -> String do
+    let letters = line.chars.takeWhile { |c| c.letter? || c == '_' }
+    return letters.empty? then line else letters.join("")
+  end
+
+  let quoted(line: String) -> String? = line.split("\"").second
+
+  let attribute(line: String, key: String) -> String? do
+    let parts = line.split("${key}: \"")
+    match parts.second do
+      Just(rest) -> rest.split("\"").first
+      None -> None
     end
   end
+end

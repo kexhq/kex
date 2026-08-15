@@ -8,30 +8,30 @@ using FS
 
 describe("File — path functions") do
   it("basename strips the directory") do
-    assert(FS.File.basename("src/main.kex") == "main.kex")
-    assert(FS.File.basename("main.kex") == "main.kex")
-    assert(FS.File.basename("/tmp/foo/bar.txt") == "bar.txt")
+    assert(FS.Path.basename("src/main.kex") == "main.kex")
+    assert(FS.Path.basename("main.kex") == "main.kex")
+    assert(FS.Path.basename("/tmp/foo/bar.txt") == "bar.txt")
   end
 
   it("dirname returns the parent directory") do
-    assert(FS.File.dirname("src/main.kex") == "src")
-    assert(FS.File.dirname("/tmp/foo/bar.txt") == "/tmp/foo")
-    assert(FS.File.dirname("bare.kex") == ".")
+    assert(FS.Path.dirname("src/main.kex") == "src")
+    assert(FS.Path.dirname("/tmp/foo/bar.txt") == "/tmp/foo")
+    assert(FS.Path.dirname("bare.kex") == ".")
   end
 
   it("extension returns the dot-prefixed extension") do
-    assert(FS.File.extension("main.kex") == ".kex")
-    assert(FS.File.extension("archive.tar.gz") == ".gz")
+    assert(FS.Path.extension("main.kex") == ".kex")
+    assert(FS.Path.extension("archive.tar.gz") == ".gz")
   end
 
   it("extension returns empty string when there is none") do
-    assert(FS.File.extension("Makefile") == "")
-    assert(FS.File.extension("no_ext") == "")
+    assert(FS.Path.extension("Makefile") == "")
+    assert(FS.Path.extension("no_ext") == "")
   end
 
   it("join combines two path components") do
-    assert(FS.File.join("src", "main.kex") == "src/main.kex")
-    assert(FS.File.join("/tmp", "foo.txt") == "/tmp/foo.txt")
+    assert(FS.Path.join("src", "main.kex") == "src/main.kex")
+    assert(FS.Path.join("/tmp", "foo.txt") == "/tmp/foo.txt")
   end
 end
 

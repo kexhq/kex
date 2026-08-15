@@ -1,4 +1,6 @@
 #include "lexer.hxx"
+#include "../common/unicode_category.hxx"
+#include "../common/utf8.hxx"
 #include <algorithm>
 #include <cctype>
 #include <gmpxx.h>
@@ -117,11 +119,28 @@ auto Lexer::scanToken() -> Token {
     if (isLowerAlpha(c) || c == '_') return lexIdentifier();
     if (isUpperAlpha(c)) {
         std::string ident(1, c);
-        while (!atEnd() && isIdentChar(peek())) {
-            ident += advance();
-        }
+        consumeIdentRest(ident);
         if (ident == "None") return makeToken(TokenType::None, ident);
         return makeToken(TokenType::UpperIdent, ident);
+    }
+    // A name written in another script. Kex tells values from types by the
+    // case of the first letter, and Unicode has that for the scripts that
+    // make the distinction: `α` is a value, `Α` a type. A script without
+    // case (Chinese, Arabic, …) has no uppercase form, so its names read as
+    // values — the useful default, since types are the rarer declaration.
+    if (static_cast<unsigned char>(c) >= 0x80) {
+        int width = 1;
+        const auto codepoint = identCodepointAt(m_pos - 1, width);
+        if (utf8::categories::inRanges(utf8::categories::letterRanges,
+                                       codepoint)) {
+            std::string ident(1, c);
+            for (int i = 1; i < width && !atEnd(); ++i) ident += advance();
+            consumeIdentRest(ident);
+            const bool upper = utf8::categories::inRanges(
+                utf8::categories::upperRanges, codepoint);
+            return makeToken(
+                upper ? TokenType::UpperIdent : TokenType::LowerIdent, ident);
+        }
     }
     if (isDigit(c)) return lexNumber();
 
@@ -300,9 +319,7 @@ auto Lexer::skipComment() -> void {
 auto Lexer::lexIdentifier() -> Token {
     std::string ident(1, m_source[m_pos - 1]);
 
-    while (!atEnd() && isIdentChar(peek())) {
-        ident += advance();
-    }
+    consumeIdentRest(ident);
 
     if (!atEnd() && peek() == '?') {
         ident += advance();
@@ -675,6 +692,41 @@ auto Lexer::isHexDigit(char c) -> bool {
 
 auto Lexer::isIdentChar(char c) -> bool {
     return isAlpha(c) || isDigit(c) || c == '_';
+}
+
+// The codepoint starting at `index`, with the byte width of its sequence. A
+// malformed sequence reads as one byte of U+FFFD, which no category accepts —
+// the scanner then reports it as an unexpected character instead of looping.
+auto Lexer::identCodepointAt(int index, int& width) const -> char32_t {
+    std::string_view source(m_source);
+    const auto start = static_cast<std::size_t>(index);
+    if (start >= source.size()) {
+        width = 1;
+        return 0xFFFD;
+    }
+    const auto span = utf8::sequenceLength(source, start);
+    width = static_cast<int>(span);
+    const auto decoded = utf8::decode(source.substr(start, span));
+    return decoded.empty() ? 0xFFFD : decoded.front();
+}
+
+// Whether the identifier continues at `index`: ASCII letters, digits and `_`
+// as before, plus any letter codepoint. Marks and non-letter symbols stop it,
+// so `a→b` stays three tokens.
+auto Lexer::identContinues(int index, int& width) const -> bool {
+    width = 1;
+    if (index >= static_cast<int>(m_source.size())) return false;
+    const auto byte = static_cast<unsigned char>(m_source[index]);
+    if (byte < 0x80) return isIdentChar(static_cast<char>(byte));
+    const auto codepoint = identCodepointAt(index, width);
+    return utf8::categories::inRanges(utf8::categories::letterRanges,
+                                      codepoint);
+}
+
+auto Lexer::consumeIdentRest(std::string& ident) -> void {
+    int width = 1;
+    while (!atEnd() && identContinues(m_pos, width))
+        for (int i = 0; i < width && !atEnd(); ++i) ident += advance();
 }
 
 } // namespace kex

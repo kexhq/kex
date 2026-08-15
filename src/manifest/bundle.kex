@@ -1,0 +1,60 @@
+# The vocabulary of a `package.kex` manifest.
+#
+# A manifest is DATA: Tey reads it, nothing executes it. These definitions
+# exist so the rest of the toolchain can read one as ordinary Kex — the
+# checker types it, and an editor gets hover and completion instead of
+# "undefined function: bundle" on every line. Their bodies are empty for that
+# reason, and this file is opt-in: `version`, `target` and `kex` are far too
+# common as names to put in the prelude. Checking a file named `package.kex`
+# loads these declarations the way a `.spec.kex` loads its base file.
+
+# Opens a manifest. Everything the package declares lives in its block.
+#
+# @example
+#   bundle "demo" do
+#     version("0.1.0")
+#   end
+let bundle(name: String, body: Block<Void>) -> Void do
+end
+
+# The package's own version, as `MAJOR.MINOR.PATCH`.
+let version(version: String) -> Void do
+end
+
+# The Kex versions this package builds against, as a requirement:
+# `">= 0.3.0"`, `"~> 0.3"`, `"0.3.1"`.
+let kex(requirement: String) -> Void do
+end
+
+# The source file `tey run` and `tey build` start from.
+let entrypoint(path: String) -> Void do
+end
+
+# A named build target. `entrypoint:` defaults to the package's own.
+let target(name: String, entrypoint: String = "") -> Void do
+end
+
+# A Git dependency, pinned by exactly one of `tag:`, `branch:` or `ref:`.
+#
+# @example
+#   tey("greet", git: "https://github.com/kexhq/greet.git", tag: "v0.1.0")
+let tey(name: String, git: String = "", tag: String = "",
+        branch: String = "", ref: String = "") -> Void do
+end
+
+# Scopes the dependencies in its block to a group, so that
+# `tey install --without dev` can leave them out.
+#
+# @example
+#   group :dev do
+#     tey("mock", git: "...", tag: "v1.0.0")
+#   end
+let group(name: Atom, body: Block<Void>) -> Void do
+
+# Sets the license of the package 
+#
+# @example
+#   license("MIT")
+#   license("GPL")
+let license(name: Atom, body: Block<Void>) -> Void do
+end

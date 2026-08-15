@@ -1,0 +1,19 @@
+# A `?` belongs in a name, including a LOCAL one. Core Erlang has no such
+# variable, so the emitter escapes it — but a fresh IR name carries the Kex
+# name it was derived from (`_ir_open?0`) and used to skip that escaping,
+# which took the whole module down with an erlc syntax error.
+
+let toggled?(flag?: Bool) -> Bool do
+  var state? = flag?
+  state? = !state?
+  return state?
+end
+
+main do
+  var open? = false
+  open? = !open?
+  IO.printLine("${open?} ${toggled?(open?)}")
+
+  let names? = ["a", "b"].any? { |name| name == "b" }
+  IO.printLine("${names?}")
+end

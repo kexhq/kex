@@ -1,44 +1,69 @@
 foul module Tey.Cli
+
 using Tey.Commands, only: [add, build, clean, init, install, list, lock, runPackage, setupMergeDriver, test]
 using Tey.Toolchain, only: [installSource, use]
-  let parser -> OptionConfig do
-    OptionParser.define("tey", "Package and Kex toolchain manager")
-      .flag("help", Just('h'), "Show this help")
-      .flag("version", Just('V'), "Show Tey and active Kex versions")
-      .flag("lib", None, "Create a library package with `tey init`")
-      .string("git", None, "Git URL for `tey add`", None, false)
-      .string("tag", None, "Git tag or tag requirement", None, false)
-      .string("branch", None, "Git branch", None, false)
-      .string("ref", None, "Git ref or commit", None, false)
-      .string("without", None, "Dependency group to omit", None, false)
-      .flag("cache", None, "Remove the complete cache with `tey clean`")
-      .flag("remove", None, "Remove configuration installed by `tey setup`")
-      .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
+
+let parser -> OptionConfig do
+  OptionParser.define("tey", "Package and Kex toolchain manager")
+    .flag("help", Just('h'), "Show this help")
+    .flag("version", Just('V'), "Show Tey and active Kex versions")
+    .flag("lib", None, "Create a library package with `tey init`")
+    .string("git", None, "Git URL for `tey add`", None, false)
+    .string("tag", None, "Git tag or tag requirement", None, false)
+    .string("branch", None, "Git branch", None, false)
+    .string("ref", None, "Git ref or commit", None, false)
+    .string("without", None, "Dependency group to omit", None, false)
+    .flag("cache", None, "Remove the complete cache with `tey clean`")
+    .flag("remove", None, "Remove configuration installed by `tey setup`")
+    .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
+end
+
+let dispatch(args: [String]) -> Integer do
+  match Tey.Cli.parser.parse(args) do
+    Error(error) -> do
+      IO.printError("tey: ${OptionParser.errorMessage(error)}\n\n${Tey.Cli.parser.help}\n")
+      1
+    end
+    Ok(options) -> do
+      return Tey.Cli.showVersion() if options.flagEnabled?("version")
+
+      return Tey.Cli.showHelp() if options.flagEnabled?("help") || options.arguments.empty?
+
+      Tey.Cli.dispatchCommand(options.arguments, options)
+    end
+  end
+end
+
+private do
+  # "* 0.3.0  installed, selected" — the marker is the selected one, so the
+  # active version is findable by eye in a long list.
+  let versionLine(version: String, installed: [String], selected: String) -> String do
+    let marker = version == selected then "*" else " "
+    let notes = installed.contains?(version) then ["installed"] else []
+    let all = version == selected then [...notes, "selected"] else notes
+    return "${marker} ${version}" if all.empty?
+    return "${marker} ${version}  ${all.join(", ")}"
   end
 
-  let dispatch(args: [String]) -> Integer do
-    match Tey.Cli.parser.parse(args) do
-      Error(error) -> do
-        IO.printError("tey: ${OptionParser.errorMessage(error)}\n\n${Tey.Cli.parser.help}\n")
-        1
-      end
-      Ok(options) -> do
-        return Tey.Cli.showVersion() if options.flagEnabled?("version")
-        return Tey.Cli.showHelp() if options.flagEnabled?("help") || options.arguments.empty?
-        Tey.Cli.dispatchCommand(options.arguments, options)
-      end
+  # The shim only takes effect if its directory is on PATH, and that is the
+  # one part Tey cannot do for the user. Say so exactly once, when it matters.
+  let reportShim(selected: String) -> Void do
+    if !selected.empty? && !ENV.get("PATH", "").split(":").contains?(Tey.Toolchain.binDirectory)
+      IO.printLine("")
+      IO.printLine("Add ${Tey.Toolchain.binDirectory} to PATH so `kex` runs the selected version.")
     end
   end
 
-  private do
-    let showVersion -> Integer do
-      IO.printLine("tey 0.1.0 (Kex ${Kex.Kernel.VERSION.number})")
-      0
-    end
+  let showVersion -> Integer do
+    IO.printLine("tey 0.1.0 (Kex ${Kex.Kernel.VERSION.number})")
+    return 0
+  end
 
-    let showHelp -> Integer do
-      IO.printLine(Tey.Cli.parser.help)
-      IO.printLine(`
+  let showHelp -> Integer do
+    IO.printLine(Tey.Cli.parser.help)
+    # Raw string: these lines are the OUTPUT, so they stay flush with the
+    # left margin rather than with the code around them.
+    IO.printLine(`
 Commands:
   init <name>              create a Kex package
   add <name>               add a Git dependency and update tey.lock
@@ -51,65 +76,127 @@ Commands:
   test                     run spec/*.spec.kex
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
-  toolchain install <src> <version>
-                           build/install compiler + runtime + stdlib
-  toolchain use <version>  select an installed Kex toolchain
+  kex list                 show Kex versions, newest first
+  kex install <version>    build and install a released Kex
+  kex install <src> <version>
+                           build and install from a source checkout
+  kex uninstall <version>  remove an installed Kex
+  kex use <version>        select an installed Kex toolchain
 `)
-      0
-    end
+    return 0
+  end
 
-    let dispatchCommand(["init", name], options: ParsedOptions) -> Integer do
-      Tey.Commands.init(name, options.flagEnabled?("lib"))
-    end
-    let dispatchCommand(["install"], _) -> Integer = Tey.Commands.install
-    let dispatchCommand(["lock"], _) -> Integer = Tey.Commands.lock
-    let dispatchCommand(["lock", _, _, _], options: ParsedOptions) -> Integer do
-      options.flagEnabled?("merge-driver") then Tey.Commands.lock else Tey.Cli.unknown("lock")
-    end
-    let dispatchCommand(["add", name], options: ParsedOptions) -> Integer = Tey.Commands.add(name, options)
-    let dispatchCommand(["update"], _) -> Integer = Tey.Commands.lock
-    let dispatchCommand(["update", _], _) -> Integer = Tey.Commands.lock
-    let dispatchCommand(["list"], _) -> Integer = Tey.Commands.list
-    let dispatchCommand(["build"], _) -> Integer = Tey.Commands.build
-    let dispatchCommand(["run" | arguments], _) -> Integer = Tey.Commands.runPackage(arguments)
-    let dispatchCommand(["test"], _) -> Integer = Tey.Commands.test
-    let dispatchCommand(["clean"], options: ParsedOptions) -> Integer do
-      Tey.Commands.clean(options.flagEnabled?("cache"))
-    end
-    let dispatchCommand(["setup", "merge-driver"], options: ParsedOptions) -> Integer do
-      Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
-    end
+  let dispatchCommand(["init", name], options: ParsedOptions) -> Integer do
+    Tey.Commands.init(name, options.flagEnabled?("lib"))
+  end
+  let dispatchCommand(["install"], options: ParsedOptions) -> Integer do
+    Tey.Commands.install(options.value("without", ""))
+  end
+  let dispatchCommand(["lock"], _) -> Integer = Tey.Commands.lock
+  let dispatchCommand(["lock", _, _, _], options: ParsedOptions) -> Integer do
+    options.flagEnabled?("merge-driver") then Tey.Commands.lock else Tey.Cli.unknown("lock")
+  end
+  let dispatchCommand(["add", name], options: ParsedOptions) -> Integer = Tey.Commands.add(name, options)
+  let dispatchCommand(["update"], _) -> Integer = Tey.Commands.lock
+  let dispatchCommand(["update", _], _) -> Integer = Tey.Commands.lock
+  let dispatchCommand(["list"], _) -> Integer = Tey.Commands.list
+  let dispatchCommand(["build"], _) -> Integer = Tey.Commands.build
+  let dispatchCommand(["run" | arguments], _) -> Integer = Tey.Commands.runPackage(arguments)
+  let dispatchCommand(["test"], _) -> Integer = Tey.Commands.test
+  let dispatchCommand(["clean"], options: ParsedOptions) -> Integer do
+    Tey.Commands.clean(options.flagEnabled?("cache"))
+  end
+  let dispatchCommand(["setup", "merge-driver"], options: ParsedOptions) -> Integer do
+    Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
+  end
 
-    let dispatchCommand(["toolchain", "install", source, version], _) -> Integer do
-      match Tey.Toolchain.installSource(source, version) do
-        Ok(prefix) -> do
-          IO.printLine("Installed and selected Kex ${version} at ${prefix}")
-          0
-        end
-        Error(error) -> do
-          IO.printError("tey: ${error}\n")
-          1
-        end
+  let dispatchCommand(["kex", "list"], _) -> Integer do
+    let available = match Tey.Toolchain.availableVersions do
+      Error(error) -> do
+        # A release list needs the network; the installed ones do not, and
+        # they are the half a user can still act on.
+        IO.printError("tey: could not read released versions: ${error}\n")
+        []
       end
+      Ok(versions) -> versions
     end
+    let installed = Tey.Toolchain.installedVersions
+    let versions = Tey.Toolchain.newestFirst([...available, ...installed])
+    if versions.empty?
+      IO.printLine("No Kex versions found")
+      return 0
+    end
+    let selected = Tey.Toolchain.selected.or("")
+    versions.each do |version|
+      IO.printLine(Tey.Cli.versionLine(version, installed, selected))
+    end
+    if !Tey.Toolchain.selectionHealthy?
+      IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+    end
+    Tey.Cli.reportShim(selected)
+    0
+  end
 
-    let dispatchCommand(["toolchain", "use", version], _) -> Integer do
-      if Tey.Toolchain.use(version)
-        IO.printLine("Using Kex ${version}")
+  let dispatchCommand(["kex", "install", version], _) -> Integer do
+    match Tey.Toolchain.installRelease(version) do
+      Ok(prefix) -> do
+        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        Tey.Cli.reportShim(version)
         0
-      else
-        IO.printError("tey: Kex ${version} is not installed\n")
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
         1
       end
     end
+  end
 
-    let dispatchCommand([command | _], _) -> Integer do
-      Tey.Cli.unknown(command)
+  let dispatchCommand(["kex", "uninstall", version], _) -> Integer do
+    match Tey.Toolchain.uninstall(version) do
+      Ok(prefix) -> do
+        IO.printLine("Removed Kex ${version} from ${prefix}")
+        IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
+        0
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
     end
-    let dispatchCommand([], _) -> Integer = Tey.Cli.showHelp()
+  end
 
-    let unknown(command: String) -> Integer do
-      IO.printError("tey: unknown or incomplete command '${command}'\n")
+  let dispatchCommand(["kex", "install", source, version], _) -> Integer do
+    match Tey.Toolchain.installSource(source, version) do
+      Ok(prefix) -> do
+        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        Tey.Cli.reportShim(version)
+        0
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+    end
+  end
+
+  let dispatchCommand(["kex", "use", version], _) -> Integer do
+    if Tey.Toolchain.use(version)
+      IO.printLine("Using Kex ${version}")
+      Tey.Cli.reportShim(version)
+      0
+    else
+      IO.printError("tey: Kex ${version} is not installed\n")
       1
     end
   end
+
+  let dispatchCommand([command | _], _) -> Integer do
+    Tey.Cli.unknown(command)
+  end
+  let dispatchCommand([], _) -> Integer = Tey.Cli.showHelp()
+
+  let unknown(command: String) -> Integer do
+    IO.printError("tey: unknown or incomplete command '${command}'\n")
+    1
+  end
+end

@@ -117,7 +117,18 @@ auto valueToLiteral(const ValuePtr& value,
                 out->kind = std::move(map);
             } else if constexpr (std::is_same_v<T, interpreter::RecordValue>) {
                 ast::RecordConstruction record;
+                // The value carries the module-qualified identity
+                // (`Boxes.Box`); the layout table is keyed by the name as
+                // declared. Fall back to the last segment so the reified
+                // literal gets DECLARATION order rather than the alphabetical
+                // unknown-type tail.
                 record.typeName = node.typeName;
+                if (context.layouts && !context.layouts->count(record.typeName))
+                    if (const auto dot = record.typeName.rfind('.');
+                        dot != std::string::npos)
+                        if (const auto bare = record.typeName.substr(dot + 1);
+                            context.layouts->count(bare))
+                            record.typeName = bare;
                 // DECLARATION order, because a record is a tuple on BEAM and
                 // the order here can BE the tuple layout: lowering's main path
                 // looks each written field up by name, but its `records.find`
@@ -132,7 +143,7 @@ auto valueToLiteral(const ValuePtr& value,
                 std::vector<const std::string*> names;
                 names.reserve(node.fields.size());
                 if (context.layouts) {
-                    const auto declared = context.layouts->find(node.typeName);
+                    const auto declared = context.layouts->find(record.typeName);
                     if (declared != context.layouts->end())
                         for (const auto& field : declared->second)
                             if (node.fields.count(field)) names.push_back(&field);

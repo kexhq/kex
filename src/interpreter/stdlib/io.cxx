@@ -105,6 +105,61 @@ auto Evaluator::registerIOBuiltins() -> void {
         std::exit(code);
     });
 
+    // System.os() — the operating system family, as one of the atoms in the
+    // OS union (system.kex). Both backends answer with the same atom for the
+    // same machine, and anything unmodelled is `:unknown` rather than a name
+    // the union does not cover.
+    defineIntrinsic("System::os", [this](std::vector<ValuePtr>) -> ValuePtr {
+        if (m_mockOS) return Value::atom(*m_mockOS);
+#if defined(_WIN32)
+        return Value::atom("windows");
+#elif defined(__EMSCRIPTEN__)
+        return Value::atom("wasm");
+#elif defined(__APPLE__)
+        return Value::atom("macos");
+#elif defined(__linux__)
+        return Value::atom("linux");
+#elif defined(__FreeBSD__)
+        return Value::atom("freebsd");
+#elif defined(__OpenBSD__)
+        return Value::atom("openbsd");
+#elif defined(__NetBSD__)
+        return Value::atom("netbsd");
+#else
+        return Value::atom("unknown");
+#endif
+    });
+
+    // System.bitWidth() — the machine's pointer width in bits. The BEAM
+    // answers from its word size; here it IS the pointer size.
+    defineIntrinsic("System::bitWidth", [this](std::vector<ValuePtr>) -> ValuePtr {
+        if (m_mockBitWidth) return Value::integer(*m_mockBitWidth);
+        return Value::integer(static_cast<int64_t>(sizeof(void*) * 8));
+    });
+
+    // Mock.System — makes the machine claim to be something else, so a test
+    // for Windows behaviour can run on this one. Same shape as Mock.FS: a
+    // setter per fact, and one `clear` that hands everything back.
+    defineIntrinsic("System::mockOS", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (!args.empty())
+            if (auto* atom = std::get_if<AtomValue>(&args[0]->data))
+                m_mockOS = atom->name;
+        return Value::unit();
+    });
+
+    defineIntrinsic("System::mockBitWidth", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (!args.empty())
+            if (auto* width = std::get_if<IntValue>(&args[0]->data))
+                m_mockBitWidth = width->value;
+        return Value::unit();
+    });
+
+    defineIntrinsic("System::mockClear", [this](std::vector<ValuePtr>) -> ValuePtr {
+        m_mockOS.reset();
+        m_mockBitWidth.reset();
+        return Value::unit();
+    });
+
     // die(msg) — print msg to stderr and terminate the process.
     {
         auto fn = [](std::vector<ValuePtr> args) -> ValuePtr {

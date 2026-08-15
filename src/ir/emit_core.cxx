@@ -19,7 +19,6 @@ namespace {
 // an ordinary name.
 auto erlVar(const std::string& s) -> std::string {
     if (s.empty()) return "_V";
-    if (s[0] == '_') return s;
     static const char* kHex = "0123456789ABCDEF";
     auto append = [&](std::string& out, unsigned char c) {
         if (std::isalnum(c) || c == '_' || c == '@') { out += static_cast<char>(c); return; }
@@ -28,7 +27,13 @@ auto erlVar(const std::string& s) -> std::string {
         out += kHex[c & 0x0F];
     };
     std::string out;
-    out += static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
+    // A fresh IR name already starts with '_', which Core Erlang accepts —
+    // but it CARRIES the Kex name it was derived from (`_ir_open?0`), so the
+    // rest still needs escaping. Returning early here let a `var open?` reach
+    // erlc verbatim and take the whole module down with a syntax error.
+    out += s[0] == '_'
+        ? '_'
+        : static_cast<char>(std::toupper(static_cast<unsigned char>(s[0])));
     for (size_t i = 1; i < s.size(); i++) append(out, static_cast<unsigned char>(s[i]));
     return out;
 }

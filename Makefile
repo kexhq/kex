@@ -50,8 +50,21 @@ help:
 	@echo "                    since it's the same tree-walker as native)."
 	@echo ""
 
+# Configure quietly, but NEVER quietly: piping cmake into `tail` discarded its
+# exit status, so a failed configure (a stale cache naming a compiler that
+# cannot build for this machine, say) went unnoticed and the build ran on into
+# a half-generated tree — surfacing as "Not a file: VerifyGlobs.cmake" or
+# mismatched archives, neither of which names the real problem. On failure the
+# whole configure output is printed and the build stops.
 build:
-	@cmake -B $(BUILD_DIR) -G "Unix Makefiles" 2>/dev/null | tail -1
+	@output=$$(cmake -B $(BUILD_DIR) -G "Unix Makefiles" 2>&1) || { \
+		echo "$$output"; \
+		echo ""; \
+		echo "cmake could not configure $(BUILD_DIR)."; \
+		echo "If its cache names the wrong compiler, remove the directory and try again:"; \
+		echo "    rm -rf $(BUILD_DIR) && make build"; \
+		exit 1; \
+	}; echo "$$output" | tail -1
 	@cmake --build $(BUILD_DIR)
 
 test: build
@@ -110,7 +123,7 @@ spec: build
 		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
 			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
 			$(KEX) -c --no-colors -o "$$tmpdir" "$$f" > /dev/null 2>&1; \
-			beamfile="$$tmpdir/$$(basename "$${f%.kex}").kx.beam"; \
+			beamfile="$$tmpdir/kex_$$(basename "$${f%.kex}").beam"; \
 			actual=$$($(KEX) "$$beamfile" 2>&1); \
 			rm -rf "$$tmpdir"; \
 		else \

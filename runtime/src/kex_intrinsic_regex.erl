@@ -29,23 +29,23 @@
 %% Compiling
 %% ---------------------------------------------------------------------------
 
-%% Regex is the record {'Regex', Source} — it carries only its pattern source;
+%% Regex is the record {'Regex.Regex', Source} — it carries only its pattern source;
 %% the compiled form is derived on use (and cached by the VM's own re cache).
 %% A compiled {re_pattern,...} must never be embedded in an artifact, since it
 %% bakes in the host's PCRE version.
 %%
 %% compile(Source) -> {'Ok', Regex} | {'Error', RegexError}
-%% RegexError is the record {'RegexError', Source, Position, Message}.
+%% RegexError is the record {'Regex.RegexError', Source, Position, Message}.
 compile(Source) when is_binary(Source) ->
     case re:compile(Source, ?COMPILE_OPTS) of
-        {ok, _} -> {'Ok', {'Regex', Source}};
+        {ok, _} -> {'Ok', {'Regex.Regex', Source}};
         {error, {Reason, Position}} ->
-            {'Error', {'RegexError', Source,
+            {'Error', {'Regex.RegexError', Source,
                        char_offset(Source, Position),
                        unicode:characters_to_binary(Reason)}}
     end;
 compile(_) ->
-    {'Error', {'RegexError', <<>>, 0, <<"regex expects a String">>}}.
+    {'Error', {'Regex.RegexError', <<>>, 0, <<"regex expects a String">>}}.
 
 %% tag(Parts, Values) -> Regex — the tagged-literal ABI. `` regex`\d+` ``
 %% lowers to regex(Parts, Values) and returns a BARE Regex, not a Result: the
@@ -55,7 +55,7 @@ compile(_) ->
 tag(Parts, Values) ->
     Source = iolist_to_binary(splice(Parts, Values)),
     case re:compile(Source, ?COMPILE_OPTS) of
-        {ok, _} -> {'Regex', Source};
+        {ok, _} -> {'Regex.Regex', Source};
         {error, {Reason, _}} ->
             erlang:error({invalid_regex, Source,
                           unicode:characters_to_binary(Reason)})
@@ -101,14 +101,14 @@ escape_char(C) -> <<$\\, C>>.
 %% ---------------------------------------------------------------------------
 
 %% matches(Subject, Regex) -> {'Just', Match} | 'None'. Unanchored.
-matches(Subject, {'Regex', Source}) when is_binary(Subject) ->
+matches(Subject, {'Regex.Regex', Source}) when is_binary(Subject) ->
     case run(Subject, Source, 0) of
         nomatch -> 'None';
         {match, Captures} -> {'Just', build_match(Subject, Source, Captures)}
     end;
 matches(_, _) -> 'None'.
 
-'matches?'(Subject, {'Regex', Source}) when is_binary(Subject) ->
+'matches?'(Subject, {'Regex.Regex', Source}) when is_binary(Subject) ->
     case run(Subject, Source, 0) of
         nomatch -> false;
         {match, _} -> true
@@ -120,7 +120,7 @@ matches(_, _) -> 'None'.
 run(Subject, Source, Offset) ->
     re:run(Subject, Source, ?COMPILE_OPTS ++ [{offset, Offset}, {capture, all, index}]).
 
-%% Builds the Match record {'Match', Captures} where Captures is a Kex map
+%% Builds the Match record {'Regex.Match', Captures} where Captures is a Kex map
 %% keyed by group number AND by name atom, exactly as the interpreter builds it.
 %% A group that did not participate is left out entirely, which is what makes
 %% get(:opt) return None while a group matching "" returns Just(<<>>).
@@ -129,7 +129,7 @@ build_match(Subject, Source, Captures) ->
     Named = [{Name, Value}
              || {Name, Number} <- name_table(Source),
                 {ok, Value} <- [nth_capture(Subject, Captures, Number)]],
-    {'Match', maps:from_list(Numbered ++ Named)}.
+    {'Regex.Match', maps:from_list(Numbered ++ Named)}.
 
 numbered_entries(_Subject, [], _Index, Acc) -> lists:reverse(Acc);
 numbered_entries(Subject, [{-1, _} | Rest], Index, Acc) ->
@@ -203,7 +203,7 @@ named_group(Bin, Index, Depth, Acc, Terminator) ->
 %% Every match, left to right. Zero-width matches are reported (as in every
 %% engine) with the cursor advancing one CHARACTER so iteration terminates and
 %% never resumes mid-UTF-8-sequence.
-scan(Subject, {'Regex', Source}) when is_binary(Subject) ->
+scan(Subject, {'Regex.Regex', Source}) when is_binary(Subject) ->
     scan_loop(Subject, Source, 0, []);
 scan(_, _) -> [].
 
@@ -223,7 +223,7 @@ next_offset(_Subject, Start, Len) -> Start + Len.
 
 %% Replaces EVERY match (gsub, not sub). Replacement is either a literal binary,
 %% inserted verbatim with no $1/\1 syntax, or a fun receiving the Match.
-replace(Subject, {'Regex', Source}, Replacement) when is_binary(Subject) ->
+replace(Subject, {'Regex.Regex', Source}, Replacement) when is_binary(Subject) ->
     replace_loop(Subject, Source, Replacement, 0, 0, []);
 replace(Subject, _, _) -> Subject.
 
@@ -278,7 +278,7 @@ split(Subject, Regex) -> split(Subject, Regex, 0).
 split(Subject, Sep, _Limit) when is_binary(Subject), is_binary(Sep) ->
     kex_intrinsic_string:split(Subject, Sep);
 
-split(Subject, {'Regex', Source}, Limit) when is_binary(Subject) ->
+split(Subject, {'Regex.Regex', Source}, Limit) when is_binary(Subject) ->
     case Subject of
         <<>> -> [];                        %% Ruby: "".split(",") is []
         _ ->

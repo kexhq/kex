@@ -61,7 +61,7 @@ split(S) -> [<<C/utf8>> || C <- unicode:characters_to_list(S)].
 %% `str.split(",")` share one UFCS name — mirroring the same branch in
 %% src/interpreter/stdlib/string.cxx. Constructing a Regex needs `using Regex`,
 %% so this clause is unreachable without it.
-split(S, {'Regex', _} = Regex) -> kex_intrinsic_regex:split(S, Regex, 0);
+split(S, {'Regex.Regex', _} = Regex) -> kex_intrinsic_regex:split(S, Regex, 0);
 %% An empty separator is the string form of `.chars` — one part per character,
 %% the same answer `split/1` gives. `string:split/3` returns the whole string
 %% for it instead, which is where the walker and BEAM disagreed.

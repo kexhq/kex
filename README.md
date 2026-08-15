@@ -423,6 +423,9 @@ make check-prelude        # Type-check the sources selected by src/stdlib/prelud
 make install              # Install build/kex to /usr/local/bin/kex
 make uninstall      # Remove the installed binary
 make clean          # Remove build artifacts
+
+# Compile a nested file with an explicit project module root (repeatable)
+build/kex --compile --source-root src -o build/beam src/tools/task.kex
 ```
 
 Requires CMake 3.20+ and a C++20 compiler. Readline is optional.

@@ -43,6 +43,40 @@ int main() {
             assertTrue(firstItemIs<std::unique_ptr<ast::FunctionDef>>(program));
         });
 
+        it("parses an = body that opens on the next line", []() {
+            auto program = parse(
+                "let double(n: Int) -> Int\n"
+                "  = n * 2\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertEqual(def->clauses.size(), size_t(1));
+            assertEqual(def->clauses[0].body.size(), size_t(1));
+        });
+
+        it("parses a return type that opens on the next line", []() {
+            auto program = parse(
+                "let chooseTag(name: String, git: String)\n"
+                "    -> Result<String, String> do\n"
+                "  return Ok(name)\n"
+                "end\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertTrue(def->clauses[0].returnAnnotation.has_value());
+        });
+
+        it("leaves a signature-only declaration alone", []() {
+            // The lookahead past newlines must not consume the NEXT
+            // declaration when no `=` follows the signature.
+            auto program = parse(
+                "let twice(n: Int) = n * 2\n"
+                "\n"
+                "let thrice(n: Int) = n * 3\n"
+            );
+            assertEqual(program.items.size(), size_t(2));
+        });
+
         it("parses multiple function clauses", []() {
             auto program = parse(
                 "let factorial(0) = 1\n"
@@ -205,6 +239,22 @@ int main() {
             auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
             assertEqual(mod->name, std::string("Math"));
             assertEqual(mod->body.size(), size_t(1));
+        });
+
+        it("keeps parsing a standalone module after ended declarations", []() {
+            auto program = parse(
+                "module Records\n"
+                "record Entry do\n"
+                "  value : Int\n"
+                "end\n"
+                "let buildEntry() do\n"
+                "  Records.Entry { value: 42 }\n"
+                "end\n"
+                "let answer() = 42\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(mod->body.size(), size_t(3));
         });
 
         it("keeps main outside a standalone module", []() {

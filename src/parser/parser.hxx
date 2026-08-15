@@ -19,6 +19,10 @@ public:
 
     auto parseProgram() -> ast::Program;
     auto parseExpr() -> ast::ExprPtr;
+    // parseExpr without its trailing `if`, so that the condition in
+    // `total = total + 1 if ready?` guards the assignment rather than the
+    // value being assigned.
+    auto parseExprWithoutGuard() -> ast::ExprPtr;
     auto diagnostics() const -> const std::vector<ParseDiagnostic>&;
 
 private:

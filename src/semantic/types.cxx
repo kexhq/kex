@@ -340,6 +340,21 @@ static auto isUnit(const TypePtr& t) -> bool {
     return false;
 }
 
+auto namedTypesMatch(const std::string& a, const std::string& b) -> bool {
+    if (a == b) return true;
+    const auto aQualified = a.find('.') != std::string::npos;
+    const auto bQualified = b.find('.') != std::string::npos;
+    // Two qualified identities are compared in full: that is what keeps
+    // Tey.Manifest.Dependency and Tey.Lockfile.Dependency distinct.
+    if (aQualified == bQualified) return false;
+    const auto& qualified = aQualified ? a : b;
+    const auto& bare = aQualified ? b : a;
+    return qualified.size() > bare.size() + 1 &&
+           qualified.compare(qualified.size() - bare.size(), bare.size(),
+                             bare) == 0 &&
+           qualified[qualified.size() - bare.size() - 1] == '.';
+}
+
 auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
     if (!a || !b) return false;
     if (a.get() == b.get()) return true;
@@ -361,7 +376,7 @@ auto typesEqual(const TypePtr& a, const TypePtr& b) -> bool {
             return at.bits == bt->bits;
         }
         else if constexpr (std::is_same_v<AT, NamedType>) {
-            if (at.name != bt->name) return false;
+            if (!namedTypesMatch(at.name, bt->name)) return false;
             if (at.typeArgs.size() != bt->typeArgs.size()) return false;
             for (size_t i = 0; i < at.typeArgs.size(); i++) {
                 if (!typesEqual(at.typeArgs[i], bt->typeArgs[i])) return false;

@@ -542,6 +542,12 @@ auto readFile(const std::string &path) -> std::string {
 
 namespace {
 
+// Additional project roots supplied by repeatable `--source-root` options.
+// Keeping this at the CLI boundary lets every existing consumer of
+// moduleRootsFor (semantic checks, discovery, validation and both runtimes)
+// observe exactly the same search path.
+std::vector<std::string> cliSourceRoots;
+
 auto isIdentChar(char c) -> bool {
   return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
 }
@@ -881,6 +887,15 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
 auto specBaseCandidates(const std::string &filepath)
     -> std::vector<std::string> {
   static const std::string suffix = ".spec.kex";
+  // A `package.kex` manifest speaks a vocabulary the stdlib describes but no
+  // program imports (`bundle`, `version`, `tey`, ...). It comes in the same
+  // way a spec's base file does, so checking a manifest reports real
+  // mistakes instead of "undefined function" on every declaration.
+  if (std::filesystem::path(filepath).filename() == "package.kex") {
+    if (auto vocabulary = kex::manifestVocabularyFile(); !vocabulary.empty())
+      return {vocabulary};
+    return {};
+  }
   if (filepath.size() <= suffix.size())
     return {};
   if (filepath.compare(filepath.size() - suffix.size(), suffix.size(),
@@ -947,17 +962,34 @@ struct LoadedDep {
 
 auto resolveBeamDeps(kex::ast::Program &program,
                      const std::vector<std::string> &roots,
+                     const kex::semantic::ImportedInterfaces *interfaces,
                      const std::unordered_set<std::string> &qualifiedModules = {})
     -> std::vector<LoadedDep> {
   std::vector<LoadedDep> deps;
   std::unordered_set<std::string> loaded;
   kex::module::Resolver resolver(roots);
 
-  std::function<void(const kex::ast::Program &)> resolve =
-      [&](const kex::ast::Program &prog) {
+  std::function<void(const kex::ast::Program &,
+                     const std::unordered_set<std::string> &)> resolve =
+      [&](const kex::ast::Program &prog,
+          const std::unordered_set<std::string> &seedModules) {
     auto modules = collectUsingModules(prog);
-    modules.insert(modules.end(),
-                   qualifiedModules.begin(), qualifiedModules.end());
+    modules.insert(modules.end(), seedModules.begin(), seedModules.end());
+
+    // Each newly parsed source file can introduce qualified-only dependency
+    // edges of its own. Analyze it here rather than only analyzing the entry
+    // program; otherwise discovery stops after one qualified-reference hop.
+    kex::semantic::Analyzer dependencyAnalysis(interfaces);
+    (void)dependencyAnalysis.analyze(prog);
+    for (const auto &name : dependencyAnalysis.referencedModules()) {
+      const bool automatic = interfaces && [&] {
+        const auto imported = interfaces->modules.find(name);
+        return imported != interfaces->modules.end() &&
+               imported->second.automaticImport;
+      }();
+      if (!automatic)
+        modules.push_back(name);
+    }
     for (const auto &modName : modules) {
       auto resolved = resolver.resolve(modName);
       if (!resolved) continue;
@@ -968,14 +1000,29 @@ auto resolveBeamDeps(kex::ast::Program &program,
       kex::Lexer lexer(std::string(*src), *path);
       kex::Parser parser(lexer.tokenizeAll(), *path);
       auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
-      if (parser.diagnostics().empty()) {
-        resolve(*depProg);
-        deps.push_back(
-            {std::move(src), std::move(path), std::move(depProg)});
+      // A dependency that does not parse is a build failure, not a module to
+      // skip. Silently dropping it produced no error anywhere: the module
+      // simply did not exist, the program compiled, and the first call into
+      // it died at RUNTIME with `Undefined function: Tey.Resolver`.
+      if (!parser.diagnostics().empty()) {
+        for (const auto &diagnostic : parser.diagnostics())
+          std::cerr << kex::color::apply(kex::color::gray)
+                    << diagnostic.location.file << ":"
+                    << diagnostic.location.line << ":"
+                    << diagnostic.location.column << ":"
+                    << kex::color::apply(kex::color::reset) << " "
+                    << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::red)
+                    << "error:" << kex::color::apply(kex::color::reset) << " "
+                    << diagnostic.message << "\n";
+        std::cerr << "error: could not parse module " << modName << "\n";
+        std::exit(1);
       }
+      resolve(*depProg, {});
+      deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
   };
-  resolve(program);
+  resolve(program, qualifiedModules);
 
   if (!deps.empty()) {
     std::vector<kex::ast::TopLevelItem> merged;
@@ -1000,6 +1047,14 @@ auto moduleRootsFor(const std::string &filepath) -> std::vector<std::string> {
   namespace fs = std::filesystem;
   const auto srcDir = fs::weakly_canonical(filepath).parent_path();
   std::vector<std::string> roots;
+  for (const auto &configured : cliSourceRoots) {
+    std::error_code ec;
+    auto root = fs::weakly_canonical(configured, ec);
+    const auto normalized = ec ? fs::path(configured).lexically_normal() : root;
+    const auto value = normalized.string();
+    if (std::find(roots.begin(), roots.end(), value) == roots.end())
+      roots.push_back(value);
+  }
   for (const auto &relative : {"lib", "src"}) {
     const auto candidate = srcDir / relative;
     std::error_code ec;
@@ -1301,7 +1356,9 @@ auto loadPreludeRecordLayouts() -> std::vector<kex::ir::ExternalRecordLayout> {
   for (const auto *module : registry.allLoadedModules())
     for (const auto &record : module->chunk.metadata.records) {
       kex::ir::ExternalRecordLayout layout;
-      layout.name = record.name;
+      // The layout is keyed by the tuple tag the record's own module emits,
+      // so a construction here agrees with a pattern match there.
+      layout.name = record.tagAtom.empty() ? record.name : record.tagAtom;
       layout.moduleAtom = module->beamAtom;
       for (const auto &field : record.fields)
         layout.fields.push_back(field.name);
@@ -1354,13 +1411,18 @@ auto preludeDisplayRegistration() -> std::string {
   const auto &registry = kex::preludeRegistry(runtimeDir);
   for (const auto *module : registry.allLoadedModules()) {
     for (const auto &record : module->chunk.metadata.records) {
-      if (!records.empty()) records += ", ";
-      records += "'" + record.name + "' => [";
+      std::string fields;
       for (size_t i = 0; i < record.fields.size(); i++) {
-        if (i) records += ", ";
-        records += "'" + record.fields[i].name + "'";
+        if (i) fields += ", ";
+        fields += "'" + record.fields[i].name + "'";
       }
-      records += "]";
+      // Keyed by the value's RUNTIME tag, which the metadata records: a
+      // record declared inside a `module` block is tagged with its qualified
+      // identity, one at a file's top level with its bare name.
+      if (!records.empty()) records += ", ";
+      records += "'" +
+                 (record.tagAtom.empty() ? record.name : record.tagAtom) +
+                 "' => [" + fields + "]";
     }
     for (const auto &adt : module->chunk.metadata.adts)
       for (const auto &constructor : adt.constructors) {
@@ -1615,6 +1677,8 @@ auto printUsage(const char *progName) -> void {
          "runtime\n"
       << "  -o <dir>          Output directory for -c / --emit-core (default: "
          ".)\n"
+      << "      --source-root <dir>\n"
+      << "                    Add a module source root (repeatable)\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "  --no-colors       Disable ANSI color output\n";
@@ -1643,6 +1707,7 @@ int main(int argc, char *argv[]) {
       {"version", no_argument, nullptr, 'v'},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
+      {"source-root", required_argument, nullptr, 1008},
       {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
@@ -1690,6 +1755,9 @@ int main(int argc, char *argv[]) {
       std::cerr << "error: LSP support is unavailable in this build\n";
       return 1;
 #endif
+      break;
+    case 1008:
+      cliSourceRoots.emplace_back(optarg);
       break;
     case 1001: {
       std::string dir = optarg;
@@ -2558,6 +2626,7 @@ int main(int argc, char *argv[]) {
           }
           auto replDeps = resolveBeamDeps(
               program, kex::standardLibraryModuleRoots(),
+              &preludeSemanticInterfaces(),
               replQualifiedModules);
           (void)replDeps;
           auto extMods = mergeExternalModules(
@@ -3519,6 +3588,7 @@ int main(int argc, char *argv[]) {
         }
         beamDeps = resolveBeamDeps(
             program, moduleRootsFor(filepath),
+            &preludeSemanticInterfaces(),
             qualifiedModules);
       }
 
@@ -3766,18 +3836,14 @@ int main(int argc, char *argv[]) {
         }
       }
 
-      // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
-      // The internal Erlang module name stays kex_<stem> inside the file.
-      std::string internalBeam = outputDir + "/" + result.moduleName + ".beam";
-      std::string kxBeam = outputDir + "/" + stem + ".kx.beam";
-      if (tempDir.empty()) {
-        std::filesystem::rename(internalBeam, kxBeam);
-        std::cerr << "  done  " << kxBeam << "\n";
-      } else {
-        // In temp-dir (interpreter/REPL) mode keep the internal name so
-        // -pa <tempDir> auto-loads it by module name.
-        kxBeam = internalBeam;
-      }
+      // The emitted file is named after the module inside it. Kex used to
+      // rename `kex_<stem>.beam` to `<stem>.kx.beam` as a friendlier name,
+      // but BEAM's code server finds a module by FILENAME: a directory of
+      // `.kx.beam` files could not be put on a code path, so anything
+      // booting a built program straight from the emulator (`erl -pa ebin`,
+      // a package launcher) needed a renamed copy alongside it.
+      std::string kxBeam = outputDir + "/" + result.moduleName + ".beam";
+      if (tempDir.empty()) std::cerr << "  done  " << kxBeam << "\n";
 
       if (compileRun) {
         // Load every freshly emitted module explicitly.  Relying on the code
@@ -3913,12 +3979,41 @@ int main(int argc, char *argv[]) {
     }
 
     // mode == "check"
+    // A companion file's declarations are part of what this file means: a
+    // `.spec.kex`'s base, and a `package.kex`'s manifest vocabulary. The run
+    // and compile paths merge them before checking; do the same here, or
+    // `kex -C` reports names the other two accept.
+    std::string checkCompanion;
+    for (const auto &candidate : specBaseCandidates(filepath)) {
+      if (!fileExists(candidate))
+        continue;
+      checkCompanion = candidate;
+
+      auto baseSource = readFile(candidate);
+      kex::Lexer baseLexer(std::move(baseSource), candidate);
+      auto baseTokens = baseLexer.tokenizeAll();
+      kex::Parser baseParser(std::move(baseTokens), candidate);
+      auto baseProgram = baseParser.parseProgram();
+
+      std::vector<kex::ast::TopLevelItem> merged;
+      merged.reserve(baseProgram.items.size() + program.items.size());
+      for (auto &item : baseProgram.items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.push_back(std::move(item));
+      for (auto &item : program.items)
+        merged.push_back(std::move(item));
+      program.items = std::move(merged);
+      break;
+    }
+
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
     db.setModuleRoots(moduleRootsFor(filepath));
     loadPrelude(db);
-    db.updateFile(filepath, readFile(filepath));
+    std::vector<std::string> checkCompanions;
+    if (!checkCompanion.empty()) checkCompanions.push_back(checkCompanion);
+    db.updateFile(filepath, readFile(filepath), checkCompanions);
 
     // Pass 3+: existing Analyzer (purity, type checking)
     kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());

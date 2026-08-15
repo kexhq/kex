@@ -249,6 +249,7 @@ private:
     auto runtimeTypeMatches(const ValuePtr& value,
                             const ast::TypeExpr& type) const -> bool;
     auto runtimeTypeKey(const ast::TypeExpr& type) const -> std::string;
+    auto resolveRecordTypeName(const std::string& name) const -> std::string;
 
     std::unordered_map<std::string, std::vector<std::string>> m_traitMethods;
     std::unordered_map<std::string, ValuePtr> m_functionValues;
@@ -383,6 +384,12 @@ private:
     // evaluation; drained by src/compiled/expand.cxx.
     std::vector<GeneratedDeclaration> m_generatedDeclarations;
 
+    // `type CommandHandler = ParsedOptions -> Integer` and friends. A named
+    // type the runtime cannot recognize would otherwise narrow method
+    // dispatch to nothing: an annotated parameter simply never matched, and
+    // the call fell through to None instead of reporting anything.
+    std::unordered_map<std::string, const ast::TypeExpr*> m_typeAliases;
+
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
 
@@ -392,6 +399,18 @@ private:
 
     bool m_mockHttp = false;
     std::deque<ValuePtr> m_mockHttpResponses;
+
+    // Mock.ENV — an overlay on the real environment, so a test can say what
+    // `ENV` holds without the process actually having it. `unset` is separate
+    // from `set` because "absent" is an answer a program can depend on.
+    std::unordered_map<std::string, std::string> m_mockEnv;
+    std::unordered_set<std::string> m_mockEnvUnset;
+    auto rebuildEnvMap() -> void;
+
+    // Mock.System — what the machine claims to be. Unset means "ask the real
+    // one", which is why these are optionals rather than defaulted values.
+    std::optional<std::string> m_mockOS;
+    std::optional<int64_t> m_mockBitWidth;
 
     // describe/it/assert (registerTestBuiltins) — nesting depth for
     // indentation, and pass/fail counters for the summary line printed

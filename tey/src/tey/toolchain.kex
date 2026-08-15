@@ -1,49 +1,240 @@
 foul module Tey.Toolchain
-using Tey.Cache, only: [root]
-  let home -> String do
-    let userHome = ENV.get("HOME", ".")
-    ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
-  end
 
-  let installedKex -> String? do
-    match ENV.get("TEY_KEX") do
-      Just(path) -> Just(path)
-      None -> do
-        match FS.File.read("${Tey.Toolchain.home}/current") do
-          Just(version) -> Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
-          None -> None
-        end
+using Tey.Cache, only: [root]
+using Tey.Git, only: [execute]
+
+let home -> String do
+  let userHome = ENV.get("HOME", ".")
+  ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
+end
+
+# Where `tey kex list` looks for releases. Overridable so a fork or a mirror
+# can be used without patching Tey.
+let repository -> String do
+  return ENV.get("TEY_KEX_REPO", "https://github.com/kexhq/kex.git")
+end
+
+# The directory holding the `kex` shim. It is what a user puts on PATH once;
+# selecting a version repoints the shim rather than asking them to edit PATH
+# again.
+let binDirectory -> String do
+  return "${Tey.Toolchain.home}/bin"
+end
+
+let shimPath -> String do
+  return "${Tey.Toolchain.binDirectory}/kex"
+end
+
+# The version `tey kex use` last selected, if any.
+let selected -> String? do
+  match FS.File.read("${Tey.Toolchain.home}/current") do
+    None -> return None
+    Just(text) -> do
+      let name = text.trim
+      return name.empty? then None else Just(name)
+    end
+  end
+end
+
+# Versions installed under this Tey home, newest first. Staging leftovers are
+# not installations.
+let installedVersions -> [String] do
+  let entries = FS.Directory.directories("${Tey.Toolchain.home}/toolchains").or([])
+  let names = entries.filter { |name| !name.endsWith?(".partial") && !name.endsWith?(".previous") }
+  return Tey.Toolchain.newestFirst(names)
+end
+
+let installed?(version: String) -> Bool do
+  return FS.File.file?("${Tey.Toolchain.home}/toolchains/${version}/bin/kex")
+end
+
+# Released versions, newest first, read from the repository's tags. Tags that
+# are not versions are skipped rather than reported as junk.
+let availableVersions -> Result<[String], String> do
+  match Tey.Git.tags(Tey.Toolchain.repository) do
+    Error(error) -> return Error(error)
+    Ok(names) -> do
+      let versions = names.collect do |tag|
+        Tey.Toolchain.versionOf(tag)
+      end
+      return Ok(Tey.Toolchain.newestFirst(versions))
+    end
+  end
+end
+
+let newestFirst(versions: [String]) -> [String] do
+  return Tey.Semver.newestFirst(versions)
+end
+
+let installedKex -> String? do
+  match ENV.get("TEY_KEX") do
+    Just(path) -> Just(path)
+    None -> do
+      match FS.File.read("${Tey.Toolchain.home}/current") do
+        Just(version) -> Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
+        None -> None
+      end
+    end
+  end
+end
+
+let kex -> String = Tey.Toolchain.installedKex.or("kex")
+
+# Whether the selected toolchain is actually there. A `current` naming a
+# version somebody deleted leaves every command failing on a path that does
+# not exist, which reads like a broken Tey rather than a missing Kex.
+let selectionHealthy? -> Bool do
+  match Tey.Toolchain.selected do
+    None -> return true
+    Just(version) -> return Tey.Toolchain.installed?(version)
+  end
+end
+
+# Installs a released version by name: the repository's tag is fetched into
+# the cache and built from there. This is the ordinary way to get a Kex —
+# `installSource` is for a checkout you already have.
+let installRelease(version: String) -> Result<String, String> do
+  let source = Tey.Toolchain.fetchRelease(version).try
+  return Tey.Toolchain.installSource(source, version)
+end
+
+# Installs compiler, runtime BEAM modules and stdlib sources together. The
+# source tree's CMake install layout is the toolchain ABI Tey manages.
+let installSource(source: String, version: String) -> Result<String, String> do
+  let home = Tey.Toolchain.home
+  let prefix = "${home}/toolchains/${version}"
+  let build = "${Tey.Cache.root}/build/kex-${version}"
+  return Error("could not create Tey home") if !FS.Directory.create(home)
+  return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
+  return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
+  return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
+  # CMake installs into a staging prefix, and only a COMPLETE installation is
+  # renamed to the real one. Installing straight into `prefix` would publish
+  # the compiler binary before the runtime and stdlib beside it, and a build
+  # that failed in between left a toolchain that `use` would happily select.
+  # Nothing bakes the prefix into the artifacts — the binary finds its stdlib
+  # relative to itself — so moving a finished tree is safe.
+  let staging = "${prefix}.partial"
+  FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+  let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${staging}"]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> result
+  end
+  if configured.exitCode != 0
+    FS.Directory.deleteAll(staging)
+    return Error(configured.stderr + configured.stdout)
+  end
+  let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> result
+  end
+  if installed.exitCode != 0
+    FS.Directory.deleteAll(staging)
+    return Error(installed.stderr + installed.stdout)
+  end
+  # `.try` propagates a failed publish as this function's Error.
+  let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
+  return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+  Tey.Toolchain.link(version)
+  Ok(installedPrefix)
+end
+
+# Removes an installed toolchain. Refuses to leave the shim pointing at
+# nothing: removing the SELECTED version also clears the selection, and the
+# caller is told to pick another.
+let uninstall(version: String) -> Result<String, String> do
+  let prefix = "${Tey.Toolchain.home}/toolchains/${version}"
+  return Error("Kex ${version} is not installed") if !FS.Directory.directory?(prefix)
+  return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix)
+  if Tey.Toolchain.selected == Just(version)
+    FS.File.delete("${Tey.Toolchain.home}/current")
+    FS.File.delete(Tey.Toolchain.shimPath)
+  end
+  return Ok(prefix)
+end
+
+let use(version: String) -> Bool do
+  let home = Tey.Toolchain.home
+  return false if !FS.File.file?("${home}/toolchains/${version}/bin/kex")
+  return false if !FS.File.write("${home}/current", "${version}\n")
+  # Best effort: the selection is recorded either way, and `tey` itself reads
+  # the record rather than the shim. Only a user's bare `kex` needs the link.
+  Tey.Toolchain.link(version)
+  return true
+end
+
+private do
+  # Clones the repository at `version`'s tag into the build cache and returns
+  # the checkout. Tags are tried as written and with a leading `v`, since
+  # both spellings are common.
+  let fetchRelease(version: String) -> Result<String, String> do
+    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
+    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/src")
+    let checkout = "${Tey.Cache.root}/src/kex-${version}"
+    return Ok(checkout) if FS.Directory.directory?(checkout)
+    let staging = "${checkout}.partial"
+    FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+    let tag = Tey.Toolchain.releaseTag(version).try
+    match Tey.Git.execute(["clone", "--depth", "1", "--branch", tag,
+                           Tey.Toolchain.repository, staging]) do
+      Error(error) -> do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(_) -> do
+        return Ok(checkout) if FS.File.rename(staging, checkout)
+        FS.Directory.deleteAll(staging)
+        return Error("could not move the Kex ${version} checkout into place")
       end
     end
   end
 
-  let kex -> String = Tey.Toolchain.installedKex.or("kex")
-
-  # Installs compiler, runtime BEAM modules and stdlib sources together. The
-  # source tree's CMake install layout is the toolchain ABI Tey manages.
-  let installSource(source: String, version: String) -> Result<String, String> do
-    let home = Tey.Toolchain.home
-    let prefix = "${home}/toolchains/${version}"
-    let build = "${Tey.Cache.root}/build/kex-${version}"
-    return Error("could not create Tey home") if !FS.Directory.create(home)
-    return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
-    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
-    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
-    let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${prefix}"]) do
-      Error(error) -> return Error(error)
-      Ok(result) -> result
-    end
-    return Error(configured.stderr + configured.stdout) if configured.exitCode != 0
-    let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
-      Error(error) -> return Error(error)
-      Ok(result) -> result
-    end
-    return Error(installed.stderr + installed.stdout) if installed.exitCode != 0
-    return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
-    Ok(prefix)
+  # The tag naming this version in the repository — `0.3.0` or `v0.3.0`.
+  let releaseTag(version: String) -> Result<String, String> do
+    let tags = Tey.Git.tags(Tey.Toolchain.repository).try
+    return Ok(version) if tags.contains?(version)
+    return Ok("v${version}") if tags.contains?("v${version}")
+    return Error("Kex ${version} is not a released version")
   end
 
-  let use(version: String) -> Bool do
-    let home = Tey.Toolchain.home
-    FS.File.file?("${home}/toolchains/${version}/bin/kex") && FS.File.write("${home}/current", "${version}\n")
+  # Points the shim at a version's binary, creating the bin directory the
+  # first time. A symlink rather than a copy: `kex` finds its stdlib and
+  # runtime relative to the REAL path, which the link preserves.
+  let link(version: String) -> Bool do
+    return false if !FS.Directory.create(Tey.Toolchain.binDirectory)
+    let target = "${Tey.Toolchain.home}/toolchains/${version}/bin/kex"
+    return false if !FS.File.file?(target)
+    match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do
+      Error(_) -> return false
+      Ok(result) -> return result.exitCode == 0
+    end
   end
+
+  # `v0.3.0` → Just("0.3.0"). A tag that is not a version is None, which
+  # `collect` drops: a toolchain is named by its version, not by a label.
+  let versionOf(tag: String) -> String? do
+    let version = tag.startsWith?("v") then tag.drop(1) else tag
+    return None if Tey.Semver.parseVersion(version) == None
+    return Just(version)
+  end
+
+  # Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
+  # tree until the new one is in place and puts it back if the move fails, so
+  # a failed upgrade leaves the previous toolchain working rather than none.
+  let publish(staging: String, prefix: String) -> Result<String, String> do
+    let previous = "${prefix}.previous"
+    FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
+    let replacing = FS.Directory.directory?(prefix)
+    if replacing && !FS.File.rename(prefix, previous)
+      FS.Directory.deleteAll(staging)
+      return Error("could not move the installed toolchain at ${prefix} aside")
+    end
+    if !FS.File.rename(staging, prefix)
+      FS.File.rename(previous, prefix) if replacing
+      FS.Directory.deleteAll(staging)
+      return Error("could not move the new toolchain into ${prefix}")
+    end
+    FS.Directory.deleteAll(previous)
+    return Ok(prefix)
+  end
+end

@@ -1,48 +1,89 @@
 foul module Tey.Cache
+
 using Tey.Git, only: [execute]
-using Tey.Lockfile, only: [LockedDependency]
-  let root -> String do
-    match ENV.get("TEY_CACHE") do
-      Just(path) -> path
-      None -> match ENV.get("HOME") do
-        Just(home) -> "${home}/.cache/tey"
-        None -> ".tey-cache"
+
+let root -> String do
+  match ENV.get("TEY_CACHE") do
+    Just(path) -> path
+    None -> match ENV.get("HOME") do
+      Just(home) -> "${home}/.cache/tey"
+      None -> ".tey-cache"
+    end
+  end
+end
+
+# Include the source URL in the cache identity: two packages with the same
+# display name must never share a checkout.
+let packagePath(dep: Tey.Lockfile.Dependency) -> String do
+  return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
+end
+
+let fetch(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
+  let path = Tey.Cache.packagePath(dep)
+
+  return Ok(path) if FS.Directory.directory?(path)
+
+  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create(Tey.Cache.root)
+  return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create("${Tey.Cache.root}/src")
+
+  if !FS.Directory.create(sourceRoot(dep))
+    return Error("cannot create Tey cache at ${Tey.Cache.root}")
+  end
+
+  # Clone into a staging directory and move it into place only once the
+  # checkout is complete: the presence of `path` is what every other command
+  # reads as "this dependency is cached", so a half-finished clone must never
+  # be reachable under that name. The staging directory is a sibling, which
+  # keeps the move within one filesystem and therefore atomic.
+  let staging = stagingPath(dep)
+  FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+
+  match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", Tey.Lockfile.dependencyGit(dep), staging]) do
+    Error(error) -> do
+      FS.Directory.deleteAll(staging)
+      return Error(error)
+    end
+    Ok(_) -> match Tey.Git.execute(["-C", staging, "checkout", "--detach", Tey.Lockfile.dependencyCommit(dep)]) do
+      Error(error) -> do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(_) -> do
+        return Ok(path) if FS.File.rename(staging, path)
+        # Another run may have finished the same checkout first. Its result
+        # is this one's result — the path is content-addressed by commit.
+        FS.Directory.deleteAll(staging)
+        return Ok(path) if FS.Directory.directory?(path)
+        return Error("could not move the ${Tey.Lockfile.dependencyName(dep)} checkout into ${path}")
       end
     end
   end
+end
 
-  # Include the source URL in the cache identity: two packages with the same
-  # display name must never share a checkout.
-  let packagePath(dep: LockedDependency) -> String do
-    "${Tey.Cache.root}/src/${Digest.sha256(dep.git)}/${dep.commit}"
+let verify(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
+  let path = Tey.Cache.packagePath(dep)
+
+  if !FS.Directory.directory?(path)
+    return Error("${Tey.Lockfile.dependencyName(dep)} is not present in the Tey cache")
   end
 
-  let fetch(dep: LockedDependency) -> Result<String, String> do
-    let path = Tey.Cache.packagePath(dep)
-    return Ok(path) if FS.Directory.directory?(path)
-    return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create(Tey.Cache.root)
-    return Error("cannot create Tey cache at ${Tey.Cache.root}") if !FS.Directory.create("${Tey.Cache.root}/src")
-    let sourceRoot = "${Tey.Cache.root}/src/${Digest.sha256(dep.git)}"
-    if !FS.Directory.create(sourceRoot)
-      return Error("cannot create Tey cache at ${Tey.Cache.root}")
+  match Tey.Git.execute(["-C", path, "archive", "--format=tar", Tey.Lockfile.dependencyCommit(dep)]) do
+    Error(error) -> Error(error)
+    Ok(archive) -> do
+      let actual = Digest.sha256(archive.stdout)
+      return actual == Tey.Lockfile.dependencySha256(dep) then Ok(path) else Error("content hash mismatch for ${Tey.Lockfile.dependencyName(dep)}: expected ${Tey.Lockfile.dependencySha256(dep)}, got ${actual}")
     end
-    match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", dep.git, path]) do
-      Error(error) -> Error(error)
-      Ok(_) -> match Tey.Git.execute(["-C", path, "checkout", "--detach", dep.commit]) do
-        Error(error) -> Error(error)
-        Ok(_) -> Ok(path)
-      end
-    end
+  end
+end
+
+private do
+  let sourceRoot(dep: Tey.Lockfile.Dependency) -> String do
+    return "${Tey.Cache.root}/src/${Digest.sha256(Tey.Lockfile.dependencyGit(dep))}"
   end
 
-  let verify(dep: LockedDependency) -> Result<String, String> do
-    let path = Tey.Cache.packagePath(dep)
-    return Error("${dep.name} is not present in the Tey cache") if !FS.Directory.directory?(path)
-    match Tey.Git.execute(["-C", path, "archive", "--format=tar", dep.commit]) do
-      Error(error) -> Error(error)
-      Ok(archive) -> do
-        let actual = Digest.sha256(archive.stdout)
-        actual == dep.sha256 then Ok(path) else Error("content hash mismatch for ${dep.name}: expected ${dep.sha256}, got ${actual}")
-      end
-    end
+  # Sibling of the final path so the move that publishes it stays on one
+  # filesystem, and named so a leftover from a killed run is recognizable.
+  let stagingPath(dep: Tey.Lockfile.Dependency) -> String do
+    return "${Tey.Cache.packagePath(dep)}.partial"
   end
+end

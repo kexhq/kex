@@ -601,8 +601,14 @@ plain_float(Digits, Power) ->
 %% Built fresh on every reference (matches how ENV is compiled — see
 %% core_erlang.cxx's UpperIdentifier handling) rather than once at startup;
 %% cheap enough, and avoids needing a global to seed.
+%% The environment as Kex sees it: the real one, with Mock.ENV's overlay
+%% applied. Read per call rather than snapshotted so a mock set mid-run takes
+%% effect, which is what a test expects.
 env_map() ->
-    maps:from_list([split_env_entry(E) || E <- os:getenv()]).
+    Base = maps:from_list([split_env_entry(E) || E <- os:getenv()]),
+    Overlay = case erlang:get(kex_mock_env) of undefined -> #{}; M -> M end,
+    Unset = case erlang:get(kex_mock_env_unset) of undefined -> []; L -> L end,
+    maps:without(Unset, maps:merge(Base, Overlay)).
 
 split_env_entry(E) ->
     case string:split(E, "=") of

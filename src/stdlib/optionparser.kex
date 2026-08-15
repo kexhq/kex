@@ -10,10 +10,25 @@ record OptionSpec do
   required? : Bool = false
 end
 
+# What a command does once the line has been parsed. It receives the parsed
+# options with the command's own words already removed, so `tey add greet`
+# hands its handler `["greet"]`, and returns the process exit code.
+type CommandHandler = ParsedOptions -> Integer
+
+record CommandSpec do
+  # A name may be several words — `kex install` — and the longest match wins,
+  # so a group and its subcommands can both be declared.
+  name : String
+  description : String = ""
+  usage : String = ""
+  handler : CommandHandler
+end
+
 record OptionConfig do
   name : String = "app"
   description : String = ""
   options : [OptionSpec] = []
+  commands : [CommandSpec] = []
 end
 
 record ParsedOptions do
@@ -49,7 +64,7 @@ make OptionConfig do
                               description: description, default: default,
                               required?: required? }
     OptionConfig { name: @name, description: @description,
-                   options: [...@options, option] }
+                   options: [...@options, option], commands: @commands }
   end
 
   let integer(long: String, short: Char?, description: String,
@@ -58,18 +73,69 @@ make OptionConfig do
                               description: description, default: default,
                               required?: required? }
     OptionConfig { name: @name, description: @description,
-                   options: [...@options, option] }
+                   options: [...@options, option], commands: @commands }
   end
 
   let flag(long: String, short: Char?, description: String) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: FlagValue,
                               description: description, default: Just("false") }
     OptionConfig { name: @name, description: @description,
-                   options: [...@options, option] }
+                   options: [...@options, option], commands: @commands }
+  end
+
+  # Declares a command. `usage` is what the help line shows after the name
+  # (`<name>`, `[args...]`); leave it empty for a command that takes none.
+  let command(name: String, description: String, handler: CommandHandler) -> OptionConfig do
+    let spec = CommandSpec { name: name, description: description,
+                             usage: "", handler: handler }
+    OptionConfig { name: @name, description: @description,
+                   options: @options, commands: [...@commands, spec] }
+  end
+
+  let command(name: String, usage: String, description: String, handler: CommandHandler) -> OptionConfig do
+    let spec = CommandSpec { name: name, description: description,
+                             usage: usage, handler: handler }
+    OptionConfig { name: @name, description: @description,
+                   options: @options, commands: [...@commands, spec] }
   end
 
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
     OptionParser.parse(@options, args)
+  end
+
+  # Parses `args` and runs the command they name, returning its exit code.
+  # A parse failure, an unknown command, or a line with no command at all
+  # reports the problem with the help text and returns 1 — the one place that
+  # policy has to live for every tool to behave the same way.
+  let run(args: [String]) -> Integer do
+    let options = match this.parse(args) do
+      Error(error) -> do
+        IO.printError("${@name}: ${OptionParser.errorMessage(error)}\n\n${this.help}\n")
+        return 1
+      end
+      Ok(value) -> value
+    end
+    return this.printHelp if options.flagEnabled?("help")
+    match OptionParser.commandFor(@commands, options.arguments) do
+      None -> do
+        return this.printHelp if options.arguments.empty?
+        IO.printError("${@name}: unknown or incomplete command '${options.arguments.first.or("")}'\n\n${this.help}\n")
+        return 1
+      end
+      Just(found) -> do
+        let (spec, rest) = found
+        # Bound first, then called: applying a function-valued field directly
+        # (`spec.handler(...)`) reads as a method call on the record and fails
+        # on both backends. Binding it is the working spelling.
+        let handler = spec.handler
+        return handler(ParsedOptions { values: options.values, arguments: rest })
+      end
+    end
+  end
+
+  let printHelp -> Integer do
+    IO.printLine(this.help)
+    return 0
   end
 
   let help -> String do
@@ -86,13 +152,46 @@ make OptionConfig do
       end
       "  ${short}--${option.long}  ${option.description}${required}${default}"
     end
-    "${title}\n\nOptions:\n${lines.join("\n")}"
+    let optionsText = "${title}\n\nOptions:\n${lines.join("\n")}"
+    return optionsText if @commands.empty?
+    let width = @commands.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
+    let commandLines = @commands.map do |command|
+      let label = OptionParser.commandLabel(command)
+      "  ${label}${" ".repeat(width - label.count)}  ${command.description}"
+    end
+    "${optionsText}\n\nCommands:\n${commandLines.join("\n")}"
   end
 end
 
 module OptionParser do
   let define(name: String, description: String) -> OptionConfig do
     OptionConfig { name: name, description: description }
+  end
+
+  let commandLabel(command: CommandSpec) -> String do
+    return command.name if command.usage == ""
+    return "${command.name} ${command.usage}"
+  end
+
+  # The declared command whose words open `arguments`, with what is left
+  # after them. Longest match first, so `kex install` is preferred over a
+  # `kex` that also exists.
+  let commandFor(commands: [CommandSpec], arguments: [String])
+      -> (CommandSpec, [String])? do
+    let ordered = commands.sort { |a, b| a.name.split(" ").count > b.name.split(" ").count }
+    match ordered.find { |command| OptionParser.opensWith?(arguments, command.name) } do
+      None -> return None
+      Just(command) -> do
+        let words = command.name.split(" ").count
+        return Just((command, arguments.drop(words)))
+      end
+    end
+  end
+
+  let opensWith?(arguments: [String], name: String) -> Bool do
+    let words = name.split(" ")
+    return false if arguments.count < words.count
+    return arguments.take(words.count) == words
   end
 
   let errorMessage(error: OptionParseError) -> String = match error do

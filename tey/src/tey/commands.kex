@@ -1,221 +1,288 @@
 foul module Tey.Commands
-using Tey.Cache, only: [fetch, root, verify]
+
+using Tey.Cache, only: [fetch, packagePath, root, verify]
 using Tey.Lockfile, only: [LockState, decode, encode]
 using Tey.Manifest, only: [ManifestPackage, read]
 using Tey.Resolver, only: [resolvePackage]
 using Tey.Toolchain, only: [kex]
-  let manifest -> Result<ManifestPackage, String> do
-    match FS.File.read("package.kex") do
-      Just(text) -> Tey.Manifest.read(text)
-      None -> Error("package.kex not found")
-    end
-  end
 
-  let lock -> Integer do
-    let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-    let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-    if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
-      IO.printLine("Locked ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
-      0
-    else
-      Tey.Commands.fail("could not write tey.lock")
-    end
+let manifest -> Result<ManifestPackage, String> do
+  match FS.File.read("package.kex") do
+    Just(text) -> Tey.Manifest.read(text)
+    None -> Error("package.kex not found")
   end
+end
 
-  let add(name: String, options: ParsedOptions) -> Integer do
-    let git = options.value("git", "")
-    return Tey.Commands.fail("tey add requires --git URL") if git == ""
-    let selected = ["tag", "branch", "ref"].filter { |key| options.value(key).present? }
-    return Tey.Commands.fail("choose only one of --tag, --branch, or --ref") if selected.count > 1
-    let selector = selected.first.or("ref")
-    let requested = options.value(selector, "HEAD")
-    let text = match FS.File.read("package.kex") do
-      Just(value) -> value.trim
-      None -> return Tey.Commands.fail("package.kex not found")
-    end
-    return Tey.Commands.fail("package.kex must end with 'end'") if !text.endsWith?("end")
-    let body = text.chars.take(text.count - 3).join("")
-    let updated = `__BODY__  tey("__NAME__", git: "__GIT__", __SELECTOR__: "__REQUESTED__")
+let lock -> Integer do
+  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
+    IO.printLine("Locked ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
+    0
+  else
+    Tey.Commands.fail("could not write tey.lock")
+  end
+end
+
+let add(name: String, options: ParsedOptions) -> Integer do
+  let git = options.value("git", "")
+  return Tey.Commands.fail("tey add requires --git URL") if git == ""
+  let selected = ["tag", "branch", "ref"].filter { |key| options.value(key).present? }
+  return Tey.Commands.fail("choose only one of --tag, --branch, or --ref") if selected.count > 1
+  let selector = selected.first.or("ref")
+  let requested = options.value(selector, "HEAD")
+  let text = match FS.File.read("package.kex") do
+    Just(value) -> value.trim
+    None -> return Tey.Commands.fail("package.kex not found")
+  end
+  return Tey.Commands.fail("package.kex must end with 'end'") if !text.endsWith?("end")
+  let body = text.chars.take(text.count - 3).join("")
+  let updated = `__BODY__  tey("__NAME__", git: "__GIT__", __SELECTOR__: "__REQUESTED__")
 end
 `.replace("__BODY__", body)
-  .replace("__NAME__", name)
-  .replace("__GIT__", git)
-  .replace("__SELECTOR__", selector)
-  .replace("__REQUESTED__", requested)
-    return Tey.Commands.fail("could not update package.kex") if !FS.File.write("package.kex", updated)
-    Tey.Commands.lock
-  end
+.replace("__NAME__", name)
+.replace("__GIT__", git)
+.replace("__SELECTOR__", selector)
+.replace("__REQUESTED__", requested)
+  return Tey.Commands.fail("could not update package.kex") if !FS.File.write("package.kex", updated)
+  Tey.Commands.lock
+end
 
-  let install -> Integer do
-    let state = match FS.File.read("tey.lock") do
-      None -> do
-        let status = Tey.Commands.lock
-        return status if status != 0
-        match FS.File.read("tey.lock") do
-          Just(text) -> match Tey.Lockfile.decode(text) do
-            Ok(value) -> value
-            Error(error) -> return Tey.Commands.fail(error)
-          end
-          None -> return Tey.Commands.fail("could not read generated tey.lock")
+# `--without dev` leaves a group's dependencies out of this install. The
+# LOCKFILE still lists them — what is omitted is the fetching, so switching
+# the flag off later needs no re-resolve.
+let install(without: String) -> Integer do
+  let state = match FS.File.read("tey.lock") do
+    None -> do
+      let status = Tey.Commands.lock
+      return status if status != 0
+      match FS.File.read("tey.lock") do
+        Just(text) -> match Tey.Lockfile.decode(text) do
+          Ok(value) -> value
+          Error(error) -> return Tey.Commands.fail(error)
         end
-      end
-      Just(text) -> match Tey.Lockfile.decode(text) do
-        Ok(value) -> value
-        Error(error) -> return Tey.Commands.fail(error)
+        None -> return Tey.Commands.fail("could not read generated tey.lock")
       end
     end
-    state.lockedDependencies.each do |dependency|
-      let path = match Tey.Cache.fetch(dependency) do
-        Error(error) -> return Tey.Commands.fail(error)
-        Ok(value) -> value
-      end
-      match Tey.Cache.verify(dependency) do
-        Error(error) -> return Tey.Commands.fail(error)
-        Ok(_) -> IO.printLine("Installed ${dependency.name} at ${path}")
-      end
-    end
-    IO.printLine("Installed ${state.lockedDependencies.count} package(s)")
-    0
-  end
-
-  let runPackage(extra: [String]) -> Integer do
-    let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-    match Process.run(Tey.Toolchain.kex, [package.entrypoint, ...extra]) do
-      Error(error) -> Tey.Commands.fail(error)
-      Ok(result) -> do
-        if result.stdout != ""
-          IO.print(result.stdout)
-        end
-        if result.stderr != ""
-          IO.printError(result.stderr)
-        end
-        result.exitCode
-      end
+    Just(text) -> match Tey.Lockfile.decode(text) do
+      Ok(value) -> value
+      Error(error) -> return Tey.Commands.fail(error)
     end
   end
-
-  let list -> Integer do
-    let state = match Tey.Commands.readLock do
+  let wanted = state.lockedDependencies.filter do |dependency|
+    without == "" || !Tey.Lockfile.dependencyGroups(dependency).contains?(without)
+  end
+  wanted.each do |dependency|
+    let path = match Tey.Cache.fetch(dependency) do
       Error(error) -> return Tey.Commands.fail(error)
       Ok(value) -> value
     end
-    state.lockedDependencies.each do |dependency|
-      IO.printLine("${dependency.name} ${dependency.resolved} (${dependency.commit})")
-    end
-    0
-  end
-
-  let build -> Integer do
-    let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-    match Process.run(Tey.Toolchain.kex, ["--compile", package.entrypoint]) do
-      Error(error) -> Tey.Commands.fail(error)
-      Ok(result) -> do
-        if result.stdout != ""
-          IO.print(result.stdout)
-        end
-        if result.stderr != ""
-          IO.printError(result.stderr)
-        end
-        result.exitCode
-      end
+    match Tey.Cache.verify(dependency) do
+      Error(error) -> return Tey.Commands.fail(error)
+      Ok(_) -> IO.printLine("Installed ${Tey.Lockfile.dependencyName(dependency)} at ${path}")
     end
   end
+  let omitted = state.lockedDependencies.count - wanted.count
+  IO.printLine("Installed ${wanted.count} package(s)") if omitted == 0
+  IO.printLine("Installed ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
+  0
+end
 
-  let test -> Integer do
-    let specs = FS.Directory.files("spec").or([])
-      .filter { |path| path.endsWith?(".spec.kex") }
-      .sort
-    if specs.empty?
-      IO.printLine("No specs found")
-      return 0
-    end
-    var status = 0
-    specs.each do |spec|
-      let result = match Process.run(Tey.Toolchain.kex, ["spec/${spec}"]) do
-        Error(error) -> return Tey.Commands.fail(error)
-        Ok(value) -> value
+# `--source-root` for every fetched dependency. Without these a dependency is
+# just bytes in the cache: `using Greet` cannot find it, and the package that
+# declared it does not compile. A dependency the lockfile names but the cache
+# does not have is reported rather than quietly dropped — the answer is
+# `tey install`, and silence would look like a broken `using`.
+let dependencyRoots -> [String] do
+  let state = match Tey.Commands.readLock do
+    Error(_) -> do
+      # No lockfile at all. Only worth saying when the package actually
+      # declares dependencies — a package with none needs nothing.
+      match Tey.Commands.manifest do
+        Ok(package) -> IO.printError("tey: no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+        Error(_) -> ()
       end
+      return []
+    end
+    Ok(value) -> value
+  end
+  var roots: [String] = []
+  var missing: [String] = []
+  state.lockedDependencies.each do |dependency|
+    let source = "${Tey.Cache.packagePath(dependency)}/src"
+    if FS.Directory.directory?(source)
+      roots.push!("--source-root")
+      roots.push!(source)
+    else
+      missing.push!(Tey.Lockfile.dependencyName(dependency))
+    end
+    ()
+  end
+  if !missing.empty?
+    IO.printError("tey: ${missing.join(", ")} not in the cache; run `tey install`\n")
+  end
+  return roots
+end
+
+let runPackage(extra: [String]) -> Integer do
+  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  match Process.run(Tey.Toolchain.kex, [...Tey.Commands.dependencyRoots, package.entrypoint, ...extra]) do
+    Error(error) -> Tey.Commands.fail(error)
+    Ok(result) -> do
       if result.stdout != ""
         IO.print(result.stdout)
       end
       if result.stderr != ""
         IO.printError(result.stderr)
       end
-      status = result.exitCode if result.exitCode != 0
-    end
-    status
-  end
-
-  let clean(all?: Bool) -> Integer do
-    if !all?
-      IO.printLine("Cache is at ${Tey.Cache.root}; pass --cache to remove it")
-      return 0
-    end
-    if FS.Directory.deleteAll(Tey.Cache.root)
-      IO.printLine("Removed ${Tey.Cache.root}")
-      0
-    else
-      Tey.Commands.fail("could not remove ${Tey.Cache.root}")
+      result.exitCode
     end
   end
+end
 
-  let setupMergeDriver(remove?: Bool) -> Integer do
-    let key = "merge.tey.driver"
-    let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey lock --merge-driver %O %A %B"]
-    match Tey.Commands.runStatus("git", arguments) do
-      0 -> do
-        IO.printLine(remove? then "Removed Tey merge driver" else "Configured Tey merge driver")
-        0
+let list -> Integer do
+  let state = match Tey.Commands.readLock do
+    Error(error) -> return Tey.Commands.fail(error)
+    Ok(value) -> value
+  end
+  state.lockedDependencies.each do |dependency|
+    IO.printLine(Tey.Lockfile.dependencyListLine(dependency))
+  end
+  0
+end
+
+let build -> Integer do
+  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  # Compiling the entry module also emits a companion for every module it
+  # reaches — the prelude and runtime included — so a build left ~80 `.beam`
+  # files sitting next to package.kex. They go under `ebin/` instead, which
+  # is both the BEAM convention and where a package's launcher expects its
+  # code path to point.
+  if !FS.Directory.create(Tey.Commands.outputDirectory)
+    return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
+  end
+  match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+                                        ...Tey.Commands.dependencyRoots, package.entrypoint]) do
+    Error(error) -> Tey.Commands.fail(error)
+    Ok(result) -> do
+      if result.stdout != ""
+        IO.print(result.stdout)
       end
-      _ -> Tey.Commands.fail("could not update global Git configuration")
+      if result.stderr != ""
+        IO.printError(result.stderr)
+      end
+      result.exitCode
     end
   end
+end
 
-  let init(name: String, library: Bool) -> Integer do
-    if !FS.Directory.create(name) || !FS.Directory.create("${name}/src") || !FS.Directory.create("${name}/spec")
-      return Tey.Commands.fail("could not create project '${name}'")
+let test -> Integer do
+  let specs = FS.Directory.files("spec").or([])
+    .filter { |path| path.endsWith?(".spec.kex") }
+    .sort
+  if specs.empty?
+    IO.printLine("No specs found")
+    return 0
+  end
+  var status = 0
+  let roots = Tey.Commands.dependencyRoots
+  specs.each do |spec|
+    let result = match Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]) do
+      Error(error) -> return Tey.Commands.fail(error)
+      Ok(value) -> value
     end
-    let entry = library then "" else `  entrypoint("src/main.kex")
+    if result.stdout != ""
+      IO.print(result.stdout)
+    end
+    if result.stderr != ""
+      IO.printError(result.stderr)
+    end
+    status = result.exitCode if result.exitCode != 0
+  end
+  status
+end
+
+let clean(all?: Bool) -> Integer do
+  if !all?
+    IO.printLine("Cache is at ${Tey.Cache.root}; pass --cache to remove it")
+    return 0
+  end
+  if FS.Directory.deleteAll(Tey.Cache.root)
+    IO.printLine("Removed ${Tey.Cache.root}")
+    0
+  else
+    Tey.Commands.fail("could not remove ${Tey.Cache.root}")
+  end
+end
+
+let setupMergeDriver(remove?: Bool) -> Integer do
+  let key = "merge.tey.driver"
+  let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey lock --merge-driver %O %A %B"]
+  match Tey.Commands.runStatus("git", arguments) do
+    0 -> do
+      IO.printLine(remove? then "Removed Tey merge driver" else "Configured Tey merge driver")
+      0
+    end
+    _ -> Tey.Commands.fail("could not update global Git configuration")
+  end
+end
+
+let init(name: String, library: Bool) -> Integer do
+  if !FS.Directory.create(name) || !FS.Directory.create("${name}/src") || !FS.Directory.create("${name}/spec")
+    return Tey.Commands.fail("could not create project '${name}'")
+  end
+  # Backtick strings are raw: every line below lands verbatim in the
+  # generated file, so the indentation here is the GENERATED file's, not
+  # this function's.
+  let entry = library then "" else `  entrypoint("src/main.kex")
 
   target("__NAME__", entrypoint: "src/main.kex")
 `.replace("__NAME__", name)
-    let source = library then `module __MODULE__ do
+  let source = library then `module __MODULE__ do
 end
 `.replace("__MODULE__", name.capitalize) else `main(args) do
   IO.printLine("Hello from __NAME__!")
 end
 `.replace("__NAME__", name)
-    let manifestText = `bundle "__NAME__" do
+  let manifestText = `bundle "__NAME__" do
   version("0.1.0")
   kex(">= 0.3.0")
 __ENTRY__end
 `.replace("__NAME__", name).replace("__ENTRY__", entry)
-    let sourcePath = library then "${name}/src/${name}.kex" else "${name}/src/main.kex"
-    if !FS.File.write("${name}/package.kex", manifestText) || !FS.File.write(sourcePath, source)
-      return Tey.Commands.fail("could not write project '${name}'")
-    end
-    FS.File.write("${name}/.gitattributes", "tey.lock merge=tey\n")
-    IO.printLine("Created ${name}")
-    0
+  let sourcePath = library then "${name}/src/${name}.kex" else "${name}/src/main.kex"
+  if !FS.File.write("${name}/package.kex", manifestText) || !FS.File.write(sourcePath, source)
+    return Tey.Commands.fail("could not write project '${name}'")
+  end
+  FS.File.write("${name}/.gitattributes", "tey.lock merge=tey\n")
+  # tey.lock IS committed — only build output is ignored.
+  FS.File.write("${name}/.gitignore", "${Tey.Commands.outputDirectory}/\n")
+  IO.printLine("Created ${name}")
+  0
+end
+
+private do
+  # Where `tey build` puts compiled artifacts, and what `tey init` tells Git
+  # to ignore.
+  let outputDirectory -> String do
+    return "ebin"
   end
 
-  private do
-    let readLock -> Result<LockState, String> do
-      match FS.File.read("tey.lock") do
-        None -> Error("tey.lock not found; run `tey lock`")
-        Just(text) -> Tey.Lockfile.decode(text)
-      end
-    end
-
-    let runStatus(command: String, arguments: [String]) -> Integer do
-      match Process.run(command, arguments) do
-        Error(_) -> 127
-        Ok(result) -> result.exitCode
-      end
-    end
-
-    let fail(message: String) -> Integer do
-      IO.printError("tey: ${message}\n")
-      1
+  let readLock -> Result<LockState, String> do
+    match FS.File.read("tey.lock") do
+      None -> Error("tey.lock not found; run `tey lock`")
+      Just(text) -> Tey.Lockfile.decode(text)
     end
   end
+
+  let runStatus(command: String, arguments: [String]) -> Integer do
+    match Process.run(command, arguments) do
+      Error(_) -> 127
+      Ok(result) -> result.exitCode
+    end
+  end
+
+  let fail(message: String) -> Integer do
+    IO.printError("tey: ${message}\n")
+    1
+  end
+end

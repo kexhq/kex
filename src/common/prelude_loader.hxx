@@ -84,6 +84,34 @@ inline auto standardLibraryModuleRoots() -> std::vector<std::string> {
     return roots;
 }
 
+// The manifest vocabulary (`bundle`, `version`, `tey`, ...) that a
+// `package.kex` is written in. Deliberately NOT under src/stdlib: everything
+// there is compiled into the stdlib artifact, which would put these names in
+// front of every program. They live on their own and are loaded only for the
+// file that speaks them.
+inline auto manifestVocabularyFile() -> std::string {
+    std::vector<std::filesystem::path> candidates;
+    if (const char* configured = std::getenv("KEX_MANIFEST_DIR");
+        configured && *configured)
+        candidates.emplace_back(configured);
+    if (const auto executableDir = executableDirectory(); !executableDir.empty()) {
+        candidates.push_back(
+            (executableDir / "../share/kex/manifest").lexically_normal());
+        candidates.push_back(
+            (executableDir / "../src/manifest").lexically_normal());
+    }
+#ifdef KEX_MANIFEST_DIR
+    candidates.emplace_back(KEX_MANIFEST_DIR);
+#endif
+    for (const auto& candidate : candidates) {
+        const auto file = candidate / "bundle.kex";
+        std::error_code ec;
+        if (std::filesystem::is_regular_file(file, ec) && !ec)
+            return file.string();
+    }
+    return {};
+}
+
 inline auto preludeManifestPath(const std::filesystem::path& root)
     -> std::optional<std::filesystem::path> {
     auto manifest = root / "prelude.kex";

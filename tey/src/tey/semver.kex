@@ -1,77 +1,113 @@
 module Tey.Semver
-  record SemanticVersion do
-    major : Integer
-    minor : Integer
-    patch : Integer
-  end
 
-  let parseVersion(text: String) -> SemanticVersion? do
-    let clean = text.startsWith?("v") then text.drop(1) else text
-    let parts = clean.split(".")
-    let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: clean, rest: clean }) end
-    let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
-    let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0").split("-").first.or("0")) _ -> Ok(0) end
-    match (major, minor, patch) do
-      (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c })
-      _ -> None
+record SemanticVersion do
+  major : Integer
+  minor : Integer
+  patch : Integer
+end
+
+let parseVersion(text: String) -> SemanticVersion? do
+  let clean = text.startsWith?("v") then text.drop(1) else text
+  let parts = clean.split(".")
+  let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: clean, rest: clean }) end
+  let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
+  let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0").split("-").first.or("0")) _ -> Ok(0) end
+  match (major, minor, patch) do
+    (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c })
+    _ -> None
+  end
+end
+
+let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
+  return -1 if a.major < b.major
+  return 1 if a.major > b.major
+  return -1 if a.minor < b.minor
+  return 1 if a.minor > b.minor
+  return -1 if a.patch < b.patch
+  return 1 if a.patch > b.patch
+  0
+end
+
+let satisfies(versionText: String, requirement: String) -> Bool do
+  let version = Tey.Semver.parseVersion(versionText)
+  return false if version == None
+  let req = requirement.trim
+    .replace(">= ", ">=")
+    .replace("<= ", "<=")
+    .replace("~> ", "~>")
+    .replace("^ ", "^")
+    .replace("> ", ">")
+    .replace("< ", "<")
+    .replace("= ", "=")
+  return true if req == "" || req == "*"
+  let clauses = req.split(" ").filter { |part| part != "" }
+  clauses.all? { |clause| satisfiesClause(version.try, clause) }
+end
+
+# Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
+# name to look up; `~> 1.2` is a question to answer against everything the
+# repository has.
+let range?(requested: String) -> Bool do
+  let text = requested.trim
+  return true if text == "*" || text.contains?(" ")
+  return ["<=", ">=", "~>", "^", "<", ">", "="].any? { |op| text.startsWith?(op) }
+end
+
+# Descending semantic order, for picking the newest of anything. A tag that is
+# not a version sorts after every tag that is, so a stray `nightly` can never
+# displace a release.
+let newer?(a: String, b: String) -> Bool do
+  match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
+    (Just(left), Just(right)) -> return Tey.Semver.compareVersions(left, right) > 0
+    (Just(_), None) -> return true
+    (None, Just(_)) -> return false
+    _ -> return false
+  end
+end
+
+let newestFirst(versions: [String]) -> [String] do
+  return versions.uniq.sort do |a, b|
+    Tey.Semver.newer?(a, b)
+  end
+end
+
+# The highest tag that satisfies the requirement — the whole point of writing
+# a range instead of a version. None when nothing does.
+let highest(tags: [String], requirement: String) -> String? do
+  let matching = tags.filter { |tag| Tey.Semver.satisfies(tag, requirement) }
+  return None if matching.empty?
+  return Tey.Semver.newestFirst(matching).first
+end
+
+private do
+  let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
+    var op = "="
+    if clause.startsWith?(">=")
+      op = ">="
+    elif clause.startsWith?("<=")
+      op = "<="
+    elif clause.startsWith?("~>")
+      op = "~>"
+    elif clause.startsWith?("^")
+      op = "^"
+    elif clause.startsWith?(">")
+      op = ">"
+    elif clause.startsWith?("<")
+      op = "<"
+    end
+    let raw = clause.drop(op.count)
+    let wanted = Tey.Semver.parseVersion(raw)
+    return false if wanted == None
+    let order = Tey.Semver.compareVersions(version, wanted.try)
+    match op do
+      ">=" -> order >= 0
+      "<=" -> order <= 0
+      ">" -> order > 0
+      "<" -> order < 0
+      "=" -> order == 0
+      "^" -> order >= 0 && version.major == wanted.try.major
+      "~>" -> order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
+      _ -> false
     end
   end
-
-  let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
-    return -1 if a.major < b.major
-    return 1 if a.major > b.major
-    return -1 if a.minor < b.minor
-    return 1 if a.minor > b.minor
-    return -1 if a.patch < b.patch
-    return 1 if a.patch > b.patch
-    0
-  end
-
-  let satisfies(versionText: String, requirement: String) -> Bool do
-    let version = Tey.Semver.parseVersion(versionText)
-    return false if version == None
-    let req = requirement.trim
-      .replace(">= ", ">=")
-      .replace("<= ", "<=")
-      .replace("~> ", "~>")
-      .replace("^ ", "^")
-      .replace("> ", ">")
-      .replace("< ", "<")
-      .replace("= ", "=")
-    return true if req == "" || req == "*"
-    let clauses = req.split(" ").filter { |part| part != "" }
-    clauses.all? { |clause| satisfiesClause(version.try, clause) }
-  end
-
-  private do
-    let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
-      var op = "="
-      if clause.startsWith?(">=")
-        op = ">="
-      elif clause.startsWith?("<=")
-        op = "<="
-      elif clause.startsWith?("~>")
-        op = "~>"
-      elif clause.startsWith?("^")
-        op = "^"
-      elif clause.startsWith?(">")
-        op = ">"
-      elif clause.startsWith?("<")
-        op = "<"
-      end
-      let raw = clause.drop(op.count)
-      let wanted = Tey.Semver.parseVersion(raw)
-      return false if wanted == None
-      let order = Tey.Semver.compareVersions(version, wanted.try)
-      match op do
-        ">=" -> order >= 0
-        "<=" -> order <= 0
-        ">" -> order > 0
-        "<" -> order < 0
-        "=" -> order == 0
-        "^" -> order >= 0 && version.major == wanted.try.major
-        "~>" -> order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
-        _ -> false
-      end
-    end
-  end
+end

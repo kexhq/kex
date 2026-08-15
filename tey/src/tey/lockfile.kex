@@ -1,80 +1,89 @@
 foul module Tey.Lockfile
+
 using JSON
-  record LockedDependency do
-    name : String
-    git : String
-    resolved : String
-    commit : String
-    sha256 : String
-    groups : [String] = []
-  end
 
-  record LockState do
-    kexRequirement : String
-    kexVersion : String
-    lockedDependencies : [LockedDependency]
-  end
+record Dependency do
+  name : String
+  git : String
+  resolved : String
+  commit : String
+  sha256 : String
+  groups : [String] = []
+end
 
-  let encode(lock: LockState) -> String do
-    let deps = lock.lockedDependencies.reduce("") do |encoded, dep|
-      let groups = dep.groups.reduce("") do |items, group|
-        let separator = items == "" then "" else ", "
-        "${items}${separator}\"${Tey.Lockfile.escape(group)}\""
-      end
-      let separator = encoded == "" then "" else ",\n"
-      "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}]}"
+record LockState do
+  kexRequirement : String
+  kexVersion : String
+  lockedDependencies : [Dependency]
+end
+
+let encode(lock: LockState) -> String do
+  let deps = lock.lockedDependencies.reduce("") do |encoded, dep|
+    let groups = dep.groups.reduce("") do |items, group|
+      let separator = items == "" then "" else ", "
+      "${items}${separator}\"${Tey.Lockfile.escape(group)}\""
     end
-    [
-      "{",
-      "  \"version\": 1,",
-      "  \"kex\": {\"requirement\": \"${Tey.Lockfile.escape(lock.kexRequirement)}\", \"version\": \"${Tey.Lockfile.escape(lock.kexVersion)}\"},",
-      "  \"deps\": {",
-      deps,
-      "  }",
-      "}"
-    ].join("\n") + "\n"
+    let separator = encoded == "" then "" else ",\n"
+    "${encoded}${separator}    \"${Tey.Lockfile.escape(dep.name)}\": {\"git\": \"${Tey.Lockfile.escape(dep.git)}\", \"resolved\": \"${Tey.Lockfile.escape(dep.resolved)}\", \"commit\": \"${Tey.Lockfile.escape(dep.commit)}\", \"sha256\": \"${dep.sha256}\", \"groups\": [${groups}]}"
   end
+  [
+    "{",
+    "  \"version\": 1,",
+    "  \"kex\": {\"requirement\": \"${Tey.Lockfile.escape(lock.kexRequirement)}\", \"version\": \"${Tey.Lockfile.escape(lock.kexVersion)}\"},",
+    "  \"deps\": {",
+    deps,
+    "  }",
+    "}"
+  ].join("\n") + "\n"
+end
 
-  let decode(text: String) -> Result<LockState, String> do
-    let root = match JSON.parse(text) do
-      Error(_) -> return Error("invalid tey.lock JSON")
-      Ok(value) -> value
-    end
-    let version = Tey.Lockfile.lockText(root["version"])
-    return Error("unsupported tey.lock version '${version}'") if version != "1"
-    let kex = match root["kex"] do
-      Just(value) -> value
-      None -> return Error("tey.lock is missing kex metadata")
-    end
-    let dependencies = match root["deps"] do
-      Just(value) -> value.entries.map do |name, raw|
-        Tey.Lockfile.LockedDependency {
-          name: "${name}",
-          git: Tey.Lockfile.lockText(raw["git"]),
-          resolved: Tey.Lockfile.lockText(raw["resolved"]),
-          commit: Tey.Lockfile.lockText(raw["commit"]),
-          sha256: Tey.Lockfile.lockText(raw["sha256"]),
-          groups: Tey.Lockfile.lockStrings(raw["groups"])
-        }
-      end
-      None -> []
-    end
-    if dependencies.any? { |dep| dep.git == "" || dep.commit == "" || dep.sha256 == "" }
-      return Error("tey.lock contains an incomplete dependency")
-    end
-    Ok(LockState {
-      kexRequirement: Tey.Lockfile.lockText(kex["requirement"]),
-      kexVersion: Tey.Lockfile.lockText(kex["version"]),
-      lockedDependencies: dependencies
-    })
+let dependencyName(dep: Dependency) -> String = dep.name
+let dependencyGit(dep: Dependency) -> String = dep.git
+let dependencyCommit(dep: Dependency) -> String = dep.commit
+let dependencySha256(dep: Dependency) -> String = dep.sha256
+let dependencyGroups(dep: Dependency) -> [String] = dep.groups
+let dependencyListLine(dep: Dependency) -> String = "${dep.name} ${dep.resolved} (${dep.commit})"
+
+let decode(text: String) -> Result<LockState, String> do
+  let root = match JSON.parse(text) do
+    Error(_) -> return Error("invalid tey.lock JSON")
+    Ok(value) -> value
   end
-
-  private do
-    let escape(text: String) = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
-
-    let lockText(None) -> String = ""
-    let lockText(Just(value)) -> String = "${value}"
-
-    let lockStrings(None) -> [String] = []
-    let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }
+  let version = Tey.Lockfile.lockText(root["version"])
+  return Error("unsupported tey.lock version '${version}'") if version != "1"
+  let kex = match root["kex"] do
+    Just(value) -> value
+    None -> return Error("tey.lock is missing kex metadata")
   end
+  let dependencies = match root["deps"] do
+    Just(value) -> value.entries.map do |name, raw|
+      Tey.Lockfile.Dependency {
+        name: "${name}",
+        git: Tey.Lockfile.lockText(raw["git"]),
+        resolved: Tey.Lockfile.lockText(raw["resolved"]),
+        commit: Tey.Lockfile.lockText(raw["commit"]),
+        sha256: Tey.Lockfile.lockText(raw["sha256"]),
+        groups: Tey.Lockfile.lockStrings(raw["groups"])
+      }
+    end
+    None -> []
+  end
+  if dependencies.any? { |dep| dep.git == "" || dep.commit == "" || dep.sha256 == "" }
+    return Error("tey.lock contains an incomplete dependency")
+  end
+  Ok(LockState {
+    kexRequirement: Tey.Lockfile.lockText(kex["requirement"]),
+    kexVersion: Tey.Lockfile.lockText(kex["version"]),
+    lockedDependencies: dependencies
+  })
+end
+
+private do
+  let escape(text: String) = text.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n")
+
+  let lockText(None) -> String = ""
+  let lockText(Just(value)) -> String = "${value}"
+
+  let lockStrings(None) -> [String] = []
+  let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }
+end

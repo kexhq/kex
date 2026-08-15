@@ -1,0 +1,20 @@
+init demo into build
+0
+init demo into dist
+0
+install /src 1.0
+7
+kex fallback use 1.0
+0
+init thing into lib
+0
+demo — A tool with commands
+
+Options:
+  -h, --help  Show this help
+  -o, --out  Output directory [default: build]
+
+Commands:
+  init <name>                  create a package
+  kex install <src> <version>  install a toolchain
+  kex <subcommand>             manage toolchains

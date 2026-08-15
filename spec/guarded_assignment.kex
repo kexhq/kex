@@ -1,0 +1,49 @@
+# `x = value if condition` guards the ASSIGNMENT, not the value.
+#
+# It used to parse as `x = (value if condition)`, so a false condition stored
+# None — quietly emptying the variable instead of leaving it alone. That made
+# the accumulator below end as None rather than 2, and it is the shape every
+# running total in a loop wants.
+#
+# A `let` is unchanged: a binding must produce something, so a guarded
+# initializer still yields None when the condition fails.
+
+main do
+  var total = 0
+  [1, 2, 3].each do |n|
+    total = total + 1 if n > 1
+  end
+  IO.printLine("total ${total}")
+
+  var status = 7
+  status = 1 if false
+  IO.printLine("kept ${status}")
+
+  var last = "none"
+  ["a", "b"].each do |name|
+    last = name if name != "a"
+  end
+  IO.printLine("last ${last}")
+
+  let missing = "value" if false
+  IO.printLine("let ${missing}")
+
+  # Inside a `loop` and a `while`, where the mutable variable has to survive
+  # the branch that did not run.
+  var total = 0
+  var index = 0
+  loop
+    break if index >= 5
+    total = total + index if index % 2 == 0
+    index = index + 1
+  end
+  IO.printLine("even ${total}")
+
+  var count = 0
+  var n = 0
+  while n < 4
+    count = count + 1 if n != 2
+    n = n + 1
+  end
+  IO.printLine("skipped ${count}")
+end

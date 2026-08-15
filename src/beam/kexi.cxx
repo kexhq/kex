@@ -304,14 +304,20 @@ auto recordToTerm(const KexiRecord& r) -> TermPtr {
     std::vector<TermPtr> fields;
     for (const auto& f : r.fields)
         fields.push_back(Term::tuple({Term::binary(f.name), typeToTerm(f.type)}));
-    return Term::tuple({Term::binary(r.name), Term::list(std::move(fields))});
+    return Term::tuple({Term::binary(r.name),
+                        Term::binary(r.tagAtom.empty() ? r.name : r.tagAtom),
+                        Term::list(std::move(fields))});
 }
 
 auto termToRecord(const TermPtr& term) -> KexiRecord {
     auto& t = term->asTuple();
     KexiRecord r;
     r.name = t[0]->asBinaryStr();
-    for (const auto& f : t[1]->asList()) {
+    // A record written before the tag was recorded is a 2-tuple; its tag is
+    // its name.
+    const bool tagged = t.size() >= 3;
+    r.tagAtom = tagged ? t[1]->asBinaryStr() : r.name;
+    for (const auto& f : t[tagged ? 2 : 1]->asList()) {
         auto& fe = f->asTuple();
         r.fields.push_back({fe[0]->asBinaryStr(), termToType(fe[1])});
     }

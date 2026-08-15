@@ -314,7 +314,9 @@ private:
     // chains (`user.name`, `point.x`) returns the declared field type.
     std::unordered_map<std::string,
                        std::unordered_map<std::string, TypePtr>> m_recordFields;
-    auto registerRecordFields(const ast::Program& program) -> void;
+    auto registerRecordFields(const ast::Program& program,
+                              bool namesOnly = false) -> void;
+    auto resolveRecordName(const std::string& name) const -> std::string;
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;

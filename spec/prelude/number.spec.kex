@@ -114,8 +114,8 @@ describe("Integer.parse and Float.parse") do
       Error(e) -> assert(e.message == "invalid integer")
       Ok(v) -> assert(false, "expected Error, got ${v}")
     end
-    # `none?` is Optional's; a Result crosses over with toOptional.
-    assert(Integer.parse("abc").toOptional.none?)
+    # `none?` is Optional's; a Result crosses over with optional.
+    assert(Integer.parse("abc").optional.none?)
   end
 
   it("Integer.parse works in if let") do
