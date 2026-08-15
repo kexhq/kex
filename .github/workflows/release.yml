@@ -142,8 +142,11 @@ jobs:
             target: linux-arm64
           - os: macos-latest
             target: macos-arm64
-          - os: macos-13
-            target: macos-x86_64
+          # No macos-x86_64: GitHub has retired its Intel macOS runners, so a
+          # macos-13 job queues forever and hangs the whole release. Until the
+          # x86_64 build is cross-compiled on an arm64 runner, Intel macOS has
+          # no archive — tey's resolver falls back to a source build there.
+          # Tracked in docs/releasing.md's "Known gaps".
     steps:
       - uses: actions/checkout@v4
         with:
@@ -712,13 +715,14 @@ jobs:
           set -euo pipefail
           base="https://github.com/kexhq/kex/releases/download/${TAG}"
 
-          # Five archives: Tey itself, plus one Kex per platform so a keg can
-          # carry the compiler for the machine installing it. The checksums are
-          # the ones published beside them, not ones computed here — if a
+          # Four archives: Tey itself, plus one Kex per supported platform so a
+          # keg can carry the compiler for the machine installing it (Intel
+          # macOS publishes no archive — see the build matrix). The checksums
+          # are the ones published beside them, not ones computed here — if a
           # release asset and its .sha256 ever disagreed, this would be the
           # wrong place to find out.
           for name in "tey-${VERSION}" \
-                      "kex-${VERSION}-macos-arm64" "kex-${VERSION}-macos-x86_64" \
+                      "kex-${VERSION}-macos-arm64" \
                       "kex-${VERSION}-linux-arm64" "kex-${VERSION}-linux-x86_64"; do
             curl -fsSL "${base}/${name}.tar.gz.sha256" -o "${name}.sha256"
             cut -d' ' -f1 < "${name}.sha256" > "${name}.hash"
@@ -752,27 +756,24 @@ jobs:
           fill("STABLE-TEY",
                f'  url "{base}/{tey}.tar.gz"\n  sha256 "{digest(tey)}"\n')
 
-          # `on_macos`/`on_arm` rather than one url with a substitution: brew
-          # resolves these at install time on the machine doing the installing,
-          # and only downloads the one it picks.
-          def resource(target, indent):
-              name = f"kex-{version}-{target}"
-              pad = " " * indent
-              return (f'{pad}resource "kex" do\n'
-                      f'{pad}  url "{base}/{name}.tar.gz"\n'
-                      f'{pad}  sha256 "{digest(name)}"\n'
-                      f'{pad}end\n')
+           # `on_macos`/`on_arm` rather than one url with a substitution: brew
+           # resolves these at install time on the machine doing the installing,
+           # and only downloads the one it picks. macOS is arm-only for now —
+           # Intel macOS publishes no archive to point a resource at.
+           def resource(target, indent):
+               name = f"kex-{version}-{target}"
+               pad = " " * indent
+               return (f'{pad}resource "kex" do\n'
+                       f'{pad}  url "{base}/{name}.tar.gz"\n'
+                       f'{pad}  sha256 "{digest(name)}"\n'
+                       f'{pad}end\n')
 
-          kex = ""
-          for system, arm, intel in (("macos", "macos-arm64", "macos-x86_64"),
-                                     ("linux", "linux-arm64", "linux-x86_64")):
-              kex += f"  on_{system} do\n"
-              kex += "    on_arm do\n" + resource(arm, 6) + "    end\n"
-              kex += "    on_intel do\n" + resource(intel, 6) + "    end\n"
-              kex += "  end\n"
-              if system == "macos":
-                  kex += "\n"
-          fill("STABLE-KEX", kex)
+           kex = "  on_macos do\n" + resource("macos-arm64", 4) + "  end\n\n"
+           kex += "  on_linux do\n"
+           kex += "    on_arm do\n" + resource("linux-arm64", 6) + "    end\n"
+           kex += "    on_intel do\n" + resource("linux-x86_64", 6) + "    end\n"
+           kex += "  end\n"
+           fill("STABLE-KEX", kex)
 
           open(path, "w").write(formula)
           PY

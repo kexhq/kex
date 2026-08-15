@@ -121,12 +121,12 @@ Without it, only the `formula` job fails, and only on a stable release.
    is already tagged, and resolves `ref` to one commit. Every later job builds
    *that commit*, so a push to `main` mid-release cannot change what is being
    released. The workflow writes nothing to the repository.
-2. **`build`** (4 runners) — builds, runs the full suites (unit, spec, prelude,
+2. **`build`** (3 runners) — builds, runs the full suites (unit, spec, prelude,
    stdlib, spec-beam), and packages one archive per platform:
 
    ```
    kex-<version>-linux-x86_64.tar.gz    kex-<version>-macos-arm64.tar.gz
-   kex-<version>-linux-arm64.tar.gz     kex-<version>-macos-x86_64.tar.gz
+   kex-<version>-linux-arm64.tar.gz
    ```
 
    each with a `.sha256` beside it. A red suite means no release.
@@ -136,11 +136,12 @@ Without it, only the `formula` job fails, and only on a stable release.
    archive serves every platform — that is what lets Homebrew install Tey
    without being able to build Kex at all.
 
-    Both halves of the Homebrew formula come from these five archives: the keg
-    installs Tey from the `tey-` one and the compiler for the installing machine
-    from the matching `kex-` one. A platform whose archive is missing is a
-    platform that cannot `brew install tey`, which is the other reason a red
-    suite stops the release.
+   Both halves of the Homebrew formula come from these four archives: the keg
+   installs Tey from the `tey-` one and the compiler for the installing machine
+   from the matching `kex-` one. A platform whose archive is missing is a
+   platform that cannot `brew install tey`, which is the other reason a red
+   suite stops the release. Intel macOS currently publishes no archive (see
+   "Known gaps").
 3. **`wasm`** — builds the npm package (`@kexhq/kex`) from the same commit, on
    the same pinned toolchain as CI's wasm job (the cache keys match, so this
    restores rather than rebuilds). Runs the wasm unit and spec suites, stamps
@@ -252,3 +253,11 @@ sticks.
 The first run of this workflow is also its first real test; the `formula` job
 in particular has only been exercised against a simulated release.
 `docs/tey-limitations.md` tracks that and the related packaging gaps.
+
+**No Intel macOS archive.** GitHub has retired its Intel macOS runners, so a
+`macos-13` build job queues forever — the first real release hung on exactly
+that. The platform is dropped until the x86_64 build is cross-compiled on an
+arm64 runner (or self-hosted). Until then: no `kex-<version>-macos-x86_64`
+asset, the Homebrew formula carries no `kex` resource for Intel macOS, and
+`tey kex install` on an Intel Mac falls back to a source build (the resolver
+already treats a missing archive as "not published for this platform").
