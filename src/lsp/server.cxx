@@ -2133,6 +2133,22 @@ private:
                         .value = renderRdoc(std::move(documentation)),
                     }};
             }
+            // Methods the RECEIVER'S OWN type declares come first. A client
+            // sorts by sortText when it is set and alphabetically when it is
+            // not, so `box.` used to open on whatever prelude method happened
+            // to sort earliest rather than on `make Box`'s own methods.
+            // `query.rewriteFrom` is the receiver type this completion
+            // resolved to, and `qualifier` is where each match comes from.
+            // The qualifier cannot answer this: rewriteCompletions has already
+            // turned every match's `Box.` into the receiver text, so they all
+            // look alike by then. `makeTarget` is the `make TypeName` a method
+            // was declared in, which is exactly the question being asked.
+            if (!query.rewriteFrom.empty() && localSymbol)
+                item.sortText =
+                    (localSymbol->makeTarget == query.rewriteFrom ? "0" : "1") +
+                    item.label;
+            else if (!query.rewriteFrom.empty())
+                item.sortText = "1" + item.label;
             result.push_back(std::move(item));
         }
         return result;
@@ -2252,7 +2268,11 @@ private:
                             fieldDetail = word.text + " : " + type;
         }
 
-        if (!fieldDetail.empty()) {
+        // Documentation is looked up by BARE NAME, so a field must not take
+        // it: `user.name` showed the right type and then OptionParser's prose
+        // about `kex install`, because that module happens to export a `name`.
+        const bool recordField = !fieldDetail.empty();
+        if (recordField) {
             detail = std::move(fieldDetail);
             symbol = nullptr;
         } else if (importLine) {
@@ -2368,7 +2388,7 @@ private:
             semantic::TypeChecker renderer(&m_interfaces);
             std::unordered_set<std::string> rendered;
             for (const auto& [signature, isFoul] : importedSignatures) {
-                auto lineDetail = renderer.displaySignature(word.text, signature);
+                auto lineDetail = renderer.displaySignature(lookupName, signature);
                 if (isFoul) lineDetail = "foul " + lineDetail;
                 if (!rendered.insert(lineDetail).second) continue;
                 if (!detail.empty()) detail += '\n';
@@ -2425,14 +2445,14 @@ private:
                     }
                 }
         }
-        if (documentation.empty())
+        if (documentation.empty() && !recordField)
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty() && !lexicalReference) {
+        if (documentation.empty() && !lexicalReference && !recordField) {
             const auto standardName = moduleQualifier.empty()
                 ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
@@ -2454,6 +2474,12 @@ private:
         } else {
             markdown = "```kex\n" + detail + "\n```";
         }
+        // `push!` is not a function: the `!` is a marker that rebinds the
+        // receiver, and what it calls is `push`. Signatures above are rendered
+        // under that real name, so say where the bang went.
+        if (lookupName != word.text)
+            markdown += "\n\n`" + word.text + "` calls `" + lookupName +
+                        "` and rebinds the receiver.";
         if (!documentation.empty()) markdown += "\n\n" + renderRdoc(documentation);
         const SourceLocation start{document.path,
                                    static_cast<int>(params.position.line + 1),
