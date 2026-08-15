@@ -206,14 +206,26 @@ spec-prelude-beam: build
 # Strings are UTF-8 binaries and Chars are tagged {'Char', N}
 # tuples on BEAM, so the old charlist ambiguities ([] vs "", [Int] vs
 # String, Char vs Int) are gone.
+#
+# stdout and stderr are captured SEPARATELY and concatenated (stdout first)
+# rather than merged with `2>&1`. A BEAM node writes the two streams through
+# two independent ports whose flush order is not guaranteed, so a merged
+# capture is a race: spec/module_scoped_make.kex produced its fatal
+# `Internal error:` line between two stdout lines on one CI run and after
+# them on another, from the same commit. The walker (plain C++ streams) has no
+# such reordering, so the goldens all end with whatever went to stderr, and
+# every spec in this suite matches under the separated capture.
 spec-beam: build
 	@echo "Running spec suite through BEAM (-R)..."
 	@failed=0; passed=0; \
+	beam_out=$$(mktemp); beam_err=$$(mktemp); \
+	trap 'rm -f "$$beam_out" "$$beam_err"' EXIT INT TERM; \
 	for f in spec/*.kex; do \
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
-		actual=$$($(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" 2>&1); \
+		$(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
+		actual=$$(cat "$$beam_out" "$$beam_err"); \
 		expected=$$(cat "$$exp_file"); \
 		if [ "$$actual" = "$$expected" ]; then \
 			printf "  \033[32m✓\033[0m %s\n" "$$(basename $$f)"; \
