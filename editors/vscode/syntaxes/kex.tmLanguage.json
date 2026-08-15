@@ -11,6 +11,13 @@
     { "name": "variable.language.this.kex", "match": "\\bthis\\b" },
     { "include": "#blockParameters" },
     { "name": "storage.type.kex", "match": "\\b(record|type|trait|make|module)\\b" },
+    { "comment": "`-> T or! E` / `-> T or E` is type syntax, not the `.or(…)` method — hence the guard against a preceding dot or word character.",
+      "name": "keyword.control.kex", "match": "(?<![.\\w])or!?(?![\\w(])" },
+    { "comment": "`make Something, implement: Showable, Comparable do` (parser.cxx:643). The label is part of the declaration, not a record field's colon.",
+      "name": "entity.other.attribute-name.kex", "match": "\\b(implement)\\s*(?=:)" },
+    { "comment": "A `name :> Type` declaration names a method just as `let name(` does.",
+      "name": "entity.name.function.kex",
+      "match": "^\\s*[a-z_][A-Za-z0-9_?!]*(?=\\s*:>)" },
     { "name": "support.type.builtin.kex", "match": "\\b(Any|Atom|Bool|Byte|Char|Float|Float32|Float64|Int|Integer|Int8|Int16|Int32|Int64|List|Map|Optional|Process|Result|Stream|String|UInt8|UInt16|UInt32|UInt64|Void)\\b" },
     { "name": "entity.name.function.kex", "match": "(?<=\\blet\\s)[a-z_][A-Za-z0-9_?!]*(?=\\s*\\()" },
     { "name": "entity.name.type.kex", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
@@ -21,8 +28,12 @@
   ],
   "repository": {
     "comments": { "patterns": [
-      { "comment": "Deliberately plain. Doc comments carry RDoc markup (`+code+`, @param/@return/@example — see renderRdoc in src/lsp/server.cxx) and an earlier version highlighted it, but a comment that competes with the code for attention is worse than one that does not: the tags landed on keyword-bright scopes, and treating an @example body as real code made prose after it into code too, down to an apostrophe opening a char literal.",
-        "name": "comment.line.number-sign.kex", "begin": "#", "end": "$" }
+      { "comment": "Comments stay comment-coloured. Only the RDoc tags are picked out, and only by weight: the token carries the comment scope for its colour plus `markup.bold`, which is the scope themes render bold. Colouring them (or treating an @example body as real code, which made the prose after it code too — an apostrophe opened a char literal) fought with the code for attention.",
+        "name": "comment.line.number-sign.kex", "begin": "#", "end": "$",
+        "patterns": [
+          { "name": "comment.line.number-sign.kex markup.bold.documentation.kex",
+            "match": "(?<=^|\\s)@(example|param|return)\\b" }
+        ] }
     ] },
     "regexLiteral": { "patterns": [
       { "comment": "Interpolating tag: regex$`^${word}` — same as below but the body embeds expressions. Listed first so the `$` form is never read as the plain one.",

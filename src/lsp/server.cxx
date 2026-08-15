@@ -1788,6 +1788,27 @@ private:
                     .completeDetail = completeDetail,
                 });
             }
+            // A name a pattern introduces is not an expression, so it has no
+            // entry above. Hovering `b` in `Boxed(b)` answered nothing at all
+            // until these were recorded.
+            for (const auto& binding : analyzer.patternBindings()) {
+                if (binding.location.file != document.path || !binding.type)
+                    continue;
+                if (std::holds_alternative<semantic::UnknownType>(
+                        binding.type->kind))
+                    continue;
+                semantic::Signature display;
+                display.name = binding.name;
+                display.result = binding.type;
+                document.hoverEntries.push_back({
+                    .line = static_cast<unsigned int>(binding.location.line),
+                    .byteColumn =
+                        static_cast<unsigned int>(binding.location.column),
+                    .byteLength = static_cast<unsigned int>(binding.name.size()),
+                    .detail = analyzer.displaySignature(binding.name, display),
+                    .completeDetail = true,
+                });
+            }
             for (const auto& [expression, signature] :
                  analyzer.selectedCallSignatures()) {
                 if (!expression || expression->location.file != document.path)
@@ -2127,6 +2148,14 @@ private:
         const auto word = wordAt(document.text, params.position.line,
                                  params.position.character);
         if (word.text.empty()) return {};
+        // `xs.push!(v)` is the mutating form of `push`, produced by the
+        // language rather than declared anywhere: no symbol, no signature and
+        // no documentation is ever registered under `push!`, so every lookup
+        // below has to ask about the base name. The bang is kept for display.
+        std::string lookupName = word.text;
+        if (lookupName.size() > 1 && lookupName.back() == '!' &&
+            !m_db.findSymbol(lookupName, document.path))
+            lookupName.pop_back();
         const auto moduleQualifier = moduleQualifierBeforeWord(
             document.text, params.position.line, word.byteColumn);
 
@@ -2153,7 +2182,7 @@ private:
             word.byteColumn < static_cast<uint32_t>(symbol->definition.column) +
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
-            symbol = m_db.findSymbol(word.text, document.path);
+            symbol = m_db.findSymbol(lookupName, document.path);
 
         std::string detail;
         std::string documentation;
@@ -2168,12 +2197,12 @@ private:
         const bool importLine =
             document.text.compare(hoverLineStart, 6, "using ") == 0;
         semantic::TypeChecker traitLookup(&m_interfaces);
-        const bool traitName = traitLookup.isTrait(word.text) ||
+        const bool traitName = traitLookup.isTrait(lookupName) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
         const auto* importedAdt = moduleQualifier.empty()
-            ? importedAdtNamed(m_interfaces, word.text) : nullptr;
+            ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
         const auto* constructorAdt = moduleQualifier.empty()
-            ? importedAdtWithConstructor(m_interfaces, word.text) : nullptr;
+            ? importedAdtWithConstructor(m_interfaces, lookupName) : nullptr;
         const Document::HoverEntry* expressionHover = nullptr;
         const Document::HoverEntry* selectedCallHover = nullptr;
         const auto line = params.position.line + 1;
@@ -2218,7 +2247,7 @@ private:
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
                         record && record->kind == semantic::SymbolKind::Record)
-                        if (auto type = recordFieldType(record->detail, word.text);
+                        if (auto type = recordFieldType(record->detail, lookupName);
                             !type.empty())
                             fieldDetail = word.text + " : " + type;
         }
@@ -2302,7 +2331,7 @@ private:
             if (!moduleQualifier.empty()) {
                 if (auto module = m_interfaces.modules.find(moduleQualifier);
                     module != m_interfaces.modules.end())
-                    if (auto functions = module->second.exports.find(word.text);
+                    if (auto functions = module->second.exports.find(lookupName);
                         functions != module->second.exports.end())
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
@@ -2318,14 +2347,14 @@ private:
                 for (const auto& [moduleName, module] : m_interfaces.modules) {
                     if (!module.automaticImport && !opened.count(moduleName))
                         continue;
-                    if (auto functions = module.exports.find(word.text);
+                    if (auto functions = module.exports.find(lookupName);
                         functions != module.exports.end())
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
                                 function.signature,
                                 function.signature.isFoul || module.isFoul);
                 }
-                if (auto functions = m_interfaces.receiverFunctions.find(word.text);
+                if (auto functions = m_interfaces.receiverFunctions.find(lookupName);
                     functions != m_interfaces.receiverFunctions.end())
                     for (const auto& function : functions->second) {
                         bool isFoul = function.signature.isFoul;
@@ -2347,7 +2376,7 @@ private:
             }
             if (!importedSignatures.empty()) {
                 const auto standardName = moduleQualifier.empty()
-                    ? word.text : moduleQualifier + "." + word.text;
+                    ? lookupName : moduleQualifier + "." + lookupName;
                 if (auto docs = m_standardDocumentation.find(standardName);
                     docs != m_standardDocumentation.end())
                     for (const auto& entry : docs->second) {
@@ -2397,7 +2426,7 @@ private:
                 }
         }
         if (documentation.empty())
-            if (auto docs = document.documentation.find(word.text);
+            if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
@@ -2405,7 +2434,7 @@ private:
                 }
         if (documentation.empty() && !lexicalReference) {
             const auto standardName = moduleQualifier.empty()
-                ? word.text : moduleQualifier + "." + word.text;
+                ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
                 docs != m_standardDocumentation.end())
                 for (const auto& entry : docs->second) {

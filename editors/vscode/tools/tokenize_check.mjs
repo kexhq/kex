@@ -8,19 +8,14 @@ const oniguruma = require("vscode-oniguruma");
 
 const wasm = readFileSync(require.resolve("vscode-oniguruma/release/onig.wasm"));
 
-const SAMPLE = `# Returns the first element satisfying the predicate wrapped in +Just+,
-# @param pred [X -> Bool]
-#
-# @example
-#   [1, 2, 3].find { |x| x > 1 }  # => Just(2)
-#   [1, 2, 3].find { |x| x > 9 }  # => None
-# find/any?/all? are provided by the Enumerable trait.
-find :> (X -> Bool) -> X?
-
-# @example
-#   { a: 1, b: 2 }.filter { |k, v| v > 1 }
-# Map overrides the map-returning HOFs (Enumerable's default returns a list).
-filter :> (K -> V -> Bool) -> Map<K, V>
+const SAMPLE = `make Parser, implement: Showable, Comparable do
+  let parse(s: String) -> Json or! ParseError = Ok(1)
+  let safe(s: String) -> Json or ParseError = Ok(1)
+  find :> (X -> Bool) -> X?
+  any? :> (X -> Bool) -> Bool
+  let value = list.or("fallback")
+  let n = maybe.or(0)
+end
 `;
 
 await oniguruma.loadWASM(wasm);

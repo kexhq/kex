@@ -67,6 +67,7 @@ auto headShapeOf(const TypePtr& type) -> TypePtr {
 auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
+    m_patternBindings.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
@@ -469,6 +470,11 @@ auto TypeChecker::check(const ast::Program& program,
     // genuinely un-inferred expression is unchanged.
     for (auto& [expr, type] : m_typeMap)
         type = resolve(type);
+    // Same reasoning for pattern bindings: a binding's type is often a fresh
+    // variable at the point the pattern is walked, and only a later use says
+    // what it is.
+    for (auto& binding : m_patternBindings)
+        binding.type = resolve(binding.type);
 
     reportUnknownMethods();
 }
@@ -1560,11 +1566,17 @@ auto TypeChecker::bindPatternVars(
     const ast::Pattern& pat, TypePtr expected) -> void {
     expected = expected ? resolve(expected) : nullptr;
     checkPatternConstructorOwner(pat, expected);
-    std::visit([this, &expected](const auto& node) {
+    std::visit([this, &expected, &pat](const auto& node) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            if (node.name != "_")
-                defineVar(node.name, expected ? expected : freshTypeVar());
+            if (node.name != "_") {
+                auto bound = expected ? expected : freshTypeVar();
+                defineVar(node.name, bound);
+                // Kept so tooling can answer for the binding itself. Types are
+                // resolved once at the end of check(), because a fresh
+                // variable here may only learn what it is from a later use.
+                m_patternBindings.push_back({node.name, pat.location, bound});
+            }
         }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) bindPatternVars(*node.inner, expected);
@@ -1582,18 +1594,32 @@ auto TypeChecker::bindPatternVars(
             for (size_t i = 0; i < node.args.size(); ++i) {
                 if (!node.args[i]) continue;
                 TypePtr payload;
-                // Only payloads naming a CONCRETE type. A payload that is a
-                // type parameter (`Just(A)`) must take its type from the
-                // scrutinee, and the scrutinee is not always shaped so that it
-                // can: `Char?` is an OptionalType, not `Optional<Char>`, so
-                // there are no type arguments to read a slot out of. Using the
-                // declared `A` there bound `c` to the wrong type outright and
-                // broke the prelude (`parsing.kex` charWhen). Those keep the
-                // previous behaviour — a fresh variable a later use pins down.
-                if (declaration && i < declaration->payloadTypes.size() &&
-                    (i >= declaration->slots.size() ||
-                     declaration->slots[i] < 0))
+                const int slot = declaration && i < declaration->slots.size()
+                    ? declaration->slots[i] : -1;
+                if (slot >= 0 && expected) {
+                    // A payload that IS a type parameter takes its type from
+                    // the scrutinee. The scrutinee's shape varies: `Result<A,
+                    // B>` carries type arguments, but `A?` is an OptionalType
+                    // and `[A]` a ListType, neither of which has any. The
+                    // declared parameter name must NOT be used as a fallback
+                    // here — doing that bound `Just(c)`'s `c` to the literal
+                    // `A` and broke the prelude (`parsing.kex` charWhen).
+                    const auto scrutinee = resolve(expected);
+                    const auto index = static_cast<size_t>(slot);
+                    if (const auto* named = std::get_if<NamedType>(&scrutinee->kind);
+                        named && index < named->typeArgs.size())
+                        payload = named->typeArgs[index];
+                    else if (const auto* optional =
+                                 std::get_if<OptionalType>(&scrutinee->kind);
+                             optional && index == 0)
+                        payload = optional->inner;
+                    else if (const auto* list =
+                                 std::get_if<ListType>(&scrutinee->kind);
+                             list && index == 0)
+                        payload = list->element;
+                } else if (declaration && i < declaration->payloadTypes.size()) {
                     payload = declaration->payloadTypes[i];
+                }
                 bindPatternVars(*node.args[i], payload);
             }
         }
