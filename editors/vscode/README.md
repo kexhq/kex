@@ -1,20 +1,25 @@
 <p align="center">
-  <img src="images/icon.png" width="128" alt="Kex" />
+  <img src="https://github.com/kexhq/kex/raw/main/editors/vscode/images/icon.png" width="128" alt="Kex" />
 </p>
+
+<h3 align="center"><a href="https://kex.run">kex.run — try Kex in your browser</a></h3>
 
 # Kex Language Support for VS Code
 
 Syntax highlighting, type-aware hover, completion, navigation, and live
 compiler diagnostics for [Kex](https://github.com/kexhq/kex) — a functional
 language with Ruby-like syntax, immutability by default, UFCS method chains,
-and an Elixir-style process model.
+and an Elixir-style process model. Try the language in your browser at
+[kex.run](https://kex.run).
 
 The extension is a thin client. Everything it shows comes from the Kex compiler
 itself, running as a language server (`kex --lsp`), so hover types and
 diagnostics are the compiler's own answers rather than a separate model of the
 language that could drift from it.
 
-![Hover showing a record declaration and its documentation](images/hover.png)
+![Hover showing a record declaration and its documentation](https://github.com/kexhq/kex/raw/main/editors/vscode/images/hover.png)
+
+![Completion after a dot on a record value](https://github.com/kexhq/kex/raw/main/editors/vscode/images/completion.png)
 
 ## Features
 
@@ -23,7 +28,7 @@ language that could drift from it.
 - **Diagnostics as you type** — syntax, type, and validation errors on the
   unsaved buffer, not just on save.
 - **Completion** — members after `.`, and top-level names, with signatures and
-  overload counts. See [Known limitations](#known-limitations).
+  overload counts.
 - **Go to definition** and **find references**.
 - **Syntax highlighting** for Kex's full grammar.
 - **Automatic server restart** when the configured compiler is rebuilt inside
@@ -73,23 +78,6 @@ code --install-extension kex-language-0.1.0.vsix
 | Command | Description |
 | --- | --- |
 | **Kex: Restart Language Server** | Restarts the server without reloading the window. |
-
-## Known limitations
-
-Completion resolves the receiver textually, using a heuristic the REPL shares,
-so it only understands receivers that are plain identifiers. After a call or
-across a line break it returns nothing:
-
-```kex
-let box = makeBox(3)
-box.g          # completes
-makeBox(3).g   # does not
-Server.new(8080)
-  .g           # does not
-```
-
-Hover, diagnostics, definition, and references are unaffected — they use the
-compiler's analysis rather than this path.
 
 ## Development
 
