@@ -19,6 +19,12 @@ brew tap kexhq/tey
 brew install --HEAD kexhq/tey/tey
 ```
 
+The tap follows the stable line, so `--HEAD` stays necessary until the first
+stable tag; from then on `brew install kexhq/tey/tey` is enough. Pre-releases
+never arrive through brew — `tey kex install <version>` and `tey kex list
+--pre` are the channel-aware way to them. Docker images are published as
+`ghcr.io/kexhq/kex` (`:slim` for a small one that keeps the BEAM backend).
+
 Tey itself is written in Kex; its implementation lives entirely under the
 `Tey` supermodule in `tey/src/tey/`.
 

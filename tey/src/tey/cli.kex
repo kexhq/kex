@@ -16,7 +16,7 @@ let parser -> OptionConfig do
     .flag("cache", None, "Remove the complete cache with `tey clean`")
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
-    .flag("pre", None, "Include pre-releases in `tey kex list`")
+    .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
 end
 
 let dispatch(args: [String]) -> Integer do
@@ -71,7 +71,13 @@ private do
   end
 
   let showVersion -> Integer do
-    IO.printLine("tey 0.1.0 (Kex ${Kex.Kernel.VERSION.number})")
+    # `.number` already parenthesizes the revision, and nesting that inside
+    # another pair reads badly: "tey 0.1.0 (Kex 0.3.0-beta (abc1234))".
+    let kex = match Kex.Kernel.VERSION.revision do
+      Just(revision) -> "${Kex.Kernel.VERSION.release}, ${revision}"
+      None -> Kex.Kernel.VERSION.release
+    end
+    IO.printLine("tey 0.1.0 (Kex ${kex})")
     return 0
   end
 
@@ -93,7 +99,8 @@ Commands:
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
   kex list [--pre]         show Kex versions, newest first
-  kex install [<version>]  build and install a Kex (newest release by default)
+  kex install [<version>]  install a Kex (newest release by default)
+  kex install --pre        install the newest Kex of any channel
   kex install <src> <version>
                            build and install from a source checkout
   kex uninstall <version>  remove an installed Kex
@@ -165,8 +172,13 @@ Commands:
     0
   end
 
-  let dispatchCommand(["kex", "install"], _) -> Integer do
-    match Tey.Toolchain.latestStable do
+  # Bare `tey kex install` means "the current Kex", which is the newest
+  # STABLE one — an rc is not what someone who named no version is asking
+  # for. `--pre` says they are: it takes the newest of any channel, which
+  # during a pre-stability run may be the only thing published.
+  let dispatchCommand(["kex", "install"], options: ParsedOptions) -> Integer do
+    let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
+    match newest do
       Error(error) -> do
         IO.printError("tey: ${error}\n")
         1

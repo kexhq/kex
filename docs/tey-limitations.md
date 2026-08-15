@@ -56,21 +56,77 @@ They are kept explicit so temporary workarounds do not become accidental API.
   re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, and target
   selection for build/run remain incomplete.
 - `tey kex list` reads released versions from the repository's tags on every
-  call. There is no cache, so listing needs the network, and a pre-release
-  suffix (`0.3.0-rc1`) parses as its release (`0.3.0`) and sorts as one.
+  call. There is no cache, so listing needs the network. Pre-releases are
+  understood now — `0.4.0-rc.1` parses, sorts below `0.4.0` and above
+  `0.4.0-beta`, and is hidden from the list unless `--pre` is passed — but a
+  version is still discovered only by asking git for tags, so a tag with no
+  published release looks installable and only fails at install time.
+  `tey kex install --pre` installs the newest version of any channel, and a
+  pre-release named outright installs without the flag; bare `tey kex install`
+  stays on the newest stable.
 - Lockfile merge-driver mode currently regenerates from the working-tree
   manifest; it does not inspect and merge the `%O`, `%A`, and `%B` inputs.
 - Toolchain handling covers the whole lifecycle: `tey kex list` shows what is
-  released and what is installed, `tey kex install <version>` clones that tag
-  into the cache and builds it, `tey kex install <src> <version>` does the
-  same from a checkout, `tey kex use` selects, and `tey kex uninstall`
-  removes — clearing the selection when it removes the selected one. Installs
-  stage into `<version>.partial` and only a complete tree is renamed into
-  place, so a failed build never replaces a working compiler. What is still
-  missing: no checksum over an installed tree, so corruption AFTER
-  installation goes unnoticed; a cached source checkout is never pruned; and
-  `tey kex install` of an already-installed version rebuilds it rather than
-  reporting that it is there.
-- The Homebrew formula is HEAD-only until the first tagged Tey/Kex release has
-  a stable source URL and checksum. During bootstrap it follows the
-  `package-management` branch and should switch back to `main` after merge.
+  released and what is installed, `tey kex install <version>` downloads the
+  published archive for the machine (falling back to building the tag from
+  source when there is none), `tey kex install <src> <version>` builds from a
+  checkout, `tey kex use` selects, and `tey kex uninstall` removes — clearing
+  the selection when it removes the selected one. Installs stage into
+  `<version>.partial` and only a complete tree is renamed into place, so a
+  failed install never replaces a working compiler. What is still missing: no
+  checksum over an INSTALLED tree, so corruption after installation goes
+  unnoticed; neither a cached source checkout nor a downloaded archive is ever
+  pruned; and `tey kex install` of an already-installed version reinstalls it
+  rather than reporting that it is there.
+- A downloaded archive is verified against the `.sha256` published beside it,
+  and a mismatch fails the install outright rather than falling back to a
+  source build. But the checksum comes from the same host as the archive, so
+  it proves transfer integrity, not provenance — signing, or a checksum
+  recorded somewhere other than the release, is the missing half.
+- Downloading and hashing shell out: `curl` (then `wget`), `tar`, and
+  `sha256sum` (then `shasum`). Tey does no HTTP of its own, shows no progress
+  on a several-tens-of-megabytes download, and cannot resume an interrupted
+  one — it re-fetches from the start. A machine with none of those binaries
+  gets a clear error and the source-build fallback, which needs a compiler
+  toolchain instead.
+- Nothing checks that a downloaded Kex can actually RUN before selecting it.
+  The macOS and Linux archives link GMP, PCRE2, Boost and readline
+  dynamically, against whatever the release runner had; a machine missing them
+  (or holding incompatible versions) gets a dynamic-loader error out of the
+  first compile rather than a diagnosis from `tey kex install`.
+
+## Tey and the packaging that installs it
+
+- Homebrew installs Tey and no Kex: two compilers under two managers drift
+  apart on the first upgrade of either. A release keg unpacks the
+  architecture-independent `tey-<version>.tar.gz`, and `tey kex install`
+  brings the compiler; `--HEAD` still has to build one (Tey is written in
+  Kex), so it puts it in `libexec`, off PATH, and Tey adopts it into its own
+  home on first use.
+- The release path of the formula is UNPROVEN: there is no tagged release yet,
+  so what has actually been exercised is the archive install against a
+  `file://` release and the tarball unpack by hand. The first real tag is also
+  the first test of the `formula` job that rewrites the tap.
+- The adopted seed is a copy, so `brew upgrade tey` — which replaces the seed
+  in `libexec` — leaves the previously adopted copy installed and selected.
+  That is deliberate (a symlink would silently change what a version directory
+  contains), but nothing tells the user a newer Kex arrived with the upgrade.
+- Tey cannot yet manage Tey. It is installed and upgraded by whatever
+  installed it, and there is no `tey self update` — so the toolchain manager is
+  the one thing on the machine that is not under the toolchain manager.
+- The Tey home is only useful once `<home>/bin` is on PATH, which Tey cannot
+  do for the user. It says so after an install, but a shell that never gets
+  the line has a selected Kex and no `kex` command.
+
+## Compiler problems this work surfaced
+
+- A module's own private function loses to a prelude function of the same
+  name, even when called by its qualified name: `Tey.Toolchain.sha256(path)`
+  resolved to the prelude's `Digest.sha256` and typechecked as `String`,
+  producing a `.try` error on a call that was plainly declared
+  `Result<String, String>` a few lines below. Renaming to `checksumOf` was the
+  workaround. Qualified names should not be resolvable to another module's
+  function at all.
+- A function-valued record field cannot be called through the field:
+  `spec.handler(options)` fails on both backends, so `OptionParser`'s command
+  dispatch binds `let handler = spec.handler` first and calls that.

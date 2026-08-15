@@ -77,6 +77,17 @@ let latestStable -> Result<String, String> do
   end
 end
 
+# The newest version of ANY channel — what `tey kex install --pre` picks. This
+# is how you get onto a beta or an rc without knowing its number: during a
+# pre-stability run there may be nothing else published at all.
+let latestIncludingPreReleases -> Result<String, String> do
+  let available = Tey.Toolchain.availableVersions.try
+  match available.first do
+    Just(version) -> return Ok(version)
+    None -> return Error("no Kex version is available")
+  end
+end
+
 let installedKex -> String? do
   match ENV.get("TEY_KEX") do
     Just(path) -> Just(path)
@@ -89,7 +100,35 @@ let installedKex -> String? do
   end
 end
 
-let kex -> String = Tey.Toolchain.installedKex.or("kex")
+# A Kex that came with Tey — what a package manager installs so the first
+# `tey` command has a compiler without a ten-minute build. It is a SEED, not
+# an installation: `kex` below adopts it into the Tey home on first use, and
+# from then on Tey manages that copy like any other version. Nothing outside
+# the Tey home is ever put on PATH, which is the whole point — two `kex`
+# binaries under two managers drift apart.
+let bundled -> String? do
+  match ENV.get("TEY_BUNDLED_KEX") do
+    None -> return None
+    Just(path) -> return FS.File.file?(path) then Just(path) else None
+  end
+end
+
+# The compiler every Tey command shells out to.
+#
+# In order: an explicit TEY_KEX, the selected toolchain, the bundled seed
+# (adopted on the spot), and only then a bare `kex` from PATH. That last one
+# is a fallback for a source checkout, not a supported installation — a `kex`
+# somebody else installed is a `kex` Tey cannot update, and it silently
+# becomes a different version from the one `tey kex list` reports.
+let kex -> String do
+  match Tey.Toolchain.installedKex do
+    Just(path) -> return path
+    None -> match Tey.Toolchain.adoptBundled do
+      Just(path) -> return path
+      None -> return "kex"
+    end
+  end
+end
 
 # Whether the selected toolchain is actually there. A `current` naming a
 # version somebody deleted leaves every command failing on a path that does
@@ -101,12 +140,59 @@ let selectionHealthy? -> Bool do
   end
 end
 
-# Installs a released version by name: the repository's tag is fetched into
-# the cache and built from there. This is the ordinary way to get a Kex —
-# `installSource` is for a checkout you already have.
+# Installs a released version by name. The published archive for this machine
+# is the fast path — unpacking one takes seconds where building takes minutes,
+# and it needs no compiler, which is the point: whatever installs Tey should
+# not also have to be able to build Kex.
+#
+# Falling back to a source build rather than failing keeps the platforms
+# without a published archive working, and covers a release whose upload is
+# incomplete.
 let installRelease(version: String) -> Result<String, String> do
-  let source = Tey.Toolchain.fetchRelease(version).try
-  return Tey.Toolchain.installSource(source, version)
+  match Tey.Toolchain.installArchive(version) do
+    Ok(prefix) -> return Ok(prefix)
+    # An archive that is not there is a platform Kex does not publish for, or
+    # a release still uploading; building is a reasonable answer to both.
+    Error(Unavailable(reason)) -> do
+      IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source\n")
+      let source = Tey.Toolchain.fetchRelease(version).try
+      return Tey.Toolchain.installSource(source, version)
+    end
+    # An archive that is there and WRONG is a different thing entirely. It
+    # could be a truncated download or a tampered mirror, and neither is
+    # something to shrug off by quietly compiling instead.
+    Error(Corrupt(reason)) -> return Error(reason)
+  end
+end
+
+# Why a published archive could not be installed. The distinction is the
+# point: one of these is routine and one of them is not.
+type ArchiveFailure =
+  | Unavailable(String)
+  | Corrupt(String)
+
+# Where the release archives live. Derived from the repository so a fork only
+# has to set TEY_KEX_REPO, and overridable on its own for a mirror.
+let releaseBase -> String do
+  match ENV.get("TEY_KEX_RELEASES") do
+    Just(base) -> return base
+    None -> do
+      let repository = Tey.Toolchain.repository
+      let trimmed = repository.endsWith?(".git") then repository.take(repository.count - 4) else repository
+      return "${trimmed}/releases/download"
+    end
+  end
+end
+
+# The archive naming this machine, matching what the release workflow builds:
+# `kex-0.4.0-macos-arm64.tar.gz`.
+let releaseTarget -> Result<String, String> do
+  let arch = Tey.Toolchain.machineArchitecture.try
+  match System.OS do
+    :macos -> return Ok("macos-${arch}")
+    :linux -> return Ok("linux-${arch}")
+    other -> return Error("no Kex archives are published for ${other}")
+  end
 end
 
 # Installs compiler, runtime BEAM modules and stdlib sources together. The
@@ -175,6 +261,215 @@ let use(version: String) -> Bool do
 end
 
 private do
+  # Downloads the published archive for this machine and installs it. The
+  # archive holds one directory — the same CMake install tree `installSource`
+  # produces — so unpacking and publishing it is the whole job.
+  let installArchive(version: String) -> Result<String, ArchiveFailure> do
+    let target = match Tey.Toolchain.releaseTarget do
+      Error(error) -> return Error(Unavailable(error))
+      Ok(value) -> value
+    end
+    let tag = match Tey.Toolchain.releaseTag(version) do
+      Error(error) -> return Error(Unavailable(error))
+      Ok(value) -> value
+    end
+    let name = "kex-${version}-${target}"
+    let downloads = "${Tey.Cache.root}/downloads"
+    return Error(Unavailable("could not create the download cache")) if !FS.Directory.create(downloads)
+
+    let archive = "${downloads}/${name}.tar.gz"
+    let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
+    match Tey.Toolchain.download(url, archive) do
+      Error(error) -> return Error(Unavailable(error))
+      Ok(_) -> ()
+    end
+    # The checksum is published beside the archive, so a mismatch means the
+    # bytes are not the release's. That is Corrupt, not Unavailable: the
+    # caller must not answer it by building something else instead.
+    match Tey.Toolchain.verifyArchive(archive, "${url}.sha256") do
+      Error(error) -> return Error(Corrupt(error))
+      Ok(_) -> ()
+    end
+
+    let home = Tey.Toolchain.home
+    let prefix = "${home}/toolchains/${version}"
+    return Error(Unavailable("could not create Tey home")) if !FS.Directory.create("${home}/toolchains")
+    let unpacked = "${downloads}/${name}.unpacked"
+    FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
+    return Error(Unavailable("could not create ${unpacked}")) if !FS.Directory.create(unpacked)
+    let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
+      Error(error) -> return Error(Corrupt(error))
+      Ok(value) -> value
+    end
+    if extracted.exitCode != 0
+      FS.Directory.deleteAll(unpacked)
+      return Error(Corrupt("could not unpack ${archive}: ${extracted.stderr}"))
+    end
+
+    # `--strip-components` is not portable across every tar, so the single
+    # top-level directory is moved rather than stripped.
+    let tree = "${unpacked}/${name}"
+    if !FS.File.file?("${tree}/bin/kex")
+      FS.Directory.deleteAll(unpacked)
+      return Error(Corrupt("${name}.tar.gz does not contain ${name}/bin/kex"))
+    end
+    let staging = "${prefix}.partial"
+    FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+    if !FS.File.rename(tree, staging)
+      FS.Directory.deleteAll(unpacked)
+      return Error(Unavailable("could not move the unpacked toolchain into place"))
+    end
+    FS.Directory.deleteAll(unpacked)
+
+    let installedPrefix = match Tey.Toolchain.publish(staging, prefix) do
+      Error(error) -> return Error(Unavailable(error))
+      Ok(value) -> value
+    end
+    return Error(Unavailable("installed Kex ${version} but could not select it")) if !FS.File.write("${home}/current", "${version}\n")
+    Tey.Toolchain.link(version)
+    return Ok(installedPrefix)
+  end
+
+  # curl, then wget: one of the two is on essentially every machine that can
+  # reach a release, and this way Tey needs neither an HTTP library nor a
+  # compiler to fetch one.
+  let download(url: String, path: String) -> Result<Void, String> do
+    let partial = "${path}.partial"
+    FS.File.delete(partial)
+    let fetched = match Process.run("curl", ["-fsSL", "-o", partial, url]) do
+      Ok(result) -> result.exitCode == 0
+      Error(_) -> match Process.run("wget", ["-q", "-O", partial, url]) do
+        Ok(result) -> result.exitCode == 0
+        Error(_) -> return Error("neither curl nor wget is available to download ${url}")
+      end
+    end
+    if !fetched
+      FS.File.delete(partial)
+      return Error("could not download ${url}")
+    end
+    return FS.File.rename(partial, path) then Ok(()) else Error("could not move the download into ${path}")
+  end
+
+  # The published `.sha256` is `<hash>  <filename>`, the format both
+  # sha256sum and shasum write and read.
+  let verifyArchive(archive: String, checksumUrl: String) -> Result<Void, String> do
+    let checksums = "${archive}.sha256"
+    Tey.Toolchain.download(checksumUrl, checksums).try
+    let expected = match FS.File.read(checksums) do
+      None -> return Error("could not read ${checksums}")
+      Just(text) -> text.trim.split(" ").first.or("")
+    end
+    return Error("${checksumUrl} does not contain a checksum") if expected.empty?
+    let actual = Tey.Toolchain.checksumOf(archive).try
+    return Error("checksum mismatch for ${archive}: expected ${expected}, got ${actual}") if actual != expected
+    return Ok(())
+  end
+
+  # Hashed with an external tool rather than read in: the archive is tens of
+  # megabytes of binary, and this keeps all of it out of the process.
+  let checksumOf(path: String) -> Result<String, String> do
+    let output = match Process.run("sha256sum", [path]) do
+      Ok(result) -> result.exitCode == 0 then Just(result.stdout) else None
+      Error(_) -> match Process.run("shasum", ["-a", "256", path]) do
+        Ok(result) -> result.exitCode == 0 then Just(result.stdout) else None
+        Error(_) -> return Error("neither sha256sum nor shasum is available to verify ${path}")
+      end
+    end
+    match output do
+      None -> return Error("could not hash ${path}")
+      Just(text) -> return Ok(text.trim.split(" ").first.or(""))
+    end
+  end
+
+  # `arm64` and `x86_64` are the spellings the release archives use; uname
+  # answers with those or with their aliases depending on the system.
+  let machineArchitecture -> Result<String, String> do
+    let result = Process.run("uname", ["-m"]).try
+    return Error("could not determine this machine's architecture") if result.exitCode != 0
+    let machine = result.stdout.trim
+    return Ok("arm64") if machine == "arm64" || machine == "aarch64"
+    return Ok("x86_64") if machine == "x86_64" || machine == "amd64"
+    return Error("no Kex archives are published for ${machine}")
+  end
+
+  # Takes an installed Kex tree into the Tey home and selects it. `binary` is
+  # the `bin/kex` of a complete CMake install tree — its stdlib and runtime sit
+  # beside it and come along.
+  #
+  # A copy rather than a symlink: the seed belongs to whatever installed Tey,
+  # and that installer will replace it on its own schedule. A link would leave a
+  # toolchain directory named for one version quietly serving another after the
+  # next `brew upgrade`.
+  let adopt(binary: String) -> Result<String, String> do
+    return Error("${binary} is not an executable Kex") if !FS.File.file?(binary)
+    let version = Tey.Toolchain.versionOfBinary(binary).try
+    let source = FS.Path.dirname(FS.Path.dirname(binary))
+    let home = Tey.Toolchain.home
+    let prefix = "${home}/toolchains/${version}"
+    return Ok(prefix) if Tey.Toolchain.installed?(version)
+
+    return Error("could not create Tey home") if !FS.Directory.create("${home}/toolchains")
+    let staging = "${prefix}.partial"
+    FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+    let copied = match Process.run("cp", ["-R", source, staging]) do
+      Error(error) -> do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(result) -> result
+    end
+    if copied.exitCode != 0
+      FS.Directory.deleteAll(staging)
+      return Error("could not copy ${source} into the Tey home: ${copied.stderr}")
+    end
+    let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
+    return Error("adopted Kex ${version} but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+    Tey.Toolchain.link(version)
+    return Ok(installedPrefix)
+  end
+
+  # Adopts the bundled seed the first time a command needs a compiler and
+  # nothing is selected. Announced on stderr rather than done silently: it
+  # writes to the Tey home and creates the shim, and a user who never asked
+  # for either should be able to see where they came from.
+  let adoptBundled -> String? do
+    match Tey.Toolchain.bundled do
+      None -> return None
+      Just(binary) -> match Tey.Toolchain.versionOfBinary(binary) do
+        Error(_) -> return None
+        Ok(version) -> do
+          IO.printError("tey: adopting the Kex ${version} that came with Tey")
+          match Tey.Toolchain.adopt(binary) do
+            Error(error) -> do
+              IO.printError("tey: ${error}")
+              return None
+            end
+            Ok(prefix) -> return Just("${prefix}/bin/kex")
+          end
+        end
+      end
+    end
+  end
+
+  # `kex --version` prints "kex 0.3.0-beta (abc1234, built 2026-08-15)"; the
+  # version is the second word. Asking the binary rather than reading a file
+  # beside it keeps this honest about what will actually run.
+  let versionOfBinary(binary: String) -> Result<String, String> do
+    match Process.run(binary, ["--version"]) do
+      Error(error) -> return Error(error)
+      Ok(result) -> do
+        return Error("${binary} --version failed: ${result.stderr}") if result.exitCode != 0
+        match result.stdout.trim.split(" ").drop(1).first do
+          None -> return Error("could not read a version out of `${binary} --version`")
+          Just(version) -> do
+            return Error("`${binary} --version` reported '${version}', which is not a version") if Tey.Semver.parseVersion(version) == None
+            return Ok(version)
+          end
+        end
+      end
+    end
+  end
+
   # Clones the repository at `version`'s tag into the build cache and returns
   # the checkout. Tags are tried as written and with a leading `v`, since
   # both spellings are common.

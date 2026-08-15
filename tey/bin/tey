@@ -6,6 +6,13 @@ PREFIX=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 TEY_EBIN=${TEY_EBIN:-"$PREFIX/lib/kex/tey/ebin"}
 export TEY_EBIN
 
+# A Kex installed alongside Tey by whatever installed Tey (Homebrew puts one
+# here). Tey adopts it into the Tey home on first use and manages it from
+# there; it is deliberately NOT on PATH, so there is only ever one `kex` a
+# user can run and Tey is the thing that decides which version it is.
+TEY_BUNDLED_KEX=${TEY_BUNDLED_KEX:-"$PREFIX/libexec/kex-toolchain/bin/kex"}
+export TEY_BUNDLED_KEX
+
 # Tey's .beam files are compiled at install time by whichever erlc was on PATH
 # then, and a BEAM file cannot be loaded by an older runtime than the one that
 # produced it (OTP 28 changed the atom table encoding, so an OTP 27 `erl`

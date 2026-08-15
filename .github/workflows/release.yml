@@ -98,18 +98,26 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-latest
             target: macos-arm64
+          - os: macos-13
+            target: macos-x86_64
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ needs.verify.outputs.tag }}
 
+      # Everything is named explicitly, including the two the x86_64 image
+      # happens to preinstall: linux-arm64 builds on a DIFFERENT runner image,
+      # and "it was already there on the other one" is not a dependency list.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
+            libssl-dev erlang-base libboost-context-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -154,6 +162,31 @@ jobs:
             (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           fi
           "stage/${name}/bin/kex" --version
+
+      # Tey is compiled to BEAM modules, which are architecture-independent, so
+      # ONE archive serves every platform and is built on whichever runner is
+      # already here. That is what lets a package manager install Tey without
+      # being able to build Kex at all: it unpacks this, and `tey kex install`
+      # brings the compiler.
+      #
+      # Compiled by the oldest Erlang in the matrix on purpose — a .beam cannot
+      # be loaded by an older runtime than the one that produced it, so the
+      # floor this sets is the floor every user inherits.
+      - name: Package Tey
+        if: matrix.target == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          name="tey-${version}"
+          # ERL=erl rather than the runner's absolute path: the launcher only
+          # honours a baked path that exists, and an absolute path from a
+          # GitHub runner never will on a user's machine.
+          make -C tey install PREFIX="$(pwd)/stage/${name}" \
+            KEX="$(pwd)/build/kex" ERL=erl INSTALL_NONINTERACTIVE=1
+          mkdir -p dist
+          tar -czf "dist/${name}.tar.gz" -C stage "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          "stage/${name}/bin/tey" --version
 
       - uses: actions/upload-artifact@v4
         with:
@@ -303,8 +336,12 @@ jobs:
         with:
           ref: ${{ needs.verify.outputs.tag }}
 
+      # Only the platform archives. The `image` jobs upload one-line digest
+      # artifacts as well, and those are plumbing between jobs, not release
+      # assets.
       - uses: actions/download-artifact@v4
         with:
+          pattern: kex-*
           path: artifacts
 
       - name: Publish the release
@@ -325,3 +362,69 @@ jobs:
           else
             gh release create "$tag" "${flags[@]}" artifacts/*/*
           fi
+
+  # Homebrew is the stable line only. A pre-release must never become what
+  # `brew install tey` hands someone, so this job simply does not run for one;
+  # `tey kex install` is the channel-aware way in.
+  formula:
+    needs: [verify, publish]
+    if: needs.verify.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tap
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/homebrew-tey
+          # A cross-repository push needs a token of its own; the job's default
+          # GITHUB_TOKEN is scoped to kexhq/kex.
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Point the formula at the new release
+        env:
+          TAG: ${{ needs.verify.outputs.tag }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          # The formula installs TEY, which is architecture-independent BEAM,
+          # so this is the one archive it needs and brew builds nothing.
+          url="https://github.com/kexhq/kex/releases/download/${TAG}/tey-${VERSION}.tar.gz"
+
+          curl -fsSL "$url" -o tey.tar.gz
+          sha=$(sha256sum tey.tar.gz | cut -d' ' -f1)
+          rm tey.tar.gz
+
+          python3 - "$url" "$sha" <<'PY'
+          import re, sys
+
+          url, sha = sys.argv[1:3]
+          path = "Formula/tey.rb"
+          formula = open(path).read()
+
+          block = f'  url "{url}"\n  sha256 "{sha}"\n'
+          formula, n = re.subn(
+              r"(?s)(  # <<STABLE\n).*?(  # STABLE>>\n)",
+              lambda m: m.group(1) + block + m.group(2),
+              formula,
+          )
+          if n != 1:
+              raise SystemExit(f"expected one STABLE block in {path}, found {n}")
+
+          open(path, "w").write(formula)
+          PY
+
+          git diff --stat
+
+      - name: Commit
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          set -euo pipefail
+          git config user.name "kex release"
+          git config user.email "noreply@kex.run"
+          # Re-running a release that changed nothing must not fail the job.
+          if git diff --quiet; then
+            echo "Formula already points at ${VERSION}"
+            exit 0
+          fi
+          git commit -am "tey ${VERSION}"
+          git push
