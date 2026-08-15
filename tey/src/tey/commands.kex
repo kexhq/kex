@@ -1,6 +1,6 @@
 foul module Tey.Commands
 
-using Tey.Cache, only: [fetch, root, verify]
+using Tey.Cache, only: [fetch, packagePath, root, verify]
 using Tey.Lockfile, only: [LockState, decode, encode]
 using Tey.Manifest, only: [ManifestPackage, read]
 using Tey.Resolver, only: [resolvePackage]
@@ -88,9 +88,45 @@ let install(without: String) -> Integer do
   0
 end
 
+# `--source-root` for every fetched dependency. Without these a dependency is
+# just bytes in the cache: `using Greet` cannot find it, and the package that
+# declared it does not compile. A dependency the lockfile names but the cache
+# does not have is reported rather than quietly dropped — the answer is
+# `tey install`, and silence would look like a broken `using`.
+let dependencyRoots -> [String] do
+  let state = match Tey.Commands.readLock do
+    Error(_) -> do
+      # No lockfile at all. Only worth saying when the package actually
+      # declares dependencies — a package with none needs nothing.
+      match Tey.Commands.manifest do
+        Ok(package) -> IO.printError("tey: no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+        Error(_) -> ()
+      end
+      return []
+    end
+    Ok(value) -> value
+  end
+  var roots: [String] = []
+  var missing: [String] = []
+  state.lockedDependencies.each do |dependency|
+    let source = "${Tey.Cache.packagePath(dependency)}/src"
+    if FS.Directory.directory?(source)
+      roots.push!("--source-root")
+      roots.push!(source)
+    else
+      missing.push!(Tey.Lockfile.dependencyName(dependency))
+    end
+    ()
+  end
+  if !missing.empty?
+    IO.printError("tey: ${missing.join(", ")} not in the cache; run `tey install`\n")
+  end
+  return roots
+end
+
 let runPackage(extra: [String]) -> Integer do
   let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-  match Process.run(Tey.Toolchain.kex, [package.entrypoint, ...extra]) do
+  match Process.run(Tey.Toolchain.kex, [...Tey.Commands.dependencyRoots, package.entrypoint, ...extra]) do
     Error(error) -> Tey.Commands.fail(error)
     Ok(result) -> do
       if result.stdout != ""
@@ -125,7 +161,8 @@ let build -> Integer do
   if !FS.Directory.create(Tey.Commands.outputDirectory)
     return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
   end
-  match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory, package.entrypoint]) do
+  match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+                                        ...Tey.Commands.dependencyRoots, package.entrypoint]) do
     Error(error) -> Tey.Commands.fail(error)
     Ok(result) -> do
       if result.stdout != ""
@@ -148,8 +185,9 @@ let test -> Integer do
     return 0
   end
   var status = 0
+  let roots = Tey.Commands.dependencyRoots
   specs.each do |spec|
-    let result = match Process.run(Tey.Toolchain.kex, ["spec/${spec}"]) do
+    let result = match Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]) do
       Error(error) -> return Tey.Commands.fail(error)
       Ok(value) -> value
     end

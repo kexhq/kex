@@ -45,11 +45,16 @@ They are kept explicit so temporary workarounds do not become accidental API.
   the clone lands in a sibling `<commit>.partial` directory and is renamed
   into place only once the checkout succeeds, so a failed or killed run
   leaves nothing reachable under the content-addressed name.)
+- `tey run`, `tey build` and `tey test` put every fetched dependency on the
+  compiler's module search path, so `using Greet` resolves to the cached
+  checkout — and a dependency the lockfile names but the cache lacks is
+  reported (`run \`tey install\``) rather than surfacing as a missing module.
+  Only DIRECT dependencies are on the path; a dependency's own dependencies
+  are not, which needs transitive resolution first.
 - `tey install --without GROUP` omits a group's dependencies from the fetch
   while leaving them in the lockfile, so turning the flag off later needs no
-  re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, target
-  selection for build/run, and transitive compiler search paths remain
-  incomplete.
+  re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, and target
+  selection for build/run remain incomplete.
 - `tey kex list` reads released versions from the repository's tags on every
   call. There is no cache, so listing needs the network, and a pre-release
   suffix (`0.3.0-rc1`) parses as its release (`0.3.0`) and sorts as one.
