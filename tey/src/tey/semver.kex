@@ -44,6 +44,41 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   clauses.all? { |clause| satisfiesClause(version.try, clause) }
 end
 
+# Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
+# name to look up; `~> 1.2` is a question to answer against everything the
+# repository has.
+let range?(requested: String) -> Bool do
+  let text = requested.trim
+  return true if text == "*" || text.contains?(" ")
+  return ["<=", ">=", "~>", "^", "<", ">", "="].any? { |op| text.startsWith?(op) }
+end
+
+# Descending semantic order, for picking the newest of anything. A tag that is
+# not a version sorts after every tag that is, so a stray `nightly` can never
+# displace a release.
+let newer?(a: String, b: String) -> Bool do
+  match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
+    (Just(left), Just(right)) -> return Tey.Semver.compareVersions(left, right) > 0
+    (Just(_), None) -> return true
+    (None, Just(_)) -> return false
+    _ -> return false
+  end
+end
+
+let newestFirst(versions: [String]) -> [String] do
+  return versions.uniq.sort do |a, b|
+    Tey.Semver.newer?(a, b)
+  end
+end
+
+# The highest tag that satisfies the requirement — the whole point of writing
+# a range instead of a version. None when nothing does.
+let highest(tags: [String], requirement: String) -> String? do
+  let matching = tags.filter { |tag| Tey.Semver.satisfies(tag, requirement) }
+  return None if matching.empty?
+  return Tey.Semver.newestFirst(matching).first
+end
+
 private do
   let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
     var op = "="

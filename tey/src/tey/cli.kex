@@ -87,7 +87,9 @@ Commands:
   let dispatchCommand(["init", name], options: ParsedOptions) -> Integer do
     Tey.Commands.init(name, options.flagEnabled?("lib"))
   end
-  let dispatchCommand(["install"], _) -> Integer = Tey.Commands.install
+  let dispatchCommand(["install"], options: ParsedOptions) -> Integer do
+    Tey.Commands.install(options.value("without", ""))
+  end
   let dispatchCommand(["lock"], _) -> Integer = Tey.Commands.lock
   let dispatchCommand(["lock", _, _, _], options: ParsedOptions) -> Integer do
     options.flagEnabled?("merge-driver") then Tey.Commands.lock else Tey.Cli.unknown("lock")

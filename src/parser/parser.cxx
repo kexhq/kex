@@ -769,6 +769,21 @@ auto Parser::parseFunctionClause() -> ast::FunctionClause {
     }
     clause.hasParamList = hasParamList;
 
+    // The return type may open on the line AFTER the parameters, the same way
+    // an `=` body may:
+    //
+    //     let chooseTag(name: String, git: String, selector: String)
+    //       -> Result<String, String> do
+    //
+    // Only `->` may follow a signature across a newline, so looking past them
+    // cannot swallow anything else; if the next real token is something else
+    // the cursor goes back.
+    if (check(TokenType::Newline)) {
+        const auto savedPos = m_pos;
+        skipNewlines();
+        if (!check(TokenType::Arrow)) m_pos = savedPos;
+    }
+
     // Return type annotation: -> Type
     if (match(TokenType::Arrow)) {
         clause.returnAnnotation = parseTypeExpr();

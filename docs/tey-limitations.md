@@ -29,10 +29,13 @@ They are kept explicit so temporary workarounds do not become accidental API.
      NIF/port, or a Kex-native parser (the self-hosting path). Either is a
      project of its own, and worth doing for tooling generally (formatter,
      linter, docgen, macros) rather than for this reader alone.
-- Git tags are pinned exactly. The package-level Kex requirement is checked,
-  but dependency semver-range tag discovery, highest-compatible
-  selection, duplicate constraint unification, transitive manifests, and cycle
-  detection are still to be implemented.
+- A dependency may ask for a RANGE — `tag: "~> 0.2"`, `"^1.0"`, `">= 0.3"` —
+  and Tey lists the repository's tags and locks the highest that satisfies it,
+  so the manifest keeps the constraint and the lockfile keeps the answer. An
+  exact tag is still taken as written. What remains is everything BEYOND one
+  dependency: two constraints on the same package are not unified, a
+  dependency's own manifest is never read (no transitive dependencies), and
+  with no graph to walk there is no cycle detection either.
 - `tey lock` currently fetches repositories while resolving them because the
   content digest is computed from `git archive`. Separating resolution from
   cache population needs a remote/archive strategy or a clearly renamed
@@ -42,9 +45,11 @@ They are kept explicit so temporary workarounds do not become accidental API.
   the clone lands in a sibling `<commit>.partial` directory and is renamed
   into place only once the checkout succeeds, so a failed or killed run
   leaves nothing reachable under the content-addressed name.)
-- `tey install --without GROUP`, orphan-only `tey clean`, targeted
-  `tey update NAME`, target selection for build/run, and transitive compiler
-  search paths remain incomplete.
+- `tey install --without GROUP` omits a group's dependencies from the fetch
+  while leaving them in the lockfile, so turning the flag off later needs no
+  re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, target
+  selection for build/run, and transitive compiler search paths remain
+  incomplete.
 - `tey kex list` reads released versions from the repository's tags on every
   call. There is no cache, so listing needs the network, and a pre-release
   suffix (`0.3.0-rc1`) parses as its release (`0.3.0`) and sorts as one.

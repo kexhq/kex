@@ -1,4 +1,9 @@
+# kex: skip-wasm
 # Process.run keeps stdout and stderr APART, and both backends agree.
+#
+# Skipped under wasm: there are no child processes there, so Process.run
+# answers `process execution is unavailable in wasm` for every call and the
+# question this spec asks cannot be put.
 #
 # The walker reads two ordinary pipes. A BEAM port cannot: it carries one
 # stream, so stderr either folds into stdout or escapes uncaptured. There the

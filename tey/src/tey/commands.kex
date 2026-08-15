@@ -48,7 +48,10 @@ end
   Tey.Commands.lock
 end
 
-let install -> Integer do
+# `--without dev` leaves a group's dependencies out of this install. The
+# LOCKFILE still lists them — what is omitted is the fetching, so switching
+# the flag off later needs no re-resolve.
+let install(without: String) -> Integer do
   let state = match FS.File.read("tey.lock") do
     None -> do
       let status = Tey.Commands.lock
@@ -66,7 +69,10 @@ let install -> Integer do
       Error(error) -> return Tey.Commands.fail(error)
     end
   end
-  state.lockedDependencies.each do |dependency|
+  let wanted = state.lockedDependencies.filter do |dependency|
+    without == "" || !Tey.Lockfile.dependencyGroups(dependency).contains?(without)
+  end
+  wanted.each do |dependency|
     let path = match Tey.Cache.fetch(dependency) do
       Error(error) -> return Tey.Commands.fail(error)
       Ok(value) -> value
@@ -76,7 +82,9 @@ let install -> Integer do
       Ok(_) -> IO.printLine("Installed ${Tey.Lockfile.dependencyName(dependency)} at ${path}")
     end
   end
-  IO.printLine("Installed ${state.lockedDependencies.count} package(s)")
+  let omitted = state.lockedDependencies.count - wanted.count
+  IO.printLine("Installed ${wanted.count} package(s)") if omitted == 0
+  IO.printLine("Installed ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
   0
 end
 

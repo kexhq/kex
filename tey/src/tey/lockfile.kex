@@ -41,6 +41,7 @@ let dependencyName(dep: Dependency) -> String = dep.name
 let dependencyGit(dep: Dependency) -> String = dep.git
 let dependencyCommit(dep: Dependency) -> String = dep.commit
 let dependencySha256(dep: Dependency) -> String = dep.sha256
+let dependencyGroups(dep: Dependency) -> [String] = dep.groups
 let dependencyListLine(dep: Dependency) -> String = "${dep.name} ${dep.resolved} (${dep.commit})"
 
 let decode(text: String) -> Result<LockState, String> do

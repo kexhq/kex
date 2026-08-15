@@ -1000,11 +1000,26 @@ auto resolveBeamDeps(kex::ast::Program &program,
       kex::Lexer lexer(std::string(*src), *path);
       kex::Parser parser(lexer.tokenizeAll(), *path);
       auto depProg = std::make_unique<kex::ast::Program>(parser.parseProgram());
-      if (parser.diagnostics().empty()) {
-        resolve(*depProg, {});
-        deps.push_back(
-            {std::move(src), std::move(path), std::move(depProg)});
+      // A dependency that does not parse is a build failure, not a module to
+      // skip. Silently dropping it produced no error anywhere: the module
+      // simply did not exist, the program compiled, and the first call into
+      // it died at RUNTIME with `Undefined function: Tey.Resolver`.
+      if (!parser.diagnostics().empty()) {
+        for (const auto &diagnostic : parser.diagnostics())
+          std::cerr << kex::color::apply(kex::color::gray)
+                    << diagnostic.location.file << ":"
+                    << diagnostic.location.line << ":"
+                    << diagnostic.location.column << ":"
+                    << kex::color::apply(kex::color::reset) << " "
+                    << kex::color::apply(kex::color::bold)
+                    << kex::color::apply(kex::color::red)
+                    << "error:" << kex::color::apply(kex::color::reset) << " "
+                    << diagnostic.message << "\n";
+        std::cerr << "error: could not parse module " << modName << "\n";
+        std::exit(1);
       }
+      resolve(*depProg, {});
+      deps.push_back({std::move(src), std::move(path), std::move(depProg)});
     }
   };
   resolve(program, qualifiedModules);

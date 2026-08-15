@@ -1,10 +1,10 @@
 foul module Tey.Resolver
 
 using Tey.Cache, only: [fetch]
-using Tey.Git, only: [execute, pinRef]
+using Tey.Git, only: [execute, pinRef, tags]
 using Tey.Lockfile, only: [LockState]
 using Tey.Manifest, only: [ManifestPackage]
-using Tey.Semver, only: [satisfies]
+using Tey.Semver, only: [highest, range?, satisfies]
 
 let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
   if !Tey.Semver.satisfies(Kex.Kernel.VERSION.number, manifest.packageKexRequirement)
@@ -19,6 +19,19 @@ let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
 end
 
 private do
+  # The exact tag to pin. Anything but a tag range is taken as written.
+  let chooseTag(name: String, git: String, selector: String, requested: String) -> Result<String, String> do
+    return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
+    let tags = match Tey.Git.tags(git) do
+      Error(error) -> return Error(error)
+      Ok(value) -> value
+    end
+    match Tey.Semver.highest(tags, requested) do
+      Just(tag) -> return Ok(tag)
+      None -> return Error("no tag of ${name} satisfies `${requested}`")
+    end
+  end
+
   let resolveDependencies([], locked: [Tey.Lockfile.Dependency]) -> Result<[Tey.Lockfile.Dependency], String> = Ok(locked)
   let resolveDependencies([dependency | rest], locked: [Tey.Lockfile.Dependency]) -> Result<[Tey.Lockfile.Dependency], String> do
     match Tey.Resolver.resolveDependency(dependency) do
@@ -28,7 +41,14 @@ private do
   end
 
   let resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Result<Tey.Lockfile.Dependency, String> do
-    let (resolved, commit) = match Tey.Git.pinRef(manifestGit, manifestSelector, manifestRequested) do
+    # A range is resolved HERE, not pinned: the manifest keeps the question
+    # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
+    # manifest can pick up a compatible release while a build stays exact.
+    let wanted = match Tey.Resolver.chooseTag(manifestName, manifestGit, manifestSelector, manifestRequested) do
+      Error(error) -> return Error(error)
+      Ok(value) -> value
+    end
+    let (resolved, commit) = match Tey.Git.pinRef(manifestGit, manifestSelector, wanted) do
       Error(error) -> return Error(error)
       Ok(pin) -> pin
     end

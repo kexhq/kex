@@ -54,6 +54,18 @@ int main() {
             assertEqual(def->clauses[0].body.size(), size_t(1));
         });
 
+        it("parses a return type that opens on the next line", []() {
+            auto program = parse(
+                "let chooseTag(name: String, git: String)\n"
+                "    -> Result<String, String> do\n"
+                "  return Ok(name)\n"
+                "end\n"
+            );
+            assertEqual(program.items.size(), size_t(1));
+            auto& def = std::get<std::unique_ptr<ast::FunctionDef>>(program.items[0]);
+            assertTrue(def->clauses[0].returnAnnotation.has_value());
+        });
+
         it("leaves a signature-only declaration alone", []() {
             // The lookahead past newlines must not consume the NEXT
             // declaration when no `=` follows the signature.
