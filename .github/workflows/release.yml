@@ -675,8 +675,12 @@ jobs:
           fi
 
           # GitHub Packages requires auth to read too, before the existence
-          # check below can ask it anything.
-          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+          # check below can ask it anything. The scoped registry line is what
+          # keeps `npm view` on GitHub Packages as well: `publish` gets there
+          # via the package's publishConfig, but `view` ignores it and would
+          # otherwise 404 against registry.npmjs.org.
+          echo "@kexhq:registry=https://npm.pkg.github.com" > ~/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" >> ~/.npmrc
 
           # npm versions are immutable, so a re-run skips rather than fails.
           if npm view "@kexhq/kex@${version}" version >/dev/null 2>&1; then
