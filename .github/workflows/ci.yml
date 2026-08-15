@@ -66,6 +66,38 @@ jobs:
       - name: Stdlib spec suite via BEAM
         run: make spec-stdlib-beam
 
+  # musl is a supported platform, and glibc passing says nothing about it:
+  # the spec suite pins float formatting, and that is exactly where libm
+  # implementations differ. The image build runs `make spec` and
+  # `make spec-beam` inside Alpine, so this job is both the platform test and
+  # the artifact the release publishes.
+  alpine:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the Alpine image (runs the suites on musl)
+        run: docker build -f docker/Dockerfile.alpine --build-arg BUILD_JOBS=4 -t kex:alpine .
+
+      - name: Smoke-test both backends in the image
+        run: |
+          set -euo pipefail
+          printf 'main do\n  IO.printLine("ok")\nend\n' > /tmp/smoke.kex
+          docker run --rm kex:alpine --version
+          [ "$(docker run --rm -v /tmp:/work kex:alpine smoke.kex)" = "ok" ]
+          [ "$(docker run --rm -v /tmp:/work kex:alpine -R smoke.kex)" = "ok" ]
+
+      # The slim image keeps the BEAM and drops the OTP applications Kex does
+      # not use, so what needs checking is that the remaining set is enough:
+      # its own build runs the suites against the pruned distribution, and
+      # this confirms the published layer behaves the same.
+      - name: Build and smoke-test the slim image
+        run: |
+          set -euo pipefail
+          docker build -f docker/Dockerfile.slim --build-arg BUILD_JOBS=4 -t kex:slim .
+          [ "$(docker run --rm -v /tmp:/work kex:slim smoke.kex)" = "ok" ]
+          [ "$(docker run --rm -v /tmp:/work kex:slim -R smoke.kex)" = "ok" ]
+
   wasm:
     runs-on: ubuntu-latest
     permissions:

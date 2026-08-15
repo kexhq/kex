@@ -151,6 +151,14 @@ auto Evaluator::registerKexBuiltins() -> void {
                              Value::integer(kVersionPatch), revision});
     });
 
+    // The release channel, "" for a stable build. Separate from version/0
+    // rather than a fifth tuple element: the tuple is a published shape
+    // (`Kex.Kernel.VERSION.tuple`), and widening it would break every
+    // destructuring of it.
+    defineIntrinsic("Kex::versionPreRelease", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::string(kVersionPreRelease);
+    });
+
     // Kex.Intrinsic.Interface.read — the KexI chunk of a compiled module,
     // decoded. Reading a BEAM chunk and decoding an Erlang external term are
     // both things the compiler already does natively, so this works on the

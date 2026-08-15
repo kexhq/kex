@@ -1,0 +1,54 @@
+# The Alpine (musl) build of Kex — a supported platform, not a smaller copy of
+# the Debian image.
+#
+# musl is genuinely a third libm: the CI matrix exists because macOS and glibc
+# already round the last bit of some float results differently, and the spec
+# suite compares that output against golden files. So this build RUNS the
+# suites, CI builds this image on every push, and a musl difference is a bug
+# to fix rather than a platform to drop.
+#
+#   docker build -f docker/Dockerfile.alpine -t kex:alpine .
+
+FROM alpine:3.20 AS build
+
+RUN apk add --no-cache \
+        build-base cmake git bash \
+        gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
+        erlang erlang-dev erlang-odbc unixodbc-dev
+
+WORKDIR /src
+COPY . .
+
+ARG KEX_BUILD_DATE
+# Bounded on purpose: an unbounded --parallel runs one compiler per core, and
+# this tree has translation units big enough to exhaust a default Docker
+# Desktop VM (the build dies with "cannot allocate memory"). CI passes a
+# higher number for its bigger runners.
+ARG BUILD_JOBS=2
+# The build context has no .git (see .dockerignore), so the commit is passed
+# in rather than discovered.
+ARG KEX_GIT_REVISION
+RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        ${KEX_BUILD_DATE:+-DKEX_BUILD_DATE="$KEX_BUILD_DATE"} \
+        ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \
+    && cmake --build build --parallel "$BUILD_JOBS"
+
+# bash, because the spec runners use process substitution.
+RUN make spec && make spec-beam
+
+RUN cmake --install build --prefix /opt/kex
+
+FROM alpine:3.20
+
+# libgmpxx is its own package on Alpine: the binary links GMP's C++
+# wrapper, and `gmp` alone leaves the image failing to start.
+RUN apk add --no-cache gmp libgmpxx pcre2 readline libstdc++ boost-context openssl \
+        erlang erlang-odbc unixodbc
+
+COPY --from=build /opt/kex /opt/kex
+ENV PATH="/opt/kex/bin:${PATH}"
+
+WORKDIR /work
+
+ENTRYPOINT ["kex"]
+CMD ["--version"]

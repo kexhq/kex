@@ -1,0 +1,10 @@
+# The container builds from a clean checkout: a host build tree is the wrong
+# architecture, and the caches are large enough to dominate the build context.
+build
+build-wasm
+tey/ebin
+Testing
+node_modules
+.git
+*.core
+*.beam

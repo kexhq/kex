@@ -7,7 +7,11 @@ using Tey.Manifest, only: [ManifestPackage]
 using Tey.Semver, only: [highest, range?, satisfies]
 
 let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
-  if !Tey.Semver.satisfies(Kex.Kernel.VERSION.number, manifest.packageKexRequirement)
+  # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
+  # satisfies `>= 0.3.0`. Ranges never RESOLVE to a pre-release (see
+  # Tey.Semver.satisfies), but refusing to build a package on the rc you
+  # deliberately installed would make pre-releases untestable.
+  if !Tey.Semver.satisfies(Tey.Semver.release(Kex.Kernel.VERSION.number), manifest.packageKexRequirement)
     return Error("Kex ${Kex.Kernel.VERSION.number} does not satisfy ${manifest.packageKexRequirement}")
   end
   let locked = match Tey.Resolver.resolveDependencies(manifest.manifestDependencies, []) do
@@ -15,7 +19,10 @@ let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
     Ok(dependencies) -> dependencies
   end
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
-                kexVersion: Kex.Kernel.VERSION.number, lockedDependencies: locked })
+                # The release, not `.number`: that carries the git revision of
+                # whichever build happened to run `tey lock`, so a committed
+                # lockfile would churn on every rebuild of the same version.
+                kexVersion: Kex.Kernel.VERSION.release, lockedDependencies: locked })
 end
 
 private do

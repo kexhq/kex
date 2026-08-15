@@ -1685,7 +1685,7 @@ auto printUsage(const char *progName) -> void {
 }
 
 auto printVersion() -> void {
-  std::cout << "kex " << kex::versionString() << "\n";
+  std::cout << "kex " << kex::versionStringWithBuild() << "\n";
 }
 
 int main(int argc, char *argv[]) {

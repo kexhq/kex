@@ -9,10 +9,16 @@ include(GNUInstallDirs)
 # .git/HEAD as a dependency so switching branches or committing re-runs this
 # rather than leaving a stale hash baked in. A source archive has no .git at
 # all; that is a normal state and leaves the revision empty (`None` in Kex).
-# The version NUMBERS are not duplicated here — they are read back out of
-# version.hxx below, which stays the single place they are written down.
-set(KEX_GIT_REVISION "")
-if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
+# The version NUMBERS are not here at all — they come from the VERSION file
+# below.
+#
+# -DKEX_GIT_REVISION=<hash> supplies it when there is no .git to ask: a
+# container build copies the source without the repository, and a release
+# image that cannot name its commit is harder to trace than it needs to be.
+if(NOT DEFINED KEX_GIT_REVISION)
+    set(KEX_GIT_REVISION "")
+endif()
+if(NOT KEX_GIT_REVISION AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
     find_package(Git QUIET)
     if(GIT_FOUND)
         execute_process(
@@ -26,19 +32,26 @@ if(EXISTS "${CMAKE_SOURCE_DIR}/.git")
     endif()
 endif()
 
-# version.hxx is authoritative for the numbers; erlc needs them too, so they
-# are parsed back out rather than restated.
-file(READ "${CMAKE_SOURCE_DIR}/src/common/version.hxx" KEX_VERSION_HEADER)
-string(REGEX MATCH "kVersionMajor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
+# The version comes from the repository's VERSION file: one line,
+# `MAJOR.MINOR.PATCH` with an optional `-prerelease`. It is baked into the
+# binary below rather than written in a header, so a release bump touches one
+# plain file that the release workflow and any packaging can read too.
+file(READ "${CMAKE_SOURCE_DIR}/VERSION" KEX_VERSION_RAW)
+string(STRIP "${KEX_VERSION_RAW}" KEX_VERSION_FULL)
+if(NOT KEX_VERSION_FULL MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9A-Za-z.-]+))?$")
+    message(FATAL_ERROR
+        "VERSION must read MAJOR.MINOR.PATCH[-prerelease], got '${KEX_VERSION_FULL}'")
+endif()
 set(KEX_VERSION_MAJOR "${CMAKE_MATCH_1}")
-string(REGEX MATCH "kVersionMinor = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
-set(KEX_VERSION_MINOR "${CMAKE_MATCH_1}")
-string(REGEX MATCH "kVersionPatch = ([0-9]+)" _m "${KEX_VERSION_HEADER}")
-set(KEX_VERSION_PATCH "${CMAKE_MATCH_1}")
+set(KEX_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(KEX_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(KEX_VERSION_PRERELEASE "${CMAKE_MATCH_5}")
+
+# Re-configure when the version changes, the same way the git HEAD is watched.
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    "${CMAKE_SOURCE_DIR}/src/common/version.hxx")
+    "${CMAKE_SOURCE_DIR}/VERSION")
 if(KEX_GIT_REVISION)
-    message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (${KEX_GIT_REVISION})")
+    message(STATUS "kex ${KEX_VERSION_FULL} (${KEX_GIT_REVISION})")
 else()
     message(STATUS "kex ${KEX_VERSION_MAJOR}.${KEX_VERSION_MINOR}.${KEX_VERSION_PATCH} (no git revision)")
 endif()
@@ -187,10 +200,25 @@ add_library(kex_lib
 
 target_include_directories(kex_lib PUBLIC src)
 
+target_compile_definitions(kex_lib PUBLIC
+    KEX_VERSION_MAJOR=${KEX_VERSION_MAJOR}
+    KEX_VERSION_MINOR=${KEX_VERSION_MINOR}
+    KEX_VERSION_PATCH=${KEX_VERSION_PATCH}
+    KEX_VERSION_PRERELEASE="${KEX_VERSION_PRERELEASE}")
+
 if(KEX_GIT_REVISION)
     target_compile_definitions(kex_lib PUBLIC
         KEX_GIT_REVISION="${KEX_GIT_REVISION}")
 endif()
+
+# The build date, shown by `kex --version`. A DATE, not a timestamp, so two
+# builds of the same source on the same day still match; pass
+# -DKEX_BUILD_DATE=YYYY-MM-DD (the release workflow uses the tagged commit's
+# date) to pin it exactly.
+if(NOT DEFINED KEX_BUILD_DATE)
+    string(TIMESTAMP KEX_BUILD_DATE "%Y-%m-%d" UTC)
+endif()
+target_compile_definitions(kex_lib PUBLIC KEX_BUILD_DATE="${KEX_BUILD_DATE}")
 
 # Wasm can't discover the prelude via executableDirectory() (no /proc/self/exe,
 # no _NSGetExecutablePath) so bake the source path in at compile time.
@@ -366,6 +394,7 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
             -DKEX_VERSION_MAJOR=${KEX_VERSION_MAJOR}
             -DKEX_VERSION_MINOR=${KEX_VERSION_MINOR}
             -DKEX_VERSION_PATCH=${KEX_VERSION_PATCH}
+            "-DKEX_VERSION_PRERELEASE=\"${KEX_VERSION_PRERELEASE}\""
             "-DKEX_GIT_REVISION=\"${KEX_GIT_REVISION}\""
             -o ${KEX_RUNTIME_BEAM_DIR} ${KEX_RUNTIME_ERL}
         DEPENDS ${KEX_RUNTIME_ERL}

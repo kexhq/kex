@@ -16,6 +16,7 @@ let parser -> OptionConfig do
     .flag("cache", None, "Remove the complete cache with `tey clean`")
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
+    .flag("pre", None, "Include pre-releases in `tey kex list`")
 end
 
 let dispatch(args: [String]) -> Integer do
@@ -35,11 +36,26 @@ let dispatch(args: [String]) -> Integer do
 end
 
 private do
+  let installKex(version: String) -> Integer do
+    match Tey.Toolchain.installRelease(version) do
+      Ok(prefix) -> do
+        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        Tey.Cli.reportShim(version)
+        0
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+    end
+  end
+
   # "* 0.3.0  installed, selected" — the marker is the selected one, so the
   # active version is findable by eye in a long list.
   let versionLine(version: String, installed: [String], selected: String) -> String do
     let marker = version == selected then "*" else " "
-    let notes = installed.contains?(version) then ["installed"] else []
+    let channel = Tey.Semver.stable?(version) then [] else ["pre-release"]
+    let notes = installed.contains?(version) then [...channel, "installed"] else channel
     let all = version == selected then [...notes, "selected"] else notes
     return "${marker} ${version}" if all.empty?
     return "${marker} ${version}  ${all.join(", ")}"
@@ -76,8 +92,8 @@ Commands:
   test                     run spec/*.spec.kex
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
-  kex list                 show Kex versions, newest first
-  kex install <version>    build and install a released Kex
+  kex list [--pre]         show Kex versions, newest first
+  kex install [<version>]  build and install a Kex (newest release by default)
   kex install <src> <version>
                            build and install from a source checkout
   kex uninstall <version>  remove an installed Kex
@@ -110,7 +126,7 @@ Commands:
     Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
   end
 
-  let dispatchCommand(["kex", "list"], _) -> Integer do
+  let dispatchCommand(["kex", "list"], options: ParsedOptions) -> Integer do
     let available = match Tey.Toolchain.availableVersions do
       Error(error) -> do
         # A release list needs the network; the installed ones do not, and
@@ -121,7 +137,16 @@ Commands:
       Ok(versions) -> versions
     end
     let installed = Tey.Toolchain.installedVersions
-    let versions = Tey.Toolchain.newestFirst([...available, ...installed])
+    let all = Tey.Toolchain.newestFirst([...available, ...installed])
+    # Pre-releases are opt-in: someone reading this list is usually choosing
+    # what to install, and `0.4.0-rc.1` sitting above `0.3.9` is an invitation
+    # to install an rc by accident. An INSTALLED pre-release is always shown —
+    # hiding a version the machine already has would be a lie about the
+    # machine, and it is how you would find the one to uninstall.
+    var versions = all
+    if !options.flagEnabled?("pre")
+      versions = all.filter { |version| Tey.Semver.stable?(version) || installed.contains?(version) }
+    end
     if versions.empty?
       IO.printLine("No Kex versions found")
       return 0
@@ -133,22 +158,25 @@ Commands:
     if !Tey.Toolchain.selectionHealthy?
       IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
     end
+    let hidden = all.count - versions.count
+    IO.printLine("") if hidden > 0
+    IO.printLine("${hidden} pre-release(s) hidden; pass --pre to see them") if hidden > 0
     Tey.Cli.reportShim(selected)
     0
   end
 
-  let dispatchCommand(["kex", "install", version], _) -> Integer do
-    match Tey.Toolchain.installRelease(version) do
-      Ok(prefix) -> do
-        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
-        Tey.Cli.reportShim(version)
-        0
-      end
+  let dispatchCommand(["kex", "install"], _) -> Integer do
+    match Tey.Toolchain.latestStable do
       Error(error) -> do
         IO.printError("tey: ${error}\n")
         1
       end
+      Ok(version) -> Tey.Cli.installKex(version)
     end
+  end
+
+  let dispatchCommand(["kex", "install", version], _) -> Integer do
+    Tey.Cli.installKex(version)
   end
 
   let dispatchCommand(["kex", "uninstall", version], _) -> Integer do
