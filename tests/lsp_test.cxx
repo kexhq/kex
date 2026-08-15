@@ -499,7 +499,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex","languageId":"kex","version":1,"text":"using FS\nmain do\n  FS.File.join(\"src\", \"utils.kex\")\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex","languageId":"kex","version":1,"text":"using FS\nmain do\n  FS.File.copy(\"src\", \"utils.kex\")\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-filesystem.kex"},"position":{"line":2,"character":11}}})");
             messages += frame(
@@ -514,13 +514,13 @@ int main() {
             assertEqual(kex::lsp::run(input, output), 0);
             const auto result = output.str();
             const auto selected = result.find(
-                "Selected overload**\\n\\n```kex\\nfoul join : String -> String -> String");
+                "Selected overload**\\n\\n```kex\\nfoul copy : String -> String -> Bool");
             assertTrue(selected != std::string::npos,
-                       "FS.File.join did not select its foul filesystem overload");
+                       "FS.File.copy did not select its foul filesystem overload");
             assertTrue(result.find("definitionProvider") != std::string::npos,
                        "server did not advertise definition navigation");
             assertTrue(result.find("fs.kex") != std::string::npos,
-                       "FS.File.join navigation did not resolve to its source");
+                       "FS.File.copy navigation did not resolve to its source");
         });
         it("prefers an at-field over an unrelated receiver method", []() {
             std::string messages;

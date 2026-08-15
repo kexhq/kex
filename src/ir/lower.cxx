@@ -4996,6 +4996,15 @@ struct Lowering {
         if (fallbackModule.empty() &&
             (servedReceivers.size() != 1 || staticReceiver.empty()))
             return nullptr;
+        // And only for a NOMINAL sole provider — a record some module owns,
+        // like Parsing's `Input`. For a builtin receiver (List, String, Map)
+        // the receiver-function table is an incomplete view of who answers:
+        // while the prelude itself is being compiled, String's own `empty?`
+        // is not in it yet, so "nobody else provides this" is wrong and the
+        // failure arm would reject every String at runtime.
+        if (fallbackModule.empty() &&
+            !records.count(canonicalRecordName(*servedReceivers.begin())))
+            return nullptr;
         std::vector<ExprPtr> fallbackArgs;
         for (const auto& arg : args) {
             try {

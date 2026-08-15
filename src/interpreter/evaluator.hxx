@@ -394,6 +394,11 @@ private:
     bool m_mockHttp = false;
     std::deque<ValuePtr> m_mockHttpResponses;
 
+    // Mock.System — what the machine claims to be. Unset means "ask the real
+    // one", which is why these are optionals rather than defaulted values.
+    std::optional<std::string> m_mockOS;
+    std::optional<int64_t> m_mockBitWidth;
+
     // describe/it/assert (registerTestBuiltins) — nesting depth for
     // indentation, and pass/fail counters for the summary line printed
     // after the program finishes if any test ran.

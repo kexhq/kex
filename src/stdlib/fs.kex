@@ -52,20 +52,181 @@ module FS do
     size : FilePath -> Integer?
     let size(path) = Kex.Intrinsic.File.size(path)
 
-    basename : FilePath -> String
-    let basename(path) = Kex.Intrinsic.File.basename(path)
-
-    dirname : FilePath -> String
-    let dirname(path) = Kex.Intrinsic.File.dirname(path)
-
-    extension : FilePath -> String
-    let extension(path) = Kex.Intrinsic.File.extension(path)
-
-    join : FilePath -> FilePath -> String
-    let join(a, b) = Kex.Intrinsic.File.join(a, b)
-
+    # Path manipulation lives in FS.Path — `basename`, `dirname`,
+    # `extension` and `join` used to be here too, but a name cannot sit in
+    # both modules: FilePath IS String, so two same-named receiver functions
+    # on it are indistinguishable at every call site. `absolute` stays
+    # because it is not lexical — it asks the process where it is.
     absolute : FilePath -> String?
     let absolute(path) = Kex.Intrinsic.File.absolute(path)
+  end
+
+  # Lexical path algebra: pure string manipulation, no filesystem access, so
+  # every answer is the same whether or not the path exists. POSIX
+  # separators only for now.
+  module Path do
+    separator : String
+    let separator = "/"
+
+    # Joins parts with a single separator and normalizes the result, the way
+    # Node's path.join and Ruby's File.join do. An absolute part does NOT
+    # restart the path (that is Pathname#join's behaviour) — use the part on
+    # its own if that is what you mean.
+    join : FilePath -> FilePath -> String
+    let join(a, b) = FS.Path.joinAll([a, b])
+
+    join : FilePath -> FilePath -> FilePath -> String
+    let join(a, b, c) = FS.Path.joinAll([a, b, c])
+
+    # The list form is `joinAll`, not another `join` overload: a list
+    # receiver already has `List.join`, and a second one-argument `join` on
+    # the same receiver would be indistinguishable from it.
+    joinAll : [FilePath] -> String
+    let joinAll(parts) do
+      let present = parts.filter { |part| !part.empty? }
+      return "." if present.empty?
+      return FS.Path.normalize(FS.Path.glue(present))
+    end
+
+    # Resolves `.` and `..` lexically. A leading `..` in a RELATIVE path is
+    # kept (there is no way to know what it escapes to); one in an absolute
+    # path is dropped, since `/` has no parent.
+    normalize : FilePath -> String
+    let normalize(path) do
+      let rooted = FS.Path.absolute?(path)
+      let parts = path.split(FS.Path.separator)
+        .filter { |part| !part.empty? && part != "." }
+      let empty: [String] = []
+      let stack = parts.reduce(empty) do |acc, part|
+        FS.Path.resolveStep(acc, part, rooted)
+      end
+      let joined = FS.Path.glue(stack)
+      return "${FS.Path.separator}${joined}" if rooted
+      return "." if joined.empty?
+      return joined
+    end
+
+    # The non-empty parts of the normalized path. `/` and `.` have none.
+    segments : FilePath -> [String]
+    let segments(path) do
+      let normalized = FS.Path.normalize(path)
+      return [] if normalized == "." || normalized == FS.Path.separator
+      return normalized.split(FS.Path.separator).filter { |part| !part.empty? }
+    end
+
+    absolute? : FilePath -> Bool
+    let absolute?(path) = path.startsWith?(FS.Path.separator)
+
+    relative? : FilePath -> Bool
+    let relative?(path) = !FS.Path.absolute?(path)
+
+    # The parent of a path: `/` for a root child, `.` for a bare name.
+    dirname : FilePath -> String
+    let dirname(path) do
+      let rooted = FS.Path.absolute?(path)
+      let parts = FS.Path.segments(path)
+      if parts.count <= 1
+        return FS.Path.separator if rooted
+        return "."
+      end
+      let head = FS.Path.glue(parts.take(parts.count - 1))
+      return "${FS.Path.separator}${head}" if rooted
+      return head
+    end
+
+    # The last segment: `/` for the root itself, `.` for an empty path.
+    basename : FilePath -> String
+    let basename(path) do
+      let parts = FS.Path.segments(path)
+      match parts.last do
+        Just(name) -> return name
+        None -> return FS.Path.absolute?(path) then FS.Path.separator else "."
+      end
+    end
+
+    # The dot-prefixed extension, or "" when there is none. A leading dot is
+    # part of the NAME, so `.gitignore` has no extension.
+    extension : FilePath -> String
+    let extension(path) do
+      let name = FS.Path.basename(path)
+      return "" if name.startsWith?(".")
+      let pieces = name.split(".")
+      return "" if pieces.count < 2
+      match pieces.last do
+        Just(suffix) -> return ".${suffix}"
+        None -> return ""
+      end
+    end
+
+    # The basename without its extension. A name that IS its extension —
+    # `.gitignore` — keeps it, because it has none to drop.
+    stem : FilePath -> String
+    let stem(path) do
+      let name = FS.Path.basename(path)
+      let suffix = FS.Path.extension(path)
+      return name if suffix.empty?
+      return name.take(name.count - suffix.count)
+    end
+
+    # Same path with a different extension. The new one may be written with
+    # or without its dot; an empty one removes the extension.
+    withExtension : FilePath -> String -> String
+    let withExtension(path, wanted) do
+      let bare = !wanted.empty? && !wanted.startsWith?(".")
+      let dotted = bare then ".${wanted}" else wanted
+      let name = "${FS.Path.stem(path)}${dotted}"
+      let parent = FS.Path.dirname(path)
+      return name if parent == "."
+      return FS.Path.join(parent, name)
+    end
+
+    # `path` expressed relative to `base`, walking up with `..` as needed.
+    # Purely lexical, so it answers only when both sides are anchored the
+    # same way; a relative path against an absolute base (or the reverse)
+    # comes back unchanged.
+    relativeTo : FilePath -> FilePath -> String
+    let relativeTo(path, base) do
+      let target = FS.Path.normalize(path)
+      let from = FS.Path.normalize(base)
+      return target if FS.Path.absolute?(target) != FS.Path.absolute?(from)
+      let targetParts = FS.Path.segments(target)
+      let fromParts = FS.Path.segments(from)
+      let shared = FS.Path.sharedPrefix(targetParts, fromParts, 0)
+      let ups = fromParts.drop(shared).map { |_| ".." }
+      let rest = targetParts.drop(shared)
+      let steps = [...ups, ...rest]
+      return "." if steps.empty?
+      return FS.Path.glue(steps)
+    end
+
+    private do
+      # Separator-joins parts that are already clean. Not `parts.join(sep)`:
+      # with FilePath aliased to String that call is ambiguous against
+      # Path.join itself.
+      let glue(parts: [String]) -> String do
+        return parts.reduce("") do |acc, part|
+          acc.empty? then part else "${acc}${FS.Path.separator}${part}"
+        end
+      end
+
+      # One `..`-aware step of the normalize fold.
+      let resolveStep(acc: [String], part: String, rooted: Bool) -> [String] do
+        return acc.push(part) if part != ".."
+        let top = match acc.last do
+          Just(value) -> value
+          None -> ""
+        end
+        return acc.take(acc.count - 1) if top != "" && top != ".."
+        return acc if rooted
+        return acc.push("..")
+      end
+
+      let sharedPrefix(a: [String], b: [String], index: Integer) -> Integer do
+        return index if index >= a.count || index >= b.count
+        return index if a.at(index) != b.at(index)
+        return FS.Path.sharedPrefix(a, b, index + 1)
+      end
+    end
   end
 
   foul module Directory do

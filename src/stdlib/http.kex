@@ -99,6 +99,26 @@ foul module Mock do
     end
   end
 
+  # Makes the machine claim to be something else, so a test for another
+  # system's behaviour can run on this one. Setter per fact, like Mock.FS.
+  foul module System do
+    OS : System.OperatingSystem -> Void
+    BITWIDTH : Integer -> Void
+    clear : Void
+
+    foul OS(name: System.OperatingSystem) -> Void do
+      return Kex.Intrinsic.System.mockOS(name)
+    end
+
+    foul BITWIDTH(bits: Integer) -> Void do
+      return Kex.Intrinsic.System.mockBitWidth(bits)
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.System.mockClear()
+    end
+  end
+
   foul module IO do
     foul start() -> Void do
       return Kex.Intrinsic.IO.ioMockStart()
