@@ -21,6 +21,15 @@
   ],
   "repository": {
     "comments": { "patterns": [
+      { "comment": "An @example body is Kex source, and hover renders it in a ```kex fence, so it gets the real grammar here too. Spans lines: it runs until the comment block ends or another tag starts. Listed before the plain comment rule, which would otherwise claim each line first.",
+        "name": "comment.block.documentation.example.kex",
+        "begin": "^\\s*#\\s*(@example)\\b",
+        "beginCaptures": { "1": { "name": "keyword.other.documentation.kex" } },
+        "end": "^(?!\\s*#)|(?=^\\s*#\\s*@(?!example))",
+        "patterns": [
+          { "name": "punctuation.definition.comment.kex", "match": "^\\s*#" },
+          { "include": "$self" }
+        ] },
       { "comment": "A `#` comment directly above a declaration is its documentation, and the LSP renders it as RDoc (see renderRdoc in src/lsp/server.cxx): `+code+` inline, plus the @example / @param / @return tags. Highlighting the same markup here means the source shows what hover will show.",
         "name": "comment.line.number-sign.kex", "begin": "#", "end": "$",
         "patterns": [

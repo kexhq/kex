@@ -1182,6 +1182,47 @@ auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+// The declared type of one field, read out of a record symbol's Kex-shaped
+// declaration text (`record Box do\n  size : Integer\n  ...`). Hovering a
+// field used to answer with whatever global function shared its name — `b.size`
+// reported `foul size : String -> Integer?` — because a field is not a symbol
+// in its own right and the name-based lookup was all there was.
+auto recordFieldType(const std::string& recordDetail, const std::string& field)
+    -> std::string {
+    size_t lineStart = 0;
+    while (lineStart <= recordDetail.size()) {
+        const auto newline = recordDetail.find('\n', lineStart);
+        const auto end =
+            newline == std::string::npos ? recordDetail.size() : newline;
+        size_t i = lineStart;
+        while (i < end && std::isspace(static_cast<unsigned char>(recordDetail[i])))
+            ++i;
+        if (recordDetail.compare(i, field.size(), field) == 0) {
+            size_t after = i + field.size();
+            while (after < end &&
+                   std::isspace(static_cast<unsigned char>(recordDetail[after])))
+                ++after;
+            if (after < end && recordDetail[after] == ':') {
+                ++after;
+                while (after < end &&
+                       std::isspace(static_cast<unsigned char>(recordDetail[after])))
+                    ++after;
+                // Stop before a default value: `count : Integer = 0`.
+                auto stop = recordDetail.find('=', after);
+                if (stop == std::string::npos || stop > end) stop = end;
+                auto text = recordDetail.substr(after, stop - after);
+                while (!text.empty() &&
+                       std::isspace(static_cast<unsigned char>(text.back())))
+                    text.pop_back();
+                if (!text.empty()) return text;
+            }
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return {};
+}
+
 // Module names this file opted into with `using`. Read from the text rather
 // than the AST so it still answers while the buffer is mid-edit and cannot be
 // parsed — which is exactly when an editor asks about a symbol.
@@ -2161,7 +2202,31 @@ private:
         const auto shorthandFieldType = atFieldType(
             document.text, params.position.line, word.byteColumn, word.text,
             m_db, document.path);
-        if (importLine) {
+        // A field of the record the receiver actually has. Resolved through
+        // the same analyzer-backed receiver lookup completion uses, so it
+        // works for `b.size`, `makeBox(3).size`, and a match binding alike.
+        std::string fieldDetail;
+        if (moduleQualifier.empty() && !importLine) {
+            const auto wordEnd = hoverLineStart + word.byteColumn - 1 +
+                                 word.byteLength;
+            if (const auto receiver = scanDotReceiver(document.text, wordEnd);
+                receiver.valid)
+                if (auto qualifier = recoveredReceiverQualifier(
+                        document.text, document.path, receiver, wordEnd,
+                        &m_interfaces);
+                    !qualifier.empty())
+                    if (const auto* record =
+                            m_db.findSymbol(qualifier, document.path);
+                        record && record->kind == semantic::SymbolKind::Record)
+                        if (auto type = recordFieldType(record->detail, word.text);
+                            !type.empty())
+                            fieldDetail = word.text + " : " + type;
+        }
+
+        if (!fieldDetail.empty()) {
+            detail = std::move(fieldDetail);
+            symbol = nullptr;
+        } else if (importLine) {
             // Hovering `FS` in `using FS` used to report an unrelated
             // declaration that happened to share the name — `type FilePath =
             // String` from the same file, or a `Feature` type — because the

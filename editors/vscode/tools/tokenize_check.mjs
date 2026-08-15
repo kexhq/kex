@@ -10,20 +10,14 @@ const wasm = readFileSync(require.resolve("vscode-oniguruma/release/onig.wasm"))
 
 const SAMPLE = `# Transforms each element by applying +f+.
 # @param f [A -> B] the mapping applied to every element
-# @return [B] the transformed list
 # @example
 #   [1, 2, 3].map { |x| x * 2 } # => [2, 4, 6]
+#   "abc".matches?(regex\`\\d+\`)
+# @return [B] the transformed list
 let map(f) = f
 
-main do
-  let digits = regex\`\\d+\`
-  let ws = re\`\\s+\`
-  let q = Regex.re\`https?://\\S+\`
-  let interp = regex$\`^\${word}\`
-  let items = [1, 2].map { |x| x * 2 }
-  let obj = Box { size: @size }
-  let me = this
-end
+# Plain prose after the block ends.
+let after = 1
 `;
 
 await oniguruma.loadWASM(wasm);
