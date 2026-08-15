@@ -1,6 +1,7 @@
 foul module Tey.Toolchain
 
 using Tey.Cache, only: [root]
+using Tey.Git, only: [execute]
 
 let home -> String do
   let userHome = ENV.get("HOME", ".")
@@ -79,6 +80,24 @@ end
 
 let kex -> String = Tey.Toolchain.installedKex.or("kex")
 
+# Whether the selected toolchain is actually there. A `current` naming a
+# version somebody deleted leaves every command failing on a path that does
+# not exist, which reads like a broken Tey rather than a missing Kex.
+let selectionHealthy? -> Bool do
+  match Tey.Toolchain.selected do
+    None -> return true
+    Just(version) -> return Tey.Toolchain.installed?(version)
+  end
+end
+
+# Installs a released version by name: the repository's tag is fetched into
+# the cache and built from there. This is the ordinary way to get a Kex —
+# `installSource` is for a checkout you already have.
+let installRelease(version: String) -> Result<String, String> do
+  let source = Tey.Toolchain.fetchRelease(version).try
+  return Tey.Toolchain.installSource(source, version)
+end
+
 # Installs compiler, runtime BEAM modules and stdlib sources together. The
 # source tree's CMake install layout is the toolchain ABI Tey manages.
 let installSource(source: String, version: String) -> Result<String, String> do
@@ -120,6 +139,20 @@ let installSource(source: String, version: String) -> Result<String, String> do
   Ok(installedPrefix)
 end
 
+# Removes an installed toolchain. Refuses to leave the shim pointing at
+# nothing: removing the SELECTED version also clears the selection, and the
+# caller is told to pick another.
+let uninstall(version: String) -> Result<String, String> do
+  let prefix = "${Tey.Toolchain.home}/toolchains/${version}"
+  return Error("Kex ${version} is not installed") if !FS.Directory.directory?(prefix)
+  return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix)
+  if Tey.Toolchain.selected == Just(version)
+    FS.File.delete("${Tey.Toolchain.home}/current")
+    FS.File.delete(Tey.Toolchain.shimPath)
+  end
+  return Ok(prefix)
+end
+
 let use(version: String) -> Bool do
   let home = Tey.Toolchain.home
   return false if !FS.File.file?("${home}/toolchains/${version}/bin/kex")
@@ -131,6 +164,39 @@ let use(version: String) -> Bool do
 end
 
 private do
+  # Clones the repository at `version`'s tag into the build cache and returns
+  # the checkout. Tags are tried as written and with a leading `v`, since
+  # both spellings are common.
+  let fetchRelease(version: String) -> Result<String, String> do
+    return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
+    return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/src")
+    let checkout = "${Tey.Cache.root}/src/kex-${version}"
+    return Ok(checkout) if FS.Directory.directory?(checkout)
+    let staging = "${checkout}.partial"
+    FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+    let tag = Tey.Toolchain.releaseTag(version).try
+    match Tey.Git.execute(["clone", "--depth", "1", "--branch", tag,
+                           Tey.Toolchain.repository, staging]) do
+      Error(error) -> do
+        FS.Directory.deleteAll(staging)
+        return Error(error)
+      end
+      Ok(_) -> do
+        return Ok(checkout) if FS.File.rename(staging, checkout)
+        FS.Directory.deleteAll(staging)
+        return Error("could not move the Kex ${version} checkout into place")
+      end
+    end
+  end
+
+  # The tag naming this version in the repository — `0.3.0` or `v0.3.0`.
+  let releaseTag(version: String) -> Result<String, String> do
+    let tags = Tey.Git.tags(Tey.Toolchain.repository).try
+    return Ok(version) if tags.contains?(version)
+    return Ok("v${version}") if tags.contains?("v${version}")
+    return Error("Kex ${version} is not a released version")
+  end
+
   # Points the shim at a version's binary, creating the bin directory the
   # first time. A symlink rather than a copy: `kex` finds its stdlib and
   # runtime relative to the REAL path, which the link preserves.

@@ -77,8 +77,10 @@ Commands:
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
   kex list                 show Kex versions, newest first
+  kex install <version>    build and install a released Kex
   kex install <src> <version>
-                           build/install compiler + runtime + stdlib
+                           build and install from a source checkout
+  kex uninstall <version>  remove an installed Kex
   kex use <version>        select an installed Kex toolchain
 `)
     return 0
@@ -128,8 +130,39 @@ Commands:
     versions.each do |version|
       IO.printLine(Tey.Cli.versionLine(version, installed, selected))
     end
+    if !Tey.Toolchain.selectionHealthy?
+      IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+    end
     Tey.Cli.reportShim(selected)
     0
+  end
+
+  let dispatchCommand(["kex", "install", version], _) -> Integer do
+    match Tey.Toolchain.installRelease(version) do
+      Ok(prefix) -> do
+        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        Tey.Cli.reportShim(version)
+        0
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+    end
+  end
+
+  let dispatchCommand(["kex", "uninstall", version], _) -> Integer do
+    match Tey.Toolchain.uninstall(version) do
+      Ok(prefix) -> do
+        IO.printLine("Removed Kex ${version} from ${prefix}")
+        IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
+        0
+      end
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+    end
   end
 
   let dispatchCommand(["kex", "install", source, version], _) -> Integer do

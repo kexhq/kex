@@ -55,11 +55,17 @@ They are kept explicit so temporary workarounds do not become accidental API.
   suffix (`0.3.0-rc1`) parses as its release (`0.3.0`) and sorts as one.
 - Lockfile merge-driver mode currently regenerates from the working-tree
   manifest; it does not inspect and merge the `%O`, `%A`, and `%B` inputs.
-- Source toolchain installation builds compiler, runtime, and stdlib
-  together, and stages them: CMake installs into `<version>.partial` and only
-  a complete tree is renamed into place, keeping the previous installation
-  until the new one lands. Still missing is a checksum over the installed
-  tree, so a toolchain that was corrupted AFTER installation is not detected.
+- Toolchain handling covers the whole lifecycle: `tey kex list` shows what is
+  released and what is installed, `tey kex install <version>` clones that tag
+  into the cache and builds it, `tey kex install <src> <version>` does the
+  same from a checkout, `tey kex use` selects, and `tey kex uninstall`
+  removes — clearing the selection when it removes the selected one. Installs
+  stage into `<version>.partial` and only a complete tree is renamed into
+  place, so a failed build never replaces a working compiler. What is still
+  missing: no checksum over an installed tree, so corruption AFTER
+  installation goes unnoticed; a cached source checkout is never pruned; and
+  `tey kex install` of an already-installed version rebuilds it rather than
+  reporting that it is there.
 - The Homebrew formula is HEAD-only until the first tagged Tey/Kex release has
   a stable source URL and checksum. During bootstrap it follows the
   `package-management` branch and should switch back to `main` after merge.
