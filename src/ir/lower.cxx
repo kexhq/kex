@@ -1103,8 +1103,13 @@ struct Lowering {
             } else if constexpr (std::is_same_v<T, ast::MatchExpr>) {
                 return lowerMatch(n);
             } else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
-                // `expr if cond` → cond ? expr : ok
-                return matchBool(lower(n.condition), lower(n.expr), lit(LitKind::Atom, "ok"));
+                // `expr if cond` → cond ? expr : None. The walker answers
+                // None for the failed case, and the value is observable:
+                // `let x = value if cond` binds it. Answering `:ok` here made
+                // the same binding print `:ok` on BEAM and nothing in the
+                // walker.
+                return matchBool(lower(n.condition), lower(n.expr),
+                                 lit(LitKind::None, "none"));
             } else if constexpr (std::is_same_v<T, ast::ThenElseExpr>) {
                 return matchBool(lower(n.condition), lower(n.thenExpr), lower(n.elseExpr));
             } else if constexpr (std::is_same_v<T, ast::ShorthandLambda>) {

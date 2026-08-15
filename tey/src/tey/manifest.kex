@@ -22,6 +22,12 @@ record ManifestPackage do
   targets : [Target] = []
 end
 
+# Reads a `package.kex`.
+#
+# Still a line reader rather than a grammar — see docs/tey-limitations.md —
+# but a strict one: it knows which line each declaration came from, joins a
+# declaration whose arguments span several lines, and refuses a declaration
+# it does not recognize instead of skipping it.
 let read(text: String) -> Result<ManifestPackage, String> do
   var name = ""
   var version = "0.1.0"
@@ -30,9 +36,10 @@ let read(text: String) -> Result<ManifestPackage, String> do
   var dependencies: [Dependency] = []
   var targets: [Target] = []
   var group = ""
+  var failure = ""
 
-  text.lines.each do |raw|
-    let line = raw.trim
+  Tey.Manifest.statements(text).each do |statement|
+    let (number, line) = statement
     if line.startsWith?("bundle ")
       name = Tey.Manifest.quoted(line).or("")
     elif line.startsWith?("version(")
@@ -43,7 +50,8 @@ let read(text: String) -> Result<ManifestPackage, String> do
       entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
     elif line.startsWith?("group ")
       group = line.split(":").second.or("").split(" ").first.or("")
-    elif line == "end" && group != ""
+    elif line == "end"
+      # Closes the group it is in, or the bundle itself.
       group = ""
     elif line.startsWith?("target(")
       targets.push!(Target {
@@ -68,8 +76,16 @@ let read(text: String) -> Result<ManifestPackage, String> do
         manifestGroups: groups
       })
       ()
+    else
+      # A line nobody recognizes is a mistake, not a comment. Reporting the
+      # FIRST one keeps the message about the manifest rather than about the
+      # cascade a typo causes.
+      if failure == ""
+        failure = "line ${number}: unknown declaration `${Tey.Manifest.head(line)}`"
+      end
     end
   end
+  return Error(failure) if failure != ""
   return Error("package.kex must declare bundle \"name\"") if name == ""
   return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
   Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
@@ -77,6 +93,62 @@ let read(text: String) -> Result<ManifestPackage, String> do
 end
 
 private do
+  # The declarations to read, each with the line it started on. Blank lines
+  # and comments are dropped; a declaration whose parentheses are still open
+  # continues onto the next line, so an argument list may be written across
+  # several.
+  let statements(text: String) -> [(Integer, String)] do
+    var found: [(Integer, String)] = []
+    var pending = ""
+    var startedAt = 0
+    var number = 0
+    text.lines.each do |raw|
+      number = number + 1
+      let line = raw.trim
+      if pending == ""
+        if !line.empty? && !line.startsWith?("#")
+          pending = line
+          startedAt = number
+        end
+      else
+        pending = "${pending} ${line}"
+      end
+      if pending != "" && Tey.Manifest.balanced?(pending)
+        found.push!((startedAt, pending))
+        pending = ""
+      end
+      ()
+    end
+    # An unclosed declaration is still worth reporting, and the reader below
+    # will reject it by name rather than lose it silently.
+    if pending != ""
+      found.push!((startedAt, pending))
+      ()
+    end
+    return found
+  end
+
+  let balanced?(line: String) -> Bool do
+    var depth = 0
+    var quoted? = false
+    line.chars.each do |c|
+      if c == '"'
+        quoted? = !quoted?
+      elif !quoted?
+        depth = depth + 1 if c == '('
+        depth = depth - 1 if c == ')'
+      end
+      ()
+    end
+    return depth <= 0
+  end
+
+  # The leading word of a declaration, for naming it in an error.
+  let head(line: String) -> String do
+    let letters = line.chars.takeWhile { |c| c.letter? || c == '_' }
+    return letters.empty? then line else letters.join("")
+  end
+
   let quoted(line: String) -> String? = line.split("\"").second
 
   let attribute(line: String, key: String) -> String? do

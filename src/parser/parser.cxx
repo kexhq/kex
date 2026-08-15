@@ -1113,7 +1113,34 @@ auto Parser::parseTypeName() -> ast::TypeName {
 // ===== Expressions =====
 
 auto Parser::parseExpr() -> ast::ExprPtr {
-    // Trailing if handled after parsing the main expr
+    auto expr = parseExprWithoutGuard();
+
+    if (match(TokenType::If)) {
+        auto condition = parseExpr();
+        // A guarded ASSIGNMENT is a statement, not a value: `total = total + 1
+        // if ready?` means "assign when ready", so it desugars to a one-armed
+        // `if`. As a TrailingIf it would be an expression whose value is None
+        // when the condition fails — and every backend would then have to
+        // decide separately what assigning None means.
+        if (std::holds_alternative<ast::AssignExpr>(expr->kind)) {
+            auto guarded = std::make_unique<ast::Expr>();
+            guarded->location = expr->location;
+            std::vector<ast::ExprPtr> body;
+            body.push_back(std::move(expr));
+            guarded->kind = ast::IfExpr{std::move(condition), std::move(body),
+                                        {}, std::nullopt, nullptr};
+            return guarded;
+        }
+        auto trailing = std::make_unique<ast::Expr>();
+        trailing->location = expr->location;
+        trailing->kind = ast::TrailingIf{std::move(expr), std::move(condition)};
+        return trailing;
+    }
+
+    return expr;
+}
+
+auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
     auto expr = parseAssignment();
 
     // `cond then a else b` — ternary replacement, lowest precedence. Both
@@ -1133,14 +1160,6 @@ auto Parser::parseExpr() -> ast::ExprPtr {
         expr = std::move(thenElse);
     }
 
-    if (match(TokenType::If)) {
-        auto trailing = std::make_unique<ast::Expr>();
-        trailing->location = expr->location;
-        auto condition = parseExpr();
-        trailing->kind = ast::TrailingIf{std::move(expr), std::move(condition)};
-        return trailing;
-    }
-
     return expr;
 }
 
@@ -1149,7 +1168,12 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
         auto loc = currentLocation();
         auto name = advance().value;
         advance(); // =
-        auto value = parseExpr();
+        // The value stops short of a trailing `if`: in
+        // `status = code if failed?` the condition decides whether the
+        // ASSIGNMENT happens. Read as part of the value it would instead
+        // store None whenever the condition was false — silently replacing
+        // the variable's contents with nothing, which is never the intent.
+        auto value = parseExprWithoutGuard();
 
         auto expr = std::make_unique<ast::Expr>();
         expr->location = loc;

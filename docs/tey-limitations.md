@@ -5,10 +5,30 @@ They are kept explicit so temporary workarounds do not become accidental API.
 
 ## Tey package-manager limitations
 
-- The manifest reader currently recognizes the supported declarations one line
-  at a time. It does not yet use the `Parsing` combinators for the full grammar,
-  report source locations, reject unknown declarations, or handle declarations
-  split across lines.
+- The manifest reader still recognizes declarations by their leading word
+  rather than by a grammar. It now reports the line a problem is on, refuses a
+  declaration it does not know, and joins a declaration whose arguments span
+  several lines — but it does not understand nesting beyond `group`, and a
+  malformed argument list is reported as an unknown declaration rather than as
+  the specific mistake.
+
+  The intended fix is NOT a hand-written grammar in Tey: `package.kex` is Kex
+  source, so the compiler should hand its AST to Kex code and Tey should read
+  that. Most of it already exists — the prelude's `Parser` module parses Kex
+  into `Program`/`Node`/`Expression` values with locations. Three things stand
+  in the way, in increasing order of size:
+
+  1. `Parser` drops the `do ... end` block passed to a call, so
+     `bundle "demo" do ... end` parses to `Call(Identifier("bundle"),
+     [LitString("demo")])` with the manifest's entire contents missing.
+  2. `Expression`'s `Call` has no representation for named arguments, which
+     `tey("greet", git: ..., tag: ...)` depends on.
+  3. `Parser` exists only in the tree walker. Under `-R` it raises `undef` —
+     there is no `kex_intrinsic_parser.erl` — and Tey runs on BEAM. Closing
+     this means either exposing the C++ parser to the BEAM runtime through a
+     NIF/port, or a Kex-native parser (the self-hosting path). Either is a
+     project of its own, and worth doing for tooling generally (formatter,
+     linter, docgen, macros) rather than for this reader alone.
 - Git tags are pinned exactly. The package-level Kex requirement is checked,
   but dependency semver-range tag discovery, highest-compatible
   selection, duplicate constraint unification, transitive manifests, and cycle
