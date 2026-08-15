@@ -1182,6 +1182,34 @@ auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+// Module names this file opted into with `using`. Read from the text rather
+// than the AST so it still answers while the buffer is mid-edit and cannot be
+// parsed — which is exactly when an editor asks about a symbol.
+auto documentImports(const std::string& source)
+    -> std::unordered_set<std::string> {
+    std::unordered_set<std::string> modules;
+    size_t lineStart = 0;
+    while (lineStart <= source.size()) {
+        const auto newline = source.find('\n', lineStart);
+        const auto end = newline == std::string::npos ? source.size() : newline;
+        size_t i = lineStart;
+        while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
+        if (source.compare(i, 6, "using ") == 0) {
+            i += 6;
+            while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
+            const size_t nameStart = i;
+            while (i < end &&
+                   (std::isalnum(static_cast<unsigned char>(source[i])) ||
+                    source[i] == '_' || source[i] == '.'))
+                ++i;
+            if (i > nameStart) modules.insert(source.substr(nameStart, i - nameStart));
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return modules;
+}
+
 // Where the receiver of a member completion starts, and the dot it hangs off.
 // `completionPrefix` answers this too, but only for receivers made of
 // identifiers on the cursor's own line: it stops at `)`, so `makeBox(3).g`
@@ -2089,6 +2117,15 @@ private:
         std::string detail;
         std::string documentation;
         std::string selectedCallDetail;
+        // `using FS` names a MODULE, and nothing downstream knows that: the
+        // symbol search resolved `FS` to whatever else carried the name and
+        // hovering an import reported an unrelated declaration from the same
+        // file. On a `using` line the word can only be a module.
+        // Anything on a `using` line is part of a module path by
+        // construction, qualified (`using Units.SI`) or not, so no lookup can
+        // make it something else.
+        const bool importLine =
+            document.text.compare(hoverLineStart, 6, "using ") == 0;
         semantic::TypeChecker traitLookup(&m_interfaces);
         const bool traitName = traitLookup.isTrait(word.text) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
@@ -2124,7 +2161,17 @@ private:
         const auto shorthandFieldType = atFieldType(
             document.text, params.position.line, word.byteColumn, word.text,
             m_db, document.path);
-        if (!shorthandFieldType.empty()) {
+        if (importLine) {
+            // Hovering `FS` in `using FS` used to report an unrelated
+            // declaration that happened to share the name — `type FilePath =
+            // String` from the same file, or a `Feature` type — because the
+            // branches below answer for values and types, and an import is
+            // neither.
+            detail = "module " + (moduleQualifier.empty()
+                                      ? word.text
+                                      : moduleQualifier + "." + word.text);
+            symbol = nullptr;
+        } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
             symbol = nullptr;
         } else if (primitiveTypeReference) {
@@ -2197,8 +2244,15 @@ private:
                                 function.signature,
                                 function.signature.isFoul || module->second.isFoul);
             } else {
-                for (const auto& [_, module] : m_interfaces.modules) {
-                    if (!module.automaticImport) continue;
+                // Modules this file opted into with `using`, as well as the
+                // automatic ones. Without the former, hovering `meter` in
+                // `100.meter` found nothing — `Units.SI` is opt-in, so its
+                // exports were skipped and the reply fell through to the
+                // bare string "function meter".
+                const auto opened = documentImports(found->second.text);
+                for (const auto& [moduleName, module] : m_interfaces.modules) {
+                    if (!module.automaticImport && !opened.count(moduleName))
+                        continue;
                     if (auto functions = module.exports.find(word.text);
                         functions != module.exports.end())
                         for (const auto& function : functions->second)

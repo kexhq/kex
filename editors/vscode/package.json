@@ -6,8 +6,13 @@
   "packageManager": "bun@1.3.13",
   "publisher": "kexhq",
   "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/kexhq/kex.git" },
+  "homepage": "https://github.com/kexhq/kex/tree/main/editors/vscode",
+  "bugs": { "url": "https://github.com/kexhq/kex/issues" },
   "icon": "images/icon.png",
-  "engines": { "vscode": "^1.90.0" },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
   "categories": ["Programming Languages", "Linters"],
   "activationEvents": ["onLanguage:kex"],
   "main": "./out/extension.js",
@@ -47,10 +52,14 @@
     "compile": "tsc -p ./ --noEmit && bun build src/extension.ts --target=node --format=cjs --external=vscode --sourcemap=external --outdir=out",
     "package": "bun run compile && bunx --bun @vscode/vsce package --no-dependencies"
   },
-  "dependencies": { "vscode-languageclient": "^9.0.1" },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.5.0"
+    "typescript": "^5.5.0",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }
