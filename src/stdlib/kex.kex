@@ -72,6 +72,9 @@ foul module Kex do
       minor : Integer
       patch : Integer
       revision : String?
+      # The release channel: "" for a stable build, otherwise "rc.1",
+      # "beta.2", "prealpha.1" — the part of VERSION after the dash.
+      preRelease : String = ""
     end
 
     make Version do
@@ -96,17 +99,23 @@ foul module Kex do
       tuple : (Integer, Integer, Integer, String?)
       let tuple = (this.major, this.minor, this.patch, this.revision)
 
+      # `0.4.0`, or `0.4.0-rc.1` on a pre-release build. What a version
+      # RANGE is matched against, so the channel has to be in it.
+      release : String
+      let release = @preRelease.empty? then "${this.major}.${this.minor}.${this.patch}" else "${this.major}.${this.minor}.${this.patch}-${@preRelease}"
+
       number : String
       let number = match this.revision do
-        Just(hash) -> "${this.major}.${this.minor}.${this.patch} (${hash})"
-        None -> "${this.major}.${this.minor}.${this.patch}"
+        Just(hash) -> "${this.release} (${hash})"
+        None -> this.release
       end
     end
 
     VERSION : Version
     let VERSION = match Kex.Intrinsic.Kex.version() do
       (major, minor, patch, revision) ->
-        Version { major: major, minor: minor, patch: patch, revision: revision }
+        Version { major: major, minor: minor, patch: patch, revision: revision,
+                  preRelease: Kex.Intrinsic.Kex.versionPreRelease() }
     end
   end
 

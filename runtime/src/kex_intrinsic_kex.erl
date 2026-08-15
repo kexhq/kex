@@ -1,6 +1,6 @@
 -module(kex_intrinsic_kex).
 -export([backend/0, 'featureHas?'/1, 'featureList'/0, inspect/1, inspect/2, show/1, kind/1,
-         version/0]).
+         version/0, versionPreRelease/0]).
 
 %% Defined by erlc from CMake (see CMakeLists.txt) so this reports the same
 %% version the native binary does. The fallbacks keep a bare
@@ -14,6 +14,9 @@
 -ifndef(KEX_VERSION_PATCH).
 -define(KEX_VERSION_PATCH, 0).
 -endif.
+-ifndef(KEX_VERSION_PRERELEASE).
+-define(KEX_VERSION_PRERELEASE, "").
+-endif.
 -ifndef(KEX_GIT_REVISION).
 -define(KEX_GIT_REVISION, "").
 -endif.
@@ -26,6 +29,10 @@ version() ->
                    Hash -> {'Just', list_to_binary(Hash)}
                end,
     {?KEX_VERSION_MAJOR, ?KEX_VERSION_MINOR, ?KEX_VERSION_PATCH, Revision}.
+
+%% The release channel: <<>> for a stable build, otherwise "rc.1", "beta.2",
+%% and so on. Kept out of version/0 so its published tuple shape holds.
+versionPreRelease() -> list_to_binary(?KEX_VERSION_PRERELEASE).
 
 backend() -> 'Beam'.
 

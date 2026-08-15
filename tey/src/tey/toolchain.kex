@@ -66,6 +66,17 @@ let newestFirst(versions: [String]) -> [String] do
   return Tey.Semver.newestFirst(versions)
 end
 
+# The newest RELEASED version — what `tey kex install` picks when asked for
+# no version in particular, and what a download page means by "the current
+# Kex". Pre-releases are opt-in by name.
+let latestStable -> Result<String, String> do
+  let available = Tey.Toolchain.availableVersions.try
+  match available.filter { |version| Tey.Semver.stable?(version) }.first do
+    Just(version) -> return Ok(version)
+    None -> return Error("no released Kex version is available")
+  end
+end
+
 let installedKex -> String? do
   match ENV.get("TEY_KEX") do
     Just(path) -> Just(path)

@@ -1,0 +1,327 @@
+name: Release
+
+# Releases are tag-driven: pushing `v<version>` publishes that version, and
+# nothing else does. The tag is checked against the repository's VERSION file
+# before anything is built, so that file stays the single place a version is
+# decided and a mistyped tag fails in seconds rather than shipping a binary
+# that disagrees with its own release page.
+#
+# Channels come from the tag's pre-release identifier:
+#
+#   v0.4.0              stable      — this is what `tey kex install` and
+#                                     https://api.github.com/repos/kexhq/kex/releases/latest
+#                                     hand out, and what kex.run should show
+#   v0.4.0-rc.1         pre-release
+#   v0.4.0-beta.1       pre-release
+#   v0.4.0-prealpha.1   pre-release
+#
+# A pre-release is published with GitHub's `prerelease` flag set, which is
+# what keeps `/releases/latest` meaning "current stable" without anyone
+# maintaining a second list.
+
+on:
+  push:
+    tags: ["v*"]
+  # Re-run a release whose publish step failed, without moving the tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release (e.g. v0.4.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Cheap gate: everything below only runs for a tag the source agrees with.
+  verify:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.check.outputs.tag }}
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+      build_date: ${{ steps.check.outputs.build_date }}
+      revision: ${{ steps.check.outputs.revision }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Check the tag against VERSION
+        id: check
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+
+          # The version lives in one plain file, so the check is a string
+          # comparison rather than a parse of C++.
+          version=$(tr -d "[:space:]" < VERSION)
+          pre="${version#*-}"
+          if [ "$pre" = "$version" ]; then pre=""; fi
+
+          if [ "$tag" != "v${version}" ]; then
+            echo "::error::tag ${tag} does not match VERSION (v${version}). Update VERSION, or tag the right commit."
+            exit 1
+          fi
+
+          # Only the channels Kex publishes. An unknown identifier is a typo
+          # (`-rc-1`, `-RC.1`), and a typo must not become a release.
+          if [ -n "$pre" ] && ! printf '%s' "$pre" | grep -Eq '^(prealpha|alpha|beta|rc)(\.[0-9]+)?$'; then
+            echo "::error::pre-release identifier '${pre}' is not one of prealpha, alpha, beta, rc (optionally .N)"
+            exit 1
+          fi
+
+          # The tagged commit's date, so the binary's `built` stamp is a fact
+          # about the release rather than about when a runner happened to run.
+          build_date=$(git show -s --format=%cs "$tag")
+          revision=$(git rev-parse --short "$tag^{commit}")
+
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "prerelease=$([ -n "$pre" ] && echo true || echo false)"
+            echo "build_date=${build_date}"
+            echo "revision=${revision}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Releasing Kex ${version} (prerelease: $([ -n "$pre" ] && echo yes || echo no), built ${build_date})"
+
+  # One archive per platform, each holding the same install tree `make
+  # install` produces: bin/kex plus share/kex/{stdlib,runtime,manifest}.
+  build:
+    needs: verify
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux-x86_64
+          - os: macos-latest
+            target: macos-arm64
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install gmp pcre2 boost erlang readline
+
+      - name: Build
+        run: |
+          cmake -B build -G "Unix Makefiles" \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DKEX_BUILD_DATE="${{ needs.verify.outputs.build_date }}"
+          cmake --build build
+
+      # A release is not published on a red suite. These are the same gates CI
+      # runs on a branch, which tags do not trigger.
+      - name: Unit tests
+        run: make test
+
+      - name: Spec suite
+        run: make spec
+
+      - name: Prelude spec suite
+        run: make spec-prelude
+
+      - name: Stdlib spec suite
+        run: make spec-stdlib
+
+      - name: Spec suite via BEAM
+        run: make spec-beam
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          target="${{ matrix.target }}"
+          name="kex-${version}-${target}"
+          cmake --install build --prefix "stage/${name}"
+          mkdir -p dist
+          tar -czf "dist/${name}.tar.gz" -C stage "${name}"
+          if command -v sha256sum >/dev/null; then
+            (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          else
+            (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          fi
+          "stage/${name}/bin/kex" --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kex-${{ matrix.target }}
+          path: dist/*
+
+  # The container images, published to GHCR alongside the archives:
+  #
+  #   ghcr.io/kexhq/kex:<version>              glibc, BEAM included
+  #   ghcr.io/kexhq/kex:<version>-alpine       musl, BEAM included
+  #   ghcr.io/kexhq/kex:<version>-slim         musl, tree walker only
+  #
+  # Each architecture is built on a runner of that architecture rather than
+  # under QEMU: the image build RUNS the spec suites, and emulating them
+  # turns a ten-minute job into an hour while testing the emulator as much as
+  # the compiler. The per-arch images are pushed by digest and stitched into
+  # one multi-arch tag by the `manifest` job below, so `docker pull` picks the
+  # right one automatically.
+  image:
+    needs: verify
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      # Two dimensions, so this is a 3 x 2 cross product; the `include`
+      # entries only attach the file/suffix/runner that each value implies.
+      matrix:
+        variant: [full, alpine, slim]
+        arch: [amd64, arm64]
+        include:
+          - variant: full
+            dockerfile: docker/Dockerfile
+            suffix: ""
+          - variant: alpine
+            dockerfile: docker/Dockerfile.alpine
+            suffix: "-alpine"
+          - variant: slim
+            dockerfile: docker/Dockerfile.slim
+            suffix: "-slim"
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - name: Build and push by digest
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: |
+            KEX_BUILD_DATE=${{ needs.verify.outputs.build_date }}
+            KEX_GIT_REVISION=${{ needs.verify.outputs.revision }}
+            BUILD_JOBS=4
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
+
+      - name: Record the digest
+        run: |
+          set -euo pipefail
+          mkdir -p digests
+          echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.variant }}-${{ matrix.arch }}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.variant }}-${{ matrix.arch }}
+          path: digests/*
+
+  # One tag per variant, pointing at both architectures.
+  #
+  # `latest` (and `latest-alpine`, `latest-slim`) follow STABLE releases only,
+  # so `docker run ghcr.io/kexhq/kex` never hands someone an rc they did not
+  # ask for. A pre-release is reachable by its exact version, and by its
+  # channel name (`:rc`, `:rc-alpine`) for anyone tracking one.
+  manifest:
+    needs: [verify, image]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - variant: full
+            suffix: ""
+          - variant: alpine
+            suffix: "-alpine"
+          - variant: slim
+            suffix: "-slim"
+    steps:
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ github.token }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digest-${{ matrix.variant }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: Create the multi-arch tags
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          suffix="${{ matrix.suffix }}"
+          image="ghcr.io/${{ github.repository }}"
+
+          tags=(--tag "${image}:${version}${suffix}")
+          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
+            channel="${version#*-}"
+            channel="${channel%%.*}"
+            tags+=(--tag "${image}:${channel}${suffix}")
+          else
+            tags+=(--tag "${image}:latest${suffix}")
+          fi
+
+          sources=()
+          for digest in digests/*; do
+            sources+=("${image}@$(cat "$digest")")
+          done
+
+          docker buildx imagetools create "${tags[@]}" "${sources[@]}"
+          docker buildx imagetools inspect "${image}:${version}${suffix}"
+
+  publish:
+    needs: [verify, build, manifest]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.verify.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.verify.outputs.version }}"
+          tag="${{ needs.verify.outputs.tag }}"
+          flags=(--generate-notes --title "Kex ${version}")
+          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
+            flags+=(--prerelease)
+          fi
+          # Re-runnable: a release that already exists gets its assets
+          # replaced rather than failing the job.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" artifacts/*/* --clobber
+          else
+            gh release create "$tag" "${flags[@]}" artifacts/*/*
+          fi

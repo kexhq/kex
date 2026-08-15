@@ -21,6 +21,11 @@ end
 let version(version: String) -> Void do
 end
 
+# The license the package is distributed under, as an SPDX identifier
+# (`"MIT"`, `"Apache-2.0"`).
+let license(identifier: String) -> Void do
+end
+
 # The Kex versions this package builds against, as a requirement:
 # `">= 0.3.0"`, `"~> 0.3"`, `"0.3.1"`.
 let kex(requirement: String) -> Void do

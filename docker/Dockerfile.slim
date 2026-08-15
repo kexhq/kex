@@ -1,0 +1,62 @@
+# The small Kex image, with the BEAM backend intact.
+#
+# Same musl build as docker/Dockerfile.alpine; the difference is that the OTP
+# applications Kex never loads are removed (docker/prune-otp.sh explains
+# which and why), taking Erlang from ~69 MB to ~26 MB and the image from
+# 139 MB to 80 MB. `kex`, `kex -R`,
+# `kex --compile` and the REPL all work exactly as in the full image.
+#
+# What you give up is `Erlang.*` interop beyond the applications on the keep
+# list (which includes mnesia): `Erlang.ssh.…` has no ssh to reach in this
+# image. If a program borrows a different one, use the full image.
+#
+#   docker build -f docker/Dockerfile.slim -t kex:slim .
+#   docker run --rm -v "$PWD:/work" kex:slim main.kex
+
+FROM alpine:3.20 AS build
+
+RUN apk add --no-cache \
+        build-base cmake git bash \
+        gmp-dev pcre2-dev readline-dev boost-dev openssl-dev \
+        erlang erlang-dev erlang-odbc unixodbc-dev
+
+WORKDIR /src
+COPY . .
+
+ARG KEX_BUILD_DATE
+ARG KEX_GIT_REVISION
+ARG BUILD_JOBS=2
+RUN cmake -B build -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release \
+        ${KEX_BUILD_DATE:+-DKEX_BUILD_DATE="$KEX_BUILD_DATE"} \
+        ${KEX_GIT_REVISION:+-DKEX_GIT_REVISION="$KEX_GIT_REVISION"} \
+    && cmake --build build --parallel "$BUILD_JOBS"
+
+# Prune BEFORE the suites, so they run against exactly the OTP the published
+# image has. Pruning afterwards would prove only that the full distribution
+# works, which is what the other image is for.
+RUN sh docker/prune-otp.sh
+
+RUN make spec && make spec-beam
+
+RUN cmake --install build --prefix /opt/kex
+
+FROM alpine:3.20
+
+# libgmpxx is its own package on Alpine: the binary links GMP's C++ wrapper,
+# and `gmp` alone leaves the image failing to start.
+# Install and prune in ONE layer. A later `rm -rf` cannot shrink an image:
+# the removed files still sit in the layer that added them, which is why
+# pruning in a second RUN left this image exactly as big as the full one.
+COPY docker/prune-otp.sh /tmp/prune-otp.sh
+RUN apk add --no-cache gmp libgmpxx pcre2 readline libstdc++ boost-context openssl \
+        erlang erlang-odbc unixodbc \
+    && sh /tmp/prune-otp.sh \
+    && rm /tmp/prune-otp.sh
+
+COPY --from=build /opt/kex /opt/kex
+ENV PATH="/opt/kex/bin:${PATH}"
+
+WORKDIR /work
+
+ENTRYPOINT ["kex"]
+CMD ["--version"]

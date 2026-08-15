@@ -16,6 +16,7 @@ end
 record ManifestPackage do
   name : String
   version : String = "0.1.0"
+  license : String = ""
   packageKexRequirement : String = ">= 0.3.0"
   entrypoint : String = "src/main.kex"
   manifestDependencies : [Dependency] = []
@@ -31,6 +32,7 @@ end
 let read(text: String) -> Result<ManifestPackage, String> do
   var name = ""
   var version = "0.1.0"
+  var license = ""
   var kexRequirement = ">= 0.3.0"
   var entrypoint = "src/main.kex"
   var dependencies: [Dependency] = []
@@ -44,6 +46,8 @@ let read(text: String) -> Result<ManifestPackage, String> do
       name = Tey.Manifest.quoted(line).or("")
     elif line.startsWith?("version(")
       version = Tey.Manifest.quoted(line).or(version)
+    elif line.startsWith?("license(")
+      license = Tey.Manifest.quoted(line).or(license)
     elif line.startsWith?("kex(")
       kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
     elif line.startsWith?("entrypoint(")
@@ -88,7 +92,7 @@ let read(text: String) -> Result<ManifestPackage, String> do
   return Error(failure) if failure != ""
   return Error("package.kex must declare bundle \"name\"") if name == ""
   return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
-  Ok(ManifestPackage { name: name, version: version, packageKexRequirement: kexRequirement,
+  Ok(ManifestPackage { name: name, version: version, license: license, packageKexRequirement: kexRequirement,
                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
 end
 

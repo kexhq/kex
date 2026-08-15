@@ -4,17 +4,43 @@ record SemanticVersion do
   major : Integer
   minor : Integer
   patch : Integer
+  # "" for a release, otherwise the channel and its number: "rc.1", "beta",
+  # "prealpha.2". A release always outranks its own pre-releases.
+  preRelease : String = ""
 end
 
 let parseVersion(text: String) -> SemanticVersion? do
-  let clean = text.startsWith?("v") then text.drop(1) else text
-  let parts = clean.split(".")
-  let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: clean, rest: clean }) end
+  let unprefixed = text.startsWith?("v") then text.drop(1) else text
+  # Build metadata (`+deadbeef`) says nothing about precedence, so it is
+  # dropped before anything else looks at the string.
+  let withoutBuild = unprefixed.split("+").first.or(unprefixed)
+  let core = withoutBuild.split("-").first.or(withoutBuild).trim
+  let preRelease = withoutBuild.split("-").drop(1).join("-").trim
+  let parts = core.split(".")
+  let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: core, rest: core }) end
   let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
-  let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0").split("-").first.or("0")) _ -> Ok(0) end
+  let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0")) _ -> Ok(0) end
   match (major, minor, patch) do
-    (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c })
+    (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c, preRelease: preRelease })
     _ -> None
+  end
+end
+
+# The release a version belongs to: `0.4.0-rc.1` → `0.4.0`. Used where a
+# pre-release should count as its eventual release.
+let release(text: String) -> String do
+  match Tey.Semver.parseVersion(text) do
+    Just(version) -> return "${version.major}.${version.minor}.${version.patch}"
+    None -> return text
+  end
+end
+
+# Whether a version is a full release rather than a pre-release. This is the
+# question a download page asks: "what is the current stable Kex?".
+let stable?(text: String) -> Bool do
+  match Tey.Semver.parseVersion(text) do
+    Just(version) -> return version.preRelease == ""
+    None -> return false
   end
 end
 
@@ -25,7 +51,11 @@ let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
   return 1 if a.minor > b.minor
   return -1 if a.patch < b.patch
   return 1 if a.patch > b.patch
-  0
+  # Same numbers: a release beats any pre-release of it.
+  return 0 if a.preRelease == b.preRelease
+  return 1 if a.preRelease == ""
+  return -1 if b.preRelease == ""
+  return Tey.Semver.comparePreRelease(a.preRelease, b.preRelease)
 end
 
 let satisfies(versionText: String, requirement: String) -> Bool do
@@ -41,7 +71,25 @@ let satisfies(versionText: String, requirement: String) -> Bool do
     .replace("= ", "=")
   return true if req == "" || req == "*"
   let clauses = req.split(" ").filter { |part| part != "" }
+  # A pre-release answers a range only when the range asks for one. `~> 0.3`
+  # means "a released 0.3.x", and resolving it to `0.4.0-rc.1` because the
+  # numbers fit is how a package manager ships an untested compiler to
+  # someone who never opted in.
+  if version.try.preRelease != "" && !clauses.any? { |clause| clause.contains?("-") }
+    return false
+  end
   clauses.all? { |clause| satisfiesClause(version.try, clause) }
+end
+
+# Channel precedence, lowest first: prealpha < alpha < beta < rc < release.
+# Plain semver would order these alphabetically — putting `beta` BEFORE
+# `prealpha` — which is not what the words mean, so the ranking is explicit.
+let channelRank(channel: String) -> Integer do
+  return 1 if channel == "prealpha"
+  return 2 if channel == "alpha"
+  return 3 if channel == "beta"
+  return 4 if channel == "rc"
+  return 0
 end
 
 # Whether a requested tag is a RANGE rather than one exact tag. `v1.2.0` is a
@@ -80,6 +128,35 @@ let highest(tags: [String], requirement: String) -> String? do
 end
 
 private do
+  # Two pre-releases of the same version: channel first, then its number, so
+  # `rc.2` beats `rc.1` beats `beta.9`.
+  let comparePreRelease(a: String, b: String) -> Integer do
+    let leftRank = Tey.Semver.channelRank(Tey.Semver.channelOf(a))
+    let rightRank = Tey.Semver.channelRank(Tey.Semver.channelOf(b))
+    return -1 if leftRank < rightRank
+    return 1 if leftRank > rightRank
+    let leftNumber = Tey.Semver.channelNumber(a)
+    let rightNumber = Tey.Semver.channelNumber(b)
+    return -1 if leftNumber < rightNumber
+    return 1 if leftNumber > rightNumber
+    return 0
+  end
+
+  # "rc.1" and "rc1" both name the rc channel; anything else is its own name.
+  let channelOf(preRelease: String) -> String do
+    let head = preRelease.split(".").first.or(preRelease)
+    return head.chars.takeWhile { |c| c.letter? }.join("")
+  end
+
+  let channelNumber(preRelease: String) -> Integer do
+    let digits = preRelease.chars.filter { |c| c.digit? }.join("")
+    return 0 if digits.empty?
+    match Integer.parse(digits) do
+      Ok(number) -> return number
+      Error(_) -> return 0
+    end
+  end
+
   let satisfiesClause(version: SemanticVersion, clause: String) -> Bool do
     var op = "="
     if clause.startsWith?(">=")
