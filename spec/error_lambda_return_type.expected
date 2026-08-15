@@ -1,10 +1,10 @@
-spec/error_lambda_return_type.kex:5:15: error: `filter` expects argument 2 to be (A) -> Bool, but got (Integer) -> Integer
+spec/error_lambda_return_type.kex:5:15: error: `filter` expects argument 2 to be A -> Bool, but got Integer -> Integer
 
-filter : Stream<A> -> (A) -> Bool -> Stream<A>
+filter : Stream<A> -> (A -> Bool) -> Stream<A>
 
-filter : String -> (Char) -> Bool -> String
+filter : String -> (Char -> Bool) -> String
 
-filter : [A] -> (A) -> Bool -> [A]
+filter : [A] -> (A -> Bool) -> [A]
 
-filter : {A: B} -> (A, B) -> Bool -> {A: B}
+filter : {A: B} -> (A -> B -> Bool) -> {A: B}
 Aborted: 1 type error — fix before running (use --no-check to skip).

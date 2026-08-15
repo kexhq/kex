@@ -42,12 +42,26 @@ struct Document {
         bool completeDetail = false;
     };
 
+    // Where a typed expression ENDS, and what to complete against there.
+    // `localReceiverTypes` is keyed by name, so it can only answer for
+    // receivers that are plain identifiers — `box.` completes, `makeBox(3).`
+    // and a chain continued on the next line do not, because there is no name
+    // to look up. These spans answer positionally instead, which is what a
+    // call result or a multi-line builder chain needs.
+    struct ReceiverSpan {
+        unsigned int line = 0;        // 0-based, as LSP positions are
+        unsigned int endByteColumn = 0;  // one past the expression's last byte
+        unsigned int byteLength = 0;
+        std::string qualifier;
+    };
+
     std::string path;
     std::string text;
     int version = 0;
     std::vector<HoverEntry> hoverEntries;
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
+    std::vector<ReceiverSpan> receiverSpans;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
 };
 
@@ -1168,6 +1182,121 @@ auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+// Where the receiver of a member completion starts, and the dot it hangs off.
+// `completionPrefix` answers this too, but only for receivers made of
+// identifiers on the cursor's own line: it stops at `)`, so `makeBox(3).g`
+// yields the bare prefix ".g", and it is bounded by the line start, so a
+// builder chain continued on the next line yields ".g" as well. Both then
+// resolve to nothing. This walks the real shape instead — identifiers,
+// balanced `(...)`/`[...]`, and quoted strings, joined by dots, across line
+// breaks.
+struct DotReceiver {
+    size_t start = 0;  // first byte of the receiver expression
+    size_t dot = 0;    // the '.' the member being typed hangs off
+    bool valid = false;
+};
+
+auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
+    const auto isWord = [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '?' || c == '!';
+    };
+    const auto skipSpaceBack = [&](size_t i) {
+        while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1])))
+            --i;
+        return i;
+    };
+    // Offset of the delimiter opening the group that ends just before `end`.
+    const auto matchOpen = [&](size_t end, char close, char open) -> size_t {
+        int depth = 0;
+        for (size_t j = end; j > 0; --j) {
+            const char c = source[j - 1];
+            if (c == close) {
+                ++depth;
+            } else if (c == open) {
+                --depth;
+                if (depth == 0) return j - 1;
+            }
+        }
+        return std::string::npos;
+    };
+
+    size_t i = cursor;
+    while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+    i = skipSpaceBack(i);
+    if (i == 0 || source[i - 1] != '.') return {};
+    const size_t dot = i - 1;
+
+    i = skipSpaceBack(dot);
+    while (i > 0) {
+        const char c = source[i - 1];
+        // A group is never the whole receiver: `makeBox(3)` continues into the
+        // name in front of it, and `[c][0]` into the list before the index.
+        if (c == ')' || c == ']') {
+            const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
+            if (open == std::string::npos) return {};
+            i = open;
+            continue;
+        }
+        if (c == '"' || c == '\'' || c == '`') {
+            size_t j = i - 1;
+            while (j > 0) {
+                --j;
+                if (source[j] == c && (j == 0 || source[j - 1] != '\\')) break;
+            }
+            i = j;
+            continue;
+        }
+        if (!isWord(static_cast<unsigned char>(c))) break;
+        while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
+        const size_t before = skipSpaceBack(i);
+        if (before == 0 || source[before - 1] != '.') break;
+        i = skipSpaceBack(before - 1);
+    }
+    if (i >= dot) return {};
+    return {.start = i, .dot = dot, .valid = true};
+}
+
+// The type of an arbitrary receiver expression, by re-parsing the buffer with
+// the half-typed member removed and asking the analyzer. Deleting through the
+// cursor rather than just the dot is what makes `makeBox(3).g` parse again.
+auto recoveredReceiverQualifier(
+    const std::string& source, const std::string& path,
+    const DotReceiver& receiver, size_t cursor,
+    const semantic::ImportedInterfaces* interfaces) -> std::string {
+    if (!receiver.valid || cursor < receiver.dot) return {};
+    auto recovered = source;
+    recovered.erase(receiver.dot, cursor - receiver.dot);
+    Lexer lexer(recovered, path);
+    Parser parser(lexer.tokenizeAll(), path);
+    auto program = parser.parseProgram();
+    if (!parser.diagnostics().empty()) return {};
+    semantic::Analyzer analyzer(interfaces);
+    analyzer.analyze(program);
+
+    // Everything before the deletion keeps its position, so the receiver's
+    // line/column are the ones it had in the original buffer.
+    int line = 1;
+    size_t lineStart = 0;
+    for (size_t i = 0; i < receiver.start; ++i)
+        if (source[i] == '\n') { ++line; lineStart = i + 1; }
+    const int column = static_cast<int>(receiver.start - lineStart) + 1;
+
+    // Several expressions can start at one column — `makeBox` the identifier
+    // and `makeBox(3)` the call both start at `m`. Only the call has a type
+    // worth completing against, so take the first that yields a qualifier.
+    for (const auto& [expression, _] : analyzer.typeMap()) {
+        if (!expression || expression->location.line != line ||
+            expression->location.column != column)
+            continue;
+        if (auto qualifier =
+                completionQualifierForType(analyzer.displayTypeOf(expression));
+            !qualifier.empty())
+            return qualifier;
+    }
+    return {};
+}
+
 auto recoveredDotReceiverQualifier(
     const std::string& source, const std::string& path,
     std::string_view receiver, unsigned int protocolLine,
@@ -1699,7 +1828,49 @@ private:
                                              params.position.line,
                                              params.position.character);
         auto query = resolveCompletionQuery(prefix.c_str(), 0, prefix.c_str());
-        if (const auto dot = prefix.find('.'); dot != std::string::npos) {
+
+        // Ask the analyzer what the receiver actually is, before falling back
+        // to the text heuristic `resolveCompletionQuery` inherited from the
+        // REPL. That heuristic reads one line and stops at `)`, so it answers
+        // `.g` for `makeBox(3).g` and for a chain continued on the next line,
+        // and answers `List` for `[c][0]` — the type of the wrong expression.
+        bool resolvedByAnalyzer = false;
+        {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            bool haveLine = true;
+            for (unsigned int current = 0; current < params.position.line;
+                 ++current) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) { haveLine = false; break; }
+                lineStart = newline + 1;
+            }
+            if (haveLine) {
+                const auto lineEndPosition = text.find('\n', lineStart);
+                const auto lineEnd = lineEndPosition == std::string::npos
+                    ? text.size() : lineEndPosition;
+                const auto cursor = byteOffsetForUtf16Column(
+                    text, lineStart, lineEnd, params.position.character);
+                if (const auto receiver = scanDotReceiver(text, cursor);
+                    receiver.valid) {
+                    if (auto qualifier = recoveredReceiverQualifier(
+                            text, found->second.path, receiver, cursor,
+                            &m_interfaces);
+                        !qualifier.empty()) {
+                        query.dbQuery = qualifier + "." +
+                            text.substr(receiver.dot + 1,
+                                        cursor - receiver.dot - 1);
+                        query.rewriteFrom = qualifier;
+                        query.rewriteTo = text.substr(
+                            receiver.start, receiver.dot - receiver.start);
+                        resolvedByAnalyzer = true;
+                    }
+                }
+            }
+        }
+
+        if (const auto dot = prefix.find('.');
+            !resolvedByAnalyzer && dot != std::string::npos) {
             const auto receiver = prefix.substr(0, dot);
             auto inferredQualifier = [&]() -> std::string {
                 if (auto inferred = found->second.localReceiverTypes.find(receiver);
@@ -1818,6 +1989,13 @@ private:
                 if (signatures.size() > 1)
                     suffix += " (+" + std::to_string(signatures.size() - 1) +
                         " overloads)";
+                // VS Code renders labelDetails.detail directly after the label
+                // with no spacing, so a suffix starting with a word runs into
+                // it: `ParsedOptionsrecord ParsedOptions do`. Parameter lists
+                // start with `(` and read correctly as they are.
+                if (!suffix.empty() && suffix.front() != ' ' &&
+                    suffix.front() != '(')
+                    suffix.insert(0, " ");
                 labelDetails = ::lsp::CompletionItemLabelDetails{
                     .detail = std::move(suffix),
                     .description = qualifier.empty()

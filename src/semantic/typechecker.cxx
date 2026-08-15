@@ -4602,7 +4602,14 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     };
     std::string result = name + " : ";
     for (const auto& param : sig.params) {
-        result += displayType(param) + " -> ";
+        auto text = displayType(param);
+        // A function-typed parameter needs parentheses of its own, or its
+        // arrow merges into the signature's: `filter : [A] -> (A -> Bool) -> [A]`
+        // rather than `[A] -> A -> Bool -> [A]`, which reads as three
+        // parameters.
+        if (param && std::holds_alternative<FuncType>(param->kind))
+            text = "(" + text + ")";
+        result += text + " -> ";
     }
     result += displayType(sig.result);
     return result;
