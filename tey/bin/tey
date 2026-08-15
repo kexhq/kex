@@ -1,7 +1,20 @@
 #!/bin/sh
 set -eu
 
-SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+# Homebrew puts bin/tey on PATH as a symlink into the Cellar, and everything
+# below hangs off the prefix beside this script (lib/ for the .beam files,
+# libexec for the bundled Kex — libexec is never linked into HOMEBREW_PREFIX).
+# So resolve $0 through every symlink first: `readlink -f` is not portable to
+# macOS, hence the loop. Relative links resolve against the link's directory.
+target=$0
+while [ -L "$target" ]; do
+  link=$(readlink "$target")
+  case $link in
+    /*) target=$link ;;
+    *) target=$(dirname -- "$target")/$link ;;
+  esac
+done
+SELF_DIR=$(CDPATH= cd -- "$(dirname -- "$target")" && pwd)
 PREFIX=$(CDPATH= cd -- "$SELF_DIR/.." && pwd)
 TEY_EBIN=${TEY_EBIN:-"$PREFIX/lib/kex/tey/ebin"}
 export TEY_EBIN
