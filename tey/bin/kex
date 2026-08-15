@@ -1,0 +1,48 @@
+#!/bin/sh
+# The `kex` command: a dispatcher, not a compiler.
+#
+# It runs whichever toolchain Tey has selected. Installing this alongside `tey`
+# is what makes `kex` work straight after `brew install tey` — without it, the
+# compiler lives in the Tey home and the user has to put that directory on PATH
+# by hand before anything they installed is runnable.
+#
+# Being a dispatcher is the point. A real `kex` binary installed here would be
+# a second compiler beside the ones Tey installs, under a different manager,
+# and the two would drift apart on the first upgrade of either. This one has no
+# version of its own: `tey kex use` changes what it runs, immediately.
+set -eu
+
+# The same three sources Tey itself consults, in the same order, so a shell and
+# a `tey run` never disagree about which compiler is in play.
+if [ -n "${TEY_KEX:-}" ]; then
+    exec "$TEY_KEX" "$@"
+fi
+
+TEY_HOME=${TEY_HOME:-"${HOME}/.local/share/tey"}
+current="${TEY_HOME}/current"
+
+if [ ! -f "$current" ]; then
+    # Nothing selected yet. Tey may still be able to produce one — an install
+    # that shipped a Kex beside Tey (Homebrew's --HEAD build does) has it
+    # waiting to be taken into the Tey home, and `tey kex which` is what does
+    # that. Asking Tey rather than looking for the seed here keeps the layout
+    # of the Tey home Tey's business alone.
+    if binary=$(tey kex which 2>/dev/null) && [ -x "$binary" ]; then
+        exec "$binary" "$@"
+    fi
+    echo "kex: no Kex is installed. Install one with:" >&2
+    echo "  tey kex install" >&2
+    exit 127
+fi
+
+version=$(tr -d '[:space:]' < "$current")
+binary="${TEY_HOME}/toolchains/${version}/bin/kex"
+
+if [ ! -x "$binary" ]; then
+    echo "kex: Kex ${version} is selected but not installed at ${binary}." >&2
+    echo "  tey kex list            to see what is installed" >&2
+    echo "  tey kex install ${version}   to put it back" >&2
+    exit 127
+fi
+
+exec "$binary" "$@"

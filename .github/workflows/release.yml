@@ -493,40 +493,76 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          # The formula installs TEY, which is architecture-independent BEAM,
-          # so this is the one archive it needs and brew builds nothing.
-          url="https://github.com/kexhq/kex/releases/download/${TAG}/tey-${VERSION}.tar.gz"
+          base="https://github.com/kexhq/kex/releases/download/${TAG}"
 
-          curl -fsSL "$url" -o tey.tar.gz
-          sha=$(sha256sum tey.tar.gz | cut -d' ' -f1)
-          rm tey.tar.gz
+          # Five archives: Tey itself, plus one Kex per platform so a keg can
+          # carry the compiler for the machine installing it. The checksums are
+          # the ones published beside them, not ones computed here — if a
+          # release asset and its .sha256 ever disagreed, this would be the
+          # wrong place to find out.
+          for name in "tey-${VERSION}" \
+                      "kex-${VERSION}-macos-arm64" "kex-${VERSION}-macos-x86_64" \
+                      "kex-${VERSION}-linux-arm64" "kex-${VERSION}-linux-x86_64"; do
+            curl -fsSL "${base}/${name}.tar.gz.sha256" -o "${name}.sha256"
+            cut -d' ' -f1 < "${name}.sha256" > "${name}.hash"
+          done
 
-          python3 - "$url" "$sha" <<'PY'
+          python3 - "$base" "$VERSION" <<'PY'
           import re, sys
 
-          url, sha = sys.argv[1:3]
+          base, version = sys.argv[1:3]
           path = "Formula/tey.rb"
           formula = open(path).read()
 
-          block = f'  url "{url}"\n  sha256 "{sha}"\n'
-          formula, n = re.subn(
-              r"(?s)(  # <<STABLE\n).*?(  # STABLE>>\n)",
-              lambda m: m.group(1) + block + m.group(2),
-              formula,
-          )
-          if n != 1:
-              raise SystemExit(f"expected one STABLE block in {path}, found {n}")
+
+          def digest(name):
+              with open(f"{name}.hash") as handle:
+                  return handle.read().strip()
+
+
+          def fill(marker, body):
+              global formula
+              formula, replaced = re.subn(
+                  rf"(?s)(  # <<{marker}\n).*?(  # {marker}>>\n)",
+                  lambda m: m.group(1) + body + m.group(2),
+                  formula,
+              )
+              if replaced != 1:
+                  raise SystemExit(f"expected one {marker} block in {path}, found {replaced}")
+
+
+          tey = f"tey-{version}"
+          fill("STABLE-TEY",
+               f'  url "{base}/{tey}.tar.gz"\n  sha256 "{digest(tey)}"\n')
+
+          # `on_macos`/`on_arm` rather than one url with a substitution: brew
+          # resolves these at install time on the machine doing the installing,
+          # and only downloads the one it picks.
+          def resource(target, indent):
+              name = f"kex-{version}-{target}"
+              pad = " " * indent
+              return (f'{pad}resource "kex" do\n'
+                      f'{pad}  url "{base}/{name}.tar.gz"\n'
+                      f'{pad}  sha256 "{digest(name)}"\n'
+                      f'{pad}end\n')
+
+          kex = ""
+          for system, arm, intel in (("macos", "macos-arm64", "macos-x86_64"),
+                                     ("linux", "linux-arm64", "linux-x86_64")):
+              kex += f"  on_{system} do\n"
+              kex += "    on_arm do\n" + resource(arm, 6) + "    end\n"
+              kex += "    on_intel do\n" + resource(intel, 6) + "    end\n"
+              kex += "  end\n"
+              if system == "macos":
+                  kex += "\n"
+          fill("STABLE-KEX", kex)
 
           open(path, "w").write(formula)
           PY
 
+          rm -f ./*.sha256 ./*.hash
           git diff --stat
 
-      # A pull request, not a push to the tap's main. Nothing here writes
-      # straight to a branch people install from: a formula that cannot be
-      # built is a broken `brew install` for everyone, and this way the tap's
-      # own checks run and a human merges. It is also what Homebrew's own
-      # `brew bump-formula-pr` does.
       - name: Open the formula bump
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

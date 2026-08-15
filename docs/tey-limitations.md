@@ -97,27 +97,32 @@ They are kept explicit so temporary workarounds do not become accidental API.
 
 ## Tey and the packaging that installs it
 
-- Homebrew installs Tey and no Kex: two compilers under two managers drift
-  apart on the first upgrade of either. A release keg unpacks the
-  architecture-independent `tey-<version>.tar.gz`, and `tey kex install`
-  brings the compiler; `--HEAD` still has to build one (Tey is written in
-  Kex), so it puts it in `libexec`, off PATH, and Tey adopts it into its own
-  home on first use.
+- Homebrew installs Tey and puts no `kex` BINARY on PATH: two compilers under
+  two managers drift apart on the first upgrade of either. What lands on PATH
+  is `tey` and Tey's own dispatcher, `tey/bin/kex`, which runs whatever Tey has
+  selected. The compiler itself sits in the keg's `libexec` — downloaded as a
+  brew resource for a release, built from source for `--HEAD` — and is used
+  where it lies until `tey kex install` takes it into the Tey home. So a fresh
+  install is runnable immediately, writes nothing outside the keg, and every
+  version after the first comes from Tey alone.
 - The release path of the formula is UNPROVEN: there is no tagged release yet,
   so what has actually been exercised is the archive install against a
   `file://` release and the tarball unpack by hand. The first real release run
   (`docs/releasing.md`) is also the first test of the `formula` job that
   rewrites the tap.
-- The adopted seed is a copy, so `brew upgrade tey` — which replaces the seed
-  in `libexec` — leaves the previously adopted copy installed and selected.
-  That is deliberate (a symlink would silently change what a version directory
-  contains), but nothing tells the user a newer Kex arrived with the upgrade.
+- Once `tey kex install` has copied the bundled compiler into the Tey home,
+  `brew upgrade tey` — which replaces the one in `libexec` — leaves the copy
+  installed and selected. The copy is deliberate (a symlink would silently
+  change what a version directory contains), but nothing tells the user a newer
+  Kex arrived with the upgrade. Before that copy exists, an upgrade does move
+  what `kex` runs, since the dispatcher falls through to the keg.
 - Tey cannot yet manage Tey. It is installed and upgraded by whatever
   installed it, and there is no `tey self update` — so the toolchain manager is
   the one thing on the machine that is not under the toolchain manager.
-- The Tey home is only useful once `<home>/bin` is on PATH, which Tey cannot
-  do for the user. It says so after an install, but a shell that never gets
-  the line has a selected Kex and no `kex` command.
+- Installed WITHOUT a package manager — the release tarball unpacked by hand —
+  Tey still needs its `bin` directory on PATH, which it cannot do for the user.
+  It says so after an install. The Homebrew path no longer has this problem,
+  since brew links `tey` and `kex` itself.
 
 ## Compiler problems this work surfaced
 

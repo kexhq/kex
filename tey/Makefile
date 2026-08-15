@@ -22,6 +22,9 @@ install: build
 	install -m 644 $(EBIN)/*.beam $(DESTDIR)$(LIBDIR)/ebin/
 	sed 's|@ERL@|$(ERL)|' bin/tey > $(EBIN)/tey.launcher
 	install -m 755 $(EBIN)/tey.launcher $(DESTDIR)$(BINDIR)/tey
+	# The `kex` command ships with Tey and dispatches to the toolchain Tey
+	# selected, so `kex` works wherever `tey` does — see bin/kex.
+	install -m 755 bin/kex $(DESTDIR)$(BINDIR)/kex
 
 clean:
 	rm -rf $(EBIN)

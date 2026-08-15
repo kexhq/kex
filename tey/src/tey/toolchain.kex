@@ -121,12 +121,37 @@ end
 # somebody else installed is a `kex` Tey cannot update, and it silently
 # becomes a different version from the one `tey kex list` reports.
 let kex -> String do
+  return Tey.Toolchain.resolved.or("kex")
+end
+
+# The compiler Tey would run, or None when there is none to run.
+#
+# The bundled Kex is used WHERE IT LIES rather than copied into the Tey home
+# first. Copying is an install, and an install is not something to do behind
+# someone's back on their first command — it is also impossible where it would
+# be most useful, since Homebrew's post-install sandbox cannot write to the
+# user's home at all. So a fresh Homebrew keg is runnable immediately, nothing
+# is written until `tey kex install` is typed, and a selected version always
+# wins over the bundled one.
+#
+# Without the last-resort fallback to a bare `kex` from PATH that `kex` above
+# keeps: `kex` on PATH is Tey's own dispatcher, and answering it with its own
+# name would send it round in a circle.
+let resolved -> String? do
   match Tey.Toolchain.installedKex do
-    Just(path) -> return path
-    None -> match Tey.Toolchain.adoptBundled do
-      Just(path) -> return path
-      None -> return "kex"
-    end
+    Just(path) -> return Just(path)
+    None -> return Tey.Toolchain.bundled
+  end
+end
+
+# Takes the bundled Kex into the Tey home so Tey manages it like any other
+# version: `tey kex list` shows it, `tey kex use` can come back to it, and
+# uninstalling whatever replaces it leaves something behind. Only ever done
+# when asked — see `resolved`.
+let installBundled -> Result<String, String> do
+  match Tey.Toolchain.bundled do
+    None -> return Error("no Kex came with this Tey")
+    Just(binary) -> return Tey.Toolchain.adopt(binary)
   end
 end
 
@@ -426,29 +451,6 @@ private do
     return Error("adopted Kex ${version} but could not select it") if !FS.File.write("${home}/current", "${version}\n")
     Tey.Toolchain.link(version)
     return Ok(installedPrefix)
-  end
-
-  # Adopts the bundled seed the first time a command needs a compiler and
-  # nothing is selected. Announced on stderr rather than done silently: it
-  # writes to the Tey home and creates the shim, and a user who never asked
-  # for either should be able to see where they came from.
-  let adoptBundled -> String? do
-    match Tey.Toolchain.bundled do
-      None -> return None
-      Just(binary) -> match Tey.Toolchain.versionOfBinary(binary) do
-        Error(_) -> return None
-        Ok(version) -> do
-          IO.printError("tey: adopting the Kex ${version} that came with Tey")
-          match Tey.Toolchain.adopt(binary) do
-            Error(error) -> do
-              IO.printError("tey: ${error}")
-              return None
-            end
-            Ok(prefix) -> return Just("${prefix}/bin/kex")
-          end
-        end
-      end
-    end
   end
 
   # `kex --version` prints "kex 0.3.0-beta (abc1234, built 2026-08-15)"; the
