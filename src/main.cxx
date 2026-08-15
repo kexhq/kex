@@ -887,6 +887,15 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
 auto specBaseCandidates(const std::string &filepath)
     -> std::vector<std::string> {
   static const std::string suffix = ".spec.kex";
+  // A `package.kex` manifest speaks a vocabulary the stdlib describes but no
+  // program imports (`bundle`, `version`, `tey`, ...). It comes in the same
+  // way a spec's base file does, so checking a manifest reports real
+  // mistakes instead of "undefined function" on every declaration.
+  if (std::filesystem::path(filepath).filename() == "package.kex") {
+    if (auto vocabulary = kex::manifestVocabularyFile(); !vocabulary.empty())
+      return {vocabulary};
+    return {};
+  }
   if (filepath.size() <= suffix.size())
     return {};
   if (filepath.compare(filepath.size() - suffix.size(), suffix.size(),
@@ -3955,12 +3964,41 @@ int main(int argc, char *argv[]) {
     }
 
     // mode == "check"
+    // A companion file's declarations are part of what this file means: a
+    // `.spec.kex`'s base, and a `package.kex`'s manifest vocabulary. The run
+    // and compile paths merge them before checking; do the same here, or
+    // `kex -C` reports names the other two accept.
+    std::string checkCompanion;
+    for (const auto &candidate : specBaseCandidates(filepath)) {
+      if (!fileExists(candidate))
+        continue;
+      checkCompanion = candidate;
+
+      auto baseSource = readFile(candidate);
+      kex::Lexer baseLexer(std::move(baseSource), candidate);
+      auto baseTokens = baseLexer.tokenizeAll();
+      kex::Parser baseParser(std::move(baseTokens), candidate);
+      auto baseProgram = baseParser.parseProgram();
+
+      std::vector<kex::ast::TopLevelItem> merged;
+      merged.reserve(baseProgram.items.size() + program.items.size());
+      for (auto &item : baseProgram.items)
+        if (!std::holds_alternative<std::unique_ptr<kex::ast::MainBlock>>(item))
+          merged.push_back(std::move(item));
+      for (auto &item : program.items)
+        merged.push_back(std::move(item));
+      program.items = std::move(merged);
+      break;
+    }
+
     // Pass 1+2: collect symbols and resolve names via SemanticDB
     kex::semantic::SemanticDB db;
     db.setImportedInterfaces(&preludeSemanticInterfaces());
     db.setModuleRoots(moduleRootsFor(filepath));
     loadPrelude(db);
-    db.updateFile(filepath, readFile(filepath));
+    std::vector<std::string> checkCompanions;
+    if (!checkCompanion.empty()) checkCompanions.push_back(checkCompanion);
+    db.updateFile(filepath, readFile(filepath), checkCompanions);
 
     // Pass 3+: existing Analyzer (purity, type checking)
     kex::semantic::Analyzer analyzer(&preludeSemanticInterfaces());

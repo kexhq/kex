@@ -3,12 +3,6 @@
 This file records known constraints in the first working Tey implementation.
 They are kept explicit so temporary workarounds do not become accidental API.
 
-## Kex compiler and module-system limitations
-
-- `Process.run` keeps stdout and stderr separate in the tree walker, while the
-  BEAM port backend currently combines stderr into stdout. Its public result is
-  stable, but stream fidelity differs by backend.
-
 ## Tey package-manager limitations
 
 - The manifest reader currently recognizes the supported declarations one line
@@ -31,6 +25,9 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - `tey install --without GROUP`, orphan-only `tey clean`, targeted
   `tey update NAME`, target selection for build/run, and transitive compiler
   search paths remain incomplete.
+- `tey kex list` reads released versions from the repository's tags on every
+  call. There is no cache, so listing needs the network, and a pre-release
+  suffix (`0.3.0-rc1`) parses as its release (`0.3.0`) and sorts as one.
 - Lockfile merge-driver mode currently regenerates from the working-tree
   manifest; it does not inspect and merge the `%O`, `%A`, and `%B` inputs.
 - Source toolchain installation builds compiler, runtime, and stdlib

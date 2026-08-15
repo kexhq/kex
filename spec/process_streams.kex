@@ -1,0 +1,29 @@
+# Process.run keeps stdout and stderr APART, and both backends agree.
+#
+# The walker reads two ordinary pipes. A BEAM port cannot: it carries one
+# stream, so stderr either folds into stdout or escapes uncaptured. There the
+# runtime redirects stderr into a NAMED pipe instead — the bytes never touch
+# the disk. The program and its arguments are passed as $0 and "$@", never
+# interpolated into the script, which is what the second case here checks: an
+# argument full of shell metacharacters is data, not syntax.
+
+main do
+  match Process.run("sh", ["-c", "echo to-stdout; echo to-stderr 1>&2; exit 3"]) do
+    Error(error) -> IO.printLine("error: ${error}")
+    Ok(result) -> do
+      IO.printLine("exit ${result.exitCode}")
+      IO.printLine("out [${result.stdout.trim}]")
+      IO.printLine("err [${result.stderr.trim}]")
+    end
+  end
+
+  match Process.run("echo", ["a b; rm -rf /", "$HOME", "`whoami`"]) do
+    Error(error) -> IO.printLine("error: ${error}")
+    Ok(result) -> IO.printLine("args [${result.stdout.trim}]")
+  end
+
+  match Process.run("definitely-not-a-real-program", []) do
+    Error(error) -> IO.printLine("missing: ${error}")
+    Ok(_) -> IO.printLine("missing: unexpectedly ran")
+  end
+end

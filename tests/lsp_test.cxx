@@ -522,6 +522,35 @@ int main() {
             assertTrue(result.find("fs.kex") != std::string::npos,
                        "FS.File.copy navigation did not resolve to its source");
         });
+        it("reads a package.kex manifest instead of flagging its vocabulary", []() {
+            // `bundle`, `version` and `tey` are declared by the stdlib but
+            // imported by nobody, so a manifest used to open with one
+            // "undefined function" per line. The declarations now arrive with
+            // the file, which is what makes hover work here too.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  kex(\">= 0.3.0\")\n  entrypoint(\"src/main.kex\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":1,"character":4}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output), 0);
+            const auto result = output.str();
+            assertTrue(result.find("Undefined function") == std::string::npos,
+                       "the manifest vocabulary was reported as undefined");
+            assertTrue(result.find("version : String -> Void") != std::string::npos,
+                       "hovering a manifest declaration showed no signature");
+        });
+
         it("prefers an at-field over an unrelated receiver method", []() {
             std::string messages;
             messages += frame(

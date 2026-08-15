@@ -394,6 +394,12 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     install(DIRECTORY src/stdlib/
         DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/stdlib
         FILES_MATCHING PATTERN "*.kex")
+    # The package.kex vocabulary ships beside the stdlib but NOT inside it:
+    # anything under stdlib/ is compiled into the prelude artifact, and these
+    # names (`version`, `target`, `kex`) must reach a manifest only.
+    install(DIRECTORY src/manifest/
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/kex/manifest
+        FILES_MATCHING PATTERN "*.kex")
 endif()
 
 # ── Kex stdlib artifact unit ─────────────────────────────────────────────

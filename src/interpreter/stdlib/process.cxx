@@ -2,19 +2,74 @@
 
 #ifndef __EMSCRIPTEN__
 #include <fcntl.h>
+#include <poll.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 #include <cstdio>
-#include <fstream>
+#include <cstdlib>
 
 namespace {
 
-auto readCapturedFile(const char* path) -> std::string {
-    std::ifstream input(path, std::ios::binary);
-    return {std::istreambuf_iterator<char>(input), {}};
+#ifndef __EMSCRIPTEN__
+// Reads both pipes to EOF, closing each as it ends. Interleaved rather than
+// sequential on purpose: a child that writes a lot to the stream we are not
+// reading yet would block forever once its pipe buffer filled.
+auto drainPipes(int outFd, std::string& out, int errFd, std::string& err)
+    -> void {
+    struct pollfd fds[2] = {{outFd, POLLIN, 0}, {errFd, POLLIN, 0}};
+    std::string* targets[2] = {&out, &err};
+    char buffer[4096];
+    while (fds[0].fd >= 0 || fds[1].fd >= 0) {
+        if (poll(fds, 2, -1) < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (fds[i].fd < 0 || !fds[i].revents) continue;
+            const auto got = read(fds[i].fd, buffer, sizeof(buffer));
+            if (got > 0) {
+                targets[i]->append(buffer, static_cast<std::size_t>(got));
+                continue;
+            }
+            if (got < 0 && errno == EINTR) continue;
+            // EOF, or an error there is no way to report per-stream.
+            close(fds[i].fd);
+            fds[i].fd = -1;
+        }
+    }
+    for (auto& descriptor : fds)
+        if (descriptor.fd >= 0) close(descriptor.fd);
 }
+#endif
+
+#ifndef __EMSCRIPTEN__
+// Whether the command names a program this process could actually run —
+// PATH lookup included, the same question `os:find_executable/1` answers on
+// BEAM. Asked BEFORE forking so both backends report a missing program the
+// same way: an Error, not an Ok carrying the shell's 127.
+auto executableExists(const std::string& command) -> bool {
+    auto runnable = [](const std::string& path) {
+        return !path.empty() && access(path.c_str(), X_OK) == 0;
+    };
+    if (command.find('/') != std::string::npos) return runnable(command);
+    const char* search = std::getenv("PATH");
+    if (!search) return false;
+    const std::string paths = search;
+    for (std::size_t start = 0; start <= paths.size();) {
+        const auto end = paths.find(':', start);
+        const auto directory = paths.substr(
+            start, end == std::string::npos ? std::string::npos : end - start);
+        if (runnable((directory.empty() ? std::string(".") : directory) +
+                     "/" + command))
+            return true;
+        if (end == std::string::npos) break;
+        start = end + 1;
+    }
+    return false;
+}
+#endif
 
 } // namespace
 
@@ -52,22 +107,33 @@ auto Evaluator::registerProcessBuiltins() -> void {
             strings.push_back(string->value);
         }
 
-        char stdoutPath[] = "/tmp/kex_process_stdout_XXXXXX";
-        char stderrPath[] = "/tmp/kex_process_stderr_XXXXXX";
-        const int stdoutFd = mkstemp(stdoutPath);
-        const int stderrFd = mkstemp(stderrPath);
-        if (stdoutFd < 0 || stderrFd < 0) {
-            if (stdoutFd >= 0) { close(stdoutFd); std::remove(stdoutPath); }
-            if (stderrFd >= 0) { close(stderrFd); std::remove(stderrPath); }
-            return Value::error(Value::string("could not create process output files"));
+        if (!executableExists(strings.front()))
+            return Value::error(Value::string("executable not found"));
+
+        // Both streams come back over PIPES rather than through temporary
+        // files: nothing the child prints touches the disk, and there is no
+        // path to collide over or clean up. The parent must drain both ends
+        // as they fill — reading one to EOF first would deadlock as soon as
+        // the child filled the other pipe's buffer (64K on Linux) — so poll
+        // sits on the pair until each side reports EOF.
+        int outPipe[2];
+        int errPipe[2];
+        if (pipe(outPipe) < 0)
+            return Value::error(Value::string("could not create process pipes"));
+        if (pipe(errPipe) < 0) {
+            close(outPipe[0]);
+            close(outPipe[1]);
+            return Value::error(Value::string("could not create process pipes"));
         }
 
         const pid_t child = fork();
         if (child == 0) {
-            dup2(stdoutFd, STDOUT_FILENO);
-            dup2(stderrFd, STDERR_FILENO);
-            close(stdoutFd);
-            close(stderrFd);
+            dup2(outPipe[1], STDOUT_FILENO);
+            dup2(errPipe[1], STDERR_FILENO);
+            close(outPipe[0]);
+            close(outPipe[1]);
+            close(errPipe[0]);
+            close(errPipe[1]);
             std::vector<char*> argv;
             argv.reserve(strings.size() + 1);
             for (auto& string : strings) argv.push_back(string.data());
@@ -75,20 +141,20 @@ auto Evaluator::registerProcessBuiltins() -> void {
             execvp(argv[0], argv.data());
             _exit(127);
         }
-        close(stdoutFd);
-        close(stderrFd);
+        close(outPipe[1]);
+        close(errPipe[1]);
         if (child < 0) {
-            std::remove(stdoutPath);
-            std::remove(stderrPath);
+            close(outPipe[0]);
+            close(errPipe[0]);
             return Value::error(Value::string("could not start process"));
         }
 
+        std::string stdoutText;
+        std::string stderrText;
+        drainPipes(outPipe[0], stdoutText, errPipe[0], stderrText);
+
         int status = 0;
         while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
-        const auto stdoutText = readCapturedFile(stdoutPath);
-        const auto stderrText = readCapturedFile(stderrPath);
-        std::remove(stdoutPath);
-        std::remove(stderrPath);
         const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
                                               : 128 + WTERMSIG(status);
         return Value::ok(Value::record("ProcessResult", {

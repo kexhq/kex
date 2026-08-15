@@ -7,6 +7,66 @@ let home -> String do
   ENV.get("TEY_HOME", "${userHome}/.local/share/tey")
 end
 
+# Where `tey kex list` looks for releases. Overridable so a fork or a mirror
+# can be used without patching Tey.
+let repository -> String do
+  return ENV.get("TEY_KEX_REPO", "https://github.com/kexhq/kex.git")
+end
+
+# The directory holding the `kex` shim. It is what a user puts on PATH once;
+# selecting a version repoints the shim rather than asking them to edit PATH
+# again.
+let binDirectory -> String do
+  return "${Tey.Toolchain.home}/bin"
+end
+
+let shimPath -> String do
+  return "${Tey.Toolchain.binDirectory}/kex"
+end
+
+# The version `tey kex use` last selected, if any.
+let selected -> String? do
+  match FS.File.read("${Tey.Toolchain.home}/current") do
+    None -> return None
+    Just(text) -> do
+      let name = text.trim
+      return name.empty? then None else Just(name)
+    end
+  end
+end
+
+# Versions installed under this Tey home, newest first. Staging leftovers are
+# not installations.
+let installedVersions -> [String] do
+  let entries = FS.Directory.directories("${Tey.Toolchain.home}/toolchains").or([])
+  let names = entries.filter { |name| !name.endsWith?(".partial") && !name.endsWith?(".previous") }
+  return Tey.Toolchain.newestFirst(names)
+end
+
+let installed?(version: String) -> Bool do
+  return FS.File.file?("${Tey.Toolchain.home}/toolchains/${version}/bin/kex")
+end
+
+# Released versions, newest first, read from the repository's tags. Tags that
+# are not versions are skipped rather than reported as junk.
+let availableVersions -> Result<[String], String> do
+  match Tey.Git.execute(["ls-remote", "--tags", "--refs", Tey.Toolchain.repository]) do
+    Error(error) -> return Error(error)
+    Ok(result) -> do
+      let versions = result.stdout.lines.collect do |line|
+        Tey.Toolchain.tagVersion(line)
+      end
+      return Ok(Tey.Toolchain.newestFirst(versions))
+    end
+  end
+end
+
+let newestFirst(versions: [String]) -> [String] do
+  return versions.uniq.sort do |a, b|
+    Tey.Toolchain.newer?(a, b)
+  end
+end
+
 let installedKex -> String? do
   match ENV.get("TEY_KEX") do
     Just(path) -> Just(path)
@@ -58,15 +118,56 @@ let installSource(source: String, version: String) -> Result<String, String> do
   # `.try` propagates a failed publish as this function's Error.
   let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
   return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
+  Tey.Toolchain.link(version)
   Ok(installedPrefix)
 end
 
 let use(version: String) -> Bool do
   let home = Tey.Toolchain.home
-  FS.File.file?("${home}/toolchains/${version}/bin/kex") && FS.File.write("${home}/current", "${version}\n")
+  return false if !FS.File.file?("${home}/toolchains/${version}/bin/kex")
+  return false if !FS.File.write("${home}/current", "${version}\n")
+  # Best effort: the selection is recorded either way, and `tey` itself reads
+  # the record rather than the shim. Only a user's bare `kex` needs the link.
+  Tey.Toolchain.link(version)
+  return true
 end
 
 private do
+  # Points the shim at a version's binary, creating the bin directory the
+  # first time. A symlink rather than a copy: `kex` finds its stdlib and
+  # runtime relative to the REAL path, which the link preserves.
+  let link(version: String) -> Bool do
+    return false if !FS.Directory.create(Tey.Toolchain.binDirectory)
+    let target = "${Tey.Toolchain.home}/toolchains/${version}/bin/kex"
+    return false if !FS.File.file?(target)
+    match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do
+      Error(_) -> return false
+      Ok(result) -> return result.exitCode == 0
+    end
+  end
+
+  # "<sha>\trefs/tags/v0.3.0" → Just("0.3.0"). Anything that is not a version
+  # tag is None, which `collect` drops.
+  let tagVersion(line: String) -> String? do
+    let ref = line.split("\t").second.or("")
+    return None if !ref.startsWith?("refs/tags/")
+    let name = ref.drop("refs/tags/".count)
+    let version = name.startsWith?("v") then name.drop(1) else name
+    return None if Tey.Semver.parseVersion(version) == None
+    return Just(version)
+  end
+
+  # Descending semantic order. Anything unparseable sorts after everything
+  # that parses, so a stray tag cannot displace a real release.
+  let newer?(a: String, b: String) -> Bool do
+    match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
+      (Just(left), Just(right)) -> return Tey.Semver.compareVersions(left, right) > 0
+      (Just(_), None) -> return true
+      (None, Just(_)) -> return false
+      _ -> return false
+    end
+  end
+
   # Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
   # tree until the new one is in place and puts it back if the move fails, so
   # a failed upgrade leaves the previous toolchain working rather than none.
