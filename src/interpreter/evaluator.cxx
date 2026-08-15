@@ -765,6 +765,18 @@ auto Evaluator::execTypeDef(const ast::TypeDef& def,
     // Skip transparent type aliases (single bare TypeName, e.g.
     // `type FilePath = String`) — they declare a name for an existing
     // type rather than introducing new variant constructors.
+    // Remember what an alias stands for. Only single-target aliases — a bare
+    // name (`type FilePath = String`) or a callable shape
+    // (`type Handler = Request -> Response`) — since those are the ones a
+    // parameter annotation names when the runtime has no such type of its
+    // own to match against.
+    if (def.variants && def.variants->size() == 1 && (*def.variants)[0]) {
+        const auto& only = (*def.variants)[0];
+        if (std::holds_alternative<ast::FunctionType>(only->kind) ||
+            std::holds_alternative<ast::BlockType>(only->kind) ||
+            kex::isTransparentTypeAlias(def))
+            m_typeAliases[def.name] = only.get();
+    }
     if (def.variants) {
         if (kex::isTransparentTypeAlias(def)) return;
         for (const auto& variant : *def.variants) {
@@ -3126,6 +3138,11 @@ auto Evaluator::runtimeTypeMatches(const ValuePtr& value,
             if (auto parent = m_variantParent.find(actual);
                 parent != m_variantParent.end() && parent->second == expected)
                 return true;
+            // An alias is whatever it stands for: `handler: CommandHandler`
+            // has to accept a closure, and `path: FilePath` a String.
+            if (auto alias = m_typeAliases.find(expected);
+                alias != m_typeAliases.end() && alias->second)
+                return runtimeTypeMatches(value, *alias->second);
             return expected == "Int" && actual == "Integer";
         } else if constexpr (std::is_same_v<T, ast::GenericType>) {
             if (node.name.parts.empty()) return true;

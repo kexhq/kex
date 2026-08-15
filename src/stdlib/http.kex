@@ -99,6 +99,27 @@ foul module Mock do
     end
   end
 
+  # Overlays the process environment, so a test can say what `ENV` holds
+  # instead of depending on how it was launched. `unset` is separate because
+  # a variable being ABSENT is an answer programs act on.
+  foul module ENV do
+    set : String -> String -> Void
+    unset : String -> Void
+    clear : Void
+
+    foul set(name: String, value: String) -> Void do
+      return Kex.Intrinsic.Env.mockSet(name, value)
+    end
+
+    foul unset(name: String) -> Void do
+      return Kex.Intrinsic.Env.mockUnset(name)
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.Env.mockClear()
+    end
+  end
+
   # Makes the machine claim to be something else, so a test for another
   # system's behaviour can run on this one. Setter per fact, like Mock.FS.
   foul module System do
