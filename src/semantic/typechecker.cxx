@@ -2827,9 +2827,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return inferBinaryOp(node.op, leftType, rightType,
                                          expr.location);
                 auto receiver = resolve(leftType);
+                // A trait-bounded variable is still a variable. `n - 1`
+                // constrains `n` to `N: Number` before `n * f(...)` is
+                // checked, and treating that as a concrete receiver let it
+                // match any operator overload whose parameter a constrained
+                // type satisfies: `let fact(n) = n * fact(n - 1)` picked up
+                // `make Period`'s `*(Integer) -> Period` and inferred
+                // `fact : Integer -> Period`.
                 const bool concreteReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
-                    !std::holds_alternative<UnknownType>(receiver->kind);
+                    !std::holds_alternative<UnknownType>(receiver->kind) &&
+                    !std::holds_alternative<ConstrainedType>(receiver->kind);
                 // An operator defined in a make block is visible either as a
                 // local declaration or — for the prelude's own `Date + Duration`
                 // and friends — only through the imported interface. Consulting

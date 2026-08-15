@@ -119,6 +119,7 @@ spec: build
 		kex_flags="--no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
+		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then kex_flags="-C -t --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then kex_flags="-R --no-colors"; fi; \
 		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
 			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
@@ -224,6 +225,7 @@ spec-beam: build
 		exp_file="$${f%.kex}.expected"; \
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
+		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then continue; fi; \
 		$(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
 		actual=$$(cat "$$beam_out" "$$beam_err"); \
 		expected=$$(cat "$$exp_file"); \
@@ -254,6 +256,7 @@ spec-wasm: build-wasm
 		kex_flags="--no-colors"; \
 		if grep -q "# kex: no-check" "$$f" 2>/dev/null; then kex_flags="$$kex_flags --no-check"; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then kex_flags="-C --no-colors"; fi; \
+		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then kex_flags="-C -t --no-colors"; fi; \
 		if grep -q "# kex: run-beam" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: skip-wasm" "$$f" 2>/dev/null; then continue; fi; \
 		actual=$$($(TIMEOUT_SPEC) node $(WASM_BUILD_DIR)/kex.js $$kex_flags "$$f" 2>&1); \
