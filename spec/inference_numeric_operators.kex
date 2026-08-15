@@ -1,0 +1,38 @@
+# kex: types-only
+# Inference is pinned here by dumping every expression's inferred type
+# (`-C -t`), so a change in how a type is chosen shows up as a diff rather
+# than as a surprise in the REPL months later.
+#
+# The regression this was written for: `let fact(n) = n * fact(n - 1)`
+# inferred `fact : Integer -> Period`. `n - 1` constrains `n` to `N: Number`,
+# and a trait-bounded variable was treated as a CONCRETE receiver by operator
+# resolution — so `n * ...` was free to match any operator overload whose
+# parameter a constrained type satisfies, and `make Period`'s
+# `*(factor: Integer) -> Period` (src/stdlib/time.kex) is one of those.
+# Nothing in the program mentions time.
+
+# The golden records what inference CURRENTLY concludes, which is not the same
+# as what it ideally would: a call to a recursive numeric function comes back
+# as the constrained variable `N` rather than `Integer`. That is a weaker
+# answer, not a wrong one, and pinning it means the day it improves shows up
+# as a reviewable diff.
+
+# Recursive, so the second clause is checked while the function's own result
+# type is still being inferred — the case that went wrong.
+let fact(0) = 1
+let fact(n) = n * fact(n - 1)
+
+# The same shape with `+`, which never had a unit overload to capture it.
+let tally(0) = 0
+let tally(n) = n + tally(n - 1)
+
+# Non-recursive: both operands are known when the operator is resolved.
+let twice(n) = n * 2
+let half(n) = n / 2
+
+main do
+  let a = fact(5)
+  let b = tally(5)
+  let c = twice(21)
+  let d = half(10)
+end

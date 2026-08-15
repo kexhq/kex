@@ -42,12 +42,26 @@ struct Document {
         bool completeDetail = false;
     };
 
+    // Where a typed expression ENDS, and what to complete against there.
+    // `localReceiverTypes` is keyed by name, so it can only answer for
+    // receivers that are plain identifiers — `box.` completes, `makeBox(3).`
+    // and a chain continued on the next line do not, because there is no name
+    // to look up. These spans answer positionally instead, which is what a
+    // call result or a multi-line builder chain needs.
+    struct ReceiverSpan {
+        unsigned int line = 0;        // 0-based, as LSP positions are
+        unsigned int endByteColumn = 0;  // one past the expression's last byte
+        unsigned int byteLength = 0;
+        std::string qualifier;
+    };
+
     std::string path;
     std::string text;
     int version = 0;
     std::vector<HoverEntry> hoverEntries;
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
+    std::vector<ReceiverSpan> receiverSpans;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
 };
 
@@ -1168,6 +1182,190 @@ auto completionQualifierForType(const semantic::TypePtr& type) -> std::string {
     }, type->kind);
 }
 
+// The declared type of one field, read out of a record symbol's Kex-shaped
+// declaration text (`record Box do\n  size : Integer\n  ...`). Hovering a
+// field used to answer with whatever global function shared its name — `b.size`
+// reported `foul size : String -> Integer?` — because a field is not a symbol
+// in its own right and the name-based lookup was all there was.
+auto recordFieldType(const std::string& recordDetail, const std::string& field)
+    -> std::string {
+    size_t lineStart = 0;
+    while (lineStart <= recordDetail.size()) {
+        const auto newline = recordDetail.find('\n', lineStart);
+        const auto end =
+            newline == std::string::npos ? recordDetail.size() : newline;
+        size_t i = lineStart;
+        while (i < end && std::isspace(static_cast<unsigned char>(recordDetail[i])))
+            ++i;
+        if (recordDetail.compare(i, field.size(), field) == 0) {
+            size_t after = i + field.size();
+            while (after < end &&
+                   std::isspace(static_cast<unsigned char>(recordDetail[after])))
+                ++after;
+            if (after < end && recordDetail[after] == ':') {
+                ++after;
+                while (after < end &&
+                       std::isspace(static_cast<unsigned char>(recordDetail[after])))
+                    ++after;
+                // Stop before a default value: `count : Integer = 0`.
+                auto stop = recordDetail.find('=', after);
+                if (stop == std::string::npos || stop > end) stop = end;
+                auto text = recordDetail.substr(after, stop - after);
+                while (!text.empty() &&
+                       std::isspace(static_cast<unsigned char>(text.back())))
+                    text.pop_back();
+                if (!text.empty()) return text;
+            }
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return {};
+}
+
+// Module names this file opted into with `using`. Read from the text rather
+// than the AST so it still answers while the buffer is mid-edit and cannot be
+// parsed — which is exactly when an editor asks about a symbol.
+auto documentImports(const std::string& source)
+    -> std::unordered_set<std::string> {
+    std::unordered_set<std::string> modules;
+    size_t lineStart = 0;
+    while (lineStart <= source.size()) {
+        const auto newline = source.find('\n', lineStart);
+        const auto end = newline == std::string::npos ? source.size() : newline;
+        size_t i = lineStart;
+        while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
+        if (source.compare(i, 6, "using ") == 0) {
+            i += 6;
+            while (i < end && std::isspace(static_cast<unsigned char>(source[i]))) ++i;
+            const size_t nameStart = i;
+            while (i < end &&
+                   (std::isalnum(static_cast<unsigned char>(source[i])) ||
+                    source[i] == '_' || source[i] == '.'))
+                ++i;
+            if (i > nameStart) modules.insert(source.substr(nameStart, i - nameStart));
+        }
+        if (newline == std::string::npos) break;
+        lineStart = newline + 1;
+    }
+    return modules;
+}
+
+// Where the receiver of a member completion starts, and the dot it hangs off.
+// `completionPrefix` answers this too, but only for receivers made of
+// identifiers on the cursor's own line: it stops at `)`, so `makeBox(3).g`
+// yields the bare prefix ".g", and it is bounded by the line start, so a
+// builder chain continued on the next line yields ".g" as well. Both then
+// resolve to nothing. This walks the real shape instead — identifiers,
+// balanced `(...)`/`[...]`, and quoted strings, joined by dots, across line
+// breaks.
+struct DotReceiver {
+    size_t start = 0;  // first byte of the receiver expression
+    size_t dot = 0;    // the '.' the member being typed hangs off
+    bool valid = false;
+};
+
+auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
+    const auto isWord = [](unsigned char c) {
+        return std::isalnum(c) || c == '_' || c == '?' || c == '!';
+    };
+    const auto skipSpaceBack = [&](size_t i) {
+        while (i > 0 && std::isspace(static_cast<unsigned char>(source[i - 1])))
+            --i;
+        return i;
+    };
+    // Offset of the delimiter opening the group that ends just before `end`.
+    const auto matchOpen = [&](size_t end, char close, char open) -> size_t {
+        int depth = 0;
+        for (size_t j = end; j > 0; --j) {
+            const char c = source[j - 1];
+            if (c == close) {
+                ++depth;
+            } else if (c == open) {
+                --depth;
+                if (depth == 0) return j - 1;
+            }
+        }
+        return std::string::npos;
+    };
+
+    size_t i = cursor;
+    while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+    i = skipSpaceBack(i);
+    if (i == 0 || source[i - 1] != '.') return {};
+    const size_t dot = i - 1;
+
+    i = skipSpaceBack(dot);
+    while (i > 0) {
+        const char c = source[i - 1];
+        // A group is never the whole receiver: `makeBox(3)` continues into the
+        // name in front of it, and `[c][0]` into the list before the index.
+        if (c == ')' || c == ']') {
+            const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
+            if (open == std::string::npos) return {};
+            i = open;
+            continue;
+        }
+        if (c == '"' || c == '\'' || c == '`') {
+            size_t j = i - 1;
+            while (j > 0) {
+                --j;
+                if (source[j] == c && (j == 0 || source[j - 1] != '\\')) break;
+            }
+            i = j;
+            continue;
+        }
+        if (!isWord(static_cast<unsigned char>(c))) break;
+        while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
+        const size_t before = skipSpaceBack(i);
+        if (before == 0 || source[before - 1] != '.') break;
+        i = skipSpaceBack(before - 1);
+    }
+    if (i >= dot) return {};
+    return {.start = i, .dot = dot, .valid = true};
+}
+
+// The type of an arbitrary receiver expression, by re-parsing the buffer with
+// the half-typed member removed and asking the analyzer. Deleting through the
+// cursor rather than just the dot is what makes `makeBox(3).g` parse again.
+auto recoveredReceiverQualifier(
+    const std::string& source, const std::string& path,
+    const DotReceiver& receiver, size_t cursor,
+    const semantic::ImportedInterfaces* interfaces) -> std::string {
+    if (!receiver.valid || cursor < receiver.dot) return {};
+    auto recovered = source;
+    recovered.erase(receiver.dot, cursor - receiver.dot);
+    Lexer lexer(recovered, path);
+    Parser parser(lexer.tokenizeAll(), path);
+    auto program = parser.parseProgram();
+    if (!parser.diagnostics().empty()) return {};
+    semantic::Analyzer analyzer(interfaces);
+    analyzer.analyze(program);
+
+    // Everything before the deletion keeps its position, so the receiver's
+    // line/column are the ones it had in the original buffer.
+    int line = 1;
+    size_t lineStart = 0;
+    for (size_t i = 0; i < receiver.start; ++i)
+        if (source[i] == '\n') { ++line; lineStart = i + 1; }
+    const int column = static_cast<int>(receiver.start - lineStart) + 1;
+
+    // Several expressions can start at one column — `makeBox` the identifier
+    // and `makeBox(3)` the call both start at `m`. Only the call has a type
+    // worth completing against, so take the first that yields a qualifier.
+    for (const auto& [expression, _] : analyzer.typeMap()) {
+        if (!expression || expression->location.line != line ||
+            expression->location.column != column)
+            continue;
+        if (auto qualifier =
+                completionQualifierForType(analyzer.displayTypeOf(expression));
+            !qualifier.empty())
+            return qualifier;
+    }
+    return {};
+}
+
 auto recoveredDotReceiverQualifier(
     const std::string& source, const std::string& path,
     std::string_view receiver, unsigned int protocolLine,
@@ -1590,6 +1788,27 @@ private:
                     .completeDetail = completeDetail,
                 });
             }
+            // A name a pattern introduces is not an expression, so it has no
+            // entry above. Hovering `b` in `Boxed(b)` answered nothing at all
+            // until these were recorded.
+            for (const auto& binding : analyzer.patternBindings()) {
+                if (binding.location.file != document.path || !binding.type)
+                    continue;
+                if (std::holds_alternative<semantic::UnknownType>(
+                        binding.type->kind))
+                    continue;
+                semantic::Signature display;
+                display.name = binding.name;
+                display.result = binding.type;
+                document.hoverEntries.push_back({
+                    .line = static_cast<unsigned int>(binding.location.line),
+                    .byteColumn =
+                        static_cast<unsigned int>(binding.location.column),
+                    .byteLength = static_cast<unsigned int>(binding.name.size()),
+                    .detail = analyzer.displaySignature(binding.name, display),
+                    .completeDetail = true,
+                });
+            }
             for (const auto& [expression, signature] :
                  analyzer.selectedCallSignatures()) {
                 if (!expression || expression->location.file != document.path)
@@ -1699,7 +1918,49 @@ private:
                                              params.position.line,
                                              params.position.character);
         auto query = resolveCompletionQuery(prefix.c_str(), 0, prefix.c_str());
-        if (const auto dot = prefix.find('.'); dot != std::string::npos) {
+
+        // Ask the analyzer what the receiver actually is, before falling back
+        // to the text heuristic `resolveCompletionQuery` inherited from the
+        // REPL. That heuristic reads one line and stops at `)`, so it answers
+        // `.g` for `makeBox(3).g` and for a chain continued on the next line,
+        // and answers `List` for `[c][0]` — the type of the wrong expression.
+        bool resolvedByAnalyzer = false;
+        {
+            const auto& text = found->second.text;
+            size_t lineStart = 0;
+            bool haveLine = true;
+            for (unsigned int current = 0; current < params.position.line;
+                 ++current) {
+                const auto newline = text.find('\n', lineStart);
+                if (newline == std::string::npos) { haveLine = false; break; }
+                lineStart = newline + 1;
+            }
+            if (haveLine) {
+                const auto lineEndPosition = text.find('\n', lineStart);
+                const auto lineEnd = lineEndPosition == std::string::npos
+                    ? text.size() : lineEndPosition;
+                const auto cursor = byteOffsetForUtf16Column(
+                    text, lineStart, lineEnd, params.position.character);
+                if (const auto receiver = scanDotReceiver(text, cursor);
+                    receiver.valid) {
+                    if (auto qualifier = recoveredReceiverQualifier(
+                            text, found->second.path, receiver, cursor,
+                            &m_interfaces);
+                        !qualifier.empty()) {
+                        query.dbQuery = qualifier + "." +
+                            text.substr(receiver.dot + 1,
+                                        cursor - receiver.dot - 1);
+                        query.rewriteFrom = qualifier;
+                        query.rewriteTo = text.substr(
+                            receiver.start, receiver.dot - receiver.start);
+                        resolvedByAnalyzer = true;
+                    }
+                }
+            }
+        }
+
+        if (const auto dot = prefix.find('.');
+            !resolvedByAnalyzer && dot != std::string::npos) {
             const auto receiver = prefix.substr(0, dot);
             auto inferredQualifier = [&]() -> std::string {
                 if (auto inferred = found->second.localReceiverTypes.find(receiver);
@@ -1818,6 +2079,13 @@ private:
                 if (signatures.size() > 1)
                     suffix += " (+" + std::to_string(signatures.size() - 1) +
                         " overloads)";
+                // VS Code renders labelDetails.detail directly after the label
+                // with no spacing, so a suffix starting with a word runs into
+                // it: `ParsedOptionsrecord ParsedOptions do`. Parameter lists
+                // start with `(` and read correctly as they are.
+                if (!suffix.empty() && suffix.front() != ' ' &&
+                    suffix.front() != '(')
+                    suffix.insert(0, " ");
                 labelDetails = ::lsp::CompletionItemLabelDetails{
                     .detail = std::move(suffix),
                     .description = qualifier.empty()
@@ -1865,6 +2133,22 @@ private:
                         .value = renderRdoc(std::move(documentation)),
                     }};
             }
+            // Methods the RECEIVER'S OWN type declares come first. A client
+            // sorts by sortText when it is set and alphabetically when it is
+            // not, so `box.` used to open on whatever prelude method happened
+            // to sort earliest rather than on `make Box`'s own methods.
+            // `query.rewriteFrom` is the receiver type this completion
+            // resolved to, and `qualifier` is where each match comes from.
+            // The qualifier cannot answer this: rewriteCompletions has already
+            // turned every match's `Box.` into the receiver text, so they all
+            // look alike by then. `makeTarget` is the `make TypeName` a method
+            // was declared in, which is exactly the question being asked.
+            if (!query.rewriteFrom.empty() && localSymbol)
+                item.sortText =
+                    (localSymbol->makeTarget == query.rewriteFrom ? "0" : "1") +
+                    item.label;
+            else if (!query.rewriteFrom.empty())
+                item.sortText = "1" + item.label;
             result.push_back(std::move(item));
         }
         return result;
@@ -1880,6 +2164,14 @@ private:
         const auto word = wordAt(document.text, params.position.line,
                                  params.position.character);
         if (word.text.empty()) return {};
+        // `xs.push!(v)` is the mutating form of `push`, produced by the
+        // language rather than declared anywhere: no symbol, no signature and
+        // no documentation is ever registered under `push!`, so every lookup
+        // below has to ask about the base name. The bang is kept for display.
+        std::string lookupName = word.text;
+        if (lookupName.size() > 1 && lookupName.back() == '!' &&
+            !m_db.findSymbol(lookupName, document.path))
+            lookupName.pop_back();
         const auto moduleQualifier = moduleQualifierBeforeWord(
             document.text, params.position.line, word.byteColumn);
 
@@ -1906,18 +2198,27 @@ private:
             word.byteColumn < static_cast<uint32_t>(symbol->definition.column) +
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
-            symbol = m_db.findSymbol(word.text, document.path);
+            symbol = m_db.findSymbol(lookupName, document.path);
 
         std::string detail;
         std::string documentation;
         std::string selectedCallDetail;
+        // `using FS` names a MODULE, and nothing downstream knows that: the
+        // symbol search resolved `FS` to whatever else carried the name and
+        // hovering an import reported an unrelated declaration from the same
+        // file. On a `using` line the word can only be a module.
+        // Anything on a `using` line is part of a module path by
+        // construction, qualified (`using Units.SI`) or not, so no lookup can
+        // make it something else.
+        const bool importLine =
+            document.text.compare(hoverLineStart, 6, "using ") == 0;
         semantic::TypeChecker traitLookup(&m_interfaces);
-        const bool traitName = traitLookup.isTrait(word.text) ||
+        const bool traitName = traitLookup.isTrait(lookupName) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
         const auto* importedAdt = moduleQualifier.empty()
-            ? importedAdtNamed(m_interfaces, word.text) : nullptr;
+            ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
         const auto* constructorAdt = moduleQualifier.empty()
-            ? importedAdtWithConstructor(m_interfaces, word.text) : nullptr;
+            ? importedAdtWithConstructor(m_interfaces, lookupName) : nullptr;
         const Document::HoverEntry* expressionHover = nullptr;
         const Document::HoverEntry* selectedCallHover = nullptr;
         const auto line = params.position.line + 1;
@@ -1946,7 +2247,45 @@ private:
         const auto shorthandFieldType = atFieldType(
             document.text, params.position.line, word.byteColumn, word.text,
             m_db, document.path);
-        if (!shorthandFieldType.empty()) {
+        // A field of the record the receiver actually has. Resolved through
+        // the same analyzer-backed receiver lookup completion uses, so it
+        // works for `b.size`, `makeBox(3).size`, and a match binding alike.
+        std::string fieldDetail;
+        if (moduleQualifier.empty() && !importLine) {
+            const auto wordEnd = hoverLineStart + word.byteColumn - 1 +
+                                 word.byteLength;
+            if (const auto receiver = scanDotReceiver(document.text, wordEnd);
+                receiver.valid)
+                if (auto qualifier = recoveredReceiverQualifier(
+                        document.text, document.path, receiver, wordEnd,
+                        &m_interfaces);
+                    !qualifier.empty())
+                    if (const auto* record =
+                            m_db.findSymbol(qualifier, document.path);
+                        record && record->kind == semantic::SymbolKind::Record)
+                        if (auto type = recordFieldType(record->detail, lookupName);
+                            !type.empty())
+                            fieldDetail = word.text + " : " + type;
+        }
+
+        // Documentation is looked up by BARE NAME, so a field must not take
+        // it: `user.name` showed the right type and then OptionParser's prose
+        // about `kex install`, because that module happens to export a `name`.
+        const bool recordField = !fieldDetail.empty();
+        if (recordField) {
+            detail = std::move(fieldDetail);
+            symbol = nullptr;
+        } else if (importLine) {
+            // Hovering `FS` in `using FS` used to report an unrelated
+            // declaration that happened to share the name — `type FilePath =
+            // String` from the same file, or a `Feature` type — because the
+            // branches below answer for values and types, and an import is
+            // neither.
+            detail = "module " + (moduleQualifier.empty()
+                                      ? word.text
+                                      : moduleQualifier + "." + word.text);
+            symbol = nullptr;
+        } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
             symbol = nullptr;
         } else if (primitiveTypeReference) {
@@ -2012,23 +2351,30 @@ private:
             if (!moduleQualifier.empty()) {
                 if (auto module = m_interfaces.modules.find(moduleQualifier);
                     module != m_interfaces.modules.end())
-                    if (auto functions = module->second.exports.find(word.text);
+                    if (auto functions = module->second.exports.find(lookupName);
                         functions != module->second.exports.end())
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
                                 function.signature,
                                 function.signature.isFoul || module->second.isFoul);
             } else {
-                for (const auto& [_, module] : m_interfaces.modules) {
-                    if (!module.automaticImport) continue;
-                    if (auto functions = module.exports.find(word.text);
+                // Modules this file opted into with `using`, as well as the
+                // automatic ones. Without the former, hovering `meter` in
+                // `100.meter` found nothing — `Units.SI` is opt-in, so its
+                // exports were skipped and the reply fell through to the
+                // bare string "function meter".
+                const auto opened = documentImports(found->second.text);
+                for (const auto& [moduleName, module] : m_interfaces.modules) {
+                    if (!module.automaticImport && !opened.count(moduleName))
+                        continue;
+                    if (auto functions = module.exports.find(lookupName);
                         functions != module.exports.end())
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
                                 function.signature,
                                 function.signature.isFoul || module.isFoul);
                 }
-                if (auto functions = m_interfaces.receiverFunctions.find(word.text);
+                if (auto functions = m_interfaces.receiverFunctions.find(lookupName);
                     functions != m_interfaces.receiverFunctions.end())
                     for (const auto& function : functions->second) {
                         bool isFoul = function.signature.isFoul;
@@ -2042,7 +2388,7 @@ private:
             semantic::TypeChecker renderer(&m_interfaces);
             std::unordered_set<std::string> rendered;
             for (const auto& [signature, isFoul] : importedSignatures) {
-                auto lineDetail = renderer.displaySignature(word.text, signature);
+                auto lineDetail = renderer.displaySignature(lookupName, signature);
                 if (isFoul) lineDetail = "foul " + lineDetail;
                 if (!rendered.insert(lineDetail).second) continue;
                 if (!detail.empty()) detail += '\n';
@@ -2050,7 +2396,7 @@ private:
             }
             if (!importedSignatures.empty()) {
                 const auto standardName = moduleQualifier.empty()
-                    ? word.text : moduleQualifier + "." + word.text;
+                    ? lookupName : moduleQualifier + "." + lookupName;
                 if (auto docs = m_standardDocumentation.find(standardName);
                     docs != m_standardDocumentation.end())
                     for (const auto& entry : docs->second) {
@@ -2099,16 +2445,16 @@ private:
                     }
                 }
         }
-        if (documentation.empty())
-            if (auto docs = document.documentation.find(word.text);
+        if (documentation.empty() && !recordField)
+            if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty() && !lexicalReference) {
+        if (documentation.empty() && !lexicalReference && !recordField) {
             const auto standardName = moduleQualifier.empty()
-                ? word.text : moduleQualifier + "." + word.text;
+                ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
                 docs != m_standardDocumentation.end())
                 for (const auto& entry : docs->second) {
@@ -2128,6 +2474,12 @@ private:
         } else {
             markdown = "```kex\n" + detail + "\n```";
         }
+        // `push!` is not a function: the `!` is a marker that rebinds the
+        // receiver, and what it calls is `push`. Signatures above are rendered
+        // under that real name, so say where the bang went.
+        if (lookupName != word.text)
+            markdown += "\n\n`" + word.text + "` calls `" + lookupName +
+                        "` and rebinds the receiver.";
         if (!documentation.empty()) markdown += "\n\n" + renderRdoc(documentation);
         const SourceLocation start{document.path,
                                    static_cast<int>(params.position.line + 1),

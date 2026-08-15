@@ -160,6 +160,97 @@ static auto errorCountPhrase(int count, const char *kind) -> std::string {
   return std::to_string(count) + " " + kind + (count == 1 ? " error" : " errors");
 }
 
+// The parameter patterns of a clause, with variable names flattened to `_`:
+// `let fact(0)` → "(0)", `let fact(n)` and `let fact(k)` → "(_)". Two clauses
+// with the same head match the same inputs, so entering one replaces the
+// other; different heads accumulate. Returns nothing when the line is not a
+// parameterised clause (a plain `let x = ...`, a record, a module).
+static auto replClauseHead(const std::string &source)
+    -> std::optional<std::string> {
+  size_t offset = 0;
+  if (source.rfind("foul ", 0) == 0) offset = 5;
+  else if (source.rfind("let ", 0) == 0) offset = 4;
+  else return std::nullopt;
+  while (offset < source.size() &&
+         std::isspace((unsigned char)source[offset])) offset++;
+  if (offset < source.size() && std::isupper((unsigned char)source[offset]))
+    return std::nullopt;
+  size_t i = offset;
+  while (i < source.size() &&
+         (std::isalnum((unsigned char)source[i]) || source[i] == '_')) i++;
+  if (i == offset) return std::nullopt;
+  if (i < source.size() && (source[i] == '?' || source[i] == '!')) i++;
+  if (i >= source.size() || source[i] != '(') return std::nullopt;
+
+  std::string head;
+  int depth = 0;
+  bool inWord = false;
+  std::string word;
+  const auto flush = [&]() {
+    if (!inWord) return;
+    // A bare lowercase identifier is a binding, so any name stands for the
+    // same set of inputs; a literal or constructor is matched as written.
+    const bool binding =
+        !word.empty() && (std::islower((unsigned char)word[0]) || word[0] == '_');
+    head += binding ? "_" : word;
+    word.clear();
+    inWord = false;
+  };
+  for (; i < source.size(); i++) {
+    const char c = source[i];
+    if (std::isalnum((unsigned char)c) || c == '_') {
+      word += c;
+      inWord = true;
+      continue;
+    }
+    flush();
+    if (c == '(') depth++;
+    if (std::isspace((unsigned char)c)) continue;
+    // The type annotation on a parameter does not change what it matches.
+    if (c == ':') {
+      while (i + 1 < source.size() && source[i + 1] != ',' &&
+             source[i + 1] != ')') i++;
+      continue;
+    }
+    head += c;
+    if (c == ')') {
+      if (--depth == 0) return head;
+    }
+  }
+  return std::nullopt;
+}
+
+// Stored definitions hold one clause per entry, appended with newlines. A
+// clause continues while its `do` blocks are unclosed, so splitting cannot
+// simply break on every newline. `countBlocks` is the caller's own block
+// counter (each REPL has one).
+template <typename CountBlocks>
+static auto splitReplClauses(const std::string &source,
+                             const CountBlocks &countBlocks)
+    -> std::vector<std::string> {
+  std::vector<std::string> clauses;
+  std::string current;
+  int blocks = 0;
+  size_t start = 0;
+  while (start <= source.size()) {
+    const auto newline = source.find('\n', start);
+    const auto line = source.substr(
+        start, newline == std::string::npos ? std::string::npos : newline - start);
+    if (!current.empty()) current += "\n";
+    current += line;
+    blocks += countBlocks(line);
+    if (blocks <= 0 && !current.empty()) {
+      clauses.push_back(current);
+      current.clear();
+      blocks = 0;
+    }
+    if (newline == std::string::npos) break;
+    start = newline + 1;
+  }
+  if (!current.empty()) clauses.push_back(current);
+  return clauses;
+}
+
 static auto replDefinitionName(const std::string &source) -> std::string {
   size_t off = 0;
   if (source.rfind("foul module ", 0) == 0) off = 12;
@@ -510,13 +601,45 @@ static char **kexCompletion(const char *text, int start, int end) {
 } // extern "C"
 #endif
 
+// Set when the user abandons the line being typed (Esc Esc, or Ctrl-G). The
+// REPL loops check it after every read so a half-typed block can be thrown
+// away without evaluating it — previously the only ways out of a `...>`
+// continuation were completing the block or killing the process.
+bool g_replInputCancelled = false;
+
+auto takeReplInputCancelled() -> bool {
+  const bool cancelled = g_replInputCancelled;
+  g_replInputCancelled = false;
+  return cancelled;
+}
+
+#ifdef HAS_READLINE
+// Esc alone cannot be bound: readline uses it as the meta prefix, so binding
+// it would break arrow keys and every other escape sequence. Esc Esc is the
+// usual answer, and Ctrl-G is readline's traditional abort.
+auto replCancelInput(int, int) -> int {
+  g_replInputCancelled = true;
+  rl_replace_line("", 0);
+  rl_done = 1;
+  return 0;
+}
+
+auto bindReplCancelKeys() -> void {
+  rl_bind_keyseq("\\e\\e", replCancelInput);
+  rl_bind_key(7, replCancelInput);  // Ctrl-G
+}
+#else
+auto bindReplCancelKeys() -> void {}
+#endif
+
 auto readLine(const std::string &prompt) -> std::pair<std::string, bool> {
+  g_replInputCancelled = false;
 #ifdef HAS_READLINE
   char *input = readline(prompt.c_str());
   if (!input)
     return {"", false};
   std::string line(input);
-  if (!line.empty())
+  if (!line.empty() && !g_replInputCancelled)
     add_history(input);
   free(input);
   return {line, true};
@@ -2018,6 +2141,7 @@ int main(int argc, char *argv[]) {
     rl_completion_display_matches_hook = kexDisplayMatches;
     rl_completer_word_break_characters = (char *)" \t\n\\@$><=;|&{(";
     rl_completer_quote_characters = (char *)"";
+    bindReplCancelKeys();
 #endif
 
     // Top-level definitions, tracked by name so redefining a function
@@ -2286,38 +2410,28 @@ int main(int argc, char *argv[]) {
       // accepted as a broken standalone clause. Matches the tree-walker.
       std::string source = input;
       int dc = countBlocks(source);
+      bool cancelled = false;
       while (dc > 0 || replHasOpenDelimiter(source)) {
         auto [cont, contOk] = readLine("  ...> ");
+        if (takeReplInputCancelled()) {
+          cancelled = true;
+          break;
+        }
         if (!contOk)
           break;
         source += "\n" + cont;
         dc = countBlocks(source);
       }
-      if (dc == 0) {
-        if (auto name = clauseFuncName(source)) {
-          while (true) {
-            auto [cont, contOk] = readLine("  ...> ");
-            if (!contOk)
-              break;
-            auto nextName = clauseFuncName(cont);
-            if (nextName && *nextName == *name) {
-              source += "\n" + cont;
-              int extra = countBlocks(cont);
-              while (extra > 0) {
-                auto [c2, ok2] = readLine("  ...> ");
-                if (!ok2)
-                  break;
-                source += "\n" + c2;
-                extra += countBlocks(c2);
-              }
-            } else {
-              if (!cont.empty())
-                pendingLine = cont;
-              break;
-            }
-          }
-        }
+      if (cancelled) {
+        std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
+                  << kex::color::apply(kex::color::reset) << "\n";
+        continue;
       }
+      // Clauses of one function are NOT gathered by reading ahead here. That
+      // is what made a complete line hang on `...>`: after `let fact(0) = 1`
+      // the REPL blocked waiting to see whether the next line was another
+      // clause, with nothing on screen to say so. Each line is now accepted
+      // on its own and clauses accumulate at definition time instead.
 
       // Classify: function def vs local let vs expression
       bool isFuncDef = false;
@@ -2407,14 +2521,44 @@ int main(int argc, char *argv[]) {
 
           std::string fname = replDefinitionName(source);
 
-          // Replace any prior definition of the same function so a
-          // redefinition takes effect (last def wins), rather than
-          // appending a duplicate clause the stale one shadows.
-          topDefs.erase(
-              std::remove_if(topDefs.begin(), topDefs.end(),
-                             [&](const auto &p) { return p.first == fname; }),
-              topDefs.end());
-          topDefs.push_back({fname, source});
+          // A new clause of a function already defined EXTENDS it; anything
+          // else replaces what was there. Redefinition still takes effect
+          // (last def wins) because a clause whose parameter patterns match
+          // an existing one overwrites that clause rather than being added
+          // beside it — otherwise the stale clause would shadow the new one
+          // and BEAM would warn that it cannot match.
+          auto existing =
+              std::find_if(topDefs.begin(), topDefs.end(),
+                           [&](const auto &p) { return p.first == fname; });
+          const auto head = replClauseHead(source);
+          if (existing != topDefs.end() && head) {
+            // Substituted IN PLACE, never moved to the end: clause order is
+            // match order, so hoisting a catch-all above a base case turns
+            // `fact` into an infinite recursion.
+            std::string rebuilt;
+            bool substituted = false;
+            for (const auto &clause :
+                 splitReplClauses(existing->second, countBlocks)) {
+              if (!rebuilt.empty()) rebuilt += "\n";
+              if (replClauseHead(clause) == head) {
+                rebuilt += source;
+                substituted = true;
+              } else {
+                rebuilt += clause;
+              }
+            }
+            if (!substituted) {
+              if (!rebuilt.empty()) rebuilt += "\n";
+              rebuilt += source;
+            }
+            existing->second = rebuilt;
+          } else {
+            topDefs.erase(
+                std::remove_if(topDefs.begin(), topDefs.end(),
+                               [&](const auto &p) { return p.first == fname; }),
+                topDefs.end());
+            topDefs.push_back({fname, source});
+          }
 
           // `using M` is an import, not a definition — it is kept in topDefs
           // so it persists across inputs, but saying "defined M" is wrong.
@@ -2810,6 +2954,7 @@ int main(int argc, char *argv[]) {
     // No quote characters: our completions can contain '"' and we don't want
     // readline's quoting machinery to touch them.
     rl_completer_quote_characters = (char *)"";
+    bindReplCancelKeys();
 #endif
 
     kex::interpreter::Evaluator evaluator;
@@ -3022,45 +3167,27 @@ int main(int argc, char *argv[]) {
         g_currentMakeTarget =
             (sp != std::string::npos) ? rest.substr(0, sp) : rest;
       }
+      bool cancelled = false;
       while (doCount > 0 || replHasOpenDelimiter(source)) {
         auto [contLine, contOk] = readLine("...> ");
+        if (takeReplInputCancelled()) {
+          cancelled = true;
+          break;
+        }
         if (!contOk)
           break;
         line = contLine;
         source += "\n" + line;
         doCount = implicitDo ? 1 + countBlocks(source) : countBlocks(source);
       }
-
-      // If this line starts a function clause definition, keep reading
-      // additional clauses for the *same* function so pattern-matching
-      // definitions like `let fact(1) = 1` / `let fact(n) = ...` are
-      // combined into one function. The first line that isn't another
-      // clause of the same function is replayed on the next iteration.
-      if (doCount == 0) {
-        if (auto name = clauseFuncName(source)) {
-          while (true) {
-            auto [contLine, contOk] = readLine("...> ");
-            if (!contOk)
-              break;
-            auto nextName = clauseFuncName(contLine);
-            if (nextName && *nextName == *name) {
-              source += "\n" + contLine;
-              int extra = countBlocks(contLine);
-              while (extra > 0) {
-                auto [contLine2, contOk2] = readLine("...> ");
-                if (!contOk2)
-                  break;
-                source += "\n" + contLine2;
-                extra += countBlocks(contLine2);
-              }
-            } else {
-              if (!contLine.empty())
-                pendingLine = contLine;
-              break;
-            }
-          }
-        }
+      if (cancelled) {
+        std::cout << kex::color::apply(kex::color::gray) << "   (cancelled)"
+                  << kex::color::apply(kex::color::reset) << "\n";
+        continue;
       }
+      // Clauses are not gathered by reading ahead — see the BEAM REPL above.
+      // A complete line is accepted as soon as it is entered, and clauses of
+      // one function accumulate where the definition is stored.
 
       // Show tokens if enabled
       if (showTokens) {
@@ -4159,7 +4286,14 @@ int main(int argc, char *argv[]) {
                   const auto &lb = b.first->location;
                   if (la.line != lb.line)
                     return la.line < lb.line;
-                  return la.column < lb.column;
+                  if (la.column != lb.column)
+                    return la.column < lb.column;
+                  // Nested expressions share a start position — `n * f(x)`
+                  // and its own left operand both begin at `n`. Without a
+                  // tiebreak their order comes from an unordered map, so two
+                  // runs of `-t` over one unchanged file could disagree.
+                  return kex::semantic::typeToString(a.second) <
+                         kex::semantic::typeToString(b.second);
                 });
       for (const auto &[expr, type] : entries) {
         if (!type)

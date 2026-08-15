@@ -183,13 +183,20 @@ auto typeToString(const TypePtr& type) -> std::string {
             return result;
         }
         else if constexpr (std::is_same_v<T, FuncType>) {
-            std::string result = "(";
-            for (size_t i = 0; i < t.params.size(); i++) {
-                if (i > 0) result += ", ";
-                result += typeToString(t.params[i]);
+            // Kex function types are curried, so they print as
+            // `A -> B -> R`, matching how they are written in source. A
+            // parameter that is itself a function has to be parenthesised or
+            // the arrows associate wrongly: `(A -> Bool) -> [A]` says
+            // something quite different from `A -> Bool -> [A]`.
+            if (t.params.empty()) return "() -> " + typeToString(t.result);
+            std::string result;
+            for (const auto& param : t.params) {
+                auto text = typeToString(param);
+                if (param && std::holds_alternative<FuncType>(param->kind))
+                    text = "(" + text + ")";
+                result += text + " -> ";
             }
-            result += ") -> " + typeToString(t.result);
-            return result;
+            return result + typeToString(t.result);
         }
         else if constexpr (std::is_same_v<T, TupleType>) {
             std::string result = "(";

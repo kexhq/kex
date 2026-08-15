@@ -67,6 +67,7 @@ auto headShapeOf(const TypePtr& type) -> TypePtr {
 auto TypeChecker::check(const ast::Program& program,
                         std::vector<Diagnostic>& diagnostics) -> void {
     m_diagnostics = &diagnostics;
+    m_patternBindings.clear();
     m_functionSignatures.clear();
     m_resolvedCalls.clear();
     m_selectedCallSignatures.clear();
@@ -469,6 +470,11 @@ auto TypeChecker::check(const ast::Program& program,
     // genuinely un-inferred expression is unchanged.
     for (auto& [expr, type] : m_typeMap)
         type = resolve(type);
+    // Same reasoning for pattern bindings: a binding's type is often a fresh
+    // variable at the point the pattern is walked, and only a later use says
+    // what it is.
+    for (auto& binding : m_patternBindings)
+        binding.type = resolve(binding.type);
 
     reportUnknownMethods();
 }
@@ -709,6 +715,18 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
                     }
                 }
                 result.slots.push_back(slot);
+                // Keep the declared type too, so a pattern binding can take
+                // its type from the declaration rather than waiting for a use
+                // to constrain it.
+                TypePtr declared;
+                if (payload) {
+                    std::unordered_map<std::string, TypePtr> generics;
+                    declared = resolveTypeExpr(*payload, generics);
+                    if (declared &&
+                        std::holds_alternative<UnknownType>(declared->kind))
+                        declared = nullptr;
+                }
+                result.payloadTypes.push_back(std::move(declared));
             }
         }
         m_constructorResult[*name] = std::move(result);
@@ -1548,18 +1566,61 @@ auto TypeChecker::bindPatternVars(
     const ast::Pattern& pat, TypePtr expected) -> void {
     expected = expected ? resolve(expected) : nullptr;
     checkPatternConstructorOwner(pat, expected);
-    std::visit([this, &expected](const auto& node) {
+    std::visit([this, &expected, &pat](const auto& node) {
         using T = std::decay_t<decltype(node)>;
         if constexpr (std::is_same_v<T, ast::VarPattern>) {
-            if (node.name != "_")
-                defineVar(node.name, expected ? expected : freshTypeVar());
+            if (node.name != "_") {
+                auto bound = expected ? expected : freshTypeVar();
+                defineVar(node.name, bound);
+                // Kept so tooling can answer for the binding itself. Types are
+                // resolved once at the end of check(), because a fresh
+                // variable here may only learn what it is from a later use.
+                m_patternBindings.push_back({node.name, pat.location, bound});
+            }
         }
         else if constexpr (std::is_same_v<T, ast::ThisPattern>) {
             if (node.inner) bindPatternVars(*node.inner, expected);
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-            for (const auto& arg : node.args) {
-                if (arg) bindPatternVars(*arg);
+            // Give each payload binding the type the constructor declares, the
+            // way a record pattern below takes field types from the record.
+            // Without it a binding had no type until some later use forced one,
+            // so `Boxed(b) -> b.size` worked only because `.size` constrained
+            // `b`, and the editor could say nothing about `b` itself.
+            const ConstructorResult* declaration = nullptr;
+            if (auto found = m_constructorResult.find(node.name);
+                found != m_constructorResult.end())
+                declaration = &found->second;
+            for (size_t i = 0; i < node.args.size(); ++i) {
+                if (!node.args[i]) continue;
+                TypePtr payload;
+                const int slot = declaration && i < declaration->slots.size()
+                    ? declaration->slots[i] : -1;
+                if (slot >= 0 && expected) {
+                    // A payload that IS a type parameter takes its type from
+                    // the scrutinee. The scrutinee's shape varies: `Result<A,
+                    // B>` carries type arguments, but `A?` is an OptionalType
+                    // and `[A]` a ListType, neither of which has any. The
+                    // declared parameter name must NOT be used as a fallback
+                    // here — doing that bound `Just(c)`'s `c` to the literal
+                    // `A` and broke the prelude (`parsing.kex` charWhen).
+                    const auto scrutinee = resolve(expected);
+                    const auto index = static_cast<size_t>(slot);
+                    if (const auto* named = std::get_if<NamedType>(&scrutinee->kind);
+                        named && index < named->typeArgs.size())
+                        payload = named->typeArgs[index];
+                    else if (const auto* optional =
+                                 std::get_if<OptionalType>(&scrutinee->kind);
+                             optional && index == 0)
+                        payload = optional->inner;
+                    else if (const auto* list =
+                                 std::get_if<ListType>(&scrutinee->kind);
+                             list && index == 0)
+                        payload = list->element;
+                } else if (declaration && i < declaration->payloadTypes.size()) {
+                    payload = declaration->payloadTypes[i];
+                }
+                bindPatternVars(*node.args[i], payload);
             }
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {
@@ -2131,6 +2192,14 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
             // pre-registered before any body is checked. Their names are
             // collected below regardless, so the unknown-method report does not
             // flag calls to them.
+            //
+            // Checking the block's own private methods FIRST does fix
+            // units.kex, but is not enough on its own: the signature a private
+            // method registers has the receiver prepended, so `si.kex`'s
+            // `productKind` then reads as arity 2 against 3-argument calls,
+            // and json_parser.spec fails on BEAM at RUNTIME with "Undefined
+            // method: advance for Parser" — registration changes dispatch, not
+            // just what tooling can see. Pre-registration is the real fix.
         }, item);
     }
     m_inMakeBlock = wasInMakeBlock;
@@ -2827,9 +2896,17 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     return inferBinaryOp(node.op, leftType, rightType,
                                          expr.location);
                 auto receiver = resolve(leftType);
+                // A trait-bounded variable is still a variable. `n - 1`
+                // constrains `n` to `N: Number` before `n * f(...)` is
+                // checked, and treating that as a concrete receiver let it
+                // match any operator overload whose parameter a constrained
+                // type satisfies: `let fact(n) = n * fact(n - 1)` picked up
+                // `make Period`'s `*(Integer) -> Period` and inferred
+                // `fact : Integer -> Period`.
                 const bool concreteReceiver =
                     !std::holds_alternative<TypeVar>(receiver->kind) &&
-                    !std::holds_alternative<UnknownType>(receiver->kind);
+                    !std::holds_alternative<UnknownType>(receiver->kind) &&
+                    !std::holds_alternative<ConstrainedType>(receiver->kind);
                 // An operator defined in a make block is visible either as a
                 // local declaration or — for the prelude's own `Date + Duration`
                 // and friends — only through the imported interface. Consulting
@@ -4602,7 +4679,14 @@ auto TypeChecker::displaySignature(const std::string& name, const Signature& sig
     };
     std::string result = name + " : ";
     for (const auto& param : sig.params) {
-        result += displayType(param) + " -> ";
+        auto text = displayType(param);
+        // A function-typed parameter needs parentheses of its own, or its
+        // arrow merges into the signature's: `filter : [A] -> (A -> Bool) -> [A]`
+        // rather than `[A] -> A -> Bool -> [A]`, which reads as three
+        // parameters.
+        if (param && std::holds_alternative<FuncType>(param->kind))
+            text = "(" + text + ")";
+        result += text + " -> ";
     }
     result += displayType(sig.result);
     return result;

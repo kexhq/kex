@@ -4,20 +4,106 @@
   "scopeName": "source.kex",
   "patterns": [
     { "include": "#comments" },
+    { "include": "#regexLiteral" },
     { "include": "#strings" },
     { "name": "keyword.control.kex", "match": "\\b(after|break|compiled|do|elif|else|end|export|final|foul|if|let|loop|main|match|next|private|public|receive|rescue|return|spawn|static|then|timeout|try|trying|using|var|when|while)\\b" },
-    { "name": "constant.language.kex", "match": "\\b(true|false|None|this)\\b" },
+    { "name": "constant.language.kex", "match": "\\b(true|false|None)\\b" },
+    { "name": "variable.language.this.kex", "match": "\\bthis\\b" },
+    { "include": "#blockParameters" },
     { "name": "storage.type.kex", "match": "\\b(record|type|trait|make|module)\\b" },
+    { "comment": "`-> T or! E` / `-> T or E` is type syntax, not the `.or(…)` method — hence the guard against a preceding dot or word character.",
+      "name": "keyword.control.kex", "match": "(?<![.\\w])or!?(?![\\w(])" },
+    { "comment": "`make Something, implement: Showable, Comparable do` (parser.cxx:643). The label is part of the declaration, not a record field's colon.",
+      "name": "entity.other.attribute-name.kex", "match": "\\b(implement)\\s*(?=:)" },
+    { "comment": "A `name :> Type` declaration names a method just as `let name(` does.",
+      "name": "entity.name.function.kex",
+      "match": "^\\s*[a-z_][A-Za-z0-9_?!]*(?=\\s*:>)" },
     { "name": "support.type.builtin.kex", "match": "\\b(Any|Atom|Bool|Byte|Char|Float|Float32|Float64|Int|Integer|Int8|Int16|Int32|Int64|List|Map|Optional|Process|Result|Stream|String|UInt8|UInt16|UInt32|UInt64|Void)\\b" },
     { "name": "entity.name.function.kex", "match": "(?<=\\blet\\s)[a-z_][A-Za-z0-9_?!]*(?=\\s*\\()" },
     { "name": "entity.name.type.kex", "match": "\\b[A-Z][A-Za-z0-9_]*\\b" },
     { "name": "constant.other.symbol.kex", "match": ":[a-zA-Z_][A-Za-z0-9_?!]*" },
-    { "name": "variable.other.member.kex", "match": "@[a-z_][A-Za-z0-9_?!]*" },
+    { "name": "variable.other.readwrite.instance.kex", "match": "@[a-z_][A-Za-z0-9_?!]*" },
     { "name": "constant.numeric.kex", "match": "(?<![A-Za-z0-9_])(?:0[xX][0-9a-fA-F_]+|0[bB][01_]+|(?:[0-9][0-9_]*\\.[0-9][0-9_]*|[0-9][0-9_]*)(?:[eE][+-]?[0-9_]+)?)(?![A-Za-z0-9_])" },
     { "name": "keyword.operator.kex", "match": "->|:>|\\.\\.\\.?|==|!=|<=|>=|&&|\\|\\||[+\\-*/%=<>!?&|~^]" }
   ],
   "repository": {
-    "comments": { "patterns": [{ "name": "comment.line.number-sign.kex", "begin": "#", "end": "$" }] },
+    "comments": { "patterns": [
+      { "comment": "Comments stay comment-coloured. Only the RDoc tags are picked out, and only by weight: the token carries the comment scope for its colour plus `markup.bold`, which is the scope themes render bold. Colouring them (or treating an @example body as real code, which made the prose after it code too — an apostrophe opened a char literal) fought with the code for attention.",
+        "name": "comment.line.number-sign.kex", "begin": "#", "end": "$",
+        "patterns": [
+          { "name": "comment.line.number-sign.kex markup.bold.documentation.kex",
+            "match": "(?<=^|\\s)@(example|param|return)\\b" }
+        ] }
+    ] },
+    "regexLiteral": { "patterns": [
+      { "comment": "Interpolating tag: regex$`^${word}` — same as below but the body embeds expressions. Listed first so the `$` form is never read as the plain one.",
+        "name": "string.regexp.interpolated.kex",
+        "begin": "\\b(?:(Regex)(\\.))?(re|regex)(\\$)(`)",
+        "beginCaptures": {
+          "1": { "name": "entity.name.type.kex" },
+          "2": { "name": "punctuation.accessor.kex" },
+          "3": { "name": "support.function.kex" },
+          "4": { "name": "punctuation.definition.template-expression.kex" },
+          "5": { "name": "punctuation.definition.string.begin.kex" }
+        },
+        "end": "(`)",
+        "endCaptures": { "1": { "name": "punctuation.definition.string.end.kex" } },
+        "patterns": [
+          { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}",
+            "patterns": [{ "include": "$self" }] },
+          { "include": "#regexSyntax" }
+        ] },
+      { "comment": "The tag form — regex`\\d+`, re`\\s+`, Regex.re`\\w+` — is Kex's regex LITERAL, the counterpart of Ruby's /…/. A backtick body escapes nothing, so `\\d` is a regex escape rather than a string one.",
+        "name": "string.regexp.kex",
+        "begin": "\\b(?:(Regex)(\\.))?(re|regex)(`)",
+        "beginCaptures": {
+          "1": { "name": "entity.name.type.kex" },
+          "2": { "name": "punctuation.accessor.kex" },
+          "3": { "name": "support.function.kex" },
+          "4": { "name": "punctuation.definition.string.begin.kex" }
+        },
+        "end": "(`)",
+        "endCaptures": { "1": { "name": "punctuation.definition.string.end.kex" } },
+        "patterns": [{ "include": "#regexSyntax" }] },
+      { "comment": "The call form `regex(\"…\")` takes a normal string, but its contents are still a pattern. Must precede #strings or the plain string rule claims it first.",
+        "name": "string.regexp.kex",
+        "begin": "\\b(regex)(\\()(\")",
+        "beginCaptures": {
+          "1": { "name": "support.function.kex" },
+          "2": { "name": "punctuation.section.arguments.begin.kex" },
+          "3": { "name": "punctuation.definition.string.begin.kex" }
+        },
+        "end": "(\")",
+        "endCaptures": { "1": { "name": "punctuation.definition.string.end.kex" } },
+        "patterns": [{ "include": "#regexSyntax" }] }
+    ] },
+    "regexSyntax": { "patterns": [
+      { "name": "constant.character.escape.regexp.kex", "match": "\\\\." },
+      { "name": "constant.other.character-class.set.regexp.kex",
+        "begin": "\\[", "end": "\\]",
+        "patterns": [{ "name": "constant.character.escape.regexp.kex", "match": "\\\\." }] },
+      { "name": "keyword.operator.quantifier.regexp.kex",
+        "match": "[*+?]|\\{[0-9]+(,[0-9]*)?\\}" },
+      { "name": "keyword.control.anchor.regexp.kex", "match": "[$^]" },
+      { "name": "keyword.operator.or.regexp.kex", "match": "\\|" },
+      { "name": "meta.group.regexp.kex", "match": "[()]" },
+      { "name": "constant.other.character-class.regexp.kex", "match": "\\." }
+    ] },
+    "_blockParameterBody": { "patterns": [
+      { "name": "variable.parameter.kex", "match": "[a-z_][A-Za-z0-9_?!]*" },
+      { "name": "punctuation.separator.kex", "match": "," }
+    ] },
+    "blockParameters": { "patterns": [
+      { "comment": "`{ |x| ... }` and `do |x| ... end` — the pipes delimit block parameters, not an operator. Two rules rather than one alternation because a lookbehind must be fixed width.",
+        "name": "meta.block.parameters.kex", "begin": "(?<=\\{)\\s*(\\|)", "end": "(\\|)",
+        "beginCaptures": { "1": { "name": "punctuation.separator.variable.kex" } },
+        "endCaptures": { "1": { "name": "punctuation.separator.variable.kex" } },
+        "patterns": [{ "include": "#_blockParameterBody" }] },
+      { "name": "meta.block.parameters.kex", "begin": "(?<=\\bdo)\\s*(\\|)", "end": "(\\|)",
+        "beginCaptures": { "1": { "name": "punctuation.separator.variable.kex" } },
+        "endCaptures": { "1": { "name": "punctuation.separator.variable.kex" } },
+        "patterns": [{ "include": "#_blockParameterBody" }] }
+    ] },
     "strings": { "patterns": [
       { "name": "string.quoted.other.raw.interpolated.kex", "begin": "\\$`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``|\\$\\$\\{" }, { "name": "meta.embedded.expression.kex", "begin": "\\$\\{", "end": "\\}", "patterns": [{ "include": "$self" }] }] },
       { "name": "string.quoted.other.raw.kex", "begin": "`", "end": "`", "patterns": [{ "name": "constant.character.escape.kex", "match": "``" }] },

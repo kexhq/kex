@@ -32,6 +32,19 @@ public:
     // the same constructor→owner relation `satisfiesTrait` uses.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+
+    // Names introduced by a PATTERN, with where they were written. Patterns
+    // are not expressions, so nothing about `Boxed(b)`'s `b` appears in
+    // typeMap and an editor had nothing to say about the binding itself —
+    // only about later uses of it.
+    struct PatternBinding {
+        std::string name;
+        SourceLocation location;
+        TypePtr type;
+    };
+    auto patternBindings() const -> const std::vector<PatternBinding>& {
+        return m_patternBindings;
+    }
     auto isTrait(const std::string& name) const -> bool {
         return m_traits.get(name) != nullptr;
     }
@@ -281,11 +294,17 @@ private:
         std::string adtName;
         std::size_t typeParamCount = 0;
         std::vector<int> slots;
+        // The payload types as DECLARED (`Boxed(Box)` -> [Box]). `slots` only
+        // says which payloads are type parameters; a payload naming a concrete
+        // type was previously discarded, so destructuring it in a pattern gave
+        // the binding a fresh variable and nothing knew `b` was a Box.
+        std::vector<TypePtr> payloadTypes;
     };
     std::unordered_map<std::string, ConstructorResult> m_constructorResult;
     // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to
     // reject a pattern that destructures the wrong number of values.
     std::unordered_map<std::string, size_t> m_constructorArity;
+    std::vector<PatternBinding> m_patternBindings;
     // Make-block methods that carry a `:>` declaration. That declaration is
     // authoritative, so the inferred signature of its `let` must not be
     // registered alongside it as a second, permissive overload.

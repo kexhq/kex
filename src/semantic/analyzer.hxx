@@ -62,6 +62,10 @@ public:
         -> const std::unordered_map<const ast::Expr*, Signature>& {
         return m_checker.selectedCallSignatures();
     }
+    auto patternBindings() const
+        -> const std::vector<TypeChecker::PatternBinding>& {
+        return m_checker.patternBindings();
+    }
     auto staticTypeOfCalls() const
         -> const std::unordered_map<const ast::MethodCall*, StaticTypeAnswer>& {
         return m_checker.staticTypeOfCalls();
