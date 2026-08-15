@@ -25,8 +25,15 @@ name: Release
 #
 #   0.4.0        stable       moves `latest`, updates the Homebrew tap, and is
 #                             what /releases/latest, kex.run and a bare
-#                             `tey kex install` hand out
-#   0.4.0-rc.1   pre-release  published, tagged `:rc`, reachable by name only
+#                             `tey kex install` hand out; on npm it is
+#                             @kexhq/kex's `latest` dist-tag
+#   0.4.0-rc.1   pre-release  published, tagged `:rc`, reachable by name only;
+#                             on npm under the channel dist-tag (`rc`)
+#
+# The npm package is built and published here too, with VERSION as its version
+# number — every channel answers "which Kex is this?" with the same number.
+# CI covers the dev side: every push publishes <VERSION>-dev.<sha> under the
+# floating `next` dist-tag (see ci.yml's wasm job).
 #
 # docs/releasing.md is the maintainer's runbook: how to run one, what each job
 # publishes, and what to do when a job fails.
@@ -226,6 +233,166 @@ jobs:
           name: kex-${{ matrix.target }}
           path: dist/*
 
+  # The npm package (@kexhq/kex), built from the release commit: the same wasm
+  # binary CI's wasm job produces, but stamped with the release's VERSION as
+  # the package version, so the npm channel reports the same number as every
+  # other one. The wasm BINARY already does (CMake bakes VERSION in); this is
+  # the package.json half.
+  #
+  # Built here rather than repackaged from CI's dev tarball for the same
+  # reason the native archives are rebuilt: KEX_BUILD_DATE is pinned to the
+  # release commit, not to whichever day a runner happened to build it. The
+  # suites run again on the pinned commit — a red suite means no release, and
+  # the npm package is a release artifact like the archives and images.
+  wasm:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      # The wasm checker reads the COMPILED stdlib unit (kex_prelude.beam and
+      # its Kex.* companions), which only the native build can produce: it
+      # means running the native kex through erlc, and a cross-compiled build
+      # cannot. Same arrangement as ci.yml's wasm job.
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libreadline-dev \
+            erlang-base libboost-context-dev
+
+      - name: Build native kex (for the compiled stdlib unit)
+        run: |
+          cmake -B build -G "Unix Makefiles"
+          cmake --build build --target kex_prelude_beam
+
+      # ── The wasm toolchain, identical to ci.yml's wasm job. The cache keys
+      # match, so on a release this is a restore, not a rebuild.
+      #
+      # Pinned to 5.0.7 specifically — newer Emscripten (6.0.2 at the time
+      # this was found) has a real Asyncify+exceptions regression; see
+      # third_party/gmp-wasm/README.md's "Emscripten version" section.
+      - name: Cache emsdk
+        id: cache-emsdk
+        uses: actions/cache@v4
+        with:
+          path: emsdk
+          key: emsdk-5.0.7
+
+      - name: Install emsdk
+        if: steps.cache-emsdk.outputs.cache-hit != 'true'
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git
+          cd emsdk && ./emsdk install 5.0.7 && ./emsdk activate 5.0.7
+
+      # Activate on cache hits too, and persist the tool directories through
+      # GITHUB_PATH for every later step in this job.
+      - name: Activate emsdk
+        run: |
+          ./emsdk/emsdk activate 5.0.7
+          echo "${GITHUB_WORKSPACE}/emsdk" >> "${GITHUB_PATH}"
+          echo "${GITHUB_WORKSPACE}/emsdk/upstream/emscripten" >> "${GITHUB_PATH}"
+
+      - name: Cache GMP-for-wasm
+        id: cache-gmp-wasm
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/gmp-wasm/include
+            third_party/gmp-wasm/lib
+          key: gmp-wasm-6.3.0-emsdk-5.0.7-v2
+
+      - name: Build GMP for wasm
+        if: steps.cache-gmp-wasm.outputs.cache-hit != 'true'
+        run: |
+          source emsdk/emsdk_env.sh
+          curl -LO https://ftp.gnu.org/gnu/gmp/gmp-6.3.0.tar.xz
+          tar xf gmp-6.3.0.tar.xz
+          mkdir gmp-6.3.0/build-wasm && cd gmp-6.3.0/build-wasm
+          emconfigure ../configure \
+            --host=wasm32-unknown-emscripten \
+            --build="$(../config.guess)" \
+            --disable-assembly \
+            --disable-shared \
+            --enable-static \
+            --enable-cxx \
+            --prefix="${GITHUB_WORKSPACE}/third_party/gmp-wasm" \
+            CC_FOR_BUILD=clang \
+            CFLAGS="-O2"
+          emmake make -j"$(nproc)"
+          emmake make install
+
+      - name: Cache PCRE2-for-wasm
+        id: cache-pcre2-wasm
+        uses: actions/cache@v4
+        with:
+          path: |
+            third_party/pcre2-wasm/include
+            third_party/pcre2-wasm/lib
+          key: pcre2-wasm-10.44-emsdk-5.0.7-v1
+
+      - name: Build PCRE2 for wasm
+        if: steps.cache-pcre2-wasm.outputs.cache-hit != 'true'
+        run: |
+          source emsdk/emsdk_env.sh
+          curl -LO https://github.com/PCRE2Project/pcre2/releases/download/pcre2-10.44/pcre2-10.44.tar.gz
+          tar xf pcre2-10.44.tar.gz
+          mkdir pcre2-10.44/build-wasm && cd pcre2-10.44/build-wasm
+          # --disable-pcre2-jit: no native machine code exists for wasm.
+          # --enable-unicode: regex.cxx compiles patterns with PCRE2_UTF/UCP.
+          emconfigure ../configure \
+            --host=wasm32-unknown-emscripten \
+            --build="$(../config.guess)" \
+            --disable-shared \
+            --enable-static \
+            --disable-pcre2-jit \
+            --enable-unicode \
+            --prefix="${GITHUB_WORKSPACE}/third_party/pcre2-wasm" \
+            CFLAGS="-O2"
+          emmake make -j"$(nproc)"
+          emmake make install
+
+      # `make build-wasm`, spelled out so KEX_BUILD_DATE can be pinned — the
+      # Makefile target takes no extra -D flags. The date, the git revision
+      # (resolved from the checkout by CMake itself) and VERSION are what
+      # `node build-wasm/kex.js --version` reports; a release build states
+      # the release, not the day a runner ran.
+      - name: Configure and build the wasm target
+        run: |
+          source emsdk/emsdk_env.sh
+          emcmake cmake -B build-wasm \
+            -DKEX_PREBUILT_RUNTIME_DIR="$(pwd)/build/runtime/beam" \
+            -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
+          cmake --build build-wasm
+          node build-wasm/kex.js --version
+
+      # The same gates CI's wasm job runs, on the pinned commit. (These
+      # re-invoke the Makefile's build-wasm target; CMake keeps the pinned
+      # KEX_BUILD_DATE from the cache.)
+      - name: Wasm unit tests (via Node)
+        run: make test-wasm
+
+      - name: Spec suite via wasm (Node)
+        run: make spec-wasm
+
+      # prepack (scripts/build.sh) assembles dist/ from build-wasm — no
+      # rebuild, the artifacts are already there. npm pack then produces
+      # kexhq-kex-<version>.tgz with VERSION as the package version, set
+      # here rather than carried in package.json: the field in the tree is
+      # a placeholder, and the number is VERSION's to give, at publish time.
+      - name: Pack the npm package
+        run: |
+          npm version "${{ needs.version.outputs.version }}" \
+            --no-git-tag-version --allow-same-version
+          npm pack
+        working-directory: packages/kex
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wasm-package
+          path: packages/kex/kexhq-kex-*.tgz
+
   # The container images, published to GHCR alongside the archives:
   #
   #   ghcr.io/kexhq/kex:<version>              glibc, BEAM included
@@ -362,7 +529,7 @@ jobs:
           docker buildx imagetools inspect "${image}:${version}${suffix}"
 
   publish:
-    needs: [version, build, manifest]
+    needs: [version, build, manifest, wasm]
     runs-on: ubuntu-latest
     steps:
       # Full history: the release log below is built from the commits since the
@@ -421,6 +588,7 @@ jobs:
             echo '```sh'
             echo "tey kex install ${VERSION}"
             echo "docker run ghcr.io/kexhq/kex:${VERSION}"
+            echo "npm install @kexhq/kex@${VERSION}   # GitHub Packages - see packages/kex/README.md"
             echo '```'
             echo
             echo "Or download the archive for your machine below; each has a \`.sha256\` beside it."
@@ -466,6 +634,55 @@ jobs:
           else
             gh release create "$tag" "${flags[@]}" artifacts/*/*
           fi
+
+  # The npm channel: publishes the package `wasm` built, with VERSION as its
+  # version number. After `publish`, so the number exists as a released Kex
+  # before it exists on npm — the tag is what makes it real.
+  #
+  # The dist-tag mirrors the image channels exactly: stable moves `latest`,
+  # a pre-release gets its channel name (`rc`, `beta`). CI's `next` tag floats
+  # over dev builds and is never touched here.
+  #
+  # Unlike every other job, this one is NOT idempotent-by-replacement: npm
+  # versions are immutable, so a re-run can only skip — the first publish of a
+  # version is the one that sticks.
+  npm:
+    needs: [version, wasm, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: wasm-package
+
+      - name: Publish @kexhq/kex
+        env:
+          NODE_AUTH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+
+          if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
+            tag="${version#*-}"
+            tag="${tag%%.*}"
+          else
+            tag=latest
+          fi
+
+          # GitHub Packages requires auth to read too, before the existence
+          # check below can ask it anything.
+          echo "//npm.pkg.github.com/:_authToken=${NODE_AUTH_TOKEN}" > ~/.npmrc
+
+          # npm versions are immutable, so a re-run skips rather than fails.
+          if npm view "@kexhq/kex@${version}" version >/dev/null 2>&1; then
+            echo "@kexhq/kex@${version} is already published; npm versions cannot be replaced."
+            exit 0
+          fi
+
+          npm publish "kexhq-kex-${version}.tgz" --tag "$tag"
+          npm view "@kexhq/kex@${tag}" version
 
   # Homebrew is the stable line only. A pre-release must never become what
   # `brew install tey` hands someone, so this job simply does not run for one;

@@ -10,10 +10,19 @@ Published to GitHub Packages, not the public npm registry — see
 
 ## Status
 
-**Pre-release.** Published under the `next` dist-tag as `0.0.0-dev.<sha>`
-versions on every push to the `wasm-emscripten` branch — there is no
-`latest`/stable release yet. Expect breaking changes without notice until a
-real version is cut.
+**Pre-release.** The package's version follows the language's `VERSION` file:
+
+- Every push to the repo publishes `<VERSION>-dev.<sha>` under the `next`
+  dist-tag (e.g. `0.3.0-beta.dev.a1b2c3d`) — a dev build names the version it
+  is working toward, distinguished by revision, exactly like a native
+  `kex --version` built from the same tree.
+- A release publishes the plain `VERSION` (`0.3.0-beta`) with the same
+  dist-tag rule as the container images: `latest` for a stable release, the
+  channel name (`rc`, `beta`) for a pre-release. The `version` field in
+  `package.json` is a placeholder — the number is stamped at publish time.
+
+Expect breaking changes without notice until 1.0.0; pin a version if you need
+reproducible builds.
 
 **Known limitation:** none currently — the Asyncify/JS-interop bug that
 used to cause duplicated output and lost state for `receive`,
@@ -82,10 +91,10 @@ stripping them, unless you specifically want plain text.
 ## For kex.run specifically
 
 This is the package kex.run is expected to import as its in-browser
-interpreter. Since there's no stable release yet, pin to a specific
-`0.0.0-dev.<sha>` version (rather than floating on `next`) if you need
-reproducible builds — every push to `wasm-emscripten` overwrites what
-`next` points to.
+interpreter. Float on `next` for development; for a deployed build pin an
+exact version — a released one (`@kexhq/kex@0.3.0-beta`) or a specific dev
+build (`@kexhq/kex@0.3.0-beta.dev.a1b2c3d`) — since `next` moves on every
+push.
 
 ## Building locally
 
