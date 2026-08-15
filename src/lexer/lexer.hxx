@@ -48,6 +48,11 @@ private:
     static auto isDigit(char c) -> bool;
     static auto isHexDigit(char c) -> bool;
     static auto isIdentChar(char c) -> bool;
+    // A letter beyond ASCII: `α` is as good a name as `a`. Reported in
+    // codepoints, not bytes, so the scanner can consume the whole character.
+    auto identCodepointAt(int index, int& width) const -> char32_t;
+    auto identContinues(int index, int& width) const -> bool;
+    auto consumeIdentRest(std::string& ident) -> void;
 
     std::string m_source;
     std::string_view m_filename;
