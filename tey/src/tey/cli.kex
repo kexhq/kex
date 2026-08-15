@@ -16,7 +16,7 @@ let parser -> OptionConfig do
     .flag("cache", None, "Remove the complete cache with `tey clean`")
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
-    .flag("pre", None, "Include pre-releases in `tey kex list`")
+    .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
 end
 
 let dispatch(args: [String]) -> Integer do
@@ -61,17 +61,34 @@ private do
     return "${marker} ${version}  ${all.join(", ")}"
   end
 
-  # The shim only takes effect if its directory is on PATH, and that is the
-  # one part Tey cannot do for the user. Say so exactly once, when it matters.
+  # Whether a `kex` is reachable as a command. Installed beside `tey` — which
+  # is how brew and the release tarball put it there — it already is, and
+  # telling someone to edit PATH when their shell can run `kex` would be
+  # noise about a problem they do not have.
+  let kexOnPath? -> Bool do
+    return ENV.get("PATH", "").split(":").any? do |directory|
+      !directory.empty? && FS.File.file?("${directory}/kex")
+    end
+  end
+
+  # The Tey home's own `kex` only takes effect if that directory is on PATH,
+  # and that is the one part Tey cannot do for the user. Say so exactly once,
+  # when it matters — which is when nothing else has put a `kex` there.
   let reportShim(selected: String) -> Void do
-    if !selected.empty? && !ENV.get("PATH", "").split(":").contains?(Tey.Toolchain.binDirectory)
+    if !selected.empty? && !Tey.Cli.kexOnPath?
       IO.printLine("")
       IO.printLine("Add ${Tey.Toolchain.binDirectory} to PATH so `kex` runs the selected version.")
     end
   end
 
   let showVersion -> Integer do
-    IO.printLine("tey 0.1.0 (Kex ${Kex.Kernel.VERSION.number})")
+    # `.number` already parenthesizes the revision, and nesting that inside
+    # another pair reads badly: "tey 0.1.0 (Kex 0.3.0-beta (abc1234))".
+    let kex = match Kex.Kernel.VERSION.revision do
+      Just(revision) -> "${Kex.Kernel.VERSION.release}, ${revision}"
+      None -> Kex.Kernel.VERSION.release
+    end
+    IO.printLine("tey 0.1.0 (Kex ${kex})")
     return 0
   end
 
@@ -93,11 +110,13 @@ Commands:
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
   kex list [--pre]         show Kex versions, newest first
-  kex install [<version>]  build and install a Kex (newest release by default)
+  kex install [<version>]  install a Kex (newest release by default)
+  kex install --pre        install the newest Kex of any channel
   kex install <src> <version>
                            build and install from a source checkout
   kex uninstall <version>  remove an installed Kex
   kex use <version>        select an installed Kex toolchain
+  kex which                print the compiler the kex command runs
 `)
     return 0
   end
@@ -165,8 +184,33 @@ Commands:
     0
   end
 
-  let dispatchCommand(["kex", "install"], _) -> Integer do
-    match Tey.Toolchain.latestStable do
+  # Bare `tey kex install` means "the current Kex", which is the newest
+  # STABLE one — an rc is not what someone who named no version is asking
+  # for. `--pre` says they are: it takes the newest of any channel, which
+  # during a pre-stability run may be the only thing published.
+  #
+  # On a machine with nothing installed, the Kex that came with Tey is that
+  # Kex: it is already on the disk, it is the version this Tey was shipped
+  # with, and taking it needs no network. Once something IS installed, this
+  # means the newest release again — otherwise the first upgrade would keep
+  # reinstalling the version the package manager shipped.
+  let dispatchCommand(["kex", "install"], options: ParsedOptions) -> Integer do
+    if Tey.Toolchain.installedVersions.empty? && Tey.Toolchain.bundled != None
+      match Tey.Toolchain.installBundled do
+        Ok(prefix) -> do
+          IO.printLine("Installed and selected the Kex that came with Tey, at ${prefix}")
+          Tey.Cli.reportShim(Tey.Toolchain.selected.or(""))
+          return 0
+        end
+        Error(error) -> do
+          IO.printError("tey: ${error}\n")
+          return 1
+        end
+      end
+    end
+
+    let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
+    match newest do
       Error(error) -> do
         IO.printError("tey: ${error}\n")
         1
@@ -202,6 +246,23 @@ Commands:
       end
       Error(error) -> do
         IO.printError("tey: ${error}\n")
+        1
+      end
+    end
+  end
+
+  # Prints the compiler `kex` would run, installing the one that came with Tey
+  # if that has not happened yet. The dispatcher in bin/kex calls this when
+  # nothing is selected, which is what makes a fresh install runnable without
+  # a `tey` command being typed first.
+  let dispatchCommand(["kex", "which"], _) -> Integer do
+    match Tey.Toolchain.resolved do
+      Just(path) -> do
+        IO.printLine(path)
+        0
+      end
+      None -> do
+        IO.printError("tey: no Kex is installed\n")
         1
       end
     end

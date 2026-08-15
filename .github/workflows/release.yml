@@ -1,96 +1,129 @@
 name: Release
 
-# Releases are tag-driven: pushing `v<version>` publishes that version, and
-# nothing else does. The tag is checked against the repository's VERSION file
-# before anything is built, so that file stays the single place a version is
-# decided and a mistyped tag fails in seconds rather than shipping a binary
-# that disagrees with its own release page.
+# Releasing is ONE action: run this workflow. It reads the VERSION file, builds
+# that version, tags it and publishes it.
 #
-# Channels come from the tag's pre-release identifier:
+# The version itself is NOT decided here. VERSION always names the NEXT
+# release — the version the tree is working toward, not the last one shipped —
+# and this workflow releases exactly what it finds there. Bumping it is an
+# ordinary reviewed commit, so the version is a decision in the repository's
+# history rather than a form field, and the diff that raises it is the diff
+# that says why.
 #
-#   v0.4.0              stable      — this is what `tey kex install` and
-#                                     https://api.github.com/repos/kexhq/kex/releases/latest
-#                                     hand out, and what kex.run should show
-#   v0.4.0-rc.1         pre-release
-#   v0.4.0-beta.1       pre-release
-#   v0.4.0-prealpha.1   pre-release
+# That convention is what makes the tag check below meaningful: if VERSION
+# still names something already released, the tree has not decided what comes
+# next, and the run stops instead of guessing.
 #
-# A pre-release is published with GitHub's `prerelease` flag set, which is
-# what keeps `/releases/latest` meaning "current stable" without anyone
-# maintaining a second list.
+# Nothing is triggered by pushing a tag either, because a tag is an OUTPUT of a
+# release, not the request for one: a hand-pushed tag can land on a commit
+# whose suites never ran, and cannot be taken back once somebody has fetched
+# it. Here the tag is created by the LAST job, so a tag in this repository
+# always names a version that was actually published.
+#
+# The channel comes from VERSION's pre-release identifier, which must be one of
+# prealpha, alpha, beta, rc, each optionally followed by .N:
+#
+#   0.4.0        stable       moves `latest`, updates the Homebrew tap, and is
+#                             what /releases/latest, kex.run and a bare
+#                             `tey kex install` hand out
+#   0.4.0-rc.1   pre-release  published, tagged `:rc`, reachable by name only
+#
+# docs/releasing.md is the maintainer's runbook: how to run one, what each job
+# publishes, and what to do when a job fails.
 
 on:
-  push:
-    tags: ["v*"]
-  # Re-run a release whose publish step failed, without moving the tag.
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Existing tag to release (e.g. v0.4.0)"
-        required: true
+      ref:
+        description: "Branch or commit to release; its VERSION file is the version"
+        default: main
+      bump_after:
+        description: "After publishing, open a PR raising VERSION to the next one"
+        type: choice
+        default: "pull request"
+        options: ["pull request", "nothing"]
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
-  # Cheap gate: everything below only runs for a tag the source agrees with.
-  verify:
+  # Reads the version and hands every job below one commit to build.
+  # Everything expensive is downstream of this, so a mistake costs seconds.
+  version:
     runs-on: ubuntu-latest
+    # Releasing is maintainer-only. `workflow_dispatch` is open to anyone with
+    # write access, which is a wider circle than the people who should be able
+    # to publish a Kex — so the first job runs in an environment whose
+    # protection rules (required reviewers) are configured in repository
+    # settings, and re-checks the caller's permission below in case the
+    # environment is ever left unprotected.
+    environment: release
     outputs:
-      tag: ${{ steps.check.outputs.tag }}
-      version: ${{ steps.check.outputs.version }}
-      prerelease: ${{ steps.check.outputs.prerelease }}
-      build_date: ${{ steps.check.outputs.build_date }}
-      revision: ${{ steps.check.outputs.revision }}
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      prerelease: ${{ steps.read.outputs.prerelease }}
+      sha: ${{ steps.read.outputs.sha }}
+      build_date: ${{ steps.read.outputs.build_date }}
+      revision: ${{ steps.read.outputs.revision }}
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
-          fetch-depth: 0
-
-      - name: Check the tag against VERSION
-        id: check
+      - name: Check that the caller may release
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          level=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${GITHUB_ACTOR}/permission" --jq .permission)
+          case "$level" in
+            admin|maintain) echo "${GITHUB_ACTOR} may release (${level})" ;;
+            *) echo "::error::${GITHUB_ACTOR} has '${level}' permission; releasing needs admin or maintain."
+               exit 1 ;;
+          esac
 
-          # The version lives in one plain file, so the check is a string
-          # comparison rather than a parse of C++.
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          fetch-depth: 0
+
+      - name: Read the version
+        id: read
+        run: |
+          set -euo pipefail
+          # One plain file, so this is a read rather than a parse of C++.
           version=$(tr -d "[:space:]" < VERSION)
-          pre="${version#*-}"
-          if [ "$pre" = "$version" ]; then pre=""; fi
-
-          if [ "$tag" != "v${version}" ]; then
-            echo "::error::tag ${tag} does not match VERSION (v${version}). Update VERSION, or tag the right commit."
-            exit 1
-          fi
 
           # Only the channels Kex publishes. An unknown identifier is a typo
           # (`-rc-1`, `-RC.1`), and a typo must not become a release.
-          if [ -n "$pre" ] && ! printf '%s' "$pre" | grep -Eq '^(prealpha|alpha|beta|rc)(\.[0-9]+)?$'; then
-            echo "::error::pre-release identifier '${pre}' is not one of prealpha, alpha, beta, rc (optionally .N)"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(prealpha|alpha|beta|rc)(\.[0-9]+)?)?$'; then
+            echo "::error::VERSION holds '${version}', which is not a Kex version (MAJOR.MINOR.PATCH[-(prealpha|alpha|beta|rc)[.N]])"
             exit 1
           fi
 
-          # The tagged commit's date, so the binary's `built` stamp is a fact
-          # about the release rather than about when a runner happened to run.
-          build_date=$(git show -s --format=%cs "$tag")
-          revision=$(git rev-parse --short "$tag^{commit}")
+          tag="v${version}"
+          # A released version is never rebuilt: someone may already be running
+          # it, and a second build of the same number would not be the same
+          # bytes. Bump VERSION and merge that first.
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "::error::${tag} already exists. Bump VERSION on ${{ inputs.ref }} and run again."
+            exit 1
+          fi
 
           {
-            echo "tag=${tag}"
             echo "version=${version}"
-            echo "prerelease=$([ -n "$pre" ] && echo true || echo false)"
-            echo "build_date=${build_date}"
-            echo "revision=${revision}"
+            echo "tag=${tag}"
+            echo "prerelease=$([ "$version" = "${version%%-*}" ] && echo false || echo true)"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "revision=$(git rev-parse --short HEAD)"
+            # The commit's own date, so the binary's `built` stamp is a fact
+            # about the release rather than about when a runner happened to run.
+            echo "build_date=$(git show -s --format=%cs HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Releasing Kex ${version} (prerelease: $([ -n "$pre" ] && echo yes || echo no), built ${build_date})"
+          echo "Releasing Kex ${version} from $(git rev-parse --short HEAD)"
 
   # One archive per platform, each holding the same install tree `make
   # install` produces: bin/kex plus share/kex/{stdlib,runtime,manifest}.
   build:
-    needs: verify
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -98,18 +131,26 @@ jobs:
         include:
           - os: ubuntu-latest
             target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-latest
             target: macos-arm64
+          - os: macos-13
+            target: macos-x86_64
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
 
+      # Everything is named explicitly, including the two the x86_64 image
+      # happens to preinstall: linux-arm64 builds on a DIFFERENT runner image,
+      # and "it was already there on the other one" is not a dependency list.
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake libgmp-dev libreadline-dev erlang-base libboost-context-dev
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
+            libssl-dev erlang-base libboost-context-dev
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
@@ -119,7 +160,7 @@ jobs:
         run: |
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
-            -DKEX_BUILD_DATE="${{ needs.verify.outputs.build_date }}"
+            -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
           cmake --build build
 
       # A release is not published on a red suite. These are the same gates CI
@@ -142,7 +183,7 @@ jobs:
       - name: Package
         run: |
           set -euo pipefail
-          version="${{ needs.verify.outputs.version }}"
+          version="${{ needs.version.outputs.version }}"
           target="${{ matrix.target }}"
           name="kex-${version}-${target}"
           cmake --install build --prefix "stage/${name}"
@@ -154,6 +195,31 @@ jobs:
             (cd dist && shasum -a 256 "${name}.tar.gz" > "${name}.tar.gz.sha256")
           fi
           "stage/${name}/bin/kex" --version
+
+      # Tey is compiled to BEAM modules, which are architecture-independent, so
+      # ONE archive serves every platform and is built on whichever runner is
+      # already here. That is what lets a package manager install Tey without
+      # being able to build Kex at all: it unpacks this, and `tey kex install`
+      # brings the compiler.
+      #
+      # Compiled by the oldest Erlang in the matrix on purpose — a .beam cannot
+      # be loaded by an older runtime than the one that produced it, so the
+      # floor this sets is the floor every user inherits.
+      - name: Package Tey
+        if: matrix.target == 'linux-x86_64'
+        run: |
+          set -euo pipefail
+          version="${{ needs.version.outputs.version }}"
+          name="tey-${version}"
+          # ERL=erl rather than the runner's absolute path: the launcher only
+          # honours a baked path that exists, and an absolute path from a
+          # GitHub runner never will on a user's machine.
+          make -C tey install PREFIX="$(pwd)/stage/${name}" \
+            KEX="$(pwd)/build/kex" ERL=erl INSTALL_NONINTERACTIVE=1
+          mkdir -p dist
+          tar -czf "dist/${name}.tar.gz" -C stage "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
+          "stage/${name}/bin/tey" --version
 
       - uses: actions/upload-artifact@v4
         with:
@@ -173,7 +239,7 @@ jobs:
   # one multi-arch tag by the `manifest` job below, so `docker pull` picks the
   # right one automatically.
   image:
-    needs: verify
+    needs: version
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -202,7 +268,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
 
       - uses: docker/setup-buildx-action@v3
 
@@ -220,8 +286,8 @@ jobs:
           file: ${{ matrix.dockerfile }}
           platforms: linux/${{ matrix.arch }}
           build-args: |
-            KEX_BUILD_DATE=${{ needs.verify.outputs.build_date }}
-            KEX_GIT_REVISION=${{ needs.verify.outputs.revision }}
+            KEX_BUILD_DATE=${{ needs.version.outputs.build_date }}
+            KEX_GIT_REVISION=${{ needs.version.outputs.revision }}
             BUILD_JOBS=4
           outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
 
@@ -243,7 +309,7 @@ jobs:
   # ask for. A pre-release is reachable by its exact version, and by its
   # channel name (`:rc`, `:rc-alpine`) for anyone tracking one.
   manifest:
-    needs: [verify, image]
+    needs: [version, image]
     runs-on: ubuntu-latest
     permissions:
       packages: write
@@ -274,12 +340,12 @@ jobs:
       - name: Create the multi-arch tags
         run: |
           set -euo pipefail
-          version="${{ needs.verify.outputs.version }}"
+          version="${{ needs.version.outputs.version }}"
           suffix="${{ matrix.suffix }}"
           image="ghcr.io/${{ github.repository }}"
 
           tags=(--tag "${image}:${version}${suffix}")
-          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
+          if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
             channel="${version#*-}"
             channel="${channel%%.*}"
             tags+=(--tag "${image}:${channel}${suffix}")
@@ -296,32 +362,301 @@ jobs:
           docker buildx imagetools inspect "${image}:${version}${suffix}"
 
   publish:
-    needs: [verify, build, manifest]
+    needs: [version, build, manifest]
     runs-on: ubuntu-latest
     steps:
+      # Full history: the release log below is built from the commits since the
+      # previous release, and a shallow clone has neither those nor the tags.
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.verify.outputs.tag }}
+          ref: ${{ needs.version.outputs.sha }}
+          fetch-depth: 0
 
+      # Only the platform archives. The `image` jobs upload one-line digest
+      # artifacts as well, and those are plumbing between jobs, not release
+      # assets.
       - uses: actions/download-artifact@v4
         with:
+          pattern: kex-*
           path: artifacts
 
+      # The release page is the changelog. There is no CHANGELOG.md to keep in
+      # step with the tags — the log is compiled here, from the commits the
+      # release actually contains.
+      - name: Compile the release log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          TAG: ${{ needs.version.outputs.tag }}
+          SHA: ${{ needs.version.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          # The newest tag that already exists is the previous release, since
+          # every tag in this repository is one.
+          previous=$(git tag --sort=-v:refname | head -1 || true)
+
+          {
+            if [ "${VERSION%%.*}" = "0" ]; then
+              echo "> **Kex is before 1.0.0, so no backward compatibility is attempted.**"
+              echo "> The language, the standard library, the package format and the on-disk"
+              echo "> layouts change between releases without deprecation cycles. Pin a version,"
+              echo "> and expect to edit code when you move off it."
+              echo
+            fi
+
+            echo "## Changes"
+            echo
+            if [ -n "$previous" ]; then
+              # Merges are dropped: their subjects repeat the branch names, and
+              # the commits they bring are listed on their own.
+              git log --no-merges --pretty="- %s (%h)" "${previous}..${SHA}" || true
+            else
+              echo "- First release."
+            fi
+            echo
+
+            echo "## Install"
+            echo
+            echo '```sh'
+            echo "tey kex install ${VERSION}"
+            echo "docker run ghcr.io/kexhq/kex:${VERSION}"
+            echo '```'
+            echo
+            echo "Or download the archive for your machine below; each has a \`.sha256\` beside it."
+            if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
+              echo "This is a pre-release: \`brew install tey\` and a bare \`tey kex install\`"
+              echo "stay on the current stable, and reaching this one is deliberate."
+            fi
+            echo
+          } > release-notes.md
+
+          # GitHub's own notes go last: they list the pull requests and new
+          # contributors, which the commit log above does not.
+          gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$SHA" \
+            ${previous:+-f previous_tag_name="$previous"} \
+            --jq .body >> release-notes.md
+
+          cat release-notes.md
+
+      # The tag is created HERE, by `--target`, and this is the last thing that
+      # can fail. Everything the release claims — the suites, the archives, the
+      # images — is already true by the time the tag exists, so a tag in this
+      # repository always names a version that was actually published.
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="${{ needs.verify.outputs.version }}"
-          tag="${{ needs.verify.outputs.tag }}"
-          flags=(--generate-notes --title "Kex ${version}")
-          if [ "${{ needs.verify.outputs.prerelease }}" = "true" ]; then
+          version="${{ needs.version.outputs.version }}"
+          tag="${{ needs.version.outputs.tag }}"
+          sha="${{ needs.version.outputs.sha }}"
+
+          flags=(--target "$sha" --title "Kex ${version}" --notes-file release-notes.md)
+          if [ "${{ needs.version.outputs.prerelease }}" = "true" ]; then
             flags+=(--prerelease)
           fi
-          # Re-runnable: a release that already exists gets its assets
-          # replaced rather than failing the job.
+
+          # Re-runnable: a release that already exists gets its assets and its
+          # notes replaced rather than failing the job.
           if gh release view "$tag" >/dev/null 2>&1; then
+            gh release edit "$tag" --notes-file release-notes.md
             gh release upload "$tag" artifacts/*/* --clobber
           else
             gh release create "$tag" "${flags[@]}" artifacts/*/*
           fi
+
+  # Homebrew is the stable line only. A pre-release must never become what
+  # `brew install tey` hands someone, so this job simply does not run for one;
+  # `tey kex install` is the channel-aware way in.
+  formula:
+    needs: [version, publish]
+    if: needs.version.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    # Where HOMEBREW_TAP_TOKEN lives: an environment secret is reachable only
+    # from a job that names the environment, so nothing else in the repository
+    # can push to the tap.
+    environment: release
+    steps:
+      - name: Check out the tap
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/homebrew-tey
+          # A cross-repository push needs a token of its own; the job's default
+          # GITHUB_TOKEN is scoped to kexhq/kex.
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Point the formula at the new release
+        env:
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/kexhq/kex/releases/download/${TAG}"
+
+          # Five archives: Tey itself, plus one Kex per platform so a keg can
+          # carry the compiler for the machine installing it. The checksums are
+          # the ones published beside them, not ones computed here — if a
+          # release asset and its .sha256 ever disagreed, this would be the
+          # wrong place to find out.
+          for name in "tey-${VERSION}" \
+                      "kex-${VERSION}-macos-arm64" "kex-${VERSION}-macos-x86_64" \
+                      "kex-${VERSION}-linux-arm64" "kex-${VERSION}-linux-x86_64"; do
+            curl -fsSL "${base}/${name}.tar.gz.sha256" -o "${name}.sha256"
+            cut -d' ' -f1 < "${name}.sha256" > "${name}.hash"
+          done
+
+          python3 - "$base" "$VERSION" <<'PY'
+          import re, sys
+
+          base, version = sys.argv[1:3]
+          path = "Formula/tey.rb"
+          formula = open(path).read()
+
+
+          def digest(name):
+              with open(f"{name}.hash") as handle:
+                  return handle.read().strip()
+
+
+          def fill(marker, body):
+              global formula
+              formula, replaced = re.subn(
+                  rf"(?s)(  # <<{marker}\n).*?(  # {marker}>>\n)",
+                  lambda m: m.group(1) + body + m.group(2),
+                  formula,
+              )
+              if replaced != 1:
+                  raise SystemExit(f"expected one {marker} block in {path}, found {replaced}")
+
+
+          tey = f"tey-{version}"
+          fill("STABLE-TEY",
+               f'  url "{base}/{tey}.tar.gz"\n  sha256 "{digest(tey)}"\n')
+
+          # `on_macos`/`on_arm` rather than one url with a substitution: brew
+          # resolves these at install time on the machine doing the installing,
+          # and only downloads the one it picks.
+          def resource(target, indent):
+              name = f"kex-{version}-{target}"
+              pad = " " * indent
+              return (f'{pad}resource "kex" do\n'
+                      f'{pad}  url "{base}/{name}.tar.gz"\n'
+                      f'{pad}  sha256 "{digest(name)}"\n'
+                      f'{pad}end\n')
+
+          kex = ""
+          for system, arm, intel in (("macos", "macos-arm64", "macos-x86_64"),
+                                     ("linux", "linux-arm64", "linux-x86_64")):
+              kex += f"  on_{system} do\n"
+              kex += "    on_arm do\n" + resource(arm, 6) + "    end\n"
+              kex += "    on_intel do\n" + resource(intel, 6) + "    end\n"
+              kex += "  end\n"
+              if system == "macos":
+                  kex += "\n"
+          fill("STABLE-KEX", kex)
+
+          open(path, "w").write(formula)
+          PY
+
+          rm -f ./*.sha256 ./*.hash
+          git diff --stat
+
+      - name: Open the formula bump
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          # Re-running a release that changed nothing must not fail the job.
+          if git diff --quiet; then
+            echo "Formula already points at ${VERSION}"
+            exit 0
+          fi
+
+          branch="tey-${VERSION}"
+          git config user.name "kex release"
+          git config user.email "noreply@kex.run"
+          git checkout -b "$branch"
+          git commit -am "tey ${VERSION}"
+          git push -u --force-with-lease origin "$branch"
+
+          # A re-run updates the open pull request rather than opening a second.
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "Updated the open pull request for ${VERSION}"
+          else
+            gh pr create --head "$branch" \
+              --title "tey ${VERSION}" \
+              --body "Kex ${VERSION} is published. This points the formula at its tey-${VERSION}.tar.gz.
+
+          Opened by kexhq/kex's release workflow; see docs/releasing.md there."
+          fi
+
+  # VERSION names the NEXT release, so publishing one leaves the tree naming a
+  # version that is already out. This proposes the next number as a pull
+  # request rather than committing it: the bump is a decision, and a
+  # release-time guess at it should be reviewable and editable — a version that
+  # deserves a minor or a channel change is exactly the case a default gets
+  # wrong.
+  #
+  # Requires "Allow GitHub Actions to create and approve pull requests" in the
+  # repository's Actions settings.
+  bump:
+    needs: [version, publish]
+    if: inputs.bump_after == 'pull request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Open the version bump
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASED: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          # The smallest step that cannot collide with what was just released:
+          # a stable gets the next patch, a pre-release the next number in its
+          # own channel. Anything larger is a judgement, which is why this is a
+          # PR and not a push.
+          case "$RELEASED" in
+            *-*)
+              channel="${RELEASED#*-}"
+              base="${RELEASED%%-*}"
+              number="${channel#*.}"
+              # `-beta` with no counter is `-beta.1` by convention, so the
+              # next one is .2. Written as an `if` because a bare `[ … ] && …`
+              # that tests false ends a `set -e` script.
+              if [ "$number" = "$channel" ]; then number=1; fi
+              next="${base}-${channel%%.*}.$((number + 1))"
+              ;;
+            *)
+              patch="${RELEASED##*.}"
+              next="${RELEASED%.*}.$((patch + 1))"
+              ;;
+          esac
+
+          # Someone may have bumped it already while the release ran.
+          if [ "$(tr -d "[:space:]" < VERSION)" != "$RELEASED" ]; then
+            echo "VERSION already moved past ${RELEASED}; nothing to propose"
+            exit 0
+          fi
+
+          branch="bump/v${next}"
+          echo "$next" > VERSION
+          git config user.name "kex release"
+          git config user.email "noreply@kex.run"
+          git checkout -b "$branch"
+          git commit -am "Next version: ${next}"
+          git push -u origin "$branch"
+
+          gh pr create --base "${{ inputs.ref }}" --head "$branch" \
+            --title "Next version: ${next}" \
+            --body "Kex ${RELEASED} is released, so VERSION now names a version that is already out.
+
+          This proposes ${next} as the next one. Change it here if the next release should be a minor, a major, or a different channel — VERSION always names the NEXT release, and this PR is where that decision is recorded.
+
+          See docs/releasing.md."
