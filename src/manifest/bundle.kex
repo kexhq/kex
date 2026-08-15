@@ -50,4 +50,11 @@ end
 #     tey("mock", git: "...", tag: "v1.0.0")
 #   end
 let group(name: Atom, body: Block<Void>) -> Void do
+
+# Sets the license of the package 
+#
+# @example
+#   license("MIT")
+#   license("GPL")
+let license(name: Atom, body: Block<Void>) -> Void do
 end
