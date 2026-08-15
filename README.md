@@ -20,7 +20,7 @@ manager. Installing Tey installs a working `kex`:
 
 ```sh
 brew tap kexhq/tey
-brew install --HEAD kexhq/tey/tey   # --HEAD until the first stable tag
+brew install kexhq/tey/tey
 kex --version
 ```
 
@@ -34,12 +34,11 @@ tey kex install [<version>] # newest stable, or the one you name
 tey kex use <version>       # switch what `kex` runs
 ```
 
-The tap follows the stable line, so `--HEAD` stays necessary until the first
-stable tag; from then on `brew install kexhq/tey/tey` is enough. Pre-releases
-never arrive through brew — `tey kex install --pre` and `tey kex list --pre`
-are the channel-aware way to them. Docker images are published as
-`ghcr.io/kexhq/kex` (`:slim` for a small one that keeps the BEAM backend).
-Maintainers cutting a release: see `docs/releasing.md`.
+The tap follows the stable line; `--HEAD` still works and builds from main.
+Pre-releases never arrive through brew — `tey kex install --pre` and
+`tey kex list --pre` are the channel-aware way to them. Docker images are
+published as `ghcr.io/kexhq/kex` (`:slim` for a small one that keeps the BEAM
+backend). Maintainers cutting a release: see `docs/releasing.md`.
 
 Tey itself is written in Kex; its implementation lives entirely under the
 `Tey` supermodule in `tey/src/tey/`.
