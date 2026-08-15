@@ -105,8 +105,9 @@ They are kept explicit so temporary workarounds do not become accidental API.
   home on first use.
 - The release path of the formula is UNPROVEN: there is no tagged release yet,
   so what has actually been exercised is the archive install against a
-  `file://` release and the tarball unpack by hand. The first real tag is also
-  the first test of the `formula` job that rewrites the tap.
+  `file://` release and the tarball unpack by hand. The first real release run
+  (`docs/releasing.md`) is also the first test of the `formula` job that
+  rewrites the tap.
 - The adopted seed is a copy, so `brew upgrade tey` — which replaces the seed
   in `libexec` — leaves the previously adopted copy installed and selected.
   That is deliberate (a symlink would silently change what a version directory

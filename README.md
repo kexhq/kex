@@ -10,6 +10,11 @@ Kex is a small functional programming language with Ruby-like syntax, immutable 
 
 It is designed for code that reads like a scripting language without giving up typed records, sum types, pure functions, and predictable dispatch.
 
+> **Kex is before 1.0.0, so no backward compatibility is attempted.** The
+> language, the standard library, the package format and the on-disk layouts
+> change between releases without deprecation cycles. Pin a version, and expect
+> to edit code when you move off it.
+
 Kex ships with **Tey**, its package, compiler, runtime, and standard-library
 manager. During the HEAD-only bootstrap period, add the Homebrew tap and
 install its Tey formula:
@@ -21,9 +26,10 @@ brew install --HEAD kexhq/tey/tey
 
 The tap follows the stable line, so `--HEAD` stays necessary until the first
 stable tag; from then on `brew install kexhq/tey/tey` is enough. Pre-releases
-never arrive through brew — `tey kex install <version>` and `tey kex list
---pre` are the channel-aware way to them. Docker images are published as
+never arrive through brew — `tey kex install --pre` and `tey kex list --pre`
+are the channel-aware way to them. Docker images are published as
 `ghcr.io/kexhq/kex` (`:slim` for a small one that keeps the BEAM backend).
+Maintainers cutting a release: see `docs/releasing.md`.
 
 Tey itself is written in Kex; its implementation lives entirely under the
 `Tey` supermodule in `tey/src/tey/`.
