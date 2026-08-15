@@ -7,7 +7,7 @@
   "publisher": "kexhq",
   "license": "MIT",
   "repository": { "type": "git", "url": "https://github.com/kexhq/kex.git" },
-  "homepage": "https://github.com/kexhq/kex/tree/main/editors/vscode",
+  "homepage": "https://kex.run",
   "bugs": { "url": "https://github.com/kexhq/kex/issues" },
   "icon": "images/icon.png",
   "engines": {

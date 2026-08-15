@@ -57,16 +57,6 @@ Not on macOS or Linux with Homebrew? Build from source — see the
 [repository README](https://github.com/kexhq/kex#readme) — then point
 `kex.executablePath` at the binary.
 
-## Installing the extension
-
-It is not on the Marketplace yet. Build a `.vsix` from this directory:
-
-```sh
-bun install
-bun run package
-code --install-extension kex-language-0.1.0.vsix
-```
-
 ## Settings
 
 | Setting | Default | Description |
@@ -79,7 +69,7 @@ code --install-extension kex-language-0.1.0.vsix
 | --- | --- |
 | **Kex: Restart Language Server** | Restarts the server without reloading the window. |
 
-## Development
+## Extension Development
 
 1. Build Kex from the repository root: `cmake --build build --target kex`.
 2. In this directory, run `bun install` and `bun run compile`.
