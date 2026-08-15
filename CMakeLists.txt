@@ -407,9 +407,16 @@ if(KEX_HAS_RUNTIME_BEAMS AND NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     set(KEX_PRELUDE_BEAM "${KEX_RUNTIME_BEAM_DIR}/kex_prelude.beam")
     file(GLOB_RECURSE KEX_STDLIB_SRC CONFIGURE_DEPENDS
         "${CMAKE_SOURCE_DIR}/src/stdlib/*.kex")
+    # KEX_STDLIB_DIR is passed explicitly rather than left to the binary's
+    # own discovery: that walks up from the EXECUTABLE (../src/stdlib), which
+    # only finds the sources when the build tree sits inside the source tree.
+    # An out-of-tree build — what `tey kex install` does, building into its
+    # cache — failed with "no prelude source root is available".
     add_custom_command(
         OUTPUT ${KEX_PRELUDE_BEAM}
-        COMMAND $<TARGET_FILE:kex> --build-prelude ${KEX_RUNTIME_BEAM_DIR}
+        COMMAND ${CMAKE_COMMAND} -E env
+            "KEX_STDLIB_DIR=${CMAKE_SOURCE_DIR}/src/stdlib"
+            $<TARGET_FILE:kex> --build-prelude ${KEX_RUNTIME_BEAM_DIR}
         DEPENDS kex ${KEX_STDLIB_SRC} ${KEX_RUNTIME_BEAMS}
         COMMENT "Prebuilding Kex prelude (kex_prelude.beam)"
         VERBATIM
@@ -493,7 +500,9 @@ add_custom_target(check-prelude
     COMMAND ${CMAKE_COMMAND} -E echo "Checking prelude..."
     COMMAND ${CMAKE_COMMAND} -E make_directory
         "${KEX_PRELUDE_CHECK_DIR}"
-    COMMAND $<TARGET_FILE:kex> --build-prelude
+    COMMAND ${CMAKE_COMMAND} -E env
+        "KEX_STDLIB_DIR=${CMAKE_SOURCE_DIR}/src/stdlib"
+        $<TARGET_FILE:kex> --build-prelude
         "${KEX_PRELUDE_CHECK_DIR}"
     DEPENDS kex ${KEX_PRELUDE_CHECK_DEPS}
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}

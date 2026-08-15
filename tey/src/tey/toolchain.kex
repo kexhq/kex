@@ -31,21 +31,59 @@ let installSource(source: String, version: String) -> Result<String, String> do
   return Error("could not create Tey toolchain directory") if !FS.Directory.create("${home}/toolchains")
   return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
   return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/build")
-  let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${prefix}"]) do
+  # CMake installs into a staging prefix, and only a COMPLETE installation is
+  # renamed to the real one. Installing straight into `prefix` would publish
+  # the compiler binary before the runtime and stdlib beside it, and a build
+  # that failed in between left a toolchain that `use` would happily select.
+  # Nothing bakes the prefix into the artifacts — the binary finds its stdlib
+  # relative to itself — so moving a finished tree is safe.
+  let staging = "${prefix}.partial"
+  FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
+  let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${staging}"]) do
     Error(error) -> return Error(error)
     Ok(result) -> result
   end
-  return Error(configured.stderr + configured.stdout) if configured.exitCode != 0
+  if configured.exitCode != 0
+    FS.Directory.deleteAll(staging)
+    return Error(configured.stderr + configured.stdout)
+  end
   let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
     Error(error) -> return Error(error)
     Ok(result) -> result
   end
-  return Error(installed.stderr + installed.stdout) if installed.exitCode != 0
+  if installed.exitCode != 0
+    FS.Directory.deleteAll(staging)
+    return Error(installed.stderr + installed.stdout)
+  end
+  # `.try` propagates a failed publish as this function's Error.
+  let installedPrefix = Tey.Toolchain.publish(staging, prefix).try
   return Error("installed Kex but could not select it") if !FS.File.write("${home}/current", "${version}\n")
-  Ok(prefix)
+  Ok(installedPrefix)
 end
 
 let use(version: String) -> Bool do
   let home = Tey.Toolchain.home
   FS.File.file?("${home}/toolchains/${version}/bin/kex") && FS.File.write("${home}/current", "${version}\n")
+end
+
+private do
+  # Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
+  # tree until the new one is in place and puts it back if the move fails, so
+  # a failed upgrade leaves the previous toolchain working rather than none.
+  let publish(staging: String, prefix: String) -> Result<String, String> do
+    let previous = "${prefix}.previous"
+    FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
+    let replacing = FS.Directory.directory?(prefix)
+    if replacing && !FS.File.rename(prefix, previous)
+      FS.Directory.deleteAll(staging)
+      return Error("could not move the installed toolchain at ${prefix} aside")
+    end
+    if !FS.File.rename(staging, prefix)
+      FS.File.rename(previous, prefix) if replacing
+      FS.Directory.deleteAll(staging)
+      return Error("could not move the new toolchain into ${prefix}")
+    end
+    FS.Directory.deleteAll(previous)
+    return Ok(prefix)
+  end
 end

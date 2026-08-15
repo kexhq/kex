@@ -8,13 +8,6 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - `Process.run` keeps stdout and stderr separate in the tree walker, while the
   BEAM port backend currently combines stderr into stdout. Its public result is
   stable, but stream fidelity differs by backend.
-- A built entry module's FILE name is deliberately not its BEAM module name
-  (`main.kx.beam` holds module `kex_main`), so `kex ebin/main.kx.beam` runs a
-  built package but plain `erl -pa ebin` cannot load it — the code server
-  looks for `kex_main.beam`. Anything that boots a package straight from the
-  BEAM needs a module-named copy, which is what `tey/Makefile` does by hand.
-  `tey build` should emit a launcher rather than leaving that to each
-  package.
 
 ## Tey package-manager limitations
 
@@ -40,8 +33,11 @@ They are kept explicit so temporary workarounds do not become accidental API.
   search paths remain incomplete.
 - Lockfile merge-driver mode currently regenerates from the working-tree
   manifest; it does not inspect and merge the `%O`, `%A`, and `%B` inputs.
-- Source toolchain installation builds compiler, runtime, and stdlib together,
-  but does not yet stage and atomically rename the completed installation.
+- Source toolchain installation builds compiler, runtime, and stdlib
+  together, and stages them: CMake installs into `<version>.partial` and only
+  a complete tree is renamed into place, keeping the previous installation
+  until the new one lands. Still missing is a checksum over the installed
+  tree, so a toolchain that was corrupted AFTER installation is not detected.
 - The Homebrew formula is HEAD-only until the first tagged Tey/Kex release has
   a stable source URL and checksum. During bootstrap it follows the
   `package-management` branch and should switch back to `main` after merge.

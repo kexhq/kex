@@ -16,7 +16,6 @@ ERL ?= $(shell dir=$$(dirname "$$(command -v erlc 2>/dev/null || echo erlc)"); \
 build:
 	mkdir -p $(EBIN)
 	$(KEX) --compile -o $(EBIN) src/main.kex
-	cp $(EBIN)/main.kx.beam $(EBIN)/kex_main.beam
 
 install: build
 	install -d $(DESTDIR)$(LIBDIR)/ebin $(DESTDIR)$(BINDIR)

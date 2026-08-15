@@ -110,7 +110,7 @@ spec: build
 		if grep -q "# kex: compile-run" "$$f" 2>/dev/null; then \
 			tmpdir=$$(mktemp -d /tmp/kex_spec_cr_XXXXXX); \
 			$(KEX) -c --no-colors -o "$$tmpdir" "$$f" > /dev/null 2>&1; \
-			beamfile="$$tmpdir/$$(basename "$${f%.kex}").kx.beam"; \
+			beamfile="$$tmpdir/kex_$$(basename "$${f%.kex}").beam"; \
 			actual=$$($(KEX) "$$beamfile" 2>&1); \
 			rm -rf "$$tmpdir"; \
 		else \

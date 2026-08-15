@@ -3812,18 +3812,14 @@ int main(int argc, char *argv[]) {
         }
       }
 
-      // Rename kex_<stem>.beam → <stem>.kx.beam (user-facing name).
-      // The internal Erlang module name stays kex_<stem> inside the file.
-      std::string internalBeam = outputDir + "/" + result.moduleName + ".beam";
-      std::string kxBeam = outputDir + "/" + stem + ".kx.beam";
-      if (tempDir.empty()) {
-        std::filesystem::rename(internalBeam, kxBeam);
-        std::cerr << "  done  " << kxBeam << "\n";
-      } else {
-        // In temp-dir (interpreter/REPL) mode keep the internal name so
-        // -pa <tempDir> auto-loads it by module name.
-        kxBeam = internalBeam;
-      }
+      // The emitted file is named after the module inside it. Kex used to
+      // rename `kex_<stem>.beam` to `<stem>.kx.beam` as a friendlier name,
+      // but BEAM's code server finds a module by FILENAME: a directory of
+      // `.kx.beam` files could not be put on a code path, so anything
+      // booting a built program straight from the emulator (`erl -pa ebin`,
+      // a package launcher) needed a renamed copy alongside it.
+      std::string kxBeam = outputDir + "/" + result.moduleName + ".beam";
+      if (tempDir.empty()) std::cerr << "  done  " << kxBeam << "\n";
 
       if (compileRun) {
         // Load every freshly emitted module explicitly.  Relying on the code
