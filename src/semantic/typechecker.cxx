@@ -2192,6 +2192,14 @@ auto TypeChecker::checkMakeDef(const ast::MakeDef& def) -> void {
             // pre-registered before any body is checked. Their names are
             // collected below regardless, so the unknown-method report does not
             // flag calls to them.
+            //
+            // Checking the block's own private methods FIRST does fix
+            // units.kex, but is not enough on its own: the signature a private
+            // method registers has the receiver prepended, so `si.kex`'s
+            // `productKind` then reads as arity 2 against 3-argument calls,
+            // and json_parser.spec fails on BEAM at RUNTIME with "Undefined
+            // method: advance for Parser" — registration changes dispatch, not
+            // just what tooling can see. Pre-registration is the real fix.
         }, item);
     }
     m_inMakeBlock = wasInMakeBlock;
