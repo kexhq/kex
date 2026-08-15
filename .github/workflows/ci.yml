@@ -98,6 +98,79 @@ jobs:
           [ "$(docker run --rm -v /tmp:/work kex:slim smoke.kex)" = "ok" ]
           [ "$(docker run --rm -v /tmp:/work kex:slim -R smoke.kex)" = "ok" ]
 
+  # The formula bump is the one release step that cannot be rehearsed by
+  # releasing: it runs only for a STABLE version (`prerelease == 'false'`),
+  # against a tap this repository does not contain, so it stayed unexecuted
+  # through every pre-release of 0.1 and 0.2 and then failed on the first real
+  # one. This runs the same script against the LAST published release and
+  # checks what comes out, so a break surfaces on the pull request that causes
+  # it rather than halfway through a release nobody can re-run.
+  #
+  # It does NOT cover the two things only a release can prove: that
+  # HOMEBREW_TAP_TOKEN is still valid, and that auto-merge is configured on the
+  # tap. Both fail loudly and leave the published release intact.
+  formula-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check out the tap
+        uses: actions/checkout@v4
+        with:
+          repository: kexhq/homebrew-tey
+          path: tap
+
+      - name: Rewrite the tap formula for the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=$(gh release list --repo kexhq/kex --exclude-drafts --exclude-pre-releases \
+                  --limit 1 --json tagName --jq '.[0].tagName')
+          if [ -z "$tag" ]; then
+            echo "No stable release published yet; nothing to rehearse against."
+            exit 0
+          fi
+          version="${tag#v}"
+          echo "Rehearsing the bump for ${tag}"
+
+          base="https://github.com/kexhq/kex/releases/download/${tag}"
+          for name in "tey-${version}" \
+                      "kex-${version}-macos-arm64" \
+                      "kex-${version}-linux-arm64" "kex-${version}-linux-x86_64"; do
+            curl -fsSL "${base}/${name}.tar.gz.sha256" | cut -d' ' -f1 > "tap/${name}.hash"
+          done
+
+          ruby tools/bump_formula.rb "$base" "$version" tap/Formula/tey.rb tap
+          rm -f tap/*.hash
+
+      - name: Check what it produced
+        run: |
+          set -euo pipefail
+          cd tap
+
+          # A no-op means the markers stopped matching and the rewrite silently
+          # did nothing — the failure mode that would ship a HEAD-only formula.
+          if git diff --quiet; then
+            echo "::error::bump_formula.rb changed nothing; the STABLE markers no longer match"
+            exit 1
+          fi
+
+          # Brew parses this file as Ruby, so a formula that does not parse is
+          # a broken `brew install` for everyone.
+          ruby -c Formula/tey.rb
+
+          # One url+sha256 for tey, three for the per-platform kex resources.
+          urls=$(grep -c '^ *url "https://github.com/kexhq/kex/releases/download/' Formula/tey.rb)
+          hashes=$(grep -cE '^ *sha256 "[0-9a-f]{64}"$' Formula/tey.rb)
+          [ "$urls" = "4" ] || { echo "::error::expected 4 release urls, found $urls"; exit 1; }
+          [ "$hashes" = "4" ] || { echo "::error::expected 4 sha256 lines, found $hashes"; exit 1; }
+
+          git diff --stat
+
   wasm:
     runs-on: ubuntu-latest
     permissions:

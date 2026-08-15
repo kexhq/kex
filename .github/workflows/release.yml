@@ -711,6 +711,17 @@ jobs:
           # GITHUB_TOKEN is scoped to kexhq/kex.
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
+      # The tap is the working tree here, so this brings in the one thing from
+      # kex that the job needs: tools/bump_formula.rb, which CI has already run
+      # against the previous release on every pull request.
+      - name: Check out the bump script
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
+          path: kex-src
+          sparse-checkout: tools/bump_formula.rb
+          sparse-checkout-cone-mode: false
+
       - name: Point the formula at the new release
         env:
           TAG: ${{ needs.version.outputs.tag }}
@@ -732,54 +743,12 @@ jobs:
             cut -d' ' -f1 < "${name}.sha256" > "${name}.hash"
           done
 
-          # Ruby, not Python: this rewrites a Ruby file in a Homebrew tap, and
-          # every runner that can build a formula already has an interpreter
-          # for it. Nothing here needs a gem — plain stdlib.
-          ruby - "$base" "$VERSION" <<'RB'
-          PATH_TO_FORMULA = "Formula/tey.rb"
-
-          base, version = ARGV[0, 2]
-          formula = File.read(PATH_TO_FORMULA)
-
-          def digest(name)
-            File.read("#{name}.hash").strip
-          end
-
-          # Anchored on the marker pair so a formula that grew or lost a block
-          # fails here rather than silently emitting one that installs nothing.
-          def fill(formula, marker, body)
-            pattern = /(  \# <<#{marker}\n).*?(  \# #{marker}>>\n)/m
-            found = formula.scan(pattern).size
-            abort("expected one #{marker} block in #{PATH_TO_FORMULA}, found #{found}") unless found == 1
-            formula.sub(pattern) { "#{$1}#{body}#{$2}" }
-          end
-
-          tey = "tey-#{version}"
-          formula = fill(formula, "STABLE-TEY",
-                         %(  url "#{base}/#{tey}.tar.gz"\n  sha256 "#{digest(tey)}"\n))
-
-          # `on_macos`/`on_arm` rather than one url with a substitution: brew
-          # resolves these at install time on the machine doing the installing,
-          # and only downloads the one it picks. macOS is arm-only for now —
-          # Intel macOS publishes no archive to point a resource at.
-          def resource(base, version, target, indent)
-            name = "kex-#{version}-#{target}"
-            pad = " " * indent
-            %(#{pad}resource "kex" do\n) +
-              %(#{pad}  url "#{base}/#{name}.tar.gz"\n) +
-              %(#{pad}  sha256 "#{digest(name)}"\n) +
-              %(#{pad}end\n)
-          end
-
-          kex = "  on_macos do\n" + resource(base, version, "macos-arm64", 4) + "  end\n\n"
-          kex += "  on_linux do\n"
-          kex += "    on_arm do\n" + resource(base, version, "linux-arm64", 6) + "    end\n"
-          kex += "    on_intel do\n" + resource(base, version, "linux-x86_64", 6) + "    end\n"
-          kex += "  end\n"
-          formula = fill(formula, "STABLE-KEX", kex)
-
-          File.write(PATH_TO_FORMULA, formula)
-          RB
+          # The rewrite lives in kex's tools/bump_formula.rb, not in a heredoc
+          # here: a script embedded in YAML cannot be syntax-checked or run
+          # outside a release, which is how an indentation error once reached
+          # this job and broke it on the first stable release. CI runs that
+          # script against the previous release on every pull request.
+          ruby kex-src/tools/bump_formula.rb "$base" "$VERSION" Formula/tey.rb .
 
           rm -f ./*.sha256 ./*.hash
           git diff --stat
