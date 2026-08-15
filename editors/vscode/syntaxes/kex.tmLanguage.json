@@ -21,25 +21,8 @@
   ],
   "repository": {
     "comments": { "patterns": [
-      { "comment": "An @example body is Kex source, and hover renders it in a ```kex fence, so it gets the real grammar here too. Spans lines: it runs until the comment block ends or another tag starts. Listed before the plain comment rule, which would otherwise claim each line first.",
-        "name": "comment.block.documentation.example.kex",
-        "begin": "^\\s*#\\s*(@example)\\b",
-        "beginCaptures": { "1": { "name": "keyword.other.documentation.kex" } },
-        "end": "^(?!\\s*#)|(?=^\\s*#\\s*@(?!example))",
-        "patterns": [
-          { "name": "punctuation.definition.comment.kex", "match": "^\\s*#" },
-          { "include": "$self" }
-        ] },
-      { "comment": "A `#` comment directly above a declaration is its documentation, and the LSP renders it as RDoc (see renderRdoc in src/lsp/server.cxx): `+code+` inline, plus the @example / @param / @return tags. Highlighting the same markup here means the source shows what hover will show.",
-        "name": "comment.line.number-sign.kex", "begin": "#", "end": "$",
-        "patterns": [
-          { "name": "keyword.other.documentation.kex",
-            "match": "(?<=^|\\s)@(example|param|return)\\b" },
-          { "name": "variable.parameter.kex",
-            "match": "(?<=@param\\s)[a-z_][A-Za-z0-9_?!]*" },
-          { "name": "entity.name.type.kex", "match": "\\[[A-Z][^\\]]*\\]" },
-          { "name": "markup.raw.inline.kex", "match": "\\+[^+\\s][^+]*\\+" }
-        ] }
+      { "comment": "Deliberately plain. Doc comments carry RDoc markup (`+code+`, @param/@return/@example — see renderRdoc in src/lsp/server.cxx) and an earlier version highlighted it, but a comment that competes with the code for attention is worse than one that does not: the tags landed on keyword-bright scopes, and treating an @example body as real code made prose after it into code too, down to an apostrophe opening a char literal.",
+        "name": "comment.line.number-sign.kex", "begin": "#", "end": "$" }
     ] },
     "regexLiteral": { "patterns": [
       { "comment": "Interpolating tag: regex$`^${word}` — same as below but the body embeds expressions. Listed first so the `$` form is never read as the plain one.",

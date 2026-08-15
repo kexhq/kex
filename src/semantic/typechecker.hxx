@@ -281,6 +281,11 @@ private:
         std::string adtName;
         std::size_t typeParamCount = 0;
         std::vector<int> slots;
+        // The payload types as DECLARED (`Boxed(Box)` -> [Box]). `slots` only
+        // says which payloads are type parameters; a payload naming a concrete
+        // type was previously discarded, so destructuring it in a pattern gave
+        // the binding a fresh variable and nothing knew `b` was a Box.
+        std::vector<TypePtr> payloadTypes;
     };
     std::unordered_map<std::string, ConstructorResult> m_constructorResult;
     // Payload count per ADT constructor (`Just` -> 1, `None` -> 0), used to

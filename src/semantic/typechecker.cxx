@@ -709,6 +709,18 @@ auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
                     }
                 }
                 result.slots.push_back(slot);
+                // Keep the declared type too, so a pattern binding can take
+                // its type from the declaration rather than waiting for a use
+                // to constrain it.
+                TypePtr declared;
+                if (payload) {
+                    std::unordered_map<std::string, TypePtr> generics;
+                    declared = resolveTypeExpr(*payload, generics);
+                    if (declared &&
+                        std::holds_alternative<UnknownType>(declared->kind))
+                        declared = nullptr;
+                }
+                result.payloadTypes.push_back(std::move(declared));
             }
         }
         m_constructorResult[*name] = std::move(result);
@@ -1558,8 +1570,31 @@ auto TypeChecker::bindPatternVars(
             if (node.inner) bindPatternVars(*node.inner, expected);
         }
         else if constexpr (std::is_same_v<T, ast::ConstructorPattern>) {
-            for (const auto& arg : node.args) {
-                if (arg) bindPatternVars(*arg);
+            // Give each payload binding the type the constructor declares, the
+            // way a record pattern below takes field types from the record.
+            // Without it a binding had no type until some later use forced one,
+            // so `Boxed(b) -> b.size` worked only because `.size` constrained
+            // `b`, and the editor could say nothing about `b` itself.
+            const ConstructorResult* declaration = nullptr;
+            if (auto found = m_constructorResult.find(node.name);
+                found != m_constructorResult.end())
+                declaration = &found->second;
+            for (size_t i = 0; i < node.args.size(); ++i) {
+                if (!node.args[i]) continue;
+                TypePtr payload;
+                // Only payloads naming a CONCRETE type. A payload that is a
+                // type parameter (`Just(A)`) must take its type from the
+                // scrutinee, and the scrutinee is not always shaped so that it
+                // can: `Char?` is an OptionalType, not `Optional<Char>`, so
+                // there are no type arguments to read a slot out of. Using the
+                // declared `A` there bound `c` to the wrong type outright and
+                // broke the prelude (`parsing.kex` charWhen). Those keep the
+                // previous behaviour — a fresh variable a later use pins down.
+                if (declaration && i < declaration->payloadTypes.size() &&
+                    (i >= declaration->slots.size() ||
+                     declaration->slots[i] < 0))
+                    payload = declaration->payloadTypes[i];
+                bindPatternVars(*node.args[i], payload);
             }
         }
         else if constexpr (std::is_same_v<T, ast::RecordPattern>) {

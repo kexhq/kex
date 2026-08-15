@@ -8,16 +8,19 @@ const oniguruma = require("vscode-oniguruma");
 
 const wasm = readFileSync(require.resolve("vscode-oniguruma/release/onig.wasm"));
 
-const SAMPLE = `# Transforms each element by applying +f+.
-# @param f [A -> B] the mapping applied to every element
+const SAMPLE = `# Returns the first element satisfying the predicate wrapped in +Just+,
+# @param pred [X -> Bool]
+#
 # @example
-#   [1, 2, 3].map { |x| x * 2 } # => [2, 4, 6]
-#   "abc".matches?(regex\`\\d+\`)
-# @return [B] the transformed list
-let map(f) = f
+#   [1, 2, 3].find { |x| x > 1 }  # => Just(2)
+#   [1, 2, 3].find { |x| x > 9 }  # => None
+# find/any?/all? are provided by the Enumerable trait.
+find :> (X -> Bool) -> X?
 
-# Plain prose after the block ends.
-let after = 1
+# @example
+#   { a: 1, b: 2 }.filter { |k, v| v > 1 }
+# Map overrides the map-returning HOFs (Enumerable's default returns a list).
+filter :> (K -> V -> Bool) -> Map<K, V>
 `;
 
 await oniguruma.loadWASM(wasm);
