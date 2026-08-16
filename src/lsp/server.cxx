@@ -199,8 +199,24 @@ auto protocolPosition(const SourceLocation& location,
     };
 }
 
+// Forward-declared: the token length lives further down, next to the other
+// source helpers.
+auto identifierLengthAt(const std::string& source, const SourceLocation& location)
+    -> unsigned int;
+
+// Where a diagnostic's squiggle ends when the checker reported only a start.
+// One character was all it ever underlined, so an error about `parseValue`
+// marked a single letter — usually the last one the eye lands on — and said
+// nothing about which name it meant. An identifier is underlined whole.
 auto pointEnd(const SourceLocation& location,
               const std::string* source = nullptr) -> ::lsp::Position {
+    if (source)
+        if (const auto length = identifierLengthAt(*source, location);
+            length > 1) {
+            SourceLocation end = location;
+            end.column += static_cast<int>(length);
+            return protocolPosition(end, source);
+        }
     auto start = protocolPosition(location, source);
     ++start.character;
     return start;
@@ -1227,6 +1243,77 @@ auto recordFieldType(const std::string& recordDetail, const std::string& field)
         lineStart = newline + 1;
     }
     return {};
+}
+
+// Whether the word at this position is a KEY in a map literal (`{ name: "Ada" }`)
+// rather than a reference to anything. A key is an atom, and it declares
+// nothing — but a name-based lookup happily found a same-named export and
+// answered with its signature and prose: `name` reported OptionParser's
+// documentation about `kex install`.
+auto isMapKeyPosition(const std::string& source, unsigned int line,
+                      unsigned int byteColumn, size_t wordLength) -> bool {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return false;
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return false;
+    const size_t start = lineStart + byteColumn - 1;
+    size_t after = start + wordLength;
+    while (after < source.size() && source[after] == ' ') ++after;
+    // `name:` — but not `name ::` or a `?:` conditional.
+    if (after >= source.size() || source[after] != ':') return false;
+    // Not `::`, and not the `:>` of a method declaration.
+    if (after + 1 < source.size() &&
+        (source[after + 1] == ':' || source[after + 1] == '>'))
+        return false;
+    size_t before = start;
+    while (before > lineStart && source[before - 1] == ' ') --before;
+    if (before == lineStart) return false;
+    const char opener = source[before - 1];
+    return opener == '{' || opener == ',';
+}
+
+// `size : Integer` in a record body declares a field. Like a map key it is not
+// a reference, so the same name-based lookup answered with an unrelated
+// export — hovering `size` reported `foul size : String -> Integer?`. Returns
+// the declared type as written, or empty when this is not such a line.
+auto declaredFieldType(const std::string& source, unsigned int line,
+                       unsigned int byteColumn, size_t wordLength)
+    -> std::string {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return {};
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return {};
+    const size_t start = lineStart + byteColumn - 1;
+    // Nothing but indentation may precede it: an expression that happens to
+    // contain `x : y` is not a declaration.
+    for (size_t i = lineStart; i < start; ++i)
+        if (source[i] != ' ' && source[i] != '\t') return {};
+    size_t after = start + wordLength;
+    while (after < source.size() && source[after] == ' ') ++after;
+    if (after >= source.size() || source[after] != ':') return {};
+    // `push :> X -> [X]` DECLARES a method, not a field: taking the text after
+    // the colon there produced the nonsense `push : > X -> [X]`.
+    if (after + 1 < source.size() &&
+        (source[after + 1] == ':' || source[after + 1] == '>'))
+        return {};
+    ++after;
+    while (after < source.size() && source[after] == ' ') ++after;
+    const auto lineEnd = source.find('\n', after);
+    auto text = source.substr(after, (lineEnd == std::string::npos
+                                          ? source.size() : lineEnd) - after);
+    // A default value is not part of the type: `count : Integer = 0`.
+    if (const auto equals = text.find('='); equals != std::string::npos)
+        text = text.substr(0, equals);
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.back())))
+        text.pop_back();
+    return text;
 }
 
 // Module names this file opted into with `using`. Read from the text rather
@@ -2392,8 +2479,21 @@ private:
         // Documentation is looked up by BARE NAME, so a field must not take
         // it: `user.name` showed the right type and then OptionParser's prose
         // about `kex install`, because that module happens to export a `name`.
+        const bool mapKey = isMapKeyPosition(document.text,
+                                             params.position.line + 1,
+                                             word.byteColumn, word.byteLength);
         const bool recordField = !fieldDetail.empty();
-        if (recordField) {
+        const auto fieldDeclaration = mapKey
+            ? std::string{}
+            : declaredFieldType(document.text, params.position.line + 1,
+                                word.byteColumn, word.byteLength);
+        if (mapKey) {
+            detail = word.text + " : Atom";
+            symbol = nullptr;
+        } else if (!fieldDeclaration.empty()) {
+            detail = word.text + " : " + fieldDeclaration;
+            symbol = nullptr;
+        } else if (recordField) {
             detail = std::move(fieldDetail);
             symbol = nullptr;
         } else if (importLine) {
@@ -2528,11 +2628,25 @@ private:
                     }
             }
         }
+        // Whether what is being shown came from a DECLARATION of this name
+        // rather than from the type of the expression sitting here. A map
+        // key, a local, a pattern binding: their type is the answer, but they
+        // declare nothing, so documentation must not be attached by name — a
+        // key called `name` was picking up OptionParser's prose about
+        // `kex install`.
+        bool detailFromExpression = false;
         if (detail.empty()) {
-            if (expressionHover)
+            if (expressionHover) {
                 detail = expressionHover->completeDetail
                     ? expressionHover->detail
                     : word.text + " : " + expressionHover->detail;
+                detailFromExpression = true;
+                // Anything gathered above belonged to a same-named DECLARATION
+                // that this expression is not. The lookups run before the
+                // answer is known, so the prose has to be dropped here rather
+                // than skipped there.
+                documentation.clear();
+            }
         }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
@@ -2566,14 +2680,16 @@ private:
                     }
                 }
         }
-        if (documentation.empty() && !recordField)
+        if (documentation.empty() && !recordField && !mapKey &&
+            fieldDeclaration.empty() && !detailFromExpression)
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty() && !lexicalReference && !recordField) {
+        if (documentation.empty() && !lexicalReference && !recordField &&
+            !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
             const auto standardName = moduleQualifier.empty()
                 ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
