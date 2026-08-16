@@ -2,7 +2,7 @@
   "name": "kex-language",
   "displayName": "Kex Language Support",
   "description": "Syntax highlighting, completion, type hover, and compiler diagnostics for Kex.",
-  "version": "0.1.0",
+  "version": "0.1.0-alpha.1",
   "packageManager": "bun@1.3.13",
   "publisher": "Kex",
   "license": "MIT",
