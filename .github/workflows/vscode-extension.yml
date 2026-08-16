@@ -13,20 +13,24 @@ name: VS Code extension
 # does (same contract as release.yml's npm job) — a re-run without a version
 # bump is cheap: it exits with "already published".
 #
-# Pre-release flagging follows the version number, like release.yml reads
-# Kex's channel from VERSION — but it CANNOT follow the same suffix rule,
-# because the Marketplace has no place to put one. Extension versions are
-# major.minor.patch and nothing else; the gallery refuses 0.1.0-alpha.1 by
-# name. Both channels share one ascending sequence, and pre-release is a
-# property stamped on a version rather than a different kind of number.
+# Pre-release is a property stamped on a version, not a different kind of
+# number: the Marketplace has no place for a suffix (it refuses 0.1.0-alpha.1
+# by name), so both channels draw from one ascending major.minor.patch
+# sequence.
 #
-# So the channel is the MINOR number's parity, Microsoft's convention: odd
-# is pre-release, even is stable. 0.1.x pre-releases lead to 0.2.0 stable,
-# 0.3.x pre-releases lead to 0.4.0, and no pre-release ever burns a number
-# the next stable wanted. The dispatch input overrides for what parity
-# cannot say, defaulting to "auto" — and it only forces prerelease ON:
-# publishing an odd minor as stable is refused, since the number is spoken
-# for and versions are immutable.
+# Which channel a run publishes is the `prerelease` INPUT and nothing else.
+# It used to be inferred from the minor number's parity — odd pre-release,
+# even stable, Microsoft's convention — with the input only able to override
+# in one direction. That inference is gone: it made the channel a property of
+# a number edited in another commit, so the person dispatching the workflow
+# could not see what they were about to publish, and asking for stable on an
+# odd minor was refused rather than obeyed. The checkbox on the dispatch form
+# is now the whole answer.
+#
+# Parity remains a good habit for choosing the next number — reserving odd
+# minors for pre-releases keeps one from burning a number the next stable
+# wants — but it is a convention for humans picking a version, not a rule the
+# workflow enforces.
 #
 # The VS Code Marketplace is the only store this publishes to. Open VSX
 # (VSCodium, Cursor) has no account yet, so those users install the .vsix by
@@ -50,10 +54,14 @@ on:
   workflow_dispatch:
     inputs:
       prerelease:
-        description: "Publish as a pre-release (auto: odd minor = pre-release)"
-        type: choice
-        default: "auto"
-        options: ["auto", "true", "false"]
+        description: "Publish as a pre-release"
+        type: boolean
+        # Defaulting ON because the two mistakes are not equal: Marketplace
+        # versions are immutable, so publishing stable when a pre-release was
+        # meant is served to everyone and cannot be taken back, while the
+        # reverse is only seen by people who opted in and is fixed by
+        # publishing the next number. Unticking it is the deliberate act.
+        default: true
 
 permissions:
   contents: read
@@ -84,40 +92,23 @@ jobs:
           # here, before any of that work.
           case "$version" in
             *[!0-9.]*|*-*)
-              echo "::error::${version} is not a Marketplace version. Use major.minor.patch; the pre-release channel comes from the minor number, not a suffix."
+              echo "::error::${version} is not a Marketplace version. Use major.minor.patch; the pre-release channel is the workflow's prerelease input, not a suffix."
               exit 1 ;;
           esac
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-          # The channel comes from the MINOR number's parity: odd is
-          # pre-release, even is stable. That is Microsoft's convention, and
-          # it exists because the Marketplace has no separate pre-release
-          # sequence — both channels draw from one ascending list of
-          # versions, and a pre-release is just a version carrying the
-          # PreRelease property. Reserving the odd minors for it is what
-          # keeps a pre-release from consuming a number the next stable
-          # wants: 0.1.x pre-release, 0.2.0 stable, 0.3.x pre-release again.
-          #
-          # Parity keeps the decision in the version, where the old -suffix
-          # rule tried to put it, rather than in a form field. The input
-          # still overrides for the case the number cannot express — but
-          # "false" on an odd minor is refused rather than guessed: it would
-          # publish a number reserved for pre-releases as stable, and
-          # versions are immutable.
-          choice="${{ inputs.prerelease || 'auto' }}"
-          minor="${version#*.}"; minor="${minor%%.*}"
-          if [ $((minor % 2)) -eq 1 ]; then from_version=true; else from_version=false; fi
-          case "$choice" in
-            auto) prerelease="$from_version" ;;
-            true) prerelease=true ;;
-            false)
-              if [ "$from_version" = true ]; then
-                echo "::error::${version} has an odd minor, which is reserved for pre-releases, but prerelease=false was requested. Use an even minor for a stable release."
-                exit 1
-              fi
-              prerelease=false ;;
-          esac
+          # The channel is the dispatch input, verbatim. A boolean input
+          # arrives as the string "true"/"false", and the `|| false` covers
+          # the one case where it arrives as neither: a run triggered by
+          # something other than the form, where unset must not read as
+          # pre-release by accident.
+          prerelease="${{ inputs.prerelease || false }}"
           echo "prerelease=${prerelease}" >> "$GITHUB_OUTPUT"
+          if [ "$prerelease" = true ]; then
+            echo "Publishing ${version} as a PRE-RELEASE."
+          else
+            echo "Publishing ${version} as STABLE."
+          fi
 
       # The platforms Kex supports — everything but Windows, both libc
       # flavors and both architectures.

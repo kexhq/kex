@@ -127,6 +127,61 @@ jobs:
 
           echo "Releasing Kex ${version} from $(git rev-parse --short HEAD)"
 
+      # The `formula` job is the last thing a release does and the only thing
+      # that reaches ANOTHER repository, so its failures are discovered at the
+      # worst possible moment: after `publish` has created a release whose
+      # version can never be rebuilt. 0.3.1 and 0.3.2 both died there, on
+      # different errors, both times with the release already out and the only
+      # way forward being to burn a version number.
+      #
+      # Everything that job needs from HOMEBREW_TAP_TOKEN is checkable in
+      # seconds, before a single archive is built. `.permissions.push` covers
+      # the clone and the branch push. Creating a pull request is a SEPARATE
+      # grant on a fine-grained token — the one 0.3.2 turned out to be missing
+      # ("Resource not accessible by personal access token (createPullRequest)"),
+      # and having contents-write is no evidence of having it.
+      #
+      # Probed by asking for a pull request that cannot be created: the head
+      # branch does not exist, so an authorized token is refused with 422
+      # (validation) and an unauthorized one with 403 (permission). The
+      # distinction is the whole answer, and nothing is created either way.
+      - name: Check the tap token can finish the release
+        if: steps.read.outputs.prerelease == 'false'
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP: kexhq/homebrew-tey
+        run: |
+          set -uo pipefail
+          fail() {
+            echo "::error::$1"
+            echo "::error::Fix HOMEBREW_TAP_TOKEN (release environment) before releasing:"
+            echo "::error::a fine-grained token on ${TAP} needs Contents: read and write"
+            echo "::error::AND Pull requests: read and write."
+            exit 1
+          }
+
+          if [ -z "${TAP_TOKEN}" ]; then
+            fail "HOMEBREW_TAP_TOKEN is empty."
+          fi
+
+          push=$(curl -fsSL -H "Authorization: Bearer ${TAP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${TAP}" 2>/dev/null \
+            | ruby -rjson -e 'puts (JSON.parse(STDIN.read).dig("permissions","push") rescue false)')
+          [ "$push" = "true" ] || fail "HOMEBREW_TAP_TOKEN cannot write to ${TAP} (Contents)."
+
+          code=$(curl -sS -o /dev/null -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${TAP_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${TAP}/pulls" \
+            -d '{"title":"kex release preflight","base":"main","head":"kex-release-preflight-branch-that-does-not-exist"}')
+          case "$code" in
+            422) echo "HOMEBREW_TAP_TOKEN can push to ${TAP} and open pull requests." ;;
+            403) fail "HOMEBREW_TAP_TOKEN cannot open pull requests on ${TAP}." ;;
+            201) fail "Preflight unexpectedly CREATED a pull request on ${TAP}; close it by hand." ;;
+            *)   fail "Unexpected ${code} probing pull-request access on ${TAP}." ;;
+          esac
+
   # One archive per platform, each holding the same install tree `make
   # install` produces: bin/kex plus share/kex/{stdlib,runtime,manifest}.
   build:
@@ -799,6 +854,15 @@ jobs:
           git push -u --force-with-lease origin "$branch"
 
           # A re-run updates the open pull request rather than opening a second.
+          #
+          # Not fatal if it fails, for the same reason the auto-merge below is
+          # not: by the time this job runs the release is PUBLISHED, and a
+          # released version can never be rebuilt. Failing here would not undo
+          # anything — it would only report a red release that actually
+          # shipped, and cost a version number to retry. The branch is already
+          # pushed at this point, so the recovery is one click, and the
+          # preflight in the `version` job now catches the token case before
+          # any of it happens.
           if gh pr view "$branch" --json number >/dev/null 2>&1; then
             echo "Updated the open pull request for ${VERSION}"
           else
@@ -806,7 +870,13 @@ jobs:
               --title "tey ${VERSION}" \
               --body "Kex ${VERSION} is published. This points the formula at its tey-${VERSION}.tar.gz.
 
-          Opened by kexhq/kex's release workflow; see docs/releasing.md there."
+          Opened by kexhq/kex's release workflow; see docs/releasing.md there." || {
+              echo "::warning::Could not open the formula pull request for ${VERSION}."
+              echo "::warning::The branch is pushed; open it by hand:"
+              echo "::warning::https://github.com/kexhq/homebrew-tey/pull/new/${branch}"
+              echo "::warning::Then check HOMEBREW_TAP_TOKEN has Pull requests: read and write."
+              exit 0
+            }
           fi
 
           # Nobody should have to click to finish a release. The formula bump

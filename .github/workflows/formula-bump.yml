@@ -51,6 +51,7 @@ jobs:
         uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
 
       - name: Rewrite the tap formula for the latest release
+        id: rehearse
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -62,6 +63,9 @@ jobs:
             exit 0
           fi
           version="${tag#v}"
+          # Handed to the next step so it can assert the rewrite names THIS
+          # release, rather than only that it produced four of something.
+          echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "Rehearsing the bump for ${tag}"
 
           base="https://github.com/kexhq/kex/releases/download/${tag}"
@@ -75,16 +79,28 @@ jobs:
           rm -f tap/*.hash
 
       - name: Check what it produced
+        if: steps.rehearse.outputs.tag != ''
+        env:
+          TAG: ${{ steps.rehearse.outputs.tag }}
         run: |
           set -euo pipefail
           cd tap
 
-          # A no-op means the markers stopped matching and the rewrite silently
-          # did nothing — the failure mode that ships a HEAD-only formula, which
-          # is what `brew install tey` served after the first stable release.
+          # A no-op used to be treated as "the markers stopped matching and the
+          # rewrite silently did nothing". That was wrong, and it made this job
+          # fail on every pull request from the moment a release finished: the
+          # rehearsal rewrites for the LATEST release, so once the tap has been
+          # bumped to that release — the normal, healthy state — the correct
+          # output is byte-identical to what is already there. The check only
+          # ever passed because the tap happened to be stale.
+          #
+          # Nothing is lost by dropping it. The failure it was guarding against
+          # is caught closer to home and harder: bump_formula.rb ABORTS unless
+          # each marker pair matches exactly once, so a broken marker fails the
+          # previous step, and the assertions below check the rewritten file
+          # names this exact release rather than merely differing from before.
           if git diff --quiet; then
-            echo "::error::bump_formula.rb changed nothing; the STABLE markers no longer match"
-            exit 1
+            echo "Formula already points at the latest release; verifying it is correct."
           fi
 
           # Brew evaluates this file as Ruby, so one that does not parse is a
@@ -99,10 +115,13 @@ jobs:
           # the same lint the tap runs, and this is where that gets found out.
           brew style Formula/tey.rb
 
-          # One url+sha256 for tey, three for the per-platform kex resources.
-          urls=$(grep -c '^ *url "https://github.com/kexhq/kex/releases/download/' Formula/tey.rb)
+          # One url+sha256 for tey, three for the per-platform kex resources —
+          # and all four must name the release just rehearsed. Counting alone
+          # would pass a formula still pointing at the PREVIOUS version, which
+          # is precisely what a silently-failed rewrite leaves behind.
+          urls=$(grep -c "^ *url \"https://github.com/kexhq/kex/releases/download/${TAG}/" Formula/tey.rb)
           hashes=$(grep -cE '^ *sha256 "[0-9a-f]{64}"$' Formula/tey.rb)
-          [ "$urls" = "4" ] || { echo "::error::expected 4 release urls, found $urls"; exit 1; }
+          [ "$urls" = "4" ] || { echo "::error::expected 4 ${TAG} release urls, found $urls"; exit 1; }
           [ "$hashes" = "4" ] || { echo "::error::expected 4 sha256 lines, found $hashes"; exit 1; }
 
           git diff --stat
