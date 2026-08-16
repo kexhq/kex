@@ -5446,6 +5446,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         ambiguousReceiver = true;
                         break;
                     }
+            // Overloads that DISAGREE about what the receiver is are no
+            // evidence about it either, even when they share a backend module
+            // — the checks above only notice ambiguity across modules. Without
+            // this, `x.to(String)` on an unconstrained `x` bound it to Measure
+            // because units.kex's `to` happened to sort first, and
+            // `let show(x) = x.to(String)` inferred as `Measure -> String`,
+            // rejecting `show(42)`.
+            if (!ambiguousReceiver && receiverUnknown && fullMatches.size() > 1) {
+                std::string receiverType;
+                for (const auto* candidate : fullMatches) {
+                    if (candidate->params.empty()) continue;
+                    auto current = typeToString(resolve(candidate->params[0]));
+                    if (receiverType.empty()) {
+                        receiverType = std::move(current);
+                    } else if (receiverType != current) {
+                        ambiguousReceiver = true;
+                        break;
+                    }
+                }
+            }
             if (resolved) {
                 bool resolvedFoul = resolved->signature.isFoul;
                 if (m_importedInterfaces)
