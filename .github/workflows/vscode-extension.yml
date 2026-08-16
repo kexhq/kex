@@ -1,17 +1,17 @@
 name: VS Code extension
 
-# The editor extension is released by an ordinary reviewed commit, like the
-# compiler's VERSION file: bump "version" in editors/vscode/package.json and
-# merge to main. This workflow picks that up and publishes. Its number is its
+# The editor extension is released deliberately, by hand: bump "version" in
+# editors/vscode/package.json, merge it, then run this workflow from the
+# Actions tab. Merging alone publishes nothing — an editor release is a
+# decision, not a side effect of touching editors/vscode. Its number is its
 # own — extension-facing changes, not compiler releases — so it deliberately
 # has no hook in release.yml: a compiler release must not republish the
 # extension, and an extension release must not tag the compiler.
 #
 # Marketplace versions are immutable, so the run first asks the gallery
 # whether this version already exists and skips instead of failing when it
-# does (same contract as release.yml's npm job). That is also what makes a
-# push that touches editors/vscode without bumping the version cheap: the
-# workflow runs, repackages nothing far, and exits with "already published".
+# does (same contract as release.yml's npm job) — a re-run without a version
+# bump is cheap: it exits with "already published".
 #
 # Pre-release flagging follows the version number, exactly like release.yml
 # reads Kex's channel from VERSION: a version with a pre-release suffix
@@ -21,12 +21,13 @@ name: VS Code extension
 # way (versions are immutable), so it only ever forces prerelease ON, never
 # off, and its default ("auto") just takes what the version says.
 #
+# The VS Code Marketplace is the only store this publishes to. Open VSX
+# (VSCodium, Cursor) has no account yet, so those users install the .vsix by
+# hand until one exists.
+#
 # Secrets:
 #   VSCE_PAT  required — Azure DevOps PAT, Marketplace/Manage scope, created
 #             under the Kex publisher's organization.
-#   OVSX_PAT  optional — open-vsx.org token. Without it the Open VSX step
-#             skips with a note; VSCodium/Cursor users just stay a version
-#             behind until one is configured.
 
 # Platform-specific VSIXs, on purpose: the extension spawns `kex --lsp` from
 # PATH, and Kex does not build or ship on Windows yet. Packaging with
@@ -39,11 +40,6 @@ name: VS Code extension
 # needed at publish time.
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "editors/vscode/**"
-      - ".github/workflows/vscode-extension.yml"
   workflow_dispatch:
     inputs:
       prerelease:
@@ -100,7 +96,10 @@ jobs:
       # flavors and both architectures.
       - name: Set the target platforms
         id: targets
-        run: echo "targets=[\"linux-x64\", \"linux-arm64\", \"alpine-x64\", \"alpine-arm64\", \"darwin-x64\", \"darwin-arm64\"]" >> "$GITHUB_OUTPUT"
+        # A plain space-separated list: every consumer below is a shell
+        # `for` loop, so this is the form that words correctly. A JSON array
+        # would only be right if something read it with fromJSON.
+        run: echo "targets=linux-x64 linux-arm64 alpine-x64 alpine-arm64 darwin-x64 darwin-arm64" >> "$GITHUB_OUTPUT"
 
       # vsce show answers from the gallery with the PAT; --json yields a
       # versions array, and membership there means this number is already
@@ -138,8 +137,10 @@ jobs:
           flag=""
           if [ "${{ steps.version.outputs.prerelease }}" = true ]; then flag="--pre-release"; fi
           bun run compile
+          version="${{ steps.version.outputs.version }}"
           for target in ${{ steps.targets.outputs.targets }}; do
-            bunx --bun vsce package --no-dependencies $flag --target "$target"
+            bunx --bun vsce package --no-dependencies $flag \
+              --target "$target" --out "kex-language-${version}-${target}.vsix"
           done
 
       # Publishing the packaged .vsix files (--packagePath) rather than letting
@@ -154,23 +155,7 @@ jobs:
           set -euo pipefail
           flag=""
           if [ "${{ steps.version.outputs.prerelease }}" = true ]; then flag="--pre-release"; fi
+          version="${{ steps.version.outputs.version }}"
           for target in ${{ steps.targets.outputs.targets }}; do
-            bunx --bun vsce publish --no-dependencies $flag --packagePath "kex-language-${{ steps.version.outputs.version }}@${target}.vsix"
-          done
-
-      - name: Publish to Open VSX
-        if: steps.check.outputs.published == 'false'
-        working-directory: editors/vscode
-        env:
-          OVSX_PAT: ${{ secrets.OVSX_PAT }}
-        run: |
-          set -euo pipefail
-          if [ -z "${OVSX_PAT}" ]; then
-            echo "OVSX_PAT is not configured; skipping Open VSX."
-            exit 0
-          fi
-          for target in ${{ steps.targets.outputs.targets }}; do
-            bunx --bun ovsx publish --no-dependencies \
-              ${{ steps.version.outputs.prerelease == 'true' && '--pre-release' || '' }} \
-              -p "${OVSX_PAT}" "kex-language-${{ steps.version.outputs.version }}@${target}.vsix"
+            bunx --bun vsce publish --no-dependencies $flag --packagePath "kex-language-${version}-${target}.vsix"
           done
