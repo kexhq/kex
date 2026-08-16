@@ -239,7 +239,10 @@ auto typeToString(const TypePtr& type) -> std::string {
             return t.varName;
         }
         else {
-            return "unknown";
+            // Capitalised like every other type name: it appears in hovers and
+            // type dumps beside `Integer`/`String`, where a lowercase word read
+            // as prose rather than as the type it is.
+            return "Unknown";
         }
     }, type->kind);
 }

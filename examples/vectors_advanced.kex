@@ -8,46 +8,48 @@
 record Vector2D do
   x : Float
   y : Float
+end
 
-  static do
-    # Constructors (capitalized — creates instances)
-    let Polar(length: Float, angle: Float) -> Vector2D do
-      return Vector2D { x: length * Math.cos(angle), y: length * Math.sin(angle) }
-    end
-
-    let Angle(angle: Float) -> Vector2D do
-      return Vector2D { x: Math.cos(angle), y: Math.sin(angle) }
-    end
-
-    # Constants (capitalized — type-level values)
-    let Zero = Vector2D { x: 0.0, y: 0.0 }
-    let UnitX = Vector2D { x: 1.0, y: 0.0 }
-    let UnitY = Vector2D { x: 0.0, y: 1.0 }
-    let One = Vector2D { x: 1.0, y: 1.0 }
+# Constructors and constants live in a MODULE of the same name, which is what
+# makes `Vector2D.Polar(…)` an ordinary qualified call.
+module Vector2D do
+  # Constructors (capitalized — creates instances)
+  let Polar(length: Float, angle: Float) -> Vector2D do
+    return Vector2D { x: length * Math.cos(angle), y: length * Math.sin(angle) }
   end
+
+  let Angle(angle: Float) -> Vector2D do
+    return Vector2D { x: Math.cos(angle), y: Math.sin(angle) }
+  end
+
+  # Constants (capitalized — type-level values)
+  let Zero = Vector2D { x: 0.0, y: 0.0 }
+  let UnitX = Vector2D { x: 1.0, y: 0.0 }
+  let UnitY = Vector2D { x: 0.0, y: 1.0 }
+  let One = Vector2D { x: 1.0, y: 1.0 }
 end
 
 record Vector3D do
   x : Float
   y : Float
   z : Float
+end
 
-  static do
-    # Constructors
-    let Spherical(radius: Float, theta: Float, phi: Float) -> Vector3D do
-      return Vector3D {
-        x: radius * Math.sin(theta) * Math.cos(phi),
-        y: radius * Math.sin(theta) * Math.sin(phi),
-        z: radius * Math.cos(theta)
-      }
-    end
-
-    # Constants
-    let Zero = Vector3D { x: 0.0, y: 0.0, z: 0.0 }
-    let UnitX = Vector3D { x: 1.0, y: 0.0, z: 0.0 }
-    let UnitY = Vector3D { x: 0.0, y: 1.0, z: 0.0 }
-    let UnitZ = Vector3D { x: 0.0, y: 0.0, z: 1.0 }
+module Vector3D do
+  # Constructors
+  let Spherical(radius: Float, theta: Float, phi: Float) -> Vector3D do
+    return Vector3D {
+      x: radius * Math.sin(theta) * Math.cos(phi),
+      y: radius * Math.sin(theta) * Math.sin(phi),
+      z: radius * Math.cos(theta)
+    }
   end
+
+  # Constants
+  let Zero = Vector3D { x: 0.0, y: 0.0, z: 0.0 }
+  let UnitX = Vector3D { x: 1.0, y: 0.0, z: 0.0 }
+  let UnitY = Vector3D { x: 0.0, y: 1.0, z: 0.0 }
+  let UnitZ = Vector3D { x: 0.0, y: 0.0, z: 1.0 }
 end
 
 # --- Instance methods via make ---

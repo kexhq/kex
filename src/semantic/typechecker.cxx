@@ -531,7 +531,7 @@ auto TypeChecker::reportUnknownMethods() -> void {
         if (knownSomewhere(unresolved.name)) continue;
         error(unresolved.location,
               "Undefined method `" + unresolved.name + "`" +
-              (unresolved.receiver.empty() || unresolved.receiver == "unknown"
+              (unresolved.receiver.empty() || unresolved.receiver == "Unknown"
                    ? std::string{}
                    : " for `" + unresolved.receiver + "`"));
     }
