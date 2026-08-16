@@ -38,6 +38,12 @@ RUN make spec && make spec-beam
 
 RUN cmake --install build --prefix /opt/kex
 
+# Tey as well -- see docker/Dockerfile for why it gets its own prefix and why
+# its bin/kex is removed (it is a dispatcher, and would shadow the compiler).
+RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
+        INSTALL_NONINTERACTIVE=1 \
+    && rm -f /opt/tey/bin/kex
+
 FROM alpine:3.20
 
 # libgmpxx is its own package on Alpine: the binary links GMP's C++
@@ -46,7 +52,11 @@ RUN apk add --no-cache gmp libgmpxx pcre2 readline libstdc++ boost-context opens
         erlang erlang-odbc unixodbc
 
 COPY --from=build /opt/kex /opt/kex
-ENV PATH="/opt/kex/bin:${PATH}"
+COPY --from=build /opt/tey /opt/tey
+# /opt/kex FIRST: `kex` must be the compiler, never a dispatcher.
+ENV PATH="/opt/kex/bin:/opt/tey/bin:${PATH}"
+# One compiler in the image, so Tey must not go looking for another.
+ENV TEY_KEX="/opt/kex/bin/kex"
 
 WORKDIR /work
 

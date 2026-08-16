@@ -44,6 +44,19 @@ RUN make spec && make spec-beam
 
 RUN cmake --install build --prefix /opt/kex
 
+# Tey as well, because the image is the whole toolchain: every CI system that
+# is not GitHub Actions takes an image plus a script, so a container with only
+# `kex` in it leaves each of them downloading Tey by hand.
+#
+# Its OWN prefix, and not /opt/kex, because `make -C tey install` also lays
+# down `bin/kex` — the dispatcher that runs whichever toolchain Tey selected —
+# which would overwrite the compiler this stage just built. The dispatcher has
+# nothing to dispatch here anyway: TEY_KEX in the final stage points Tey at
+# the compiler in the image, the only one it will ever have.
+RUN make -C tey install PREFIX=/opt/tey KEX=/src/build/kex ERL=erl \
+        INSTALL_NONINTERACTIVE=1 \
+    && rm -f /opt/tey/bin/kex
+
 FROM debian:bookworm-slim
 
 # Runtime only: the shared libraries the binary links, plus Erlang for `-R`,
@@ -54,9 +67,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=build /opt/kex /opt/kex
-ENV PATH="/opt/kex/bin:${PATH}"
+COPY --from=build /opt/tey /opt/tey
+# /opt/kex FIRST: `kex` must be the compiler, never a dispatcher.
+ENV PATH="/opt/kex/bin:/opt/tey/bin:${PATH}"
+# Tey manages toolchains by downloading them into a home directory. There is
+# nothing to manage in an image that ships exactly one compiler, and a
+# container that reaches for the network to find what is already inside it is
+# a container that fails on an offline runner.
+ENV TEY_KEX="/opt/kex/bin/kex"
 
 # Programs are mounted, not baked: `docker run -v "$PWD:/work" kex main.kex`.
+#
+# ENTRYPOINT stays `kex`, so `docker run kex main.kex` keeps working. Reach
+# Tey with `docker run --entrypoint tey ... test`; CI systems that take an
+# `image:` and a `script:` replace the entrypoint themselves and just run
+# `tey test`.
 WORKDIR /work
 
 ENTRYPOINT ["kex"]

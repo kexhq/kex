@@ -38,7 +38,9 @@ The tap follows the stable line; `--HEAD` still works and builds from main.
 Pre-releases never arrive through brew — `tey kex install --pre` and
 `tey kex list --pre` are the channel-aware way to them. Docker images are
 published as `ghcr.io/kexhq/kex` (`:slim` for a small one that keeps the BEAM
-backend). Maintainers cutting a release: see `docs/releasing.md`.
+backend), and carry `tey` as well as `kex` — which is what makes them usable
+as a CI image on any platform that takes one. Maintainers cutting a release:
+see `docs/releasing.md`.
 
 Tey itself is written in Kex; its implementation lives entirely under the
 `Tey` supermodule in `tey/src/tey/`.

@@ -198,6 +198,23 @@ jobs:
           [ "$(docker run --rm -v /tmp:/work kex:alpine smoke.kex)" = "ok" ]
           [ "$(docker run --rm -v /tmp:/work kex:alpine -R smoke.kex)" = "ok" ]
 
+      # Tey ships in the image too, and that is the whole reason a CI system
+      # without a GitHub Action can use it. Three things can break and none
+      # would show up above: Tey missing, `kex` resolving to Tey's dispatcher
+      # instead of the compiler, or TEY_KEX unset so Tey tries to DOWNLOAD a
+      # toolchain from inside a container that already has one.
+      - name: Smoke-test Tey in the image
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint tey kex:alpine --version
+          # `kex` must be the compiler. Tey's dispatcher answers --version too,
+          # so compare the path rather than trusting the output.
+          [ "$(docker run --rm --entrypoint sh kex:alpine -c 'command -v kex')" = "/opt/kex/bin/kex" ]
+          docker run --rm --entrypoint sh kex:alpine -c '
+            set -eu
+            cd /tmp && tey new smoke --lib >/dev/null
+            cd smoke && tey build >/dev/null && tey test'
+
       # The slim image keeps the BEAM and drops the OTP applications Kex does
       # not use, so what needs checking is that the remaining set is enough:
       # its own build runs the suites against the pruned distribution, and
