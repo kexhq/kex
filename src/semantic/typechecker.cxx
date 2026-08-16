@@ -531,7 +531,7 @@ auto TypeChecker::reportUnknownMethods() -> void {
         if (knownSomewhere(unresolved.name)) continue;
         error(unresolved.location,
               "Undefined method `" + unresolved.name + "`" +
-              (unresolved.receiver.empty() || unresolved.receiver == "unknown"
+              (unresolved.receiver.empty() || unresolved.receiver == "Unknown"
                    ? std::string{}
                    : " for `" + unresolved.receiver + "`"));
     }
@@ -1102,6 +1102,61 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                 if (auto* visibleAnn =
                         std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&visible))
                     add(*visibleAnn);
+        }
+    }
+
+    // A method written as a plain `let` — no `:>` — was registered only when
+    // its make block was CHECKED, which is after every top-level function body.
+    // So `let grow(c: Crate) = c.doubled` found no `doubled` at all and typed
+    // as unknown, while the identical call inside `main` (checked last) worked.
+    // Registering the declared shape here makes the method visible to whatever
+    // is checked first; the body still refines it later.
+    const auto preRegister = [&](const ast::FunctionDef& def) {
+        if (m_annotatedMethods.count(def.name)) return;
+        if (def.clauses.empty()) return;
+        const auto& clause = def.clauses.front();
+        // Only plain named parameters. A pattern in first position is the
+        // receiver-matching form (`let head(@[x | _])`) whose arity must not
+        // gain an implicit receiver, and a type-selector argument
+        // (`let to(String)`) is not a parameter type at all.
+        for (const auto& param : clause.params)
+            if (param.pattern || !param.name) return;
+        Signature signature;
+        signature.name = def.name;
+        signature.isFoul = def.isFoul;
+        signature.params.push_back(receiver);
+        for (const auto& param : clause.params)
+            signature.params.push_back(
+                param.type ? resolveTypeExpr(**param.type, targetVars)
+                           : freshTypeVar());
+        signature.result = clause.returnAnnotation
+            ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
+            : freshTypeVar();
+        signature.makeModule = modulePath;
+        auto& existing = m_methodSignatures[def.name];
+        const bool duplicate =
+            std::any_of(existing.begin(), existing.end(),
+                        [&](const Signature& other) {
+                            if (other.params.size() != signature.params.size())
+                                return false;
+                            for (size_t i = 0; i < other.params.size(); i++)
+                                if (!typesEqual(other.params[i], signature.params[i]))
+                                    return false;
+                            return true;
+                        });
+        if (!duplicate) existing.push_back(std::move(signature));
+    };
+    for (const auto& item : def.body) {
+        if (const auto* function =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*function) preRegister(**function);
+        } else if (const auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                   visibility && *visibility) {
+            for (const auto& visible : (*visibility)->items)
+                if (const auto* function =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
+                    if (*function) preRegister(**function);
         }
     }
 }
@@ -2545,7 +2600,16 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                 pt = freshTypeVar();
             }
             paramTypes.push_back(pt);
-            if (lam->params[i].name != "_") defineVar(lam->params[i].name, pt);
+            if (lam->params[i].name != "_") {
+                defineVar(lam->params[i].name, pt);
+                // Recorded for tooling like any other binding. A LambdaParam
+                // carries no location of its own, so the block's own position
+                // is the anchor and the name is found from there — without
+                // this, hovering `x` in `{ |x| … }` answered nothing while a
+                // use of it answered fine.
+                m_patternBindings.push_back(
+                    {lam->params[i].name, blockExpr.location, pt});
+            }
         }
         m_blockDepth++;
         auto bodyType = inferBody(lam->body);
@@ -5349,6 +5413,43 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
     }
 
+    // With no evidence about the receiver, prefer an overload whose receiver
+    // is itself generic. That one is written to accept anything; an overload
+    // naming a concrete receiver is a specialization for a type this call has
+    // no reason to believe in. Without the preference the winner was whichever
+    // sorted first, so `let show(x) = x.to(String)` answered `String` — the
+    // result of units.kex's `to(measure: Measure, String)` — where the general
+    // `to(value, String)` in optional.kex says `String?`.
+    if (isMethodCall && fullMatches.size() > 1 && !argTypes.empty()) {
+        const auto receiver = resolve(argTypes[0]);
+        if (std::holds_alternative<TypeVar>(receiver->kind) ||
+            std::holds_alternative<UnknownType>(receiver->kind)) {
+            // A trait-bounded receiver (`Showable`) outranks a bare variable:
+            // it accepts anything that satisfies the bound AND says more about
+            // the result. `x.to(String)` picks `to : Showable -> String?` over
+            // the untyped `to(value, t)`, whose result is only `unknown?`.
+            const auto rank = [&](const Signature* candidate) {
+                if (candidate->params.empty()) return 2;
+                const auto parameter = resolve(candidate->params[0]);
+                if (std::holds_alternative<ConstrainedType>(parameter->kind))
+                    return 0;
+                // A trait may reach here as a plain named type rather than a
+                // constrained one; `Showable` is a bound, not a concrete type.
+                if (const auto* named = std::get_if<NamedType>(&parameter->kind);
+                    named && isTrait(named->name))
+                    return 0;
+                if (std::holds_alternative<TypeVar>(parameter->kind) ||
+                    std::holds_alternative<UnknownType>(parameter->kind))
+                    return 1;
+                return 2;
+            };
+            std::stable_sort(fullMatches.begin(), fullMatches.end(),
+                             [&](const Signature* left, const Signature* right) {
+                                 return rank(left) < rank(right);
+                             });
+        }
+    }
+
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
         if (std::getenv("KEX_DEBUG_SIG") && name == "to") {
@@ -5437,6 +5538,26 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         ambiguousReceiver = true;
                         break;
                     }
+            // Overloads that DISAGREE about what the receiver is are no
+            // evidence about it either, even when they share a backend module
+            // — the checks above only notice ambiguity across modules. Without
+            // this, `x.to(String)` on an unconstrained `x` bound it to Measure
+            // because units.kex's `to` happened to sort first, and
+            // `let show(x) = x.to(String)` inferred as `Measure -> String`,
+            // rejecting `show(42)`.
+            if (!ambiguousReceiver && receiverUnknown && fullMatches.size() > 1) {
+                std::string receiverType;
+                for (const auto* candidate : fullMatches) {
+                    if (candidate->params.empty()) continue;
+                    auto current = typeToString(resolve(candidate->params[0]));
+                    if (receiverType.empty()) {
+                        receiverType = std::move(current);
+                    } else if (receiverType != current) {
+                        ambiguousReceiver = true;
+                        break;
+                    }
+                }
+            }
             if (resolved) {
                 bool resolvedFoul = resolved->signature.isFoul;
                 if (m_importedInterfaces)

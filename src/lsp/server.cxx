@@ -422,6 +422,31 @@ auto sourceLocalDefinition(const std::string& source, const std::string& path,
     return std::nullopt;
 }
 
+// Byte offset of a 1-based line/column, and the inverse. Both appear inline in
+// several places already; these are for callers that need to walk the source
+// from a node's position and then report what they found.
+auto offsetOfLocation(const std::string& source, const SourceLocation& location)
+    -> size_t {
+    if (location.line < 1 || location.column < 1) return std::string::npos;
+    size_t offset = 0;
+    for (int line = 1; line < location.line; ++line) {
+        const auto newline = source.find('\n', offset);
+        if (newline == std::string::npos) return std::string::npos;
+        offset = newline + 1;
+    }
+    offset += static_cast<size_t>(location.column - 1);
+    return offset > source.size() ? std::string::npos : offset;
+}
+
+auto locationOfOffset(const std::string& source, size_t offset)
+    -> std::pair<unsigned int, unsigned int> {
+    unsigned int line = 1;
+    size_t lineStart = 0;
+    for (size_t i = 0; i < offset && i < source.size(); ++i)
+        if (source[i] == '\n') { ++line; lineStart = i + 1; }
+    return {line, static_cast<unsigned int>(offset - lineStart) + 1};
+}
+
 auto identifierLengthAt(const std::string& source, const SourceLocation& location)
     -> unsigned int {
     if (location.line < 1 || location.column < 1) return 0;
@@ -645,6 +670,26 @@ auto documentationBeforeSource(std::string_view source,
         if (first == std::string_view::npos || line[first] != '#') break;
         line.remove_prefix(first + 1);
         if (!line.empty() && line.front() == ' ') line.remove_prefix(1);
+        // A section banner separates groups of declarations for a reader; it
+        // documents none of them. Collected as documentation it became the
+        // first line of a hover — the type `Integer` answered with a rule and
+        // a paragraph about durations, because time.kex's `make Integer do`
+        // sits under one. A banner ends the walk rather than joining it.
+        const auto isBanner = [](std::string_view text) {
+            size_t rule = 0;
+            for (size_t i = 0; i < text.size(); ++i) {
+                // The box-drawing dash is three bytes in UTF-8; count its lead
+                // byte only, so a run of them outweighs the title beside it.
+                if (static_cast<unsigned char>(text[i]) == 0xE2) {
+                    ++rule;
+                    i += 2;
+                } else if (text[i] == '-' || text[i] == '=' || text[i] == '_') {
+                    ++rule;
+                }
+            }
+            return rule >= 8;
+        };
+        if (isBanner(line)) break;
         docs.emplace_back(line);
     }
     std::reverse(docs.begin(), docs.end());
@@ -777,6 +822,22 @@ auto documentedDeclarationName(std::string_view line) -> std::string {
     return std::string(name);
 }
 
+// A comment that is mostly rule characters: `# ── Durations ─────────`. The
+// box-drawing dash is three bytes in UTF-8, so only its lead byte is counted —
+// a run of them then outweighs the title sitting beside it.
+auto isDocumentationBanner(std::string_view text) -> bool {
+    size_t rule = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        if (static_cast<unsigned char>(text[i]) == 0xE2) {
+            ++rule;
+            i += 2;
+        } else if (text[i] == '-' || text[i] == '=' || text[i] == '_') {
+            ++rule;
+        }
+    }
+    return rule >= 8;
+}
+
 auto sourceDocumentation(const std::string& source)
     -> std::unordered_map<std::string, std::vector<std::string>> {
     std::unordered_map<std::string, std::vector<std::string>> result;
@@ -789,6 +850,15 @@ auto sourceDocumentation(const std::string& source)
             auto comment = line.substr(first + 1);
             if (!comment.empty() && comment.front() == ' ')
                 comment.erase(0, 1);
+            // A section banner documents nothing — it separates groups of
+            // declarations for a reader. Kept, it became the opening line of a
+            // hover: the type `Integer` answered with a rule and a paragraph
+            // about durations, because time.kex's `make Integer do` sits under
+            // one. Anything gathered above it belongs to the previous section.
+            if (isDocumentationBanner(comment)) {
+                pending.clear();
+                continue;
+            }
             pending.push_back(std::move(comment));
             continue;
         }
@@ -2040,10 +2110,31 @@ private:
                 semantic::Signature display;
                 display.name = binding.name;
                 display.result = binding.type;
+                // The recorded position is the binding's own for a pattern,
+                // but only an ANCHOR for a block parameter — `{ |x| … }` marks
+                // the block, since a LambdaParam has no location. When the
+                // anchor does not sit on the name, find it in the `|…|` list
+                // that follows.
+                auto line = static_cast<unsigned int>(binding.location.line);
+                auto column = static_cast<unsigned int>(binding.location.column);
+                if (auto offset = offsetOfLocation(document.text,
+                                                   binding.location);
+                    offset != std::string::npos &&
+                    document.text.compare(offset, binding.name.size(),
+                                          binding.name) != 0) {
+                    const auto lineEnd = document.text.find('\n', offset);
+                    const auto limit = lineEnd == std::string::npos
+                        ? document.text.size() : lineEnd;
+                    const auto found =
+                        document.text.find(binding.name, offset);
+                    if (found == std::string::npos || found >= limit) continue;
+                    const auto position = locationOfOffset(document.text, found);
+                    line = position.first;
+                    column = position.second;
+                }
                 document.hoverEntries.push_back({
-                    .line = static_cast<unsigned int>(binding.location.line),
-                    .byteColumn =
-                        static_cast<unsigned int>(binding.location.column),
+                    .line = line,
+                    .byteColumn = column,
                     .byteLength = static_cast<unsigned int>(binding.name.size()),
                     .detail = analyzer.displaySignature(binding.name, display),
                     .completeDetail = true,
@@ -2364,7 +2455,7 @@ private:
             if (completionDocs) {
                 std::string documentation;
                 for (const auto& entry : *completionDocs) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
                 item.documentation = ::lsp::OneOf<::lsp::String,
@@ -2426,11 +2517,13 @@ private:
             hoverLineStart = newline + 1;
         }
         const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
-        const bool lexicalReference = !resolvedSymbolAtPosition &&
-            moduleQualifier.empty() &&
-            sourceLocalDefinition(
-                document.text, document.path, word.text,
-                hoverWordOffset ? hoverWordOffset - 1 : 0).has_value();
+        const auto localDefinition =
+            (!resolvedSymbolAtPosition && moduleQualifier.empty())
+                ? sourceLocalDefinition(
+                      document.text, document.path, word.text,
+                      hoverWordOffset ? hoverWordOffset - 1 : 0)
+                : std::nullopt;
+        const bool lexicalReference = localDefinition.has_value();
         const bool symbolDefinitionAtPosition = symbol &&
             symbol->definition.file == document.path &&
             symbol->definition.line == static_cast<int>(params.position.line + 1) &&
@@ -2613,7 +2706,12 @@ private:
                 detail = importedConstructorDetail(*constructorAdt, word.text);
         }
 
-        if (detail.empty()) {
+        // A LOCAL binding shadows anything imported under the same name, so
+        // its signatures are not an answer about this word. `let name =
+        // json["name"].or(unknown)` hovered as `name : Weekday -> String`,
+        // with OptionParser's prose about `kex install` attached, because a
+        // module exports a `name` and the imported lookup ran first.
+        if (detail.empty() && !lexicalReference) {
             std::vector<std::pair<semantic::Signature, bool>> importedSignatures;
             if (!moduleQualifier.empty()) {
                 if (auto module = m_interfaces.modules.find(moduleQualifier);
@@ -2669,7 +2767,7 @@ private:
                     for (const auto& entry : docs->second) {
                         if (documentation.find(entry) != std::string::npos)
                             continue;
-                        if (!documentation.empty()) documentation += "\n\n---\n\n";
+                        if (!documentation.empty()) documentation += "\n\n";
                         documentation += entry;
                     }
             }
@@ -2694,6 +2792,21 @@ private:
                 documentation.clear();
             }
         }
+        // Nothing typed this occurrence — an identifier inside a string
+        // interpolation (`"${name}"`) never reaches the type map at all — but
+        // its local definition was found, and THAT was typed. Answer with what
+        // the binding says rather than the bare word "function name".
+        if (detail.empty() && localDefinition)
+            for (const auto& entry : document.hoverEntries)
+                if (entry.line ==
+                        static_cast<unsigned int>(localDefinition->line) &&
+                    entry.byteColumn ==
+                        static_cast<unsigned int>(localDefinition->column)) {
+                    detail = entry.completeDetail
+                        ? entry.detail
+                        : word.text + " : " + entry.detail;
+                    break;
+                }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
             if (symbol->kind == semantic::SymbolKind::Module) kind = "module";
@@ -2721,7 +2834,7 @@ private:
                     docs != m_standardDocumentation.end()) {
                     documentation.clear();
                     for (const auto& entry : docs->second) {
-                        if (!documentation.empty()) documentation += "\n\n---\n\n";
+                        if (!documentation.empty()) documentation += "\n\n";
                         documentation += entry;
                     }
                 }
@@ -2731,7 +2844,7 @@ private:
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
         if (documentation.empty() && !lexicalReference && !recordField &&
@@ -2741,7 +2854,7 @@ private:
             if (auto docs = m_standardDocumentation.find(standardName);
                 docs != m_standardDocumentation.end())
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
         }
