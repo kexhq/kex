@@ -4,7 +4,12 @@
 # with an advanced cursor. Failure leaves the caller free to try an alternative.
 module Parsing
 
-type ParseError = Unexpected(String, Integer) | NoMatch(Integer)
+# `Expected` carries what the grammar WANTED rather than what it found — the
+# difference between "unexpected `d`" and "expected `version(`". It is what
+# `label` and `string` report.
+type ParseError = Unexpected(String, Integer)
+                | Expected(String, Integer)
+                | NoMatch(Integer)
 
 record Input do
   input : String
@@ -69,6 +74,38 @@ make Input do
     let (first, p) = f(this).try
     let (rest, advanced) = p.many(f)
     Ok(([first, ...rest], advanced))
+  end
+
+  # An exact literal. A keyword grammar is mostly literals — `version(` is one
+  # token to a reader and eight calls to `char` — and matching it here reports
+  # the failure at the START of the literal, which is where a person looking at
+  # the error expects the caret.
+  let string(expected: String) -> (String, Input) or! ParseError do
+    let wanted = expected.chars
+    var index = 0
+    loop
+      break if index >= wanted.count
+      return Error(Expected(expected, @pos)) if this.peekAt(index) != Just(wanted.at(index))
+      index = index + 1
+    end
+    Ok((expected, this.advanceBy(wanted.count)))
+  end
+
+  # Every character while +pred+ holds, as a String. `many(charWhen(...))` gives
+  # a [Char] the caller has to join, and a run of characters is almost always
+  # wanted as text. Cannot fail: an empty run is an empty String, which is what
+  # makes it safe for the optional parts of a grammar.
+  let takeWhile(pred: Char -> Bool) -> (String, Input) do
+    var cursor = this
+    var collected: [Char] = []
+    loop
+      break if cursor.peek == None
+      let Just(c) = cursor.peek
+      break if !pred(c)
+      collected.push!(c)
+      cursor.advance!
+    end
+    return (collected.join(""), cursor)
   end
 
   let choice(alts: [Input -> Result<(T, Input), ParseError>]) -> (T, Input) or! ParseError do
