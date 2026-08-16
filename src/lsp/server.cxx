@@ -48,12 +48,13 @@ struct Document {
     // and a chain continued on the next line do not, because there is no name
     // to look up. These spans answer positionally instead, which is what a
     // call result or a multi-line builder chain needs.
-    struct ReceiverSpan {
-        unsigned int line = 0;        // 0-based, as LSP positions are
-        unsigned int endByteColumn = 0;  // one past the expression's last byte
-        unsigned int byteLength = 0;
-        std::string qualifier;
-    };
+    // Where a completable expression STARTS -> what to complete against.
+    // Keyed by start because that is what the AST records (nodes carry no end
+    // position) and what a backwards scan from the cursor can recover.
+    static auto receiverKey(unsigned int line, unsigned int byteColumn)
+        -> uint64_t {
+        return (static_cast<uint64_t>(line) << 32) | byteColumn;
+    }
 
     std::string path;
     std::string text;
@@ -61,7 +62,12 @@ struct Document {
     std::vector<HoverEntry> hoverEntries;
     std::vector<HoverEntry> selectedCallEntries;
     std::unordered_map<std::string, std::string> localReceiverTypes;
-    std::vector<ReceiverSpan> receiverSpans;
+    std::unordered_map<uint64_t, std::string> receiverSpans;
+    // Receivers that needed the full re-analysis, by start offset. A call
+    // result (`Date.of(2026, 7, 30).weekday`) has no recorded span, and an
+    // editor asks about the same site repeatedly — once per keystroke during
+    // completion. Dropped whenever the text changes, so it cannot go stale.
+    mutable std::unordered_map<size_t, std::string> recoveredReceivers;
     std::unordered_map<std::string, std::vector<std::string>> documentation;
 };
 
@@ -193,8 +199,24 @@ auto protocolPosition(const SourceLocation& location,
     };
 }
 
+// Forward-declared: the token length lives further down, next to the other
+// source helpers.
+auto identifierLengthAt(const std::string& source, const SourceLocation& location)
+    -> unsigned int;
+
+// Where a diagnostic's squiggle ends when the checker reported only a start.
+// One character was all it ever underlined, so an error about `parseValue`
+// marked a single letter — usually the last one the eye lands on — and said
+// nothing about which name it meant. An identifier is underlined whole.
 auto pointEnd(const SourceLocation& location,
               const std::string* source = nullptr) -> ::lsp::Position {
+    if (source)
+        if (const auto length = identifierLengthAt(*source, location);
+            length > 1) {
+            SourceLocation end = location;
+            end.column += static_cast<int>(length);
+            return protocolPosition(end, source);
+        }
     auto start = protocolPosition(location, source);
     ++start.character;
     return start;
@@ -1223,6 +1245,109 @@ auto recordFieldType(const std::string& recordDetail, const std::string& field)
     return {};
 }
 
+// Whether the word at this position is a KEY in a map literal (`{ name: "Ada" }`)
+// rather than a reference to anything. A key is an atom, and it declares
+// nothing — but a name-based lookup happily found a same-named export and
+// answered with its signature and prose: `name` reported OptionParser's
+// documentation about `kex install`.
+auto isMapKeyPosition(const std::string& source, unsigned int line,
+                      unsigned int byteColumn, size_t wordLength) -> bool {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return false;
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return false;
+    const size_t start = lineStart + byteColumn - 1;
+    size_t after = start + wordLength;
+    while (after < source.size() && source[after] == ' ') ++after;
+    // `name:` — but not `name ::` or a `?:` conditional.
+    if (after >= source.size() || source[after] != ':') return false;
+    // Not `::`, and not the `:>` of a method declaration.
+    if (after + 1 < source.size() &&
+        (source[after + 1] == ':' || source[after + 1] == '>'))
+        return false;
+    size_t before = start;
+    while (before > lineStart && source[before - 1] == ' ') --before;
+    if (before == lineStart) return false;
+    const char opener = source[before - 1];
+    return opener == '{' || opener == ',';
+}
+
+// The record a `{ … }` literal names, for a key at this position — `User` in
+// `User { name: "Alice" }`. Empty for a plain map literal, whose keys really
+// are atoms. Only the same line is examined; a literal opened on an earlier
+// line simply falls back to the map reading.
+auto literalRecordName(const std::string& source, unsigned int line,
+                       unsigned int byteColumn) -> std::string {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return {};
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return {};
+    size_t i = lineStart + byteColumn - 1;
+    // Back to the `{` that opened this literal, past any earlier `key: value,`.
+    while (i > lineStart && source[i - 1] != '{') --i;
+    if (i == lineStart || source[i - 1] != '{') return {};
+    size_t brace = i - 1;
+    while (brace > lineStart && source[brace - 1] == ' ') --brace;
+    const size_t nameEnd = brace;
+    while (brace > lineStart &&
+           (std::isalnum(static_cast<unsigned char>(source[brace - 1])) ||
+            source[brace - 1] == '_' || source[brace - 1] == '.'))
+        --brace;
+    if (brace == nameEnd) return {};
+    auto name = source.substr(brace, nameEnd - brace);
+    // A record name is capitalised; anything else is not a record literal.
+    if (name.empty() || !std::isupper(static_cast<unsigned char>(name.front())))
+        return {};
+    return name;
+}
+
+// `size : Integer` in a record body declares a field. Like a map key it is not
+// a reference, so the same name-based lookup answered with an unrelated
+// export — hovering `size` reported `foul size : String -> Integer?`. Returns
+// the declared type as written, or empty when this is not such a line.
+auto declaredFieldType(const std::string& source, unsigned int line,
+                       unsigned int byteColumn, size_t wordLength)
+    -> std::string {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return {};
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return {};
+    const size_t start = lineStart + byteColumn - 1;
+    // Nothing but indentation may precede it: an expression that happens to
+    // contain `x : y` is not a declaration.
+    for (size_t i = lineStart; i < start; ++i)
+        if (source[i] != ' ' && source[i] != '\t') return {};
+    size_t after = start + wordLength;
+    while (after < source.size() && source[after] == ' ') ++after;
+    if (after >= source.size() || source[after] != ':') return {};
+    // `push :> X -> [X]` DECLARES a method, not a field: taking the text after
+    // the colon there produced the nonsense `push : > X -> [X]`.
+    if (after + 1 < source.size() &&
+        (source[after + 1] == ':' || source[after + 1] == '>'))
+        return {};
+    ++after;
+    while (after < source.size() && source[after] == ' ') ++after;
+    const auto lineEnd = source.find('\n', after);
+    auto text = source.substr(after, (lineEnd == std::string::npos
+                                          ? source.size() : lineEnd) - after);
+    // A default value is not part of the type: `count : Integer = 0`.
+    if (const auto equals = text.find('='); equals != std::string::npos)
+        text = text.substr(0, equals);
+    while (!text.empty() &&
+           std::isspace(static_cast<unsigned char>(text.back())))
+        text.pop_back();
+    return text;
+}
+
 // Module names this file opted into with `using`. Read from the text rather
 // than the AST so it still answers while the buffer is mid-edit and cannot be
 // parsed — which is exactly when an editor asks about a symbol.
@@ -1262,6 +1387,11 @@ auto documentImports(const std::string& source)
 struct DotReceiver {
     size_t start = 0;  // first byte of the receiver expression
     size_t dot = 0;    // the '.' the member being typed hangs off
+    // Where the AST records the OUTERMOST expression of the receiver. A call
+    // is recorded at its argument list's `(`, not at the receiver it hangs
+    // off: in a builder chain `Web.Server.new(0)\n  .get("/", ~h)` the last
+    // `.get(…)` call sits at that `(`. Zero when the receiver ends in no call.
+    size_t callOpen = 0;
     bool valid = false;
 };
 
@@ -1295,6 +1425,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
     if (i == 0 || source[i - 1] != '.') return {};
     const size_t dot = i - 1;
 
+    size_t callOpen = 0;
     i = skipSpaceBack(dot);
     while (i > 0) {
         const char c = source[i - 1];
@@ -1303,6 +1434,7 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         if (c == ')' || c == ']') {
             const size_t open = matchOpen(i, c, c == ')' ? '(' : '[');
             if (open == std::string::npos) return {};
+            if (c == ')' && callOpen == 0) callOpen = open;
             i = open;
             continue;
         }
@@ -1317,13 +1449,18 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
         }
         if (!isWord(static_cast<unsigned char>(c))) break;
         while (i > 0 && isWord(static_cast<unsigned char>(source[i - 1]))) --i;
+        // `@size` is one expression and the AST records it starting at the
+        // `@`. Stopping at the sigil pointed one byte too far right, so the
+        // recorded type could not be found and every `@field.method` fell back
+        // to re-analyzing the whole buffer.
+        if (i > 0 && source[i - 1] == '@') --i;
         // A dot here means the chain continues leftwards: `Web.Server.new(0)`.
         const size_t before = skipSpaceBack(i);
         if (before == 0 || source[before - 1] != '.') break;
         i = skipSpaceBack(before - 1);
     }
     if (i >= dot) return {};
-    return {.start = i, .dot = dot, .valid = true};
+    return {.start = i, .dot = dot, .callOpen = callOpen, .valid = true};
 }
 
 // The type of an arbitrary receiver expression, by re-parsing the buffer with
@@ -1332,38 +1469,124 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
 auto recoveredReceiverQualifier(
     const std::string& source, const std::string& path,
     const DotReceiver& receiver, size_t cursor,
-    const semantic::ImportedInterfaces* interfaces) -> std::string {
+    const semantic::ImportedInterfaces* interfaces,
+    const std::vector<std::string>& moduleRoots) -> std::string {
     if (!receiver.valid || cursor < receiver.dot) return {};
     auto recovered = source;
     recovered.erase(receiver.dot, cursor - receiver.dot);
-    Lexer lexer(recovered, path);
-    Parser parser(lexer.tokenizeAll(), path);
-    auto program = parser.parseProgram();
-    if (!parser.diagnostics().empty()) return {};
+    // Through a SemanticDB with the file's own module roots, not a bare
+    // parse: `using Web` is resolved by loading that module's source, and
+    // without it every type from an opt-in module came back `unknown` — so a
+    // builder chain on `Web.Server` completed to nothing while the same shape
+    // on a local record worked. Kept between calls so the module sources are
+    // parsed once rather than per keystroke.
+    static semantic::SemanticDB recoveryDb;
+    recoveryDb.setImportedInterfaces(interfaces);
+    recoveryDb.setModuleRoots(moduleRoots);
+    recoveryDb.updateFile(path, recovered);
+    auto* state = recoveryDb.fileState(path);
+    if (!state) return {};
     semantic::Analyzer analyzer(interfaces);
-    analyzer.analyze(program);
+    analyzer.analyze(state->ast);
+    const auto& program = state->ast;
+    (void)program;
 
     // Everything before the deletion keeps its position, so the receiver's
-    // line/column are the ones it had in the original buffer.
-    int line = 1;
-    size_t lineStart = 0;
-    for (size_t i = 0; i < receiver.start; ++i)
-        if (source[i] == '\n') { ++line; lineStart = i + 1; }
-    const int column = static_cast<int>(receiver.start - lineStart) + 1;
+    // line/column are the ones it had in the original buffer. A CALL is
+    // recorded at its argument list's `(`, so a builder chain
+    // (`Web.Server.new(0).get(…).post(…)`) has nothing at all at the start of
+    // the receiver — that position is where `Web` is, and the chain's own type
+    // lives at the last call's paren.
+    const auto positionOf = [&](size_t offset) {
+        int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < offset; ++i)
+            if (source[i] == '\n') { ++line; lineStart = i + 1; }
+        return std::pair<int, int>{
+            line, static_cast<int>(offset - lineStart) + 1};
+    };
+    std::vector<std::pair<int, int>> candidates;
+    if (receiver.callOpen) candidates.push_back(positionOf(receiver.callOpen));
+    candidates.push_back(positionOf(receiver.start));
 
     // Several expressions can start at one column — `makeBox` the identifier
     // and `makeBox(3)` the call both start at `m`. Only the call has a type
     // worth completing against, so take the first that yields a qualifier.
-    for (const auto& [expression, _] : analyzer.typeMap()) {
-        if (!expression || expression->location.line != line ||
-            expression->location.column != column)
-            continue;
-        if (auto qualifier =
-                completionQualifierForType(analyzer.displayTypeOf(expression));
-            !qualifier.empty())
-            return qualifier;
-    }
+    for (const auto& [candidateLine, candidateColumn] : candidates)
+        for (const auto& [expression, _] : analyzer.typeMap()) {
+            if (!expression || expression->location.line != candidateLine ||
+                expression->location.column != candidateColumn)
+                continue;
+            if (auto qualifier =
+                    completionQualifierForType(analyzer.displayTypeOf(expression));
+                !qualifier.empty())
+                return qualifier;
+        }
     return {};
+}
+
+// The receiver's type, cheaply where possible. `recoveredReceiverQualifier`
+// re-lexes, re-parses and re-analyzes the WHOLE buffer, which is fine once but
+// not per keystroke: hovering in a 900-line file cost ~18ms a request, all of
+// it that re-analysis. A receiver that is a plain identifier already has its
+// type recorded from the last good analysis, so answer from that map first and
+// keep the re-analysis for receivers it cannot describe — a call result, an
+// index, a chain.
+template <typename Document>
+auto receiverQualifier(const Document& document, const DotReceiver& receiver,
+                       size_t cursor,
+                       const semantic::ImportedInterfaces* interfaces,
+                       const std::vector<std::string>& moduleRoots)
+    -> std::string {
+    if (!receiver.valid) return {};
+    // The last good analysis already typed this expression; find it by where
+    // it starts.
+    const auto spanAt = [&](size_t offset) -> std::string {
+        unsigned int line = 1;
+        size_t lineStart = 0;
+        for (size_t i = 0; i < offset; ++i)
+            if (document.text[i] == '\n') { ++line; lineStart = i + 1; }
+        auto span = document.receiverSpans.find(Document::receiverKey(
+            line, static_cast<unsigned int>(offset - lineStart) + 1));
+        return span == document.receiverSpans.end() ? std::string{} : span->second;
+    };
+    // The call's `(` first: for a chain that is where the OUTERMOST expression
+    // is recorded, and its type is the one being completed against. The
+    // receiver's start answers the plain `identifier.` case.
+    if (receiver.callOpen)
+        if (auto qualifier = spanAt(receiver.callOpen); !qualifier.empty())
+            return qualifier;
+    if (auto qualifier = spanAt(receiver.start); !qualifier.empty())
+        return qualifier;
+
+
+    const auto text = document.text.substr(receiver.start,
+                                           receiver.dot - receiver.start);
+    // A literal receiver needs no analysis to type: `36.hours` is an Integer
+    // with a method on it, and time.kex is full of them. They were the bulk of
+    // the misses that fell through to re-analysis.
+    if (!text.empty()) {
+        if (text.front() == '"') return "String";
+        if (std::isdigit(static_cast<unsigned char>(text.front()))) {
+            const bool fractional = text.find('.') != std::string::npos;
+            return fractional ? "Float" : "Integer";
+        }
+    }
+    if (!text.empty() &&
+        text.find_first_of(" \t\n()[]{}.\"'`") == std::string::npos)
+        if (auto known = document.localReceiverTypes.find(text);
+            known != document.localReceiverTypes.end() && !known->second.empty())
+            return known->second;
+    // Nothing recorded — the buffer may not have parsed since this expression
+    // was written. Re-analyze with the half-typed member removed, once.
+    if (auto cached = document.recoveredReceivers.find(receiver.start);
+        cached != document.recoveredReceivers.end())
+        return cached->second;
+    auto recovered = recoveredReceiverQualifier(document.text, document.path,
+                                                receiver, cursor, interfaces,
+                                                moduleRoots);
+    document.recoveredReceivers.insert_or_assign(receiver.start, recovered);
+    return recovered;
 }
 
 auto recoveredDotReceiverQualifier(
@@ -1431,10 +1654,11 @@ void enrichFunctionSymbols(semantic::FileState& state,
 
 class Server {
 public:
-    Server(std::istream& input, std::ostream& output)
+    Server(std::istream& input, std::ostream& output,
+           const std::string& runtimeBeamDir)
         : m_stream(input, output), m_connection(m_stream),
           m_handler(m_connection, 0),
-          m_interfaces(preludeSemanticInterfaces("")),
+          m_interfaces(preludeSemanticInterfaces(runtimeBeamDir)),
           m_standardDocumentation(standardLibraryDocumentation()),
           m_standardParameterNames(standardLibraryParameterNames()) {
         m_db.setImportedInterfaces(&m_interfaces);
@@ -1651,6 +1875,7 @@ private:
         auto& document = m_documents[key];
         auto previousReceiverTypes = std::move(document.localReceiverTypes);
         document = {path, std::move(text), version};
+        document.recoveredReceivers.clear();
         // Keep the last valid receiver types while the user is typing syntax
         // that temporarily cannot be parsed, most notably the trailing dot
         // that triggers member completion.
@@ -1675,10 +1900,25 @@ private:
             enrichFunctionSymbols(*state, analyzer);
             document.hoverEntries.clear();
             document.selectedCallEntries.clear();
-            if (analyzed) document.localReceiverTypes.clear();
+            if (analyzed) {
+                document.localReceiverTypes.clear();
+                document.receiverSpans.clear();
+            }
             for (const auto& [expression, _] : analyzer.typeMap()) {
                 if (!expression || expression->location.file != document.path)
                     continue;
+                // Every expression that could be completed against, by where
+                // it starts. Answering a member completion from this costs a
+                // hash lookup; re-deriving it by re-analyzing the buffer cost
+                // ~18ms a keystroke in a 900-line file.
+                if (auto spanQualifier =
+                        completionQualifierForType(analyzer.displayTypeOf(expression));
+                    !spanQualifier.empty())
+                    document.receiverSpans.insert_or_assign(
+                        Document::receiverKey(
+                            static_cast<unsigned int>(expression->location.line),
+                            static_cast<unsigned int>(expression->location.column)),
+                        std::move(spanQualifier));
                 if (const auto* binding =
                         std::get_if<ast::LetExpr>(&expression->kind);
                     binding && binding->pattern && binding->value) {
@@ -1943,9 +2183,9 @@ private:
                     text, lineStart, lineEnd, params.position.character);
                 if (const auto receiver = scanDotReceiver(text, cursor);
                     receiver.valid) {
-                    if (auto qualifier = recoveredReceiverQualifier(
-                            text, found->second.path, receiver, cursor,
-                            &m_interfaces);
+                    if (auto qualifier = receiverQualifier(
+                            found->second, receiver, cursor, &m_interfaces,
+                            moduleRootsFor(found->second.path));
                         !qualifier.empty()) {
                         query.dbQuery = qualifier + "." +
                             text.substr(receiver.dot + 1,
@@ -2256,9 +2496,9 @@ private:
                                  word.byteLength;
             if (const auto receiver = scanDotReceiver(document.text, wordEnd);
                 receiver.valid)
-                if (auto qualifier = recoveredReceiverQualifier(
-                        document.text, document.path, receiver, wordEnd,
-                        &m_interfaces);
+                if (auto qualifier = receiverQualifier(
+                        document, receiver, wordEnd, &m_interfaces,
+                        moduleRootsFor(document.path));
                     !qualifier.empty())
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
@@ -2271,8 +2511,35 @@ private:
         // Documentation is looked up by BARE NAME, so a field must not take
         // it: `user.name` showed the right type and then OptionParser's prose
         // about `kex install`, because that module happens to export a `name`.
+        const bool mapKey = isMapKeyPosition(document.text,
+                                             params.position.line + 1,
+                                             word.byteColumn, word.byteLength);
         const bool recordField = !fieldDetail.empty();
-        if (recordField) {
+        const auto fieldDeclaration = mapKey
+            ? std::string{}
+            : declaredFieldType(document.text, params.position.line + 1,
+                                word.byteColumn, word.byteLength);
+        if (mapKey) {
+            // In a RECORD literal the key is that record's field, so it has a
+            // declared type; in a map literal it is genuinely an atom.
+            detail.clear();
+            if (const auto record = literalRecordName(
+                    document.text, params.position.line + 1, word.byteColumn);
+                !record.empty())
+                if (const auto* declaration =
+                        m_db.findSymbol(record, document.path);
+                    declaration &&
+                    declaration->kind == semantic::SymbolKind::Record)
+                    if (auto type = recordFieldType(declaration->detail,
+                                                    word.text);
+                        !type.empty())
+                        detail = word.text + " : " + type;
+            if (detail.empty()) detail = word.text + " : Atom";
+            symbol = nullptr;
+        } else if (!fieldDeclaration.empty()) {
+            detail = word.text + " : " + fieldDeclaration;
+            symbol = nullptr;
+        } else if (recordField) {
             detail = std::move(fieldDetail);
             symbol = nullptr;
         } else if (importLine) {
@@ -2407,11 +2674,25 @@ private:
                     }
             }
         }
+        // Whether what is being shown came from a DECLARATION of this name
+        // rather than from the type of the expression sitting here. A map
+        // key, a local, a pattern binding: their type is the answer, but they
+        // declare nothing, so documentation must not be attached by name — a
+        // key called `name` was picking up OptionParser's prose about
+        // `kex install`.
+        bool detailFromExpression = false;
         if (detail.empty()) {
-            if (expressionHover)
+            if (expressionHover) {
                 detail = expressionHover->completeDetail
                     ? expressionHover->detail
                     : word.text + " : " + expressionHover->detail;
+                detailFromExpression = true;
+                // Anything gathered above belonged to a same-named DECLARATION
+                // that this expression is not. The lookups run before the
+                // answer is known, so the prose has to be dropped here rather
+                // than skipped there.
+                documentation.clear();
+            }
         }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
@@ -2445,14 +2726,16 @@ private:
                     }
                 }
         }
-        if (documentation.empty() && !recordField)
+        if (documentation.empty() && !recordField && !mapKey &&
+            fieldDeclaration.empty() && !detailFromExpression)
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
                     if (!documentation.empty()) documentation += "\n\n---\n\n";
                     documentation += entry;
                 }
-        if (documentation.empty() && !lexicalReference && !recordField) {
+        if (documentation.empty() && !lexicalReference && !recordField &&
+            !mapKey && fieldDeclaration.empty() && !detailFromExpression) {
             const auto standardName = moduleQualifier.empty()
                 ? lookupName : moduleQualifier + "." + lookupName;
             if (auto docs = m_standardDocumentation.find(standardName);
@@ -2847,9 +3130,10 @@ private:
 
 } // namespace
 
-auto run(std::istream& input, std::ostream& output) -> int {
+auto run(std::istream& input, std::ostream& output,
+         const std::string& runtimeBeamDir) -> int {
     try {
-        return Server(input, output).run();
+        return Server(input, output, runtimeBeamDir).run();
     } catch (const std::exception& error) {
         std::cerr << "kex --lsp: " << error.what() << '\n';
         return 1;

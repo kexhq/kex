@@ -335,6 +335,36 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                     if (!overloads.empty() && name.rfind(memberPrefix, 0) == 0)
                         results.push_back(qualifier + "." + name);
             }
+            // Instance methods of a type that came from a COMPILED interface.
+            // The branch above offers a module's exports, which covers static
+            // members (`Web.Server.new`), but a `make Server do` block inside
+            // `module Web` lands in the name-indexed receiver table instead —
+            // so `Web.Server.` offered nothing for `get`/`post`/`start`, and a
+            // builder chain on such a type completed to nothing at all.
+            for (const auto& [name, overloads] : m_imports->receiverFunctions) {
+                if (name.rfind(memberPrefix, 0) != 0) continue;
+                for (const auto& overload : overloads) {
+                    if (overload.signature.params.empty()) continue;
+                    const auto receiver =
+                        typeToString(overload.signature.params.front());
+                    // A value of this type reports it QUALIFIED
+                    // (`Web.Server`), while the interface records the receiver
+                    // as written inside its own module (`Server`). The owning
+                    // module cannot be joined back on to compare them: every
+                    // standard-library export carries sourceModule "Prelude",
+                    // not "Web". So the last segment is what there is to match
+                    // on. Two modules each declaring a `Server` would offer
+                    // each other's methods here — acceptable for a completion
+                    // list, and the alternative today is offering nothing at
+                    // all for any module-qualified type.
+                    const auto tail = qualifier.rfind('.') == std::string::npos
+                        ? qualifier : qualifier.substr(qualifier.rfind('.') + 1);
+                    const bool matches = receiver == qualifier || receiver == tail;
+                    if (!matches) continue;
+                    results.push_back(qualifier + "." + name);
+                    break;
+                }
+            }
             const auto nestedPrefix = qualifier + ".";
             for (const auto& [moduleName, interface] : m_imports->modules) {
                 if (moduleName.rfind(nestedPrefix, 0) != 0) continue;

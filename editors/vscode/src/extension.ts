@@ -56,7 +56,21 @@ export function activate(context: vscode.ExtensionContext): void {
       context.subscriptions.push(executableWatcher);
     }
   }
-  void client.start();
+  void client.start().then(undefined, error => {
+    // Spawn failures land here as a 127-ish spawn error (ENOENT on macOS/
+    // Linux). Getting the user from "installed the extension" to "installed
+    // a compiler" is the one actionable message, so say it plainly instead
+    // of leaving the failure buried in the output channel.
+    const message = String(error?.message ?? error);
+    void vscode.window.showErrorMessage(
+      `Kex language server failed to start: ${message}. Install a Kex with 'brew install kexhq/tey/tey' (then run 'Kex: Restart Language Server'), or set kex.executablePath.`,
+      'Restart Language Server',
+    ).then(choice => {
+      if (choice === 'Restart Language Server') {
+        restartLanguageServer();
+      }
+    });
+  });
 }
 
 export function deactivate(): Thenable<void> | undefined {

@@ -5620,6 +5620,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                         args.push_back(applyGenerics(arg));
                     return Type::named(named->name, std::move(args));
                 }
+                // A function-typed parameter is where a BLOCK is passed, and
+                // without this its variables were the only ones left standing:
+                // `nums.map { |x| x * 2 }` reported the selected overload as
+                // `[Integer] -> (A -> B) -> [Integer]`, substituting the
+                // receiver and result but not the block it was actually given.
+                if (auto* function = std::get_if<FuncType>(&type->kind)) {
+                    std::vector<TypePtr> params;
+                    for (const auto& param : function->params)
+                        params.push_back(applyGenerics(param));
+                    return Type::func(std::move(params),
+                                      applyGenerics(function->result));
+                }
                 return type;
             };
         auto selectedResult = applyGenerics(matched.result);
