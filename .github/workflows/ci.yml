@@ -15,11 +15,17 @@ on:
 
 # One run per branch. Pushing a fixup while the previous run is still going
 # cancels that one instead of queueing behind it — the older run is testing a
-# commit nobody will merge. Not applied to main: a post-merge run is the
-# record for a commit that has already landed, and cancelling it would leave
-# that commit with no verdict.
+# commit nobody will merge.
+#
+# On main the group is keyed by SHA instead, which puts every main commit in a
+# group of its own. Two things follow, and both are wanted: nothing is ever
+# cancelled there — a post-merge run is the record for a commit that has
+# already landed, and cancelling it would leave that commit with no verdict —
+# and, because the groups differ, two merges in quick succession still run at
+# the same time. Keying main on the ref like everything else would serialize
+# them, which is not a safety property, just a slower answer.
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}-${{ github.ref == 'refs/heads/main' && github.sha || '' }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
