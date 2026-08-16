@@ -29,6 +29,82 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # Which files this run is about. The compiler suites cannot be affected by
+  # an editors/ change, and the extension cannot be affected by anything
+  # outside editors/, so both sides filter on one file list. Workflow-level
+  # `paths:` would be the wrong tool: it skips the ENTIRE workflow, taking the
+  # extension check — the one job an extension-only change needs — down with
+  # the suites it does not.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      extension: ${{ steps.filter.outputs.extension }}
+      extension-only: ${{ steps.filter.outputs.extension-only }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Filter changed files
+        id: filter
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+            # After a force push (or on the very first push) `before` is all
+            # zeros and names no commit; fall back to the parent, which at
+            # worst runs jobs this commit did not strictly need.
+            git rev-parse -q --verify "${base}^{commit}" >/dev/null 2>&1 || base=HEAD^
+          fi
+          changed=$(git diff --name-only "${base}...HEAD")
+          extension=false
+          extension_only=true
+          while IFS= read -r file; do
+            [ -n "${file}" ] || continue
+            case "${file}" in
+              editors/*) extension=true ;;
+              *) extension_only=false ;;
+            esac
+          done <<< "${changed}"
+          # An empty diff (nothing distinguishable) says nothing, so err on
+          # the side of running the suites.
+          [ -n "${changed}" ] || extension_only=false
+          echo "extension=${extension}" >> "$GITHUB_OUTPUT"
+          echo "extension-only=${extension_only}" >> "$GITHUB_OUTPUT"
+
+  # The VS Code extension: same install/compile/package path the release
+  # walks locally via `bun run package` (editors/vscode/package.json), split
+  # into steps so a type error is not buried under vsce's output. Gated on
+  # editors/ changes because nothing else feeds into it.
+  extension:
+    needs: changes
+    if: needs.changes.outputs.extension == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to the packageManager field's version so CI compiles with the
+      # bun the lockfile was written for.
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+
+      - name: Install
+        run: bun install --frozen-lockfile
+        working-directory: editors/vscode
+
+      - name: Typecheck and build
+        run: bun run compile
+        working-directory: editors/vscode
+
+      # Producing the .vsix validates the rest of packaging: manifest
+      # fields, the `files` list, README/LICENSE inclusion.
+      - name: Package the .vsix
+        run: bunx --bun @vscode/vsce package --no-dependencies
+        working-directory: editors/vscode
+
   # Both platforms, because they genuinely disagree. libm is only required to
   # correctly round some operations (sqrt, the arithmetic operators); for the
   # rest — cbrt among them — macOS and glibc differ in the last bit, and float
@@ -36,6 +112,8 @@ jobs:
   # reaches the golden files. Linux-only CI meant a macOS-passing spec could
   # still break on push (and vice versa), with nothing local able to catch it.
   test:
+    needs: changes
+    if: needs.changes.outputs.extension-only != 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       # Report both platforms rather than cancelling the sibling on the first
@@ -98,6 +176,8 @@ jobs:
   # `make spec-beam` inside Alpine, so this job is both the platform test and
   # the artifact the release publishes.
   alpine:
+    needs: changes
+    if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -130,6 +210,8 @@ jobs:
   # release.yml, which meant a Tey that did not build stopped a RELEASE rather
   # than a pull request. Its own suites run here too.
   tey:
+    needs: changes
+    if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -171,6 +253,8 @@ jobs:
           fi
 
   wasm:
+    needs: changes
+    if: needs.changes.outputs.extension-only != 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
