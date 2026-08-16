@@ -1104,6 +1104,61 @@ auto TypeChecker::registerMakeSignature(const ast::MakeDef& def,
                     add(*visibleAnn);
         }
     }
+
+    // A method written as a plain `let` — no `:>` — was registered only when
+    // its make block was CHECKED, which is after every top-level function body.
+    // So `let grow(c: Crate) = c.doubled` found no `doubled` at all and typed
+    // as unknown, while the identical call inside `main` (checked last) worked.
+    // Registering the declared shape here makes the method visible to whatever
+    // is checked first; the body still refines it later.
+    const auto preRegister = [&](const ast::FunctionDef& def) {
+        if (m_annotatedMethods.count(def.name)) return;
+        if (def.clauses.empty()) return;
+        const auto& clause = def.clauses.front();
+        // Only plain named parameters. A pattern in first position is the
+        // receiver-matching form (`let head(@[x | _])`) whose arity must not
+        // gain an implicit receiver, and a type-selector argument
+        // (`let to(String)`) is not a parameter type at all.
+        for (const auto& param : clause.params)
+            if (param.pattern || !param.name) return;
+        Signature signature;
+        signature.name = def.name;
+        signature.isFoul = def.isFoul;
+        signature.params.push_back(receiver);
+        for (const auto& param : clause.params)
+            signature.params.push_back(
+                param.type ? resolveTypeExpr(**param.type, targetVars)
+                           : freshTypeVar());
+        signature.result = clause.returnAnnotation
+            ? resolveTypeExpr(**clause.returnAnnotation, targetVars)
+            : freshTypeVar();
+        signature.makeModule = modulePath;
+        auto& existing = m_methodSignatures[def.name];
+        const bool duplicate =
+            std::any_of(existing.begin(), existing.end(),
+                        [&](const Signature& other) {
+                            if (other.params.size() != signature.params.size())
+                                return false;
+                            for (size_t i = 0; i < other.params.size(); i++)
+                                if (!typesEqual(other.params[i], signature.params[i]))
+                                    return false;
+                            return true;
+                        });
+        if (!duplicate) existing.push_back(std::move(signature));
+    };
+    for (const auto& item : def.body) {
+        if (const auto* function =
+                std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+            if (*function) preRegister(**function);
+        } else if (const auto* visibility =
+                       std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item);
+                   visibility && *visibility) {
+            for (const auto& visible : (*visibility)->items)
+                if (const auto* function =
+                        std::get_if<std::unique_ptr<ast::FunctionDef>>(&visible))
+                    if (*function) preRegister(**function);
+        }
+    }
 }
 
 auto TypeChecker::registerMakeSignaturesInModule(const ast::ModuleDef& mod,

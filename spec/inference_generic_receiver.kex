@@ -1,0 +1,44 @@
+# kex: types-only
+# A receiver with no declared type matches EVERY overload of a method, because
+# a type variable is permissive. The winner must not then be treated as
+# evidence about what the receiver is.
+#
+# The regression this was written for: `let show(x) = x.to(String)` inferred as
+# `Measure -> String`, so `show(42)` was a type error. Nothing in the program
+# mentions units — units.kex's `to` merely sorted first among the overloads,
+# and the receiver was bound to its parameter type. Overloads that disagree
+# about the receiver are now no evidence about it, the same way overloads from
+# different backend modules already were.
+#
+# As with the other inference golden, this records what inference CURRENTLY
+# concludes: `x` stays an unbound variable rather than becoming something
+# usefully general. That is a weaker answer, not a wrong one.
+
+# Unconstrained receiver, method with many overloads across types.
+let show(x) = x.to(String)
+
+# The same call where the receiver's type is known: no ambiguity to resolve.
+let showInteger(n: Integer) = n.to(String)
+
+record Crate do
+  size : Integer
+end
+
+make Crate do
+  let doubled -> Crate = Crate { size: @size * 2 }
+end
+
+# A method only ONE type declares DOES say what its receiver is: no ambiguity
+# to protect against, so `c` binds to Crate. This works from a top-level
+# function only because make-block methods are now pre-registered: written as a
+# plain `let` (no `:>`), `doubled` used to be registered when its make block was
+# checked — after every top-level body — so this call found nothing at all and
+# typed as unknown, while the identical call inside `main` worked.
+let grow(c) = c.doubled
+
+main do
+  let a = show(42)
+  let b = show("text")
+  let c = showInteger(7)
+  let d = grow(Crate { size: 1 })
+end
