@@ -2020,7 +2020,7 @@ int main(int argc, char *argv[]) {
 
   if (mode == "lsp") {
 #ifdef KEX_HAS_LSP
-    return kex::lsp::run(std::cin, std::cout);
+    return kex::lsp::run(std::cin, std::cout, prebuiltRuntimeBeamDir());
 #endif
   }
 

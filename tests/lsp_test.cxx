@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "test.hxx"
 #include "../src/lsp/server.hxx"
 
@@ -9,6 +10,18 @@
 using namespace test;
 
 namespace {
+// The compiled standard library, as the CLI locates it. Passed explicitly
+// rather than defaulted: reading interfaces from .kex SOURCE instead loses
+// inferred result types, which is what once left every method call on a call
+// result typed `unknown` in the editor.
+auto testRuntimeBeamDir() -> std::string {
+    if (const char* configured = std::getenv("KEX_RUNTIME_DIR");
+        configured && *configured)
+        return configured;
+    return {};
+}
+
+
 
 auto frame(const std::string& json) -> std::string {
     return "Content-Length: " + std::to_string(json.size()) +
@@ -96,7 +109,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("publishDiagnostics") != std::string::npos,
                        "missing diagnostics notification");
@@ -177,7 +190,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("type String") != std::string::npos,
                        "to(String) hover did not identify String as a type value");
@@ -211,7 +224,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("at : Type") != std::string::npos,
                        "Type.of result was not retained on its local binding");
@@ -241,7 +254,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto hover = responseForId(output.str(), 2);
             assertTrue(hover.find("lines : [String]") != std::string::npos,
                        "local lines hover omitted its inferred list type");
@@ -270,7 +283,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("drop :") != std::string::npos,
                        "Stream.drop hover omitted its imported signature");
@@ -304,7 +317,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("A documented module.") != std::string::npos,
                        "module hover omitted user documentation");
@@ -342,7 +355,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find(R"(type LocalCapability\ntrait LocalCapability)") !=
                            std::string::npos,
@@ -370,7 +383,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("Error : Result<") != std::string::npos,
                        "Error constructor hover omitted its inferred Result type");
@@ -394,7 +407,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             const auto selected = result.find(
                 "at : [Integer] -> Integer -> Integer?");
@@ -425,7 +438,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("Unwraps the value") != std::string::npos,
                        "Optional.or hover omitted the selected fallback documentation");
@@ -454,7 +467,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("factorial : Integer -> Integer") !=
                            std::string::npos &&
@@ -483,7 +496,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find(
                            R"(record Point do\n  x : Float\n  y : Float\nend)") !=
@@ -511,7 +524,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             const auto selected = result.find(
                 "Selected overload**\\n\\n```kex\\nfoul copy : String -> String -> Bool");
@@ -543,7 +556,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("Undefined function") == std::string::npos,
                        "the manifest vocabulary was reported as undefined");
@@ -568,7 +581,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find("@name : String") != std::string::npos,
                        "@name did not retain the User.name field type: " + result);
@@ -592,7 +605,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find(R"("label":"map")") != std::string::npos &&
                        result.find(R"("label":"count")") != std::string::npos,
@@ -626,7 +639,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find(
                            R"("start":{"character":6,"line":1})") !=
@@ -669,7 +682,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
             assertTrue(result.find(R"("referencesProvider":true)") !=
                            std::string::npos,
@@ -707,7 +720,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto references = responseForId(output.str(), 2);
             assertEqual(occurrences(references, R"("uri":)"), size_t{2},
                         "Optional.or references included Bits.or");
@@ -745,7 +758,7 @@ int main() {
 
             std::istringstream input(messages);
             std::ostringstream output;
-            assertEqual(kex::lsp::run(input, output), 0);
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto references = responseForId(output.str(), 2);
             assertEqual(occurrences(references, R"("uri":)"), size_t{2},
                         "unopened workspace reference was not indexed cleanly");

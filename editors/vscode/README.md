@@ -7,7 +7,7 @@
 # Kex Language Support for VS Code
 
 Syntax highlighting, type-aware hover, completion, navigation, and live
-compiler diagnostics for [Kex](https://github.com/kexhq/kex)
+compiler diagnostics for [Kex](https://github.com/kexhq/kex).
 
 Kex is a functional language with Ruby-like syntax, immutability by default, UFCS method chains,
 and an Elixir-style process model. Try the language in your browser at [kex.run](https://kex.run).

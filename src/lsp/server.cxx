@@ -1350,16 +1350,27 @@ auto scanDotReceiver(const std::string& source, size_t cursor) -> DotReceiver {
 auto recoveredReceiverQualifier(
     const std::string& source, const std::string& path,
     const DotReceiver& receiver, size_t cursor,
-    const semantic::ImportedInterfaces* interfaces) -> std::string {
+    const semantic::ImportedInterfaces* interfaces,
+    const std::vector<std::string>& moduleRoots) -> std::string {
     if (!receiver.valid || cursor < receiver.dot) return {};
     auto recovered = source;
     recovered.erase(receiver.dot, cursor - receiver.dot);
-    Lexer lexer(recovered, path);
-    Parser parser(lexer.tokenizeAll(), path);
-    auto program = parser.parseProgram();
-    if (!parser.diagnostics().empty()) return {};
+    // Through a SemanticDB with the file's own module roots, not a bare
+    // parse: `using Web` is resolved by loading that module's source, and
+    // without it every type from an opt-in module came back `unknown` — so a
+    // builder chain on `Web.Server` completed to nothing while the same shape
+    // on a local record worked. Kept between calls so the module sources are
+    // parsed once rather than per keystroke.
+    static semantic::SemanticDB recoveryDb;
+    recoveryDb.setImportedInterfaces(interfaces);
+    recoveryDb.setModuleRoots(moduleRoots);
+    recoveryDb.updateFile(path, recovered);
+    auto* state = recoveryDb.fileState(path);
+    if (!state) return {};
     semantic::Analyzer analyzer(interfaces);
-    analyzer.analyze(program);
+    analyzer.analyze(state->ast);
+    const auto& program = state->ast;
+    (void)program;
 
     // Everything before the deletion keeps its position, so the receiver's
     // line/column are the ones it had in the original buffer. A CALL is
@@ -1405,7 +1416,8 @@ auto recoveredReceiverQualifier(
 template <typename Document>
 auto receiverQualifier(const Document& document, const DotReceiver& receiver,
                        size_t cursor,
-                       const semantic::ImportedInterfaces* interfaces)
+                       const semantic::ImportedInterfaces* interfaces,
+                       const std::vector<std::string>& moduleRoots)
     -> std::string {
     if (!receiver.valid) return {};
     // The last good analysis already typed this expression; find it by where
@@ -1452,7 +1464,8 @@ auto receiverQualifier(const Document& document, const DotReceiver& receiver,
         cached != document.recoveredReceivers.end())
         return cached->second;
     auto recovered = recoveredReceiverQualifier(document.text, document.path,
-                                                receiver, cursor, interfaces);
+                                                receiver, cursor, interfaces,
+                                                moduleRoots);
     document.recoveredReceivers.insert_or_assign(receiver.start, recovered);
     return recovered;
 }
@@ -1522,10 +1535,11 @@ void enrichFunctionSymbols(semantic::FileState& state,
 
 class Server {
 public:
-    Server(std::istream& input, std::ostream& output)
+    Server(std::istream& input, std::ostream& output,
+           const std::string& runtimeBeamDir)
         : m_stream(input, output), m_connection(m_stream),
           m_handler(m_connection, 0),
-          m_interfaces(preludeSemanticInterfaces("")),
+          m_interfaces(preludeSemanticInterfaces(runtimeBeamDir)),
           m_standardDocumentation(standardLibraryDocumentation()),
           m_standardParameterNames(standardLibraryParameterNames()) {
         m_db.setImportedInterfaces(&m_interfaces);
@@ -2051,7 +2065,8 @@ private:
                 if (const auto receiver = scanDotReceiver(text, cursor);
                     receiver.valid) {
                     if (auto qualifier = receiverQualifier(
-                            found->second, receiver, cursor, &m_interfaces);
+                            found->second, receiver, cursor, &m_interfaces,
+                            moduleRootsFor(found->second.path));
                         !qualifier.empty()) {
                         query.dbQuery = qualifier + "." +
                             text.substr(receiver.dot + 1,
@@ -2363,7 +2378,8 @@ private:
             if (const auto receiver = scanDotReceiver(document.text, wordEnd);
                 receiver.valid)
                 if (auto qualifier = receiverQualifier(
-                        document, receiver, wordEnd, &m_interfaces);
+                        document, receiver, wordEnd, &m_interfaces,
+                        moduleRootsFor(document.path));
                     !qualifier.empty())
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
@@ -2952,9 +2968,10 @@ private:
 
 } // namespace
 
-auto run(std::istream& input, std::ostream& output) -> int {
+auto run(std::istream& input, std::ostream& output,
+         const std::string& runtimeBeamDir) -> int {
     try {
-        return Server(input, output).run();
+        return Server(input, output, runtimeBeamDir).run();
     } catch (const std::exception& error) {
         std::cerr << "kex --lsp: " << error.what() << '\n';
         return 1;

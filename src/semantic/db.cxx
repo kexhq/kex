@@ -347,15 +347,19 @@ auto SemanticDB::completionsFor(const std::string& prefix) const -> std::vector<
                     if (overload.signature.params.empty()) continue;
                     const auto receiver =
                         typeToString(overload.signature.params.front());
-                    // A value of this type reports it QUALIFIED (`Web.Server`),
-                    // but the interface records the receiver as written inside
-                    // its module (`Server`). Joining the owning module back on
-                    // is what makes the two comparable — matching the bare name
-                    // alone would offer another module's `Server` methods too.
-                    const bool matches =
-                        receiver == qualifier ||
-                        (!overload.sourceModule.empty() &&
-                         overload.sourceModule + "." + receiver == qualifier);
+                    // A value of this type reports it QUALIFIED
+                    // (`Web.Server`), while the interface records the receiver
+                    // as written inside its own module (`Server`). The owning
+                    // module cannot be joined back on to compare them: every
+                    // standard-library export carries sourceModule "Prelude",
+                    // not "Web". So the last segment is what there is to match
+                    // on. Two modules each declaring a `Server` would offer
+                    // each other's methods here — acceptable for a completion
+                    // list, and the alternative today is offering nothing at
+                    // all for any module-qualified type.
+                    const auto tail = qualifier.rfind('.') == std::string::npos
+                        ? qualifier : qualifier.substr(qualifier.rfind('.') + 1);
+                    const bool matches = receiver == qualifier || receiver == tail;
                     if (!matches) continue;
                     results.push_back(qualifier + "." + name);
                     break;
