@@ -124,6 +124,52 @@ jobs:
           [ "$(docker run --rm -v /tmp:/work kex:slim smoke.kex)" = "ok" ]
           [ "$(docker run --rm -v /tmp:/work kex:slim -R smoke.kex)" = "ok" ]
 
+  # Tey, which nothing in CI used to touch. It is written in Kex and lives in
+  # this repository, so a compiler change can break it — and until this job
+  # existed the first thing to compile it was `make -C tey install` inside
+  # release.yml, which meant a Tey that did not build stopped a RELEASE rather
+  # than a pull request. Its own suites run here too.
+  tey:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # erlang for erlc: Tey is compiled to .beam, and its suites run through
+      # the BEAM backend because that is how Tey itself runs.
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
+            libssl-dev erlang-base libboost-context-dev
+
+      - name: Build kex
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
+
+      # Compiling Tey is the first assertion: it either builds with this
+      # compiler or it does not.
+      - name: Build Tey
+        run: make build-tey
+
+      - name: Tey spec suite
+        run: make spec-tey
+
+      # The suites cover the pure logic; this covers the wiring — that the
+      # launcher starts, finds its modules, and answers. A Tey whose .beam
+      # files cannot be loaded passes every spec above and is still broken.
+      - name: Smoke-test the tey CLI
+        run: |
+          set -euo pipefail
+          make -C tey install PREFIX="$(pwd)/stage" KEX="$(pwd)/build/kex" ERL=erl INSTALL_NONINTERACTIVE=1
+          export TEY_HOME="$(mktemp -d)"
+          stage/bin/tey --version
+          stage/bin/tey --help > /dev/null
+          # Nothing installed and nothing bundled, so `latest` has nothing to
+          # resolve to and the command must fail rather than invent a version.
+          if stage/bin/tey kex use latest; then
+            echo "::error::tey kex use latest should fail when no Kex is installed"
+            exit 1
+          fi
+
   wasm:
     runs-on: ubuntu-latest
     permissions:

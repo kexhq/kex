@@ -1,4 +1,4 @@
-.PHONY: build test spec spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
+.PHONY: build-tey spec-tey build test spec spec-prelude spec-stdlib spec-beam spec-stdlib-beam spec-wasm test-all clean repl run check install uninstall help build-wasm test-wasm web-demo
 
 BUILD_DIR = build
 KEX = $(BUILD_DIR)/kex
@@ -38,6 +38,8 @@ help:
 	@echo "  make test         Run all unit tests (C++ test binaries)"
 	@echo "  make spec         Run spec programs and verify output"
 	@echo "  make test-all     Run unit tests + spec suites, incl. BEAM (used by CI)"
+	@echo "  make build-tey    Compile Tey with the freshly built kex"
+	@echo "  make spec-tey     Run Tey own spec suite (requires erlc)"
 	@echo "  make parse        Parse all examples (syntax check)"
 	@echo "  make repl         Start the REPL"
 	@echo "  make install      Install kex to $(BINDIR)"
@@ -369,3 +371,41 @@ uninstall:
 
 clean:
 	@rm -rf "$(BUILD_DIR)" "$(WASM_BUILD_DIR)" packages/kex/dist
+
+# Tey's own suites. Run through the BEAM backend (-R) because that is how Tey
+# actually runs — `tey` is compiled to .beam by the release — and because the
+# tree-walker cannot currently resolve a prelude module (FS) from inside a
+# `foul module` loaded via --source-root, which is a walker gap rather than
+# anything about Tey.
+#
+# --source-root tey/src puts Tey.* on the module path without a package
+# install, so the suites run straight from a checkout.
+#
+# Not folded into `test-all`: Tey needs erlc, and `make test` is expected to
+# work on a machine that only builds the compiler.
+spec-tey: build
+	@echo "Running Tey spec suite through BEAM (-R)..."
+	@failed=0; passed=0; \
+	for f in tey/spec/*.spec.kex; do \
+		output=$$($(KEX) -R --no-colors --source-root tey/src "$$f" 2>&1); \
+		rc=$$?; \
+		f_passed=$$(echo "$$output" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+'); \
+		f_failed=$$(echo "$$output" | grep -oE '[0-9]+ failed' | grep -oE '[0-9]+'); \
+		f_passed=$${f_passed:-0}; f_failed=$${f_failed:-0}; \
+		if [ "$$rc" -eq 0 ] && [ "$$f_failed" -eq 0 ]; then \
+			printf "  \033[32m✓\033[0m %s (%s passed)\n" "$$(basename $$f)" "$$f_passed"; \
+		else \
+			printf "  \033[31m✗\033[0m %s (%s passed, %s failed)\n" "$$(basename $$f)" "$$f_passed" "$$f_failed"; \
+			echo "$$output" | grep '✗' | sed 's/^/    /'; \
+		fi; \
+		passed=$$((passed + f_passed)); failed=$$((failed + f_failed)); \
+	done; \
+	echo ""; echo "  $$passed passed, $$failed failed"; [ $$failed -eq 0 ]
+
+# Compiling Tey is itself a test: it is written in Kex, so a change to the
+# compiler can break it, and until this existed the FIRST thing to find out
+# was the release — `make -C tey install` runs in release.yml and nowhere
+# else. A Tey that does not compile stopped a release rather than a pull
+# request.
+build-tey: build
+	@$(MAKE) -C tey build KEX=../$(KEX)

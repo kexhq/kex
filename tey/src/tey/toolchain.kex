@@ -100,7 +100,7 @@ let installedKex -> String? do
   end
 end
 
-# A Kex that came with Tey — what a package manager installs so the first
+# The Kex bundled beside Tey — what a package manager lays down so the first
 # `tey` command has a compiler without a ten-minute build. It is a SEED, not
 # an installation: `kex` below adopts it into the Tey home on first use, and
 # from then on Tey manages that copy like any other version. Nothing outside
@@ -111,6 +111,52 @@ let bundled -> String? do
     None -> return None
     Just(path) -> return FS.File.file?(path) then Just(path) else None
   end
+end
+
+# Which version the bundled Kex is. Answering means RUNNING it, so this is
+# not something to ask inside a loop — but it is the only way to know: the
+# seed is a plain install tree with no version recorded beside it.
+let bundledVersion -> String? do
+  match Tey.Toolchain.bundled do
+    None -> return None
+    Just(binary) -> do
+      match Tey.Toolchain.versionOfBinary(binary) do
+        Error(_) -> return None
+        Ok(version) -> return Just(version)
+      end
+    end
+  end
+end
+
+# Every version `tey kex use` can select, newest first: the ones in the Tey
+# home, plus the bundled one.
+#
+# The seed belongs here even though it is not installed. It is a real compiler
+# already on the disk, and on a fresh keg it is the one a bare `kex` runs — so
+# leaving it out made `tey kex use <that version>` refuse a version the user
+# had just watched run, with no way back to it short of downloading a second
+# copy of what was already there.
+let selectableVersions -> [String] do
+  let installed = Tey.Toolchain.installedVersions
+  match Tey.Toolchain.bundledVersion do
+    None -> return installed
+    Just(version) -> do
+      return installed if installed.contains?(version)
+      return Tey.Toolchain.newestFirst([...installed, version])
+    end
+  end
+end
+
+# Turns what someone typed after `tey kex use` into a version number.
+#
+# `latest` means the newest Kex this machine can select — NOT the newest
+# released one. `use` selects among what is already here; reaching for
+# something unreleased-and-undownloaded is what `tey kex install` is for, and
+# quietly downloading from a command that reads like "switch to" would be a
+# surprise.
+let resolveSelector(selector: String) -> String? do
+  return Just(selector) if selector != "latest"
+  return Tey.Toolchain.selectableVersions.first
 end
 
 # The compiler every Tey command shells out to.
@@ -150,7 +196,7 @@ end
 # when asked — see `resolved`.
 let installBundled -> Result<String, String> do
   match Tey.Toolchain.bundled do
-    None -> return Error("no Kex came with this Tey")
+    None -> return Error("no Kex is bundled with this install")
     Just(binary) -> return Tey.Toolchain.adopt(binary)
   end
 end
@@ -277,7 +323,21 @@ end
 
 let use(version: String) -> Bool do
   let home = Tey.Toolchain.home
-  return false if !FS.File.file?("${home}/toolchains/${version}/bin/kex")
+  # Naming the bundled Kex selects it, taking the copy into the Tey
+  # home on the way — the one place an install happens without being typed as
+  # one. It is not a download and not a build: the files are already on the
+  # disk, this is a copy of what the user is pointing at. The alternative was
+  # refusing a version that is demonstrably present, which is how someone who
+  # installed a second Kex lost the one their package manager gave them.
+  if !Tey.Toolchain.installed?(version)
+    return false if Tey.Toolchain.bundledVersion != Just(version)
+    # installBundled writes `current` and relinks itself, so there is nothing
+    # left to do here.
+    match Tey.Toolchain.installBundled do
+      Error(_) -> return false
+      Ok(_) -> return true
+    end
+  end
   return false if !FS.File.write("${home}/current", "${version}\n")
   # Best effort: the selection is recorded either way, and `tey` itself reads
   # the record rather than the shim. Only a user's bare `kex` needs the link.

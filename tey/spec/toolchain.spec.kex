@@ -1,0 +1,118 @@
+using Tey.Toolchain
+
+# What `tey kex use` will accept, and what `latest` resolves to.
+#
+# Both answers depend on the machine — a Tey home full of toolchains, and a
+# bundled Kex whose version is only knowable by running it — so the whole
+# thing is driven through `Mock.ENV` and `Mock.FS`. That is the point: this
+# logic decides whether a version the user can see is one they can select, and
+# it went wrong in a way no amount of reading caught (`tey kex use 0.3.2`
+# refusing the compiler that had just been running).
+
+describe("Tey.Toolchain selection with no bundled Kex") do
+  it("finds nothing to select on an empty machine") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+
+    assert(Tey.Toolchain.installedVersions == [])
+    assert(Tey.Toolchain.selectableVersions == [])
+    # `tey kex use latest` has to say "nothing to select" rather than pick a
+    # version out of the air.
+    assert(Tey.Toolchain.resolveSelector("latest") == None)
+  end
+
+  it("lists installed versions newest first") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+    Mock.FS.Directory("/tey/toolchains/0.3.0")
+    Mock.FS.File("/tey/toolchains/0.3.0/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.10.0")
+    Mock.FS.File("/tey/toolchains/0.10.0/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.3.2")
+    Mock.FS.File("/tey/toolchains/0.3.2/bin/kex", "")
+
+    assert(Tey.Toolchain.installedVersions == ["0.10.0", "0.3.2", "0.3.0"])
+    assert(Tey.Toolchain.installed?("0.3.2"))
+    assert(!Tey.Toolchain.installed?("9.9.9"))
+  end
+
+  it("resolves latest to the newest installed version") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+    Mock.FS.Directory("/tey/toolchains/0.3.0")
+    Mock.FS.File("/tey/toolchains/0.3.0/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.3.2")
+    Mock.FS.File("/tey/toolchains/0.3.2/bin/kex", "")
+
+    assert(Tey.Toolchain.resolveSelector("latest") == Just("0.3.2"))
+  end
+
+  it("passes any other selector through untouched") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+
+    # `use` does the existence check; the selector step only expands `latest`,
+    # so an uninstalled version still arrives at `use` to be refused there.
+    assert(Tey.Toolchain.resolveSelector("0.3.0") == Just("0.3.0"))
+    assert(Tey.Toolchain.resolveSelector("9.9.9") == Just("9.9.9"))
+  end
+
+  it("ignores staging leftovers") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+    Mock.FS.Directory("/tey/toolchains/0.3.0")
+    Mock.FS.File("/tey/toolchains/0.3.0/bin/kex", "")
+    # A crashed install leaves these behind; neither is a version anyone can
+    # select, and `latest` picking one would select a half-copied tree.
+    Mock.FS.Directory("/tey/toolchains/0.4.0.partial")
+    Mock.FS.File("/tey/toolchains/0.4.0.partial/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.4.0.previous")
+    Mock.FS.File("/tey/toolchains/0.4.0.previous/bin/kex", "")
+
+    assert(Tey.Toolchain.installedVersions == ["0.3.0"])
+    assert(Tey.Toolchain.resolveSelector("latest") == Just("0.3.0"))
+  end
+end
+
+describe("Tey.Toolchain selection with a bundled Kex") do
+  # A real file on the real filesystem, because knowing the bundled version
+  # means RUNNING it — `Mock.FS` can make a path exist but not answer
+  # `--version`. A stub script pins the answer so the test does not depend on
+  # whichever Kex built it.
+  let seedRoot = "/tmp/kex-tey-spec-seed"
+  let seed = "${seedRoot}/bin/kex"
+
+  it("offers the bundled version even though it is not installed") do
+    Mock.FS.clear()
+    FS.Directory.create("${seedRoot}/bin")
+    FS.File.write(seed, "#!/bin/sh\necho 'kex 9.9.9 (stub)'\n")
+    Process.run("chmod", ["+x", seed])
+    Mock.ENV.set("TEY_HOME", "${seedRoot}/home")
+    Mock.ENV.set("TEY_BUNDLED_KEX", seed)
+
+    assert(Tey.Toolchain.bundledVersion == Just("9.9.9"))
+    # Nothing is installed, yet the bundled one is selectable — this is the
+    # bug: `tey kex use 9.9.9` used to refuse the compiler that was running.
+    assert(Tey.Toolchain.installedVersions == [])
+    assert(Tey.Toolchain.selectableVersions == ["9.9.9"])
+    assert(Tey.Toolchain.resolveSelector("latest") == Just("9.9.9"))
+  end
+
+  it("has no bundled version when none is pointed at") do
+    Mock.FS.clear()
+    Mock.ENV.set("TEY_HOME", "${seedRoot}/home")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+
+    assert(Tey.Toolchain.bundledVersion == None)
+    assert(Tey.Toolchain.selectableVersions == [])
+  end
+end

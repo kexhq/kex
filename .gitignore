@@ -65,3 +65,10 @@ third_party/pcre2-wasm/*
 # Assembled by packages/kex/scripts/build.sh from build-wasm/ — build
 # output, not source, same reasoning as the gmp-wasm entries above.
 packages/kex/dist/
+
+# Tey compiled to BEAM by `make build-tey` (and by tey/Makefile's own build
+# target). Generated from tey/src by whichever kex is to hand, so it is build
+# output like the entries above — and a .beam cannot be loaded by an older OTP
+# than the one that produced it, which makes a checked-in copy actively wrong
+# for anyone on a different Erlang.
+tey/ebin/
