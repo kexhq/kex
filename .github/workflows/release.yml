@@ -176,7 +176,7 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release \
             -DKEX_BOOST_STATIC=ON \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
-          cmake --build build
+          cmake --build build --parallel
 
       # A release is not published on a red suite. These are the same gates CI
       # runs on a branch, which tags do not trigger.
@@ -273,7 +273,7 @@ jobs:
       - name: Build native kex (for the compiled stdlib unit)
         run: |
           cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam
+          cmake --build build --target kex_prelude_beam --parallel
 
       # ── The wasm toolchain, identical to ci.yml's wasm job. The cache keys
       # match, so on a release this is a restore, not a rebuild.
@@ -372,7 +372,7 @@ jobs:
           emcmake cmake -B build-wasm \
             -DKEX_PREBUILT_RUNTIME_DIR="$(pwd)/build/runtime/beam" \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
-          cmake --build build-wasm
+          cmake --build build-wasm --parallel
           node build-wasm/kex.js --version
 
       # The same gates CI's wasm job runs, on the pinned commit. (These

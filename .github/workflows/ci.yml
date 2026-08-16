@@ -60,7 +60,7 @@ jobs:
       # only ever happens during a release is a link nobody finds out about
       # until the release is the thing that breaks.
       - name: Build
-        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
 
       - name: Unit tests
         run: make test
@@ -247,7 +247,7 @@ jobs:
       - name: Build native kex (for the compiled stdlib unit)
         run: |
           cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam
+          cmake --build build --target kex_prelude_beam --parallel
 
       - name: Configure and build wasm target
         run: |
