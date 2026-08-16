@@ -50,6 +50,16 @@ private do
     end
   end
 
+  # Re-downloading a version already on the disk to arrive where you already
+  # are is waste, so `install latest` that finds nothing to do selects it and
+  # says so rather than reporting an install that did not happen.
+  let alreadyCurrent(version: String) -> Integer do
+    Tey.Toolchain.use(version)
+    IO.printLine("Kex ${version} is the newest release and already installed; selected it")
+    Tey.Cli.reportShim(version)
+    return 0
+  end
+
   # "* 0.3.0  installed, selected" — the marker is the selected one, so the
   # active version is findable by eye in a long list.
   let versionLine(version: String, installed: [String], selected: String) -> String do
@@ -111,11 +121,13 @@ Commands:
   setup merge-driver      configure Git's tey.lock merge driver
   kex list [--pre]         show Kex versions, newest first
   kex install [<version>]  install a Kex (newest release by default)
+  kex install latest       install the newest release by name
   kex install --pre        install the newest Kex of any channel
   kex install <src> <version>
                            build and install from a source checkout
   kex uninstall <version>  remove an installed Kex
   kex use <version>        select an installed Kex toolchain
+  kex use latest           select the newest Kex already on this machine
   kex which                print the compiler the kex command runs
 `)
     return 0
@@ -189,7 +201,7 @@ Commands:
   # for. `--pre` says they are: it takes the newest of any channel, which
   # during a pre-stability run may be the only thing published.
   #
-  # On a machine with nothing installed, the Kex that came with Tey is that
+  # On a machine with nothing installed, the bundled Kex is that
   # Kex: it is already on the disk, it is the version this Tey was shipped
   # with, and taking it needs no network. Once something IS installed, this
   # means the newest release again — otherwise the first upgrade would keep
@@ -198,7 +210,7 @@ Commands:
     if Tey.Toolchain.installedVersions.empty? && Tey.Toolchain.bundled != None
       match Tey.Toolchain.installBundled do
         Ok(prefix) -> do
-          IO.printLine("Installed and selected the Kex that came with Tey, at ${prefix}")
+          IO.printLine("Installed and selected the bundled Kex, at ${prefix}")
           Tey.Cli.reportShim(Tey.Toolchain.selected.or(""))
           return 0
         end
@@ -216,6 +228,27 @@ Commands:
         1
       end
       Ok(version) -> Tey.Cli.installKex(version)
+    end
+  end
+
+  # `latest` is the same thing a bare `tey kex install` means — the newest
+  # RELEASE, or the newest of any channel with `--pre`. It exists because
+  # "install the newest one" is a thing people type, and having to know that
+  # the way to say it is to say nothing is a poor answer. Naming it also gets
+  # past the bundled-seed shortcut a bare install takes on an empty machine:
+  # `tey kex install latest` fetches the newest release even when a bundled
+  # copy is sitting there unused.
+  let dispatchCommand(["kex", "install", "latest"], options: ParsedOptions) -> Integer do
+    let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
+    match newest do
+      Error(error) -> do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+      Ok(version) -> do
+        return Tey.Cli.alreadyCurrent(version) if Tey.Toolchain.installed?(version)
+        Tey.Cli.installKex(version)
+      end
     end
   end
 
@@ -251,7 +284,7 @@ Commands:
     end
   end
 
-  # Prints the compiler `kex` would run, installing the one that came with Tey
+  # Prints the compiler `kex` would run, installing the bundled one
   # if that has not happened yet. The dispatcher in bin/kex calls this when
   # nothing is selected, which is what makes a fresh install runnable without
   # a `tey` command being typed first.
@@ -268,14 +301,32 @@ Commands:
     end
   end
 
-  let dispatchCommand(["kex", "use", version], _) -> Integer do
-    if Tey.Toolchain.use(version)
-      IO.printLine("Using Kex ${version}")
-      Tey.Cli.reportShim(version)
-      0
-    else
-      IO.printError("tey: Kex ${version} is not installed\n")
-      1
+  # `latest` selects the newest Kex this machine already has, so the way back
+  # to the current one is not "remember which number it was".
+  let dispatchCommand(["kex", "use", selector], _) -> Integer do
+    match Tey.Toolchain.resolveSelector(selector) do
+      None -> do
+        IO.printError("tey: no Kex is installed; install one with `tey kex install`\n")
+        1
+      end
+      Just(version) -> do
+        # Asked BEFORE selecting, because selecting the bundled Kex
+        # installs it — and a line that said only "Using Kex 0.3.2" would hide
+        # that a copy had just been made.
+        let alreadyInstalled = Tey.Toolchain.installed?(version)
+        if Tey.Toolchain.use(version)
+          if alreadyInstalled
+            IO.printLine("Using Kex ${version}")
+          else
+            IO.printLine("Using Kex ${version} — installed from the bundled copy")
+          end
+          Tey.Cli.reportShim(version)
+          0
+        else
+          IO.printError("tey: Kex ${version} is not installed\n")
+          1
+        end
+      end
     end
   end
 
