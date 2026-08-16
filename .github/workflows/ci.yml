@@ -39,8 +39,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install gmp pcre2 boost erlang readline
 
+      # KEX_BOOST_STATIC matches release.yml: the released archives link
+      # Boost.Context statically (see CMakeLists.txt), and a static link that
+      # only ever happens during a release is a link nobody finds out about
+      # until the release is the thing that breaks.
       - name: Build
-        run: cmake -B build -G "Unix Makefiles" && cmake --build build
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build
 
       - name: Unit tests
         run: make test

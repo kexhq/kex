@@ -45,6 +45,11 @@ jobs:
           repository: kexhq/homebrew-tey
           path: tap
 
+      # For `brew style` below. Pinned rather than @master, which Homebrew has
+      # deprecated and will stop syncing.
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+
       - name: Rewrite the tap formula for the latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -85,6 +90,14 @@ jobs:
           # Brew evaluates this file as Ruby, so one that does not parse is a
           # broken `brew install` for everyone.
           ruby -c Formula/tey.rb
+
+          # Parsing is not enough: `brew style` is a REQUIRED check on the tap,
+          # so a generated formula that offends a cop cannot auto-merge, and
+          # the release ends with an open pull request nobody was told about.
+          # That is how 0.3.1 ended — FormulaAudit/ComponentsOrder objected to
+          # a `resource` per platform block. The generator's output has to pass
+          # the same lint the tap runs, and this is where that gets found out.
+          brew style Formula/tey.rb
 
           # One url+sha256 for tey, three for the per-platform kex resources.
           urls=$(grep -c '^ *url "https://github.com/kexhq/kex/releases/download/' Formula/tey.rb)

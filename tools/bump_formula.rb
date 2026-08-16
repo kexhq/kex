@@ -47,13 +47,18 @@ end
 # these at install time on the machine doing the installing, and only downloads
 # the one it picks. macOS is arm-only for now — Intel macOS publishes no archive
 # to point a resource at.
-def resource(base, version, hash_dir, target, indent)
+#
+# ONE `resource "kex"` with the platform blocks inside it, rather than a
+# resource per platform block. Both install the same thing, but `brew style`
+# rejects the second — "Nest `on_macos` blocks inside `resource` blocks when
+# there is only one inner block" (FormulaAudit/ComponentsOrder) — and the tap's
+# CI runs `brew style` as a required check, so the shape that fails it is a
+# shape that blocks the release's own auto-merge.
+def platform_urls(base, version, hash_dir, target, indent)
   name = "kex-#{version}-#{target}"
   pad = " " * indent
-  %(#{pad}resource "kex" do\n) +
-    %(#{pad}  url "#{base}/#{name}.tar.gz"\n) +
-    %(#{pad}  sha256 "#{digest(hash_dir, name)}"\n) +
-    %(#{pad}end\n)
+  %(#{pad}url "#{base}/#{name}.tar.gz"\n) +
+    %(#{pad}sha256 "#{digest(hash_dir, name)}"\n)
 end
 
 formula = File.read(formula_path)
@@ -65,10 +70,12 @@ formula = fill(formula, "STABLE-TEY",
                %(  url "#{base}/#{tey}.tar.gz"\n  sha256 "#{digest(hash_dir, tey)}"\n),
                formula_path)
 
-kex = "  on_macos do\n" + resource(base, version, hash_dir, "macos-arm64", 4) + "  end\n\n"
-kex += "  on_linux do\n"
-kex += "    on_arm do\n" + resource(base, version, hash_dir, "linux-arm64", 6) + "    end\n"
-kex += "    on_intel do\n" + resource(base, version, hash_dir, "linux-x86_64", 6) + "    end\n"
+kex = %(  resource "kex" do\n)
+kex += "    on_macos do\n" + platform_urls(base, version, hash_dir, "macos-arm64", 6) + "    end\n\n"
+kex += "    on_linux do\n"
+kex += "      on_arm do\n" + platform_urls(base, version, hash_dir, "linux-arm64", 8) + "      end\n\n"
+kex += "      on_intel do\n" + platform_urls(base, version, hash_dir, "linux-x86_64", 8) + "      end\n"
+kex += "    end\n"
 kex += "  end\n"
 formula = fill(formula, "STABLE-KEX", kex, formula_path)
 
