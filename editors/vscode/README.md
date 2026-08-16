@@ -9,7 +9,7 @@
 Syntax highlighting, type-aware hover, completion, navigation, and live
 compiler diagnostics for [Kex](https://github.com/kexhq/kex).
 
-Kex is a functional language with Ruby-like syntax, immutability by default, UFCS method chains,
+Kex is a functional language with Ruby-like syntax, immutability by default, UFCS function chains,
 and an Elixir-style process model. Try the language in your browser at [kex.run](https://kex.run).
 
 The extension is a thin client. Everything it shows comes from the Kex compiler
@@ -17,17 +17,18 @@ itself, running as a language server (`kex --lsp`), so hover types and
 diagnostics are the compiler's own answers rather than a separate model of the
 language that could drift from it.
 
-![Hover showing a record declaration and its documentation](https://github.com/kexhq/kex/raw/main/editors/vscode/images/hover.png)
+![Hover on an overloaded function, showing which overload was selected, the others available, and the documented example](https://github.com/kexhq/kex/raw/main/editors/vscode/images/hover.png)
 
-![Completion after a dot on a record value](https://github.com/kexhq/kex/raw/main/editors/vscode/images/completion.png)
+![Completion after a dot in a builder chain, listing each function with its full signature](https://github.com/kexhq/kex/raw/main/editors/vscode/images/completion.png)
 
 ## Features
 
 - **Type and declaration hover** — the declaration as written, plus any doc
-  comments above it.
+  comments above it. On an overloaded function it names the overload chosen at
+  that call site and lists the alternatives.
 - **Diagnostics as you type** — syntax, type, and validation errors on the
   unsaved buffer, not just on save.
-- **Completion** — members after `.`, and top-level names, with signatures and
+- **Completion** — functions after `.`, and top-level names, with signatures and
   overload counts.
 - **Go to definition** and **find references**.
 - **Syntax highlighting** for Kex's full grammar.
