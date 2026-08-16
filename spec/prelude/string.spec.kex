@@ -157,3 +157,33 @@ describe("String — join from list") do
     assert(["only"].join(", ") == "only")
   end
 end
+
+describe("String — substitute") do
+  it("replaces every key with its value") do
+    assert("Hello, $WHO$!".substitute({"$WHO$": "world"}) == "Hello, world!")
+    assert("$A$ and $B$".substitute({"$A$": "x", "$B$": "y"}) == "x and y")
+  end
+
+  it("replaces every occurrence of a key, not just the first") do
+    assert("$X$-$X$-$X$".substitute({"$X$": "a"}) == "a-a-a")
+  end
+
+  it("imposes no placeholder syntax") do
+    # The keys are literal, so a template picks its own convention.
+    assert("__A__".substitute({"__A__": "one"}) == "one")
+    assert("{{a}}".substitute({"{{a}}": "two"}) == "two")
+    assert("%a%".substitute({"%a%": "three"}) == "three")
+  end
+
+  it("leaves the string alone when nothing matches") do
+    assert("untouched".substitute({"$NOPE$": "x"}) == "untouched")
+    assert("untouched".substitute({}) == "untouched")
+  end
+
+  it("applies each substitution to the result of the last") do
+    # Documented behaviour rather than an accident: substitutions run in the
+    # map's canonical key order, so a value containing a later key is still
+    # rewritten. `$A$` sorts before `$B$`.
+    assert("$A$".substitute({"$A$": "<$B$>", "$B$": "done"}) == "<done>")
+  end
+end

@@ -1,0 +1,120 @@
+using Tey.Manifest, only: [ManifestPackage, read]
+
+# What a `package.kex` means. The reader is strict on purpose — an unknown
+# declaration is a mistake rather than a comment — which makes every field it
+# accepts part of the format's contract: adding one is a change to what a
+# package MAY say, and forgetting one turns a reasonable manifest into an
+# error message. These are the fields, checked without a disk or a network.
+
+describe("Tey.Manifest.read") do
+  it("reads the name, version and Kex requirement") do
+    let package = Tey.Manifest.read(`bundle "greet" do
+  version("0.2.1")
+  kex(">= 0.3.3")
+end
+`).try
+    assert(package.name == "greet")
+    assert(package.version == "0.2.1")
+    assert(package.packageKexRequirement == ">= 0.3.3")
+  end
+
+  it("reads a description") do
+    let package = Tey.Manifest.read(`bundle "greet" do
+  version("0.1.0")
+  description("The first Kex package")
+  license("MIT")
+end
+`).try
+    assert(package.description == "The first Kex package")
+    assert(package.license == "MIT")
+  end
+
+  it("leaves the description empty when there is none") do
+    # Optional, because a manifest nobody can write until they have phrased a
+    # sentence is a manifest nobody writes.
+    let package = Tey.Manifest.read(`bundle "greet" do
+  version("0.1.0")
+end
+`).try
+    assert(package.description == "")
+  end
+
+  it("refuses a declaration it does not recognize") do
+    # The strictness that makes `description` need declaring here at all: a
+    # typo must not be read as a comment and silently dropped.
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`bundle "greet" do
+  describtion("typo")
+end
+`)
+    match outcome do
+      Error(message) -> assert(message.contains?("describtion"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  # A manifest is Kex source rather than JSON so that it can be commented, so
+  # every position a reader would naturally put one has to work. The last case
+  # is the one that bit: the parenthesis in a trailing comment made the
+  # declaration look unfinished, and the reader swallowed the rest of the
+  # manifest without reporting anything.
+  it("allows comments on their own line, after a declaration, and inside one") do
+    let package = Tey.Manifest.read(`# What this package is.
+bundle "greet" do
+  # The version people depend on.
+  version("0.1.0")
+  description("The first Kex package")  # and what it is for
+  kex(">= 0.3.3")
+
+  tey("other", git: "https://example.com/o",   # why we need it
+      tag: "~> 0.1")
+end
+`).try
+    assert(package.name == "greet")
+    assert(package.version == "0.1.0")
+    assert(package.description == "The first Kex package")
+    assert(package.packageKexRequirement == ">= 0.3.3")
+    assert(package.manifestDependencies.count == 1)
+  end
+
+  it("does not let a comment's parenthesis swallow the next declaration") do
+    let package = Tey.Manifest.read(`bundle "greet" do
+  version("0.1.0")  # bump when you cut a release (see docs/releasing
+  description("still here")
+  kex(">= 0.3.3")
+end
+`).try
+    assert(package.description == "still here")
+    assert(package.packageKexRequirement == ">= 0.3.3")
+  end
+
+  it("keeps a # that is inside a string") do
+    let package = Tey.Manifest.read(`bundle "greet" do
+  description("C# interop, of all things")
+end
+`).try
+    assert(package.description == "C# interop, of all things")
+  end
+
+  it("defaults the entrypoint, and a library leaves it unused") do
+    let library = Tey.Manifest.read(`bundle "greet" do
+  version("0.1.0")
+end
+`).try
+    assert(library.entrypoint == "src/main.kex")
+    assert(library.targets.empty?)
+  end
+
+  it("reads dependencies with their selector") do
+    let package = Tey.Manifest.read(`bundle "app" do
+  version("0.1.0")
+  tey("greet", git: "https://github.com/kexhq/greet", tag: "~> 0.1")
+end
+`).try
+    assert(package.manifestDependencies.count == 1)
+    let dependency = package.manifestDependencies.first.try
+    assert(dependency.manifestName == "greet")
+    assert(dependency.manifestGit == "https://github.com/kexhq/greet")
+    assert(dependency.manifestSelector == "tag")
+    assert(dependency.manifestRequested == "~> 0.1")
+  end
+end

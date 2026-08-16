@@ -294,6 +294,39 @@ make String, implement: Enumerable, Foldable do
   replace :> String -> String -> String
   let replace(pattern, replacement) = Kex.Intrinsic.String.replace(this, pattern, replacement)
 
+  # Replaces every key of +replacements+ with its value, in one pass over the
+  # map. The keys are the placeholders exactly as written — no syntax is
+  # imposed, and nothing is reserved — so `$NAME$`, `__NAME__`, `{{name}}` and
+  # `%name%` are all equally valid, and a template needs no escaping to be a
+  # template. `$NAME$` is the convention to reach for when there is no reason
+  # to prefer another.
+  #
+  # Note that a placeholder is NOT `${name}`: that is interpolation, which the
+  # compiler resolves before this ever sees the string.
+  #
+  # This is what a template wants instead of a chain of `.replace` calls: the
+  # chain reads as a pipeline when it is really a substitution table, and it
+  # quietly depends on its own order, since an earlier replacement's OUTPUT is
+  # still visible to every later one.
+  #
+  # Substitutions are applied in the map's canonical key order and each is
+  # applied to the result of the last, so a value that itself contains a key
+  # can still be rewritten by a later one. Keep values placeholder-free when
+  # that matters.
+  #
+  # @param replacements [{String: String}]
+  # @return [String]
+  #
+  # @example
+  #   "Hello, $WHO$!".substitute({"$WHO$": "world"})           # => "Hello, world!"
+  #   "$A$ and $B$".substitute({"$A$": "x", "$B$": "y"})       # => "x and y"
+  #   "__A__".substitute({"__A__": "any key works"})           # => "any key works"
+  substitute :> {String: String} -> String
+  let substitute(replacements) = replacements.entries.reduce(this) do |text, entry|
+    let (key, value) = entry
+    text.replace(key, value)
+  end
+
   # Removes leading and trailing whitespace.
   #
   # @return [String]

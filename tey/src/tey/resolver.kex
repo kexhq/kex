@@ -6,7 +6,7 @@ using Tey.Lockfile, only: [LockState]
 using Tey.Manifest, only: [ManifestPackage]
 using Tey.Semver, only: [highest, range?, satisfies]
 
-let resolvePackage(manifest: ManifestPackage) -> Result<LockState, String> do
+let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
   # satisfies `>= 0.3.0`. Ranges never RESOLVE to a pre-release (see
   # Tey.Semver.satisfies), but refusing to build a package on the rc you
@@ -27,7 +27,7 @@ end
 
 private do
   # The exact tag to pin. Anything but a tag range is taken as written.
-  let chooseTag(name: String, git: String, selector: String, requested: String) -> Result<String, String> do
+  let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
     let tags = match Tey.Git.tags(git) do
       Error(error) -> return Error(error)
@@ -39,15 +39,15 @@ private do
     end
   end
 
-  let resolveDependencies([], locked: [Tey.Lockfile.Dependency]) -> Result<[Tey.Lockfile.Dependency], String> = Ok(locked)
-  let resolveDependencies([dependency | rest], locked: [Tey.Lockfile.Dependency]) -> Result<[Tey.Lockfile.Dependency], String> do
+  let resolveDependencies([], locked: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String = Ok(locked)
+  let resolveDependencies([dependency | rest], locked: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
     match Tey.Resolver.resolveDependency(dependency) do
       Error(error) -> Error(error)
       Ok(resolved) -> Tey.Resolver.resolveDependencies(rest, [...locked, resolved])
     end
   end
 
-  let resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Result<Tey.Lockfile.Dependency, String> do
+  let resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
     # A range is resolved HERE, not pinned: the manifest keeps the question
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.

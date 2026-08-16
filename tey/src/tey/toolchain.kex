@@ -50,7 +50,7 @@ end
 
 # Released versions, newest first, read from the repository's tags. Tags that
 # are not versions are skipped rather than reported as junk.
-let availableVersions -> Result<[String], String> do
+let availableVersions -> [String] or! String do
   match Tey.Git.tags(Tey.Toolchain.repository) do
     Error(error) -> return Error(error)
     Ok(names) -> do
@@ -69,7 +69,7 @@ end
 # The newest RELEASED version — what `tey kex install` picks when asked for
 # no version in particular, and what a download page means by "the current
 # Kex". Pre-releases are opt-in by name.
-let latestStable -> Result<String, String> do
+let latestStable -> String or! String do
   let available = Tey.Toolchain.availableVersions.try
   match available.filter { |version| Tey.Semver.stable?(version) }.first do
     Just(version) -> return Ok(version)
@@ -80,7 +80,7 @@ end
 # The newest version of ANY channel — what `tey kex install --pre` picks. This
 # is how you get onto a beta or an rc without knowing its number: during a
 # pre-stability run there may be nothing else published at all.
-let latestIncludingPreReleases -> Result<String, String> do
+let latestIncludingPreReleases -> String or! String do
   let available = Tey.Toolchain.availableVersions.try
   match available.first do
     Just(version) -> return Ok(version)
@@ -194,7 +194,7 @@ end
 # version: `tey kex list` shows it, `tey kex use` can come back to it, and
 # uninstalling whatever replaces it leaves something behind. Only ever done
 # when asked — see `resolved`.
-let installBundled -> Result<String, String> do
+let installBundled -> String or! String do
   match Tey.Toolchain.bundled do
     None -> return Error("no Kex is bundled with this install")
     Just(binary) -> return Tey.Toolchain.adopt(binary)
@@ -219,7 +219,7 @@ end
 # Falling back to a source build rather than failing keeps the platforms
 # without a published archive working, and covers a release whose upload is
 # incomplete.
-let installRelease(version: String) -> Result<String, String> do
+let installRelease(version: String) -> String or! String do
   match Tey.Toolchain.installArchive(version) do
     Ok(prefix) -> return Ok(prefix)
     # An archive that is not there is a platform Kex does not publish for, or
@@ -257,7 +257,7 @@ end
 
 # The archive naming this machine, matching what the release workflow builds:
 # `kex-0.4.0-macos-arm64.tar.gz`.
-let releaseTarget -> Result<String, String> do
+let releaseTarget -> String or! String do
   let arch = Tey.Toolchain.machineArchitecture.try
   match System.OS do
     :macos -> return Ok("macos-${arch}")
@@ -268,7 +268,7 @@ end
 
 # Installs compiler, runtime BEAM modules and stdlib sources together. The
 # source tree's CMake install layout is the toolchain ABI Tey manages.
-let installSource(source: String, version: String) -> Result<String, String> do
+let installSource(source: String, version: String) -> String or! String do
   let home = Tey.Toolchain.home
   let prefix = "${home}/toolchains/${version}"
   let build = "${Tey.Cache.root}/build/kex-${version}"
@@ -310,7 +310,7 @@ end
 # Removes an installed toolchain. Refuses to leave the shim pointing at
 # nothing: removing the SELECTED version also clears the selection, and the
 # caller is told to pick another.
-let uninstall(version: String) -> Result<String, String> do
+let uninstall(version: String) -> String or! String do
   let prefix = "${Tey.Toolchain.home}/toolchains/${version}"
   return Error("Kex ${version} is not installed") if !FS.Directory.directory?(prefix)
   return Error("could not remove ${prefix}") if !FS.Directory.deleteAll(prefix)
@@ -349,7 +349,7 @@ private do
   # Downloads the published archive for this machine and installs it. The
   # archive holds one directory — the same CMake install tree `installSource`
   # produces — so unpacking and publishing it is the whole job.
-  let installArchive(version: String) -> Result<String, ArchiveFailure> do
+  let installArchive(version: String) -> String or! ArchiveFailure do
     let target = match Tey.Toolchain.releaseTarget do
       Error(error) -> return Error(Unavailable(error))
       Ok(value) -> value
@@ -418,7 +418,7 @@ private do
   # curl, then wget: one of the two is on essentially every machine that can
   # reach a release, and this way Tey needs neither an HTTP library nor a
   # compiler to fetch one.
-  let download(url: String, path: String) -> Result<Void, String> do
+  let download(url: String, path: String) -> Void or! String do
     let partial = "${path}.partial"
     FS.File.delete(partial)
     let fetched = match Process.run("curl", ["-fsSL", "-o", partial, url]) do
@@ -437,7 +437,7 @@ private do
 
   # The published `.sha256` is `<hash>  <filename>`, the format both
   # sha256sum and shasum write and read.
-  let verifyArchive(archive: String, checksumUrl: String) -> Result<Void, String> do
+  let verifyArchive(archive: String, checksumUrl: String) -> Void or! String do
     let checksums = "${archive}.sha256"
     Tey.Toolchain.download(checksumUrl, checksums).try
     let expected = match FS.File.read(checksums) do
@@ -452,7 +452,7 @@ private do
 
   # Hashed with an external tool rather than read in: the archive is tens of
   # megabytes of binary, and this keeps all of it out of the process.
-  let checksumOf(path: String) -> Result<String, String> do
+  let checksumOf(path: String) -> String or! String do
     let output = match Process.run("sha256sum", [path]) do
       Ok(result) -> result.exitCode == 0 then Just(result.stdout) else None
       Error(_) -> match Process.run("shasum", ["-a", "256", path]) do
@@ -468,7 +468,7 @@ private do
 
   # `arm64` and `x86_64` are the spellings the release archives use; uname
   # answers with those or with their aliases depending on the system.
-  let machineArchitecture -> Result<String, String> do
+  let machineArchitecture -> String or! String do
     let result = Process.run("uname", ["-m"]).try
     return Error("could not determine this machine's architecture") if result.exitCode != 0
     let machine = result.stdout.trim
@@ -485,7 +485,7 @@ private do
   # and that installer will replace it on its own schedule. A link would leave a
   # toolchain directory named for one version quietly serving another after the
   # next `brew upgrade`.
-  let adopt(binary: String) -> Result<String, String> do
+  let adopt(binary: String) -> String or! String do
     return Error("${binary} is not an executable Kex") if !FS.File.file?(binary)
     let version = Tey.Toolchain.versionOfBinary(binary).try
     let source = FS.Path.dirname(FS.Path.dirname(binary))
@@ -516,7 +516,7 @@ private do
   # `kex --version` prints "kex 0.3.0-beta (abc1234, built 2026-08-15)"; the
   # version is the second word. Asking the binary rather than reading a file
   # beside it keeps this honest about what will actually run.
-  let versionOfBinary(binary: String) -> Result<String, String> do
+  let versionOfBinary(binary: String) -> String or! String do
     match Process.run(binary, ["--version"]) do
       Error(error) -> return Error(error)
       Ok(result) -> do
@@ -535,7 +535,7 @@ private do
   # Clones the repository at `version`'s tag into the build cache and returns
   # the checkout. Tags are tried as written and with a leading `v`, since
   # both spellings are common.
-  let fetchRelease(version: String) -> Result<String, String> do
+  let fetchRelease(version: String) -> String or! String do
     return Error("could not create Tey build cache") if !FS.Directory.create(Tey.Cache.root)
     return Error("could not create Tey build cache") if !FS.Directory.create("${Tey.Cache.root}/src")
     let checkout = "${Tey.Cache.root}/src/kex-${version}"
@@ -558,7 +558,7 @@ private do
   end
 
   # The tag naming this version in the repository — `0.3.0` or `v0.3.0`.
-  let releaseTag(version: String) -> Result<String, String> do
+  let releaseTag(version: String) -> String or! String do
     let tags = Tey.Git.tags(Tey.Toolchain.repository).try
     return Ok(version) if tags.contains?(version)
     return Ok("v${version}") if tags.contains?("v${version}")
@@ -589,7 +589,7 @@ private do
   # Swaps a finished staging tree in for `prefix`. A reinstall keeps the old
   # tree until the new one is in place and puts it back if the move fails, so
   # a failed upgrade leaves the previous toolchain working rather than none.
-  let publish(staging: String, prefix: String) -> Result<String, String> do
+  let publish(staging: String, prefix: String) -> String or! String do
     let previous = "${prefix}.previous"
     FS.Directory.deleteAll(previous) if FS.Directory.directory?(previous)
     let replacing = FS.Directory.directory?(prefix)

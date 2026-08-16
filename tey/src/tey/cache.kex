@@ -18,7 +18,7 @@ let packagePath(dep: Tey.Lockfile.Dependency) -> String do
   return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
 end
 
-let fetch(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
+let fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   let path = Tey.Cache.packagePath(dep)
 
   return Ok(path) if FS.Directory.directory?(path)
@@ -60,7 +60,7 @@ let fetch(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
   end
 end
 
-let verify(dep: Tey.Lockfile.Dependency) -> Result<String, String> do
+let verify(dep: Tey.Lockfile.Dependency) -> String or! String do
   let path = Tey.Cache.packagePath(dep)
 
   if !FS.Directory.directory?(path)

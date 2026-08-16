@@ -108,14 +108,15 @@ private do
     # left margin rather than with the code around them.
     IO.printLine(`
 Commands:
-  init <name>              create a Kex package
+  new <name> [--lib]       create a Kex package in a new directory
+  init [<name>] [--lib]    create a Kex package in this directory
   add <name>               add a Git dependency and update tey.lock
   install                  resolve, fetch and write tey.lock
   update [name]            re-resolve dependencies
   lock                     resolve and write tey.lock
   list                     show locked dependencies
   run [args...]            run the package entrypoint
-  build                    compile the package entrypoint
+  build                    compile the package (entrypoint, or src/ for a library)
   test                     run spec/*.spec.kex
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
@@ -133,6 +134,15 @@ Commands:
     return 0
   end
 
+  let dispatchCommand(["new", name], options: ParsedOptions) -> Integer do
+    Tey.Commands.new(name, options.flagEnabled?("lib"))
+  end
+  # Bare `tey init` names the package after the directory it is standing in;
+  # an argument overrides that, for a checkout whose directory name is not the
+  # package name.
+  let dispatchCommand(["init"], options: ParsedOptions) -> Integer do
+    Tey.Commands.init("", options.flagEnabled?("lib"))
+  end
   let dispatchCommand(["init", name], options: ParsedOptions) -> Integer do
     Tey.Commands.init(name, options.flagEnabled?("lib"))
   end

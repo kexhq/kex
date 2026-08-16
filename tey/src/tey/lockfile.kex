@@ -44,7 +44,7 @@ let dependencySha256(dep: Dependency) -> String = dep.sha256
 let dependencyGroups(dep: Dependency) -> [String] = dep.groups
 let dependencyListLine(dep: Dependency) -> String = "${dep.name} ${dep.resolved} (${dep.commit})"
 
-let decode(text: String) -> Result<LockState, String> do
+let decode(text: String) -> LockState or! String do
   let root = match JSON.parse(text) do
     Error(_) -> return Error("invalid tey.lock JSON")
     Ok(value) -> value
