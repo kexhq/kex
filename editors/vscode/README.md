@@ -1,16 +1,16 @@
 <p align="center">
-  <img src="https://github.com/kexhq/kex/raw/main/editors/vscode/images/icon.png" width="128" alt="Kex" />
+  <img src="https://github.com/kexhq/kex/raw/main/docs/assets/logo.png" alt="Kex" height="220" />
 </p>
 
-<h3 align="center"><a href="https://kex.run">kex.run — try Kex in your browser</a></h3>
+<h3 align="center"><a href="https://kex.run">Try Kex in your browser on kex.run</a></h3>
 
 # Kex Language Support for VS Code
 
 Syntax highlighting, type-aware hover, completion, navigation, and live
-compiler diagnostics for [Kex](https://github.com/kexhq/kex) — a functional
-language with Ruby-like syntax, immutability by default, UFCS method chains,
-and an Elixir-style process model. Try the language in your browser at
-[kex.run](https://kex.run).
+compiler diagnostics for [Kex](https://github.com/kexhq/kex)
+
+Kex is a functional language with Ruby-like syntax, immutability by default, UFCS method chains,
+and an Elixir-style process model. Try the language in your browser at [kex.run](https://kex.run).
 
 The extension is a thin client. Everything it shows comes from the Kex compiler
 itself, running as a language server (`kex --lsp`), so hover types and
