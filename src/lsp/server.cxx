@@ -1275,6 +1275,38 @@ auto isMapKeyPosition(const std::string& source, unsigned int line,
     return opener == '{' || opener == ',';
 }
 
+// The record a `{ … }` literal names, for a key at this position — `User` in
+// `User { name: "Alice" }`. Empty for a plain map literal, whose keys really
+// are atoms. Only the same line is examined; a literal opened on an earlier
+// line simply falls back to the map reading.
+auto literalRecordName(const std::string& source, unsigned int line,
+                       unsigned int byteColumn) -> std::string {
+    size_t lineStart = 0;
+    for (unsigned int current = 1; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return {};
+        lineStart = newline + 1;
+    }
+    if (byteColumn == 0) return {};
+    size_t i = lineStart + byteColumn - 1;
+    // Back to the `{` that opened this literal, past any earlier `key: value,`.
+    while (i > lineStart && source[i - 1] != '{') --i;
+    if (i == lineStart || source[i - 1] != '{') return {};
+    size_t brace = i - 1;
+    while (brace > lineStart && source[brace - 1] == ' ') --brace;
+    const size_t nameEnd = brace;
+    while (brace > lineStart &&
+           (std::isalnum(static_cast<unsigned char>(source[brace - 1])) ||
+            source[brace - 1] == '_' || source[brace - 1] == '.'))
+        --brace;
+    if (brace == nameEnd) return {};
+    auto name = source.substr(brace, nameEnd - brace);
+    // A record name is capitalised; anything else is not a record literal.
+    if (name.empty() || !std::isupper(static_cast<unsigned char>(name.front())))
+        return {};
+    return name;
+}
+
 // `size : Integer` in a record body declares a field. Like a map key it is not
 // a reference, so the same name-based lookup answered with an unrelated
 // export — hovering `size` reported `foul size : String -> Integer?`. Returns
@@ -2488,7 +2520,21 @@ private:
             : declaredFieldType(document.text, params.position.line + 1,
                                 word.byteColumn, word.byteLength);
         if (mapKey) {
-            detail = word.text + " : Atom";
+            // In a RECORD literal the key is that record's field, so it has a
+            // declared type; in a map literal it is genuinely an atom.
+            detail.clear();
+            if (const auto record = literalRecordName(
+                    document.text, params.position.line + 1, word.byteColumn);
+                !record.empty())
+                if (const auto* declaration =
+                        m_db.findSymbol(record, document.path);
+                    declaration &&
+                    declaration->kind == semantic::SymbolKind::Record)
+                    if (auto type = recordFieldType(declaration->detail,
+                                                    word.text);
+                        !type.empty())
+                        detail = word.text + " : " + type;
+            if (detail.empty()) detail = word.text + " : Atom";
             symbol = nullptr;
         } else if (!fieldDeclaration.empty()) {
             detail = word.text + " : " + fieldDeclaration;

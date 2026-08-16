@@ -8,13 +8,15 @@ const oniguruma = require("vscode-oniguruma");
 
 const wasm = readFileSync(require.resolve("vscode-oniguruma/release/onig.wasm"));
 
-const SAMPLE = `make Parser, implement: Showable, Comparable do
-  let parse(s: String) -> Json or! ParseError = Ok(1)
-  let safe(s: String) -> Json or ParseError = Ok(1)
-  find :> (X -> Bool) -> X?
-  any? :> (X -> Bool) -> Bool
-  let value = list.or("fallback")
-  let n = maybe.or(0)
+const SAMPLE = `record Box do
+  size : Integer
+  label : String = "x"
+end
+
+make Box do
+  let grown -> Box = Box { size: @size * 2, label: @label }
+  let scaled(by: Integer) -> Box = Box { size: @size * by }
+  push :> X -> [X]
 end
 `;
 
