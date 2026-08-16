@@ -254,8 +254,11 @@ __ENTRY__end
     return Tey.Commands.fail("could not write project '${name}'")
   end
   FS.File.write("${name}/.gitattributes", "tey.lock merge=tey\n")
-  # tey.lock IS committed — only build output is ignored.
-  FS.File.write("${name}/.gitignore", "${Tey.Commands.outputDirectory}/\n")
+  # tey.lock IS committed — only build output is ignored. erl_crash.dump is
+  # not build output but it lands in the project root the same way: the BEAM
+  # writes one wherever it died, and nobody wants it in a commit.
+  FS.File.write("${name}/.gitignore",
+                "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
   IO.printLine("Created ${name}")
   0
 end

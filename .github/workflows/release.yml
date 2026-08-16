@@ -217,6 +217,16 @@ jobs:
           sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
             libssl-dev erlang-base libboost-context-dev
 
+      # Unversioned erlang, the same formula users get: brew is the main
+      # install path for Kex, so the OTP that compiles these runtime beams and
+      # the OTP that loads them come from one source and match by
+      # construction. Kex targets current OTP and does not support loading
+      # these beams into an older runtime (OTP 28 changed the atom table
+      # encoding, so an older loader rejects them outright).
+      # What keeps that from being the opaque failure 0.3.3 shipped is the
+      # runtime-version guard: CMake bakes this erlc's OTP release into the
+      # binary, and kex checks it before spawning erl, so a user on a too-old
+      # Erlang is told to upgrade instead of dying as `undef`.
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install gmp pcre2 boost erlang readline

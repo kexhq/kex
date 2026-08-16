@@ -72,3 +72,8 @@ packages/kex/dist/
 # than the one that produced it, which makes a checked-in copy actively wrong
 # for anyone on a different Erlang.
 tey/ebin/
+
+# The BEAM writes a crash dump into whatever directory it died in, so these
+# land in the repo root whenever a spec, an example or the REPL takes down an
+# erl. Never source, never worth committing.
+erl_crash.dump
