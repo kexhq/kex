@@ -397,6 +397,37 @@ foreach(erl IN LISTS KEX_RUNTIME_ERL)
     list(APPEND KEX_RUNTIME_BEAMS "${KEX_RUNTIME_BEAM_DIR}/${stem}.beam")
 endforeach()
 
+# The OTP release of the erlc above, baked into the binary. A .beam cannot be
+# loaded by a runtime older than the one that produced it (OTP 28 changed the
+# atom table encoding: older loaders report "corrupt atom table" and the run
+# dies as an anonymous `undef`). kex checks this floor against the `erl` it is
+# about to spawn and diagnoses the mismatch instead. 0 disables the check —
+# set when erlc is missing (BEAM modes then need prebuilt artifacts anyway)
+# or when the release cannot be determined.
+set(KEX_RUNTIME_OTP_FLOOR 0)
+if(ERLC_EXECUTABLE)
+    # Prefer the erl sitting beside the discovered erlc — same install — so
+    # the floor describes the beams actually being compiled, not whatever
+    # erl happens to be first on PATH.
+    cmake_path(GET ERLC_EXECUTABLE PARENT_PATH _erlc_dir)
+    find_program(ERL_EXECUTABLE erl HINTS "${_erlc_dir}")
+    if(ERL_EXECUTABLE)
+        execute_process(
+            COMMAND ${ERL_EXECUTABLE} -noshell -eval
+                "io:format(\"~s\",[erlang:system_info(otp_release)]),halt()."
+            OUTPUT_VARIABLE _otp_release
+            RESULT_VARIABLE _otp_result
+            TIMEOUT 30
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+        if(_otp_result EQUAL 0 AND _otp_release MATCHES "^[0-9]+$")
+            set(KEX_RUNTIME_OTP_FLOOR "${_otp_release}")
+        else()
+            message(WARNING "Runtime beams: could not determine the OTP release of ${ERL_EXECUTABLE}; the BEAM runtime-version check will be disabled")
+        endif()
+    endif()
+endif()
+
 if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     add_custom_command(
         OUTPUT ${KEX_RUNTIME_BEAMS}
@@ -417,12 +448,14 @@ if(ERLC_EXECUTABLE AND KEX_RUNTIME_BEAMS)
     )
     add_custom_target(kex_runtime_beams DEPENDS ${KEX_RUNTIME_BEAMS})
     set(KEX_HAS_RUNTIME_BEAMS TRUE)
+    message(STATUS "Runtime beams: compiled by OTP ${KEX_RUNTIME_OTP_FLOOR} (loadable by OTP ${KEX_RUNTIME_OTP_FLOOR}+ only)")
 else()
     message(STATUS "Runtime beams: skipped (erlc not found); BEAM modes require prebuilt runtime artifacts")
 endif()
 
 add_executable(kex src/main.cxx)
 target_link_libraries(kex PRIVATE kex_lib)
+target_compile_definitions(kex PRIVATE KEX_RUNTIME_OTP_FLOOR=${KEX_RUNTIME_OTP_FLOOR})
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
     target_sources(kex PRIVATE src/lsp/server.cxx)
     target_compile_definitions(kex PRIVATE KEX_HAS_LSP=1)

@@ -1697,6 +1697,67 @@ auto prebuiltRuntimeBeamDir() -> std::string {
   return {};
 }
 
+// The `erl` kex spawns for every BEAM mode (run -R, compile-run, the BEAM
+// REPL). KEX_ERL overrides PATH, mirroring tey's TEY_ERL — the escape hatch
+// for when the erl first on PATH is older than the runtime beams' compile
+// OTP but a newer one is installed elsewhere.
+auto erlExecutable() -> std::string {
+  if (const char *override = std::getenv("KEX_ERL"); override && *override)
+    return override;
+  return "erl";
+}
+
+// The `erlc` kex shells out to for Core Erlang. It has to come from the same
+// OTP install as erlExecutable() or KEX_ERL only half-works: pointing at a
+// newer erl while PATH's erlc stays behind compiles session modules with one
+// toolchain and loads them with another. erlc always sits beside erl, so an
+// absolute KEX_ERL names its erlc too; KEX_ERLC overrides that directly.
+auto erlcExecutable() -> std::string {
+  if (const char *override = std::getenv("KEX_ERLC"); override && *override)
+    return override;
+  if (const char *erl = std::getenv("KEX_ERL"); erl && *erl) {
+    std::filesystem::path p{erl};
+    if (p.has_parent_path()) {
+      auto sibling = p.parent_path() / "erlc";
+      std::error_code ec;
+      if (std::filesystem::exists(sibling, ec))
+        return sibling.string();
+    }
+  }
+  return "erlc";
+}
+
+#ifndef KEX_RUNTIME_OTP_FLOOR
+#define KEX_RUNTIME_OTP_FLOOR 0
+#endif
+
+// A .beam cannot be loaded by an Erlang runtime older than the one whose
+// erlc produced it (OTP 28 changed the atom table encoding: an OTP 27 `erl`
+// rejects OTP 29 output with "corrupt atom table", and the run dies as an
+// anonymous `undef`). KEX_RUNTIME_OTP_FLOOR — baked in by CMakeLists next to
+// the runtime-beam compilation — is the OTP that compiled the bundled
+// runtime beams; 0 means unknown and disables the check. Prepended to every
+// eval kex hands to `erl`, so it costs one comparison per VM boot and fires
+// before any module load can fail opaquely.
+auto beamOtpFloorGuard() -> std::string {
+  if (KEX_RUNTIME_OTP_FLOOR == 0)
+    return {};
+  return "case catch list_to_integer(erlang:system_info(otp_release)) of "
+         "N when is_integer(N), N >= " +
+         std::to_string(KEX_RUNTIME_OTP_FLOOR) +
+         " -> ok; "
+         "_ -> E=case os:find_executable(os:getenv(\"KEX_ERL\",\"erl\")) of "
+         "false -> os:getenv(\"KEX_ERL\",\"erl\"); P -> P end, "
+         "io:format(standard_error, \"error: the Kex runtime beams bundled "
+         "with this kex were compiled with Erlang/OTP " +
+         std::to_string(KEX_RUNTIME_OTP_FLOOR) +
+         ", and ~ts (OTP ~ts) is too old to load them — without this check "
+         "the run would die as 'corrupt atom table' or 'undef'.~nUpgrade "
+         "Erlang, or point the KEX_ERL environment variable at an OTP " +
+         std::to_string(KEX_RUNTIME_OTP_FLOOR) + "+ erl.~n\", "
+         "[E, erlang:system_info(otp_release)]), halt(1) end, ";
+}
+
 // Every variable a pattern binds. `let x = ...` binds one, but
 // `let Just(x) = ...` / `let (a, b) = ...` bind through the pattern, and the
 // REPL has to remember those too or the names vanish on the next input.
@@ -1919,9 +1980,9 @@ int main(int argc, char *argv[]) {
                                    cleanupError.message());
 
         for (const auto &module : modules) {
-          std::string cmd = "erlc +from_core -pa " + dir + " -o " + dir +
-                            " " + dir + "/" + module.emitted.moduleName +
-                            ".core";
+          std::string cmd = erlcExecutable() + " +from_core -pa " + dir +
+                            " -o " + dir + " " + dir + "/" +
+                            module.emitted.moduleName + ".core";
           if (std::system(cmd.c_str()) != 0) return 1;
         }
 
@@ -2078,13 +2139,14 @@ int main(int argc, char *argv[]) {
     // cold re-runs.
     BeamVm vm;
     {
-      std::vector<std::string> erlArgs = {"erl", "-noshell", "-pa", beamDir};
+      std::vector<std::string> erlArgs = {erlExecutable(), "-noshell", "-pa",
+                                          beamDir};
       if (!rtPaDir.empty()) {
         erlArgs.push_back("-pa");
         erlArgs.push_back(rtPaDir);
       }
       erlArgs.push_back("-eval");
-      erlArgs.push_back("kex_repl_driver:loop()");
+      erlArgs.push_back(beamOtpFloorGuard() + "kex_repl_driver:loop()");
       if (!vm.start(erlArgs)) {
         std::cerr << "error: could not start erl VM for BEAM REPL\n";
         std::filesystem::remove_all(beamDir);
@@ -2112,6 +2174,18 @@ int main(int argc, char *argv[]) {
       vm.writeLine("info " + nonce);
       std::string status;
       std::string otpInfo = vm.readUntilSentinel(sentinel, status);
+      // The VM died before answering the first handshake — an OTP too old for
+      // the bundled beams (the floor guard has already said so on stderr), a
+      // missing runtime module, a broken erl. Without this the REPL prints
+      // its banner over the corpse and answers every input with "failed to
+      // load session module".
+      if (status == "eof") {
+        vm.close();
+        std::cerr
+            << "error: the BEAM runtime did not start; cannot run the REPL\n";
+        std::filesystem::remove_all(beamDir);
+        return 1;
+      }
       while (!otpInfo.empty() && otpInfo.back() == '\n')
         otpInfo.pop_back();
       if (!otpInfo.empty())
@@ -2807,7 +2881,7 @@ int main(int argc, char *argv[]) {
             cf << emitted.source;
             cf.close();
 
-            std::string erlCmd = "erlc +from_core -W0 -pa " +
+            std::string erlCmd = erlcExecutable() + " +from_core -W0 -pa " +
                                  beamDir + " -o " + beamDir + " " +
                                  corePath + " 2>&1";
             int erlcRet = std::system(erlCmd.c_str());
@@ -3463,6 +3537,7 @@ int main(int argc, char *argv[]) {
     // output depended on the environment: identical source printed `[h, é, é]`
     // here and `[h, \ufffd, \ufffd]` there.
     std::string mainCall =
+        beamOtpFloorGuard() +
         "io:setopts(standard_io, [{encoding, unicode}]), "
         "io:setopts(standard_error, [{encoding, unicode}]), "
         "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
@@ -3486,7 +3561,7 @@ int main(int argc, char *argv[]) {
     // Erlang prepends each -pa directory, so add the toolchain first and the
     // compiled unit last. A source module intentionally shadows a stdlib
     // module with the same public name (for example a user-defined `Math`).
-    std::string runCmd = "erl -noshell";
+    std::string runCmd = erlExecutable() + " -noshell";
     if (!rtBeamDir.empty())
       runCmd += " -pa " + rtBeamDir;
     runCmd += " -pa " + absBeamDir;
@@ -3853,8 +3928,9 @@ int main(int argc, char *argv[]) {
 
       int erlcRet = 0;
       for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
-        std::string coreCmd = "erlc +from_core -pa " + outputDir + " -o " +
-                              outputDir + " " + corePaths[moduleIndex];
+        std::string coreCmd = erlcExecutable() + " +from_core -pa " +
+                              outputDir + " -o " + outputDir + " " +
+                              corePaths[moduleIndex];
         if (!tempDir.empty()) {
         // Suppress erlc noise in temp-dir (interpreter/-R) mode —
         // was `2>&1` (merging stderr into stdout), the OPPOSITE of
@@ -3879,8 +3955,8 @@ int main(int argc, char *argv[]) {
           // message reaches the terminal (and CI) instead of a bare
           // "erlc failed", which is all a failing spec could report.
           if (!tempDir.empty())
-            std::system(("erlc +from_core -pa " + outputDir + " -o " +
-                         outputDir + " " + corePaths[moduleIndex])
+            std::system((erlcExecutable() + " +from_core -pa " + outputDir +
+                         " -o " + outputDir + " " + corePaths[moduleIndex])
                             .c_str());
           std::cerr << "error: erlc failed\n";
           if (!tempDir.empty()) std::filesystem::remove_all(tempDir);
@@ -4004,20 +4080,23 @@ int main(int argc, char *argv[]) {
             "io:setopts(standard_error, [{encoding, unicode}]), ";
         std::string mainCall =
             result.mainArity == 1
-                ? utf8Io + "try " + loadExpr + "'" + result.moduleName +
+                ? beamOtpFloorGuard() + utf8Io + "try " + loadExpr + "'" +
+                      result.moduleName +
                       "':main([unicode:characters_to_binary(A) || A <- "
                       "init:get_plain_arguments()]) of Result -> halt() catch "
                       "_:Reason:_ -> " +
                       reasonFmt + ", halt(1) end"
-                : utf8Io + "try " + loadExpr + "'" + result.moduleName +
+                : beamOtpFloorGuard() + utf8Io + "try " + loadExpr + "'" +
+                      result.moduleName +
                       "':main() of Result -> halt() catch _:Reason:_ -> " +
                       reasonFmt + ", halt(1) end";
         // shellSingleQuote (see its own comment) wraps the whole
         // -eval text as one shell argument, so quote characters
         // embedded in it survive into erl correctly regardless of
         // where they land (spec/json_parser.spec.kex).
-        std::string runCmd = "erl -noshell -pa " + outputDir + " -eval " +
-                             shellSingleQuote(mainCall);
+        std::string runCmd =
+            erlExecutable() + " -noshell -pa " + outputDir + " -eval " +
+            shellSingleQuote(mainCall);
         if (result.mainArity == 1 && !scriptArgs.empty()) {
           runCmd += " -extra";
           for (const auto &a : scriptArgs)

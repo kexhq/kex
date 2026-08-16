@@ -98,7 +98,7 @@ private do
       Just(revision) -> "${Kex.Kernel.VERSION.release}, ${revision}"
       None -> Kex.Kernel.VERSION.release
     end
-    IO.printLine("tey 0.1.1 (Kex ${kex})")
+    IO.printLine("tey ${Tey.Version.number} (Kex ${kex})")
     return 0
   end
 

@@ -68,14 +68,27 @@ jobs:
           echo "tag=${tag}" >> "$GITHUB_OUTPUT"
           echo "Rehearsing the bump for ${tag}"
 
+          # Tey's version is its own and is NOT derivable from the tag, so the
+          # asset list is what says which tey-*.tar.gz that release published.
+          # Asking the release rather than reconstructing the name also means
+          # this keeps rehearsing across a change to the naming itself — which
+          # is exactly what the move off `tey-<kex-version>` was.
+          tey_version=$(gh release view "$tag" --repo kexhq/kex --json assets \
+            --jq '[.assets[].name | capture("^tey-(?<v>.+)\\.tar\\.gz$").v] | first // empty')
+          if [ -z "$tey_version" ]; then
+            echo "::error::${tag} published no tey-*.tar.gz to rehearse against"
+            exit 1
+          fi
+          echo "Tey ${tey_version} ships with Kex ${version}"
+
           base="https://github.com/kexhq/kex/releases/download/${tag}"
-          for name in "tey-${version}" \
+          for name in "tey-${tey_version}" \
                       "kex-${version}-macos-arm64" \
                       "kex-${version}-linux-arm64" "kex-${version}-linux-x86_64"; do
             curl -fsSL "${base}/${name}.tar.gz.sha256" | cut -d' ' -f1 > "tap/${name}.hash"
           done
 
-          ruby tools/bump_formula.rb "$base" "$version" tap/Formula/tey.rb tap
+          ruby tools/bump_formula.rb "$base" "$version" "$tey_version" tap/Formula/tey.rb tap
           rm -f tap/*.hash
 
       - name: Check what it produced
@@ -123,5 +136,16 @@ jobs:
           hashes=$(grep -cE '^ *sha256 "[0-9a-f]{64}"$' Formula/tey.rb)
           [ "$urls" = "4" ] || { echo "::error::expected 4 ${TAG} release urls, found $urls"; exit 1; }
           [ "$hashes" = "4" ] || { echo "::error::expected 4 sha256 lines, found $hashes"; exit 1; }
+
+          # The keg version is stated rather than inferred, because the tey
+          # archive is named for TEY's version now and brew would otherwise
+          # read the keg version off that url — leaving `brew upgrade` blind to
+          # a release that bumped only Kex. Losing this line does not break the
+          # formula in any way `ruby -c` or `brew style` can see; it silently
+          # strands everyone on the brew channel on an old compiler.
+          if ! grep -qx "  version \"${TAG#v}\"" Formula/tey.rb; then
+            echo "::error::Formula/tey.rb is missing 'version \"${TAG#v}\"' — brew would take the keg version from the tey archive's name"
+            exit 1
+          fi
 
           git diff --stat

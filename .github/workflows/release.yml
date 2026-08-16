@@ -68,6 +68,7 @@ jobs:
     environment: release
     outputs:
       version: ${{ steps.read.outputs.version }}
+      tey_version: ${{ steps.read.outputs.tey_version }}
       tag: ${{ steps.read.outputs.tag }}
       prerelease: ${{ steps.read.outputs.prerelease }}
       sha: ${{ steps.read.outputs.sha }}
@@ -105,6 +106,17 @@ jobs:
             exit 1
           fi
 
+          # Tey has its OWN version and its own cadence: it is released from
+          # this repository, but a Kex release is not automatically a new Tey.
+          # tey/package.kex is the single source (tey/Makefile generates the
+          # module `tey --version` prints from the same line), so the archive
+          # and the tap pull request can finally name the thing they ship.
+          tey_version=$(sed -n 's/^ *version("\([^"]*\)").*/\1/p' tey/package.kex)
+          if ! printf '%s' "$tey_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-(prealpha|alpha|beta|rc)(\.[0-9]+)?)?$'; then
+            echo "::error::tey/package.kex declares version '${tey_version}', which is not a version (MAJOR.MINOR.PATCH[-(prealpha|alpha|beta|rc)[.N]])"
+            exit 1
+          fi
+
           tag="v${version}"
           # A released version is never rebuilt: someone may already be running
           # it, and a second build of the same number would not be the same
@@ -116,6 +128,7 @@ jobs:
 
           {
             echo "version=${version}"
+            echo "tey_version=${tey_version}"
             echo "tag=${tag}"
             echo "prerelease=$([ "$version" = "${version%%-*}" ] && echo false || echo true)"
             echo "sha=$(git rev-parse HEAD)"
@@ -125,7 +138,7 @@ jobs:
             echo "build_date=$(git show -s --format=%cs HEAD)"
           } >> "$GITHUB_OUTPUT"
 
-          echo "Releasing Kex ${version} from $(git rev-parse --short HEAD)"
+          echo "Releasing Kex ${version} (with Tey ${tey_version}) from $(git rev-parse --short HEAD)"
 
       # The `formula` job is the last thing a release does and the only thing
       # that reaches ANOTHER repository, so its failures are discovered at the
@@ -217,6 +230,16 @@ jobs:
           sudo apt-get install -y cmake libgmp-dev libpcre2-dev libreadline-dev \
             libssl-dev erlang-base libboost-context-dev
 
+      # Unversioned erlang, the same formula users get: brew is the main
+      # install path for Kex, so the OTP that compiles these runtime beams and
+      # the OTP that loads them come from one source and match by
+      # construction. Kex targets current OTP and does not support loading
+      # these beams into an older runtime (OTP 28 changed the atom table
+      # encoding, so an older loader rejects them outright).
+      # What keeps that from being the opaque failure 0.3.3 shipped is the
+      # runtime-version guard: CMake bakes this erlc's OTP release into the
+      # binary, and kex checks it before spawning erl, so a user on a too-old
+      # Erlang is told to upgrade instead of dying as `undef`.
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install gmp pcre2 boost erlang readline
@@ -279,7 +302,10 @@ jobs:
         if: matrix.target == 'linux-x86_64'
         run: |
           set -euo pipefail
-          version="${{ needs.version.outputs.version }}"
+          # Tey's own version, not the Kex one: this archive holds Tey, and
+          # naming it after the compiler it happens to ship beside is how
+          # `brew list tey` came to disagree with `tey --version`.
+          version="${{ needs.version.outputs.tey_version }}"
           name="tey-${version}"
           # ERL=erl rather than the runner's absolute path: the launcher only
           # honours a baked path that exists, and an absolute path from a
@@ -796,6 +822,7 @@ jobs:
         env:
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
+          TEY_VERSION: ${{ needs.version.outputs.tey_version }}
         run: |
           set -euo pipefail
           base="https://github.com/kexhq/kex/releases/download/${TAG}"
@@ -806,7 +833,7 @@ jobs:
           # are the ones published beside them, not ones computed here — if a
           # release asset and its .sha256 ever disagreed, this would be the
           # wrong place to find out.
-          for name in "tey-${VERSION}" \
+          for name in "tey-${TEY_VERSION}" \
                       "kex-${VERSION}-macos-arm64" \
                       "kex-${VERSION}-linux-arm64" "kex-${VERSION}-linux-x86_64"; do
             curl -fsSL "${base}/${name}.tar.gz.sha256" -o "${name}.sha256"
@@ -818,7 +845,7 @@ jobs:
           # outside a release, which is how an indentation error once reached
           # this job and broke it on the first stable release. CI runs that
           # script against the previous release on every pull request.
-          ruby kex-src/tools/bump_formula.rb "$base" "$VERSION" Formula/tey.rb .
+          ruby kex-src/tools/bump_formula.rb "$base" "$VERSION" "$TEY_VERSION" Formula/tey.rb .
 
           rm -f ./*.sha256 ./*.hash
           git diff --stat
@@ -827,6 +854,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
           VERSION: ${{ needs.version.outputs.version }}
+          TEY_VERSION: ${{ needs.version.outputs.tey_version }}
         run: |
           set -euo pipefail
           # Re-running a release that changed nothing must not fail the job.
@@ -835,11 +863,15 @@ jobs:
             exit 0
           fi
 
+          # Branched and titled by the KEX version even though the archive is
+          # named for Tey's: Tey's version does not move on every release, and
+          # two releases sharing one branch name would collide on the push and
+          # update the earlier release's pull request.
           branch="tey-${VERSION}"
           git config user.name "kex release"
           git config user.email "noreply@kex.run"
           git checkout -b "$branch"
-          git commit -am "tey ${VERSION}"
+          git commit -am "tey ${TEY_VERSION} for Kex ${VERSION}"
 
           # --force-with-lease compares against the remote-tracking ref, and
           # actions/checkout fetches only the default branch — so on a re-run,
@@ -867,8 +899,8 @@ jobs:
             echo "Updated the open pull request for ${VERSION}"
           else
             gh pr create --head "$branch" \
-              --title "tey ${VERSION}" \
-              --body "Kex ${VERSION} is published. This points the formula at its tey-${VERSION}.tar.gz.
+              --title "tey ${TEY_VERSION} for Kex ${VERSION}" \
+              --body "Kex ${VERSION} is published. This points the formula at tey-${TEY_VERSION}.tar.gz and the Kex ${VERSION} archives beside it.
 
           Opened by kexhq/kex's release workflow; see docs/releasing.md there." || {
               echo "::warning::Could not open the formula pull request for ${VERSION}."
