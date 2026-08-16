@@ -721,3 +721,12 @@ target_include_directories(color_cli_test PRIVATE tests)
 target_compile_definitions(color_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
 add_dependencies(color_cli_test kex)
 add_test(NAME color_cli_test COMMAND color_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})
+
+# `--info` is a machine contract other tools parse (Tey reads the OTP floor
+# out of it), so its shape is pinned by a test rather than by convention.
+add_executable(info_cli_test tests/info_cli_test.cxx)
+target_link_libraries(info_cli_test PRIVATE kex_lib)
+target_include_directories(info_cli_test PRIVATE tests)
+target_compile_definitions(info_cli_test PRIVATE KEX_BINARY_PATH="$<TARGET_FILE:kex>")
+add_dependencies(info_cli_test kex)
+add_test(NAME info_cli_test COMMAND info_cli_test WORKING_DIRECTORY ${CMAKE_SOURCE_DIR})

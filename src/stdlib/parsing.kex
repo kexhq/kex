@@ -51,8 +51,8 @@ make Input do
     return cursor
   end
 
-  let many(f: Input -> Result<(a, Input), ParseError>) -> ([a], Input) do
-    var results: [a] = []
+  let many(f: Input -> Result<(T, Input), ParseError>) -> ([T], Input) do
+    var results: [T] = []
     var p = this
     loop
       trying do
@@ -65,13 +65,13 @@ make Input do
     end
   end
 
-  let some(f: Input -> Result<(a, Input), ParseError>) -> ([a], Input) or! ParseError do
+  let some(f: Input -> Result<(T, Input), ParseError>) -> ([T], Input) or! ParseError do
     let (first, p) = f(this).try
     let (rest, advanced) = p.many(f)
     Ok(([first, ...rest], advanced))
   end
 
-  let choice(alts: [Input -> Result<(a, Input), ParseError>]) -> (a, Input) or! ParseError do
+  let choice(alts: [Input -> Result<(T, Input), ParseError>]) -> (T, Input) or! ParseError do
     var index = 0
     loop
       break if index >= alts.count
