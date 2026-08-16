@@ -483,8 +483,18 @@ jobs:
   # so `docker run ghcr.io/kexhq/kex` never hands someone an rc they did not
   # ask for. A pre-release is reachable by its exact version, and by its
   # channel name (`:rc`, `:rc-alpine`) for anyone tracking one.
+  #
+  # Waits on `build` as well as `image`, because this is the step that makes an
+  # image REACHABLE. `image` pushes by digest — untagged blobs nobody can pull
+  # by name — while `build` is still running the suites, and the image jobs
+  # finish first precisely because they do not run any. Without `build` here, a
+  # release whose specs failed still tagged `:<version>` and `:latest`, and
+  # `docker run ghcr.io/kexhq/kex` handed it to people, while the `publish` job
+  # below correctly refused to create the release the tags belonged to. Costs
+  # no wall time: `publish` already waits for `build`, so nothing downstream
+  # starts sooner for having tagged early.
   manifest:
-    needs: [version, image]
+    needs: [version, image, build]
     runs-on: ubuntu-latest
     permissions:
       packages: write
