@@ -173,6 +173,14 @@ jobs:
       # Publishing the packaged .vsix files (--packagePath) rather than letting
       # publish repackage: the store receives the identical bytes this workflow
       # tested, target stamped at package time.
+      #
+      # A rejection here can be about the extension's NAME rather than its
+      # contents: the Marketplace refuses a `displayName` it considers close to
+      # an existing one, and "Kex Language Support" was refused against the
+      # field of "<Something> Language Support" extensions. Hence the bare
+      # "Kex" in package.json — the description carries what the suffix used
+      # to say. The check runs on every publish, so renaming it back reopens
+      # this.
       - name: Publish to the Marketplace
         if: steps.check.outputs.published == 'false'
         working-directory: editors/vscode

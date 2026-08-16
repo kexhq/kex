@@ -8,6 +8,16 @@ STDLIBDIR ?= $(PREFIX)/share/kex/stdlib
 
 WASM_BUILD_DIR = build-wasm
 
+# Every `cmake --build` below is parallel. The tree is ~56 translation units
+# and was compiling them one at a time, which is most of what a CI run spent
+# its time on — the wasm job's build step alone was 10.6 of its 17 minutes,
+# with the GMP and PCRE2 builds beside it already using -j"$(nproc)".
+# `--parallel` with no number lets CMake use every core it finds, which is
+# what a developer machine and a runner both want. Override to serialize when
+# a compiler error's output is interleaved past reading: make JOBS=1.
+JOBS ?=
+CMAKE_BUILD_JOBS = --parallel $(JOBS)
+
 # GNU `timeout` bounds a backend that hangs, but macOS ships without it
 # (coreutils installs it as `gtimeout`). Fall back to running unbounded rather
 # than failing every spec with "timeout: command not found" — which is what the
@@ -65,7 +75,7 @@ build:
 		echo "    rm -rf $(BUILD_DIR) && make build"; \
 		exit 1; \
 	}; echo "$$output" | tail -1
-	@cmake --build $(BUILD_DIR)
+	@cmake --build $(BUILD_DIR) $(CMAKE_BUILD_JOBS)
 
 test: build
 	@ctest --test-dir $(BUILD_DIR) --output-on-failure
@@ -86,7 +96,7 @@ test: build
 build-wasm:
 	@emcmake cmake -B $(WASM_BUILD_DIR) \
 		-DKEX_PREBUILT_RUNTIME_DIR=$(CURDIR)/$(BUILD_DIR)/runtime/beam
-	@cmake --build $(WASM_BUILD_DIR)
+	@cmake --build $(WASM_BUILD_DIR) $(CMAKE_BUILD_JOBS)
 
 # Only interpreter_test is run here — it's the suite this project has
 # actually verified passes under wasm (187/187, matching the native suite)

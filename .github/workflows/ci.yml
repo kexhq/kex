@@ -1,10 +1,26 @@
 name: CI
 
+# `push` is main ONLY. With `branches: ["**"]` on both events, every branch
+# with an open pull request ran the whole suite twice — once for the branch
+# tip, once for the pull request — which is what a PR showing 9 checks, four
+# of them the same four jobs a second time, was. The pull_request run tests
+# the MERGE of the branch into main, which is strictly the more relevant of
+# the two, so dropping the push half costs no coverage. What remains on main
+# is the post-merge signal: proof that what actually landed is green.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
     branches: ["**"]
+
+# One run per branch. Pushing a fixup while the previous run is still going
+# cancels that one instead of queueing behind it — the older run is testing a
+# commit nobody will merge. Not applied to main: a post-merge run is the
+# record for a commit that has already landed, and cancelling it would leave
+# that commit with no verdict.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   # Both platforms, because they genuinely disagree. libm is only required to
@@ -39,8 +55,12 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install gmp pcre2 boost erlang readline
 
+      # KEX_BOOST_STATIC matches release.yml: the released archives link
+      # Boost.Context statically (see CMakeLists.txt), and a static link that
+      # only ever happens during a release is a link nobody finds out about
+      # until the release is the thing that breaks.
       - name: Build
-        run: cmake -B build -G "Unix Makefiles" && cmake --build build
+        run: cmake -B build -G "Unix Makefiles" -DKEX_BOOST_STATIC=ON && cmake --build build --parallel
 
       - name: Unit tests
         run: make test
@@ -227,7 +247,7 @@ jobs:
       - name: Build native kex (for the compiled stdlib unit)
         run: |
           cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam
+          cmake --build build --target kex_prelude_beam --parallel
 
       - name: Configure and build wasm target
         run: |

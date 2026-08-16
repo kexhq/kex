@@ -355,6 +355,20 @@ endif()
 # register state across a context switch, causing heap corruption. Boost's
 # fcontext backend is the well-tested primitive purpose-built for this.
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Emscripten")
+    # Released archives link it STATICALLY (-DKEX_BOOST_STATIC=ON in
+    # release.yml). Boost.Context is the one dependency whose Linux soname
+    # carries the upstream version — libboost_context.so.1.83.0 for the
+    # Ubuntu runner that builds the archive — so it can never be satisfied by
+    # the copy a package manager installed: Homebrew's boost is a different
+    # 1.x and its soname says so. That is what broke `brew install tey` on
+    # Linux for 0.3.1, with the formula's `depends_on "boost"` satisfied and
+    # useless. Every other dependency (gmp, pcre2, readline, crypto) has a
+    # stable ABI-versioned soname that any of them provides, so only this one
+    # has to come along in the binary. It is a few tens of KB of assembly.
+    option(KEX_BOOST_STATIC "Link Boost.Context statically" OFF)
+    if(KEX_BOOST_STATIC)
+        set(Boost_USE_STATIC_LIBS ON)
+    endif()
     find_package(Boost REQUIRED COMPONENTS context)
     target_link_libraries(kex_lib PUBLIC Boost::context)
 

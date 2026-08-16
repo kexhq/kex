@@ -166,12 +166,17 @@ jobs:
         if: runner.os == 'macOS'
         run: brew install gmp pcre2 boost erlang readline
 
+      # KEX_BOOST_STATIC is what makes the archive installable by a package
+      # manager: see the comment on the option in CMakeLists.txt. It is a
+      # release-build setting rather than the default because a distribution
+      # packaging Kex from source wants its own shared boost.
       - name: Build
         run: |
           cmake -B build -G "Unix Makefiles" \
             -DCMAKE_BUILD_TYPE=Release \
+            -DKEX_BOOST_STATIC=ON \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
-          cmake --build build
+          cmake --build build --parallel
 
       # A release is not published on a red suite. These are the same gates CI
       # runs on a branch, which tags do not trigger.
@@ -268,7 +273,7 @@ jobs:
       - name: Build native kex (for the compiled stdlib unit)
         run: |
           cmake -B build -G "Unix Makefiles"
-          cmake --build build --target kex_prelude_beam
+          cmake --build build --target kex_prelude_beam --parallel
 
       # ── The wasm toolchain, identical to ci.yml's wasm job. The cache keys
       # match, so on a release this is a restore, not a rebuild.
@@ -367,7 +372,7 @@ jobs:
           emcmake cmake -B build-wasm \
             -DKEX_PREBUILT_RUNTIME_DIR="$(pwd)/build/runtime/beam" \
             -DKEX_BUILD_DATE="${{ needs.version.outputs.build_date }}"
-          cmake --build build-wasm
+          cmake --build build-wasm --parallel
           node build-wasm/kex.js --version
 
       # The same gates CI's wasm job runs, on the pinned commit. (These
@@ -770,6 +775,17 @@ jobs:
           git config user.email "noreply@kex.run"
           git checkout -b "$branch"
           git commit -am "tey ${VERSION}"
+
+          # --force-with-lease compares against the remote-tracking ref, and
+          # actions/checkout fetches only the default branch — so on a re-run,
+          # where the remote already HAS this branch, there is no
+          # origin/tey-<version> to compare with and git refuses the push as
+          # "stale info" rather than as a conflict. Fetching the branch first
+          # gives the lease the base it wants; it stays a lease rather than a
+          # bare --force, so a push still aborts if somebody edited the branch
+          # between this fetch and this push. `|| true` because a first release
+          # has nothing to fetch, and there the lease is trivially satisfied.
+          git fetch --no-tags origin "+refs/heads/${branch}:refs/remotes/origin/${branch}" || true
           git push -u --force-with-lease origin "$branch"
 
           # A re-run updates the open pull request rather than opening a second.
