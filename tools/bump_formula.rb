@@ -10,17 +10,22 @@
 # until the first stable release — the `formula` job is gated on
 # `prerelease == 'false'`, so nothing had ever run it.
 #
-#   ruby tools/bump_formula.rb <base-url> <version> [formula-path] [hash-dir]
+#   ruby tools/bump_formula.rb <base-url> <version> <tey-version> [formula-path] [hash-dir]
+#
+# <version> is Kex's, <tey-version> is Tey's own — they are not the same
+# number and do not move together. See the STABLE-TEY block below for which
+# one ends up where.
 #
 # <hash-dir> holds one `<archive-name>.hash` per archive, each a bare sha256.
 # The checksums are the ones published beside the release rather than any
 # computed here: if an asset and its .sha256 ever disagreed, this would be the
 # wrong place to find out.
 
-USAGE = "usage: bump_formula.rb <base-url> <version> [formula-path] [hash-dir]"
+USAGE = "usage: bump_formula.rb <base-url> <version> <tey-version> [formula-path] [hash-dir]"
 
-base, version, formula_path, hash_dir = ARGV
+base, version, tey_version, formula_path, hash_dir = ARGV
 abort(USAGE) if base.nil? || base.empty? || version.nil? || version.empty?
+abort(USAGE) if tey_version.nil? || tey_version.empty?
 formula_path ||= "Formula/tey.rb"
 hash_dir ||= "."
 
@@ -65,9 +70,18 @@ formula = File.read(formula_path)
 
 # Tey itself is compiled to BEAM modules and therefore architecture-independent:
 # one small archive serves every platform.
-tey = "tey-#{version}"
+#
+# The explicit `version` is Kex's, not Tey's, and it is load-bearing rather
+# than cosmetic. Brew would otherwise infer the keg version from the url —
+# tey-0.2.0.tar.gz — and Tey's version does not move on every Kex release, so
+# a release that only bumps Kex would leave brew seeing no new version and
+# never handing anyone the new compiler. The formula ships `resource "kex"`,
+# so what it installs really does change with Kex even when Tey is untouched.
+tey = "tey-#{tey_version}"
 formula = fill(formula, "STABLE-TEY",
-               %(  url "#{base}/#{tey}.tar.gz"\n  sha256 "#{digest(hash_dir, tey)}"\n),
+               %(  url "#{base}/#{tey}.tar.gz"\n) +
+                 %(  version "#{version}"\n) +
+                 %(  sha256 "#{digest(hash_dir, tey)}"\n),
                formula_path)
 
 kex = %(  resource "kex" do\n)

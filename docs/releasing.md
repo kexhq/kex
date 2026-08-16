@@ -47,6 +47,24 @@ you edit or close it: a version that should be a minor, a major or a different
 channel is exactly what a default gets wrong. Run with `bump_after: nothing` to
 raise it by hand instead.
 
+### Tey has its own version
+
+`VERSION` is Kex's. **Tey's is the `version(...)` line in `tey/package.kex`**,
+and the two do not move together: Tey ships from this repository on every
+release, but a Kex release is not a new Tey. Bump it only when Tey itself
+changed, with the same syntax rules — the workflow validates it the same way
+and refuses a typo.
+
+That one line is the only place the number lives. `tey/Makefile` reads it and
+generates `tey/src/tey/version.kex` (gitignored) so that `tey --version`
+prints it, and the release names the archive `tey-<tey-version>.tar.gz` and
+titles the tap pull request from it. Before this, three places said it by hand
+and disagreed: `brew list --versions tey` answered `0.3.3` while the binary it
+had just installed said `tey 0.1.1`.
+
+The Homebrew keg version is still Kex's, and deliberately — see the `formula`
+job below.
+
 Until `VERSION` moves, running the workflow again fails on the existing tag
 rather than rebuilding a published number.
 
@@ -131,9 +149,10 @@ Without it, only the `formula` job fails, and only on a stable release.
 
    each with a `.sha256` beside it. A red suite means no release.
 
-   The Linux x86_64 runner additionally packages **`tey-<version>.tar.gz`**.
-   Tey is compiled to BEAM modules, which are architecture-independent, so one
-   archive serves every platform — that is what lets Homebrew install Tey
+   The Linux x86_64 runner additionally packages **`tey-<tey-version>.tar.gz`**
+   — named for Tey's own version (`tey/package.kex`), not the Kex one beside
+   it. Tey is compiled to BEAM modules, which are architecture-independent, so
+   one archive serves every platform — that is what lets Homebrew install Tey
    without being able to build Kex at all.
 
    Both halves of the Homebrew formula come from these four archives: the keg
@@ -183,10 +202,18 @@ Without it, only the `formula` job fails, and only on a stable release.
 8. **`formula`** — **stable only**. Points `kexhq/homebrew-tey`'s
    `Formula/tey.rb` at the new release and opens a pull request on the tap. It
    fills two marked regions and nothing else: `# <<STABLE-TEY` with the Tey
-   archive's `url`/`sha256`, and `# <<STABLE-KEX` with one `resource` per
-   platform, so brew downloads the compiler for the machine doing the
+   archive's `url`/`version`/`sha256`, and `# <<STABLE-KEX` with one `resource`
+   per platform, so brew downloads the compiler for the machine doing the
    installing. Checksums are read from the `.sha256` files published beside the
-   assets rather than recomputed. Nothing pushes to a branch people install
+   assets rather than recomputed.
+
+   The `version` in that first region is **Kex's**, stated rather than left for
+   brew to infer from the `tey-<tey-version>.tar.gz` url. It has to be: the keg
+   carries the compiler as a resource, so what `brew install tey` gives you
+   changes with every Kex release — but Tey's own version does not, and a keg
+   version that stood still would leave the whole brew channel with no upgrade
+   to see. `formula-bump` asserts the line is present, because nothing else
+   would notice it missing until users stopped receiving compilers. Nothing pushes to a branch people install
    from — a formula that cannot build is a broken `brew install` for everyone —
    so **a release reaches Homebrew when a maintainer merges that pull
    request**.
