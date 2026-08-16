@@ -5413,6 +5413,43 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         }
     }
 
+    // With no evidence about the receiver, prefer an overload whose receiver
+    // is itself generic. That one is written to accept anything; an overload
+    // naming a concrete receiver is a specialization for a type this call has
+    // no reason to believe in. Without the preference the winner was whichever
+    // sorted first, so `let show(x) = x.to(String)` answered `String` — the
+    // result of units.kex's `to(measure: Measure, String)` — where the general
+    // `to(value, String)` in optional.kex says `String?`.
+    if (isMethodCall && fullMatches.size() > 1 && !argTypes.empty()) {
+        const auto receiver = resolve(argTypes[0]);
+        if (std::holds_alternative<TypeVar>(receiver->kind) ||
+            std::holds_alternative<UnknownType>(receiver->kind)) {
+            // A trait-bounded receiver (`Showable`) outranks a bare variable:
+            // it accepts anything that satisfies the bound AND says more about
+            // the result. `x.to(String)` picks `to : Showable -> String?` over
+            // the untyped `to(value, t)`, whose result is only `unknown?`.
+            const auto rank = [&](const Signature* candidate) {
+                if (candidate->params.empty()) return 2;
+                const auto parameter = resolve(candidate->params[0]);
+                if (std::holds_alternative<ConstrainedType>(parameter->kind))
+                    return 0;
+                // A trait may reach here as a plain named type rather than a
+                // constrained one; `Showable` is a bound, not a concrete type.
+                if (const auto* named = std::get_if<NamedType>(&parameter->kind);
+                    named && isTrait(named->name))
+                    return 0;
+                if (std::holds_alternative<TypeVar>(parameter->kind) ||
+                    std::holds_alternative<UnknownType>(parameter->kind))
+                    return 1;
+                return 2;
+            };
+            std::stable_sort(fullMatches.begin(), fullMatches.end(),
+                             [&](const Signature* left, const Signature* right) {
+                                 return rank(left) < rank(right);
+                             });
+        }
+    }
+
     if (fullMatches.size() >= 1) {
         const auto& matched = *fullMatches[0];
         if (std::getenv("KEX_DEBUG_SIG") && name == "to") {

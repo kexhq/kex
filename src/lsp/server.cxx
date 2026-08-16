@@ -2455,7 +2455,7 @@ private:
             if (completionDocs) {
                 std::string documentation;
                 for (const auto& entry : *completionDocs) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
                 item.documentation = ::lsp::OneOf<::lsp::String,
@@ -2517,11 +2517,13 @@ private:
             hoverLineStart = newline + 1;
         }
         const auto hoverWordOffset = hoverLineStart + word.byteColumn - 1;
-        const bool lexicalReference = !resolvedSymbolAtPosition &&
-            moduleQualifier.empty() &&
-            sourceLocalDefinition(
-                document.text, document.path, word.text,
-                hoverWordOffset ? hoverWordOffset - 1 : 0).has_value();
+        const auto localDefinition =
+            (!resolvedSymbolAtPosition && moduleQualifier.empty())
+                ? sourceLocalDefinition(
+                      document.text, document.path, word.text,
+                      hoverWordOffset ? hoverWordOffset - 1 : 0)
+                : std::nullopt;
+        const bool lexicalReference = localDefinition.has_value();
         const bool symbolDefinitionAtPosition = symbol &&
             symbol->definition.file == document.path &&
             symbol->definition.line == static_cast<int>(params.position.line + 1) &&
@@ -2704,7 +2706,12 @@ private:
                 detail = importedConstructorDetail(*constructorAdt, word.text);
         }
 
-        if (detail.empty()) {
+        // A LOCAL binding shadows anything imported under the same name, so
+        // its signatures are not an answer about this word. `let name =
+        // json["name"].or(unknown)` hovered as `name : Weekday -> String`,
+        // with OptionParser's prose about `kex install` attached, because a
+        // module exports a `name` and the imported lookup ran first.
+        if (detail.empty() && !lexicalReference) {
             std::vector<std::pair<semantic::Signature, bool>> importedSignatures;
             if (!moduleQualifier.empty()) {
                 if (auto module = m_interfaces.modules.find(moduleQualifier);
@@ -2760,7 +2767,7 @@ private:
                     for (const auto& entry : docs->second) {
                         if (documentation.find(entry) != std::string::npos)
                             continue;
-                        if (!documentation.empty()) documentation += "\n\n---\n\n";
+                        if (!documentation.empty()) documentation += "\n\n";
                         documentation += entry;
                     }
             }
@@ -2785,6 +2792,21 @@ private:
                 documentation.clear();
             }
         }
+        // Nothing typed this occurrence — an identifier inside a string
+        // interpolation (`"${name}"`) never reaches the type map at all — but
+        // its local definition was found, and THAT was typed. Answer with what
+        // the binding says rather than the bare word "function name".
+        if (detail.empty() && localDefinition)
+            for (const auto& entry : document.hoverEntries)
+                if (entry.line ==
+                        static_cast<unsigned int>(localDefinition->line) &&
+                    entry.byteColumn ==
+                        static_cast<unsigned int>(localDefinition->column)) {
+                    detail = entry.completeDetail
+                        ? entry.detail
+                        : word.text + " : " + entry.detail;
+                    break;
+                }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
             if (symbol->kind == semantic::SymbolKind::Module) kind = "module";
@@ -2812,7 +2834,7 @@ private:
                     docs != m_standardDocumentation.end()) {
                     documentation.clear();
                     for (const auto& entry : docs->second) {
-                        if (!documentation.empty()) documentation += "\n\n---\n\n";
+                        if (!documentation.empty()) documentation += "\n\n";
                         documentation += entry;
                     }
                 }
@@ -2822,7 +2844,7 @@ private:
             if (auto docs = document.documentation.find(lookupName);
                 docs != document.documentation.end())
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
         if (documentation.empty() && !lexicalReference && !recordField &&
@@ -2832,7 +2854,7 @@ private:
             if (auto docs = m_standardDocumentation.find(standardName);
                 docs != m_standardDocumentation.end())
                 for (const auto& entry : docs->second) {
-                    if (!documentation.empty()) documentation += "\n\n---\n\n";
+                    if (!documentation.empty()) documentation += "\n\n";
                     documentation += entry;
                 }
         }
