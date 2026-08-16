@@ -13,13 +13,20 @@ name: VS Code extension
 # does (same contract as release.yml's npm job) — a re-run without a version
 # bump is cheap: it exits with "already published".
 #
-# Pre-release flagging follows the version number, exactly like release.yml
-# reads Kex's channel from VERSION: a version with a pre-release suffix
-# (0.2.0-rc.1) is packaged and published as a pre-release, a plain one is
-# stable. The dispatch input exists for the one case the string cannot say —
-# republishing a stable-numbered build as pre-release is impossible either
-# way (versions are immutable), so it only ever forces prerelease ON, never
-# off, and its default ("auto") just takes what the version says.
+# Pre-release flagging follows the version number, like release.yml reads
+# Kex's channel from VERSION — but it CANNOT follow the same suffix rule,
+# because the Marketplace has no place to put one. Extension versions are
+# major.minor.patch and nothing else; the gallery refuses 0.1.0-alpha.1 by
+# name. Both channels share one ascending sequence, and pre-release is a
+# property stamped on a version rather than a different kind of number.
+#
+# So the channel is the MINOR number's parity, Microsoft's convention: odd
+# is pre-release, even is stable. 0.1.x pre-releases lead to 0.2.0 stable,
+# 0.3.x pre-releases lead to 0.4.0, and no pre-release ever burns a number
+# the next stable wanted. The dispatch input overrides for what parity
+# cannot say, defaulting to "auto" — and it only forces prerelease ON:
+# publishing an odd minor as stable is refused, since the number is spoken
+# for and versions are immutable.
 #
 # The VS Code Marketplace is the only store this publishes to. Open VSX
 # (VSCodium, Cursor) has no account yet, so those users install the .vsix by
@@ -43,7 +50,7 @@ on:
   workflow_dispatch:
     inputs:
       prerelease:
-        description: "Publish as a pre-release (auto: from the version's -suffix)"
+        description: "Publish as a pre-release (auto: odd minor = pre-release)"
         type: choice
         default: "auto"
         options: ["auto", "true", "false"]
@@ -69,23 +76,43 @@ jobs:
         run: |
           set -euo pipefail
           version=$(bun -e 'console.log(require("./package.json").version)')
+
+          # major.minor.patch, nothing else. The gallery rejects a semver
+          # pre-release suffix outright ("The VS Marketplace doesn't support
+          # prerelease versions: '0.1.0-alpha.1'"), and it rejects it at
+          # publish — after six VSIXs have been built — so the check belongs
+          # here, before any of that work.
+          case "$version" in
+            *[!0-9.]*|*-*)
+              echo "::error::${version} is not a Marketplace version. Use major.minor.patch; the pre-release channel comes from the minor number, not a suffix."
+              exit 1 ;;
+          esac
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
-          # Pre-release if the version carries a -suffix, unless the dispatch
-          # input overrides. "false" as an input cannot un-pre-release a
-          # suffixed version: the Marketplace would then offer it as stable,
-          # so that combination is rejected instead of guessed.
+          # The channel comes from the MINOR number's parity: odd is
+          # pre-release, even is stable. That is Microsoft's convention, and
+          # it exists because the Marketplace has no separate pre-release
+          # sequence — both channels draw from one ascending list of
+          # versions, and a pre-release is just a version carrying the
+          # PreRelease property. Reserving the odd minors for it is what
+          # keeps a pre-release from consuming a number the next stable
+          # wants: 0.1.x pre-release, 0.2.0 stable, 0.3.x pre-release again.
+          #
+          # Parity keeps the decision in the version, where the old -suffix
+          # rule tried to put it, rather than in a form field. The input
+          # still overrides for the case the number cannot express — but
+          # "false" on an odd minor is refused rather than guessed: it would
+          # publish a number reserved for pre-releases as stable, and
+          # versions are immutable.
           choice="${{ inputs.prerelease || 'auto' }}"
-          case "$version" in
-            *-*) from_version=true ;;
-            *)   from_version=false ;;
-          esac
+          minor="${version#*.}"; minor="${minor%%.*}"
+          if [ $((minor % 2)) -eq 1 ]; then from_version=true; else from_version=false; fi
           case "$choice" in
             auto) prerelease="$from_version" ;;
             true) prerelease=true ;;
             false)
               if [ "$from_version" = true ]; then
-                echo "::error::${version} has a pre-release suffix but prerelease=false was requested."
+                echo "::error::${version} has an odd minor, which is reserved for pre-releases, but prerelease=false was requested. Use an even minor for a stable release."
                 exit 1
               fi
               prerelease=false ;;
