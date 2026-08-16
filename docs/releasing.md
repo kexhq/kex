@@ -181,6 +181,14 @@ Without it, only the `formula` job fails, and only on a stable release.
 
    A stable release also moves `latest`, `latest-alpine`, `latest-slim`; a
    pre-release instead gets its channel name (`rc`, `beta`, …).
+
+   All three carry **Tey** as well as the compiler, under `/opt/tey`, with
+   `TEY_KEX` pointing at the image's own `kex`. That is what lets a CI system
+   with no GitHub Action — GitLab, CodeBuild, Woodpecker — run `tey install &&
+   tey build && tey test` from an `image:` line and nothing else. Tey's
+   `bin/kex` dispatcher is deliberately NOT installed: it would shadow the
+   compiler, and there is nothing to dispatch to in an image holding exactly
+   one toolchain.
 6. **`publish`** — compiles the release log, then **creates the tag** (via
    `--target`) together with the GitHub release, attaches the platform
    archives, and marks a pre-release as such.

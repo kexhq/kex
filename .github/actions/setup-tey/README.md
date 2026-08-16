@@ -81,19 +81,17 @@ something. `@main` tracks the tip if you would rather.
 ## Other CI systems
 
 There is deliberately no GitLab/CodeBuild/Woodpecker equivalent of this file.
-Those all take an image plus a script, so the published container should be the
-answer there rather than a per-platform config to keep in step.
-
-It is not that yet: `ghcr.io/kexhq/kex` ships `kex` but **not** `tey`, and its
-`ENTRYPOINT` is `kex`. Until that changes, the portable recipe is the same
-download this action performs:
+Those all take an image plus a script, so the published container is the answer
+there rather than a per-platform config to keep in step:
 
 ```yaml
 image: ghcr.io/kexhq/kex:0.3.5
 script:
-  - curl -fsSL https://github.com/kexhq/kex/releases/download/v0.3.5/tey-0.2.0.tar.gz | tar -xz
-  - export PATH="$PWD/tey-0.2.0/bin:$PATH"
   - tey install && tey build && tey test
 ```
 
-Putting Tey in the image would reduce that to the last line.
+All three image variants carry `tey` alongside `kex`, with `TEY_KEX` already
+pointing at the compiler inside the image so nothing reaches for the network.
+The image's `ENTRYPOINT` is `kex`, which CI systems taking an `image:` and a
+`script:` replace themselves; from a plain `docker run`, reach Tey with
+`--entrypoint tey`.
