@@ -2545,7 +2545,16 @@ auto TypeChecker::inferBlock(const ast::Expr& blockExpr,
                 pt = freshTypeVar();
             }
             paramTypes.push_back(pt);
-            if (lam->params[i].name != "_") defineVar(lam->params[i].name, pt);
+            if (lam->params[i].name != "_") {
+                defineVar(lam->params[i].name, pt);
+                // Recorded for tooling like any other binding. A LambdaParam
+                // carries no location of its own, so the block's own position
+                // is the anchor and the name is found from there — without
+                // this, hovering `x` in `{ |x| … }` answered nothing while a
+                // use of it answered fine.
+                m_patternBindings.push_back(
+                    {lam->params[i].name, blockExpr.location, pt});
+            }
         }
         m_blockDepth++;
         auto bodyType = inferBody(lam->body);
