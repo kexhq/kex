@@ -1,0 +1,142 @@
+using Tey.Semver
+
+# Tey's ordering rules, which decide what `tey kex list` puts at the top, what
+# a bare `tey kex install` picks, and what `latest` means. All of it is pure
+# string work, so it is testable without a Tey home, a network, or a compiler
+# on the disk — and it is where a wrong answer is quietest: nothing crashes
+# when a version sorts wrong, somebody just gets the wrong Kex.
+
+describe("Tey.Semver.parseVersion") do
+  it("reads major.minor.patch, with or without a leading v") do
+    let version = Tey.Semver.parseVersion("1.2.3").try
+    assert(version.major == 1)
+    assert(version.minor == 2)
+    assert(version.patch == 3)
+    assert(version.preRelease == "")
+    assert(Tey.Semver.parseVersion("v1.2.3") == Tey.Semver.parseVersion("1.2.3"))
+  end
+
+  it("keeps the pre-release identifier and drops build metadata") do
+    assert(Tey.Semver.parseVersion("0.4.0-rc.1").try.preRelease == "rc.1")
+    # Build metadata says nothing about precedence, so it must not survive
+    # into the comparison — 1.2.3+deadbeef and 1.2.3 are the same version.
+    assert(Tey.Semver.parseVersion("1.2.3+deadbeef").try.preRelease == "")
+    assert(Tey.Semver.parseVersion("1.2.3+deadbeef") == Tey.Semver.parseVersion("1.2.3"))
+  end
+
+  it("defaults the parts nobody wrote") do
+    assert(Tey.Semver.parseVersion("2").try.minor == 0)
+    assert(Tey.Semver.parseVersion("2").try.patch == 0)
+    assert(Tey.Semver.parseVersion("2.5").try.patch == 0)
+  end
+
+  it("is None for something that is not a version") do
+    assert(Tey.Semver.parseVersion("nightly") == None)
+    assert(Tey.Semver.parseVersion("") == None)
+  end
+end
+
+describe("Tey.Semver.stable?") do
+  it("is true only for a full release") do
+    assert(Tey.Semver.stable?("0.3.2"))
+    assert(Tey.Semver.stable?("v0.3.2"))
+    assert(!Tey.Semver.stable?("0.4.0-rc.1"))
+    assert(!Tey.Semver.stable?("0.4.0-beta"))
+  end
+
+  it("is false for a string that is not a version at all") do
+    # `tey kex list` filters on this, and a tag like `nightly` answering
+    # "yes, stable" is how it would end up offered as a release.
+    assert(!Tey.Semver.stable?("nightly"))
+  end
+end
+
+describe("Tey.Semver.release") do
+  it("maps a pre-release onto the release it belongs to") do
+    assert(Tey.Semver.release("0.4.0-rc.1") == "0.4.0")
+    assert(Tey.Semver.release("v0.4.0-rc.1") == "0.4.0")
+    assert(Tey.Semver.release("0.4.0") == "0.4.0")
+  end
+
+  it("hands back anything it cannot read, unchanged") do
+    assert(Tey.Semver.release("nightly") == "nightly")
+  end
+end
+
+describe("Tey.Semver.newestFirst") do
+  it("sorts descending by number") do
+    assert(Tey.Semver.newestFirst(["0.3.0", "0.10.0", "0.3.2"]) == ["0.10.0", "0.3.2", "0.3.0"])
+  end
+
+  it("puts a release above its own pre-releases") do
+    assert(Tey.Semver.newestFirst(["0.4.0-rc.1", "0.4.0"]) == ["0.4.0", "0.4.0-rc.1"])
+  end
+
+  it("orders channels by what the words mean, not alphabetically") do
+    # Plain semver sorts these as text, which puts `beta` before `prealpha`.
+    assert(Tey.Semver.newestFirst(["0.4.0-beta", "0.4.0-prealpha", "0.4.0-rc.1", "0.4.0-alpha"]) ==
+           ["0.4.0-rc.1", "0.4.0-beta", "0.4.0-alpha", "0.4.0-prealpha"])
+  end
+
+  it("sorts a non-version after every version") do
+    # `tey kex install` takes the first entry, so a stray tag reaching the top
+    # would be installed by name.
+    assert(Tey.Semver.newestFirst(["nightly", "0.1.0"]).first == Just("0.1.0"))
+  end
+end
+
+describe("Tey.Semver.channelRank") do
+  it("ranks prealpha below alpha below beta below rc below release") do
+    assert(Tey.Semver.channelRank("prealpha") < Tey.Semver.channelRank("alpha"))
+    assert(Tey.Semver.channelRank("alpha") < Tey.Semver.channelRank("beta"))
+    assert(Tey.Semver.channelRank("beta") < Tey.Semver.channelRank("rc"))
+    # A release is rank 0 and is handled before rank is consulted, so this
+    # only says the four named channels are the ones that rank.
+    assert(Tey.Semver.channelRank("") == 0)
+  end
+end
+
+describe("Tey.Semver.range?") do
+  it("recognises an operator or a wildcard as a range") do
+    assert(Tey.Semver.range?("*"))
+    assert(Tey.Semver.range?(">= 1.2"))
+    assert(Tey.Semver.range?("~> 1.2"))
+    assert(Tey.Semver.range?("^1.0"))
+    assert(Tey.Semver.range?(">= 1.0 < 2.0"))
+  end
+
+  it("treats a bare version as a name to look up") do
+    assert(!Tey.Semver.range?("v1.2.0"))
+    assert(!Tey.Semver.range?("1.2.0"))
+  end
+end
+
+describe("Tey.Semver.satisfies") do
+  it("answers exact and open requirements") do
+    assert(Tey.Semver.satisfies("1.2.3", ""))
+    assert(Tey.Semver.satisfies("1.2.3", "*"))
+    assert(Tey.Semver.satisfies("1.2.3", ">= 1.0.0"))
+    assert(!Tey.Semver.satisfies("0.9.0", ">= 1.0.0"))
+  end
+
+  it("accepts an operator written with or without a space") do
+    assert(Tey.Semver.satisfies("1.2.3", ">=1.0.0"))
+    assert(Tey.Semver.satisfies("1.2.3", ">= 1.0.0"))
+  end
+
+  it("requires every clause of a compound requirement") do
+    assert(Tey.Semver.satisfies("1.5.0", ">= 1.0.0 < 2.0.0"))
+    assert(!Tey.Semver.satisfies("2.5.0", ">= 1.0.0 < 2.0.0"))
+  end
+
+  it("keeps a pre-release out of a range that did not ask for one") do
+    # The rule that stops `~> 0.3` resolving to 0.4.0-rc.1 and shipping an
+    # untested compiler to somebody who never opted in.
+    assert(!Tey.Semver.satisfies("0.4.0-rc.1", ">= 0.1.0"))
+    assert(Tey.Semver.satisfies("0.4.0-rc.1", ">= 0.4.0-rc.1"))
+  end
+
+  it("is false for a version it cannot read") do
+    assert(!Tey.Semver.satisfies("nightly", ">= 1.0.0"))
+  end
+end
