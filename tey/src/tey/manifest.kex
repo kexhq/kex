@@ -16,6 +16,11 @@ end
 record ManifestPackage do
   name : String
   version : String = "0.1.0"
+  # One line saying what the package is for. Optional, because a manifest that
+  # cannot be written until its author has phrased the sentence is a manifest
+  # nobody writes — but it is what a package index or a `tey list` has to show,
+  # and a name alone never says enough.
+  description : String = ""
   license : String = ""
   packageKexRequirement : String = ">= 0.3.0"
   entrypoint : String = "src/main.kex"
@@ -29,9 +34,10 @@ end
 # but a strict one: it knows which line each declaration came from, joins a
 # declaration whose arguments span several lines, and refuses a declaration
 # it does not recognize instead of skipping it.
-let read(text: String) -> Result<ManifestPackage, String> do
+let read(text: String) -> ManifestPackage or! String do
   var name = ""
   var version = "0.1.0"
+  var description = ""
   var license = ""
   var kexRequirement = ">= 0.3.0"
   var entrypoint = "src/main.kex"
@@ -46,6 +52,8 @@ let read(text: String) -> Result<ManifestPackage, String> do
       name = Tey.Manifest.quoted(line).or("")
     elif line.startsWith?("version(")
       version = Tey.Manifest.quoted(line).or(version)
+    elif line.startsWith?("description(")
+      description = Tey.Manifest.quoted(line).or(description)
     elif line.startsWith?("license(")
       license = Tey.Manifest.quoted(line).or(license)
     elif line.startsWith?("kex(")
@@ -92,7 +100,8 @@ let read(text: String) -> Result<ManifestPackage, String> do
   return Error(failure) if failure != ""
   return Error("package.kex must declare bundle \"name\"") if name == ""
   return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
-  Ok(ManifestPackage { name: name, version: version, license: license, packageKexRequirement: kexRequirement,
+  Ok(ManifestPackage { name: name, version: version, description: description, license: license,
+                    packageKexRequirement: kexRequirement,
                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
 end
 
@@ -108,9 +117,16 @@ private do
     var number = 0
     text.lines.each do |raw|
       number = number + 1
-      let line = raw.trim
+      # Comments come off BEFORE anything counts parentheses or looks for a
+      # keyword. A manifest is Kex rather than JSON precisely so it can carry
+      # comments, and they have to be allowed everywhere a reader would put
+      # one — including after a declaration, and inside one spread over
+      # several lines. Leaving them in made `version("0.1.0")  # (see docs`
+      # unbalanced, so the reader swallowed every following declaration and
+      # reported nothing: the manifest simply lost its dependencies.
+      let line = Tey.Manifest.stripComment(raw).trim
       if pending == ""
-        if !line.empty? && !line.startsWith?("#")
+        if !line.empty?
           pending = line
           startedAt = number
         end
@@ -130,6 +146,29 @@ private do
       ()
     end
     return found
+  end
+
+  # Everything before the first unquoted `#`. A `#` INSIDE a string is part of
+  # the string — `description("C# on the BEAM")` is a description, not a
+  # truncated one — so this tracks quoting rather than searching for the
+  # character.
+  let stripComment(line: String) -> String do
+    var kept: [Char] = []
+    var quoted? = false
+    var done? = false
+    line.chars.each do |c|
+      if !done?
+        if c == '#' && !quoted?
+          done? = true
+        else
+          quoted? = !quoted? if c == '"'
+          kept.push!(c)
+          ()
+        end
+      end
+      ()
+    end
+    return kept.join("")
   end
 
   let balanced?(line: String) -> Bool do

@@ -1,0 +1,178 @@
+name: Set up Tey
+description: >-
+  Installs Tey and a Kex toolchain from the published release archives, puts
+  them on PATH, and caches both the toolchain and the package cache.
+
+# Why this exists, and why it does not use Homebrew:
+#
+# `brew install tey` on a Linux runner took 2m31s of a 2m49s job — brew has to
+# resolve and pull the whole dependency chain on a machine that will be thrown
+# away in three minutes. The release already publishes precisely what is
+# needed as archives of a few megabytes, and Tey's own installer knows how to
+# verify and place them. This action downloads those.
+#
+# Two caches, because there are two different things with two different
+# lifetimes:
+#
+#   ~/.local/share/tey   the toolchain. Changes when the Kex version does.
+#   ~/.cache/tey         fetched dependencies, content-addressed by commit.
+#                        Changes when tey.lock does.
+#
+# Keying them together would throw away every dependency on a Kex bump, and
+# keying them the other way would serve a stale compiler.
+
+inputs:
+  kex-version:
+    description: >-
+      The Kex version to install: a version like `0.4.0`, or `latest` for the
+      newest stable release.
+    required: false
+    default: latest
+  cache:
+    description: Cache the toolchain and the package cache between runs.
+    required: false
+    default: "true"
+  erlang:
+    description: >-
+      Install Erlang/OTP. Kex compiles to BEAM, so it is required — turn this
+      off only when the runner or container already has it.
+    required: false
+    default: "true"
+  repository:
+    description: The repository publishing the releases. For forks and mirrors.
+    required: false
+    default: kexhq/kex
+  token:
+    description: Token used to read the release list. The default is fine.
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  kex-version:
+    description: The Kex version that was installed.
+    value: ${{ steps.resolve.outputs.kex-version }}
+  tey-version:
+    description: The Tey version that was installed.
+    value: ${{ steps.resolve.outputs.tey-version }}
+  cache-hit:
+    description: Whether the toolchain came from the cache.
+    value: ${{ steps.toolchain-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    # Resolved BEFORE the cache is restored, because the version is what the
+    # cache key is made of. Tey's version is not derivable from the Kex one —
+    # they are released together but numbered separately — so the release's
+    # own asset list is what says which tey archive to fetch.
+    - name: Resolve versions
+      id: resolve
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        REQUESTED: ${{ inputs.kex-version }}
+      run: |
+        set -euo pipefail
+        if [ "$REQUESTED" = "latest" ]; then
+          tag=$(gh api "repos/${REPOSITORY}/releases/latest" --jq .tag_name)
+        else
+          tag="v${REQUESTED#v}"
+        fi
+        kex_version="${tag#v}"
+
+        tey_version=$(gh api "repos/${REPOSITORY}/releases/tags/${tag}" \
+          --jq '[.assets[].name | capture("^tey-(?<v>.+)\\.tar\\.gz$").v] | first // empty')
+        if [ -z "$tey_version" ]; then
+          echo "::error::${tag} publishes no tey-*.tar.gz"
+          exit 1
+        fi
+
+        {
+          echo "kex-version=${kex_version}"
+          echo "tey-version=${tey_version}"
+          echo "tag=${tag}"
+        } >> "$GITHUB_OUTPUT"
+        echo "Kex ${kex_version} with Tey ${tey_version}"
+
+    # The archives link gmp/pcre2/readline/openssl by soname and run on the
+    # BEAM. The runner images carry the libraries; Erlang they do not.
+    - name: Install Erlang
+      if: inputs.erlang == 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        if command -v erl >/dev/null 2>&1; then
+          echo "Erlang already present: $(erl -noshell -eval 'io:format("OTP ~s~n",[erlang:system_info(otp_release)]),halt().')"
+          exit 0
+        fi
+        case "$RUNNER_OS" in
+          Linux)  sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends erlang-base ;;
+          macOS)  brew install erlang ;;
+          *)      echo "::error::no Erlang install recipe for ${RUNNER_OS}"; exit 1 ;;
+        esac
+
+    # Keyed on the RESOLVED version rather than the input, so `latest` starts
+    # using a new cache the day a release lands instead of pinning whatever
+    # `latest` meant the first time this ran.
+    - name: Restore the toolchain
+      id: toolchain-cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/share/tey
+        key: tey-${{ runner.os }}-${{ runner.arch }}-kex-${{ steps.resolve.outputs.kex-version }}-tey-${{ steps.resolve.outputs.tey-version }}
+
+    - name: Install Tey and Kex
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        REPOSITORY: ${{ inputs.repository }}
+        TAG: ${{ steps.resolve.outputs.tag }}
+        TEY_VERSION: ${{ steps.resolve.outputs.tey-version }}
+        KEX_VERSION: ${{ steps.resolve.outputs.kex-version }}
+        CACHE_HIT: ${{ steps.toolchain-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        home="${TEY_HOME:-$HOME/.local/share/tey}"
+        dist="${home}/dist"
+
+        # The dist lives INSIDE the Tey home so one cache entry covers Tey and
+        # every toolchain it installed.
+        if [ "$CACHE_HIT" = "true" ] && [ -x "${dist}/bin/tey" ]; then
+          echo "Toolchain restored from cache"
+        else
+          mkdir -p "$dist"
+          gh release download "$TAG" --repo "$REPOSITORY" \
+            --pattern "tey-${TEY_VERSION}.tar.gz" --output /tmp/tey.tar.gz --clobber
+          tar -xzf /tmp/tey.tar.gz -C /tmp
+          cp -R "/tmp/tey-${TEY_VERSION}/." "$dist/"
+          rm -rf /tmp/tey.tar.gz "/tmp/tey-${TEY_VERSION}"
+        fi
+
+        echo "${dist}/bin" >> "$GITHUB_PATH"
+        export PATH="${dist}/bin:$PATH"
+
+        # Tey's own installer, rather than unpacking the compiler here: it
+        # verifies the published checksum, stages into `<version>.partial` and
+        # renames only a complete tree, and records the selection. Reproducing
+        # that in shell is how the two drift.
+        if [ -x "${home}/toolchains/${KEX_VERSION}/bin/kex" ]; then
+          tey kex use "$KEX_VERSION"
+        else
+          tey kex install "$KEX_VERSION"
+        fi
+        tey --version
+
+    # Restored AFTER the toolchain, and keyed on the lockfile: these are the
+    # fetched dependencies, and they turn over on a `tey.lock` change rather
+    # than on a compiler change. restore-keys lets a lockfile edit reuse the
+    # previous cache and re-fetch only what actually moved.
+    - name: Restore the package cache
+      if: inputs.cache == 'true'
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/tey
+        key: tey-packages-${{ runner.os }}-${{ hashFiles('**/tey.lock') }}
+        restore-keys: |
+          tey-packages-${{ runner.os }}-

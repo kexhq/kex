@@ -4179,6 +4179,13 @@ int main(int argc, char *argv[]) {
       // and `program` owns those nodes for as long as the evaluator needs the
       // raw `const ast::FunctionDef*` pointers it keeps into them.
       auto result = evaluator.execute(program);
+      // A failing spec is a failing run. Checked before the program's own
+      // return value because a spec file has none — it ends on the summary
+      // line — and without this `kex some.spec.kex` exited 0 no matter how
+      // many `it` blocks failed, which is what made every downstream `tey
+      // test` and CI job green on a red suite.
+      if (evaluator.testsFailed() > 0)
+        return 1;
       if (auto *i = std::get_if<kex::interpreter::IntValue>(&result->data))
         return static_cast<int>(i->value);
       return 0;

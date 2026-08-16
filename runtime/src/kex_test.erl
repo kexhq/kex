@@ -131,12 +131,33 @@ capture_exception(Fun) ->
     catch Class:Reason:Stack -> {raised, Class, Reason, Stack}
     end.
 
+%% Prints the tally and, if anything failed, ENDS THE RUN NON-ZERO.
+%%
+%% A failing spec used to exit 0. Every `tey test` and every CI job built on
+%% one was therefore green whatever the specs said, and this repository's own
+%% Makefile worked around it by grepping "N failed" back out of the output —
+%% a workaround no downstream project knew to copy.
+%%
+%% halt/1 here rather than a return value the caller checks: this call is
+%% already the last thing a lowered `main` does (see withTestSummary in
+%% src/ir/lower.cxx), and threading a status back out through main's return
+%% would change what every non-test program returns.
 maybe_print_summary() ->
     Passed = counter(kex_test_passed),
     Failed = counter(kex_test_failed),
     case Passed + Failed of
         0 -> ok;
-        _ -> io:format("~n~b passed, ~b failed~n", [Passed, Failed])
+        _ ->
+            io:format("~n~b passed, ~b failed~n", [Passed, Failed]),
+            case Failed of
+                0 -> ok;
+                _ ->
+                    %% Flush before halting: halt/1 does not wait for the
+                    %% group leader, and the tally above is the one line a
+                    %% failing run must not lose.
+                    ok = io:format(""),
+                    erlang:halt(1)
+            end
     end.
 
 get_depth() -> counter(kex_test_depth).

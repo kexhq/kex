@@ -295,6 +295,13 @@ private:
     auto knownModuleValue(const std::string& name) const -> bool;
 
 public:
+    // How many `it` blocks failed during the last execute(). The CLI turns a
+    // non-zero count into a non-zero exit status: a spec suite that reports
+    // failures and exits 0 makes every CI job built on it green regardless of
+    // what the specs said. Kept as a count rather than a bool so a caller can
+    // say how many without re-parsing the summary line.
+    auto testsFailed() const -> int { return m_testsFailed; }
+
     // `Type.of(x)` sites the checker typed concretely (see
     // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
     // — the table is simply absent and every `Type.of` asks the value.

@@ -156,6 +156,10 @@ spec: build
 	echo "  $$passed passing, $$failed failing"; \
 	[ $$failed -eq 0 ]
 
+# `rc` is authoritative: a suite with failures now exits non-zero (see
+# kex_test:maybe_print_summary and the walker's testsFailed check). The tallies
+# are still scraped out of the output because this loop reports TOTALS across
+# files, which no single exit status can carry.
 spec-prelude: build
 	@echo "Running prelude spec suite..."
 	@failed=0; passed=0; \
