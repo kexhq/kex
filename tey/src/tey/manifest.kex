@@ -23,6 +23,13 @@ record ManifestPackage do
   description : String = ""
   license : String = ""
   packageKexRequirement : String = ">= 0.3.0"
+  # The Erlang/OTP a package needs. Optional — absent means "no opinion" —
+  # and worth setting when the package reaches for `Erlang.*` interop that
+  # arrived in a particular release. The floor actually enforced is the higher
+  # of this and the toolchain's own (see Tey.Toolchain.runtimeOtpFloor): a
+  # package cannot ask for an OTP older than the one that compiled the runtime
+  # beams it is about to load.
+  packageOtpRequirement : String = ""
   entrypoint : String = "src/main.kex"
   manifestDependencies : [Dependency] = []
   targets : [Target] = []
@@ -40,6 +47,7 @@ let read(text: String) -> ManifestPackage or! String do
   var description = ""
   var license = ""
   var kexRequirement = ">= 0.3.0"
+  var otpRequirement = ""
   var entrypoint = "src/main.kex"
   var dependencies: [Dependency] = []
   var targets: [Target] = []
@@ -58,6 +66,8 @@ let read(text: String) -> ManifestPackage or! String do
       license = Tey.Manifest.quoted(line).or(license)
     elif line.startsWith?("kex(")
       kexRequirement = Tey.Manifest.quoted(line).or(kexRequirement)
+    elif line.startsWith?("otp(")
+      otpRequirement = Tey.Manifest.quoted(line).or(otpRequirement)
     elif line.startsWith?("entrypoint(")
       entrypoint = Tey.Manifest.quoted(line).or(entrypoint)
     elif line.startsWith?("group ")
@@ -102,6 +112,7 @@ let read(text: String) -> ManifestPackage or! String do
   return Error("every dependency must declare a git URL") if dependencies.any? { |dep| dep.manifestGit == "" || dep.manifestName == "" }
   Ok(ManifestPackage { name: name, version: version, description: description, license: license,
                     packageKexRequirement: kexRequirement,
+                    packageOtpRequirement: otpRequirement,
                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
 end
 

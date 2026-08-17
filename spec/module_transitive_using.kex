@@ -1,0 +1,9 @@
+# A module that itself `using`s another module. This crashed the compiler with
+# SIGSEGV on both backends until the re-entrant re-parse in SemanticDB was
+# guarded, which is why nothing could depend on a package that had its own
+# dependency.
+using Chain.Mid, only: [polite]
+
+main do
+  IO.printLine(polite("Akos"))
+end

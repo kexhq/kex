@@ -140,3 +140,138 @@ describe("Tey.Semver.satisfies") do
     assert(!Tey.Semver.satisfies("nightly", ">= 1.0.0"))
   end
 end
+
+# Two packages in one dependency graph can each ask for the same dependency.
+# What they jointly permit is the intersection, and getting this wrong is how a
+# resolver quietly installs a version one of them cannot use.
+describe("Tey.Semver.intersect") do
+  it("keeps both constraints") do
+    let both = Tey.Semver.intersect("~> 0.1", ">= 0.1.5")
+    assert(Tey.Semver.satisfies("0.1.6", both))
+    assert(!Tey.Semver.satisfies("0.1.2", both))
+    assert(!Tey.Semver.satisfies("0.2.0", both))
+  end
+
+  it("treats an absent or wildcard requirement as no opinion") do
+    assert(Tey.Semver.intersect("", "~> 0.2") == "~> 0.2")
+    assert(Tey.Semver.intersect("~> 0.2", "") == "~> 0.2")
+    assert(Tey.Semver.intersect("*", "~> 0.2") == "~> 0.2")
+    assert(Tey.Semver.intersect("~> 0.2", "*") == "~> 0.2")
+  end
+
+  it("does not duplicate an identical constraint") do
+    assert(Tey.Semver.intersect("~> 0.2", "~> 0.2") == "~> 0.2")
+  end
+
+  it("produces an unsatisfiable requirement rather than an error") do
+    # Two packages asking for incompatible majors is a real situation. It has
+    # to survive being ASKED so the resolver can report it against the tags
+    # that exist, rather than blowing up while merely combining two strings.
+    let impossible = Tey.Semver.intersect("~> 0.1", "~> 0.2")
+    assert(!Tey.Semver.satisfies("0.1.0", impossible))
+    assert(!Tey.Semver.satisfies("0.2.0", impossible))
+    assert(Tey.Semver.highest(["v0.1.0", "v0.2.0"], impossible) == None)
+  end
+
+  it("combines a whole list") do
+    let all = Tey.Semver.intersectAll(["", ">= 0.1.0", "~> 0.1"])
+    assert(Tey.Semver.satisfies("0.1.7", all))
+    assert(!Tey.Semver.satisfies("0.0.9", all))
+    assert(Tey.Semver.intersectAll([]) == "")
+  end
+
+  it("picks the highest tag satisfying a combined requirement") do
+    let both = Tey.Semver.intersect("~> 0.1", ">= 0.1.2")
+    assert(Tey.Semver.highest(["v0.1.1", "v0.1.4", "v0.2.0"], both) == Just("v0.1.4"))
+  end
+end
+
+# The operator matrix, pinned one operator at a time. This is the part a
+# reimplementation is most likely to get subtly wrong, because every operator
+# here is *nearly* the same as its counterpart in another package manager.
+describe("Tey.Semver.satisfies — operators") do
+  it("`=` and a bare version mean exactly that version") do
+    assert(Tey.Semver.satisfies("1.2.3", "1.2.3"))
+    assert(Tey.Semver.satisfies("1.2.3", "=1.2.3"))
+    assert(!Tey.Semver.satisfies("1.2.4", "1.2.3"))
+    assert(!Tey.Semver.satisfies("1.2.2", "=1.2.3"))
+  end
+
+  it("`>=` and `<=` include the boundary, `>` and `<` do not") do
+    assert(Tey.Semver.satisfies("1.2.3", ">=1.2.3"))
+    assert(Tey.Semver.satisfies("1.2.4", ">=1.2.3"))
+    assert(!Tey.Semver.satisfies("1.2.2", ">=1.2.3"))
+
+    assert(Tey.Semver.satisfies("1.2.3", "<=1.2.3"))
+    assert(!Tey.Semver.satisfies("1.2.4", "<=1.2.3"))
+
+    assert(!Tey.Semver.satisfies("1.2.3", ">1.2.3"))
+    assert(Tey.Semver.satisfies("1.2.4", ">1.2.3"))
+    assert(!Tey.Semver.satisfies("1.2.3", "<1.2.3"))
+    assert(Tey.Semver.satisfies("1.2.2", "<1.2.3"))
+  end
+
+  it("`^` allows anything from here up within the same MAJOR") do
+    assert(Tey.Semver.satisfies("1.2.3", "^1.2.0"))
+    assert(Tey.Semver.satisfies("1.9.9", "^1.2.0"))
+    assert(!Tey.Semver.satisfies("2.0.0", "^1.2.0"))
+    assert(!Tey.Semver.satisfies("1.1.0", "^1.2.0"))
+  end
+
+  it("`~>` allows anything from here up within the same MAJOR AND MINOR") do
+    # NOT Bundler's reading. There `~> 0.2` means ">= 0.2, < 1.0"; here the
+    # missing parts default to zero, so `~> 0.2` is `~> 0.2.0` and admits
+    # 0.2.x only. Changing this silently widens every manifest in existence.
+    assert(Tey.Semver.satisfies("0.2.0", "~> 0.2"))
+    assert(Tey.Semver.satisfies("0.2.9", "~> 0.2"))
+    assert(!Tey.Semver.satisfies("0.3.0", "~> 0.2"))
+    assert(!Tey.Semver.satisfies("0.1.9", "~> 0.2"))
+    assert(!Tey.Semver.satisfies("1.0.0", "~> 0.2"))
+  end
+
+  it("`*` and an empty requirement admit everything readable") do
+    assert(Tey.Semver.satisfies("1.2.3", "*"))
+    assert(Tey.Semver.satisfies("0.0.1", ""))
+  end
+
+  it("refuses a requirement whose version cannot be read") do
+    assert(!Tey.Semver.satisfies("1.2.3", ">=not-a-version"))
+  end
+end
+
+describe("Tey.Semver.versionOf") do
+  it("pulls the version out of a resolved ref") do
+    assert(Tey.Semver.versionOf("refs/tags/v0.1.1") == "v0.1.1")
+    assert(Tey.Semver.versionOf("v0.1.1") == "v0.1.1")
+  end
+
+  it("is empty for a ref that names no version") do
+    # A branch or a bare commit satisfies no range, and saying so as "" keeps
+    # `satisfies` from having to guess.
+    assert(Tey.Semver.versionOf("main") == "")
+    assert(Tey.Semver.versionOf("refs/heads/main") == "")
+    assert(!Tey.Semver.satisfies(Tey.Semver.versionOf("main"), "~> 0.1"))
+  end
+end
+
+describe("Tey.Semver.highest") do
+  it("picks the newest tag meeting the requirement, not merely the last") do
+    let tags = ["v0.1.0", "v0.2.0", "v0.1.9", "v0.3.0"]
+    assert(Tey.Semver.highest(tags, "~> 0.1") == Just("v0.1.9"))
+    assert(Tey.Semver.highest(tags, ">=0.2.0") == Just("v0.3.0"))
+  end
+
+  it("is None when nothing satisfies, rather than a nearest guess") do
+    assert(Tey.Semver.highest(["v0.1.0", "v0.2.0"], "~> 9.9") == None)
+    assert(Tey.Semver.highest([], "*") == None)
+  end
+
+  it("never resolves a range to a pre-release") do
+    # The rule that keeps `tey kex install` off an rc nobody asked for.
+    assert(Tey.Semver.highest(["v0.1.0", "v0.2.0-rc.1"], ">=0.1.0") == Just("v0.1.0"))
+  end
+
+  it("ignores tags that are not versions") do
+    assert(Tey.Semver.highest(["nightly", "v0.1.0", "latest"], "*") == Just("v0.1.0"))
+  end
+end

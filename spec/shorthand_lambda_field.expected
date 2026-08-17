@@ -2,5 +2,5 @@
 [1, 2]
 [A, BB]
 [A, BB]
-[R { count: 2, title: bb }]
+[Row { count: 2, title: bb }]
 [x]

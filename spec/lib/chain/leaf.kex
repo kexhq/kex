@@ -1,0 +1,3 @@
+module Chain.Leaf
+
+let hello(name: String) = "Hello, ${name}!"

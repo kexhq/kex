@@ -42,19 +42,31 @@ They are kept explicit so temporary workarounds do not become accidental API.
 - A dependency may ask for a RANGE — `tag: "~> 0.2"`, `"^1.0"`, `">= 0.3"` —
   and Tey lists the repository's tags and locks the highest that satisfies it,
   so the manifest keeps the constraint and the lockfile keeps the answer. An
-  exact tag is still taken as written. What remains is everything BEYOND one
-  dependency: two constraints on the same package are not unified, a
-  dependency's own manifest is never read (no transitive dependencies), and
-  with no graph to walk there is no cycle detection either.
-  `docs/tey-resolver-plan.md` is the committed design for closing this, together
-  with the OTP gap below — they share a constraint-intersection step, and doing
-  either first without the other means writing it twice.
-- Nothing records which Erlang/OTP a package needs or was built with. A `.beam`
-  cannot be loaded by an OTP older than the `erlc` that produced it, and while
-  `kex` now diagnoses that before spawning `erl` (`KEX_RUNTIME_OTP_FLOOR`), a
-  manifest cannot declare an OTP requirement and `tey.lock` does not record the
-  OTP that resolved it — so a locked, reproducible checkout can still behave
-  differently on two machines. Planned in `docs/tey-resolver-plan.md`.
+  exact tag is still taken as written.
+
+  Resolution now walks the whole graph: a fetched dependency's own
+  `package.kex` is read and its `tey(...)` lines join a breadth-first queue,
+  keyed on package NAME. Two constraints on one package are intersected
+  (`~> 0.1` and `>= 0.1.5` become `~> 0.1 >= 0.1.5`, which `satisfies` already
+  evaluates as a clause list), and a name reached from two different
+  repositories is an error rather than two packages.
+
+  What remains is re-resolution. A constraint discovered LATER in the walk is
+  checked against the version already pinned and reported if it conflicts; the
+  package is not re-resolved to a version that would have satisfied both. So
+  `~> 0.1` seen first pinning `0.1.2`, then `>= 0.1.5` arriving from a deeper
+  package, reports a conflict that `0.1.6` would have solved. A fixpoint loop
+  is the fix; intersect-and-report was chosen first because its failures are
+  legible.
+- OTP is declared, enforced and recorded: `otp(">= 26")` in the manifest,
+  `Tey.Toolchain.runtimeOtpFloor` reading the compiling OTP out of
+  `kex --info`, an effective floor of `max(package, toolchain)` refused before
+  any resolving happens, and `"otp": {"requirement": ..., "release": N}` in
+  `tey.lock`. What is NOT done is inheriting the requirement from
+  dependencies — only the root package's `otp(...)` is consulted, so a library
+  needing a newer Erlang than its consumer says nothing until the consumer's
+  build fails. The intersection machinery to fix it exists
+  (`Tey.Semver.intersect`); the walk does not feed OTP through it yet.
 - `tey lock` currently fetches repositories while resolving them because the
   content digest is computed from `git archive`. Separating resolution from
   cache population needs a remote/archive strategy or a clearly renamed
@@ -68,8 +80,11 @@ They are kept explicit so temporary workarounds do not become accidental API.
   compiler's module search path, so `using Greet` resolves to the cached
   checkout — and a dependency the lockfile names but the cache lacks is
   reported (`run \`tey install\``) rather than surfacing as a missing module.
-  Only DIRECT dependencies are on the path; a dependency's own dependencies
-  are not, which needs transitive resolution first.
+  The whole resolved closure is on the path now, not only the direct
+  dependencies — and the compiler can finally build it: a module that had a
+  `using` of its own used to crash `kex` with SIGSEGV, which is why a
+  dependency-of-a-dependency had never worked even when the resolver placed it
+  correctly.
 - `tey install --without GROUP` omits a group's dependencies from the fetch
   while leaving them in the lockfile, so turning the flag off later needs no
   re-resolve. Orphan-only `tey clean`, targeted `tey update NAME`, and target

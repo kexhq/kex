@@ -4,7 +4,9 @@ using Tey.Cache, only: [fetch]
 using Tey.Git, only: [execute, pinRef, tags]
 using Tey.Lockfile, only: [LockState]
 using Tey.Manifest, only: [ManifestPackage]
-using Tey.Semver, only: [highest, range?, satisfies]
+using Tey.Semver, only: [highest, intersect, range?, satisfies, versionOf]
+using Tey.Cache, only: [packagePath]
+using Tey.Manifest, only: [read]
 
 let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
@@ -14,11 +16,24 @@ let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   if !Tey.Semver.satisfies(Tey.Semver.release(Kex.Kernel.VERSION.number), manifest.packageKexRequirement)
     return Error("Kex ${Kex.Kernel.VERSION.number} does not satisfy ${manifest.packageKexRequirement}")
   end
+  # The OTP floor actually in force is the higher of what the package asks for
+  # and what the toolchain's own runtime beams require — a package cannot ask
+  # for an Erlang older than the one that compiled the beams it is about to
+  # load, however modest its own needs are.
+  let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
+  let running = Tey.Toolchain.runningOtpRelease
+  match (floor, running) do
+    (Just(required), Just(actual)) when actual < required ->
+      return Error("Erlang/OTP ${actual} is too old: ${Tey.Resolver.otpReason(manifest.packageOtpRequirement, required)}")
+    _ -> ()
+  end
   let locked = match Tey.Resolver.resolveDependencies(manifest.manifestDependencies, []) do
     Error(error) -> return Error(error)
     Ok(dependencies) -> dependencies
   end
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
+                otpRequirement: manifest.packageOtpRequirement,
+                otpRelease: running.or(0),
                 # The release, not `.number`: that carries the git revision of
                 # whichever build happened to run `tey lock`, so a committed
                 # lockfile would churn on every rebuild of the same version.
@@ -26,6 +41,43 @@ let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
 end
 
 private do
+  # The lowest OTP this build can legally run on: the higher of the package's
+  # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
+  # says anything, which is the ordinary case for a package with no interop
+  # needs on a toolchain built without erlc.
+  let effectiveOtpFloor(requirement: String) -> Integer? do
+    let toolchain = Tey.Toolchain.runtimeOtpFloor
+    let declared = Tey.Resolver.lowestSatisfying(requirement)
+    match (declared, toolchain) do
+      (None, None) -> return None
+      (Just(d), None) -> return Just(d)
+      (None, Just(t)) -> return Just(t)
+      (Just(d), Just(t)) -> return Just(d > t then d else t)
+    end
+  end
+
+  # The smallest OTP release satisfying an `otp(...)` requirement. Releases are
+  # plain integers — `28`, not `28.1.2` — so the requirement is read as a bare
+  # lower bound rather than through the semver machinery, which would have to
+  # invent minor and patch numbers that OTP does not have.
+  let lowestSatisfying(requirement: String) -> Integer? do
+    return None if requirement == ""
+    let digits = requirement.chars.filter { |c| c.digit? }.join("")
+    return None if digits == ""
+    match Integer.parse(digits) do
+      Error(_) -> return None
+      Ok(value) -> return Just(value)
+    end
+  end
+
+  # Which of the two constraints is doing the work, so the message points at
+  # the thing the reader can change.
+  let otpReason(requirement: String, required: Integer) -> String do
+    let declared = Tey.Resolver.lowestSatisfying(requirement)
+    return "this package declares otp(\"${requirement}\")" if declared == Just(required)
+    return "the toolchain's runtime beams were compiled by OTP ${required}, and a .beam cannot be loaded by an older runtime"
+  end
+
   # The exact tag to pin. Anything but a tag range is taken as written.
   let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
@@ -39,11 +91,91 @@ private do
     end
   end
 
-  let resolveDependencies([], locked: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String = Ok(locked)
-  let resolveDependencies([dependency | rest], locked: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
-    match Tey.Resolver.resolveDependency(dependency) do
-      Error(error) -> Error(error)
-      Ok(resolved) -> Tey.Resolver.resolveDependencies(rest, [...locked, resolved])
+  # Breadth-first over the whole graph, not just the root's own list.
+  #
+  # A dependency's `package.kex` is read once it is in the cache, and its own
+  # `tey(...)` lines join the queue. Identity is the package NAME, and that is
+  # forced rather than chosen: one BEAM module name is one loaded module per
+  # VM, so two versions of `Greet` cannot coexist however the resolver feels
+  # about it. Seeing a name twice therefore means combining the two
+  # constraints, never installing both.
+  #
+  # Breadth-first so the shortest path to a package is the one that resolves
+  # it, which makes "required by" in an error the nearest explanation rather
+  # than an arbitrary one.
+  let resolveDependencies(direct: [Tey.Manifest.Dependency],
+                          _unused: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
+    var queue = direct.map { |dependency| (dependency, "this package") }
+    var resolved : [Tey.Lockfile.Dependency] = []
+    var seen : [String] = []
+    var wanted : {String: String} = {}
+    var origin : {String: String} = {}
+    var gits : {String: String} = {}
+
+    loop
+      break if queue.empty?
+      let (dependency, requiredBy) = queue.first.try
+      queue = queue.drop(1)
+      let name = dependency.manifestName
+
+      # The same name from two different repositories is a conflict, not two
+      # packages: `using Greet` could not say which was meant.
+      match gits[name] do
+        Just(existing) when existing != dependency.manifestGit ->
+          return Error("`${name}` is required from two different repositories:\n  ${existing}\n  ${dependency.manifestGit} (via ${requiredBy})")
+        _ -> ()
+      end
+      gits.put!(name, dependency.manifestGit)
+
+      let combined = Tey.Semver.intersect(wanted[name].or(""), dependency.manifestRequested)
+      wanted.put!(name, combined)
+      origin.put!(name, origin[name].or(requiredBy))
+
+      if seen.contains?(name)
+        # Already pinned. A constraint that the pinned version still satisfies
+        # needs nothing; one it does not is the conflict worth reporting, with
+        # both askers named so the reader knows which manifest to open.
+        let pinnedRef = resolved.find { |d| d.name == name }.map { |d| d.resolved }.or("")
+        let checkable = dependency.manifestSelector == "tag" && Tey.Semver.range?(dependency.manifestRequested)
+        let met = Tey.Semver.satisfies(Tey.Semver.versionOf(pinnedRef), combined)
+        if checkable && !met
+          return Error("cannot satisfy every constraint on `${name}`: ${combined}, asked by ${origin[name].or("?")} and ${requiredBy}, but it resolved to ${pinnedRef}")
+        end
+      else
+        let entry = match Tey.Resolver.resolveDependency(dependency) do
+          Error(error) -> return Error("${error} (required by ${requiredBy})")
+          Ok(value) -> value
+        end
+        resolved.push!(entry)
+        seen.push!(name)
+        # Its own dependencies join the queue. Only the ROOT package's groups
+        # apply, so a dependency's `group :dev` block is skipped: otherwise
+        # `tey install` on a two-package project drags in every test framework
+        # in the graph.
+        match Tey.Resolver.dependenciesOf(entry) do
+          Error(error) -> return Error(error)
+          Ok(children) -> do
+            let inherited = children.filter { |child| child.manifestGroups.empty? }
+            queue = [...queue, ...inherited.map { |child| (child, name) }]
+          end
+        end
+      end
+    end
+    Ok(resolved)
+  end
+
+  # The `tey(...)` lines of a package already in the cache. A checkout with no
+  # `package.kex` is an error rather than an empty node: it means the
+  # repository is not a Kex package, and `using` would fail later with a worse
+  # message.
+  let dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
+    let path = "${Tey.Cache.packagePath(entry)}/package.kex"
+    match FS.File.read(path) do
+      None -> return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
+      Just(text) -> match Tey.Manifest.read(text) do
+        Error(error) -> return Error("`${entry.name}` has an unreadable package.kex: ${error}")
+        Ok(manifest) -> return Ok(manifest.manifestDependencies)
+      end
     end
   end
 

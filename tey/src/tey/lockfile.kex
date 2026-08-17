@@ -17,6 +17,17 @@ end
 record LockState do
   kexRequirement : String
   kexVersion : String
+  # The OTP constraint the resolve was made under, and the release that
+  # satisfied it. Recorded so a checkout on a different Erlang is a DETECTED
+  # difference rather than one discovered later as an opaque `undef` — a
+  # lockfile that pins every dependency to a commit and says nothing about the
+  # runtime that will load them is only half a lock.
+  #
+  # Empty requirement and 0 release mean "this lockfile predates the field",
+  # which is not an error: a package with no otp(...) has no opinion, and a
+  # toolchain that cannot report its floor is a fact about the toolchain.
+  otpRequirement : String = ""
+  otpRelease : Integer = 0
   lockedDependencies : [Dependency]
 end
 
@@ -33,6 +44,7 @@ let encode(lock: LockState) -> String do
     "{",
     "  \"version\": 1,",
     "  \"kex\": {\"requirement\": \"${Tey.Lockfile.escape(lock.kexRequirement)}\", \"version\": \"${Tey.Lockfile.escape(lock.kexVersion)}\"},",
+    "  \"otp\": {\"requirement\": \"${Tey.Lockfile.escape(lock.otpRequirement)}\", \"release\": ${lock.otpRelease}},",
     "  \"deps\": {",
     deps,
     "  }",
@@ -58,6 +70,9 @@ let decode(text: String) -> LockState or! String do
     Just(value) -> value
     None -> return Error("tey.lock is missing kex metadata")
   end
+  # Absent in a lockfile written before the field existed, which is not an
+  # error: it means "this resolve had no opinion about OTP".
+  let otp = root["otp"]
   let dependencies = match root["deps"] do
     Just(value) -> value.entries.map do |name, raw|
       Tey.Lockfile.Dependency {
@@ -76,6 +91,8 @@ let decode(text: String) -> LockState or! String do
   end
   Ok(LockState {
     kexRequirement: Tey.Lockfile.lockText(kex["requirement"]),
+    otpRequirement: Tey.Lockfile.lockField(otp, "requirement"),
+    otpRelease: Tey.Lockfile.lockNumber(Tey.Lockfile.lockSub(otp, "release")),
     kexVersion: Tey.Lockfile.lockText(kex["version"]),
     lockedDependencies: dependencies
   })
@@ -86,6 +103,17 @@ private do
 
   let lockText(None) -> String = ""
   let lockText(Just(value)) -> String = "${value}"
+
+  # An `otp` block absent from an older lockfile reads as "no opinion" rather
+  # than as a malformed file.
+  let lockField(None, _) -> String = ""
+  let lockField(Just(block), key: String) -> String = Tey.Lockfile.lockText(block[key])
+
+  let lockSub(None, _) = None
+  let lockSub(Just(block), key: String) = block[key]
+
+  let lockNumber(None) -> Integer = 0
+  let lockNumber(Just(value)) -> Integer = match Integer.parse("${value}") do Ok(n) -> n Error(_) -> 0 end
 
   let lockStrings(None) -> [String] = []
   let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }

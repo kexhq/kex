@@ -163,3 +163,38 @@ describe("Tey.Lockfile.dependencyListLine") do
     assert(line.contains?("22c6db55eb807504d9a6d0eee9af44eb52230833"))
   end
 end
+
+describe("Tey.Lockfile — the OTP record") do
+  it("round-trips the OTP requirement and release") do
+    let withOtp = LockState {
+      kexRequirement: ">= 0.3.3", kexVersion: "0.3.4",
+      otpRequirement: ">= 26", otpRelease: 29,
+      lockedDependencies: []
+    }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(withOtp)).try
+    assert(back.otpRequirement == ">= 26")
+    assert(back.otpRelease == 29)
+  end
+
+  it("reads a lockfile written before the OTP block existed") do
+    # The compatibility that lets an old lockfile keep working: absent means
+    # "this resolve had no opinion", not "malformed".
+    let old = Tey.Lockfile.decode(
+      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+        "deps": {}}`).try
+    assert(old.otpRequirement == "")
+    assert(old.otpRelease == 0)
+    assert(old.kexVersion == "0.3.4")
+  end
+
+  it("keeps a zero release out of the way of a real one") do
+    # 0 is the "unknown" marker, so it must survive the round trip as 0 and
+    # never be confused with an actual OTP release.
+    let unknown = LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.3.4",
+      otpRequirement: "", otpRelease: 0, lockedDependencies: []
+    }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(unknown)).try
+    assert(back.otpRelease == 0)
+  end
+end

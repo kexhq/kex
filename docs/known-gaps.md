@@ -97,6 +97,97 @@ signatures (`src/semantic/typechecker.cxx`), which fixed `.to(String)` dispatch
 for three specs, yet a minimal one-record reproduction still resolves to the
 prelude. Something in the fuller context enables it.
 
+## A type parameter inside a function-typed parameter does not reach the result
+
+```kex
+record Cursor do
+  n : Integer = 0
+end
+
+make Cursor do
+  let onlyGeneric(f: Cursor -> Result<(T, Cursor), String>) -> Result<(T, Cursor), String> = f(this)
+  let mixed(tag: String, f: Cursor -> Result<(T, Cursor), String>) -> Result<(T, Cursor), String> = f(this)
+end
+
+let mk(w: Cursor) -> Result<(Integer, Cursor), String> = Ok((1, w))
+
+main do
+  let w = Cursor { n: 0 }
+  match w.mixed("x", mk) do Ok((v, _)) -> IO.printLine("${v}") Error(_) -> () end
+end
+# error: `mixed` expects argument 3 to be Cursor -> Result<(Unknown, Cursor), String>,
+#        but got Result<(Integer, Cursor), String>
+#   mixed : A -> String -> (B -> Result<(C, B), String>) -> Result<(D, E), String>
+```
+
+The same `T` is instantiated as three unrelated variables — `C` in the
+parameter, `D` in the result — so the type the caller supplies can never reach
+the return, and every call site reports the result as `Unknown` and then
+rejects the argument it was just handed.
+
+**Located, not fixed.** `TypeChecker::preRegisterFunctionDef`
+(`src/semantic/typechecker.cxx`, the two `Signature{...}` constructions) builds
+the provisional signature's result as a bare `freshTypeVar()`, discarding
+`clause.returnAnnotation` and the `genericVars` map the parameters were
+resolved with. Resolving the annotation with that same map fixes the signature.
+
+It cannot land on its own. Giving those functions a concrete result type also
+gives their CALLERS concrete receiver types, and that exposes a second defect
+underneath: `src/stdlib/json.kex:47` then resolves `rest.atEnd?` to
+`FileHandle.atEnd?` even though `rest` is a `Parsing.Input`, because method
+overload selection does not filter by receiver type first. Today an
+unconstrained receiver keeps that check permissive and hides it — the same
+shape as the `Match.get` gap above. Receiver-based overload selection is the
+prerequisite; the return-type fix drops in after it.
+
+This is what blocks four combinators (`zeroOrOne`, `separatedBy`, `between`,
+`label`) from joining `Parsing`: they compile into the prelude and fail only at
+call sites. `string` and `takeWhile` shipped because they are not generic.
+
+## `this` is unbound in functions compiled after a fall-through `rescue`
+
+Only in the prelude build (`kex --build-prelude`, how `src/stdlib/*.kex`
+becomes `kex_prelude.beam`). A `trying` block whose `rescue` arm ASSIGNS rather
+than returning corrupts `this` for functions compiled after it in the same
+`make` block:
+
+```kex
+# added to src/stdlib/parsing.kex — `choice` below it was not touched
+let zeroOrOne(f: Input -> Result<(T, Input), ParseError>) -> (T?, Input) do
+  var found: T? = None
+  var cursor = this
+  trying do
+    let (value, advanced) = f(cursor).try
+    found = Just(value)
+    cursor = advanced
+  rescue found = None
+  end
+  return (found, cursor)
+end
+# kex_prelude: unbound variable 'This' in choice/1
+```
+
+Returning from both paths is clean, and is the workaround:
+
+```kex
+trying do
+  let (value, advanced) = f(this).try
+  return (Just(value), advanced)
+rescue return (None, this)
+end
+```
+
+The arities in the error (`choice/1`, `between/3`) count only the explicit
+parameters, so the receiver is missing from the emitted signature entirely.
+Ordinary compilation of the same shapes is fine on both backends — it is
+specific to the prelude path. Binding `let self = this` first does NOT work
+around it.
+
+**Note for anyone reproducing this:** an incremental `cmake --build build` can
+skip the prelude step silently when `CMakeFiles/VerifyGlobs.cmake` errors,
+which makes the failure look fixed. Touch `src/stdlib/parsing.kex` and build
+`kex_prelude_beam` directly before believing a green result.
+
 ## BEAM parity: 6 specs differ
 
 `make spec-beam` reports 158 matching, 6 differing. It is informational and

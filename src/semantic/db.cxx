@@ -20,6 +20,18 @@ const std::vector<std::string> SemanticDB::s_emptyPaths;
 auto SemanticDB::updateFile(const std::string& path, std::string source,
                             const std::vector<std::string>& companionDeclFiles)
     -> void {
+    // Re-entrancy: ResolvePass walks `m_files[path].ast.items` by reference,
+    // and resolving a `using` can reach back here for the very file being
+    // walked. Re-parsing would assign a fresh Program over that vector and
+    // leave the loop holding freed AST nodes — a segfault reading the next
+    // item's name, not a diagnostic. The file is already parsed and its
+    // symbols are already collected, so there is nothing to redo.
+    //
+    // Reachable from ordinary code: a module whose own `using` names a module
+    // that leads back to it. `m_resolvingFiles` was already maintained around
+    // the resolve pass below for `isModuleLoading`; this consults it.
+    if (m_resolvingFiles.count(path)) return;
+
     // Module export entries point directly into FileState::symbols. An editor
     // updates the same file repeatedly, so discard those pointers while the
     // old vector is still alive, before clear()/reallocation can invalidate
@@ -152,8 +164,35 @@ auto SemanticDB::ensureModule(const std::string& moduleName,
                        std::istreambuf_iterator<char>());
     updateFile(resolution->path, std::move(source));
     m_loadingModules.erase(resolution->moduleName);
-    if (!hasModule(resolution->moduleName)) return std::nullopt;
-    return resolution->moduleName;
+    if (hasModule(resolution->moduleName)) return resolution->moduleName;
+
+    // The relative candidate did not pan out. `Mid.Leaf` can match a FILE —
+    // the container heuristic in Resolver::resolve accepts `mid.kex` for a
+    // nested `Mid.Leaf`, because that is how `module Shop do module Cart`
+    // works — without that file actually defining the nested module. When it
+    // does not, the absolute name is still owed a look: `using Leaf` inside
+    // `module Mid` means the top-level `Leaf` whenever `Mid.Leaf` is not a
+    // real module.
+    //
+    // Without this, a library whose own module imports another module
+    // resolved to a name nothing defines, and reported the module it was
+    // standing in as missing.
+    if (resolution->moduleName != moduleName) {
+        module::Resolver absolute(m_moduleRoots);
+        if (auto plain = absolute.resolve(moduleName, "")) {
+            m_shadowedModulePaths[plain->moduleName] = plain->shadowedPaths;
+            if (hasModule(plain->moduleName)) return plain->moduleName;
+            if (m_loadingModules.insert(plain->moduleName).second) {
+                std::ifstream plainInput(plain->path);
+                std::string plainSource((std::istreambuf_iterator<char>(plainInput)),
+                                        std::istreambuf_iterator<char>());
+                updateFile(plain->path, std::move(plainSource));
+                m_loadingModules.erase(plain->moduleName);
+            }
+            if (hasModule(plain->moduleName)) return plain->moduleName;
+        }
+    }
+    return std::nullopt;
 }
 
 auto SemanticDB::diagnosticsFor(const std::string& file) const -> const std::vector<Diagnostic>& {

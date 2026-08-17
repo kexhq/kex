@@ -5,12 +5,12 @@
 # the ordinary method-call lowering) read the field fine. Field access has to
 # win over dispatch here, the same order `receiver.field` already uses.
 
-record R do
+record Row do
   title : String
   count : Integer
 end
 
-make R do
+make Row do
   let shout -> String = this.title.upperCase
 end
 
@@ -19,7 +19,7 @@ record Named do
   name : String
 end
 
-let rs = [R { title: "a", count: 1 }, R { title: "bb", count: 2 }]
+let rs = [Row { title: "a", count: 1 }, Row { title: "bb", count: 2 }]
 
 IO.printLine(rs.map(&.title))
 IO.printLine(rs.map(&.count))

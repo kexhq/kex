@@ -1,0 +1,5 @@
+spec/error_single_letter_type_name.kex:5:10: error: `T` is a type parameter, so it cannot name a record, give it a longer name
+spec/error_single_letter_type_name.kex:9:8: error: `U` is a type parameter, so it cannot name a type, give it a longer name
+spec/error_single_letter_type_name.kex:11:9: error: `V` is a type parameter, so it cannot name a trait, give it a longer name
+spec/error_single_letter_type_name.kex:14:8: error: `W` is a type parameter, so it cannot name a make target, give it a longer name
+Aborted: 4 syntax errors — fix before running.
