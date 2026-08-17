@@ -12,11 +12,6 @@ compiler diagnostics for [Kex](https://github.com/kexhq/kex).
 Kex is a functional language with Ruby-like syntax, immutability by default, UFCS function chains,
 and an Elixir-style process model. Try the language in your browser at [kex.run](https://kex.run).
 
-The extension is a thin client. Everything it shows comes from the Kex compiler
-itself, running as a language server (`kex --lsp`), so hover types and
-diagnostics are the compiler's own answers rather than a separate model of the
-language that could drift from it.
-
 ![Hover on an overloaded function, showing which overload was selected, the others available, and the documented example](https://github.com/kexhq/kex/raw/main/editors/vscode/images/hover.png)
 
 ![Completion after a dot in a builder chain, listing each function with its full signature](https://github.com/kexhq/kex/raw/main/editors/vscode/images/completion.png)
@@ -32,8 +27,6 @@ language that could drift from it.
   overload counts.
 - **Go to definition** and **find references**.
 - **Syntax highlighting** for Kex's full grammar.
-- **Automatic server restart** when the configured compiler is rebuilt inside
-  the workspace.
 
 ## Requirements
 
