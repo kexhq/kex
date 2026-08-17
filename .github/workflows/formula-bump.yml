@@ -95,6 +95,9 @@ jobs:
         if: steps.rehearse.outputs.tag != ''
         env:
           TAG: ${{ steps.rehearse.outputs.tag }}
+          # --online below hits the GitHub API for every url; the job token
+          # keeps it off the anonymous rate limit.
+          HOMEBREW_GITHUB_API_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd tap
@@ -137,14 +140,24 @@ jobs:
           [ "$urls" = "4" ] || { echo "::error::expected 4 ${TAG} release urls, found $urls"; exit 1; }
           [ "$hashes" = "4" ] || { echo "::error::expected 4 sha256 lines, found $hashes"; exit 1; }
 
-          # The keg version is stated rather than inferred, because the tey
-          # archive is named for TEY's version now and brew would otherwise
-          # read the keg version off that url — leaving `brew upgrade` blind to
-          # a release that bumped only Kex. Losing this line does not break the
-          # formula in any way `ruby -c` or `brew style` can see; it silently
-          # strands everyone on the brew channel on an old compiler.
-          if ! grep -qx "  version \"${TAG#v}\"" Formula/tey.rb; then
-            echo "::error::Formula/tey.rb is missing 'version \"${TAG#v}\"' — brew would take the keg version from the tey archive's name"
+          # `brew style` is not the only lint the tap runs: its syntax job also
+          # runs `brew audit --strict --online`, and that is a gate a generated
+          # formula has to clear too. This is not hypothetical — the 0.3.4 bump
+          # emitted `version "0.3.4"` beside a url whose v0.3.4 tag segment brew
+          # already scans the version from, and audit rejected it as "redundant
+          # with version scanned from URL" on the tap, where nothing in kex
+          # could see it happen.
+          brew audit --strict --online Formula/tey.rb
+
+          # Which is also why there is NO `version` line to assert here: the
+          # keg version is whatever brew scans off the release url's v<kex> tag
+          # segment (Version.detect prefers it over the tey-<version> filename
+          # in every combination), so it tracks Kex releases with nothing
+          # stated — and a stated version equal to the scanned one fails the
+          # audit above. Guard the absence, so the line cannot come back and
+          # redden a release again.
+          if grep -qx '  version ".*"' Formula/tey.rb; then
+            echo "::error::Formula/tey.rb states a version explicitly — brew scans the keg version from the release url's tag segment, and audit rejects a stated version that matches it"
             exit 1
           fi
 
