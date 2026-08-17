@@ -1,0 +1,19 @@
+# A single uppercase letter is a type PARAMETER, so nothing else may claim one.
+# Without this rule `x: T` is ambiguous at a glance: a concrete type and a type
+# variable would share one spelling. All four declaration forms are rejected
+# the same way.
+record T do
+  n : Integer = 0
+end
+
+type U = Bad(Integer)
+
+trait V do
+end
+
+make W do
+end
+
+main do
+  IO.printLine("unreachable")
+end

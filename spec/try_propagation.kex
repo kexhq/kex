@@ -16,9 +16,9 @@
 # `spec/try_rescue.kex` covers the RESCUED paths; this file covers only what
 # happens with no handler, which is where the backends disagreed.
 
-type E = Bad(String)
+type Failure = Bad(String)
 
-let mk(v: String) -> Result<Int, E> do
+let mk(v: String) -> Result<Int, Failure> do
   match v do
     "ok" -> Ok(1)
     _    -> Error(Bad(v))

@@ -145,6 +145,9 @@ private:
     auto isAtExprStart() const -> bool;
     auto hasDoBeforeNewline() const -> bool;
     // Error handling and recovery
+    // Rejects a single uppercase letter as a declaration name: those are
+    // type parameters. `what` names the construct for the message.
+    auto rejectSingleLetterTypeName(const std::string& name, const char* what) -> void;
     [[noreturn]] auto error(const std::string& message) -> void;
     auto syncToTopLevel() -> void;
     auto syncToStatement() -> void;

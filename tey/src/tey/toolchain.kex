@@ -170,6 +170,59 @@ let kex -> String do
   return Tey.Toolchain.resolved.or("kex")
 end
 
+# The OTP release that compiled the selected toolchain's runtime beams — the
+# oldest Erlang that can load them, since a `.beam` cannot be read by a runtime
+# older than the `erlc` that produced it.
+#
+# Read from `kex --info` rather than guessed: the number is a build-time
+# constant inside the binary (KEX_RUNTIME_OTP_FLOOR) and Tey has no other way
+# to see it. `--version` is prose and may be reworded; `--info` is the contract
+# (tests/info_cli_test.cxx pins it).
+#
+# `None` when the toolchain is too old to have `--info`, when the field is
+# absent, or when it is `null` because the compiler was built without erlc. All
+# three mean the same thing to a caller — "this toolchain does not say" — and
+# none of them is an error worth stopping a build for.
+let runtimeOtpFloor -> Integer? do
+  match Process.run(Tey.Toolchain.kex, ["--info"]) do
+    Error(_) -> return None
+    Ok(result) -> do
+      return None if result.exitCode != 0
+      match JSON.parse(result.stdout) do
+        Error(_) -> return None
+        Ok(info) -> match info["runtime_otp_floor"] do
+          None -> return None
+          Just(value) -> match Integer.parse("${value}") do
+            Error(_) -> return None
+            Ok(floor) -> return Just(floor)
+          end
+        end
+      end
+    end
+  end
+end
+
+# The OTP actually about to run, asked of `erl` itself.
+let runningOtpRelease -> Integer? do
+  match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval",
+                                        "io:format(\"~s\", [erlang:system_info(otp_release)]), halt()."]) do
+    Error(_) -> return None
+    Ok(result) -> do
+      return None if result.exitCode != 0
+      match Integer.parse(result.stdout.trim) do
+        Error(_) -> return None
+        Ok(release) -> return Just(release)
+      end
+    end
+  end
+end
+
+# The `erl` Tey and Kex will spawn. KEX_ERL mirrors what the compiler itself
+# honours, so overriding it moves both rather than half of the pair.
+let erl -> String do
+  return ENV.get("KEX_ERL", "erl")
+end
+
 # The compiler Tey would run, or None when there is none to run.
 #
 # The bundled Kex is used WHERE IT LIES rather than copied into the Tey home

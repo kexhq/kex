@@ -14,11 +14,24 @@ let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   if !Tey.Semver.satisfies(Tey.Semver.release(Kex.Kernel.VERSION.number), manifest.packageKexRequirement)
     return Error("Kex ${Kex.Kernel.VERSION.number} does not satisfy ${manifest.packageKexRequirement}")
   end
+  # The OTP floor actually in force is the higher of what the package asks for
+  # and what the toolchain's own runtime beams require — a package cannot ask
+  # for an Erlang older than the one that compiled the beams it is about to
+  # load, however modest its own needs are.
+  let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
+  let running = Tey.Toolchain.runningOtpRelease
+  match (floor, running) do
+    (Just(required), Just(actual)) when actual < required ->
+      return Error("Erlang/OTP ${actual} is too old: ${Tey.Resolver.otpReason(manifest.packageOtpRequirement, required)}")
+    _ -> ()
+  end
   let locked = match Tey.Resolver.resolveDependencies(manifest.manifestDependencies, []) do
     Error(error) -> return Error(error)
     Ok(dependencies) -> dependencies
   end
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
+                otpRequirement: manifest.packageOtpRequirement,
+                otpRelease: running.or(0),
                 # The release, not `.number`: that carries the git revision of
                 # whichever build happened to run `tey lock`, so a committed
                 # lockfile would churn on every rebuild of the same version.
@@ -26,6 +39,43 @@ let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
 end
 
 private do
+  # The lowest OTP this build can legally run on: the higher of the package's
+  # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
+  # says anything, which is the ordinary case for a package with no interop
+  # needs on a toolchain built without erlc.
+  let effectiveOtpFloor(requirement: String) -> Integer? do
+    let toolchain = Tey.Toolchain.runtimeOtpFloor
+    let declared = Tey.Resolver.lowestSatisfying(requirement)
+    match (declared, toolchain) do
+      (None, None) -> return None
+      (Just(d), None) -> return Just(d)
+      (None, Just(t)) -> return Just(t)
+      (Just(d), Just(t)) -> return Just(d > t then d else t)
+    end
+  end
+
+  # The smallest OTP release satisfying an `otp(...)` requirement. Releases are
+  # plain integers — `28`, not `28.1.2` — so the requirement is read as a bare
+  # lower bound rather than through the semver machinery, which would have to
+  # invent minor and patch numbers that OTP does not have.
+  let lowestSatisfying(requirement: String) -> Integer? do
+    return None if requirement == ""
+    let digits = requirement.chars.filter { |c| c.digit? }.join("")
+    return None if digits == ""
+    match Integer.parse(digits) do
+      Error(_) -> return None
+      Ok(value) -> return Just(value)
+    end
+  end
+
+  # Which of the two constraints is doing the work, so the message points at
+  # the thing the reader can change.
+  let otpReason(requirement: String, required: Integer) -> String do
+    let declared = Tey.Resolver.lowestSatisfying(requirement)
+    return "this package declares otp(\"${requirement}\")" if declared == Just(required)
+    return "the toolchain's runtime beams were compiled by OTP ${required}, and a .beam cannot be loaded by an older runtime"
+  end
+
   # The exact tag to pin. Anything but a tag range is taken as written.
   let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
