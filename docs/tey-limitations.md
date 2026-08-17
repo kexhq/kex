@@ -46,6 +46,15 @@ They are kept explicit so temporary workarounds do not become accidental API.
   dependency: two constraints on the same package are not unified, a
   dependency's own manifest is never read (no transitive dependencies), and
   with no graph to walk there is no cycle detection either.
+  `docs/tey-resolver-plan.md` is the committed design for closing this, together
+  with the OTP gap below — they share a constraint-intersection step, and doing
+  either first without the other means writing it twice.
+- Nothing records which Erlang/OTP a package needs or was built with. A `.beam`
+  cannot be loaded by an OTP older than the `erlc` that produced it, and while
+  `kex` now diagnoses that before spawning `erl` (`KEX_RUNTIME_OTP_FLOOR`), a
+  manifest cannot declare an OTP requirement and `tey.lock` does not record the
+  OTP that resolved it — so a locked, reproducible checkout can still behave
+  differently on two machines. Planned in `docs/tey-resolver-plan.md`.
 - `tey lock` currently fetches repositories while resolving them because the
   content digest is computed from `git archive`. Separating resolution from
   cache population needs a remote/archive strategy or a clearly renamed

@@ -179,3 +179,55 @@ describe("Parsing combinators") do
     end
   end
 end
+
+describe("Parsing.string") do
+  it("matches an exact literal and advances past it") do
+    match Input { input: "version(1)" }.string("version(") do
+      Ok((literal, rest)) -> do
+        assert(literal == "version(")
+        assert(rest.remaining == "1)")
+      end
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("reports the failure at the START of the literal") do
+    # Partway through is where the parser noticed; the start is where a person
+    # reading the error expects the caret.
+    match Input { input: "verzion(" }.string("version(") do
+      Ok(_) -> assert(false)
+      Error(Expected(what, at)) -> do
+        assert(what == "version(")
+        assert(at == 0)
+      end
+      Error(_) -> assert(false)
+    end
+  end
+
+  it("fails rather than matching a truncated input") do
+    match Input { input: "ver" }.string("version(") do
+      Ok(_) -> assert(false)
+      Error(_) -> assert(true)
+    end
+  end
+end
+
+describe("Parsing.takeWhile") do
+  it("takes the run as a String") do
+    let (word, rest) = Input { input: "version(1)" }.takeWhile { |c| c.letter? }
+    assert(word == "version")
+    assert(rest.remaining == "(1)")
+  end
+
+  it("cannot fail: no match is an empty String and an unmoved cursor") do
+    let (empty, unmoved) = Input { input: "123" }.takeWhile { |c| c.letter? }
+    assert(empty == "")
+    assert(unmoved.pos == 0)
+  end
+
+  it("stops at the end of the input") do
+    let (all, rest) = Input { input: "abc" }.takeWhile { |c| c.letter? }
+    assert(all == "abc")
+    assert(rest.atEnd?)
+  end
+end

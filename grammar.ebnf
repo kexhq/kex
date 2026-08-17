@@ -73,7 +73,6 @@ type_params = LESS_THAN UPPER_IDENT ( COMMA UPPER_IDENT )* GREATER_THAN ;
 type_expr
   = type_name
   | type_name LESS_THAN type_arg ( COMMA type_arg )* GREATER_THAN
-  | LOWER_IDENT                                   (* single-letter generic *)
   | type_expr ARROW type_expr                     (* function type *)
   | LPAREN type_expr ( COMMA type_expr )* RPAREN  (* tuple type *)
   | LBRACKET type_expr RBRACKET                   (* list type *)
@@ -88,6 +87,9 @@ type_expr
 
 type_arg = type_expr ;
 
+(* A single uppercase LETTER is a type parameter — `T` in
+   `let identity(x: T) -> T`. That is the whole rule: anything longer names a
+   type. *)
 type_name = UPPER_IDENT ( DOT UPPER_IDENT )* ;
 
 abstract_function = LOWER_IDENT ( TYPE_ANNOTATION | COLON ) type_expr ;

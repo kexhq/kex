@@ -1865,11 +1865,50 @@ auto printUsage(const char *progName) -> void {
       << "                    Add a module source root (repeatable)\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
+      << "      --info        Print this build's details as JSON, for tools\n"
       << "  --no-colors       Disable ANSI color output\n";
 }
 
 auto printVersion() -> void {
   std::cout << "kex " << kex::versionStringWithBuild() << "\n";
+}
+
+// `--info`: everything a TOOL needs to know about this binary, as JSON on one
+// line. `--version` is for people and its text may be reworded; this is a
+// contract, and Tey depends on it — see docs/tey-resolver-plan.md.
+//
+// `runtime_otp_floor` is the reason this exists. The OTP release that compiled
+// the bundled runtime beams is the oldest that can load them, it is baked in
+// at build time (KEX_RUNTIME_OTP_FLOOR), and a package manager cannot read a
+// C++ define. Without it, Tey can only guess at the requirement it is supposed
+// to record and enforce.
+//
+// Fields may be ADDED; existing ones keep their name and type. A reader must
+// ignore what it does not know, and treat a missing field as unknown rather
+// than as an error — a Tey newer than the Kex it is asking will meet one.
+// `null` for a value this build genuinely does not have, so the key's absence
+// and its emptiness stay distinguishable.
+auto printInfo() -> void {
+  auto quoted = [](const std::string &value) {
+    return value.empty() ? std::string("null") : "\"" + value + "\"";
+  };
+  std::cout << "{"
+            << "\"version\":\"" << kex::versionNumber() << "\","
+            << "\"revision\":" << quoted(kex::kGitRevision) << ","
+            << "\"built\":" << quoted(kex::kBuildDate) << ","
+            // 0 means "unknown", which disables the check — report it as null
+            // rather than as a floor of zero that every runtime satisfies.
+            << "\"runtime_otp_floor\":"
+            << (KEX_RUNTIME_OTP_FLOOR == 0
+                    ? std::string("null")
+                    : std::to_string(KEX_RUNTIME_OTP_FLOOR))
+            << ","
+            // Where the prebuilt stdlib and runtime beams live. Empty when
+            // this build has none, which is what makes every BEAM mode fail —
+            // worth being able to ask about rather than infer.
+            << "\"runtime_dir\":" << quoted(prebuiltRuntimeBeamDir()) << ","
+            << "\"erl\":\"" << erlExecutable() << "\""
+            << "}\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -1889,6 +1928,9 @@ int main(int argc, char *argv[]) {
       {"complete", required_argument, nullptr, 'K'},
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
+      // Machine-readable counterpart to --version. Long-only: it is for
+      // tools, and a short flag would invite it into shell prompts.
+      {"info", no_argument, nullptr, 1009},
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
       {"source-root", required_argument, nullptr, 1008},
@@ -2063,6 +2105,9 @@ int main(int argc, char *argv[]) {
       return 0;
     case 'v':
       printVersion();
+      return 0;
+    case 1009:
+      printInfo();
       return 0;
     case 'N':
       kex::color::enabled = false;

@@ -56,8 +56,8 @@ make Parser do
 
   # Apply `f` zero or more times, collecting results. Stops at the first
   # failure and returns everything gathered so far (never fails).
-  let many(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) do
-    var results: [a] = []
+  let many(f: Parser -> Result<(T, Parser), ParseError>) -> ([T], Parser) do
+    var results: [T] = []
     var p = this
     loop
       trying do
@@ -70,14 +70,14 @@ make Parser do
   end
 
   # Apply `f` one or more times. Fails if the first application fails.
-  let some(f: Parser -> Result<(a, Parser), ParseError>) -> ([a], Parser) or! ParseError do
+  let some(f: Parser -> Result<(T, Parser), ParseError>) -> ([T], Parser) or! ParseError do
     let (first, p) = f(this).try
     let (rest, p2) = p.many(f)
     Ok(([first, ...rest], p2))
   end
 
   # Try each alternative in order, returning the first that succeeds.
-  let choice(alts: [Parser -> Result<(a, Parser), ParseError>]) -> (a, Parser) or! ParseError do
+  let choice(alts: [Parser -> Result<(T, Parser), ParseError>]) -> (T, Parser) or! ParseError do
     var i = 0
     loop
       break if i >= alts.count

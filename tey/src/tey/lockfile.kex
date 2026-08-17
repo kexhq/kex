@@ -1,4 +1,7 @@
-foul module Tey.Lockfile
+# Pure, and declared so. Reading and writing `tey.lock` is somebody else's
+# job — this module only turns the text into a LockState and back, which is
+# what makes the whole format testable without a disk (tey/spec/lockfile.spec.kex).
+module Tey.Lockfile
 
 using JSON
 

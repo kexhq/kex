@@ -1,0 +1,165 @@
+using Tey.Lockfile, only: [Dependency, LockState, decode, encode]
+
+# `tey.lock` is the file that makes a checkout build the same code everywhere,
+# and it is committed — so its format is a contract with every past and future
+# Tey, and with Git's merge driver. All of this is pure string work: no cache,
+# no network, no compiler.
+#
+# The round trip matters more than either direction alone. `encode` is written
+# by hand rather than through a JSON serializer, so it is exactly the kind of
+# code where an unescaped quote or a missing comma produces a file that only
+# fails later, on somebody else's machine.
+
+let sample -> LockState do
+  return LockState {
+    kexRequirement: ">= 0.3.3",
+    kexVersion: "0.3.4",
+    lockedDependencies: [
+      Dependency { name: "greet", git: "https://github.com/kexhq/greet",
+                   resolved: "refs/tags/v0.1.1",
+                   commit: "22c6db55eb807504d9a6d0eee9af44eb52230833",
+                   sha256: "1d43746e5b4a31987e2776767860d7965d46783f08f8fcefc97859bda0554923",
+                   groups: [] }
+    ]
+  }
+end
+
+describe("Tey.Lockfile round trip") do
+  it("decodes what it encoded") do
+    let state: LockState or! String = Tey.Lockfile.decode(Tey.Lockfile.encode(sample()))
+    match state do
+      Error(message) -> do
+        IO.printLine("decode failed: ${message}")
+        assert(false)
+      end
+      Ok(back) -> do
+        assert(back.kexRequirement == ">= 0.3.3")
+        assert(back.kexVersion == "0.3.4")
+        assert(back.lockedDependencies.count == 1)
+        let dep = back.lockedDependencies.first.try
+        assert(dep.name == "greet")
+        assert(dep.git == "https://github.com/kexhq/greet")
+        assert(dep.resolved == "refs/tags/v0.1.1")
+        assert(dep.commit == "22c6db55eb807504d9a6d0eee9af44eb52230833")
+      end
+    end
+  end
+
+  it("keeps groups through the round trip") do
+    let withGroup = LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.3.4",
+      lockedDependencies: [
+        Dependency { name: "spec-helper", git: "https://example.com/h",
+                     resolved: "main", commit: "abc123", sha256: "deadbeef",
+                     groups: ["dev"] }
+      ]
+    }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(withGroup)).try
+    assert(back.lockedDependencies.first.try.groups == ["dev"])
+  end
+
+  it("survives a dependency with no dependencies at all") do
+    let empty = LockState { kexRequirement: ">= 0.3.0", kexVersion: "0.3.4",
+                            lockedDependencies: [] }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(empty)).try
+    assert(back.lockedDependencies.empty?)
+    assert(back.kexVersion == "0.3.4")
+  end
+end
+
+describe("Tey.Lockfile.encode") do
+  it("writes the version marker every reader checks first") do
+    assert(Tey.Lockfile.encode(sample()).contains?("\"version\": 1"))
+  end
+
+  it("ends with a newline") do
+    # A file Git has to merge, so it ends the way every other text file does.
+    assert(Tey.Lockfile.encode(sample()).endsWith?("\n"))
+  end
+
+  it("escapes what would otherwise break the JSON") do
+    # A quote in a git URL is far-fetched; a backslash on a Windows-style path
+    # or a file:// URL is not, and an unescaped one produces a lockfile that
+    # parses as something else entirely.
+    let awkward = LockState {
+      kexRequirement: ">= 0.3.0", kexVersion: "0.3.4",
+      lockedDependencies: [
+        Dependency { name: "odd", git: "https://example.com/a\"b\\c",
+                     resolved: "main", commit: "abc123", sha256: "deadbeef" }
+      ]
+    }
+    let back = Tey.Lockfile.decode(Tey.Lockfile.encode(awkward)).try
+    assert(back.lockedDependencies.first.try.git == "https://example.com/a\"b\\c")
+  end
+end
+
+describe("Tey.Lockfile.decode") do
+  it("refuses a lockfile version it does not know") do
+    # The guard that makes changing this format possible at all: a Tey that
+    # cannot understand a newer lockfile must say so rather than misread it.
+    let state: LockState or! String = Tey.Lockfile.decode(`{"version": 2, "kex": {}, "deps": {}}`)
+    match state do
+      Error(message) -> assert(message.contains?("version"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  it("refuses text that is not JSON") do
+    let state: LockState or! String = Tey.Lockfile.decode("this is not a lockfile")
+    match state do
+      Error(message) -> assert(message.contains?("JSON"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  it("refuses a lockfile with no kex metadata") do
+    let state: LockState or! String = Tey.Lockfile.decode(`{"version": 1, "deps": {}}`)
+    match state do
+      Error(message) -> assert(message.contains?("kex"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  it("refuses a dependency missing its commit or digest") do
+    # An entry without a commit pins nothing, and one without a digest cannot
+    # be verified — either would let `tey install` fetch something and report
+    # success, which is the failure this format exists to prevent.
+    let noCommit: LockState or! String = Tey.Lockfile.decode(
+      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+        "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
+                           "commit": "", "sha256": "deadbeef", "groups": []}}}`)
+    match noCommit do
+      Error(message) -> assert(message.contains?("incomplete"))
+      Ok(_) -> assert(false)
+    end
+
+    let noDigest: LockState or! String = Tey.Lockfile.decode(
+      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+        "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
+                           "commit": "abc123", "sha256": "", "groups": []}}}`)
+    match noDigest do
+      Error(message) -> assert(message.contains?("incomplete"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  it("treats a lockfile with no deps key as having none") do
+    # Distinct from a malformed one: `tey lock` on a package with no
+    # dependencies is an ordinary thing, not an error.
+    let state = Tey.Lockfile.decode(
+      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"}}`).try
+    assert(state.lockedDependencies.empty?)
+  end
+end
+
+describe("Tey.Lockfile.dependencyListLine") do
+  it("names the dependency, what it resolved to, and the exact commit") do
+    # What `tey list` prints. The commit is the part that matters: `main` says
+    # nothing about which `main`.
+    let dep = sample().lockedDependencies.first.try
+    let line = Tey.Lockfile.dependencyListLine(dep)
+    assert(line.contains?("greet"))
+    assert(line.contains?("refs/tags/v0.1.1"))
+    assert(line.contains?("22c6db55eb807504d9a6d0eee9af44eb52230833"))
+  end
+end

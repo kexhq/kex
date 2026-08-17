@@ -1,6 +1,7 @@
 #include "parser.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
+#include <cctype>
 #include <stdexcept>
 
 namespace kex {
@@ -1072,10 +1073,17 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
         return type;
     }
 
-    // Generic var (single letter lowercase)
+    // Type parameters are uppercase, like every other type name. A lowercase
+    // letter here is what someone arriving from a language that spells them
+    // lowercase will reach for, so it is worth its own message: falling
+    // through to "Expected type expression" points at an ordinary-looking
+    // name and says nothing about what to write instead.
     if (check(TokenType::LowerIdent) && peek().value.size() == 1) {
-        type->kind = ast::GenericVar{advance().value};
-        return type;
+        const auto name = peek().value;
+        std::string upper = name;
+        upper[0] = static_cast<char>(std::toupper(static_cast<unsigned char>(upper[0])));
+        error("type parameters are uppercase: write `" + upper + "` rather than `" +
+              name + "`");
     }
 
     // A compiler-computed type: `Type.returnedBy(f)` / `Type.of(expr)`.
