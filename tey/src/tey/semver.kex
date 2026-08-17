@@ -81,6 +81,44 @@ let satisfies(versionText: String, requirement: String) -> Bool do
   clauses.all? { |clause| satisfiesClause(version.try, clause) }
 end
 
+# The requirement satisfied only by versions satisfying BOTH, for when two
+# packages in one graph each ask for the same dependency.
+#
+# Concatenation, because `satisfies` already reads a requirement as a list of
+# space-separated clauses that must ALL hold: `~> 0.1` and `>= 0.1.5` intersect
+# to `~> 0.1 >= 0.1.5`, which is exactly the question "satisfies both". No
+# interval arithmetic, no second implementation of the operators to keep in
+# step with the first.
+#
+# An empty intersection is not detected here, and deliberately: `~> 0.1 ~> 0.2`
+# is perfectly well formed and simply matches nothing. Emptiness is a fact
+# about the versions a repository actually publishes, so it is discovered where
+# the tags are (`highest`), where the error can also say what WAS available.
+let intersect(a: String, b: String) -> String do
+  let left = a.trim
+  let right = b.trim
+  return right if left == "" || left == "*"
+  return left if right == "" || right == "*"
+  return left if left == right
+  return "${left} ${right}"
+end
+
+# Every constraint at once. `[]` and `[""]` both mean "no opinion", which is
+# what a package with no version requirement expresses.
+let intersectAll(requirements: [String]) -> String do
+  return requirements.reduce("") do |combined, requirement|
+    Tey.Semver.intersect(combined, requirement)
+  end
+end
+
+# The version inside a resolved ref: `refs/tags/v0.1.1` and `v0.1.1` both
+# give `0.1.1`. A ref that carries no version (a branch name, a bare commit)
+# gives "", which satisfies nothing and so never claims to meet a range.
+let versionOf(ref: String) -> String do
+  let last = ref.split("/").last.or(ref)
+  return Tey.Semver.parseVersion(last) == None then "" else last
+end
+
 # Channel precedence, lowest first: prealpha < alpha < beta < rc < release.
 # Plain semver would order these alphabetically — putting `beta` BEFORE
 # `prealpha` — which is not what the words mean, so the ranking is explicit.
@@ -172,7 +210,13 @@ private do
     elif clause.startsWith?("<")
       op = "<"
     end
-    let raw = clause.drop(op.count)
+    # Only strip an operator that is actually there. `op` starts as "=" to
+    # give the match below a default, but a bare `1.2.3` carries no prefix:
+    # dropping one character anyway left `.2.3`, which parses as nothing, so a
+    # bare exact requirement was satisfied by no version at all — including
+    # itself. Masked in the main path because `range?` sends a bare version to
+    # be looked up as a tag name rather than matched.
+    let raw = clause.startsWith?(op) then clause.drop(op.count) else clause
     let wanted = Tey.Semver.parseVersion(raw)
     return false if wanted == None
     let order = Tey.Semver.compareVersions(version, wanted.try)

@@ -1,0 +1,8 @@
+module Chain.Mid
+
+# The case that used to segfault the compiler: a module with a `using` of
+# its own. Written unqualified so it also covers the relative-candidate path,
+# where `Leaf` is first read as `Chain.Mid.Leaf`.
+using Chain.Leaf, only: [hello]
+
+let polite(name: String) = "${hello(name)} How are you?"

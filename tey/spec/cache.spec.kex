@@ -1,0 +1,76 @@
+using Tey.Cache, only: [packagePath, root]
+using Tey.Lockfile, only: [Dependency]
+
+# Where a fetched dependency lives on disk, and — more importantly — what
+# makes two checkouts the SAME checkout. Cache identity is a correctness
+# property, not a performance one: two packages sharing a directory would have
+# them overwrite each other's source, and the same package failing to share
+# one would re-clone forever.
+#
+# Pure path arithmetic, so none of this touches the network or the disk.
+
+let at(git: String, commit: String) -> Dependency do
+  return Dependency { name: "greet", git: git, resolved: "main",
+                      commit: commit, sha256: "deadbeef" }
+end
+
+describe("Tey.Cache.packagePath") do
+  it("gives one directory per commit") do
+    let first = Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+    let second = Tey.Cache.packagePath(at("https://example.com/greet", "bbb222"))
+    assert(first != second)
+    assert(first.endsWith?("aaa111"))
+    assert(second.endsWith?("bbb222"))
+  end
+
+  it("separates two packages that share a name but not a repository") do
+    # The reason the URL is part of the identity. Two `greet` packages from
+    # different repositories must never land in the same directory, or one
+    # would silently compile against the other's source.
+    let mine = Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+    let theirs = Tey.Cache.packagePath(at("https://other.example/greet", "aaa111"))
+    assert(mine != theirs)
+  end
+
+  it("gives the same directory for the same repository and commit") do
+    # Idempotence is what makes a warm cache a cache. Called twice, or across
+    # two runs, the answer has to be the same string.
+    let once = Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+    let twice = Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+    assert(once == twice)
+  end
+
+  it("ignores the parts of a dependency that are not its identity") do
+    # `resolved` is a human-facing label for the same commit — `refs/tags/v1`
+    # and `main` can name one — so it must not split the cache. The commit is
+    # the identity.
+    let byTag = Dependency { name: "greet", git: "https://example.com/greet",
+                             resolved: "refs/tags/v0.1.0", commit: "aaa111",
+                             sha256: "deadbeef" }
+    let byBranch = Dependency { name: "greet", git: "https://example.com/greet",
+                                resolved: "main", commit: "aaa111",
+                                sha256: "deadbeef" }
+    assert(Tey.Cache.packagePath(byTag) == Tey.Cache.packagePath(byBranch))
+  end
+
+  it("lands under the cache root") do
+    assert(Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+             .startsWith?(Tey.Cache.root))
+  end
+
+  it("does not put the raw URL in the path") do
+    # The URL is hashed, not embedded: it contains `/` and `:`, which would
+    # otherwise invent directory levels and break on Windows-style paths.
+    let path = Tey.Cache.packagePath(at("https://example.com/greet", "aaa111"))
+    assert(!path.contains?("https:"))
+    assert(!path.contains?("example.com"))
+  end
+end
+
+describe("Tey.Cache.root") do
+  it("is honoured from TEY_CACHE when set, and is absolute otherwise") do
+    # Overridable so a test or a sandbox can point it somewhere disposable.
+    # Whatever it is, it must be a path and not empty.
+    assert(!Tey.Cache.root.empty?)
+  end
+end

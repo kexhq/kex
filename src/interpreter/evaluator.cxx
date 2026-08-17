@@ -328,11 +328,35 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     if (!resolved) {
         if (module::Resolver::isForeignNamespace(moduleName))
             throw RuntimeError("Foreign module interop is not implemented: " + moduleName, loc);
+        // `using Leaf` written inside `module Mid` reaches here already
+        // qualified as `Mid.Leaf`, because a nested module is the first
+        // reading. When no such nested module exists, the name meant the
+        // top-level `Leaf` all along — try it before giving up, or a module
+        // can never import a sibling module.
+        if (const auto dot = moduleName.rfind('.'); dot != std::string::npos) {
+            const auto bare = moduleName.substr(dot + 1);
+            if (auto sibling = resolver.resolve(bare, "")) {
+                m_loadingModules.erase(moduleName);
+                return ensureModuleLoaded(sibling->moduleName, loc, "");
+            }
+        }
         throw RuntimeError("Unknown module: " + moduleName, loc);
     }
     const auto canonicalName = resolved->moduleName;
     if (m_moduleRegistry.contains(canonicalName)) return canonicalName;
-    if (!m_loadingModules.insert(canonicalName).second) return canonicalName;
+    if (!m_loadingModules.insert(canonicalName).second) {
+        // Already being loaded. For a genuine cycle the name is right and the
+        // half-built module is what the caller gets. But a RELATIVE candidate
+        // reaching here means the container heuristic sent us back into the
+        // file we are already executing — `using Leaf` inside `module Mid`
+        // resolving `Mid.Leaf` to `mid.kex` — and returning that name hands
+        // the caller a module nothing will ever define. The absolute name is
+        // what was meant.
+        if (canonicalName != moduleName)
+            if (auto sibling = module::Resolver(m_moduleRoots).resolve(moduleName, ""))
+                return ensureModuleLoaded(sibling->moduleName, loc, "");
+        return canonicalName;
+    }
 
     auto path = std::make_unique<std::string>(std::move(resolved->path));
     std::ifstream input(*path);
@@ -362,8 +386,24 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     for (const auto& item : ownedProgram->items) execTopLevel(item);
     m_loadingModules.erase(canonicalName);
 
-    if (!m_moduleRegistry.contains(canonicalName))
+    if (!m_moduleRegistry.contains(canonicalName)) {
+        // The relative candidate matched a FILE without that file defining the
+        // nested module: `using Leaf` inside `module Mid` tries `Mid.Leaf`
+        // first, and `mid.kex` answers it, because that is how a container
+        // module (`module Shop do module Cart`) is found. When the nested
+        // module turns out not to exist, the absolute name is still owed a
+        // look — `Leaf` means the top-level `Leaf`.
+        //
+        // Mirrors the same fallback in SemanticDB::ensureModule. Without it a
+        // module that imports another module fails at run time having already
+        // type-checked.
+        if (canonicalName != moduleName)
+            if (auto plain = module::Resolver(m_moduleRoots).resolve(moduleName, "")) {
+                m_loadingModules.erase(canonicalName);
+                return ensureModuleLoaded(plain->moduleName, loc, "");
+            }
         throw RuntimeError("Resolved file does not define module " + canonicalName, loc);
+    }
     return canonicalName;
 }
 

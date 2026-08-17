@@ -82,6 +82,48 @@ let install(without: String) -> Integer do
   let omitted = state.lockedDependencies.count - wanted.count
   IO.printLine("Installed ${wanted.count} package(s)") if omitted == 0
   IO.printLine("Installed ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
+  Tey.Commands.installTargets
+end
+
+# Puts this package's `target(...)` executables where they can be run by name.
+#
+# `${TEY_HOME}/bin` is a directory Tey already owns and already asks people to
+# put on PATH — it is how the `kex` shim gets there — so a package's programs
+# land beside it rather than needing a second directory and a second
+# instruction.
+#
+# Only packages that DECLARE a target are affected. A library has none, so
+# `tey install` in one still means exactly what it meant before: fetch the
+# dependencies.
+let installTargets -> Integer do
+  let package = match Tey.Commands.manifest do
+    Error(_) -> return 0
+    Ok(value) -> value
+  end
+  return 0 if package.targets.empty?
+  let status = Tey.Commands.build
+  return status if status != 0
+  let binDirectory = Tey.Toolchain.binDirectory
+  if !FS.Directory.create(binDirectory)
+    return Tey.Commands.fail("could not create ${binDirectory}")
+  end
+  var failures = 0
+  package.targets.each do |target|
+    let built = "${Tey.Commands.outputDirectory}/${target.name}"
+    let installed = "${binDirectory}/${target.name}"
+    if FS.File.copy(built, installed) && Tey.Commands.runStatus("chmod", ["+x", installed]) == 0
+      IO.printLine("Installed ${target.name} to ${installed}")
+    else
+      failures = Tey.Commands.fail("could not install ${target.name} to ${installed}")
+    end
+    ()
+  end
+  return failures if failures != 0
+  # Said only when it matters: a keg or tarball install already has this
+  # directory on PATH, and telling someone to fix a problem they do not have
+  # is noise.
+  let reachable = ENV.get("PATH", "").split(":").any? { |directory| directory == binDirectory }
+  IO.printLine("Add ${binDirectory} to PATH to run them by name.") if !reachable
   0
 end
 
@@ -187,9 +229,9 @@ let build -> Integer do
   if !FS.Directory.create(Tey.Commands.outputDirectory)
     return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
   end
-  match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+  let status = match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
                                         ...Tey.Commands.sourceRoots, ...units]) do
-    Error(error) -> Tey.Commands.fail(error)
+    Error(error) -> return Tey.Commands.fail(error)
     Ok(result) -> do
       if result.stdout != ""
         IO.print(result.stdout)
@@ -200,6 +242,8 @@ let build -> Integer do
       result.exitCode
     end
   end
+  return status if status != 0
+  Tey.Commands.buildTargets(package)
 end
 
 let test -> Integer do
@@ -301,6 +345,69 @@ private do
   # to ignore.
   let outputDirectory -> String do
     return "ebin"
+  end
+
+  # An executable per `target(...)`, written next to the beams.
+  #
+  # `target` was parsed and then ignored by everything, so declaring one did
+  # nothing at all. It now names a real file you can run, hand to someone, or
+  # put on PATH with `tey install`.
+  #
+  # Each target is compiled into its OWN directory before being archived,
+  # because the compiler names every entry module `kex_main`: archiving one
+  # shared `ebin/` would give every target the same program under a different
+  # name.
+  let buildTargets(package: ManifestPackage) -> Integer do
+    return 0 if package.targets.empty?
+    var status = 0
+    package.targets.each do |target|
+      let staging = "${Tey.Commands.outputDirectory}/.${target.name}"
+      if !FS.Directory.create(staging)
+        status = Tey.Commands.fail("could not create ${staging}")
+      end
+      let outcome = match Process.run(Tey.Toolchain.kex,
+                                       ["--compile", "-o", staging,
+                                        ...Tey.Commands.sourceRoots, target.entrypoint]) do
+        Error(error) -> Tey.Commands.fail(error)
+        Ok(result) -> do
+          IO.printError(result.stderr) if result.stderr != ""
+          result.exitCode
+        end
+      end
+      status = outcome if outcome != 0
+      let output = "${Tey.Commands.outputDirectory}/${target.name}"
+      if outcome == 0
+        if Tey.Commands.writeEscript(staging, output)
+          IO.printLine("  Target  ${output}")
+        else
+          status = Tey.Commands.fail("could not write ${output}")
+        end
+      end
+      ()
+    end
+    return status
+  end
+
+  # An escript: the BEAM's single-file executable. A shebang, the emulator
+  # flags naming the entry module, and a zip of every beam the program needs —
+  # the runtime and the prelude included, which is what makes the result
+  # runnable on a machine that has Erlang and nothing else.
+  #
+  # Built by `escript:create/2` rather than by assembling the archive here,
+  # because the header format is OTP's to define.
+  #
+  # The result carries the same OTP floor as any other beam: it cannot be run
+  # by an Erlang older than the one that compiled it, and that failure reads
+  # as `corrupt atom table`.
+  let writeEscript(from: String, output: String) -> Bool do
+    let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_main\"}, {archive,B,[]}]), halt()."
+    match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
+      Error(_) -> return false
+      Ok(result) -> do
+        return false if result.exitCode != 0
+        return Tey.Commands.runStatus("chmod", ["+x", output]) == 0
+      end
+    end
   end
 
   # The last component of the working directory — the package name `tey init`

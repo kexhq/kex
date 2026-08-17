@@ -118,3 +118,135 @@ end
     assert(dependency.manifestRequested == "~> 0.1")
   end
 end
+
+# The rest of the format. Every field here is part of what a `package.kex` is
+# allowed to say, so a reimplementation has to accept all of them and mean the
+# same things by them.
+describe("Tey.Manifest.read — the whole format") do
+  it("reads an entrypoint and a target") do
+    let package = Tey.Manifest.read(`bundle "greeter" do
+  version("0.1.0")
+  entrypoint("src/main.kex")
+
+  target("greeter", entrypoint: "src/main.kex")
+end
+`).try
+    assert(package.entrypoint == "src/main.kex")
+    assert(package.targets.count == 1)
+    assert(package.targets.first.try.name == "greeter")
+    assert(package.targets.first.try.entrypoint == "src/main.kex")
+  end
+
+  it("lets a target default its entrypoint to the package's") do
+    let package = Tey.Manifest.read(`bundle "greeter" do
+  entrypoint("src/cli.kex")
+  target("greeter")
+end
+`).try
+    assert(package.targets.first.try.entrypoint == "src/cli.kex")
+  end
+
+  it("reads several targets") do
+    # Each names a separate executable, so they must not collapse into one.
+    let package = Tey.Manifest.read(`bundle "tools" do
+  target("build", entrypoint: "src/build.kex")
+  target("serve", entrypoint: "src/serve.kex")
+end
+`).try
+    assert(package.targets.count == 2)
+    assert(package.targets.map { |t| t.name } == ["build", "serve"])
+  end
+
+  it("reads an otp requirement") do
+    let package = Tey.Manifest.read(`bundle "greet" do
+  kex(">= 0.3.3")
+  otp(">= 26")
+end
+`).try
+    assert(package.packageOtpRequirement == ">= 26")
+    assert(package.packageKexRequirement == ">= 0.3.3")
+  end
+
+  it("leaves the otp requirement empty when there is none") do
+    # Absent means "no opinion", which is different from asking for OTP 0.
+    let package = Tey.Manifest.read(`bundle "greet" do
+  version("0.1.0")
+end
+`).try
+    assert(package.packageOtpRequirement == "")
+  end
+
+  it("tags a dependency with the group it was declared in") do
+    let package = Tey.Manifest.read(`bundle "app" do
+  tey("greet", git: "https://example.com/greet", tag: "~> 0.1")
+
+  group :dev do
+    tey("spec-helper", git: "https://example.com/h", branch: "main")
+  end
+end
+`).try
+    assert(package.manifestDependencies.count == 2)
+    let production = package.manifestDependencies.first.try
+    let development = package.manifestDependencies.second.try
+    assert(production.manifestGroups.empty?)
+    assert(development.manifestGroups == ["dev"])
+  end
+
+  it("closes a group at its end rather than swallowing what follows") do
+    let package = Tey.Manifest.read(`bundle "app" do
+  group :dev do
+    tey("helper", git: "https://example.com/h", branch: "main")
+  end
+
+  tey("greet", git: "https://example.com/greet", tag: "~> 0.1")
+end
+`).try
+    assert(package.manifestDependencies.second.try.manifestGroups.empty?)
+  end
+
+  it("reads a declaration spread over several lines") do
+    let package = Tey.Manifest.read(`bundle "app" do
+  tey("greet",
+      git: "https://example.com/greet",
+      tag: "~> 0.1")
+end
+`).try
+    let dependency = package.manifestDependencies.first.try
+    assert(dependency.manifestName == "greet")
+    assert(dependency.manifestGit == "https://example.com/greet")
+    assert(dependency.manifestRequested == "~> 0.1")
+  end
+
+  it("distinguishes the three dependency selectors") do
+    let package = Tey.Manifest.read(`bundle "app" do
+  tey("a", git: "https://example.com/a", tag: "v1.0.0")
+  tey("b", git: "https://example.com/b", branch: "main")
+  tey("c", git: "https://example.com/c", ref: "abc123")
+end
+`).try
+    assert(package.manifestDependencies.map { |d| d.manifestSelector } == ["tag", "branch", "ref"])
+    assert(package.manifestDependencies.map { |d| d.manifestRequested } == ["v1.0.0", "main", "abc123"])
+  end
+
+  it("refuses a manifest with no bundle name") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`version("0.1.0")
+`)
+    match outcome do
+      Error(message) -> assert(message.contains?("bundle"))
+      Ok(_) -> assert(false)
+    end
+  end
+
+  it("refuses a dependency with no git URL") do
+    # Nothing else can locate it, so accepting this would only defer the
+    # failure to fetch time with less to say.
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`bundle "app" do
+  tey("greet", tag: "~> 0.1")
+end
+`)
+    match outcome do
+      Error(message) -> assert(message.contains?("git"))
+      Ok(_) -> assert(false)
+    end
+  end
+end
