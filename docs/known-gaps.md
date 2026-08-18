@@ -209,8 +209,9 @@ the BEAM-side ANALYSIS rather than running at all, so they are a different
 problem from the rest — the names resolve for the walker but not for the
 compile path.
 
-`standalone_module.kex` and `static_namespacing.kex` were both in this list
-previously and now match.
+`standalone_module.kex` and `static_namespacing.kex` (now
+`record_module_constructors.kex`, after `static do` was removed) were both in
+this list previously and now match.
 
 ## No regex on the wasm build
 

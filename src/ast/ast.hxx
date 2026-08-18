@@ -531,10 +531,6 @@ struct AbstractFunction {
     bool implicitThis;
 };
 
-struct StaticBlock {
-    std::vector<std::unique_ptr<FunctionDef>> functions;
-};
-
 struct TypeDef {
     SourceLocation location;
     std::string name;
@@ -546,7 +542,6 @@ struct TypeDef {
     // transparent alias like `type FilePath = String`.
     bool leadingPipe = false;
     std::optional<std::vector<AbstractFunction>> abstractFunctions;
-    std::optional<StaticBlock> staticBlock;
 };
 
 struct RecordField {
@@ -560,7 +555,6 @@ struct RecordDef {
     std::string name;
     std::vector<std::string> typeParams;
     std::vector<RecordField> fields;
-    std::optional<StaticBlock> staticBlock;
 };
 
 struct UsingBlock;

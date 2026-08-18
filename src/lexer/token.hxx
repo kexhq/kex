@@ -34,7 +34,6 @@ enum class TokenType {
     Rescue,
     Return,
     Spawn,
-    Static,
     Then,
     This,
     Timeout,

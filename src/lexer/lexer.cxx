@@ -37,7 +37,6 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"rescue", TokenType::Rescue},
     {"return", TokenType::Return},
     {"spawn", TokenType::Spawn},
-    {"static", TokenType::Static},
     {"then", TokenType::Then},
     {"this", TokenType::This},
     {"timeout", TokenType::Timeout},

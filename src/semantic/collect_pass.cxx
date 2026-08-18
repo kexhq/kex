@@ -360,21 +360,6 @@ auto CollectPass::collectRecord(const ast::RecordDef& def, const std::string& mo
         fi.type = Type::unknown();
         m_state->symbols.push_back(std::move(fi));
     }
-
-    // Static block functions are callable as RecordName.FuncName(...)
-    if (def.staticBlock) {
-        for (const auto& fn : def.staticBlock->functions) {
-            SymbolInfo si;
-            si.name = fn->name;
-            si.kind = SymbolKind::Function;
-            si.definition = fn->location;
-            si.module = module;
-            si.makeTarget = def.name;
-            si.isFoul = fn->isFoul;
-            si.type = Type::unknown();
-            m_state->symbols.push_back(std::move(si));
-        }
-    }
 }
 
 static auto makeTargetName(const ast::TypeExprPtr& te) -> std::string {

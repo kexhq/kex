@@ -6,7 +6,7 @@
     { "include": "#comments" },
     { "include": "#regexLiteral" },
     { "include": "#strings" },
-    { "name": "keyword.control.kex", "match": "\\b(after|break|compiled|do|elif|else|end|export|final|foul|if|let|loop|main|match|next|private|public|receive|rescue|return|spawn|static|then|timeout|try|trying|using|var|when|while)\\b" },
+    { "name": "keyword.control.kex", "match": "\\b(after|break|compiled|do|elif|else|end|export|final|foul|if|let|loop|main|match|next|private|public|receive|rescue|return|spawn|then|timeout|try|trying|using|var|when|while)\\b" },
     { "name": "constant.language.kex", "match": "\\b(true|false|None)\\b" },
     { "name": "variable.language.this.kex", "match": "\\bthis\\b" },
     { "include": "#blockParameters" },

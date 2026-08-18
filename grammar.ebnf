@@ -64,7 +64,7 @@ type_def
   | TYPE UPPER_IDENT type_params? inheritance?
   ;
 
-type_body = ( abstract_function | static_block )* ;
+type_body = abstract_function* ;
 
 inheritance = LESS_THAN type_name ( COMMA type_name )* ;
 
@@ -98,11 +98,9 @@ abstract_function = LOWER_IDENT ( TYPE_ANNOTATION | COLON ) type_expr ;
 
 record_def = RECORD UPPER_IDENT type_params? DO record_body END ;
 
-record_body = ( record_field | static_block )* ;
+record_body = record_field* ;
 
 record_field = LOWER_IDENT COLON type_expr ( EQUALS expr )? ;
-
-static_block = STATIC DO module_item* END ;
 
 (* ===== Traits ===== *)
 
@@ -140,7 +138,7 @@ make_item
 function_def
   = ( FOUL | LET ) LOWER_IDENT function_clauses
   | ( FOUL | LET ) LOWER_IDENT QUESTION function_clauses  (* predicate functions *)
-  | ( FOUL | LET ) UPPER_IDENT function_clauses           (* static constructors, e.g. `let Polar(...) ... end` *)
+  | ( FOUL | LET ) UPPER_IDENT function_clauses           (* type-level constructors declared in a module of the type's name, e.g. `let Polar(...) ... end` *)
   | ( FOUL | LET ) binary_op function_clauses             (* operator overload inside `make`, e.g. `foul +(other) ... end` *)
   ;
 
@@ -501,7 +499,6 @@ RECEIVE  = "receive" ;
 RECORD   = "record" ;
 RETURN   = "return" ;
 SPAWN    = "spawn" ;
-STATIC   = "static" ;
 THEN     = "then" ;
 THIS     = "this" ;
 TIMEOUT  = "timeout" ;

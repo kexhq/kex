@@ -160,12 +160,6 @@ auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
     if (type.variants) out->variants = cloneVec(*type.variants);
     if (type.abstractFunctions)
         out->abstractFunctions = cloneVec(*type.abstractFunctions);
-    if (type.staticBlock) {
-        StaticBlock block;
-        for (const auto& fn : type.staticBlock->functions)
-            if (fn) block.functions.push_back(clone(*fn));
-        out->staticBlock = std::move(block);
-    }
     return out;
 }
 

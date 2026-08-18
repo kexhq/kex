@@ -485,31 +485,11 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
       // non-constructors
     }
   }
-  // Abstract type with required functions and/or static block
+  // Abstract type with required functions
   else if (match(TokenType::Do)) {
     skipNewlines();
     def->abstractFunctions = std::vector<ast::AbstractFunction>{};
     while (!check(TokenType::End) && !atEnd()) {
-      // Static block inside type
-      if (check(TokenType::Static)) {
-        advance();
-        expect(TokenType::Do, "Expected 'do' after 'static'");
-        skipNewlines();
-        def->staticBlock = ast::StaticBlock{};
-        while (!check(TokenType::End) && !atEnd()) {
-          if (check(TokenType::Let) || check(TokenType::Foul)) {
-            bool isFoul = match(TokenType::Foul);
-            def->staticBlock->functions.push_back(parseFunctionDef(isFoul));
-          } else {
-            error("Expected function definition in static block");
-          }
-          skipNewlines();
-        }
-        expect(TokenType::End, "Expected 'end' to close static block");
-        skipNewlines();
-        continue;
-      }
-
       ast::AbstractFunction func;
       func.name = expect(TokenType::LowerIdent, "Expected function name").value;
       if (match(TokenType::TypeAnnotation)) {
@@ -553,26 +533,6 @@ auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
     // End of record — 'end' not followed by ':' means it's the closing keyword
     if (check(TokenType::End) && peekNext().type != TokenType::Colon)
       break;
-
-    // Static block
-    if (check(TokenType::Static)) {
-      advance(); // static
-      expect(TokenType::Do, "Expected 'do' after 'static'");
-      skipNewlines();
-      def->staticBlock = ast::StaticBlock{};
-      while (!check(TokenType::End) && !atEnd()) {
-        if (check(TokenType::Let) || check(TokenType::Foul)) {
-          bool isFoul = match(TokenType::Foul);
-          def->staticBlock->functions.push_back(parseFunctionDef(isFoul));
-        } else {
-          error("Expected function definition in static block");
-        }
-        skipNewlines();
-      }
-      expect(TokenType::End, "Expected 'end' to close static block");
-      skipNewlines();
-      continue;
-    }
 
     ast::RecordField field;
     // Field names can be keywords (e.g. 'end', 'type')
