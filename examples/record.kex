@@ -1,9 +1,11 @@
 record Temperature do
   celsius : Float
+end
 
-  static do
-    let Freezing = Temperature { celsius: 0.0 }
-  end
+# Type-level constants live in a MODULE of the same name, which is what makes
+# `Temperature.Freezing` an ordinary qualified lookup.
+module Temperature do
+  let Freezing = Temperature { celsius: 0.0 }
 end
 
 main do

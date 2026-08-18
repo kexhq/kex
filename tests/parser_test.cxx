@@ -21,6 +21,7 @@ auto parseFails(const std::string& source) -> bool {
 }
 
 auto itemCount(const std::string& source) -> size_t {
+
     return parse(source).items.size();
 }
 

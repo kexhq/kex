@@ -115,23 +115,24 @@ div(id: "main", classes: ["container"]) do
 end
 ```
 
-## Static Functions (Constructors)
+## Type-Level Functions (Constructors)
 
-Records and types can have `static do...end` blocks for namespaced constructors and constants:
+Constructors and constants for a type live in a `module` of the same name,
+declared alongside the type:
 
 ```kex
 record Vector2D do
   x : Float
   y : Float
+end
 
-  static do
-    let Polar(length: Float, angle: Float) -> Vector2D do
-      return Vector2D { x: length * Math.cos(angle), y: length * Math.sin(angle) }
-    end
-
-    let Zero = Vector2D { x: 0.0, y: 0.0 }
-    let UnitX = Vector2D { x: 1.0, y: 0.0 }
+module Vector2D do
+  let Polar(length: Float, angle: Float) -> Vector2D do
+    return Vector2D { x: length * Math.cos(angle), y: length * Math.sin(angle) }
   end
+
+  let Zero = Vector2D { x: 0.0, y: 0.0 }
+  let UnitX = Vector2D { x: 1.0, y: 0.0 }
 end
 
 # Usage — fully qualified:
@@ -139,11 +140,17 @@ let v = Vector2D.Polar(5.0, Math.PI / 4.0)
 let origin = Vector2D.Zero
 ```
 
+One name carries three declarations, each owning a different half of the type:
+`record Vector2D` (its data), `module Vector2D` (its type-level functions) and
+`make Vector2D` (its instance methods).
+
 Convention:
 - **Capitalized** — constructors and constants (`Polar`, `Zero`, `UnitX`)
 - **Lowercase** — instance methods in `make` blocks (`add`, `length`, `normalize`)
 
-Static functions have no `this` — they create or return values of the type.
+Type-level functions have no `this` — they create or return values of the type.
+They are reachable only under the module name: bare `Polar(...)` is an
+undefined function.
 
 ## Predicate Functions
 

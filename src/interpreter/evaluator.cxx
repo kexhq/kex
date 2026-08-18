@@ -786,14 +786,6 @@ auto Evaluator::execCompiledBlock(const ast::CompiledBlock& block,
 
 auto Evaluator::execTypeDef(const ast::TypeDef& def,
                             const std::string& moduleScope) -> void {
-    if (def.staticBlock) {
-        // Static constructors/constants are namespaced under the type
-        // (Vector2D.Polar(...), not bare Polar(...)) — see docs/functions.md
-        // "Static Functions (Constructors)".
-        for (const auto& func : def.staticBlock->functions) {
-            execFunctionDef(*func, def.name);
-        }
-    }
     // Register sum-type variant constructors. Zero-arg variants (Fizz,
     // None, ...) are stored directly as VariantValue in the environment.
     // With-arg constructors (Just(A), Ok(A), ...) are registered as
@@ -871,11 +863,6 @@ auto Evaluator::execRecordDef(const ast::RecordDef& def, const std::string& modu
         m_env->define(scoped, Value::record(typeName, {}));
         m_recordDefs[scoped] = &def;
         m_recordDefs[typeName] = &def;
-    }
-    if (def.staticBlock) {
-        for (const auto& func : def.staticBlock->functions) {
-            execFunctionDef(*func, def.name);
-        }
     }
 }
 

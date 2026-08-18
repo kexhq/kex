@@ -1118,11 +1118,6 @@ void walkFunctions(const Node& node, Callback& callback) {
             else return node.body;
         }();
         for (const auto& item : items) walkFunctionVariant(item, callback);
-    } else if constexpr (std::is_same_v<T, ast::RecordDef> ||
-                         std::is_same_v<T, ast::TypeDef>) {
-        if (node.staticBlock)
-            for (const auto& function : node.staticBlock->functions)
-                if (function) callback(*function);
     }
 }
 

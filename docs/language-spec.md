@@ -208,7 +208,7 @@ the evaluation.
 ```
 after  break  compiled  do  elif  else  end  false  final  foul
 if  let  loop  main  make  match  module  next  None  private
-public  receive  record  return  spawn  static  then  this
+public  receive  record  return  spawn  then  this
 trait  true  type  using  var  when  while
 ```
 

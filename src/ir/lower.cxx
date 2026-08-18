@@ -426,16 +426,8 @@ struct Lowering {
     std::unordered_map<std::string, std::vector<std::string>> typeVariantTags;
     // Nullary variant tags (no payload) — dispatched as atoms, not tuples.
     std::unordered_set<std::string> nullaryVariantTags;
-    // Every variant tag of every ADT (flat), and every record static-block
-    // member name. A bare use of a static-only name is out of scope — it
-    // lives behind its record (Temperature.Fahrenheit) — so it must be a
-    // runtime error like the walker's, not a silent constructor tuple.
+    // Every variant tag of every ADT (flat).
     std::unordered_set<std::string> variantTagSet;
-    std::unordered_set<std::string> staticCtorNames;
-    auto staticCtorOutOfScope(const std::string& name) -> bool {
-        return staticCtorNames.count(name) && !variantTagSet.count(name)
-            && !records.count(name) && !knownFns.count(name);
-    }
     // `Mod.Tag` for an ADT declared inside a module (e.g. `Kex.FS`). A tag is
     // just an atom at runtime, so the qualifier has no representation here —
     // resolve to the bare tag. `variantOwner` covers tags declared outside
@@ -821,8 +813,6 @@ struct Lowering {
                 // this, uppercase names in expression context become unbound
                 // variables in Core Erlang and erlc rejects them.
                 if (!n.name.empty() && std::isupper(static_cast<unsigned char>(n.name[0]))) {
-                    if (staticCtorOutOfScope(n.name))
-                        return runtimeError("Undefined identifier: " + n.name);
                     auto ex = std::make_unique<Expr>();
                     ex->node = Construct{n.name, {}};
                     return ex;
@@ -854,8 +844,6 @@ struct Lowering {
                     ex->node = Construct{tag, {}};
                     return ex;
                 }
-                if (staticCtorOutOfScope(n.name))
-                    return runtimeError("Undefined identifier: " + n.name);
                 ex->node = Construct{n.name, {}};
                 return ex;
             } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
@@ -1686,8 +1674,6 @@ struct Lowering {
                 ex->node = Construct{tag, std::move(args)};
                 return wrapLets(binds, std::move(ex));
             }
-            if (staticCtorOutOfScope(n.name))
-                return wrapLets(binds, runtimeError("Undefined function: " + n.name));
             ex->node = Construct{n.name, std::move(args)};
         }
         else if (zeroArgThunk && (!args.empty() || topLevelConstants.count(n.name))) {
@@ -5957,19 +5943,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // field accessor is arity 1, so only an arity-1 function of that name
     // can own the symbol (see makeAccessors).
     std::unordered_set<std::string> definedFnArities;
-    std::unordered_set<std::string> staticMethodNames; // record static blocks
     auto preRecord = [&](const ast::RecordDef& rd,
                          const std::string& owner = std::string{}) {
         L.collectRecord(rd, owner);
         L.knownTypes.insert(rd.name);
         if (!owner.empty()) L.knownTypes.insert(owner + "." + rd.name);
-        if (rd.staticBlock)
-            for (const auto& sf : rd.staticBlock->functions)
-                if (sf) {
-                    definedFns.insert(
-                        mangleQualifiedMember(rd.name, sf->name));
-                    staticMethodNames.insert(sf->name);
-                }
     };
     if (externalRecords)
         for (const auto& record : *externalRecords) {
@@ -6261,8 +6239,6 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     // local function or a record field accessor.
     L.knownFns = definedFns;
     L.localMethods = definedFns;
-    L.staticCtorNames = staticMethodNames;
-    for (const auto& n : staticMethodNames) L.localMethods.insert(n);
     // Record field accessors participate in localMethods only when an
     // accessor is actually emitted for them — a field whose name collides
     // with an imported package-declared receiver function is skipped (see
@@ -6298,17 +6274,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 (void)node; // handled above
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
                 // Layout already collected; accessors emitted after the loop.
-                // Record static-block functions emit as top-level functions so
-                // `RecordName.method(...)` namespace calls find them.
-                if (node && node->staticBlock) {
-                    for (const auto& sf : node->staticBlock->functions) {
-                        if (!sf) continue;
-                        std::vector<const ast::FunctionDef*> tmp{sf.get()};
-                        std::string mangled =
-                            mangleQualifiedMember(node->name, sf->name);
-                        mod.functions.push_back(L.lowerFunctionGroup(tmp, "", mangled));
-                    }
-                }
+                (void)node;
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
                 if (!node) return;
                 // A union target applies the block to every member, so the

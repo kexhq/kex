@@ -868,14 +868,14 @@ int main() {
             ));
         });
 
-        it("does not treat capitalized static values as namespaces", []() {
+        it("does not treat capitalized module values as namespaces", []() {
             assertTrue(noErrors(
                 "record Temperature do\n"
                 "  celsius : Float\n"
-                "  static do\n"
-                "    let Fahrenheit(value: Float) -> Temperature = Temperature { celsius: value }\n"
-                "    let Freezing = Temperature { celsius: 0.0 }\n"
-                "  end\n"
+                "end\n"
+                "module Temperature do\n"
+                "  let Fahrenheit(value: Float) -> Temperature = Temperature { celsius: value }\n"
+                "  let Freezing = Temperature { celsius: 0.0 }\n"
                 "end\n"
                 "make Temperature do\n"
                 "  let to(String) -> String? = Just(\"temperature\")\n"

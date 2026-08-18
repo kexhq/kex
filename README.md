@@ -117,11 +117,11 @@ map(requests, ~normalize)
 record Vector2D do
   x : Float
   y : Float
+end
 
-  static do
-    let Zero = Vector2D { x: 0.0, y: 0.0 }
-    let UnitX = Vector2D { x: 1.0, y: 0.0 }
-  end
+module Vector2D do
+  let Zero = Vector2D { x: 0.0, y: 0.0 }
+  let UnitX = Vector2D { x: 1.0, y: 0.0 }
 end
 
 record Vector3D do
@@ -354,25 +354,29 @@ let app = Http.routes do
 end
 ```
 
-### Static Constructors and Constants
+### Type-Level Constructors and Constants
 
-Records can define type-level constructors and constants in `static do` blocks. Constructors are capitalized `let`s that build an instance; constants are capitalized `let`s that just hold a value.
+Constructors and constants for a type live in a `module` of the same name,
+declared alongside the type. Constructors are capitalized `let`s that build an
+instance; constants are capitalized `let`s that just hold a value. One name thus
+carries up to three declarations — `record` for the data, `module` for the
+type-level functions, `make` for the instance methods.
 
 ```rb
 record Temperature do
   celsius : Float
+end
 
-  static do
-    let Celsius(value: Float) -> Temperature do
-      return Temperature { celsius: value }
-    end
-
-    let Fahrenheit(value: Float) -> Temperature do
-      return Temperature { celsius: (value - 32.0) * 5.0 / 9.0 }
-    end
-
-    let Freezing = Temperature { celsius: 0.0 }
+module Temperature do
+  let Celsius(value: Float) -> Temperature do
+    return Temperature { celsius: value }
   end
+
+  let Fahrenheit(value: Float) -> Temperature do
+    return Temperature { celsius: (value - 32.0) * 5.0 / 9.0 }
+  end
+
+  let Freezing = Temperature { celsius: 0.0 }
 end
 
 make Temperature do
@@ -459,7 +463,7 @@ Good starting points:
 
 - `examples/basics.kex` - core syntax
 - `examples/traits.kex` - Shape trait, required/default/overridden methods, multiple traits
-- `examples/vectors_advanced.kex` - records, static constructors, UFCS methods
+- `examples/vectors_advanced.kex` - records, type-level constructors, UFCS methods
 - `examples/streams.kex` - lazy ranges and streams
 - `examples/html_dsl.kex` - DSL-oriented blocks
 - `examples/error_handling.kex` - `Result`, optional values, and `?`
@@ -467,7 +471,7 @@ Good starting points:
 - `spec/operator_overloading.kex` - overloading `+`, `*`, `==` per receiver type
 - `spec/at_field_shorthand.kex` - `@field`/`@method(...)` inside `make` blocks
 - `spec/mutating_calls.kex` - `var`/`let` and `!` mutation semantics
-- `spec/static_namespacing.kex` - static constructors/constants stay namespaced under their type
+- `spec/record_module_constructors.kex` - constructors/constants in a `module` of the record's name stay namespaced under it
 - `spec/math.kex` - the `Math` module (`Math.PI`, `Math.sqrt`, trig, logs, ...)
 - `spec/testing_dsl.kex` - the `describe`/`it`/`assert` testing DSL itself
 - `spec/json_parser.spec.kex` - a spec for `examples/json_parser.kex` using `describe`/`it`/`assert` (see "Specs for example files" in `docs/testing.md`)
