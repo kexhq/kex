@@ -71,16 +71,18 @@ formula = File.read(formula_path)
 # Tey itself is compiled to BEAM modules and therefore architecture-independent:
 # one small archive serves every platform.
 #
-# The explicit `version` is Kex's, not Tey's, and it is load-bearing rather
-# than cosmetic. Brew would otherwise infer the keg version from the url —
-# tey-0.2.0.tar.gz — and Tey's version does not move on every Kex release, so
-# a release that only bumps Kex would leave brew seeing no new version and
-# never handing anyone the new compiler. The formula ships `resource "kex"`,
-# so what it installs really does change with Kex even when Tey is untouched.
+# NO explicit `version` line. Brew scans one out of the url, and the scanner
+# (Version.detect) reads the `v<kex>` tag SEGMENT, not the tey-<version>
+# filename — in every combination, even one where Tey's number is larger — so
+# the keg version follows Kex releases on its own: a release that bumps only
+# Kex still scans as a new version, and `brew upgrade` sees it. Stating the
+# number explicitly is worse than useless here, because an explicit version
+# equal to the scanned one is rejected by `brew audit --strict` as "redundant
+# with version scanned from URL" — which is how the 0.3.4 tap pull request
+# went red on its syntax job.
 tey = "tey-#{tey_version}"
 formula = fill(formula, "STABLE-TEY",
                %(  url "#{base}/#{tey}.tar.gz"\n) +
-                 %(  version "#{version}"\n) +
                  %(  sha256 "#{digest(hash_dir, tey)}"\n),
                formula_path)
 
