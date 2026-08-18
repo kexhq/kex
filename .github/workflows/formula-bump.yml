@@ -147,7 +147,17 @@ jobs:
           # already scans the version from, and audit rejected it as "redundant
           # with version scanned from URL" on the tap, where nothing in kex
           # could see it happen.
-          brew audit --strict --online Formula/tey.rb
+          # `brew audit [path ...]` is disabled in current Homebrew — it errors
+          # with "Use `brew audit [name ...]` instead" — so the formula has to
+          # be audited by name, which means brew has to be able to FIND it.
+          # This checkout is not the repository under test, so setup-homebrew
+          # did not place it under Library/Taps; link it there ourselves, the
+          # way setup-homebrew does for a tap repository, and audit by the
+          # fully-qualified name so no other tap can answer for `tey`.
+          taps_dir="$(brew --repository)/Library/Taps"
+          mkdir -p "${taps_dir}/kexhq"
+          ln -sfn "$PWD" "${taps_dir}/kexhq/homebrew-tey"
+          brew audit --strict --online --formula kexhq/tey/tey
 
           # Which is also why there is NO `version` line to assert here: the
           # keg version is whatever brew scans off the release url's v<kex> tag
