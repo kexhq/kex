@@ -3828,10 +3828,13 @@ struct Lowering {
             r.clauses.push_back(std::move(rc));
         }
         if (n.timeout) {
-            // The timeout stands on its own: `receive timeout: N do ... end`
-            // with no `after` clause waits N milliseconds and yields None,
-            // matching the walker (scheduler.hxx:115). Gating the timeout on
-            // the after body dropped it entirely and blocked forever.
+            // A timeout only ever arrives with its `after` clause — the parser
+            // reads the two together, and an empty body reaches here as an
+            // empty BlockExpr, not an absent one. The None fallback is for a
+            // ReceiveExpr assembled some other way: a timeout emitted without
+            // an after branch is a receive that blocks forever instead of
+            // expiring, so it yields None like the walker does
+            // (scheduler.hxx:115).
             r.timeout = lower(*n.timeout);
             r.afterBody = n.afterBody ? lower(*n.afterBody)
                                       : lit(LitKind::None, "none");
