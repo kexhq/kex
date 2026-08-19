@@ -89,7 +89,7 @@ private do
 
   let skipIgnored(cursor: Input, allowComments: Bool) -> Result<Input, Error> do
     var current = skipWhitespace(cursor)
-    loop
+    loop do
       return Ok(current) if !allowComments || current.peek != Just('/')
       if current.peekAt(1) == Just('/')
         current = current.advanceBy(2)
@@ -101,7 +101,7 @@ private do
         if current.peekAt(1) == Just('*')
           let commentStart = current.pos
           current = current.advanceBy(2)
-          loop
+          loop do
             return Error(UnterminatedComment(commentStart)) if current.atEnd?
             if current.peek == Just('*') && current.peekAt(1) == Just('/')
               current = skipWhitespace(current.advanceBy(2))
@@ -118,7 +118,7 @@ private do
 
   let skipWhitespace(cursor: Input) -> Input do
     var current = cursor
-    loop
+    loop do
       break if current.peek != Just(' ') && current.peek != Just('\t') && current.peek != Just('\n') && current.peek != Just('\r')
       current = current.advance
     end
@@ -162,7 +162,7 @@ private do
   let parseStringText(cursor: Input) -> Result<(String, Input), Error> do
     var current = cursor.advance
     var pieces: [String] = []
-    loop
+    loop do
       match current.peek do
         None -> return Error(UnexpectedEnd(current.pos))
         Just('"') -> return Ok((pieces.join(""), current.advance))
@@ -251,7 +251,7 @@ private do
     var current = skipIgnored(cursor.advance, allowComments).try
     var values: [Any] = []
     return Ok((values, current.advance)) if current.peek == Just(']')
-    loop
+    loop do
       let (value, afterValue) = parseValue(current, allowComments).try
       values.push!(value)
       current = skipIgnored(afterValue, allowComments).try
@@ -271,7 +271,7 @@ private do
     var current = skipIgnored(cursor.advance, allowComments).try
     var values: {String: Any} = {}
     return Ok((values, current.advance)) if current.peek == Just('}')
-    loop
+    loop do
       return Error(UnexpectedCharacter("expected object key", current.pos)) if current.peek != Just('"')
       let (key, afterKey) = parseStringText(current).try
       current = skipIgnored(afterKey, allowComments).try

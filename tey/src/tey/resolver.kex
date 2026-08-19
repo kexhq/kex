@@ -112,7 +112,7 @@ private do
     var origin : {String: String} = {}
     var gits : {String: String} = {}
 
-    loop
+    loop do
       break if queue.empty?
       let (dependency, requiredBy) = queue.first.try
       queue = queue.drop(1)

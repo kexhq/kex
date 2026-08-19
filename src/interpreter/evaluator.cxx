@@ -2489,8 +2489,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // an uncaught error. Each iteration gets its own scope so
             // `var`s declared inside the loop body don't leak across
             // iterations (mirrors how other block bodies push/pop).
+            // `loop do |i|` binds a 0-based iteration counter, fresh in each
+            // iteration's scope (so the body can't leak a mutation into the
+            // next round).
+            long long iter = 0;
             while (true) {
                 pushEnv();
+                if (node.counter && *node.counter != "_")
+                    m_env->define(*node.counter, Value::integer(iter));
+                iter++;
                 try {
                     evalBody(node.body);
                 } catch (const BreakException&) {

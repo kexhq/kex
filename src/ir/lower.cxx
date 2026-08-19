@@ -230,6 +230,10 @@ struct Binding {
 
 struct Lowering {
     int counter = 0;
+    // `__loopN` -> the Kex name of its `loop do |i|` iteration counter, for the
+    // loop functions that bind one. The counter rides along as a loop-carried
+    // parameter, but its tail-call argument is bumped instead of threaded.
+    std::unordered_map<std::string, std::string> loopCounters;
     std::string sourceFile;
     const SourceLocation* currentLoc = nullptr;
     // Names bound with `let` (immutable) — a mutating `!` call on one is a
@@ -1319,6 +1323,18 @@ struct Lowering {
                 auto ex = std::make_unique<Expr>();
                 ex->node = std::move(tc);
                 return ex;
+            } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+                // A loop in expression position — how the REPL evaluates a
+                // bare `loop do ... end`, since it wraps the input in an
+                // inspect call. It is its own last statement, so there is no
+                // continuation to splice.
+                requireNoOuterMutation(n.body, "loop");
+                return lowerLoopCore(n.body, nullptr, true,
+                                     []() -> ExprPtr { return nullptr; }, &n.counter);
+            } else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
+                requireNoOuterMutation(n.body, "while");
+                return lowerLoopCore(n.body, &n.condition, true,
+                                     []() -> ExprPtr { return nullptr; });
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());
@@ -3881,6 +3897,21 @@ struct Lowering {
         }, e->kind);
     }
 
+    // A loop in expression position has no continuation to thread its state
+    // into: the rebound names would only be in scope inside the expression
+    // itself, so mutations could not escape it. Reject that up front rather
+    // than emitting Core that references them afterwards.
+    auto requireNoOuterMutation(const std::vector<ast::ExprPtr>& body,
+                                const char* what) -> void {
+        std::unordered_set<std::string> mset;
+        for (const auto& s : body) collectMutated(s, mset);
+        for (const auto& v : mset)
+            if (subst.count(v))
+                throw LowerError(std::string("IR lower: `") + what +
+                                 "` used as an expression cannot assign to `" + v +
+                                 "` — put it in statement position instead");
+    }
+
     // The loop's current threaded-state value: bare var for one, tuple for
     // several, 'ok' for none.
     auto stateExpr(const std::vector<std::string>& mutVars) -> ExprPtr {
@@ -3891,11 +3922,24 @@ struct Lowering {
         auto e = std::make_unique<Expr>(); e->node = MakeTuple{std::move(els)}; return e;
     }
     auto tailCall(const std::string& loopFn, const std::vector<std::string>& mutVars) -> ExprPtr {
+        auto ctrIt = loopCounters.find(loopFn);
+        const std::string ctr = ctrIt == loopCounters.end() ? "" : ctrIt->second;
         std::vector<ExprPtr> args;
-        for (const auto& v : mutVars) args.push_back(var(currentName(v)));
+        std::string bumped;
+        for (const auto& v : mutVars) {
+            if (!ctr.empty() && v == ctr) {
+                // Call arguments must be atomic, so the +1 gets its own let.
+                bumped = fresh(ctr);
+                args.push_back(var(bumped));
+            } else {
+                args.push_back(var(currentName(v)));
+            }
+        }
         auto e = std::make_unique<Expr>();
         e->node = Call{"", loopFn, (int)mutVars.size(), std::move(args), false};
-        return e;
+        if (bumped.empty()) return e;
+        return makeLet(bumped, intrin(Op::Add, two(var(currentName(ctr)), litInt(1))),
+                       std::move(e));
     }
 
     // If `e` is a break/next/return, its loop-control IR; else nullptr.
@@ -4037,7 +4081,7 @@ struct Lowering {
             return expandGuards(std::move(subjects), std::move(cls));
         }
         if (auto* le2 = std::get_if<ast::LoopExpr>(&e->kind))
-            return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); });
+            return lowerLoopCore(le2->body, nullptr, false, [&]{ return cont(); }, &le2->counter);
         if (auto* we2 = std::get_if<ast::WhileExpr>(&e->kind))
             return lowerLoopCore(we2->body, &we2->condition, false, [&]{ return cont(); });
         if (auto* te = std::get_if<ast::TryingExpr>(&e->kind)) {
@@ -4144,7 +4188,8 @@ struct Lowering {
     // enclosing body; for a NESTED loop it's the rest of the OUTER loop body
     // (so it tail-calls the outer loop).
     auto lowerLoopCore(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                       bool restIsLast, const std::function<ExprPtr()>& mkRest) -> ExprPtr {
+                       bool restIsLast, const std::function<ExprPtr()>& mkRest,
+                       const std::optional<std::string>* counterVar = nullptr) -> ExprPtr {
         std::unordered_set<std::string> mset;
         for (const auto& s : loopBody) collectMutated(s, mset);
         std::vector<std::string> mutVars;
@@ -4152,8 +4197,19 @@ struct Lowering {
         std::sort(mutVars.begin(), mutVars.end());
 
         std::string loopFn = "__loop" + std::to_string(counter++);
+        // A named `loop do |i|` counter becomes an extra loop-carried slot,
+        // starting at 0 and bumped by every tail call. It exists only for the
+        // duration of the loop, so it is never rebound afterwards.
+        std::string ctr;
+        if (counterVar && *counterVar && **counterVar != "_") {
+            ctr = **counterVar;
+            mutVars.erase(std::remove(mutVars.begin(), mutVars.end(), ctr), mutVars.end());
+            mutVars.push_back(ctr);
+            loopCounters[loopFn] = ctr;
+        }
         std::vector<ExprPtr> initArgs;
-        for (const auto& v : mutVars) initArgs.push_back(var(currentName(v)));
+        for (const auto& v : mutVars)
+            initArgs.push_back(v == ctr && !ctr.empty() ? litInt(0) : var(currentName(v)));
 
         auto snap = subst;
         for (const auto& v : mutVars) subst[v] = v;
@@ -4179,18 +4235,23 @@ struct Lowering {
             // loop that reassigns subst[v]).
             std::vector<std::string> boundNames;
             for (size_t k = 0; k < mutVars.size(); k++) {
+                // The counter slot is loop-local: leave it out of subst so it
+                // is not visible (or bound) after the loop.
+                if (!ctr.empty() && mutVars[k] == ctr) { boundNames.emplace_back(); continue; }
                 std::string nv = fresh(mutVars[k]); subst[mutVars[k]] = nv; boundNames.push_back(nv);
             }
-            auto rest = restIsLast ? stateExpr(mutVars) : mkRest();
+            auto rest = restIsLast ? (ctr.empty() ? stateExpr(mutVars) : var(resVar)) : mkRest();
             ExprPtr chained = std::move(rest);
             if (mutVars.size() == 1) {
-                chained = makeLet(boundNames[0], var(resVar), std::move(chained));
+                if (!boundNames[0].empty())
+                    chained = makeLet(boundNames[0], var(resVar), std::move(chained));
             } else {
                 // Only unpack the loop-carried slots the continuation actually
                 // reads: an `element/2` bound to a dead name makes erlc warn
                 // that the call's result is ignored (loop counters hit this
                 // constantly, since they're live only inside the loop).
                 for (size_t k = mutVars.size(); k-- > 0; ) {
+                    if (boundNames[k].empty()) continue;
                     if (!mentionsVar(*chained, boundNames[k])) continue;
                     chained = makeLet(boundNames[k],
                         callE("erlang", "element", 2, two(litInt((long)k + 1), var(resVar))),
@@ -4204,10 +4265,11 @@ struct Lowering {
     }
     // Top-level loop statement: continuation is the rest of the enclosing body.
     auto lowerLoopStmt(const std::vector<ast::ExprPtr>& loopBody, const ast::ExprPtr* cond,
-                       const std::vector<ast::ExprPtr>& outer, size_t outerStart) -> ExprPtr {
+                       const std::vector<ast::ExprPtr>& outer, size_t outerStart,
+                       const std::optional<std::string>* counterVar = nullptr) -> ExprPtr {
         bool restIsLast = (outerStart + 1 >= outer.size());
         return lowerLoopCore(loopBody, cond, restIsLast,
-            [&]{ return lowerBodyFrom(outer, outerStart + 1); });
+            [&]{ return lowerBodyFrom(outer, outerStart + 1); }, counterVar);
     }
 
     // ---- Body lowering ----------------------------------------------------
@@ -4478,7 +4540,7 @@ struct Lowering {
         }
         // loop / while → tail-recursive local function threading mutable state.
         if (auto* le = std::get_if<ast::LoopExpr>(&e->kind))
-            return lowerLoopStmt(le->body, nullptr, body, i);
+            return lowerLoopStmt(le->body, nullptr, body, i, &le->counter);
         if (auto* we = std::get_if<ast::WhileExpr>(&e->kind))
             return lowerLoopStmt(we->body, &we->condition, body, i);
 

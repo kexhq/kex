@@ -253,7 +253,7 @@ int main() {
                 "parts.first.or(\"\")\n"
                 "let validateDemo(source: String) -> "
                 "[TaggedValidation.Issue] do\n"
-                "  loop\n"
+                "  loop do\n"
                 "    next\n"
                 "  end\n"
                 "end\n"

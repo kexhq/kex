@@ -1,0 +1,37 @@
+# `loop do ... end` runs until something breaks out of it. Adding a block
+# parameter binds a 0-based iteration counter.
+
+main do
+  # Prints 0 through 9.
+  loop do |counter|
+    IO.printLine(counter)
+    break if counter >= 9
+  end
+
+  # `next` advances the counter just like reaching the end of the body.
+  var odds = 0
+  loop do |i|
+    next if i % 2 == 0
+    odds = odds + i
+    break if i > 7
+  end
+  IO.printLine("sum of odds below 10: ${odds}")
+
+  # Each loop gets its own counter; the inner one shadows nothing.
+  loop do |row|
+    loop do |col|
+      IO.print("(${row},${col}) ")
+      break if col == 2
+    end
+    IO.printLine("")
+    break if row == 2
+  end
+
+  # The counter is optional — a loop over mutable state needs none.
+  var countdown = 3
+  loop do
+    IO.printLine("t-minus ${countdown}")
+    countdown = countdown - 1
+    break if countdown == 0
+  end
+end

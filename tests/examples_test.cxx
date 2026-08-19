@@ -70,6 +70,7 @@ int main() {
         it("regexes.kex", []() { assertTrue(parseFile("examples/regexes.kex")); });
         it("json_parser.kex", []() { assertTrue(parseFile("examples/json_parser.kex")); });
         it("json_stdlib.kex", []() { assertTrue(parseFile("examples/json_stdlib.kex")); });
+        it("loop_counter.kex", []() { assertTrue(parseFile("examples/loop_counter.kex")); });
         it("maps.kex", []() { assertTrue(parseFile("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(parseFile("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(parseFile("examples/mutating.kex")); });
@@ -142,6 +143,7 @@ int main() {
         it("fizzbuzz_simple.kex", []() { assertTrue(runFileOk("examples/fizzbuzz_simple.kex")); });
         it("generics.kex", []() { assertTrue(runFileOk("examples/generics.kex")); });
         it("hello.kex", []() { assertTrue(runFileOk("examples/hello.kex")); });
+        it("loop_counter.kex", []() { assertTrue(runFileOk("examples/loop_counter.kex")); });
         it("maps.kex", []() { assertTrue(runFileOk("examples/maps.kex")); });
         it("modules.kex", []() { assertTrue(runFileOk("examples/modules.kex")); });
         it("mutating.kex", []() { assertTrue(runFileOk("examples/mutating.kex")); });

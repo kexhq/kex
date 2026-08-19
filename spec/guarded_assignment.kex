@@ -32,7 +32,7 @@ main do
   # the branch that did not run.
   var total = 0
   var index = 0
-  loop
+  loop do
     break if index >= 5
     total = total + index if index % 2 == 0
     index = index + 1

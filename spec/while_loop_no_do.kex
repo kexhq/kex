@@ -1,4 +1,4 @@
-# `while`/`loop` without `do`, plus `break`/`next`.
+# `while` without `do` (and `loop do`), plus `break`/`next`.
 main do
   var i = 0
   while i < 3
@@ -21,14 +21,14 @@ main do
   end
 
   var m = 0
-  loop
+  loop do
     m = m + 1
     IO.printLine("loop/end: ${m}")
     break if m >= 2
   end
 
   var n = 0
-  loop
+  loop do
     n = n + 1
     break if n > 3
     IO.printLine("loop with break: ${n}")
@@ -38,7 +38,7 @@ main do
   while outer < 2
     outer = outer + 1
     var inner = 0
-    loop
+    loop do
       inner = inner + 1
       break if inner > 2
       IO.printLine("nested loop inside while: outer=${outer} inner=${inner}")
@@ -46,7 +46,7 @@ main do
   end
 
   var a = 0
-  loop
+  loop do
     a = a + 1
     var b = 0
     while b < 2

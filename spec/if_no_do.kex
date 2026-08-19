@@ -34,7 +34,7 @@ main do
     end
   end
 
-  loop
+  loop do
     if true
       IO.printLine("if inside loop")
     end

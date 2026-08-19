@@ -652,11 +652,20 @@ while condition
   body
 end
 
-loop
+loop do
   # runs forever until break
   break if done
 end
+
+# `loop do |i|` binds a 0-based iteration counter
+loop do |i|
+  IO.printLine(i)   # 0, 1, 2, ...
+  break if i >= 9
+end
 ```
+
+The counter is optional and scoped to the loop body; `next` advances it just
+like falling off the end of the body.
 
 `break` exits the nearest enclosing `while`/`loop`. `next` skips to the next
 iteration. Using `break`/`next` outside a loop, or inside a closure passed to a

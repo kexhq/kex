@@ -356,7 +356,8 @@ receive_expr
   | RECEIVE TIMEOUT COLON expr DO match_clause+ AFTER ARROW expr END
   ;
 
-loop_expr = LOOP NEWLINE body END ;
+loop_expr = LOOP DO ( PIPE ( LOWER_IDENT | UNDERSCORE ) PIPE )? NEWLINE body END ;
+(* The optional binding is a 0-based iteration counter: loop do |i| ... end *)
 
 while_expr = WHILE expr NEWLINE body END ;
 

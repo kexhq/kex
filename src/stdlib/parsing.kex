@@ -47,7 +47,7 @@ make Input do
 
   let whiteSpaces -> Input do
     var cursor = this
-    loop
+    loop do
       break if cursor.peek == None
       let Just(c) = cursor.peek
       break if !c.space?
@@ -59,7 +59,7 @@ make Input do
   let many(f: Input -> Result<(T, Input), ParseError>) -> ([T], Input) do
     var results: [T] = []
     var p = this
-    loop
+    loop do
       trying do
         let (value, advanced) = f(p).try
         return (results, p) if advanced.pos == p.pos
@@ -83,7 +83,7 @@ make Input do
   let string(expected: String) -> (String, Input) or! ParseError do
     let wanted = expected.chars
     var index = 0
-    loop
+    loop do
       break if index >= wanted.count
       return Error(Expected(expected, @pos)) if this.peekAt(index) != Just(wanted.at(index))
       index = index + 1
@@ -98,7 +98,7 @@ make Input do
   let takeWhile(pred: Char -> Bool) -> (String, Input) do
     var cursor = this
     var collected: [Char] = []
-    loop
+    loop do
       break if cursor.peek == None
       let Just(c) = cursor.peek
       break if !pred(c)
@@ -110,7 +110,7 @@ make Input do
 
   let choice(alts: [Input -> Result<(T, Input), ParseError>]) -> (T, Input) or! ParseError do
     var index = 0
-    loop
+    loop do
       break if index >= alts.count
       trying do
         let f = alts.at(index)
