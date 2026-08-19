@@ -1,4 +1,4 @@
-foul module IO do
+module IO do
   # Writes each argument to stdout followed by a newline.
   # Multiple arguments are printed consecutively with no separator.
   #
@@ -6,8 +6,8 @@ foul module IO do
   #   IO.printLine("hello")      # prints: hello
   #   IO.printLine("x = ", 42)   # prints: x = 42
   printLine : Showable -> Void
-  let printLine(msg: Showable) = Kex.Intrinsic.IO.printLine(msg.showValue)
-  let printLine = Kex.Intrinsic.IO.printLine("")
+  foul printLine(msg: Showable) = Kex.Intrinsic.IO.printLine(msg.showValue)
+  foul printLine = Kex.Intrinsic.IO.printLine("")
 
   # Writes each argument to stdout without a trailing newline.
   #
@@ -15,8 +15,8 @@ foul module IO do
   #   IO.print("hello ")
   #   IO.print("world")   # stdout: hello world
   print : Showable -> Void
-  let print(msg: Showable) = Kex.Intrinsic.IO.print(msg.showValue)
-  let print = Kex.Intrinsic.IO.print("")
+  foul print(msg: Showable) = Kex.Intrinsic.IO.print(msg.showValue)
+  foul print = Kex.Intrinsic.IO.print("")
 
   # Pretty-prints a colored inspect representation of +val+ to stderr.
   # Returns +val+ unchanged so it can be inserted into any pipeline.
@@ -37,26 +37,26 @@ foul module IO do
   #
   # @example  IO.getLine.or("")
   getLine : String?
-  let getLine = Kex.Intrinsic.IO.getLine
+  foul getLine = Kex.Intrinsic.IO.getLine
 
   # Reads a single character from stdin. Returns +None+ at end-of-input.
   get : String?
-  let get = Kex.Intrinsic.IO.get
+  foul get = Kex.Intrinsic.IO.get
 
   # Writes a line to stderr. Does not exit.
   # Use for error messages that should not go to stdout.
   #
   # @example  IO.printError("config file not found")
   printError : Showable -> Void
-  let printError(msg: Showable) = Kex.Intrinsic.IO.printError(msg.showValue)
-  let printError = Kex.Intrinsic.IO.printError("")
+  foul printError(msg: Showable) = Kex.Intrinsic.IO.printError(msg.showValue)
+  foul printError = Kex.Intrinsic.IO.printError("")
 
   # Alias for +printError+ — use when signalling a non-fatal condition.
   warn : Showable -> Void
-  let warn(msg: Showable) = Kex.Intrinsic.IO.warn(msg.showValue)
+  foul warn(msg: Showable) = Kex.Intrinsic.IO.warn(msg.showValue)
 
   # Alias for +printError+ — longer form of +warn+.
   warning : Showable -> Void
-  let warning(msg: Showable) = Kex.Intrinsic.IO.warning(msg.showValue)
+  foul warning(msg: Showable) = Kex.Intrinsic.IO.warning(msg.showValue)
 
 end

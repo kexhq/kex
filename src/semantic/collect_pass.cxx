@@ -142,7 +142,6 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
     moduleInfo.kind = SymbolKind::Module;
     moduleInfo.definition = mod.location;
     moduleInfo.module = parentModule;
-    moduleInfo.isFoul = mod.isFoul;
     moduleInfo.type = Type::unknown();
     m_state->symbols.push_back(std::move(moduleInfo));
 

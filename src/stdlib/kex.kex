@@ -44,7 +44,7 @@ make Result<X, E>, implement: Showable do
   let showValue(@Error(e)) = "Error(${e.showValue})"
 end
 
-foul module Kex do
+module Kex do
   type Backend = Interpreter | Beam
 
   type Feature = Http | FS | Process | WebServer
@@ -119,7 +119,7 @@ foul module Kex do
     end
   end
 
-  foul module Feature do
+  module Feature do
     has? : Feature -> Bool
     let has?(f) = Kex.Intrinsic.Kex.featureHas?(f)
 

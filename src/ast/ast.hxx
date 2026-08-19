@@ -674,7 +674,6 @@ using ModuleItem = std::variant<
 struct ModuleDef {
     SourceLocation location;
     std::string name;
-    bool isFoul = false;
     std::vector<ModuleItem> body;
 };
 

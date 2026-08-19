@@ -5,52 +5,52 @@ module FS do
   type WriteCapability = CanWrite | CannotWrite
   type FileError = OpenFailed(FilePath)
 
-  foul module File do
+  module File do
     open : FilePath -> Read -> Result<FileHandle<CanRead, CannotWrite>, FileError>
     open : FilePath -> Write -> Result<FileHandle<CannotRead, CanWrite>, FileError>
     open : FilePath -> Append -> Result<FileHandle<CannotRead, CanWrite>, FileError>
     open : FilePath -> ReadWrite -> Result<FileHandle<CanRead, CanWrite>, FileError>
-    let open(path, mode) = Kex.Intrinsic.File.open(path, mode)
+    foul open(path, mode) = Kex.Intrinsic.File.open(path, mode)
 
     read : FilePath -> String?
-    let read(path) = Kex.Intrinsic.File.read(path)
+    foul read(path) = Kex.Intrinsic.File.read(path)
 
     write : FilePath -> String -> Bool
-    let write(path, content) = Kex.Intrinsic.File.write(path, content)
+    foul write(path, content) = Kex.Intrinsic.File.write(path, content)
 
     append : FilePath -> String -> Bool
-    let append(path, content) = Kex.Intrinsic.File.append(path, content)
+    foul append(path, content) = Kex.Intrinsic.File.append(path, content)
 
     exists? : FilePath -> Bool
-    let exists?(path) = Kex.Intrinsic.File.exists?(path)
+    foul exists?(path) = Kex.Intrinsic.File.exists?(path)
 
     file? : FilePath -> Bool
-    let file?(path) = Kex.Intrinsic.File.file?(path)
+    foul file?(path) = Kex.Intrinsic.File.file?(path)
 
     directory? : FilePath -> Bool
-    let directory?(path) = Kex.Intrinsic.File.directory?(path)
+    foul directory?(path) = Kex.Intrinsic.File.directory?(path)
 
     delete : FilePath -> Bool
-    let delete(path) = Kex.Intrinsic.File.delete(path)
+    foul delete(path) = Kex.Intrinsic.File.delete(path)
 
     copy : FilePath -> FilePath -> Bool
-    let copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
+    foul copy(src, dst) = Kex.Intrinsic.File.copy(src, dst)
 
     rename : FilePath -> FilePath -> Bool
-    let rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
+    foul rename(src, dst) = Kex.Intrinsic.File.rename(src, dst)
 
     # NOT `lines`: FilePath is an alias for String, so a receiver function
     # named `lines` here is indistinguishable from String's own `lines` at
     # every call site, and merely saying `using FS` made `text.lines`
     # ambiguous. `readLines` also says what it does — it reads the file.
     readLines : FilePath -> [String]?
-    let readLines(path) = Kex.Intrinsic.File.lines(path)
+    foul readLines(path) = Kex.Intrinsic.File.lines(path)
 
     feed : FilePath -> Stream<String>?
-    let feed(path) = Kex.Intrinsic.File.feed(path)
+    foul feed(path) = Kex.Intrinsic.File.feed(path)
 
     size : FilePath -> Integer?
-    let size(path) = Kex.Intrinsic.File.size(path)
+    foul size(path) = Kex.Intrinsic.File.size(path)
 
     # Path manipulation lives in FS.Path — `basename`, `dirname`,
     # `extension` and `join` used to be here too, but a name cannot sit in
@@ -58,7 +58,7 @@ module FS do
     # on it are indistinguishable at every call site. `absolute` stays
     # because it is not lexical — it asks the process where it is.
     absolute : FilePath -> String?
-    let absolute(path) = Kex.Intrinsic.File.absolute(path)
+    foul absolute(path) = Kex.Intrinsic.File.absolute(path)
   end
 
   # Lexical path algebra: pure string manipulation, no filesystem access, so
@@ -229,39 +229,39 @@ module FS do
     end
   end
 
-  foul module Directory do
+  module Directory do
     exists? : FilePath -> Bool
-    let exists?(path) = Kex.Intrinsic.Directory.exists?(path)
+    foul exists?(path) = Kex.Intrinsic.Directory.exists?(path)
 
     directory? : FilePath -> Bool
-    let directory?(path) = Kex.Intrinsic.Directory.directory?(path)
+    foul directory?(path) = Kex.Intrinsic.Directory.directory?(path)
 
     file? : FilePath -> Bool
-    let file?(path) = Kex.Intrinsic.Directory.file?(path)
+    foul file?(path) = Kex.Intrinsic.Directory.file?(path)
 
     create : FilePath -> Bool
-    let create(path) = Kex.Intrinsic.Directory.create(path)
+    foul create(path) = Kex.Intrinsic.Directory.create(path)
 
     delete : FilePath -> Bool
-    let delete(path) = Kex.Intrinsic.Directory.delete(path)
+    foul delete(path) = Kex.Intrinsic.Directory.delete(path)
 
     deleteAll : FilePath -> Bool
-    let deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
+    foul deleteAll(path) = Kex.Intrinsic.Directory.deleteAll(path)
 
     list : FilePath -> [String]?
-    let list(path) = Kex.Intrinsic.Directory.list(path)
+    foul list(path) = Kex.Intrinsic.Directory.list(path)
 
     files : FilePath -> [String]?
-    let files(path) = Kex.Intrinsic.Directory.files(path)
+    foul files(path) = Kex.Intrinsic.Directory.files(path)
 
     directories : FilePath -> [String]?
-    let directories(path) = Kex.Intrinsic.Directory.directories(path)
+    foul directories(path) = Kex.Intrinsic.Directory.directories(path)
 
     current : String
-    let current = Kex.Intrinsic.Directory.current
+    foul current = Kex.Intrinsic.Directory.current
 
     home : String?
-    let home = Kex.Intrinsic.Directory.home
+    foul home = Kex.Intrinsic.Directory.home
   end
 end
 

@@ -333,7 +333,6 @@ private:
         std::unordered_map<std::string, ValuePtr> exports;
         std::unordered_set<std::string> privateNames;
         std::unordered_map<std::string, std::string> submodules;
-        bool isFoul = false;
     };
     struct PendingExport { std::string owner; const ast::ExportDecl* decl; };
 

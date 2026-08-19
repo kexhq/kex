@@ -76,7 +76,7 @@ foul events: Feed<Event> = keyboard.feed
 Feeds are consumed — once you read from them, the data is gone:
 
 ```kex
-foul do
+main do
   let feed = FS.File.feed("log.txt").or(Stream.empty)
   feed.each do |line|
     IO.printLine(line) if line.contains?("ERROR")

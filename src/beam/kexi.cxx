@@ -467,7 +467,6 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
 
     auto structural = Term::map({
         {Term::atom("module"), Term::binary(chunk.metadata.moduleAtom)},
-        {Term::atom("foul"), chunk.metadata.isFoul ? Term::atom("true") : Term::atom("false")},
         {Term::atom("role"), chunk.metadata.role == KexiModuleRole::Entry
                                  ? Term::atom("entry") : Term::atom("companion")},
         {Term::atom("entry_back_pointer"), Term::binary(chunk.metadata.entryBackPointer)},
@@ -672,7 +671,6 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     if (auto u = sm->mapGet("unit_id")) chunk.metadata.unitId = u->asBinaryStr();
     if (auto s = sm->mapGet("source_module"))
         chunk.metadata.sourceModule = s->asBinaryStr();
-    if (auto f = sm->mapGet("foul")) chunk.metadata.isFoul = f->isAtom("true");
     if (auto r = sm->mapGet("role"))
         chunk.metadata.role = r->isAtom("companion") ? KexiModuleRole::Companion
                                                       : KexiModuleRole::Entry;

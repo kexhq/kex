@@ -88,7 +88,7 @@ end
 `Task` is a library built on processes — no special keywords:
 
 ```kex
-foul do
+main do
   let task1 = Task.start { fetchUser(id) }
   let task2 = Task.start { fetchPosts(id) }
 

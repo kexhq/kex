@@ -884,7 +884,6 @@ auto findAndCollectModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             if ((*module)->name == moduleName) {
                 collectFromModuleBody((*module)->body, iface, meta, analysis,
                                       moduleName);
-                meta.isFoul = (*module)->isFoul;
                 return true;
             }
             if (findAndCollectModuleBody((*module)->body, moduleName, iface,
@@ -907,7 +906,6 @@ auto findAndCollectModule(const kex::ast::Program& program,
             if ((*module)->name == moduleName) {
                 collectFromModuleBody((*module)->body, iface, meta, analysis,
                                       moduleName);
-                meta.isFoul = (*module)->isFoul;
                 return true;
             }
             if (findAndCollectModuleBody((*module)->body, moduleName, iface,

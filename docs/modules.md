@@ -1,6 +1,6 @@
 # Modules and Visibility
 
-> **Status.** Module declaration, nesting, `private do`, `foul module`, and
+> **Status.** Module declaration, nesting, `private do`, and
 > qualified access all work in the interpreter. `using` is currently a **no-op**
 > in the interpreter (names are not actually brought into scope — see
 > `docs/testing.md`), and a full module system across BEAM modules is still in
@@ -56,16 +56,23 @@ end
 
 No selective imports — `using` brings everything public. If a module exports too much, split it.
 
-## Foul Modules
+## Effects in a Module
+
+A module carries no effect of its own — there is no `foul module`. Each
+function declares its own, so a `let` is pure wherever it appears:
 
 ```kex
-foul module Logger do
-  let info(msg: String) = ...
-  let error(msg: String) = ...
+module Logger do
+  foul info(msg: String) = ...
+  foul error(msg: String) = ...
+
+  # Pure: formats a message without writing it anywhere.
+  let format(level: Atom, msg: String) = ...
 end
 ```
 
-All functions in a `foul module` are implicitly foul.
+Calling `Logger.info` from a pure function is an error; calling
+`Logger.format` is fine. See [purity.md](purity.md).
 
 ## Access
 

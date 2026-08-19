@@ -578,7 +578,15 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             ifaces.modules[mod.name].backendModule =
                 backendModuleFor(mod.name);
             ifaces.modules[mod.name].automaticImport = automaticImport;
-            ifaces.modules[mod.name].isFoul = mod.isFoul;
+            // `foul` is written on the definition, never on the annotation
+            // above it — `foul name : T` is the foul VALUE-binding form, so
+            // an arrow signature cannot carry the marker. An annotated
+            // function would otherwise export as pure and its effect would be
+            // invisible to every importer.
+            std::unordered_set<std::string> foulDefs;
+            for (const auto& item : mod.body)
+                if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
+                    if (*fn && (*fn)->isFoul) foulDefs.insert((*fn)->name);
             for (const auto& item : mod.body) {
                 if (const auto* fn = std::get_if<std::unique_ptr<ast::FunctionDef>>(&item))
                     if (*fn) {
@@ -590,6 +598,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 if (const auto* ann = std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item))
                     if (*ann) {
                         auto sig = annotationToSignature(**ann, nullptr);
+                        sig.isFoul = sig.isFoul || foulDefs.count(sig.name) > 0;
                         if (directBackendOwnership && !sig.params.empty())
                             addReceiverSig(mod.name, sig);
                         else

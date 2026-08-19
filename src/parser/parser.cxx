@@ -260,8 +260,16 @@ auto Parser::parseModuleDef(bool allowStandalone,
   auto mod = std::make_unique<ast::ModuleDef>();
   mod->location = currentLocation();
 
-  if (match(TokenType::Foul)) {
-    mod->isFoul = true;
+  // `foul module` used to make every member foul, so a `let` inside one was
+  // silently a foul function — an effect declared arbitrarily far from the
+  // definition it applied to. Effects are per-function now (kexhq/kex#130).
+  if (check(TokenType::Foul) && peekNext().type == TokenType::Module) {
+    // `foul` is consumed BEFORE reporting: error() throws, and syncToTopLevel
+    // treats `foul` as a resume point, so leaving it in place would put the
+    // recovery loop straight back on this token and spin forever.
+    advance();
+    error("'foul module' is no longer supported — mark each effectful "
+          "function 'foul' at its own definition instead");
   }
 
   expect(TokenType::Module, "Expected 'module'");

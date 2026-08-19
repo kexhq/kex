@@ -107,7 +107,7 @@ make OptionConfig do
   # A parse failure, an unknown command, or a line with no command at all
   # reports the problem with the help text and returns 1 — the one place that
   # policy has to live for every tool to behave the same way.
-  let run(args: [String]) -> Integer do
+  foul run(args: [String]) -> Integer do
     let options = match this.parse(args) do
       Error(error) => do
         IO.printError("${@name}: ${OptionParser.errorMessage(error)}\n\n${this.help}\n")
@@ -133,7 +133,7 @@ make OptionConfig do
     end
   end
 
-  let printHelp -> Integer do
+  foul printHelp -> Integer do
     IO.printLine(this.help)
     return 0
   end

@@ -437,7 +437,6 @@ static auto convertModuleDef(const ast::ModuleDef& mod, const std::string& doc, 
     std::unordered_map<std::string, ValuePtr> fields;
     fields["name"] = Value::string(mod.name);
     fields["doc"] = doc.empty() ? Value::none() : Value::string(doc);
-    fields["foul"] = Value::boolean(mod.isFoul);
     std::vector<ValuePtr> items;
     for (const auto& item : mod.body) {
         auto converted = convertModuleItem(item, filename, docs);

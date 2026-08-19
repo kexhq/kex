@@ -583,12 +583,12 @@ int main() {
             ));
         });
 
-        it("rejects call to imported foul module from pure context", []() {
+        it("rejects call to an imported foul export from pure context", []() {
+            // The export's own flag decides: its module carries none.
             semantic::ImportedInterfaces interfaces;
             semantic::ImportedModuleInterface db;
             db.sourceModule = "Database";
             db.backendModule = "kex_database";
-            db.isFoul = true;
             semantic::ImportedFunction query;
             query.sourceName = "query";
             query.signature = {"query", {semantic::Type::string()},

@@ -218,10 +218,10 @@ int main() {
             assertEqual(mod->name, std::string("Math"));
         });
 
-        it("parses foul module", []() {
-            auto program = parse("foul module IO do\nend");
-            auto& mod = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
-            assertTrue(mod->isFoul);
+        it("rejects foul module", []() {
+            // Effects are per-function: a module never carries one, so a `let`
+            // inside it is never silently foul (kexhq/kex#130).
+            assertTrue(parseFails("foul module IO do\nend"));
         });
 
         it("parses a qualified module name", []() {

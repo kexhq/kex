@@ -2,34 +2,34 @@
 # the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
 # spawned process with an awaitable result.
 
-foul module Process do
+module Process do
   # Run an executable directly with an argv vector. No shell is involved.
   # Output is captured as UTF-8 strings; a non-zero child status is still a
   # successful ProcessResult, while failure to start the child is Error.
   run : String -> [String] -> Result<ProcessResult, String>
-  let run(command, args) = Kex.Intrinsic.Process.run(command, args)
+  foul run(command, args) = Kex.Intrinsic.Process.run(command, args)
 
   exec : String -> [String] -> Integer
-  let exec(command, args) = match Process.run(command, args) do
+  foul exec(command, args) = match Process.run(command, args) do
     Ok(result) => result.exitCode
     Error(_) => 127
   end
 
   # Returns the calling process's Pid.
   self : Pid
-  let self = Kex.Intrinsic.Process.self
+  foul self = Kex.Intrinsic.Process.self
 
   # Sends an exit signal with +reason+ to +pid+.
   exit : Pid -> X -> Void
-  let exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
+  foul exit(pid, reason) = Kex.Intrinsic.Process.exit(pid, reason)
 
   # Registers +pid+ under the given atom +name+.
   register : Pid -> Atom -> Void
-  let register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
+  foul register(pid, name) = Kex.Intrinsic.Process.register(pid, name)
 
   # Returns the Pid registered under +name+, or None.
   whereis : Atom -> Pid?
-  let whereis(name) = Kex.Intrinsic.Process.whereis(name)
+  foul whereis(name) = Kex.Intrinsic.Process.whereis(name)
 end
 
 record ProcessResult do
@@ -60,14 +60,14 @@ make Pid do
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
 
-foul module Task do
+module Task do
   # Spawns a new process that runs +f+ and returns a Task handle.
   start : Block<X> -> Task
-  let start(f) = Kex.Intrinsic.Task.start(f)
+  foul start(f) = Kex.Intrinsic.Task.start(f)
 
   # Awaits all tasks in +tasks+, returning their results.
   awaitAll : [Task] -> [X]
-  let awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
+  foul awaitAll(tasks) = Kex.Intrinsic.Task.awaitAll(tasks)
 end
 
 make Task do

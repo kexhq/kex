@@ -1,4 +1,4 @@
-foul module Tey.Resolver
+module Tey.Resolver
 
 using Tey.Cache, only: [fetch]
 using Tey.Git, only: [execute, pinRef, tags]
@@ -8,7 +8,7 @@ using Tey.Semver, only: [highest, intersect, range?, satisfies, versionOf]
 using Tey.Cache, only: [packagePath]
 using Tey.Manifest, only: [read]
 
-let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
+foul resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   # A pre-release toolchain is checked as the release it leads to: `0.4.0-rc.1`
   # satisfies `>= 0.3.0`. Ranges never RESOLVE to a pre-release (see
   # Tey.Semver.satisfies), but refusing to build a package on the rc you
@@ -45,7 +45,7 @@ private do
   # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
   # says anything, which is the ordinary case for a package with no interop
   # needs on a toolchain built without erlc.
-  let effectiveOtpFloor(requirement: String) -> Integer? do
+  foul effectiveOtpFloor(requirement: String) -> Integer? do
     let toolchain = Tey.Toolchain.runtimeOtpFloor
     let declared = Tey.Resolver.lowestSatisfying(requirement)
     match (declared, toolchain) do
@@ -79,7 +79,7 @@ private do
   end
 
   # The exact tag to pin. Anything but a tag range is taken as written.
-  let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
+  foul chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
     let tags = match Tey.Git.tags(git) do
       Error(error) => return Error(error)
@@ -103,7 +103,7 @@ private do
   # Breadth-first so the shortest path to a package is the one that resolves
   # it, which makes "required by" in an error the nearest explanation rather
   # than an arbitrary one.
-  let resolveDependencies(direct: [Tey.Manifest.Dependency],
+  foul resolveDependencies(direct: [Tey.Manifest.Dependency],
                           _unused: [Tey.Lockfile.Dependency]) -> [Tey.Lockfile.Dependency] or! String do
     var queue = direct.map { |dependency| (dependency, "this package") }
     var resolved : [Tey.Lockfile.Dependency] = []
@@ -168,7 +168,7 @@ private do
   # `package.kex` is an error rather than an empty node: it means the
   # repository is not a Kex package, and `using` would fail later with a worse
   # message.
-  let dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
+  foul dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
     let path = "${Tey.Cache.packagePath(entry)}/package.kex"
     match FS.File.read(path) do
       None => return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
@@ -179,7 +179,7 @@ private do
     end
   end
 
-  let resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
+  foul resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
     # A range is resolved HERE, not pinned: the manifest keeps the question
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.

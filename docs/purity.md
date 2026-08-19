@@ -22,24 +22,22 @@ end
 
 ## Granularity
 
-`foul` can be applied at three levels:
+`foul` marks one function. There is no wider form — no foul block, and no
+`foul module` — so a function's effect is always declared on the function:
 
 ```kex
-# Per function
-foul log(msg: String) = IO.printLine(msg)
+module IO do
+  foul printLine(msg: String) = ...
+  foul getLine -> String = ...
 
-# Per block
-foul do
-  let readConfig(path: String) = IO.read(path)
-  let writeLog(msg: String) = Log.write(msg)
-end
-
-# Per module
-foul module IO do
-  let printLine(msg: String) = ...
-  let getLine -> String = ...
+  # Pure, and callable from pure code, despite the effectful company.
+  let escape(msg: String) = ...
 end
 ```
+
+A module carries no effect of its own. Whether a call is legal from pure code
+depends only on the function it names, so `let` always means pure and reading
+one definition is enough to know (kexhq/kex#130).
 
 ## Process State
 
