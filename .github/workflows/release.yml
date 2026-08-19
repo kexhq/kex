@@ -240,9 +240,11 @@ jobs:
       # runtime-version guard: CMake bakes this erlc's OTP release into the
       # binary, and kex checks it before spawning erl, so a user on a too-old
       # Erlang is told to upgrade instead of dying as `undef`.
+      # Installed via the repo's Brewfile, same as ci.yml's macOS job: one
+      # dependency list for both, instead of a second one that can drift.
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install gmp pcre2 boost erlang readline
+        run: brew bundle
 
       # KEX_BOOST_STATIC is what makes the archive installable by a package
       # manager: see the comment on the option in CMakeLists.txt. It is a

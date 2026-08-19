@@ -39,6 +39,9 @@ _deps/
 .DS_Store
 Thumbs.db
 
+# Written by `brew bundle` next to the Brewfile it ran against
+Brewfile.lock.json
+
 # Scratch files left behind by an interrupted `make spec` IO test run
 spec/io_scratch.txt
 

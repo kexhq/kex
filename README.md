@@ -509,11 +509,12 @@ grammar.ebnf    Formal grammar specification
 ## Compiler Development
 
 The compiler is written in C++20. On Homebrew systems the dependencies are
-installed by `brew bundle` (see "Try It"). What they cover: GMP
-(arbitrary-precision `Integer`), PCRE2 (regex in the interpreter — the BEAM
-backend uses Erlang's `re` instead), Boost.Context (native fibers), Erlang/OTP
-(`erlc` for the runtime beams and BEAM backend), OpenSSL (SHA-256 on Linux only
-— macOS uses CommonCrypto), and readline (optional, nicer REPL).
+installed by `brew bundle` (see "Try It"). What they cover: CMake (the build
+system itself), GMP (arbitrary-precision `Integer`), PCRE2 (regex in the
+interpreter — the BEAM backend uses Erlang's `re` instead), Boost.Context
+(native fibers), Erlang/OTP (`erlc` for the runtime beams and BEAM backend),
+OpenSSL (SHA-256 on Linux only — macOS uses CommonCrypto), and readline
+(optional, nicer REPL).
 
 Source flows through:
 
