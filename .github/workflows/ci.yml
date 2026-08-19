@@ -136,18 +136,13 @@ jobs:
       # uses CommonCrypto for SHA-256 on Apple. PCRE2 is explicit because,
       # unlike the Linux image, it is not preinstalled.
       #
-      # Installed via the repo's Brewfile rather than a hardcoded list: the
-      # configure step's FATAL_ERROR checks in CMakeLists.txt make a missing
-      # dependency fail this build, so CI is what keeps the Brewfile honest.
-      # brew bundle reads ./Brewfile from the checkout's working directory.
-      #
       # Unversioned erlang, matching release.yml: Kex targets current OTP and
       # does not support back-loading its runtime beams into an older one.
       # kex diagnoses that mismatch at startup (the runtime-version guard in
       # main.cxx) instead of CI compiling down to an ancient floor for it.
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew bundle
+        run: brew install gmp pcre2 boost erlang readline
 
       # KEX_BOOST_STATIC matches release.yml: the released archives link
       # Boost.Context statically (see CMakeLists.txt), and a static link that
