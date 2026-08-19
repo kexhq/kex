@@ -11,7 +11,7 @@
 
 program = top_level_item* ;
 
-standalone_module = FOUL? MODULE type_name NEWLINE top_level_item* ;
+standalone_module = MODULE type_name NEWLINE top_level_item* ;
 
 top_level_item
   = module_def
@@ -27,7 +27,7 @@ top_level_item
 
 (* ===== Modules ===== *)
 
-module_def = FOUL? MODULE UPPER_IDENT DO module_body END ;
+module_def = MODULE UPPER_IDENT DO module_body END ;
 
 module_body = module_item* ;
 

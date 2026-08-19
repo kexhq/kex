@@ -297,7 +297,6 @@ auto Evaluator::resolvePendingExports() -> void {
             const auto alias = pending.decl->alias.value_or(pending.decl->module.parts.back());
             const auto viewName = pending.owner + "." + alias;
             ModuleEntry view;
-            view.isFoul = target->second.isFoul;
             for (const auto& [name, value] : target->second.exports) {
                 if (!pending.decl->onlyNames.empty()
                     && std::find(pending.decl->onlyNames.begin(), pending.decl->onlyNames.end(), name)
@@ -688,7 +687,6 @@ auto Evaluator::execModule(const ast::ModuleDef& mod,
     }
 
     ModuleEntry entry;
-    entry.isFoul = mod.isFoul;
     entry.privateNames = std::move(privateNames);
     entry.submodules = std::move(m_moduleRegistry[moduleName].submodules);
     const auto prefix = moduleName + "::";

@@ -82,6 +82,7 @@ private:
     auto analyzeTypeDef(const ast::TypeDef& def) -> void;
     auto analyzeRecordDef(const ast::RecordDef& def) -> void;
     auto analyzeMakeDef(const ast::MakeDef& def) -> void;
+    auto analyzeVisibilityBlock(const ast::VisibilityBlock& block) -> void;
     auto analyzeFunctionDef(const ast::FunctionDef& def) -> void;
     auto analyzeMainBlock(const ast::MainBlock& block) -> void;
 
@@ -95,6 +96,17 @@ private:
     // the current scope — mirrors TypeChecker::bindPatternVars, just
     // populating SymbolTable instead of TypeEnv.
     auto bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void;
+
+    // Records which member of which module is foul, for the modules declared
+    // in THIS compilation unit. Runs before Phase 1 so a call can be checked
+    // against a module declared later in the file. Imported modules answer the
+    // same question through `isExportFoul`.
+    auto collectModuleMemberEffects(const ast::Program& program) -> void;
+    // Whether `module.member` is a foul function, consulting local modules
+    // first and imported interfaces second. This is the ONLY purity question
+    // asked about a qualified call — there is no module-level foulness.
+    auto isQualifiedCallFoul(const std::string& module,
+                             const std::string& member) const -> bool;
 
     // Transitive effect computation — runs after Phase 1, before Phase 2.
     auto computeTransitiveEffects(const ast::Program& program) -> void;
@@ -126,6 +138,12 @@ private:
     // enriched by enrichEffectsFromResolvedCalls after type checking.
     std::unordered_map<std::string, std::set<std::string>> m_callGraph;
     std::unordered_set<std::string> m_transitivelyFoul;
+
+    // Foul members of modules declared in this unit, keyed by the module's
+    // bare name — nested modules are addressed by their own name (`File`, not
+    // `FS.File`), matching how imported interfaces register them.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_localModuleFoulMembers;
 };
 
 } // namespace kex::semantic

@@ -1030,9 +1030,13 @@ auto sourceParameterNames(const std::string& source)
         const auto first = line.find_first_not_of(" \t");
         if (first == std::string::npos) continue;
         auto declaration = std::string_view(line).substr(first);
+        // `foul` REPLACES `let` on a definition, it does not precede it. When
+        // module-level foulness went away every effectful stdlib function was
+        // respelled `foul name(...)`, and requiring a `let` after the prefix
+        // dropped all of their parameter names from completion.
         if (declaration.rfind("foul ", 0) == 0) declaration.remove_prefix(5);
-        if (declaration.rfind("let ", 0) != 0) continue;
-        declaration.remove_prefix(4);
+        else if (declaration.rfind("let ", 0) == 0) declaration.remove_prefix(4);
+        else continue;
         const auto open = declaration.find('(');
         const auto close = open == std::string_view::npos
             ? std::string_view::npos : declaration.find(')', open + 1);
@@ -2351,11 +2355,7 @@ private:
             std::vector<std::string> signatures;
             for (const auto* function : functions) {
                 auto rendered = renderer.displaySignature(leaf, function->signature);
-                bool isFoul = function->signature.isFoul;
-                if (auto owner = m_interfaces.modules.find(function->sourceModule);
-                    owner != m_interfaces.modules.end())
-                    isFoul = isFoul || owner->second.isFoul;
-                if (isFoul) rendered = "foul " + rendered;
+                if (function->signature.isFoul) rendered = "foul " + rendered;
                 if (std::find(signatures.begin(), signatures.end(), rendered) ==
                     signatures.end())
                     signatures.push_back(std::move(rendered));
@@ -2716,7 +2716,7 @@ private:
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
                                 function.signature,
-                                function.signature.isFoul || module->second.isFoul);
+                                function.signature.isFoul);
             } else {
                 // Modules this file opted into with `using`, as well as the
                 // automatic ones. Without the former, hovering `meter` in
@@ -2732,17 +2732,13 @@ private:
                         for (const auto& function : functions->second)
                             importedSignatures.emplace_back(
                                 function.signature,
-                                function.signature.isFoul || module.isFoul);
+                                function.signature.isFoul);
                 }
                 if (auto functions = m_interfaces.receiverFunctions.find(lookupName);
                     functions != m_interfaces.receiverFunctions.end())
                     for (const auto& function : functions->second) {
-                        bool isFoul = function.signature.isFoul;
-                        if (auto owner = m_interfaces.modules.find(
-                                function.sourceModule);
-                            owner != m_interfaces.modules.end())
-                            isFoul = isFoul || owner->second.isFoul;
-                        importedSignatures.emplace_back(function.signature, isFoul);
+                        importedSignatures.emplace_back(function.signature,
+                                                       function.signature.isFoul);
                     }
             }
             semantic::TypeChecker renderer(&m_interfaces);

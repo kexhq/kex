@@ -1,8 +1,8 @@
-foul module Tey.Cache
+module Tey.Cache
 
 using Tey.Git, only: [execute]
 
-let root -> String do
+foul root -> String do
   match ENV.get("TEY_CACHE") do
     Just(path) => path
     None => match ENV.get("HOME") do
@@ -18,7 +18,7 @@ let packagePath(dep: Tey.Lockfile.Dependency) -> String do
   return "${sourceRoot(dep)}/${Tey.Lockfile.dependencyCommit(dep)}"
 end
 
-let fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
+foul fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   let path = Tey.Cache.packagePath(dep)
 
   return Ok(path) if FS.Directory.directory?(path)
@@ -60,7 +60,7 @@ let fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   end
 end
 
-let verify(dep: Tey.Lockfile.Dependency) -> String or! String do
+foul verify(dep: Tey.Lockfile.Dependency) -> String or! String do
   let path = Tey.Cache.packagePath(dep)
 
   if !FS.Directory.directory?(path)
@@ -77,7 +77,7 @@ let verify(dep: Tey.Lockfile.Dependency) -> String or! String do
 end
 
 private do
-  let sourceRoot(dep: Tey.Lockfile.Dependency) -> String do
+  foul sourceRoot(dep: Tey.Lockfile.Dependency) -> String do
     return "${Tey.Cache.root}/src/${Digest.sha256(Tey.Lockfile.dependencyGit(dep))}"
   end
 

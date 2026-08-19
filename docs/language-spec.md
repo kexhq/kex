@@ -72,6 +72,16 @@ There are no block comments.
 Lowercase identifiers may end with a single `?` or `!`. Uppercase identifiers
 consist of `[A-Z][A-Za-z0-9]*`.
 
+An initialism in an uppercase name is written in full caps, not Pascal-cased:
+`IO`, `FS`, `ENV`, `JSON`, `AST`, `SI` — never `Io`, `Json`, or `Ast`. This
+applies to the whole of an uppercase name and to each dot-separated segment of
+a module path (`Kex.AST`, `Units.SI`). A name that merely begins with an
+initialism keeps the rest in Pascal case: `JSONDecoder`, not `JsonDecoder` or
+`JSONdecoder`.
+
+A single uppercase letter is a type parameter (see *Generics*), so one-letter
+names are unavailable; two-letter initialisms like `IO` are fine.
+
 ### Literals
 
 | Token | Example | Type |
@@ -1210,7 +1220,8 @@ Rules:
 
 - A pure function **cannot** call a foul function (compile error).
 - `main` is implicitly foul.
-- Modules may be marked `foul module`, making every member foul.
+- A module carries no effect: `foul` marks one function, so a `let` is pure
+  wherever it appears. There is no `foul module` and no foul block.
 - Guards in `match` must be pure — foul calls in guards are a compile error.
 
 `IO`, `FS.File`, `FS.Directory`, `Http`, `System`, `Task`, and `Process`
@@ -1665,7 +1676,7 @@ All functions take `Number` (Integer or Float) and return `Float` unless noted.
 | `floor(x)`, `ceil(x)` | → `Integer` |
 | `hypot(x, y)` | `sqrt(x² + y²)` |
 
-### 23.8 IO (`foul module IO`)
+### 23.8 IO (`module IO`)
 
 | Function | Description |
 |---|---|

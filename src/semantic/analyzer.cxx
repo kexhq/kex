@@ -2,10 +2,39 @@
 #include "receiver_conflicts.hxx"
 
 #include <algorithm>
+#include <cctype>
 #include <functional>
 #include <set>
 
 namespace kex::semantic {
+
+namespace {
+
+// The module path a qualified call names, or "" when the receiver is a value
+// rather than a module path: `IO.printLine` -> "IO", `FS.File.read` ->
+// "FS.File". Nested modules carry their parent in the name (parseModuleDef
+// builds `parent + "." + name`), so the dotted path is what both the local
+// collection pass and imported interfaces are keyed by.
+auto receiverModuleName(const ast::Expr& receiver) -> std::string {
+    if (auto* lower = std::get_if<ast::Identifier>(&receiver.kind))
+        return lower->name;
+    if (auto* upper = std::get_if<ast::UpperIdentifier>(&receiver.kind))
+        return upper->name;
+    // `FS.File` parses as an argument-less method call on `FS`. Treat it as a
+    // module path only when the segment is itself capitalized, so a field read
+    // such as `config.io` never looks like one.
+    if (auto* call = std::get_if<ast::MethodCall>(&receiver.kind))
+        if (call->args.empty() && call->namedArgs.empty() && !call->block
+            && !call->method.empty()
+            && std::isupper(static_cast<unsigned char>(call->method[0]))
+            && call->receiver) {
+            auto parent = receiverModuleName(*call->receiver);
+            if (!parent.empty()) return parent + "." + call->method;
+        }
+    return {};
+}
+
+} // namespace
 
 auto Analyzer::bindPatternVars(const ast::Pattern& pat, SourceLocation loc) -> void {
     std::visit([this, loc](const auto& node) {
@@ -64,6 +93,10 @@ auto Analyzer::analyze(const ast::Program& program) -> bool {
     // an ambiguous method tends to cause downstream.
     for (auto& conflict : findReceiverConflicts(program))
         m_diagnostics.push_back(std::move(conflict));
+
+    // Phase 0.5: per-module member effects, so a qualified call can be checked
+    // against a module declared anywhere in the unit, including below it.
+    collectModuleMemberEffects(program);
 
     // Phase 1: scope resolution and purity checking
     for (const auto& item : program.items) {
@@ -138,11 +171,11 @@ auto Analyzer::analyzeTopLevel(const ast::TopLevelItem& item) -> void {
 
 auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
     m_symbols.define(Symbol{
-        mod.name, SymbolKind::Module, mod.isFoul, false, true, mod.location});
+        mod.name, SymbolKind::Module, false, false, true, mod.location});
 
-    m_symbols.pushScope(mod.isFoul);
-    bool prevFoul = m_inFoulContext;
-    if (mod.isFoul) m_inFoulContext = true;
+    // A module never carries an effect of its own: entering one leaves the
+    // surrounding purity exactly as it was, and each member declares its own.
+    m_symbols.pushScope(m_inFoulContext);
 
     for (const auto& item : mod.body) {
         std::visit([this](const auto& node) {
@@ -160,7 +193,11 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::CompiledBlock>>) {
                 // skip
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::VisibilityBlock>>) {
-                // TODO: handle visibility
+                // Visibility decides who may CALL a function, not whether its
+                // body is checked. Skipping the block entirely meant a
+                // `private do` member was never purity-checked — every
+                // effectful helper in tey's private blocks passed as pure.
+                analyzeVisibilityBlock(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 // skip
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeAnnotation>>) {
@@ -169,8 +206,26 @@ auto Analyzer::analyzeModule(const ast::ModuleDef& mod) -> void {
         }, item);
     }
 
-    m_inFoulContext = prevFoul;
     m_symbols.popScope();
+}
+
+auto Analyzer::analyzeVisibilityBlock(const ast::VisibilityBlock& block) -> void {
+    for (const auto& item : block.items) {
+        std::visit([this](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
+                if (node) analyzeFunctionDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
+                if (node) analyzeTypeDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                if (node) analyzeRecordDef(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) analyzeMakeDef(*node);
+            }
+            // TypeAnnotation travels with its function def; UsingBlock is
+            // resolved elsewhere.
+        }, item);
+    }
 }
 
 auto Analyzer::analyzeTypeDef(const ast::TypeDef& def) -> void {
@@ -370,26 +425,10 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
 
             // IO.inspect is the documented purity-exempt escape hatch.
             bool isInspect = (node.method == "inspect");
-            auto receiverName = [&]() -> std::string {
-                if (!node.receiver) return {};
-                if (auto* lo = std::get_if<ast::Identifier>(&node.receiver->kind))
-                    return lo->name;
-                if (auto* up = std::get_if<ast::UpperIdentifier>(&node.receiver->kind))
-                    return up->name;
-                return {};
-            }();
-            auto isModuleFoul = [&](const std::string& name) -> bool {
-                if (!m_importedInterfaces) return false;
-                auto it = m_importedInterfaces->modules.find(name);
-                if (it != m_importedInterfaces->modules.end())
-                    return it->second.isFoul;
-                return false;
-            };
-            // Kex.Intrinsic.* is the private ABI — its per-export isFoul
-            // governs purity, not the blanket Kex module foulness.
-            bool isIntrinsicCall = (node.method == "Intrinsic");
-            if (!m_inFoulContext && !isInspect && !isIntrinsicCall
-                && !receiverName.empty() && isModuleFoul(receiverName)) {
+            auto receiverName = node.receiver ? receiverModuleName(*node.receiver)
+                                              : std::string{};
+            if (!m_inFoulContext && !isInspect && !receiverName.empty()
+                && isQualifiedCallFoul(receiverName, node.method)) {
                 error(expr.location,
                     "Cannot call foul function '" + receiverName + "." +
                     node.method + "' from pure context");
@@ -574,6 +613,61 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
     }, expr.kind);
 }
 
+auto Analyzer::collectModuleMemberEffects(const ast::Program& program) -> void {
+    m_localModuleFoulMembers.clear();
+
+    std::function<void(const ast::ModuleDef&)> collect =
+        [&](const ast::ModuleDef& mod) {
+        auto& foulMembers = m_localModuleFoulMembers[mod.name];
+        for (const auto& item : mod.body) {
+            if (const auto* fn =
+                    std::get_if<std::unique_ptr<ast::FunctionDef>>(&item)) {
+                if (*fn && (*fn)->isFoul) foulMembers.insert((*fn)->name);
+            } else if (const auto* ann =
+                    std::get_if<std::unique_ptr<ast::TypeAnnotation>>(&item)) {
+                // `foul name : T` declares a foul value binding; the `let`
+                // clause below it carries no marker of its own.
+                if (*ann && (*ann)->isFoul) foulMembers.insert((*ann)->name);
+            } else if (const auto* nested =
+                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&item)) {
+                if (*nested) collect(**nested);
+            } else if (const auto* visibility =
+                    std::get_if<std::unique_ptr<ast::VisibilityBlock>>(&item)) {
+                // A `private do` member is still a member: its effect has to
+                // be registered, or a caller inside the same module sees it
+                // as pure.
+                if (*visibility)
+                    for (const auto& inner : (*visibility)->items)
+                        if (const auto* fn = std::get_if<
+                                std::unique_ptr<ast::FunctionDef>>(&inner))
+                            if (*fn && (*fn)->isFoul)
+                                foulMembers.insert((*fn)->name);
+            }
+        }
+    };
+
+    for (const auto& item : program.items)
+        if (const auto* mod = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+            if (*mod) collect(**mod);
+}
+
+auto Analyzer::isQualifiedCallFoul(const std::string& module,
+                                   const std::string& member) const -> bool {
+    auto known = [&](const std::string& name) {
+        if (auto local = m_localModuleFoulMembers.find(name);
+            local != m_localModuleFoulMembers.end() && local->second.count(member))
+            return true;
+        return m_importedInterfaces
+            && isExportFoul(*m_importedInterfaces, name, member);
+    };
+    // Only the receiver exactly as written is looked up. Resolving a
+    // shortened path (`File.read` under `using FS`) would mean matching any
+    // module whose name ends in that segment, and `Mock.System.OS` would then
+    // make every `System.OS` read foul. Missing a rejection is recoverable;
+    // rejecting pure code because an unrelated module shares a segment is not.
+    return known(module);
+}
+
 auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     // Build a call graph over top-level and module functions.
     // A function is "directly foul" if:
@@ -614,16 +708,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 if (allFns.count(n.method)) calls.insert(n.method);
                 if (n.receiver) {
                     walkExpr(*n.receiver, calls, hasFoulOp);
-                    auto receiverName = [&]() -> std::string {
-                        if (auto* up = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
-                            return up->name;
-                        return {};
-                    }();
-                    if (!receiverName.empty() && n.method != "Intrinsic" && m_importedInterfaces) {
-                        auto it = m_importedInterfaces->modules.find(receiverName);
-                        if (it != m_importedInterfaces->modules.end() && it->second.isFoul)
-                            hasFoulOp = true;
-                    }
+                    auto receiverName = receiverModuleName(*n.receiver);
+                    if (!receiverName.empty()
+                        && isQualifiedCallFoul(receiverName, n.method))
+                        hasFoulOp = true;
                 }
                 for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
                 for (const auto& [_, a] : n.namedArgs) if (a) walkExpr(*a, calls, hasFoulOp);
@@ -713,7 +801,6 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     if (n) allFns.insert(n->name);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                     if (n) {
-                        if (n->isFoul) directlyFoul.insert(n->name);
                         for (const auto& mi : n->body) {
                             std::visit([&](const auto& mn) {
                                 using MT = std::decay_t<decltype(mn)>;
@@ -755,7 +842,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                                 if (mn) {
                                     auto& def = *mn;
                                     std::set<std::string> calls;
-                                    bool hasFoulOp = def.isFoul || n->isFoul;
+                                    bool hasFoulOp = def.isFoul;
                                     for (const auto& clause : def.clauses)
                                         for (const auto& ex : clause.body)
                                             if (ex) walkExpr(*ex, calls, hasFoulOp);
@@ -788,14 +875,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
         }
     }
 
-    auto isModuleFoul = [&](const std::string& name) -> bool {
-        if (!m_importedInterfaces) return false;
-        auto it = m_importedInterfaces->modules.find(name);
-        return it != m_importedInterfaces->modules.end() && it->second.isFoul;
-    };
-
-    // Re-walk guard expressions to reject foul calls (direct, transitive,
-    // and module-level).
+    // Re-walk guard expressions to reject foul calls, direct and transitive.
     std::function<void(const ast::Expr&)> checkGuard = [&](const ast::Expr& e) {
         std::visit([&](const auto& n) {
             using T = std::decay_t<decltype(n)>;
@@ -827,15 +907,10 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     if (value) checkGuard(*value);
             } else if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 if (n.receiver) {
-                    auto receiverName = [&]() -> std::string {
-                        if (auto* up = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
-                            return up->name;
-                        return {};
-                    }();
+                    auto receiverName = receiverModuleName(*n.receiver);
                     bool isInspect = (n.method == "inspect");
-                    bool isIntrinsicCall = (n.method == "Intrinsic");
-                    if (!isInspect && !isIntrinsicCall
-                        && !receiverName.empty() && isModuleFoul(receiverName)) {
+                    if (!isInspect && !receiverName.empty()
+                        && isQualifiedCallFoul(receiverName, n.method)) {
                         error(e.location,
                             "Cannot call foul function '" + receiverName + "." +
                             n.method + "' in a guard");

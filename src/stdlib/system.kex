@@ -1,5 +1,5 @@
 # Operations concerning the running Kex system process.
-foul module System do
+module System do
   # The operating system family the program is running on. A union of atoms
   # rather than an ADT: these are plain tags, and a `match` over them is
   # still exhaustive. Anything unmodelled is `:unknown` — the union is
@@ -12,7 +12,7 @@ foul module System do
   #
   # @example  System.exit(1)
   exit : Integer -> Void
-  let exit(code) = Kex.Intrinsic.System.exit(code)
+  foul exit(code) = Kex.Intrinsic.System.exit(code)
 
   # Both backends answer with the same atom for the same machine.
   #

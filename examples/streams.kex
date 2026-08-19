@@ -24,9 +24,9 @@ let sum = (1..100).sum
 let squares = (1..10).map { |x| x * x }
 let evensInRange = (1..20).filter { |x| x.modulo(2) == 0 }
 
-# Foul feeds for IO
-foul module FileReader do
-  let processLarge(path: String) -> Result<Int, IOError> do
+# Feeds are IO resources, so the functions that read them are foul
+module FileReader do
+  foul processLarge(path: String) -> Result<Int, IOError> do
     let feed = FS.File.feed(path).or(Stream.empty)
     var count = 0
 
@@ -37,7 +37,7 @@ foul module FileReader do
     return Ok(count)
   end
 
-  let processWithStream(path: String) -> Result<[String], IOError> do
+  foul processWithStream(path: String) -> Result<[String], IOError> do
     let handle = FS.File.open(path, FS.Read).try
     let lines = handle.feed
     let errors = lines

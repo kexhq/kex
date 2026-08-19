@@ -1,13 +1,13 @@
-foul module Tey.Git
+module Tey.Git
 
-let execute(args: [String]) -> ProcessResult or! String do
+foul execute(args: [String]) -> ProcessResult or! String do
   match Process.run("git", args) do
     Error(error) => Error(error)
     Ok(result) => result.exitCode == 0 then Ok(result) else Error(result.stderr + result.stdout)
   end
 end
 
-let pinRef(url: String, selector: String, requested: String) -> (String, String) or! String do
+foul pinRef(url: String, selector: String, requested: String) -> (String, String) or! String do
   let refName = match selector do
     "tag" => "refs/tags/${requested}^{}"
     "branch" => "refs/heads/${requested}"
@@ -28,7 +28,7 @@ end
 
 # Every version-shaped tag a repository publishes, newest first. Used to
 # answer a range requirement, and to list installable Kex toolchains.
-let tags(url: String) -> [String] or! String do
+foul tags(url: String) -> [String] or! String do
   match Tey.Git.execute(["ls-remote", "--tags", "--refs", url]) do
     Error(error) => return Error(error)
     Ok(result) => do

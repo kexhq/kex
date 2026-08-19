@@ -164,7 +164,6 @@ struct KexiStructuralMetadata {
     std::string unitId;
     std::string sourceModule;
     std::string moduleAtom;
-    bool isFoul = false;
     KexiModuleRole role = KexiModuleRole::Entry;
     std::string entryBackPointer; // for companions: the entry module's atom
     std::vector<KexiCompanion> companions; // for entries: the companion manifest

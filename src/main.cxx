@@ -1631,8 +1631,7 @@ auto printAst(const kex::ast::Program &program) -> void {
           using T = std::decay_t<decltype(node)>;
           if constexpr (std::is_same_v<T,
                                        std::unique_ptr<kex::ast::ModuleDef>>) {
-            std::cout << "  Module: " << node->name
-                      << (node->isFoul ? " [foul]" : "") << "\n";
+            std::cout << "  Module: " << node->name << "\n";
           } else if constexpr (std::is_same_v<
                                    T, std::unique_ptr<kex::ast::TypeDef>>) {
             std::cout << "  Type: " << node->name << "\n";
@@ -4368,7 +4367,7 @@ int main(int argc, char *argv[]) {
             depth > 0 && separator != std::string::npos
                 ? module.name.substr(separator + 1)
                 : module.name;
-        std::cout << indent << (module.isFoul ? "foul " : "") << "module "
+        std::cout << indent << "module "
                   << displayName << " do\n";
         for (const auto &item : module.body) {
           std::visit(

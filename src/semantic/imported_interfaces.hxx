@@ -38,7 +38,6 @@ struct ImportedModuleInterface {
     std::string sourceModule;
     std::string backendModule;
     bool automaticImport = false;
-    bool isFoul = false;
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 
@@ -120,5 +119,25 @@ struct ImportedInterfaces {
     std::unordered_set<std::string> typeNames;
     std::vector<TraitDef> traits;
 };
+
+// Whether `module.member` names a foul export.
+//
+// Per-export purity is the only source of truth: Kex has no module-level
+// foulness, so a module full of foul functions never taints the pure ones
+// beside it (kexhq/kex#130). An overload set counts as foul when ANY overload
+// is foul — this is consulted before overload resolution has picked a winner,
+// so the conservative answer is the correct one, and the post-typecheck
+// enrichment pass narrows it to the resolved target.
+inline auto isExportFoul(const ImportedInterfaces& ifaces,
+                         const std::string& module,
+                         const std::string& member) -> bool {
+    auto mod = ifaces.modules.find(module);
+    if (mod == ifaces.modules.end()) return false;
+    auto exported = mod->second.exports.find(member);
+    if (exported == mod->second.exports.end()) return false;
+    for (const auto& overload : exported->second)
+        if (overload.signature.isFoul) return true;
+    return false;
+}
 
 } // namespace kex::semantic

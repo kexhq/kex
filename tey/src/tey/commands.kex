@@ -1,4 +1,4 @@
-foul module Tey.Commands
+module Tey.Commands
 
 using Tey.Cache, only: [fetch, packagePath, root, verify]
 using Tey.Lockfile, only: [LockState, decode, encode]
@@ -6,14 +6,14 @@ using Tey.Manifest, only: [ManifestPackage, read]
 using Tey.Resolver, only: [resolvePackage]
 using Tey.Toolchain, only: [kex]
 
-let manifest -> ManifestPackage or! String do
+foul manifest -> ManifestPackage or! String do
   match FS.File.read("package.kex") do
     Just(text) => Tey.Manifest.read(text)
     None => Error("package.kex not found")
   end
 end
 
-let lock -> Integer do
+foul lock -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
@@ -24,7 +24,7 @@ let lock -> Integer do
   end
 end
 
-let add(name: String, options: ParsedOptions) -> Integer do
+foul add(name: String, options: ParsedOptions) -> Integer do
   let git = options.value("git", "")
   return Tey.Commands.fail("tey add requires --git URL") if git == ""
   let selected = ["tag", "branch", "ref"].filter { |key| options.value(key).present? }
@@ -48,7 +48,7 @@ end
 # `--without dev` leaves a group's dependencies out of this install. The
 # LOCKFILE still lists them — what is omitted is the fetching, so switching
 # the flag off later needs no re-resolve.
-let install(without: String) -> Integer do
+foul install(without: String) -> Integer do
   let state = match FS.File.read("tey.lock") do
     None => do
       let status = Tey.Commands.lock
@@ -95,7 +95,7 @@ end
 # Only packages that DECLARE a target are affected. A library has none, so
 # `tey install` in one still means exactly what it meant before: fetch the
 # dependencies.
-let installTargets -> Integer do
+foul installTargets -> Integer do
   let package = match Tey.Commands.manifest do
     Error(_) => return 0
     Ok(value) => value
@@ -132,7 +132,7 @@ end
 # declared it does not compile. A dependency the lockfile names but the cache
 # does not have is reported rather than quietly dropped — the answer is
 # `tey install`, and silence would look like a broken `using`.
-let dependencyRoots -> [String] do
+foul dependencyRoots -> [String] do
   let state = match Tey.Commands.readLock do
     Error(_) => do
       # No lockfile at all. Only worth saying when the package actually
@@ -167,7 +167,7 @@ end
 # then each dependency's. Own-first is deliberate — a package that shadows a
 # dependency's module name means its own, the same way `--source-root` order
 # already decides that for dependencies among themselves.
-let sourceRoots -> [String] do
+foul sourceRoots -> [String] do
   let own = FS.Directory.directory?("src") then ["--source-root", "src"] else []
   return [...own, ...Tey.Commands.dependencyRoots]
 end
@@ -176,14 +176,14 @@ end
 # recursive walk — a nested module is reached by the file that declares it,
 # and compiling it twice by name is how you get a duplicate-module error out
 # of a perfectly good package.
-let librarySources -> [String] do
+foul librarySources -> [String] do
   return FS.Directory.files("src").or([])
     .filter { |path| path.endsWith?(".kex") }
     .sort
     .map { |path| "src/${path}" }
 end
 
-let runPackage(extra: [String]) -> Integer do
+foul runPackage(extra: [String]) -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   match Process.run(Tey.Toolchain.kex, [...Tey.Commands.dependencyRoots, package.entrypoint, ...extra]) do
     Error(error) => Tey.Commands.fail(error)
@@ -199,7 +199,7 @@ let runPackage(extra: [String]) -> Integer do
   end
 end
 
-let list -> Integer do
+foul list -> Integer do
   let state = match Tey.Commands.readLock do
     Error(error) => return Tey.Commands.fail(error)
     Ok(value) => value
@@ -210,7 +210,7 @@ let list -> Integer do
   0
 end
 
-let build -> Integer do
+foul build -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   # A library declares no entrypoint, so there is no `src/main.kex` to reach
   # its modules from — every one of them is a root. Compiling them by name is
@@ -246,7 +246,7 @@ let build -> Integer do
   Tey.Commands.buildTargets(package)
 end
 
-let test -> Integer do
+foul test -> Integer do
   let specs = FS.Directory.files("spec").or([])
     .filter { |path| path.endsWith?(".spec.kex") }
     .sort
@@ -277,7 +277,7 @@ let test -> Integer do
   status
 end
 
-let clean(all?: Bool) -> Integer do
+foul clean(all?: Bool) -> Integer do
   if !all?
     IO.printLine("Cache is at ${Tey.Cache.root}; pass --cache to remove it")
     return 0
@@ -290,7 +290,7 @@ let clean(all?: Bool) -> Integer do
   end
 end
 
-let setupMergeDriver(remove?: Bool) -> Integer do
+foul setupMergeDriver(remove?: Bool) -> Integer do
   let key = "merge.tey.driver"
   let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey lock --merge-driver %O %A %B"]
   match Tey.Commands.runStatus("git", arguments) do
@@ -306,7 +306,7 @@ end
 # creates. The pair with `init` below follows what `git init` and `cargo new`
 # already taught everyone: `new` makes the directory, `init` adopts the one
 # you are standing in.
-let new(name: String, library: Bool) -> Integer do
+foul new(name: String, library: Bool) -> Integer do
   if FS.File.file?("${name}/package.kex")
     return Tey.Commands.fail("'${name}' already holds a package.kex")
   end
@@ -326,7 +326,7 @@ end
 #
 # The name is overridable because a directory name is not always the package
 # name — `kexhq/greet` checked out as `greet-main` is still `greet`.
-let init(name: String, library: Bool) -> Integer do
+foul init(name: String, library: Bool) -> Integer do
   if FS.File.file?("package.kex")
     return Tey.Commands.fail("this directory already holds a package.kex")
   end
@@ -357,7 +357,7 @@ private do
   # because the compiler names every entry module `kex_main`: archiving one
   # shared `ebin/` would give every target the same program under a different
   # name.
-  let buildTargets(package: ManifestPackage) -> Integer do
+  foul buildTargets(package: ManifestPackage) -> Integer do
     return 0 if package.targets.empty?
     var status = 0
     package.targets.each do |target|
@@ -399,7 +399,7 @@ private do
   # The result carries the same OTP floor as any other beam: it cannot be run
   # by an Erlang older than the one that compiled it, and that failure reads
   # as `corrupt atom table`.
-  let writeEscript(from: String, output: String) -> Bool do
+  foul writeEscript(from: String, output: String) -> Bool do
     let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_main\"}, {archive,B,[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
       Error(_) => return false
@@ -413,7 +413,7 @@ private do
   # The last component of the working directory — the package name `tey init`
   # picks when nobody names one. A trailing separator would otherwise make
   # this empty, and `/` has no last component at all.
-  let currentDirectoryName -> String do
+  foul currentDirectoryName -> String do
     let trimmed = FS.Directory.current.split("/").filter { |part| part != "" }
     return trimmed.last.or("")
   end
@@ -495,7 +495,7 @@ $USAGE$`
   # Writes a package into `directory`. Shared by `new` and `init` so the two
   # cannot drift into producing different packages — the bug that shape of
   # duplication always ends in.
-  let scaffold(directory: String, name: String, library: Bool) -> Integer do
+  foul scaffold(directory: String, name: String, library: Bool) -> Integer do
     if !FS.Directory.create("${directory}/src") || !FS.Directory.create("${directory}/spec")
       return Tey.Commands.fail("could not create project '${name}'")
     end
@@ -514,7 +514,7 @@ $USAGE$`
     let fields = {"$NAME$": name, "$MODULE$": moduleName, "$ENTRY$": entry}
     let libraryModule = `module $MODULE$
 
-let greeting(name: String) = "Hello, ${name}!"
+foul greeting(name: String) = "Hello, ${name}!"
 `
     let application = `main(args) do
   IO.printLine("Hello from $NAME$!")
@@ -569,21 +569,21 @@ end
     0
   end
 
-  let readLock -> LockState or! String do
+  foul readLock -> LockState or! String do
     match FS.File.read("tey.lock") do
       None => Error("tey.lock not found; run `tey lock`")
       Just(text) => Tey.Lockfile.decode(text)
     end
   end
 
-  let runStatus(command: String, arguments: [String]) -> Integer do
+  foul runStatus(command: String, arguments: [String]) -> Integer do
     match Process.run(command, arguments) do
       Error(_) => 127
       Ok(result) => result.exitCode
     end
   end
 
-  let fail(message: String) -> Integer do
+  foul fail(message: String) -> Integer do
     IO.printError("tey: ${message}\n")
     1
   end

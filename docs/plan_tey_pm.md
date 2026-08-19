@@ -97,9 +97,9 @@ APIs** in the prelude, each replacing an awkward Erlang return shape with the
 corresponding Kex idiom:
 
 ```kex
-foul module Process do
-  run  : (String, [String]) -> Result<ProcessResult, Int>     # not :os.cmd's charlist goo
-  exec : (String, [String]) -> Int
+module Process do
+  foul run  : (String, [String]) -> Result<ProcessResult, Int>     # not :os.cmd's charlist goo
+  foul exec : (String, [String]) -> Int
 end
 record ProcessResult do
   exitCode : Int
@@ -107,9 +107,9 @@ record ProcessResult do
   stderr : String
 end
 
-foul module Http do
-  get     : String -> Result<HttpResponse, HttpError>          # not :httpc's status tuple
-  download: (String, String) -> Result<Unit, HttpError>
+module Http do
+  foul get     : String -> Result<HttpResponse, HttpError>          # not :httpc's status tuple
+  foul download: (String, String) -> Result<Unit, HttpError>
 end
 record HttpResponse do
   status  : Int

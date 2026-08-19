@@ -5566,13 +5566,9 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
                 }
             }
             if (resolved) {
+                // The export's own flag is the whole answer: the module that
+                // owns it carries no effect of its own (kexhq/kex#130).
                 bool resolvedFoul = resolved->signature.isFoul;
-                if (m_importedInterfaces)
-                    if (auto owner = m_importedInterfaces->modules.find(
-                            qualifiedModule.empty() ? resolved->sourceModule
-                                                    : qualifiedModule);
-                        owner != m_importedInterfaces->modules.end())
-                        resolvedFoul = resolvedFoul || owner->second.isFoul;
                 ResolvedCallTarget target{
                     resolved->sourceModule,
                     resolved->backendModule,
