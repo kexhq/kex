@@ -391,6 +391,19 @@ let zero = Temperature.Freezing.to(String).or("")              # "0.0C"
 
 ## Try It
 
+Requires CMake 3.20+ and a C++20 compiler. On macOS or Linux with Homebrew,
+install every native build dependency in one step:
+
+```sh
+brew bundle
+make build
+```
+
+`brew bundle` reads the `Brewfile` in the repo root (it pulls OpenSSL too on
+Linux). The wasm target's extra dependencies — `emsdk` pinned to 5.0.7 and the
+prebuilt GMP/PCRE2 under `third_party/*-wasm` — are not installable through
+brew; see those READMEs.
+
 Build the compiler:
 
 ```sh
@@ -455,8 +468,6 @@ make clean          # Remove build artifacts
 build/kex --compile --source-root src -o build/beam src/tools/task.kex
 ```
 
-Requires CMake 3.20+ and a C++20 compiler. Readline is optional.
-
 ## Examples
 
 Good starting points:
@@ -497,9 +508,12 @@ grammar.ebnf    Formal grammar specification
 
 ## Compiler Development
 
-The compiler is written in C++20. Required dependency: GMP (arbitrary-precision
-`Integer`). Optional: readline (nicer REPL) and PCRE2 (regex in the
-interpreter — the BEAM backend uses Erlang's `re` instead).
+The compiler is written in C++20. On Homebrew systems the dependencies are
+installed by `brew bundle` (see "Try It"). What they cover: GMP
+(arbitrary-precision `Integer`), PCRE2 (regex in the interpreter — the BEAM
+backend uses Erlang's `re` instead), Boost.Context (native fibers), Erlang/OTP
+(`erlc` for the runtime beams and BEAM backend), OpenSSL (SHA-256 on Linux only
+— macOS uses CommonCrypto), and readline (optional, nicer REPL).
 
 Source flows through:
 
