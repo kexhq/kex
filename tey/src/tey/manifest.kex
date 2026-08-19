@@ -208,8 +208,8 @@ private do
   let attribute(line: String, key: String) -> String? do
     let parts = line.split("${key}: \"")
     match parts.second do
-      Just(rest) -> rest.split("\"").first
-      None -> None
+      Just(rest) => rest.split("\"").first
+      None => None
     end
   end
 end

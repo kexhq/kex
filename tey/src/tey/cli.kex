@@ -21,11 +21,11 @@ end
 
 let dispatch(args: [String]) -> Integer do
   match Tey.Cli.parser.parse(args) do
-    Error(error) -> do
+    Error(error) => do
       IO.printError("tey: ${OptionParser.errorMessage(error)}\n\n${Tey.Cli.parser.help}\n")
       1
     end
-    Ok(options) -> do
+    Ok(options) => do
       return Tey.Cli.showVersion() if options.flagEnabled?("version")
 
       return Tey.Cli.showHelp() if options.flagEnabled?("help") || options.arguments.empty?
@@ -38,12 +38,12 @@ end
 private do
   let installKex(version: String) -> Integer do
     match Tey.Toolchain.installRelease(version) do
-      Ok(prefix) -> do
+      Ok(prefix) => do
         IO.printLine("Installed and selected Kex ${version} at ${prefix}")
         Tey.Cli.reportShim(version)
         0
       end
-      Error(error) -> do
+      Error(error) => do
         IO.printError("tey: ${error}\n")
         1
       end
@@ -95,8 +95,8 @@ private do
     # `.number` already parenthesizes the revision, and nesting that inside
     # another pair reads badly: "tey 0.1.0 (Kex 0.3.0-beta (abc1234))".
     let kex = match Kex.Kernel.VERSION.revision do
-      Just(revision) -> "${Kex.Kernel.VERSION.release}, ${revision}"
-      None -> Kex.Kernel.VERSION.release
+      Just(revision) => "${Kex.Kernel.VERSION.release}, ${revision}"
+      None => Kex.Kernel.VERSION.release
     end
     IO.printLine("tey ${Tey.Version.number} (Kex ${kex})")
     return 0
@@ -169,13 +169,13 @@ Commands:
 
   let dispatchCommand(["kex", "list"], options: ParsedOptions) -> Integer do
     let available = match Tey.Toolchain.availableVersions do
-      Error(error) -> do
+      Error(error) => do
         # A release list needs the network; the installed ones do not, and
         # they are the half a user can still act on.
         IO.printError("tey: could not read released versions: ${error}\n")
         []
       end
-      Ok(versions) -> versions
+      Ok(versions) => versions
     end
     let installed = Tey.Toolchain.installedVersions
     let all = Tey.Toolchain.newestFirst([...available, ...installed])
@@ -219,12 +219,12 @@ Commands:
   let dispatchCommand(["kex", "install"], options: ParsedOptions) -> Integer do
     if Tey.Toolchain.installedVersions.empty? && Tey.Toolchain.bundled != None
       match Tey.Toolchain.installBundled do
-        Ok(prefix) -> do
+        Ok(prefix) => do
           IO.printLine("Installed and selected the bundled Kex, at ${prefix}")
           Tey.Cli.reportShim(Tey.Toolchain.selected.or(""))
           return 0
         end
-        Error(error) -> do
+        Error(error) => do
           IO.printError("tey: ${error}\n")
           return 1
         end
@@ -233,11 +233,11 @@ Commands:
 
     let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
     match newest do
-      Error(error) -> do
+      Error(error) => do
         IO.printError("tey: ${error}\n")
         1
       end
-      Ok(version) -> Tey.Cli.installKex(version)
+      Ok(version) => Tey.Cli.installKex(version)
     end
   end
 
@@ -251,11 +251,11 @@ Commands:
   let dispatchCommand(["kex", "install", "latest"], options: ParsedOptions) -> Integer do
     let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
     match newest do
-      Error(error) -> do
+      Error(error) => do
         IO.printError("tey: ${error}\n")
         1
       end
-      Ok(version) -> do
+      Ok(version) => do
         return Tey.Cli.alreadyCurrent(version) if Tey.Toolchain.installed?(version)
         Tey.Cli.installKex(version)
       end
@@ -268,12 +268,12 @@ Commands:
 
   let dispatchCommand(["kex", "uninstall", version], _) -> Integer do
     match Tey.Toolchain.uninstall(version) do
-      Ok(prefix) -> do
+      Ok(prefix) => do
         IO.printLine("Removed Kex ${version} from ${prefix}")
         IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
         0
       end
-      Error(error) -> do
+      Error(error) => do
         IO.printError("tey: ${error}\n")
         1
       end
@@ -282,12 +282,12 @@ Commands:
 
   let dispatchCommand(["kex", "install", source, version], _) -> Integer do
     match Tey.Toolchain.installSource(source, version) do
-      Ok(prefix) -> do
+      Ok(prefix) => do
         IO.printLine("Installed and selected Kex ${version} at ${prefix}")
         Tey.Cli.reportShim(version)
         0
       end
-      Error(error) -> do
+      Error(error) => do
         IO.printError("tey: ${error}\n")
         1
       end
@@ -300,11 +300,11 @@ Commands:
   # a `tey` command being typed first.
   let dispatchCommand(["kex", "which"], _) -> Integer do
     match Tey.Toolchain.resolved do
-      Just(path) -> do
+      Just(path) => do
         IO.printLine(path)
         0
       end
-      None -> do
+      None => do
         IO.printError("tey: no Kex is installed\n")
         1
       end
@@ -315,11 +315,11 @@ Commands:
   # to the current one is not "remember which number it was".
   let dispatchCommand(["kex", "use", selector], _) -> Integer do
     match Tey.Toolchain.resolveSelector(selector) do
-      None -> do
+      None => do
         IO.printError("tey: no Kex is installed; install one with `tey kex install`\n")
         1
       end
-      Just(version) -> do
+      Just(version) => do
         # Asked BEFORE selecting, because selecting the bundled Kex
         # installs it — and a line that said only "Using Kex 0.3.2" would hide
         # that a copy had just been made.

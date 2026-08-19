@@ -61,20 +61,20 @@ let dependencyListLine(dep: Dependency) -> String = "${dep.name} ${dep.resolved}
 
 let decode(text: String) -> LockState or! String do
   let root = match JSON.parse(text) do
-    Error(_) -> return Error("invalid tey.lock JSON")
-    Ok(value) -> value
+    Error(_) => return Error("invalid tey.lock JSON")
+    Ok(value) => value
   end
   let version = Tey.Lockfile.lockText(root["version"])
   return Error("unsupported tey.lock version '${version}'") if version != "1"
   let kex = match root["kex"] do
-    Just(value) -> value
-    None -> return Error("tey.lock is missing kex metadata")
+    Just(value) => value
+    None => return Error("tey.lock is missing kex metadata")
   end
   # Absent in a lockfile written before the field existed, which is not an
   # error: it means "this resolve had no opinion about OTP".
   let otp = root["otp"]
   let dependencies = match root["deps"] do
-    Just(value) -> value.entries.map do |name, raw|
+    Just(value) => value.entries.map do |name, raw|
       Tey.Lockfile.Dependency {
         name: "${name}",
         git: Tey.Lockfile.lockText(raw["git"]),
@@ -84,7 +84,7 @@ let decode(text: String) -> LockState or! String do
         groups: Tey.Lockfile.lockStrings(raw["groups"])
       }
     end
-    None -> []
+    None => []
   end
   if dependencies.any? { |dep| dep.git == "" || dep.commit == "" || dep.sha256 == "" }
     return Error("tey.lock contains an incomplete dependency")
@@ -113,7 +113,7 @@ private do
   let lockSub(Just(block), key: String) = block[key]
 
   let lockNumber(None) -> Integer = 0
-  let lockNumber(Just(value)) -> Integer = match Integer.parse("${value}") do Ok(n) -> n Error(_) -> 0 end
+  let lockNumber(Just(value)) -> Integer = match Integer.parse("${value}") do Ok(n) => n Error(_) => 0 end
 
   let lockStrings(None) -> [String] = []
   let lockStrings(Just(values)) -> [String] = values.map { |value| "${value}" }

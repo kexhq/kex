@@ -47,8 +47,8 @@ end
 end
 `)
     match outcome do
-      Error(message) -> assert(message.contains?("describtion"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("describtion"))
+      Ok(_) => assert(false)
     end
   end
 
@@ -232,8 +232,8 @@ end
     let outcome: ManifestPackage or! String = Tey.Manifest.read(`version("0.1.0")
 `)
     match outcome do
-      Error(message) -> assert(message.contains?("bundle"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("bundle"))
+      Ok(_) => assert(false)
     end
   end
 
@@ -245,8 +245,8 @@ end
 end
 `)
     match outcome do
-      Error(message) -> assert(message.contains?("git"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("git"))
+      Ok(_) => assert(false)
     end
   end
 end

@@ -17,7 +17,7 @@ Kex uses an Elixir-style process model with lightweight, isolated processes comm
 foul pid = spawn do
   loop do
     receive do
-      (:ping, sender) -> sender.send(:pong)
+      (:ping, sender) => sender.send(:pong)
     end
   end
 end
@@ -34,9 +34,9 @@ foul counter: Process<CounterMessage> = spawn do
   var state = 0
   loop do
     receive do
-      :increment -> state = state + 1
-      :reset -> state = 0
-      (:get, sender) -> sender.send(state)
+      :increment => state = state + 1
+      :reset => state = 0
+      (:get, sender) => sender.send(state)
     end
   end
 end
@@ -60,7 +60,7 @@ foul counter = spawn do
   var state = 0
   loop do
     receive do
-      :increment -> state = state + 1
+      :increment => state = state + 1
     end
   end
 end
@@ -72,8 +72,8 @@ Functional (recursive):
 foul counter = spawn do
   let loop(state: Int) do
     receive do
-      :increment -> loop(state + 1)
-      (:get, sender) -> do
+      :increment => loop(state + 1)
+      (:get, sender) => do
         sender.send(state)
         loop(state)
       end
@@ -118,7 +118,7 @@ When a child crashes, the supervisor restarts it based on its restart policy.
 
 ```kex
 receive timeout: 5000 do
-  msg -> handle(msg)
-after -> handleTimeout()
+  msg => handle(msg)
+after handleTimeout()
 end
 ```

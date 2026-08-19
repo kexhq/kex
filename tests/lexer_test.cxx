@@ -373,6 +373,11 @@ int main() {
             assertEqual(firstToken("&&").type, TokenType::AmpAmp);
             assertEqual(firstToken("||").type, TokenType::PipePipe);
             assertEqual(firstToken("->").type, TokenType::Arrow);
+            // `=>` (arms) must not lex as `=` then `>`, and must not disturb
+            // `==` — the two share a first character.
+            assertEqual(firstToken("=>").type, TokenType::FatArrow);
+            assertEqual(firstToken("==").type, TokenType::EqEq);
+            assertEqual(firstToken("=").type, TokenType::Equals);
             assertEqual(firstToken(":>").type, TokenType::TypeAnnotation);
             assertEqual(firstToken("..").type, TokenType::DotDot);
             assertEqual(firstToken("...").type, TokenType::DotDotDot);

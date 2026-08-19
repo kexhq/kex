@@ -4,10 +4,10 @@ using Tey.Git, only: [execute]
 
 let root -> String do
   match ENV.get("TEY_CACHE") do
-    Just(path) -> path
-    None -> match ENV.get("HOME") do
-      Just(home) -> "${home}/.cache/tey"
-      None -> ".tey-cache"
+    Just(path) => path
+    None => match ENV.get("HOME") do
+      Just(home) => "${home}/.cache/tey"
+      None => ".tey-cache"
     end
   end
 end
@@ -39,16 +39,16 @@ let fetch(dep: Tey.Lockfile.Dependency) -> String or! String do
   FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
 
   match Tey.Git.execute(["clone", "--filter=blob:none", "--no-checkout", Tey.Lockfile.dependencyGit(dep), staging]) do
-    Error(error) -> do
+    Error(error) => do
       FS.Directory.deleteAll(staging)
       return Error(error)
     end
-    Ok(_) -> match Tey.Git.execute(["-C", staging, "checkout", "--detach", Tey.Lockfile.dependencyCommit(dep)]) do
-      Error(error) -> do
+    Ok(_) => match Tey.Git.execute(["-C", staging, "checkout", "--detach", Tey.Lockfile.dependencyCommit(dep)]) do
+      Error(error) => do
         FS.Directory.deleteAll(staging)
         return Error(error)
       end
-      Ok(_) -> do
+      Ok(_) => do
         return Ok(path) if FS.File.rename(staging, path)
         # Another run may have finished the same checkout first. Its result
         # is this one's result — the path is content-addressed by commit.
@@ -68,8 +68,8 @@ let verify(dep: Tey.Lockfile.Dependency) -> String or! String do
   end
 
   match Tey.Git.execute(["-C", path, "archive", "--format=tar", Tey.Lockfile.dependencyCommit(dep)]) do
-    Error(error) -> Error(error)
-    Ok(archive) -> do
+    Error(error) => Error(error)
+    Ok(archive) => do
       let actual = Digest.sha256(archive.stdout)
       return actual == Tey.Lockfile.dependencySha256(dep) then Ok(path) else Error("content hash mismatch for ${Tey.Lockfile.dependencyName(dep)}: expected ${Tey.Lockfile.dependencySha256(dep)}, got ${actual}")
     end

@@ -7,17 +7,17 @@
 
 main do
   let result = match 42 do
-    0 -> "zero"
-    42 -> "the answer"
-    _ -> "other"
+    0 => "zero"
+    42 => "the answer"
+    _ => "other"
   end
   IO.printLine(result)
 
   let grade = match 85 do
-    n when n >= 90 -> "A"
-    n when n >= 80 -> "B"
-    n when n >= 70 -> "C"
-    _ -> "F"
+    n when n >= 90 => "A"
+    n when n >= 80 => "B"
+    n when n >= 70 => "C"
+    _ => "F"
   end
   IO.printLine(grade)
 

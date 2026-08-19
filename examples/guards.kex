@@ -1,8 +1,8 @@
 let describe(n: Integer) -> String do
   match n do
-    x when x < 0 -> "negative"
-    0            -> "zero"
-    _            -> "positive"
+    x when x < 0 => "negative"
+    0            => "zero"
+    _            => "positive"
   end
 end
 

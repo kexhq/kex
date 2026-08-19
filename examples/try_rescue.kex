@@ -15,7 +15,7 @@ let safeDivide(a: Int, b: Int) -> String do
   let result = divide(a, b).try
   "result: ${result}"
 rescue
-  e -> "error: ${e}"
+  e => "error: ${e}"
 end
 
 # --- .try on Option ---
@@ -25,7 +25,7 @@ let getFirst(list: [Int]) -> String do
     let head = list.first.try
     "found: ${head * 10}"
   rescue
-    _ -> "empty"
+    _ => "empty"
   end
   val
 end
@@ -39,7 +39,7 @@ let tryDivisions(a: Int, divisors: [Int]) -> [String] do
       let r = divide(a, d).try
       results.push!("${a}/${d} = ${r}")
     rescue
-      e -> results.push!("${a}/${d} failed: ${e}")
+      e => results.push!("${a}/${d} failed: ${e}")
     end
   end
   results
@@ -72,10 +72,10 @@ let nested(a: Int, b: Int) -> String do
       divide(a, b).try
       "inner ok"
     rescue
-      _ -> "inner caught"
+      _ => "inner caught"
     end
   rescue
-    _ -> "outer caught"
+    _ => "outer caught"
   end
 end
 

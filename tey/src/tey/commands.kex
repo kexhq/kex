@@ -8,14 +8,14 @@ using Tey.Toolchain, only: [kex]
 
 let manifest -> ManifestPackage or! String do
   match FS.File.read("package.kex") do
-    Just(text) -> Tey.Manifest.read(text)
-    None -> Error("package.kex not found")
+    Just(text) => Tey.Manifest.read(text)
+    None => Error("package.kex not found")
   end
 end
 
 let lock -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
-  let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
+  let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
     IO.printLine("Locked ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
     0
@@ -32,8 +32,8 @@ let add(name: String, options: ParsedOptions) -> Integer do
   let selector = selected.first.or("ref")
   let requested = options.value(selector, "HEAD")
   let text = match FS.File.read("package.kex") do
-    Just(value) -> value.trim
-    None -> return Tey.Commands.fail("package.kex not found")
+    Just(value) => value.trim
+    None => return Tey.Commands.fail("package.kex not found")
   end
   return Tey.Commands.fail("package.kex must end with 'end'") if !text.endsWith?("end")
   let body = text.chars.take(text.count - 3).join("")
@@ -50,20 +50,20 @@ end
 # the flag off later needs no re-resolve.
 let install(without: String) -> Integer do
   let state = match FS.File.read("tey.lock") do
-    None -> do
+    None => do
       let status = Tey.Commands.lock
       return status if status != 0
       match FS.File.read("tey.lock") do
-        Just(text) -> match Tey.Lockfile.decode(text) do
-          Ok(value) -> value
-          Error(error) -> return Tey.Commands.fail(error)
+        Just(text) => match Tey.Lockfile.decode(text) do
+          Ok(value) => value
+          Error(error) => return Tey.Commands.fail(error)
         end
-        None -> return Tey.Commands.fail("could not read generated tey.lock")
+        None => return Tey.Commands.fail("could not read generated tey.lock")
       end
     end
-    Just(text) -> match Tey.Lockfile.decode(text) do
-      Ok(value) -> value
-      Error(error) -> return Tey.Commands.fail(error)
+    Just(text) => match Tey.Lockfile.decode(text) do
+      Ok(value) => value
+      Error(error) => return Tey.Commands.fail(error)
     end
   end
   let wanted = state.lockedDependencies.filter do |dependency|
@@ -71,12 +71,12 @@ let install(without: String) -> Integer do
   end
   wanted.each do |dependency|
     let path = match Tey.Cache.fetch(dependency) do
-      Error(error) -> return Tey.Commands.fail(error)
-      Ok(value) -> value
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(value) => value
     end
     match Tey.Cache.verify(dependency) do
-      Error(error) -> return Tey.Commands.fail(error)
-      Ok(_) -> IO.printLine("Installed ${Tey.Lockfile.dependencyName(dependency)} at ${path}")
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(_) => IO.printLine("Installed ${Tey.Lockfile.dependencyName(dependency)} at ${path}")
     end
   end
   let omitted = state.lockedDependencies.count - wanted.count
@@ -97,8 +97,8 @@ end
 # dependencies.
 let installTargets -> Integer do
   let package = match Tey.Commands.manifest do
-    Error(_) -> return 0
-    Ok(value) -> value
+    Error(_) => return 0
+    Ok(value) => value
   end
   return 0 if package.targets.empty?
   let status = Tey.Commands.build
@@ -134,16 +134,16 @@ end
 # `tey install`, and silence would look like a broken `using`.
 let dependencyRoots -> [String] do
   let state = match Tey.Commands.readLock do
-    Error(_) -> do
+    Error(_) => do
       # No lockfile at all. Only worth saying when the package actually
       # declares dependencies — a package with none needs nothing.
       match Tey.Commands.manifest do
-        Ok(package) -> IO.printError("tey: no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
-        Error(_) -> ()
+        Ok(package) => IO.printError("tey: no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+        Error(_) => ()
       end
       return []
     end
-    Ok(value) -> value
+    Ok(value) => value
   end
   var roots: [String] = []
   var missing: [String] = []
@@ -184,10 +184,10 @@ let librarySources -> [String] do
 end
 
 let runPackage(extra: [String]) -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   match Process.run(Tey.Toolchain.kex, [...Tey.Commands.dependencyRoots, package.entrypoint, ...extra]) do
-    Error(error) -> Tey.Commands.fail(error)
-    Ok(result) -> do
+    Error(error) => Tey.Commands.fail(error)
+    Ok(result) => do
       if result.stdout != ""
         IO.print(result.stdout)
       end
@@ -201,8 +201,8 @@ end
 
 let list -> Integer do
   let state = match Tey.Commands.readLock do
-    Error(error) -> return Tey.Commands.fail(error)
-    Ok(value) -> value
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(value) => value
   end
   state.lockedDependencies.each do |dependency|
     IO.printLine(Tey.Lockfile.dependencyListLine(dependency))
@@ -211,7 +211,7 @@ let list -> Integer do
 end
 
 let build -> Integer do
-  let package = match Tey.Commands.manifest do Error(error) -> return Tey.Commands.fail(error) Ok(value) -> value end
+  let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   # A library declares no entrypoint, so there is no `src/main.kex` to reach
   # its modules from — every one of them is a root. Compiling them by name is
   # what makes `tey build` mean something in a library, which until now
@@ -231,8 +231,8 @@ let build -> Integer do
   end
   let status = match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
                                         ...Tey.Commands.sourceRoots, ...units]) do
-    Error(error) -> return Tey.Commands.fail(error)
-    Ok(result) -> do
+    Error(error) => return Tey.Commands.fail(error)
+    Ok(result) => do
       if result.stdout != ""
         IO.print(result.stdout)
       end
@@ -263,8 +263,8 @@ let test -> Integer do
   let roots = Tey.Commands.sourceRoots
   specs.each do |spec|
     let result = match Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]) do
-      Error(error) -> return Tey.Commands.fail(error)
-      Ok(value) -> value
+      Error(error) => return Tey.Commands.fail(error)
+      Ok(value) => value
     end
     if result.stdout != ""
       IO.print(result.stdout)
@@ -294,11 +294,11 @@ let setupMergeDriver(remove?: Bool) -> Integer do
   let key = "merge.tey.driver"
   let arguments = remove? then ["config", "--global", "--unset-all", key] else ["config", "--global", key, "tey lock --merge-driver %O %A %B"]
   match Tey.Commands.runStatus("git", arguments) do
-    0 -> do
+    0 => do
       IO.printLine(remove? then "Removed Tey merge driver" else "Configured Tey merge driver")
       0
     end
-    _ -> Tey.Commands.fail("could not update global Git configuration")
+    _ => Tey.Commands.fail("could not update global Git configuration")
   end
 end
 
@@ -368,8 +368,8 @@ private do
       let outcome = match Process.run(Tey.Toolchain.kex,
                                        ["--compile", "-o", staging,
                                         ...Tey.Commands.sourceRoots, target.entrypoint]) do
-        Error(error) -> Tey.Commands.fail(error)
-        Ok(result) -> do
+        Error(error) => Tey.Commands.fail(error)
+        Ok(result) => do
           IO.printError(result.stderr) if result.stderr != ""
           result.exitCode
         end
@@ -402,8 +402,8 @@ private do
   let writeEscript(from: String, output: String) -> Bool do
     let script = "{ok,Fs}=file:list_dir(\"${from}\"), B=[{F, element(2, file:read_file(\"${from}/\"++F))} || F <- Fs, lists:suffix(\".beam\",F)], ok=escript:create(\"${output}\", [shebang, {emu_args,\"-escript main kex_main\"}, {archive,B,[]}]), halt()."
     match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval", script]) do
-      Error(_) -> return false
-      Ok(result) -> do
+      Error(_) => return false
+      Ok(result) => do
         return false if result.exitCode != 0
         return Tey.Commands.runStatus("chmod", ["+x", output]) == 0
       end
@@ -571,15 +571,15 @@ end
 
   let readLock -> LockState or! String do
     match FS.File.read("tey.lock") do
-      None -> Error("tey.lock not found; run `tey lock`")
-      Just(text) -> Tey.Lockfile.decode(text)
+      None => Error("tey.lock not found; run `tey lock`")
+      Just(text) => Tey.Lockfile.decode(text)
     end
   end
 
   let runStatus(command: String, arguments: [String]) -> Integer do
     match Process.run(command, arguments) do
-      Error(_) -> 127
-      Ok(result) -> result.exitCode
+      Error(_) => 127
+      Ok(result) => result.exitCode
     end
   end
 

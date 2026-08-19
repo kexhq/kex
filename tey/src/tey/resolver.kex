@@ -23,13 +23,13 @@ let resolvePackage(manifest: ManifestPackage) -> LockState or! String do
   let floor = Tey.Resolver.effectiveOtpFloor(manifest.packageOtpRequirement)
   let running = Tey.Toolchain.runningOtpRelease
   match (floor, running) do
-    (Just(required), Just(actual)) when actual < required ->
+    (Just(required), Just(actual)) when actual < required =>
       return Error("Erlang/OTP ${actual} is too old: ${Tey.Resolver.otpReason(manifest.packageOtpRequirement, required)}")
-    _ -> ()
+    _ => ()
   end
   let locked = match Tey.Resolver.resolveDependencies(manifest.manifestDependencies, []) do
-    Error(error) -> return Error(error)
-    Ok(dependencies) -> dependencies
+    Error(error) => return Error(error)
+    Ok(dependencies) => dependencies
   end
   Ok(LockState { kexRequirement: manifest.packageKexRequirement,
                 otpRequirement: manifest.packageOtpRequirement,
@@ -49,10 +49,10 @@ private do
     let toolchain = Tey.Toolchain.runtimeOtpFloor
     let declared = Tey.Resolver.lowestSatisfying(requirement)
     match (declared, toolchain) do
-      (None, None) -> return None
-      (Just(d), None) -> return Just(d)
-      (None, Just(t)) -> return Just(t)
-      (Just(d), Just(t)) -> return Just(d > t then d else t)
+      (None, None) => return None
+      (Just(d), None) => return Just(d)
+      (None, Just(t)) => return Just(t)
+      (Just(d), Just(t)) => return Just(d > t then d else t)
     end
   end
 
@@ -65,8 +65,8 @@ private do
     let digits = requirement.chars.filter { |c| c.digit? }.join("")
     return None if digits == ""
     match Integer.parse(digits) do
-      Error(_) -> return None
-      Ok(value) -> return Just(value)
+      Error(_) => return None
+      Ok(value) => return Just(value)
     end
   end
 
@@ -82,12 +82,12 @@ private do
   let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
     let tags = match Tey.Git.tags(git) do
-      Error(error) -> return Error(error)
-      Ok(value) -> value
+      Error(error) => return Error(error)
+      Ok(value) => value
     end
     match Tey.Semver.highest(tags, requested) do
-      Just(tag) -> return Ok(tag)
-      None -> return Error("no tag of ${name} satisfies `${requested}`")
+      Just(tag) => return Ok(tag)
+      None => return Error("no tag of ${name} satisfies `${requested}`")
     end
   end
 
@@ -121,9 +121,9 @@ private do
       # The same name from two different repositories is a conflict, not two
       # packages: `using Greet` could not say which was meant.
       match gits[name] do
-        Just(existing) when existing != dependency.manifestGit ->
+        Just(existing) when existing != dependency.manifestGit =>
           return Error("`${name}` is required from two different repositories:\n  ${existing}\n  ${dependency.manifestGit} (via ${requiredBy})")
-        _ -> ()
+        _ => ()
       end
       gits.put!(name, dependency.manifestGit)
 
@@ -143,8 +143,8 @@ private do
         end
       else
         let entry = match Tey.Resolver.resolveDependency(dependency) do
-          Error(error) -> return Error("${error} (required by ${requiredBy})")
-          Ok(value) -> value
+          Error(error) => return Error("${error} (required by ${requiredBy})")
+          Ok(value) => value
         end
         resolved.push!(entry)
         seen.push!(name)
@@ -153,8 +153,8 @@ private do
         # `tey install` on a two-package project drags in every test framework
         # in the graph.
         match Tey.Resolver.dependenciesOf(entry) do
-          Error(error) -> return Error(error)
-          Ok(children) -> do
+          Error(error) => return Error(error)
+          Ok(children) => do
             let inherited = children.filter { |child| child.manifestGroups.empty? }
             queue = [...queue, ...inherited.map { |child| (child, name) }]
           end
@@ -171,10 +171,10 @@ private do
   let dependenciesOf(entry: Tey.Lockfile.Dependency) -> [Tey.Manifest.Dependency] or! String do
     let path = "${Tey.Cache.packagePath(entry)}/package.kex"
     match FS.File.read(path) do
-      None -> return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
-      Just(text) -> match Tey.Manifest.read(text) do
-        Error(error) -> return Error("`${entry.name}` has an unreadable package.kex: ${error}")
-        Ok(manifest) -> return Ok(manifest.manifestDependencies)
+      None => return Error("`${entry.name}` has no package.kex, so it is not a Kex package")
+      Just(text) => match Tey.Manifest.read(text) do
+        Error(error) => return Error("`${entry.name}` has an unreadable package.kex: ${error}")
+        Ok(manifest) => return Ok(manifest.manifestDependencies)
       end
     end
   end
@@ -184,22 +184,22 @@ private do
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.
     let wanted = match Tey.Resolver.chooseTag(manifestName, manifestGit, manifestSelector, manifestRequested) do
-      Error(error) -> return Error(error)
-      Ok(value) -> value
+      Error(error) => return Error(error)
+      Ok(value) => value
     end
     let (resolved, commit) = match Tey.Git.pinRef(manifestGit, manifestSelector, wanted) do
-      Error(error) -> return Error(error)
-      Ok(pin) -> pin
+      Error(error) => return Error(error)
+      Ok(pin) => pin
     end
     let candidate = Tey.Lockfile.Dependency { name: manifestName, git: manifestGit,
       resolved: resolved, commit: commit, sha256: "", groups: manifestGroups }
     let path = match Tey.Cache.fetch(candidate) do
-      Error(error) -> return Error(error)
-      Ok(value) -> value
+      Error(error) => return Error(error)
+      Ok(value) => value
     end
     let sha = match Tey.Git.execute(["-C", path, "archive", "--format=tar", commit]) do
-      Ok(result) -> Digest.sha256(result.stdout)
-      Error(error) -> return Error(error)
+      Ok(result) => Digest.sha256(result.stdout)
+      Error(error) => return Error(error)
     end
     Ok(Tey.Lockfile.Dependency { name: manifestName, git: manifestGit,
       resolved: resolved, commit: commit, sha256: sha, groups: manifestGroups })

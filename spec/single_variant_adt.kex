@@ -19,8 +19,8 @@ let describe(p: FilePath) = "path: ${p}"
 
 let area(s) do
   return match s do
-    Circle(r) -> 3 * r * r
-    Square(a) -> a * a
+    Circle(r) => 3 * r * r
+    Square(a) => a * a
   end
 end
 
@@ -34,8 +34,8 @@ main do
 
   IO.printLine("-- single variant is matchable --")
   match DivideByZero do
-    DivideByZero -> IO.printLine("matched DivideByZero")
-    _ -> IO.printLine("no match")
+    DivideByZero => IO.printLine("matched DivideByZero")
+    _ => IO.printLine("no match")
   end
 
   IO.printLine("-- multi-variant, no leading pipe --")

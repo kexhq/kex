@@ -43,26 +43,26 @@ foul renderType(t: Any) -> String do
   let f: [Any] = fields(t)
   let tag = f.first.or(:unknown)
   return match tag do
-    :prim        -> atomStr(f.second.or(:none))
-    :named       -> renderNamed(t)
-    :func        -> renderFunction(t)
-    :tuple       -> "(" + renderList(f.second.or([])).join(", ") + ")"
-    :list        -> "[" + renderType(f.second.or(:unknown)) + "]"
-    :map         -> renderMap(t)
-    :optional    -> renderType(f.second.or(:unknown)) + "?"
-    :union       -> renderList(f.second.or([])).join(" | ")
-    :constrained -> "${f.second.or(:none)}: ${f.third.or(:none)}"
-    :never       -> "Never"
-    :unknown     -> "_"
-    _            -> atomStr(tag)
+    :prim        => atomStr(f.second.or(:none))
+    :named       => renderNamed(t)
+    :func        => renderFunction(t)
+    :tuple       => "(" + renderList(f.second.or([])).join(", ") + ")"
+    :list        => "[" + renderType(f.second.or(:unknown)) + "]"
+    :map         => renderMap(t)
+    :optional    => renderType(f.second.or(:unknown)) + "?"
+    :union       => renderList(f.second.or([])).join(" | ")
+    :constrained => "${f.second.or(:none)}: ${f.third.or(:none)}"
+    :never       => "Never"
+    :unknown     => "_"
+    _            => atomStr(tag)
   end
 end
 
 foul renderNamed(t: Any) -> String do
   let (_tag, name, args) = t
   return match args.empty? do
-    true  -> name
-    false -> "${name}<${renderList(args).join(", ")}>"
+    true  => name
+    false => "${name}<${renderList(args).join(", ")}>"
   end
 end
 
@@ -75,8 +75,8 @@ foul renderFunction(t: Any) -> String do
   let (_tag, params, result) = t
   let ps = renderList(params).join(" -> ")
   return match ps.empty? do
-    true  -> "() -> ${renderType(result)}"
-    false -> "${ps} -> ${renderType(result)}"
+    true  => "() -> ${renderType(result)}"
+    false => "${ps} -> ${renderType(result)}"
   end
 end
 
@@ -87,8 +87,8 @@ end
 foul renderSig(params: [Any], ret: Any) -> String do
   let ps = renderList(params).join(" -> ")
   return match ps.empty? do
-    true  -> renderType(ret)
-    false -> "${ps} -> ${renderType(ret)}"
+    true  => renderType(ret)
+    false => "${ps} -> ${renderType(ret)}"
   end
 end
 
@@ -100,8 +100,8 @@ foul renderExport(e: Any) -> String do
   let params = f.at(3).or([])
   let ret = f.at(4).or(:unknown)
   let mark = match f.at(2).or(false) do
-    true -> "foul "
-    _    -> ""
+    true => "foul "
+    _    => ""
   end
   return "  ${mark}${name} : ${renderSig(params, ret)}"
 end
@@ -120,8 +120,8 @@ end
 foul renderCtor(c: Any) -> String do
   let (name, _tag, _fields, arity) = c
   return match arity do
-    0 -> name
-    _ -> "${name}/${arity}"
+    0 => name
+    _ => "${name}/${arity}"
   end
 end
 
@@ -145,8 +145,8 @@ end
 
 foul inspect(file: String) do
   match Kex.Interface.read(file) do
-    Just(term) -> printKexi(file, term)
-    None       -> abort("No KexI chunk in ${file}")
+    Just(term) => printKexi(file, term)
+    None       => abort("No KexI chunk in ${file}")
   end
 end
 

@@ -59,11 +59,11 @@ main do
   # --- a list pattern keeps the SUBJECT's type in the tail: over a [Char] the
   # tail is a [Char], and over a String it is a String
   match cs do
-    [c | rest] -> IO.printLine("list head ${c} tail ${rest}")
-    []         -> IO.printLine("empty")
+    [c | rest] => IO.printLine("list head ${c} tail ${rest}")
+    []         => IO.printLine("empty")
   end
   match s do
-    [c | rest] -> IO.printLine("string head ${c} tail ${rest}")
-    []         -> IO.printLine("empty")
+    [c | rest] => IO.printLine("string head ${c} tail ${rest}")
+    []         => IO.printLine("empty")
   end
 end

@@ -58,15 +58,15 @@ end
 make [Monoid] do
   let fold -> This do
     match this do
-      [] -> A.identity
-      [x | xs] -> x.combine(xs.fold)
+      [] => A.identity
+      [x | xs] => x.combine(xs.fold)
     end
   end
 
   let foldMap(f: A -> B) -> B where B: Monoid do
     match this do
-      [] -> B.identity
-      [x | xs] -> f(x).combine(xs.foldMap(f))
+      [] => B.identity
+      [x | xs] => f(x).combine(xs.foldMap(f))
     end
   end
 end
@@ -85,8 +85,8 @@ end
 # Power via repeated combine — works for any Monoid
 let repeat(value: Monoid, n: Int) -> do
   match n do
-    0 -> A.identity
-    _ -> value.combine(repeat(value, n - 1))
+    0 => A.identity
+    _ => value.combine(repeat(value, n - 1))
   end
 end
 

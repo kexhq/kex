@@ -520,8 +520,8 @@ int main() {
             assertTrue(hasError(
                 "main do\n"
                 "  match \"test\" do\n"
-                "    s when IO.printLine(s) -> s\n"
-                "    _ -> \"\"\n"
+                "    s when IO.printLine(s) => s\n"
+                "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
                 "guard"
@@ -533,8 +533,8 @@ int main() {
                 "using FS\n"
                 "main do\n"
                 "  match \"hello\" do\n"
-                "    s when s.count > 0 -> s\n"
-                "    _ -> \"\"\n"
+                "    s when s.count > 0 => s\n"
+                "    _ => \"\"\n"
                 "  end\n"
                 "end\n"
             ));
@@ -546,8 +546,8 @@ int main() {
                 "let check(x: String) = log(x)\n"
                 "main do\n"
                 "  match \"test\" do\n"
-                "    s when check(s) -> s\n"
-                "    _ -> \"\"\n"
+                "    s when check(s) => s\n"
+                "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
                 "transitively"
@@ -562,8 +562,8 @@ int main() {
                 "let step3(x: String) = step2(x)\n"
                 "main do\n"
                 "  match \"test\" do\n"
-                "    s when step3(s) -> s\n"
-                "    _ -> \"\"\n"
+                "    s when step3(s) => s\n"
+                "    _ => \"\"\n"
                 "  end\n"
                 "end\n",
                 "transitively"
@@ -576,8 +576,8 @@ int main() {
                 "let quadruple(x: Int) = double(double(x))\n"
                 "main do\n"
                 "  match 5 do\n"
-                "    x when quadruple(x) > 10 -> x\n"
-                "    _ -> 0\n"
+                "    x when quadruple(x) > 10 => x\n"
+                "    _ => 0\n"
                 "  end\n"
                 "end\n"
             ));
@@ -924,7 +924,7 @@ int main() {
             assertTrue(hasErrorWithInterfaces(
                 "let choose(value: Choice) do\n"
                 "  match value do\n"
-                "    Yes -> 1\n"
+                "    Yes => 1\n"
                 "  end\n"
                 "end\n",
                 interfaces, "Non-exhaustive match"));
@@ -1177,7 +1177,7 @@ int main() {
             assertTrue(hasError(
                 "let handler(x: Int) do\n"
                 "  receive do\n"
-                "    :msg -> x\n"
+                "    :msg => x\n"
                 "  end\n"
                 "end\n",
                 "receive"
@@ -1188,7 +1188,7 @@ int main() {
             assertTrue(noErrors(
                 "foul handler(x: Int) do\n"
                 "  receive do\n"
-                "    :msg -> x\n"
+                "    :msg => x\n"
                 "  end\n"
                 "end\n"
             ));
@@ -1721,7 +1721,7 @@ int main() {
             assertTrue(hasError(
                 "let inspect(value: Either<Integer, String>) do\n"
                 "  match value do\n"
-                "    Left(number) -> number\n"
+                "    Left(number) => number\n"
                 "  end\n"
                 "end\n",
                 "Non-exhaustive match on Either: missing case(s) Right"));
@@ -1770,8 +1770,8 @@ int main() {
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
-                "    Circle(r) -> r\n"
-                "    Rectangle(w, h) -> w * h\n"
+                "    Circle(r) => r\n"
+                "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
                 "Non-exhaustive"
@@ -1784,8 +1784,8 @@ int main() {
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
-                "    Circle(r) -> r\n"
-                "    Rectangle(w, h) -> w * h\n"
+                "    Circle(r) => r\n"
+                "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n"
             ));
@@ -1797,8 +1797,8 @@ int main() {
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
-                "    Circle(r) -> r\n"
-                "    _ -> 0.0\n"
+                "    Circle(r) => r\n"
+                "    _ => 0.0\n"
                 "  end\n"
                 "end\n"
             ));
@@ -1809,7 +1809,7 @@ int main() {
                 "main do\n"
                 "  let x = Just(1)\n"
                 "  match x do\n"
-                "    Just(v) -> v\n"
+                "    Just(v) => v\n"
                 "  end\n"
                 "end\n",
                 "Non-exhaustive"
@@ -1825,8 +1825,8 @@ int main() {
                 "main do\n"
                 "  let x = Just(1)\n"
                 "  match x do\n"
-                "    Just(v) -> v\n"
-                "    None -> 0\n"
+                "    Just(v) => v\n"
+                "    None => 0\n"
                 "  end\n"
                 "end\n"
             ));
@@ -1838,8 +1838,8 @@ int main() {
                 "main do\n"
                 "  let s = Circle(1.0)\n"
                 "  match s do\n"
-                "    Circle(r) when r > 0.0 -> r\n"
-                "    Rectangle(w, h) -> w * h\n"
+                "    Circle(r) when r > 0.0 => r\n"
+                "    Rectangle(w, h) => w * h\n"
                 "  end\n"
                 "end\n",
                 "Non-exhaustive"
@@ -1852,7 +1852,7 @@ int main() {
                 "main do\n"
                 "  let p = Pair(1, 2)\n"
                 "  match p do\n"
-                "    Pair(a, b) -> a + b\n"
+                "    Pair(a, b) => a + b\n"
                 "  end\n"
                 "end\n"
             ));
@@ -2016,7 +2016,7 @@ int main() {
                 "  trying do\n"
                 "    requireInteger(FS.File.read(\"input.txt\").try)\n"
                 "  rescue\n"
-                "    _ -> 0\n"
+                "    _ => 0\n"
                 "  end\n"
                 "end\n",
                 "String"
@@ -2038,7 +2038,7 @@ int main() {
                 "  trying do\n"
                 "    42.try\n"
                 "  rescue\n"
-                "    _ -> 0\n"
+                "    _ => 0\n"
                 "  end\n"
                 "end\n",
                 "Result or Optional"
@@ -2825,7 +2825,7 @@ int main() {
             assertTrue(hasError(
                 "foul startTyped -> Process<String> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg) end\n"
+                "    receive do msg => IO.printLine(msg) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"
@@ -2840,7 +2840,7 @@ int main() {
             assertTrue(noErrors(
                 "foul startTyped -> Process<String> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg) end\n"
+                "    receive do msg => IO.printLine(msg) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"
@@ -2854,7 +2854,7 @@ int main() {
             assertTrue(noErrors(
                 "foul startDynamic -> Process<Any> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg.to(String).or(\"\")) end\n"
+                "    receive do msg => IO.printLine(msg.to(String).or(\"\")) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"
@@ -2869,7 +2869,7 @@ int main() {
             assertTrue(hasError(
                 "foul startTyped -> Process<String> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg) end\n"
+                "    receive do msg => IO.printLine(msg) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"
@@ -2884,7 +2884,7 @@ int main() {
             assertTrue(noErrors(
                 "foul startTyped -> Process<String> do\n"
                 "  return spawn do\n"
-                "    receive do msg -> IO.printLine(msg) end\n"
+                "    receive do msg => IO.printLine(msg) end\n"
                 "  end\n"
                 "end\n"
                 "main do\n"

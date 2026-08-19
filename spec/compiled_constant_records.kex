@@ -46,7 +46,7 @@ main do
   IO.printLine("${NESTED.count}")
   IO.printLine("zebra=${REV.zebra} apple=${REV.apple} middle=${REV.middle}")
   match OK do
-    Ok(v)    -> IO.printLine("ok ${v}")
-    Error(_) -> IO.printLine("err")
+    Ok(v)    => IO.printLine("ok ${v}")
+    Error(_) => IO.printLine("err")
   end
 end

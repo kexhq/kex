@@ -1,8 +1,8 @@
 # Match arms that return incompatible types are a compile-time error.
 let describe(n) do
   match n do
-    0 -> "zero"
-    _ -> 99
+    0 => "zero"
+    _ => 99
   end
 end
 main do

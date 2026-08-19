@@ -8,7 +8,7 @@
 foul crasher do
   spawn do
     receive do
-      :go -> IO.printLine("crasher: exiting")
+      :go => IO.printLine("crasher: exiting")
     end
   end
 end
@@ -20,7 +20,7 @@ main do
   child.send(:go)
   # Small timeout to let the child finish
   receive timeout: 200 do
-    _ -> IO.printLine("unexpected message")
-  after -> IO.printLine("parent: child has exited")
+    _ => IO.printLine("unexpected message")
+  after IO.printLine("parent: child has exited")
   end
 end

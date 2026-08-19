@@ -1,10 +1,10 @@
 # FizzBuzz in Kex — demonstrating pattern matching and functional programming
 let fizzBuzz(n: Integer) -> String do
   match (n.modulo(3), n.modulo(5)) do
-    (0, 0) -> "FizzBuzz"
-    (0, _) -> "Fizz"
-    (_, 0) -> "Buzz"
-    (_, _) -> n.to(String).or("")
+    (0, 0) => "FizzBuzz"
+    (0, _) => "Fizz"
+    (_, 0) => "Buzz"
+    (_, _) => n.to(String).or("")
   end
 end
 

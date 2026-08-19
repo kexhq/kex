@@ -28,13 +28,13 @@ main do
   IO.printLine("abc".at(10))        # None — out of range
 
   match "x" do
-    "x" -> IO.printLine("string pattern matches string value")
-    _ -> IO.printLine("no match")
+    "x" => IO.printLine("string pattern matches string value")
+    _ => IO.printLine("no match")
   end
 
   match "abc".at(0) do
-    'a' -> IO.printLine("char pattern matches char value")
-    _ -> IO.printLine("no match")
+    'a' => IO.printLine("char pattern matches char value")
+    _ => IO.printLine("no match")
   end
 
   IO.printLine('5'.digit?)

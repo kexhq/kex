@@ -10,7 +10,7 @@ let safeDivide(a: Int, b: Int) -> String do
   let result = divide(a, b).try
   "result: ${result}"
 rescue
-  e -> "error: ${e}"
+  e => "error: ${e}"
 end
 
 let withCatchAll(a: Int, b: Int) -> String do
@@ -32,8 +32,8 @@ let withPatternGuard(a: Int, b: Int) -> String do
   divide(a, b).try
   "ok"
 rescue
-  e when e == "division by zero" -> "div0"
-  e -> "other: ${e}"
+  e when e == "division by zero" => "div0"
+  e => "other: ${e}"
 end
 
 let nestedTrying(a: Int, b: Int) -> String do
@@ -42,10 +42,10 @@ let nestedTrying(a: Int, b: Int) -> String do
       divide(a, b).try
       "inner ok"
     rescue
-      _ -> "inner caught"
+      _ => "inner caught"
     end
   rescue
-    _ -> "outer caught"
+    _ => "outer caught"
   end
 end
 

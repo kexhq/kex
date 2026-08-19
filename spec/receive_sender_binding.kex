@@ -9,7 +9,7 @@
 foul echoer do
   spawn do
     receive do |sender|
-      :ping -> sender.send(:pong)
+      :ping => sender.send(:pong)
     end
   end
 end

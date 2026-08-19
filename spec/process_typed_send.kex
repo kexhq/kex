@@ -5,8 +5,8 @@ type Msg = Ping | Pong
 foul server -> Process<Msg> do
   return spawn do
     receive do
-      Ping -> IO.printLine("ping")
-      Pong -> IO.printLine("pong")
+      Ping => IO.printLine("ping")
+      Pong => IO.printLine("pong")
     end
   end
 end

@@ -177,11 +177,11 @@ describe("Map — find and each") do
     let result = { a: 1, b: 5, c: 2 }.find { |k, v| v > 3 }
     assert(result != None)
     match result do
-      Just((k, v)) -> do
+      Just((k, v)) => do
         assert(k == :b)
         assert(v == 5)
       end
-      None -> assert(false, "expected Just")
+      None => assert(false, "expected Just")
     end
   end
 

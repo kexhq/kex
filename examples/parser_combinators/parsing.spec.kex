@@ -9,11 +9,11 @@ describe("Parser combinators with .try/rescue") do
       let p = Parser { input: "abc" }
       let result = p.charWhen(&.lower?)
       match result do
-        Ok((c, p2)) -> do
+        Ok((c, p2)) => do
           assert(c == 'a')
           assert(p2.pos == 1)
         end
-        _ -> assert(false)
+        _ => assert(false)
       end
     end
 
@@ -21,8 +21,8 @@ describe("Parser combinators with .try/rescue") do
       let p = Parser { input: "123" }
       let result = p.charWhen(&.lower?)
       match result do
-        Error(_) -> assert(true)
-        _ -> assert(false)
+        Error(_) => assert(true)
+        _ => assert(false)
       end
     end
   end
@@ -57,11 +57,11 @@ describe("Parser combinators with .try/rescue") do
       let p = Parser { input: "42abc" }
       let result = p.some { |q| q.charWhen(&.digit?) }
       match result do
-        Ok((digits, p2)) -> do
+        Ok((digits, p2)) => do
           assert(digits.join("") == "42")
           assert(p2.pos == 2)
         end
-        _ -> assert(false)
+        _ => assert(false)
       end
     end
 
@@ -69,8 +69,8 @@ describe("Parser combinators with .try/rescue") do
       let p = Parser { input: "abc" }
       let result = p.some { |q| q.charWhen(&.digit?) }
       match result do
-        Error(_) -> assert(true)
-        _ -> assert(false)
+        Error(_) => assert(true)
+        _ => assert(false)
       end
     end
   end
@@ -83,8 +83,8 @@ describe("Parser combinators with .try/rescue") do
         { |q| q.char('-') },
       ])
       match result do
-        Ok((c, _)) -> assert(c == '+')
-        _ -> assert(false)
+        Ok((c, _)) => assert(c == '+')
+        _ => assert(false)
       end
     end
 
@@ -95,8 +95,8 @@ describe("Parser combinators with .try/rescue") do
         { |q| q.char('-') },
       ])
       match result do
-        Ok((c, _)) -> assert(c == '-')
-        _ -> assert(false)
+        Ok((c, _)) => assert(c == '-')
+        _ => assert(false)
       end
     end
 
@@ -107,8 +107,8 @@ describe("Parser combinators with .try/rescue") do
         { |q| q.char('-') },
       ])
       match result do
-        Error(NoMatch(_)) -> assert(true)
-        _ -> assert(false)
+        Error(NoMatch(_)) => assert(true)
+        _ => assert(false)
       end
     end
   end
@@ -120,7 +120,7 @@ describe("Parser combinators with .try/rescue") do
         let (c, _) = p.charWhen(&.digit?).try
         "digit: ${c}"
       rescue
-        _ -> "not a digit"
+        _ => "not a digit"
       end
 
       assert(parseDigit("5") == "digit: 5")
@@ -134,7 +134,7 @@ describe("Parser combinators with .try/rescue") do
         let (d2, _) = p2.charWhen(&.digit?).try
         "${d1}${d2}"
       rescue
-        Unexpected(ch, pos) -> "unexpected ${ch} at ${pos}"
+        Unexpected(ch, pos) => "unexpected ${ch} at ${pos}"
       end
 
       assert(parseTwoDigits("42") == "42")

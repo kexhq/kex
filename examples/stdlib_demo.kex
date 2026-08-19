@@ -97,18 +97,18 @@ main do
   IO.printLine("=== Pattern Matching ===")
 
   let grade = match 87 do
-    n when n >= 90 -> "A"
-    n when n >= 80 -> "B"
-    n when n >= 70 -> "C"
-    n when n >= 60 -> "D"
-    _ -> "F"
+    n when n >= 90 => "A"
+    n when n >= 80 => "B"
+    n when n >= 70 => "C"
+    n when n >= 60 => "D"
+    _ => "F"
   end
   IO.printLine("grade for 87: ${grade}")
 
   let describe = match nums.count do
-    0 -> "empty"
-    1 -> "single"
-    _ -> "many"
+    0 => "empty"
+    1 => "single"
+    _ => "many"
   end
   IO.printLine("nums is: ${describe}")
 

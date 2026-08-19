@@ -16,7 +16,7 @@ end
 
 let describe(p: Pt) -> String do
   match p do
-    Pt { x, y } -> "${x}+${y}"
+    Pt { x, y } => "${x}+${y}"
   end
 end
 
@@ -25,8 +25,8 @@ main do
 
   # A Pt-pattern must NOT match a Qt, even though both carry x and y.
   match Qt { x: 1, y: 2 } do
-    Pt { x } -> IO.printLine("matched Pt ${x}")
-    _        -> IO.printLine("rejected Pt-pattern")
+    Pt { x } => IO.printLine("matched Pt ${x}")
+    _        => IO.printLine("rejected Pt-pattern")
   end
 
   # Named destructure in a `let` binding.

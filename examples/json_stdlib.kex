@@ -5,7 +5,7 @@ using JSON
 main do
   let source = "{ /* profile */ \"name\": \"Kex\", \"active\": true }"
   match JSON.parse(source, options: { allowComments: true }) do
-    Ok(value) -> IO.printLine(JSON.stringify(value))
-    Error(error) -> IO.printLine("JSON error: ${error}")
+    Ok(value) => IO.printLine(JSON.stringify(value))
+    Error(error) => IO.printLine("JSON error: ${error}")
   end
 end

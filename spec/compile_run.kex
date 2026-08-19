@@ -27,8 +27,8 @@ main do
   IO.printLine(xs.map { |x| x * 2 }.to(String).or(""))
 
   IO.printLine(match 42 do
-    0 -> "zero"
-    42 -> "forty-two"
-    _ -> "other"
+    0 => "zero"
+    42 => "forty-two"
+    _ => "other"
   end)
 end

@@ -51,12 +51,12 @@ end
 let convertTo(measure: Measure, unit: DataUnit) -> Result<Measure, String> do
   let target = definition(unit)
   match measure.kind == target.dimension do
-    true -> return Ok(Measure {
+    true => return Ok(Measure {
       canonical: measure.canonical,
       value: measure.canonical / target.factor,
       unit: target
     })
-    false -> return Error("Cannot convert between different measurement kinds")
+    false => return Error("Cannot convert between different measurement kinds")
   end
 end
 
@@ -65,13 +65,13 @@ end
 # the measure's existing unit.
 let to(measure: Measure, String, in: DataPrefix) -> String? do
   match measure.kind == :data do
-    false -> return None
-    true -> do
+    false => return None
+    true => do
   match in do
-    Kilo -> return Just(displayWithPrefix(measure, 1000.0, "KB"))
-    Mega -> return Just(displayWithPrefix(measure, 1000000.0, "MB"))
-    Giga -> return Just(displayWithPrefix(measure, 1000000000.0, "GB"))
-    _ -> return None
+    Kilo => return Just(displayWithPrefix(measure, 1000.0, "KB"))
+    Mega => return Just(displayWithPrefix(measure, 1000000.0, "MB"))
+    Giga => return Just(displayWithPrefix(measure, 1000000000.0, "GB"))
+    _ => return None
   end
   end
   end

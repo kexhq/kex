@@ -2504,7 +2504,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
     advance(); // when
     clause.guard = parseExpr();
 
-    expect(TokenType::Arrow, "Expected '->' in match clause");
+    expect(TokenType::FatArrow, "Expected '=>' in match clause");
     clause.body = parseMatchClauseBody();
     return clause;
   }
@@ -2519,7 +2519,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
     clause.guard = parseExpr();
   }
 
-  expect(TokenType::Arrow, "Expected '->' in match clause");
+  expect(TokenType::FatArrow, "Expected '=>' in match clause");
   clause.body = parseMatchClauseBody();
 
   return clause;
@@ -2587,7 +2587,8 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
 
   std::optional<ast::ExprPtr> afterBody;
   if (match(TokenType::After)) {
-    expect(TokenType::Arrow, "Expected '->' after 'after'");
+    // `after` takes a bare expression: nothing sits to its left, so there is
+    // no arrow to carry information.
     afterBody = parseExpr();
     skipNewlines();
   }

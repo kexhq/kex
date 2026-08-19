@@ -6,32 +6,32 @@ let OPTION_PARSER = OptionParser.define("testapp", "A test CLI")
 describe("OptionParser") do
   it("parses long, short, typed, and flag options") do
     match OPTION_PARSER.parse(["--name", "Alice", "-p", "8080", "-v"]) do
-      Ok(parsed) -> do
+      Ok(parsed) => do
         assert(parsed.value("name", "") == "Alice")
         assert(parsed.integerValue("port") == Just(8080))
         assert(parsed.flagEnabled?("verbose"))
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
   it("accepts --name=value and preserves positional arguments") do
     match OPTION_PARSER.parse(["run", "--name=Alice", "--", "--literal"]) do
-      Ok(parsed) -> do
+      Ok(parsed) => do
         assert(parsed.value("name", "") == "Alice")
         assert(parsed.arguments == ["run", "--literal"])
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
   it("fills defaults") do
     match OPTION_PARSER.parse(["--name", "Alice"]) do
-      Ok(parsed) -> do
+      Ok(parsed) => do
         assert(parsed.value("port", "") == "3000")
         assert(!parsed.flagEnabled?("verbose"))
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 

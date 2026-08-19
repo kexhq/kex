@@ -28,10 +28,10 @@ main do
 
   # --- structural: the SAME pattern matches both record types
   match m1 do
-    { value, rest } -> IO.printLine("anon miss ${value}/${rest}")
+    { value, rest } => IO.printLine("anon miss ${value}/${rest}")
   end
   match a1 do
-    { value, rest } -> IO.printLine("anon alt ${value}/${rest}")
+    { value, rest } => IO.printLine("anon alt ${value}/${rest}")
   end
 
   # --- structural in a let destructure
@@ -43,7 +43,7 @@ main do
   let { value, rest } = mp
   IO.printLine("map let ${value}/${rest}")
   match mp do
-    { value, rest } -> IO.printLine("map match ${value}/${rest}")
-    _               -> IO.printLine("map match fell through (known gap)")
+    { value, rest } => IO.printLine("map match ${value}/${rest}")
+    _               => IO.printLine("map match fell through (known gap)")
   end
 end

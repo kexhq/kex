@@ -274,8 +274,8 @@ int main() {
             // @Ok(x) in match → {'Ok', X} in Core Erlang
             auto out = emit(
                 "let f(v) = match v do\n"
-                "  @Ok(x) -> x\n"
-                "  @Error(e) -> e\n"
+                "  @Ok(x) => x\n"
+                "  @Error(e) => e\n"
                 "end\n"
                 "main do f(42) end\n"
             );
@@ -287,9 +287,9 @@ int main() {
             // @Less in match → 'Less' in Core Erlang
             auto out = emit(
                 "let f(v) = match v do\n"
-                "  @Less -> -1\n"
-                "  @Equal -> 0\n"
-                "  @Greater -> 1\n"
+                "  @Less => -1\n"
+                "  @Equal => 0\n"
+                "  @Greater => 1\n"
                 "end\n"
                 "main do f(Less) end\n"
             );
@@ -807,8 +807,8 @@ int main() {
                 "main do\n"
                 "  var value = 10\n"
                 "  match :two do\n"
-                "    :one -> value = 1\n"
-                "    :two -> value = value + 2\n"
+                "    :one => value = 1\n"
+                "    :two => value = value + 2\n"
                 "  end\n"
                 "  value\n"
                 "end\n",
@@ -1182,13 +1182,13 @@ int main() {
 
     describe("IR Core Erlang emitter — match expressions", []() {
         it("match emits case with when 'true' guards", []() {
-            auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
+            auto out = emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
             assertTrue(contains(out, "case"), out);
             assertTrue(contains(out, "when 'true'"), out);
         });
 
         it("tuple subject remains a tuple in the case expression", []() {
-            auto out = emit("main do\n  match (1, 2) do\n    (1, 2) -> true\n    (_, _) -> false\n  end\nend\n");
+            auto out = emit("main do\n  match (1, 2) do\n    (1, 2) => true\n    (_, _) => false\n  end\nend\n");
             assertTrue(contains(out, "case {1, 2}"), out);
             // The pattern stays a 2-tuple; its numeric elements bind fresh
             // vars compared with `==` in the guard, so `0` matches `0.0`.
@@ -1198,7 +1198,7 @@ int main() {
         });
 
         it("no semicolons between match clauses", []() {
-            auto out = emit("main do\n  match 1 do\n    1 -> \"one\"\n    _ -> \"other\"\n  end\nend\n");
+            auto out = emit("main do\n  match 1 do\n    1 => \"one\"\n    _ => \"other\"\n  end\nend\n");
             assertTrue(contains(out, "->"), "output should contain arrows");
             // Extract the case body and assert no semicolons between clauses
             auto caseStart = out.find("case ");
@@ -1601,7 +1601,7 @@ int main() {
                 "# kex: no-check\n"
                 "foul loop do\n"
                 "  receive do\n"
-                "    :stop -> IO.printLine(\"done\")\n"
+                "    :stop => IO.printLine(\"done\")\n"
                 "  end\n"
                 "end\n"
                 "main do spawn do loop() end end\n"
@@ -1615,8 +1615,8 @@ int main() {
                 "# kex: no-check\n"
                 "foul waitOne do\n"
                 "  receive timeout: 1000 do\n"
-                "    :ok -> IO.printLine(\"got it\")\n"
-                "  after -> IO.printLine(\"timeout\")\n"
+                "    :ok => IO.printLine(\"got it\")\n"
+                "  after IO.printLine(\"timeout\")\n"
                 "  end\n"
                 "end\n"
                 "main do waitOne() end\n"
@@ -1742,7 +1742,7 @@ int main() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul startWorker do\n"
-                "  spawn do receive do :stop -> \"done\" end end\n"
+                "  spawn do receive do :stop => \"done\" end end\n"
                 "end\n"
                 "main do\n"
                 "  Supervisor.start(strategy: :only_crashed) do\n"
@@ -1758,7 +1758,7 @@ int main() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul w do\n"
-                "  worker { spawn do receive do :stop -> \"done\" end end }\n"
+                "  worker { spawn do receive do :stop => \"done\" end end }\n"
                 "end\n"
                 "main do w() end\n"
             );

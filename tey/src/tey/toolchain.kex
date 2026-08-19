@@ -28,8 +28,8 @@ end
 # The version `tey kex use` last selected, if any.
 let selected -> String? do
   match FS.File.read("${Tey.Toolchain.home}/current") do
-    None -> return None
-    Just(text) -> do
+    None => return None
+    Just(text) => do
       let name = text.trim
       return name.empty? then None else Just(name)
     end
@@ -52,8 +52,8 @@ end
 # are not versions are skipped rather than reported as junk.
 let availableVersions -> [String] or! String do
   match Tey.Git.tags(Tey.Toolchain.repository) do
-    Error(error) -> return Error(error)
-    Ok(names) -> do
+    Error(error) => return Error(error)
+    Ok(names) => do
       let versions = names.collect do |tag|
         Tey.Toolchain.versionOf(tag)
       end
@@ -72,8 +72,8 @@ end
 let latestStable -> String or! String do
   let available = Tey.Toolchain.availableVersions.try
   match available.filter { |version| Tey.Semver.stable?(version) }.first do
-    Just(version) -> return Ok(version)
-    None -> return Error("no released Kex version is available")
+    Just(version) => return Ok(version)
+    None => return Error("no released Kex version is available")
   end
 end
 
@@ -83,18 +83,18 @@ end
 let latestIncludingPreReleases -> String or! String do
   let available = Tey.Toolchain.availableVersions.try
   match available.first do
-    Just(version) -> return Ok(version)
-    None -> return Error("no Kex version is available")
+    Just(version) => return Ok(version)
+    None => return Error("no Kex version is available")
   end
 end
 
 let installedKex -> String? do
   match ENV.get("TEY_KEX") do
-    Just(path) -> Just(path)
-    None -> do
+    Just(path) => Just(path)
+    None => do
       match FS.File.read("${Tey.Toolchain.home}/current") do
-        Just(version) -> Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
-        None -> None
+        Just(version) => Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
+        None => None
       end
     end
   end
@@ -108,8 +108,8 @@ end
 # binaries under two managers drift apart.
 let bundled -> String? do
   match ENV.get("TEY_BUNDLED_KEX") do
-    None -> return None
-    Just(path) -> return FS.File.file?(path) then Just(path) else None
+    None => return None
+    Just(path) => return FS.File.file?(path) then Just(path) else None
   end
 end
 
@@ -118,11 +118,11 @@ end
 # seed is a plain install tree with no version recorded beside it.
 let bundledVersion -> String? do
   match Tey.Toolchain.bundled do
-    None -> return None
-    Just(binary) -> do
+    None => return None
+    Just(binary) => do
       match Tey.Toolchain.versionOfBinary(binary) do
-        Error(_) -> return None
-        Ok(version) -> return Just(version)
+        Error(_) => return None
+        Ok(version) => return Just(version)
       end
     end
   end
@@ -139,8 +139,8 @@ end
 let selectableVersions -> [String] do
   let installed = Tey.Toolchain.installedVersions
   match Tey.Toolchain.bundledVersion do
-    None -> return installed
-    Just(version) -> do
+    None => return installed
+    Just(version) => do
       return installed if installed.contains?(version)
       return Tey.Toolchain.newestFirst([...installed, version])
     end
@@ -185,16 +185,16 @@ end
 # none of them is an error worth stopping a build for.
 let runtimeOtpFloor -> Integer? do
   match Process.run(Tey.Toolchain.kex, ["--info"]) do
-    Error(_) -> return None
-    Ok(result) -> do
+    Error(_) => return None
+    Ok(result) => do
       return None if result.exitCode != 0
       match JSON.parse(result.stdout) do
-        Error(_) -> return None
-        Ok(info) -> match info["runtime_otp_floor"] do
-          None -> return None
-          Just(value) -> match Integer.parse("${value}") do
-            Error(_) -> return None
-            Ok(floor) -> return Just(floor)
+        Error(_) => return None
+        Ok(info) => match info["runtime_otp_floor"] do
+          None => return None
+          Just(value) => match Integer.parse("${value}") do
+            Error(_) => return None
+            Ok(floor) => return Just(floor)
           end
         end
       end
@@ -206,12 +206,12 @@ end
 let runningOtpRelease -> Integer? do
   match Process.run(Tey.Toolchain.erl, ["-noshell", "-eval",
                                         "io:format(\"~s\", [erlang:system_info(otp_release)]), halt()."]) do
-    Error(_) -> return None
-    Ok(result) -> do
+    Error(_) => return None
+    Ok(result) => do
       return None if result.exitCode != 0
       match Integer.parse(result.stdout.trim) do
-        Error(_) -> return None
-        Ok(release) -> return Just(release)
+        Error(_) => return None
+        Ok(release) => return Just(release)
       end
     end
   end
@@ -238,8 +238,8 @@ end
 # name would send it round in a circle.
 let resolved -> String? do
   match Tey.Toolchain.installedKex do
-    Just(path) -> return Just(path)
-    None -> return Tey.Toolchain.bundled
+    Just(path) => return Just(path)
+    None => return Tey.Toolchain.bundled
   end
 end
 
@@ -249,8 +249,8 @@ end
 # when asked — see `resolved`.
 let installBundled -> String or! String do
   match Tey.Toolchain.bundled do
-    None -> return Error("no Kex is bundled with this install")
-    Just(binary) -> return Tey.Toolchain.adopt(binary)
+    None => return Error("no Kex is bundled with this install")
+    Just(binary) => return Tey.Toolchain.adopt(binary)
   end
 end
 
@@ -259,8 +259,8 @@ end
 # not exist, which reads like a broken Tey rather than a missing Kex.
 let selectionHealthy? -> Bool do
   match Tey.Toolchain.selected do
-    None -> return true
-    Just(version) -> return Tey.Toolchain.installed?(version)
+    None => return true
+    Just(version) => return Tey.Toolchain.installed?(version)
   end
 end
 
@@ -274,10 +274,10 @@ end
 # incomplete.
 let installRelease(version: String) -> String or! String do
   match Tey.Toolchain.installArchive(version) do
-    Ok(prefix) -> return Ok(prefix)
+    Ok(prefix) => return Ok(prefix)
     # An archive that is not there is a platform Kex does not publish for, or
     # a release still uploading; building is a reasonable answer to both.
-    Error(Unavailable(reason)) -> do
+    Error(Unavailable(reason)) => do
       IO.printError("tey: no archive for this machine (${reason}); building Kex ${version} from source\n")
       let source = Tey.Toolchain.fetchRelease(version).try
       return Tey.Toolchain.installSource(source, version)
@@ -285,7 +285,7 @@ let installRelease(version: String) -> String or! String do
     # An archive that is there and WRONG is a different thing entirely. It
     # could be a truncated download or a tampered mirror, and neither is
     # something to shrug off by quietly compiling instead.
-    Error(Corrupt(reason)) -> return Error(reason)
+    Error(Corrupt(reason)) => return Error(reason)
   end
 end
 
@@ -299,8 +299,8 @@ type ArchiveFailure =
 # has to set TEY_KEX_REPO, and overridable on its own for a mirror.
 let releaseBase -> String do
   match ENV.get("TEY_KEX_RELEASES") do
-    Just(base) -> return base
-    None -> do
+    Just(base) => return base
+    None => do
       let repository = Tey.Toolchain.repository
       let trimmed = repository.endsWith?(".git") then repository.take(repository.count - 4) else repository
       return "${trimmed}/releases/download"
@@ -313,9 +313,9 @@ end
 let releaseTarget -> String or! String do
   let arch = Tey.Toolchain.machineArchitecture.try
   match System.OS do
-    :macos -> return Ok("macos-${arch}")
-    :linux -> return Ok("linux-${arch}")
-    other -> return Error("no Kex archives are published for ${other}")
+    :macos => return Ok("macos-${arch}")
+    :linux => return Ok("linux-${arch}")
+    other => return Error("no Kex archives are published for ${other}")
   end
 end
 
@@ -338,16 +338,16 @@ let installSource(source: String, version: String) -> String or! String do
   let staging = "${prefix}.partial"
   FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
   let configured = match Process.run("cmake", ["-S", source, "-B", build, "-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=${staging}"]) do
-    Error(error) -> return Error(error)
-    Ok(result) -> result
+    Error(error) => return Error(error)
+    Ok(result) => result
   end
   if configured.exitCode != 0
     FS.Directory.deleteAll(staging)
     return Error(configured.stderr + configured.stdout)
   end
   let installed = match Process.run("cmake", ["--build", build, "--target", "install", "--parallel"]) do
-    Error(error) -> return Error(error)
-    Ok(result) -> result
+    Error(error) => return Error(error)
+    Ok(result) => result
   end
   if installed.exitCode != 0
     FS.Directory.deleteAll(staging)
@@ -387,8 +387,8 @@ let use(version: String) -> Bool do
     # installBundled writes `current` and relinks itself, so there is nothing
     # left to do here.
     match Tey.Toolchain.installBundled do
-      Error(_) -> return false
-      Ok(_) -> return true
+      Error(_) => return false
+      Ok(_) => return true
     end
   end
   return false if !FS.File.write("${home}/current", "${version}\n")
@@ -404,12 +404,12 @@ private do
   # produces — so unpacking and publishing it is the whole job.
   let installArchive(version: String) -> String or! ArchiveFailure do
     let target = match Tey.Toolchain.releaseTarget do
-      Error(error) -> return Error(Unavailable(error))
-      Ok(value) -> value
+      Error(error) => return Error(Unavailable(error))
+      Ok(value) => value
     end
     let tag = match Tey.Toolchain.releaseTag(version) do
-      Error(error) -> return Error(Unavailable(error))
-      Ok(value) -> value
+      Error(error) => return Error(Unavailable(error))
+      Ok(value) => value
     end
     let name = "kex-${version}-${target}"
     let downloads = "${Tey.Cache.root}/downloads"
@@ -418,15 +418,15 @@ private do
     let archive = "${downloads}/${name}.tar.gz"
     let url = "${Tey.Toolchain.releaseBase}/${tag}/${name}.tar.gz"
     match Tey.Toolchain.download(url, archive) do
-      Error(error) -> return Error(Unavailable(error))
-      Ok(_) -> ()
+      Error(error) => return Error(Unavailable(error))
+      Ok(_) => ()
     end
     # The checksum is published beside the archive, so a mismatch means the
     # bytes are not the release's. That is Corrupt, not Unavailable: the
     # caller must not answer it by building something else instead.
     match Tey.Toolchain.verifyArchive(archive, "${url}.sha256") do
-      Error(error) -> return Error(Corrupt(error))
-      Ok(_) -> ()
+      Error(error) => return Error(Corrupt(error))
+      Ok(_) => ()
     end
 
     let home = Tey.Toolchain.home
@@ -436,8 +436,8 @@ private do
     FS.Directory.deleteAll(unpacked) if FS.Directory.directory?(unpacked)
     return Error(Unavailable("could not create ${unpacked}")) if !FS.Directory.create(unpacked)
     let extracted = match Process.run("tar", ["-xzf", archive, "-C", unpacked]) do
-      Error(error) -> return Error(Corrupt(error))
-      Ok(value) -> value
+      Error(error) => return Error(Corrupt(error))
+      Ok(value) => value
     end
     if extracted.exitCode != 0
       FS.Directory.deleteAll(unpacked)
@@ -460,8 +460,8 @@ private do
     FS.Directory.deleteAll(unpacked)
 
     let installedPrefix = match Tey.Toolchain.publish(staging, prefix) do
-      Error(error) -> return Error(Unavailable(error))
-      Ok(value) -> value
+      Error(error) => return Error(Unavailable(error))
+      Ok(value) => value
     end
     return Error(Unavailable("installed Kex ${version} but could not select it")) if !FS.File.write("${home}/current", "${version}\n")
     Tey.Toolchain.link(version)
@@ -475,10 +475,10 @@ private do
     let partial = "${path}.partial"
     FS.File.delete(partial)
     let fetched = match Process.run("curl", ["-fsSL", "-o", partial, url]) do
-      Ok(result) -> result.exitCode == 0
-      Error(_) -> match Process.run("wget", ["-q", "-O", partial, url]) do
-        Ok(result) -> result.exitCode == 0
-        Error(_) -> return Error("neither curl nor wget is available to download ${url}")
+      Ok(result) => result.exitCode == 0
+      Error(_) => match Process.run("wget", ["-q", "-O", partial, url]) do
+        Ok(result) => result.exitCode == 0
+        Error(_) => return Error("neither curl nor wget is available to download ${url}")
       end
     end
     if !fetched
@@ -494,8 +494,8 @@ private do
     let checksums = "${archive}.sha256"
     Tey.Toolchain.download(checksumUrl, checksums).try
     let expected = match FS.File.read(checksums) do
-      None -> return Error("could not read ${checksums}")
-      Just(text) -> text.trim.split(" ").first.or("")
+      None => return Error("could not read ${checksums}")
+      Just(text) => text.trim.split(" ").first.or("")
     end
     return Error("${checksumUrl} does not contain a checksum") if expected.empty?
     let actual = Tey.Toolchain.checksumOf(archive).try
@@ -507,15 +507,15 @@ private do
   # megabytes of binary, and this keeps all of it out of the process.
   let checksumOf(path: String) -> String or! String do
     let output = match Process.run("sha256sum", [path]) do
-      Ok(result) -> result.exitCode == 0 then Just(result.stdout) else None
-      Error(_) -> match Process.run("shasum", ["-a", "256", path]) do
-        Ok(result) -> result.exitCode == 0 then Just(result.stdout) else None
-        Error(_) -> return Error("neither sha256sum nor shasum is available to verify ${path}")
+      Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
+      Error(_) => match Process.run("shasum", ["-a", "256", path]) do
+        Ok(result) => result.exitCode == 0 then Just(result.stdout) else None
+        Error(_) => return Error("neither sha256sum nor shasum is available to verify ${path}")
       end
     end
     match output do
-      None -> return Error("could not hash ${path}")
-      Just(text) -> return Ok(text.trim.split(" ").first.or(""))
+      None => return Error("could not hash ${path}")
+      Just(text) => return Ok(text.trim.split(" ").first.or(""))
     end
   end
 
@@ -550,11 +550,11 @@ private do
     let staging = "${prefix}.partial"
     FS.Directory.deleteAll(staging) if FS.Directory.directory?(staging)
     let copied = match Process.run("cp", ["-R", source, staging]) do
-      Error(error) -> do
+      Error(error) => do
         FS.Directory.deleteAll(staging)
         return Error(error)
       end
-      Ok(result) -> result
+      Ok(result) => result
     end
     if copied.exitCode != 0
       FS.Directory.deleteAll(staging)
@@ -571,12 +571,12 @@ private do
   # beside it keeps this honest about what will actually run.
   let versionOfBinary(binary: String) -> String or! String do
     match Process.run(binary, ["--version"]) do
-      Error(error) -> return Error(error)
-      Ok(result) -> do
+      Error(error) => return Error(error)
+      Ok(result) => do
         return Error("${binary} --version failed: ${result.stderr}") if result.exitCode != 0
         match result.stdout.trim.split(" ").drop(1).first do
-          None -> return Error("could not read a version out of `${binary} --version`")
-          Just(version) -> do
+          None => return Error("could not read a version out of `${binary} --version`")
+          Just(version) => do
             return Error("`${binary} --version` reported '${version}', which is not a version") if Tey.Semver.parseVersion(version) == None
             return Ok(version)
           end
@@ -598,11 +598,11 @@ private do
     let tag = Tey.Toolchain.releaseTag(version).try
     match Tey.Git.execute(["clone", "--depth", "1", "--branch", tag,
                            Tey.Toolchain.repository, staging]) do
-      Error(error) -> do
+      Error(error) => do
         FS.Directory.deleteAll(staging)
         return Error(error)
       end
-      Ok(_) -> do
+      Ok(_) => do
         return Ok(checkout) if FS.File.rename(staging, checkout)
         FS.Directory.deleteAll(staging)
         return Error("could not move the Kex ${version} checkout into place")
@@ -626,8 +626,8 @@ private do
     let target = "${Tey.Toolchain.home}/toolchains/${version}/bin/kex"
     return false if !FS.File.file?(target)
     match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do
-      Error(_) -> return false
-      Ok(result) -> return result.exitCode == 0
+      Error(_) => return false
+      Ok(result) => return result.exitCode == 0
     end
   end
 

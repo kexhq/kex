@@ -347,13 +347,13 @@ if_expr
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
 
 match_clause
-  = pattern ( COMMA pattern )* ( WHEN expr )? ARROW expr
-  | WHEN expr ARROW expr   (* bare when = _ when *)
+  = pattern ( COMMA pattern )* ( WHEN expr )? FAT_ARROW expr
+  | WHEN expr FAT_ARROW expr   (* bare when = _ when *)
   ;
 
 receive_expr
   = RECEIVE DO match_clause+ END
-  | RECEIVE TIMEOUT COLON expr DO match_clause+ AFTER ARROW expr END
+  | RECEIVE TIMEOUT COLON expr DO match_clause+ AFTER expr END
   ;
 
 loop_expr = LOOP DO ( PIPE ( LOWER_IDENT | UNDERSCORE ) PIPE )? NEWLINE body END ;
@@ -511,7 +511,8 @@ WHEN     = "when" ;
 WHILE    = "while" ;
 
 (* Symbols *)
-ARROW        = "->" ;
+ARROW        = "->" ;   (* types only: function type, return annotation *)
+FAT_ARROW    = "=>" ;   (* arms only: match, bare when, receive, rescue *)
 AMP          = "&" ;
 AT           = "@" ;
 BANG         = "!" ;

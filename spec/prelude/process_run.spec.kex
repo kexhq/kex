@@ -2,18 +2,18 @@ describe("Process.run") do
   it("passes argv without shell interpretation and captures stdout") do
     let result = Process.run("printf", ["%s", "hello world"])
     match result do
-      Ok(process) -> do
+      Ok(process) => do
         assert(process.exitCode == 0)
         assert(process.stdout == "hello world")
       end
-      Error(message) -> assert(false, message)
+      Error(message) => assert(false, message)
     end
   end
 
   it("reports a child exit code") do
     match Process.run("false", []) do
-      Ok(process) -> assert(process.exitCode != 0)
-      Error(message) -> assert(false, message)
+      Ok(process) => assert(process.exitCode != 0)
+      Error(message) => assert(false, message)
     end
   end
 end

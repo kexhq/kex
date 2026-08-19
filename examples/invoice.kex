@@ -28,9 +28,9 @@ end
 
 let sendInvoice(invoice: Invoice, to: Email) -> Result<String, String> do
   match invoice do
-    Pending -> return Error("Invoice is pending and cannot be sent")
-    Paid(receipt) -> return Ok("Invoice already paid. Receipt: ${receipt.to(String)}")
-    Failed(receipt) -> return Error("Invoice failed. Receipt: ${receipt.to(String)}")
+    Pending => return Error("Invoice is pending and cannot be sent")
+    Paid(receipt) => return Ok("Invoice already paid. Receipt: ${receipt.to(String)}")
+    Failed(receipt) => return Error("Invoice failed. Receipt: ${receipt.to(String)}")
   end
 end
 
@@ -40,8 +40,8 @@ main do
     let address = Email.create("akoskovacs0@gmail.com")
 
     match x do
-      Pending -> IO.printLine("Invoice is pending")
-      Paid(receipt) -> IO.printLine("Invoice is paid: ${receipt.to(String)}")
-      Failed(receipt) -> IO.printLine("Invoice failed: ${receipt.to(String)}")
+      Pending => IO.printLine("Invoice is pending")
+      Paid(receipt) => IO.printLine("Invoice is paid: ${receipt.to(String)}")
+      Failed(receipt) => IO.printLine("Invoice failed: ${receipt.to(String)}")
     end
 end

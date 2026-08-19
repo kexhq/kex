@@ -7,8 +7,8 @@ main do
 
   IO.printLine("download: ${download.to(String)}")
   match download.convertTo(MiB) do
-    Ok(binary) -> IO.printLine("download in MiB: ${binary.to(String)}")
-    Error(error) -> IO.printLine(error)
+    Ok(binary) => IO.printLine("download in MiB: ${binary.to(String)}")
+    Error(error) => IO.printLine(error)
   end
   IO.printLine("cache: ${cache.to(String)}")
   IO.printLine("cache bytes: ${cache.canonical}")

@@ -18,9 +18,9 @@ let origin?(_) = false
 # literal's own comparison must not clobber the user's guard.
 let step(pair) do
   return match pair do
-    (0, n) when n > 0 -> "zero then positive"
-    (0, _) -> "zero"
-    _ -> "nonzero"
+    (0, n) when n > 0 => "zero then positive"
+    (0, _) => "zero"
+    _ => "nonzero"
   end
 end
 
@@ -70,12 +70,12 @@ main do
 
   IO.printLine("-- match expression --")
   match 0.0 do
-    0 -> IO.printLine("0.0 matched the 0 arm")
-    _ -> IO.printLine("0.0 fell through")
+    0 => IO.printLine("0.0 matched the 0 arm")
+    _ => IO.printLine("0.0 fell through")
   end
 
   match 3 do
-    3.0 -> IO.printLine("3 matched the 3.0 arm")
-    _ -> IO.printLine("3 fell through")
+    3.0 => IO.printLine("3 matched the 3.0 arm")
+    _ => IO.printLine("3 fell through")
   end
 end

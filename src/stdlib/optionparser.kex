@@ -48,10 +48,10 @@ make ParsedOptions do
   let flagEnabled?(name: String) -> Bool = @values.get(name, "false") == "true"
   let integerValue(name: String) -> Integer? do
     match @values.get(name) do
-      None -> None
-      Just(value) -> match Integer.parse(value) do
-        Ok(number) -> Just(number)
-        Error(_) -> None
+      None => None
+      Just(value) => match Integer.parse(value) do
+        Ok(number) => Just(number)
+        Error(_) => None
       end
     end
   end
@@ -109,20 +109,20 @@ make OptionConfig do
   # policy has to live for every tool to behave the same way.
   let run(args: [String]) -> Integer do
     let options = match this.parse(args) do
-      Error(error) -> do
+      Error(error) => do
         IO.printError("${@name}: ${OptionParser.errorMessage(error)}\n\n${this.help}\n")
         return 1
       end
-      Ok(value) -> value
+      Ok(value) => value
     end
     return this.printHelp if options.flagEnabled?("help")
     match OptionParser.commandFor(@commands, options.arguments) do
-      None -> do
+      None => do
         return this.printHelp if options.arguments.empty?
         IO.printError("${@name}: unknown or incomplete command '${options.arguments.first.or("")}'\n\n${this.help}\n")
         return 1
       end
-      Just(found) -> do
+      Just(found) => do
         let (spec, rest) = found
         # Bound first, then called: applying a function-valued field directly
         # (`spec.handler(...)`) reads as a method call on the record and fails
@@ -142,13 +142,13 @@ make OptionConfig do
     let title = @description == "" then @name else "${@name} — ${@description}"
     let lines = @options.map do |option|
       let short = match option.short do
-        Just(value) -> "-${value}, "
-        None -> "    "
+        Just(value) => "-${value}, "
+        None => "    "
       end
       let required = option.required? then " (required)" else ""
       let default = match option.default do
-        Just(value) -> option.kind == FlagValue then "" else " [default: ${value}]"
-        None -> ""
+        Just(value) => option.kind == FlagValue then "" else " [default: ${value}]"
+        None => ""
       end
       "  ${short}--${option.long}  ${option.description}${required}${default}"
     end
@@ -180,8 +180,8 @@ module OptionParser do
       -> (CommandSpec, [String])? do
     let ordered = commands.sort { |a, b| a.name.split(" ").count > b.name.split(" ").count }
     match ordered.find { |command| OptionParser.opensWith?(arguments, command.name) } do
-      None -> return None
-      Just(command) -> do
+      None => return None
+      Just(command) => do
         let words = command.name.split(" ").count
         return Just((command, arguments.drop(words)))
       end
@@ -195,11 +195,11 @@ module OptionParser do
   end
 
   let errorMessage(error: OptionParseError) -> String = match error do
-    UnknownOption(option) -> "unknown option '${option}'"
-    MissingValue(option) -> "--${option} requires a value"
-    UnexpectedValue(option) -> "--${option} does not take a value"
-    MissingRequired(option) -> "--${option} is required"
-    InvalidInteger(option, value) -> "--${option} expects an integer, got '${value}'"
+    UnknownOption(option) => "unknown option '${option}'"
+    MissingValue(option) => "--${option} requires a value"
+    UnexpectedValue(option) => "--${option} does not take a value"
+    MissingRequired(option) => "--${option} is required"
+    InvalidInteger(option, value) => "--${option} expects an integer, got '${value}'"
   end
 
   let parse(options: [OptionSpec], args: [String]) -> Result<ParsedOptions, OptionParseError> do
@@ -210,8 +210,8 @@ module OptionParser do
     let findOption(options: [OptionSpec], argument: String) -> OptionSpec? do
       options.find do |option|
         "--${option.long}" == argument || match option.short do
-          Just(short) -> "-${short}" == argument
-          None -> false
+          Just(short) => "-${short}" == argument
+          None => false
         end
       end
     end
@@ -226,8 +226,8 @@ module OptionParser do
     let finishRequired(None, options, values, arguments) do
       let complete = options.reduce(values) do |result, option|
         match option.default do
-          Just(value) -> result.has?(option.long) then result else Kex.Intrinsic.Map.put(result, option.long, value)
-          None -> result
+          Just(value) => result.has?(option.long) then result else Kex.Intrinsic.Map.put(result, option.long, value)
+          None => result
         end
       end
       Ok(ParsedOptions { values: complete, arguments: arguments })
@@ -255,9 +255,9 @@ module OptionParser do
     let consume(None, _, _, _, _, _, spelling) = Error(UnknownOption(spelling))
     let consume(Just(option), options, rest, values, arguments, inlineValue, _) do
       match option.kind do
-        FlagValue -> OptionParser.consumeFlag(inlineValue, option, options,
+        FlagValue => OptionParser.consumeFlag(inlineValue, option, options,
                                                rest, values, arguments)
-        _ -> OptionParser.consumeValue(
+        _ => OptionParser.consumeValue(
                OptionParser.valueAndRest(inlineValue, rest), option,
                options, values, arguments)
       end

@@ -11,8 +11,8 @@ foul module Process do
 
   exec : String -> [String] -> Integer
   let exec(command, args) = match Process.run(command, args) do
-    Ok(result) -> result.exitCode
-    Error(_) -> 127
+    Ok(result) => result.exitCode
+    Error(_) => 127
   end
 
   # Returns the calling process's Pid.

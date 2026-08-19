@@ -27,7 +27,7 @@ main do
   # an UPPERCASE name in match-subject position is read as a constructor.
   let pair = PAIR
   match pair do
-    (n, s) -> IO.printLine("pair ${n}${s}")
+    (n, s) => IO.printLine("pair ${n}${s}")
   end
   IO.printLine("squares ${SQUARES}")
 end

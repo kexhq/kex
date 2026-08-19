@@ -289,9 +289,9 @@ Pattern matching destructures them:
 ```kex
 make Shape do
   let area = match this do
-    Circle(r)       -> Math.PI * r * r
-    Rectangle(w, h) -> w * h
-    Triangle(a, _, h) -> 0.5 * a * h
+    Circle(r)       => Math.PI * r * r
+    Rectangle(w, h) => w * h
+    Triangle(a, _, h) => 0.5 * a * h
   end
 end
 ```
@@ -306,8 +306,8 @@ let findUser(users: [User], name: String) -> User? do
 end
 
 match result do
-  Just(user) -> user.name
-  None       -> "not found"
+  Just(user) => user.name
+  None       => "not found"
 end
 ```
 
@@ -610,9 +610,9 @@ end
 
 ```kex
 match shape do
-  Circle(r)       -> 3.14 * r * r
-  Rectangle(w, h) -> w * h
-  _               -> 0.0
+  Circle(r)       => 3.14 * r * r
+  Rectangle(w, h) => w * h
+  _               => 0.0
 end
 ```
 
@@ -620,9 +620,9 @@ Match clauses support guards with `when`:
 
 ```kex
 match n do
-  0              -> "zero"
-  n when n > 0   -> "positive"
-  _              -> "non-positive"
+  0              => "zero"
+  n when n > 0   => "positive"
+  _              => "non-positive"
 end
 ```
 
@@ -630,9 +630,9 @@ A bare `when` (no pattern) acts as a catch-all guarded clause:
 
 ```kex
 match value do
-  when value > 100 -> "large"
-  when value > 0   -> "small"
-  _                -> "non-positive"
+  when value > 100 => "large"
+  when value > 0   => "small"
+  _                => "non-positive"
 end
 ```
 
@@ -640,8 +640,8 @@ A named match variable binds the scrutinee:
 
 ```kex
 match expr do |result|
-  Ok(v)     -> handle(v)
-  Error(e)  -> retry(result)
+  Ok(v)     => handle(v)
+  Error(e)  => retry(result)
 end
 ```
 
@@ -735,10 +735,10 @@ end
 
 ```kex
 match list do
-  []           -> "empty"
-  [x]          -> "single: ${x}"
-  [x, y]       -> "pair: ${x}, ${y}"
-  [x | rest]   -> "head: ${x}, tail length: ${rest.count}"
+  []           => "empty"
+  [x]          => "single: ${x}"
+  [x, y]       => "pair: ${x}, ${y}"
+  [x | rest]   => "head: ${x}, tail length: ${rest.count}"
 end
 ```
 
@@ -1027,8 +1027,8 @@ end
 make final: Bool do
   let to(String) do
     match this do
-      true  -> Just("true")
-      false -> Just("false")
+      true  => Just("true")
+      false => Just("false")
     end
   end
 end
@@ -1249,9 +1249,9 @@ counter.send(Increment)
 ```kex
 foul counterLoop(n: Integer) do
   receive do
-    Increment       -> counterLoop(n + 1)
-    Reset           -> counterLoop(0)
-    Get(sender)     -> do
+    Increment       => counterLoop(n + 1)
+    Reset           => counterLoop(0)
+    Get(sender)     => do
       sender.send(n)
       counterLoop(n)
     end
@@ -1263,8 +1263,8 @@ end
 
 ```kex
 receive timeout: 5000 do
-  (:ok, value) -> handle(value)
-after -> IO.printLine("timed out")
+  (:ok, value) => handle(value)
+after IO.printLine("timed out")
 end
 ```
 
@@ -1276,8 +1276,8 @@ end
 let t = Task.start { slowCompute(42) }
 
 match t.await(5000) do
-  Ok(result)  -> IO.printLine("got: ${result}")
-  Error(_)    -> IO.printLine("task failed or timed out")
+  Ok(result)  => IO.printLine("got: ${result}")
+  Error(_)    => IO.printLine("task failed or timed out")
 end
 ```
 
@@ -1311,8 +1311,8 @@ main do
     [worker { startCounter("counter-A") }]
   end
   match result do
-    Ok(pid)    -> IO.printLine("supervisor started: ${pid}")
-    Error(msg) -> IO.printLine("supervisor error: ${msg}")
+    Ok(pid)    => IO.printLine("supervisor started: ${pid}")
+    Error(msg) => IO.printLine("supervisor error: ${msg}")
   end
 end
 ```
@@ -1759,7 +1759,7 @@ trying do
   file.close
   first
 rescue
-  OpenFailed(_) -> None
+  OpenFailed(_) => None
 end
 ```
 
@@ -1797,8 +1797,8 @@ Each verb (`get`, `post`, `put`, `patch`, `delete`, `head`, `options`) has a
 
 ```kex
 match Http.get("https://example.com") do
-  Ok(res)   -> IO.printLine(res.status)
-  Error(e)  -> IO.printLine("failed: ${e.message}")
+  Ok(res)   => IO.printLine(res.status)
+  Error(e)  => IO.printLine("failed: ${e.message}")
 end
 ```
 
@@ -1817,8 +1817,8 @@ main do
     .get("/") { |req| Web.Response.text("hello") }
     .get("/api") { |req| Web.Response.json("{\"ok\":true}") }
   match server.start() do
-    Ok(_) -> IO.printLine("serving")
-    Error(e) -> IO.printLine("failed: ${e}")
+    Ok(_) => IO.printLine("serving")
+    Error(e) => IO.printLine("failed: ${e}")
   end
 end
 ```

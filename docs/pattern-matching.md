@@ -4,11 +4,16 @@
 
 ```kex
 match value do
-  pattern1 -> result1
-  pattern2 -> result2
-  _ -> default
+  pattern1 => result1
+  pattern2 => result2
+  _ => default
 end
 ```
+
+Arms take `=>`. So do bare `when` clauses, `rescue` clauses and `receive` arms:
+`->` belongs to the type language alone (function types and return
+annotations), so the line you are reading tells you which of the two you are
+in.
 
 ## Pattern Types
 
@@ -16,9 +21,9 @@ end
 
 ```kex
 match n do
-  0 -> "zero"
-  1 -> "one"
-  _ -> "other"
+  0 => "zero"
+  1 => "one"
+  _ => "other"
 end
 ```
 
@@ -26,8 +31,8 @@ end
 
 ```kex
 match option do
-  Just(x) -> x
-  None -> default
+  Just(x) => x
+  None => default
 end
 ```
 
@@ -43,8 +48,8 @@ let first(@[x | _]) = Just(x)
 
 ```kex
 match shape do
-  Circle(r) -> 3.14 * r * r
-  Rectangle(w, h) -> w * h
+  Circle(r) => 3.14 * r * r
+  Rectangle(w, h) => w * h
 end
 ```
 
@@ -53,8 +58,8 @@ end
 ```kex
 let (x, y) = point
 match (a > 0, b > 0) do
-  (true, true) -> "both positive"
-  _ -> "not both"
+  (true, true) => "both positive"
+  _ => "not both"
 end
 ```
 
@@ -62,10 +67,10 @@ end
 
 ```kex
 match list do
-  [] -> "empty"
-  [x] -> "single"
-  [x, y] -> "pair"
-  [x | rest] -> "at least one"
+  [] => "empty"
+  [x] => "single"
+  [x, y] => "pair"
+  [x | rest] => "at least one"
 end
 ```
 
@@ -108,9 +113,9 @@ Trailing `if` in match clauses:
 
 ```kex
 match n do
-  0 -> "zero"
-  n if n > 0 -> "positive"
-  _ -> "negative"
+  0 => "zero"
+  n if n > 0 => "positive"
+  _ => "negative"
 end
 ```
 

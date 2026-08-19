@@ -13,8 +13,8 @@ assert(n == 42, "parse full match")
 
 # trailing: Error with parsed value + rest
 match Integer.parse("12ab") do
-  Ok(_) -> assert(false, "parse trailing — expected Error")
-  Error(e) -> do
+  Ok(_) => assert(false, "parse trailing — expected Error")
+  Error(e) => do
     assert(e.value == 12,   "parse trailing value")
     assert(e.rest == "ab",  "parse trailing rest")
     assert(e.position == 2, "parse trailing position")
@@ -23,8 +23,8 @@ end
 
 # invalid
 match Integer.parse("abc") do
-  Ok(_) -> assert(false, "parse invalid — unexpected Ok")
-  Error(e) -> do
+  Ok(_) => assert(false, "parse invalid — unexpected Ok")
+  Error(e) => do
     assert(e.position == 0, "parse invalid position")
     assert(e.rest == "abc", "parse invalid rest")
     assert(e.value == None, "parse invalid no value")
@@ -36,8 +36,8 @@ let Ok(f) = Float.parse("3.14")
 assert(f > 3.13, "Float.parse Ok")
 
 match Float.parse("xyz") do
-  Error(e) -> assert(e.message == "invalid float", "Float.parse invalid")
-  Ok(_) -> assert(false, "Float.parse invalid — unexpected Ok")
+  Error(e) => assert(e.message == "invalid float", "Float.parse invalid")
+  Ok(_) => assert(false, "Float.parse invalid — unexpected Ok")
 end
 
 # Number.parse — int-first, float fallback

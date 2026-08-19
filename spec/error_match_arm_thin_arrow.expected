@@ -1,0 +1,2 @@
+spec/error_match_arm_thin_arrow.kex:5:7: error: Expected '=>' in match clause, got ->
+Aborted: 1 syntax error — fix before running.

@@ -7,12 +7,12 @@ let OPTIONS = OptionParser.define("myapp", "A sample CLI application")
 
 main(args) do
   match OPTIONS.parse(args) do
-    Ok(options) -> do
+    Ok(options) => do
       IO.printLine("Parsed options:")
       IO.printLine("  name:    ${options.value("name", "")}")
       IO.printLine("  port:    ${options.integerValue("port").or(3000)}")
       IO.printLine("  verbose: ${options.flagEnabled?("verbose")}")
     end
-    Error(error) -> IO.printError("Error: ${OptionParser.errorMessage(error)}\n\n${OPTIONS.help}\n")
+    Error(error) => IO.printError("Error: ${OptionParser.errorMessage(error)}\n\n${OPTIONS.help}\n")
   end
 end

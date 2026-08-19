@@ -81,8 +81,8 @@ let regex(parts, values) = Kex.Intrinsic.Regex.tag(parts, values)
 # @return [[TaggedValidation.Issue]]
 let validateRegex(source: String) -> [TaggedValidation.Issue] do
   match Kex.Intrinsic.Regex.validate(source) do
-    Just((offset, message)) -> [TaggedValidation.fatalAt(offset, message)]
-    None          -> []
+    Just((offset, message)) => [TaggedValidation.fatalAt(offset, message)]
+    None          => []
   end
 end
 

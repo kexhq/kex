@@ -8,9 +8,9 @@ end
 
 let asMatchString(m: Comparison) -> String do
   match m do
-    Less -> "Less"
-    Equal -> "Equal"
-    Greater -> "Greater"
+    Less => "Less"
+    Equal => "Equal"
+    Greater => "Greater"
   end
 end
 

@@ -111,8 +111,8 @@ describe("Integer.parse and Float.parse") do
     assert(Integer.parse("abc").error?)
     # The payload is a ParseError record, so match it to reach the message.
     match Integer.parse("abc") do
-      Error(e) -> assert(e.message == "invalid integer")
-      Ok(v) -> assert(false, "expected Error, got ${v}")
+      Error(e) => assert(e.message == "invalid integer")
+      Ok(v) => assert(false, "expected Error, got ${v}")
     end
     # `none?` is Optional's; a Result crosses over with optional.
     assert(Integer.parse("abc").optional.none?)
@@ -166,8 +166,8 @@ describe("Integer.parse and Float.parse") do
     # Still a Result, so the failure is still matchable and still carries its
     # reason. This is why `parse` exists next to `to`.
     match Float.parse("xyz") do
-      Error(e) -> assert(e.message == "invalid float")
-      Ok(v) -> assert(false, "expected Error, got ${v}")
+      Error(e) => assert(e.message == "invalid float")
+      Ok(v) => assert(false, "expected Error, got ${v}")
     end
   end
 
@@ -179,11 +179,11 @@ describe("Integer.parse and Float.parse") do
 
   it("Integer.parsePrefix parses leading integer") do
     match Integer.parsePrefix("42abc") do
-      Just((n, rest)) -> do
+      Just((n, rest)) => do
         assert(n == 42)
         assert(rest == "abc")
       end
-      None -> assert(false, "expected Just")
+      None => assert(false, "expected Just")
     end
   end
 
@@ -254,11 +254,11 @@ end
 describe("Float.parsePrefix") do
   it("Float.parsePrefix parses leading float") do
     match Float.parsePrefix("3.14abc") do
-      Just((f, rest)) -> do
+      Just((f, rest)) => do
         assert(f == 3.14)
         assert(rest == "abc")
       end
-      None -> assert(false, "expected Just")
+      None => assert(false, "expected Just")
     end
   end
 

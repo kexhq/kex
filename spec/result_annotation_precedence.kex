@@ -23,8 +23,8 @@ let pick(n) = Right(n)
 unwrapOr : Number or! MathError -> Number -> Number
 let unwrapOr(r, fallback) do
   return match r do
-    Ok(v) -> v
-    Error(_) -> fallback
+    Ok(v) => v
+    Error(_) => fallback
   end
 end
 

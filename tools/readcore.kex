@@ -48,13 +48,13 @@ let sliceFunction(source: String, name: String) -> String do
   let startAt = lines.findIndex(&.startsWith?("'${name}'/"))
 
   match startAt do
-    None -> "(no function named ${name} in this module)"
-    Just(from) -> do
+    None => "(no function named ${name} in this module)"
+    Just(from) => do
       let rest = lines.drop(from + 1)
       let len = rest.findIndex { |l| l.startsWith?("'") && l.contains?("'/") }
       let body = match len do
-        Just(n) -> lines.drop(from).take(n + 1)
-        None    -> lines.drop(from)
+        Just(n) => lines.drop(from).take(n + 1)
+        None    => lines.drop(from)
       end
       body.join("\n")
     end
@@ -67,11 +67,11 @@ let READCORE_OPTIONS = OptionParser.define("readcore", "Decode Core Erlang binar
 
 main(args) do
   let parsed = match READCORE_OPTIONS.parse(args) do
-    Error(error) -> do
+    Error(error) => do
       IO.printError("readcore: ${OptionParser.errorMessage(error)}\n${READCORE_OPTIONS.help}\n")
       return 1
     end
-    Ok(options) -> options
+    Ok(options) => options
   end
   let files = parsed.arguments
   let fnName = parsed.value("fn")
@@ -84,8 +84,8 @@ main(args) do
 
   files.each do |path|
     match FS.File.read(path) do
-      None -> IO.printError("readcore: cannot read ${path}")
-      Just(source) -> do
+      None => IO.printError("readcore: cannot read ${path}")
+      Just(source) => do
         var body = decode(source)
 
         if fnName.present?

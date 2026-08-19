@@ -28,11 +28,11 @@ describe("Tey.Lockfile round trip") do
   it("decodes what it encoded") do
     let state: LockState or! String = Tey.Lockfile.decode(Tey.Lockfile.encode(sample()))
     match state do
-      Error(message) -> do
+      Error(message) => do
         IO.printLine("decode failed: ${message}")
         assert(false)
       end
-      Ok(back) -> do
+      Ok(back) => do
         assert(back.kexRequirement == ">= 0.3.3")
         assert(back.kexVersion == "0.3.4")
         assert(back.lockedDependencies.count == 1)
@@ -99,24 +99,24 @@ describe("Tey.Lockfile.decode") do
     # cannot understand a newer lockfile must say so rather than misread it.
     let state: LockState or! String = Tey.Lockfile.decode(`{"version": 2, "kex": {}, "deps": {}}`)
     match state do
-      Error(message) -> assert(message.contains?("version"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("version"))
+      Ok(_) => assert(false)
     end
   end
 
   it("refuses text that is not JSON") do
     let state: LockState or! String = Tey.Lockfile.decode("this is not a lockfile")
     match state do
-      Error(message) -> assert(message.contains?("JSON"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("JSON"))
+      Ok(_) => assert(false)
     end
   end
 
   it("refuses a lockfile with no kex metadata") do
     let state: LockState or! String = Tey.Lockfile.decode(`{"version": 1, "deps": {}}`)
     match state do
-      Error(message) -> assert(message.contains?("kex"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("kex"))
+      Ok(_) => assert(false)
     end
   end
 
@@ -129,8 +129,8 @@ describe("Tey.Lockfile.decode") do
         "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
                            "commit": "", "sha256": "deadbeef", "groups": []}}}`)
     match noCommit do
-      Error(message) -> assert(message.contains?("incomplete"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("incomplete"))
+      Ok(_) => assert(false)
     end
 
     let noDigest: LockState or! String = Tey.Lockfile.decode(
@@ -138,8 +138,8 @@ describe("Tey.Lockfile.decode") do
         "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
                            "commit": "abc123", "sha256": "", "groups": []}}}`)
     match noDigest do
-      Error(message) -> assert(message.contains?("incomplete"))
-      Ok(_) -> assert(false)
+      Error(message) => assert(message.contains?("incomplete"))
+      Ok(_) => assert(false)
     end
   end
 

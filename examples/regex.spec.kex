@@ -7,8 +7,8 @@ using Regex
 describe("matching") do
   it("matches returns Just(match) on a hit") do
     match "abc123".matches(regex`\d+`) do
-      Just(m) -> assert(m.get(0, "") == "123")     # get(0) = whole match
-      None    -> assert(false)
+      Just(m) => assert(m.get(0, "") == "123")     # get(0) = whole match
+      None    => assert(false)
     end
   end
 
@@ -62,8 +62,8 @@ describe("flags and equivalence") do
 
   it("tag form and ordinary call produce equivalent regexes") do
     match regex("\\d") do
-      Ok(re)   -> assert("x9".matches?(re) == "x9".matches?(regex`\d`))
-      Error(_) -> assert(false)
+      Ok(re)   => assert("x9".matches?(re) == "x9".matches?(regex`\d`))
+      Error(_) => assert(false)
     end
   end
 end

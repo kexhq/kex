@@ -6,7 +6,7 @@ foul pingServer do
   spawn do
     loop do
       receive do |sender|
-        :ping -> sender.send(:pong)
+        :ping => sender.send(:pong)
       end
     end
   end
@@ -16,6 +16,6 @@ main do
   let server = pingServer()
   server.send(:ping)
   receive do
-    :pong -> IO.printLine("pong")
+    :pong => IO.printLine("pong")
   end
 end

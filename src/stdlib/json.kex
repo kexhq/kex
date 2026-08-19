@@ -52,20 +52,20 @@ end
 stringify : Any -> String
 let stringify(value: Any) -> String do
   match Kex.Intrinsic.Kex.kind(value) do
-    :none -> return "null"
-    :bool -> return value then "true" else "false"
-    :integer -> return "${value}"
-    :float -> return "${value}"
-    :string -> return encodeString(value)
-    :list -> return "[${value.map(~stringify).join(",")}]"
-    :map -> do
+    :none => return "null"
+    :bool => return value then "true" else "false"
+    :integer => return "${value}"
+    :float => return "${value}"
+    :string => return encodeString(value)
+    :list => return "[${value.map(~stringify).join(",")}]"
+    :map => do
       let fields = Kex.Intrinsic.Map.entries(value).map do |entry|
         let (key, item) = entry
         "${encodeString(objectKey(key))}:${stringify(item)}"
       end
       return "{${fields.join(",")}}"
     end
-    _ -> return "null"
+    _ => return "null"
   end
 end
 
@@ -82,8 +82,8 @@ private do
 
   let validateOptions(options: {Atom: Bool}) -> Error? do
     match Kex.Intrinsic.Map.keys(options).find { |key| key != allowCommentsKey() } do
-      Just(key) -> return Just(UnknownOption(key))
-      None -> return None
+      Just(key) => return Just(UnknownOption(key))
+      None => return None
     end
   end
 
@@ -128,16 +128,16 @@ private do
   let parseValue(cursor: Input, allowComments: Bool) -> Result<(Any, Input), Error> do
     let current = skipIgnored(cursor, allowComments).try
     match current.peek do
-      None -> return Error(UnexpectedEnd(current.pos))
-      Just('n') -> return parseLiteral(current, "null", None)
-      Just('t') -> return parseLiteral(current, "true", true)
-      Just('f') -> return parseLiteral(current, "false", false)
-      Just('"') -> return parseString(current)
-      Just('[') -> return parseArray(current, allowComments)
-      Just('{') -> return parseObject(current, allowComments)
-      Just('-') -> return parseNumber(current)
-      Just(c) when c.digit? -> return parseNumber(current)
-      Just(c) -> return Error(UnexpectedCharacter("${c}", current.pos))
+      None => return Error(UnexpectedEnd(current.pos))
+      Just('n') => return parseLiteral(current, "null", None)
+      Just('t') => return parseLiteral(current, "true", true)
+      Just('f') => return parseLiteral(current, "false", false)
+      Just('"') => return parseString(current)
+      Just('[') => return parseArray(current, allowComments)
+      Just('{') => return parseObject(current, allowComments)
+      Just('-') => return parseNumber(current)
+      Just(c) when c.digit? => return parseNumber(current)
+      Just(c) => return Error(UnexpectedCharacter("${c}", current.pos))
     end
   end
 
@@ -146,8 +146,8 @@ private do
     var index = 0
     while index < literal.count
       match current.peek do
-        Just(c) when c == literal.at(index) -> current = current.advance
-        _ -> return Error(InvalidLiteral(literal, cursor.pos))
+        Just(c) when c == literal.at(index) => current = current.advance
+        _ => return Error(InvalidLiteral(literal, cursor.pos))
       end
       index = index + 1
     end
@@ -164,15 +164,15 @@ private do
     var pieces: [String] = []
     loop do
       match current.peek do
-        None -> return Error(UnexpectedEnd(current.pos))
-        Just('"') -> return Ok((pieces.join(""), current.advance))
-        Just('\\') -> do
+        None => return Error(UnexpectedEnd(current.pos))
+        Just('"') => return Ok((pieces.join(""), current.advance))
+        Just('\\') => do
           let (piece, advanced) = parseEscape(current).try
           pieces.push!(piece)
           current = advanced
         end
-        Just(c) when c.codepoint < 32 -> return Error(UnexpectedCharacter("${c}", current.pos))
-        Just(c) -> do
+        Just(c) when c.codepoint < 32 => return Error(UnexpectedCharacter("${c}", current.pos))
+        Just(c) => do
           pieces.push!("${c}")
           current = current.advance
         end
@@ -183,17 +183,17 @@ private do
   let parseEscape(cursor: Input) -> Result<(String, Input), Error> do
     let escaped = cursor.advance
     match escaped.peek do
-      None -> return Error(UnexpectedEnd(escaped.pos))
-      Just('"') -> return Ok(("\"", escaped.advance))
-      Just('\\') -> return Ok(("\\", escaped.advance))
-      Just('/') -> return Ok(("/", escaped.advance))
-      Just('b') -> return Ok((String.fromCodepoint(8).or(""), escaped.advance))
-      Just('f') -> return Ok((String.fromCodepoint(12).or(""), escaped.advance))
-      Just('n') -> return Ok(("\n", escaped.advance))
-      Just('r') -> return Ok(("\r", escaped.advance))
-      Just('t') -> return Ok(("\t", escaped.advance))
-      Just('u') -> return parseUnicodeEscape(escaped.advance, cursor.pos)
-      Just(c) -> return Error(InvalidEscape("${c}", cursor.pos))
+      None => return Error(UnexpectedEnd(escaped.pos))
+      Just('"') => return Ok(("\"", escaped.advance))
+      Just('\\') => return Ok(("\\", escaped.advance))
+      Just('/') => return Ok(("/", escaped.advance))
+      Just('b') => return Ok((String.fromCodepoint(8).or(""), escaped.advance))
+      Just('f') => return Ok((String.fromCodepoint(12).or(""), escaped.advance))
+      Just('n') => return Ok(("\n", escaped.advance))
+      Just('r') => return Ok(("\r", escaped.advance))
+      Just('t') => return Ok(("\t", escaped.advance))
+      Just('u') => return parseUnicodeEscape(escaped.advance, cursor.pos)
+      Just(c) => return Error(InvalidEscape("${c}", cursor.pos))
     end
   end
 
@@ -215,8 +215,8 @@ private do
     end
 
     match String.fromCodepoint(codepoint) do
-      Just(value) -> return Ok((value, advanced))
-      None -> return Error(InvalidUnicodeEscape("invalid codepoint", escapePosition))
+      Just(value) => return Ok((value, advanced))
+      None => return Error(InvalidUnicodeEscape("invalid codepoint", escapePosition))
     end
   end
 
@@ -226,14 +226,14 @@ private do
     var count = 0
     while count < 4
       match current.peek do
-        Just(c) -> do
+        Just(c) => do
           match hexValue(c) do
-            Just(digit) -> value = value * 16 + digit
-            None -> return Error(InvalidUnicodeEscape("${c}", escapePosition))
+            Just(digit) => value = value * 16 + digit
+            None => return Error(InvalidUnicodeEscape("${c}", escapePosition))
           end
           current = current.advance
         end
-        None -> return Error(UnexpectedEnd(current.pos))
+        None => return Error(UnexpectedEnd(current.pos))
       end
       count = count + 1
     end
@@ -256,13 +256,13 @@ private do
       values.push!(value)
       current = skipIgnored(afterValue, allowComments).try
       match current.peek do
-        Just(']') -> return Ok((values, current.advance))
-        Just(',') -> do
+        Just(']') => return Ok((values, current.advance))
+        Just(',') => do
           current = skipIgnored(current.advance, allowComments).try
           return Error(UnexpectedCharacter("]", current.pos)) if current.peek == Just(']')
         end
-        None -> return Error(UnexpectedEnd(current.pos))
-        Just(c) -> return Error(UnexpectedCharacter("${c}", current.pos))
+        None => return Error(UnexpectedEnd(current.pos))
+        Just(c) => return Error(UnexpectedCharacter("${c}", current.pos))
       end
     end
   end
@@ -281,13 +281,13 @@ private do
       values = Kex.Intrinsic.Map.put(values, key, value)
       current = skipIgnored(afterValue, allowComments).try
       match current.peek do
-        Just('}') -> return Ok((values, current.advance))
-        Just(',') -> do
+        Just('}') => return Ok((values, current.advance))
+        Just(',') => do
           current = skipIgnored(current.advance, allowComments).try
           return Error(UnexpectedCharacter("}", current.pos)) if current.peek == Just('}')
         end
-        None -> return Error(UnexpectedEnd(current.pos))
-        Just(c) -> return Error(UnexpectedCharacter("${c}", current.pos))
+        None => return Error(UnexpectedEnd(current.pos))
+        Just(c) => return Error(UnexpectedCharacter("${c}", current.pos))
       end
     end
   end
@@ -302,7 +302,7 @@ private do
     end
 
     match current.peek do
-      Just('0') -> do
+      Just('0') => do
         chars.push!('0')
         current = current.advance
         if current.peek != None
@@ -310,14 +310,14 @@ private do
           return Error(InvalidNumber("${chars.join("")}${digitAfterZero}", start)) if digitAfterZero.digit?
         end
       end
-      Just(c) when c >= '1' && c <= '9' -> do
-        while match current.peek do Just(d) -> d.digit? _ -> false end
+      Just(c) when c >= '1' && c <= '9' => do
+        while match current.peek do Just(d) => d.digit? _ => false end
           let Just(integerDigit) = current.peek
           chars.push!(integerDigit)
           current = current.advance
         end
       end
-      _ -> return Error(InvalidNumber(chars.join(""), start))
+      _ => return Error(InvalidNumber(chars.join(""), start))
     end
 
     var floating = false
@@ -325,8 +325,8 @@ private do
       floating = true
       chars.push!('.')
       current = current.advance
-      return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) -> !d.digit? _ -> true end
-      while match current.peek do Just(d) -> d.digit? _ -> false end
+      return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) => !d.digit? _ => true end
+      while match current.peek do Just(d) => d.digit? _ => false end
         let Just(fractionDigit) = current.peek
         chars.push!(fractionDigit)
         current = current.advance
@@ -343,8 +343,8 @@ private do
         chars.push!(sign)
         current = current.advance
       end
-      return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) -> !d.digit? _ -> true end
-      while match current.peek do Just(d) -> d.digit? _ -> false end
+      return Error(InvalidNumber(chars.join(""), start)) if match current.peek do Just(d) => !d.digit? _ => true end
+      while match current.peek do Just(d) => d.digit? _ => false end
         let Just(exponentDigit) = current.peek
         chars.push!(exponentDigit)
         current = current.advance
@@ -354,13 +354,13 @@ private do
     let source = chars.join("")
     if floating
       match Float.parse(source) do
-        Ok(value) -> return Ok((value, current))
-        Error(_) -> return Error(InvalidNumber(source, start))
+        Ok(value) => return Ok((value, current))
+        Error(_) => return Error(InvalidNumber(source, start))
       end
     end
     match Integer.parse(source) do
-      Ok(value) -> return Ok((value, current))
-      Error(_) -> return Error(InvalidNumber(source, start))
+      Ok(value) => return Ok((value, current))
+      Error(_) => return Error(InvalidNumber(source, start))
     end
   end
 
@@ -369,15 +369,15 @@ private do
     var index = 0
     while index < value.count
       match value.at(index) do
-        '"' -> pieces.push!("\\\"")
-        '\\' -> pieces.push!("\\\\")
-        c when c.codepoint == 8 -> pieces.push!("\\b")
-        c when c.codepoint == 12 -> pieces.push!("\\f")
-        '\n' -> pieces.push!("\\n")
-        '\r' -> pieces.push!("\\r")
-        '\t' -> pieces.push!("\\t")
-        c when c.codepoint < 32 -> pieces.push!("\\u${hex4(c.codepoint)}")
-        c -> pieces.push!("${c}")
+        '"' => pieces.push!("\\\"")
+        '\\' => pieces.push!("\\\\")
+        c when c.codepoint == 8 => pieces.push!("\\b")
+        c when c.codepoint == 12 => pieces.push!("\\f")
+        '\n' => pieces.push!("\\n")
+        '\r' => pieces.push!("\\r")
+        '\t' => pieces.push!("\\t")
+        c when c.codepoint < 32 => pieces.push!("\\u${hex4(c.codepoint)}")
+        c => pieces.push!("${c}")
       end
       index = index + 1
     end

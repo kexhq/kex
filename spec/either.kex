@@ -5,12 +5,12 @@ main do
   let right = Right("yes")
 
   match left do
-    Left(value) -> IO.printLine("left ${value}")
-    Right(value) -> IO.printLine("right ${value}")
+    Left(value) => IO.printLine("left ${value}")
+    Right(value) => IO.printLine("right ${value}")
   end
 
   match right do
-    Left(value) -> IO.printLine("left ${value}")
-    Right(value) -> IO.printLine("right ${value}")
+    Left(value) => IO.printLine("left ${value}")
+    Right(value) => IO.printLine("right ${value}")
   end
 end

@@ -58,8 +58,8 @@ main do
   # the tuple SIZE tells two layouts sharing a tag apart.
   IO.printLine(ParseError { message: "local" }.message)
   match Float.parse("abc") do
-    Ok(f)    -> IO.printLine(f)
-    Error(e) -> IO.printLine(e.message)
+    Ok(f)    => IO.printLine(f)
+    Error(e) => IO.printLine(e.message)
   end
 
   IO.printLine("-- a top-level constant beats an imported accessor --")
@@ -100,11 +100,11 @@ main do
 
   IO.printLine("-- an untyped binding dispatches on its runtime value --")
   match Just({ year: "2026" }) do
-    Just(entry) -> IO.printLine(entry.get(:year, "?"))
-    None        -> IO.printLine("none")
+    Just(entry) => IO.printLine(entry.get(:year, "?"))
+    None        => IO.printLine("none")
   end
   match "2026-07".matches(namedGroups) do
-    Just(found) -> IO.printLine(found.get(:year, "?"))
-    None        -> IO.printLine("no match")
+    Just(found) => IO.printLine(found.get(:year, "?"))
+    None        => IO.printLine("no match")
   end
 end

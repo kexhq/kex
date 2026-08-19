@@ -46,8 +46,8 @@ foul startAccumulator -> Process<(:add, Int) | :get> do
 
     loop do
       receive do
-        (:add, n) -> items.push!(n)
-        (:get, sender) -> sender.send(items)
+        (:add, n) => items.push!(n)
+        (:get, sender) => sender.send(items)
       end
     end
   end

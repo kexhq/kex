@@ -1,0 +1,8 @@
+# kex: no-check
+# Arms take `=>`; `->` is the type language's alone.
+main do
+  match 1 do
+    1 -> "one"
+    _ -> "other"
+  end
+end

@@ -138,8 +138,8 @@ make Option implement: Monad do
   let wrap(value: A) -> Option<A> = Just(value)
   let flatMap(f: A -> Option<B>) -> Option<B> =
     match this do
-      Just(x) -> f(x)
-      None -> None
+      Just(x) => f(x)
+      None => None
     end
 end
 
@@ -147,8 +147,8 @@ make Result implement: Monad do
   let wrap(value: A) -> Result<A, E> = Ok(value)
   let flatMap(f: A -> Result<B, E>) -> Result<B, E> =
     match this do
-      Ok(x) -> f(x)
-      Error(e) -> Error(e)
+      Ok(x) => f(x)
+      Error(e) => Error(e)
     end
 end
 ```
@@ -207,8 +207,8 @@ foul startCounter -> Process<CounterMessage> do
     var state = 0
     loop do
       receive do
-        :increment -> state = state + 1
-        (:get, sender) -> sender.send(state)
+        :increment => state = state + 1
+        (:get, sender) => sender.send(state)
       end
     end
   end

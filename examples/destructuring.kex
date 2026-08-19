@@ -4,15 +4,15 @@ end
 
 let describeResult(result: Result<Integer, String>) -> String do
   match result do
-    Ok(n)    -> "got ${n}"
-    Error(e) -> "failed: ${e}"
+    Ok(n)    => "got ${n}"
+    Error(e) => "failed: ${e}"
   end
 end
 
 let describeOptional(opt: Integer?) -> String do
   match opt do
-    Just(n) -> "got ${n}"
-    None    -> "nothing"
+    Just(n) => "got ${n}"
+    None    => "nothing"
   end
 end
 

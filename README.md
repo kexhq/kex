@@ -170,10 +170,10 @@ Kex supports multi-clause functions, `match` expressions, destructuring, and `@p
 ```rb
 let fizzBuzz(n: Int) -> String do
   match (n.modulo(3), n.modulo(5)) do
-    (0, 0) -> "FizzBuzz"
-    (0, _) -> "Fizz"
-    (_, 0) -> "Buzz"
-    (_, _) -> n.to(String).or("")
+    (0, 0) => "FizzBuzz"
+    (0, _) => "Fizz"
+    (_, 0) => "Buzz"
+    (_, _) => n.to(String).or("")
   end
 end
 
@@ -194,8 +194,8 @@ type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 let parseInt(s: String) -> Result<Int, ParseError> do
   return Error(EmptyInput) if s.empty?
   match Integer.parse(s) do
-    Ok(n)    -> Ok(n)
-    Error(_) -> Error(InvalidFormat(s))
+    Ok(n)    => Ok(n)
+    Error(_) => Error(InvalidFormat(s))
   end
 end
 
@@ -340,8 +340,8 @@ let app = Http.routes do
 
   get "/users/:id" do |req|
     match UserService.find(req.params.id) do
-      Just(user) -> Response.json(user)
-      None -> Response.notFound("user not found")
+      Just(user) => Response.json(user)
+      None => Response.notFound("user not found")
     end
   end
 
