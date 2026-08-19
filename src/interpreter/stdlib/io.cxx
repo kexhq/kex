@@ -139,8 +139,10 @@ auto Evaluator::registerIOBuiltins() -> void {
 
     // Mock.System — makes the machine claim to be something else, so a test
     // for Windows behaviour can run on this one. Same shape as Mock.FS: a
-    // setter per fact, and one `clear` that hands everything back.
+    // setter per fact, and one `clear` that hands everything back. Test-only
+    // like every Mock.* intrinsic (issue #144).
     defineIntrinsic("System::mockOS", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.System.OS");
         if (!args.empty())
             if (auto* atom = std::get_if<AtomValue>(&args[0]->data))
                 m_mockOS = atom->name;
@@ -148,6 +150,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     defineIntrinsic("System::mockBitWidth", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.System.BITWIDTH");
         if (!args.empty())
             if (auto* width = std::get_if<IntValue>(&args[0]->data))
                 m_mockBitWidth = width->value;
@@ -155,6 +158,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     });
 
     defineIntrinsic("System::mockClear", [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.System.clear");
         m_mockOS.reset();
         m_mockBitWidth.reset();
         return Value::unit();
@@ -216,8 +220,12 @@ auto Evaluator::registerIOBuiltins() -> void {
     //   Mock.IO.output()             — return captured output as a String
     //   Mock.IO.clear()              — reset output buffer + input queue
     //   Mock.IO.stop()               — deactivate mock mode and clear
+    //
+    // Capturing the console is as much a lie as faking a file, so the whole
+    // family is test-only (issue #144).
 
     auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.IO.start");
         m_mockIO = true;
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();
@@ -225,6 +233,7 @@ auto Evaluator::registerIOBuiltins() -> void {
     };
 
     auto mockInput = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.IO.input");
         if (args.size() == 1 && std::holds_alternative<ListValue>(args[0]->data)) {
             for (const auto& elem : std::get<ListValue>(args[0]->data).elements)
                 m_mockIOInputLines.push_back(elem->toString());
@@ -236,16 +245,19 @@ auto Evaluator::registerIOBuiltins() -> void {
     };
 
     auto mockOutput = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.IO.output");
         return Value::string(m_mockIOOutput);
     };
 
     auto mockClear = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.IO.clear");
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();
         return Value::unit();
     };
 
     auto mockStop = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.IO.stop");
         m_mockIO = false;
         m_mockIOOutput.clear();
         m_mockIOInputLines.clear();

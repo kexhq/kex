@@ -163,6 +163,14 @@ public:
     // line), exposed to Kex code via Args.all/Args.get/Args.count.
     auto setArgs(std::vector<std::string> args) -> void;
     auto setModuleRoots(std::vector<std::string> roots) -> void;
+    // Mock.* is test-only: a mock lets one part of a program lie to another
+    // about the filesystem, environment, platform, network or console
+    // (issue #144), so the intrinsics refuse to run unless the runtime is
+    // executing a spec suite (a *.spec.kex entry), an interactive REPL, or a
+    // run the user explicitly opted into with --allow-mocks. Defaults to
+    // denied.
+    auto setMocksAllowed(bool allowed) -> void;
+    auto mocksAllowed() const -> bool { return m_mocksAllowed; }
 
 private:
     // Top-level
@@ -275,6 +283,11 @@ private:
     auto defineModule(const std::string& name) -> void;
     auto definePublic(const std::string& name, NativeFunc fn) -> void;
     auto defineDual(const std::string& name, NativeFunc fn) -> void;
+    // Throws unless setMocksAllowed(true) — the runtime half of "Mock.* is
+    // only callable from tests". `api` is the public Kex name of the entry
+    // point being denied (e.g. "Mock.FS.File"), so the error names what the
+    // program actually called rather than the private intrinsic behind it.
+    auto requireMocksAllowed(const std::string& api) const -> void;
     auto registerBuiltins() -> void;
     auto registerAdtConstructors() -> void;
     auto registerIOBuiltins() -> void;
@@ -398,6 +411,11 @@ private:
 
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
+
+    // See setMocksAllowed. Denied by default: an Evaluator used for
+    // compile-time evaluation (compiled do, tagged-literal validation) is
+    // exactly the place a dependency must not be able to install a mock.
+    bool m_mocksAllowed = false;
 
     bool m_mockIO = false;
     std::string m_mockIOOutput;

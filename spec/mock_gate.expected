@@ -1,0 +1,2 @@
+before: false
+Internal error: Mock.FS.File is test-only — Mock.* runs in spec files (*.spec.kex), the REPL, or with --allow-mocks

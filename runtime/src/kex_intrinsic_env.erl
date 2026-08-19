@@ -39,8 +39,10 @@
 
 %% Mock.ENV — a test's overlay on the process environment, held in the
 %% process dictionary like the file and IO mocks. kex_io:env_map/0 applies it,
-%% so every ENV function sees the same answer.
+%% so every ENV function sees the same answer. Test-only like every Mock.*
+%% intrinsic (issue #144).
 mockSet(Name, Value) ->
+    kex_test:require_mocks_allowed(<<"Mock.ENV.set">>),
     Overlay = case erlang:get(kex_mock_env) of undefined -> #{}; M -> M end,
     erlang:put(kex_mock_env, maps:put(Name, Value, Overlay)),
     erlang:put(kex_mock_env_unset,
@@ -48,6 +50,7 @@ mockSet(Name, Value) ->
     'Kex.Unit'.
 
 mockUnset(Name) ->
+    kex_test:require_mocks_allowed(<<"Mock.ENV.unset">>),
     Overlay = case erlang:get(kex_mock_env) of undefined -> #{}; M -> M end,
     erlang:put(kex_mock_env, maps:remove(Name, Overlay)),
     Unset = case erlang:get(kex_mock_env_unset) of undefined -> []; L -> L end,
@@ -55,6 +58,7 @@ mockUnset(Name) ->
     'Kex.Unit'.
 
 mockClear() ->
+    kex_test:require_mocks_allowed(<<"Mock.ENV.clear">>),
     erlang:erase(kex_mock_env),
     erlang:erase(kex_mock_env_unset),
     'Kex.Unit'.

@@ -1,5 +1,8 @@
 # Filesystem module demonstration
 # Covers FS.File, FS.Directory, FileHandle, and Mock.FS
+#
+# Mock.* is test-only, so this one needs the flag:
+#   kex --allow-mocks examples/filesystem.kex
 
 using FS
 

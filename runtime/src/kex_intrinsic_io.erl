@@ -17,9 +17,24 @@ warn(Msg)       -> kex_io:print_error(Msg).
 warning(Msg)    -> kex_io:print_error(Msg).
 getLine()       -> kex_io:read_line().
 get()           -> kex_io:read_char().
-ioMockStart()     -> kex_io:mock_start().
-ioMockStop()      -> kex_io:mock_stop().
-ioMockOutput()    -> kex_io:mock_output().
-ioMockClear()     -> kex_io:mock_clear().
-ioMockInput(Lines) when is_list(Lines) -> kex_io:mock_input(Lines);
-ioMockInput(Line) -> kex_io:mock_input([Line]).
+%% Mock.IO — capturing the console is as much a lie as faking a file, so
+%% the whole family is test-only like every other Mock.* intrinsic
+%% (issue #144, kex_test:require_mocks_allowed/1).
+ioMockStart() ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.start">>),
+    kex_io:mock_start().
+ioMockStop() ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.stop">>),
+    kex_io:mock_stop().
+ioMockOutput() ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.output">>),
+    kex_io:mock_output().
+ioMockClear() ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.clear">>),
+    kex_io:mock_clear().
+ioMockInput(Lines) when is_list(Lines) ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.input">>),
+    kex_io:mock_input(Lines);
+ioMockInput(Line) ->
+    kex_test:require_mocks_allowed(<<"Mock.IO.input">>),
+    kex_io:mock_input([Line]).

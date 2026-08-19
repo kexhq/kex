@@ -23,6 +23,19 @@ auto runFS(const std::string& source) -> ValuePtr {
     return run("using FS\n" + source);
 }
 
+// Like runFS, but with the Mock.* gate opened (issue #144). Kept separate
+// from `run`/`runFS` on purpose: those stay in the default denied state, so
+// the gate itself is under test every time one of them runs mock-free code.
+auto runFSMocking(const std::string& source) -> ValuePtr {
+    Lexer lexer("using FS\n" + source);
+    auto tokens = lexer.tokenizeAll();
+    Parser parser(std::move(tokens));
+    auto program = parser.parseProgram();
+    Evaluator evaluator;
+    evaluator.setMocksAllowed(true);
+    return evaluator.execute(program);
+}
+
 auto runOutput(const std::string& source) -> std::string {
     Lexer lexer(source);
     auto tokens = lexer.tokenizeAll();
@@ -1293,8 +1306,54 @@ int main() {
             std::filesystem::remove(path);
         });
 
+        // Issue #144: Mock.* let one part of a program lie to another about
+        // the filesystem, environment, platform, network and console, from
+        // anywhere, because nothing ever checked. These assert the check.
+        it("refuses Mock.* unless the run allows mocks", []() {
+            const std::vector<std::pair<std::string, std::string>> cases = {
+                {"Mock.FS.File(\"secret.txt\", \"lie\")", "Mock.FS.File"},
+                {"Mock.FS.Directory(\"cache\")", "Mock.FS.Directory"},
+                {"Mock.FS.clear()", "Mock.FS.clear"},
+                {"Mock.ENV.set(\"HOME\", \"/tmp/elsewhere\")", "Mock.ENV.set"},
+                {"Mock.System.OS(:windows)", "Mock.System.OS"},
+                {"Mock.Http.start()", "Mock.Http.start"},
+                {"Mock.IO.start()", "Mock.IO.start"},
+            };
+            for (const auto& [expression, api] : cases) {
+                bool threw = false;
+                try {
+                    runFS("main do\n  " + expression + "\nend\n");
+                } catch (const std::exception& error) {
+                    threw = true;
+                    assertTrue(std::string(error.what()).find(api + " is test-only")
+                               != std::string::npos, error.what());
+                }
+                assertTrue(threw, "mock should be denied outside a test: " + api);
+            }
+        });
+
+        it("leaves the real filesystem answering when a mock is denied", []() {
+            // The failure mode that matters is not the error — it is a
+            // program continuing with a mocked answer it never earned.
+            bool threw = false;
+            try {
+                runFS(
+                    "main do\n"
+                    "  Mock.FS.File(\"/nonexistent/kex/path/xyz\", \"forged\")\n"
+                    "end\n");
+            } catch (const std::exception&) {
+                threw = true;
+            }
+            assertTrue(threw);
+            auto after = runFS(
+                "main do\n"
+                "  FS.File.exists?(\"/nonexistent/kex/path/xyz\")\n"
+                "end\n");
+            assertTrue(!std::get<BoolValue>(after->data).value);
+        });
+
         it("applies open modes to Mock.FS handles", []() {
-            auto result = runFS(
+            auto result = runFSMocking(
                 "main do\n"
                 "  Mock.FS.File(\"mock.txt\", \"old\")\n"
                 "  let writer = FS.File.open(\"mock.txt\", FS.Write).try\n"
@@ -1328,7 +1387,7 @@ int main() {
         });
 
         it("filesystem Optional success values are wrapped in Just", []() {
-            auto result = runFS(
+            auto result = runFSMocking(
                 "main do\n"
                 "  Mock.FS.File(\"wrapped.txt\", \"hello\\n\")\n"
                 "  let Just(content) = FS.File.read(\"wrapped.txt\")\n"

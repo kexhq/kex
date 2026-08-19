@@ -265,4 +265,5 @@ module FS do
   end
 end
 
-# Mock.FS declarations are in http.kex alongside Mock.Http and Mock.IO.
+# Mock.FS declarations are in mock.kex alongside Mock.Http, Mock.ENV,
+# Mock.System and Mock.IO.

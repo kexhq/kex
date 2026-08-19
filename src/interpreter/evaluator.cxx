@@ -382,7 +382,25 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
     m_loadedModulePaths.push_back(std::move(path));
     auto* ownedProgram = program.get();
     m_loadedModulePrograms.push_back(std::move(program));
-    for (const auto& item : ownedProgram->items) execTopLevel(item);
+    // A module's declarations are global for the rest of the run. Loading is
+    // lazy, so this can fire from inside a function body — executing the
+    // items against the CURRENT m_env would define them into that call's
+    // transient scope, and every binding would vanish when the call returned:
+    // the first `FS.File.read` through a wrapper function registered
+    // `FS.File::read` in the wrapper's local env and the next call reported
+    // `Undefined function: FS.File.read` (issue #144's secondary bug). Swap
+    // to the global environment for the duration of the load.
+    {
+        auto savedEnv = m_env;
+        m_env = m_globalEnv;
+        try {
+            for (const auto& item : ownedProgram->items) execTopLevel(item);
+        } catch (...) {
+            m_env = std::move(savedEnv);
+            throw;
+        }
+        m_env = std::move(savedEnv);
+    }
     m_loadingModules.erase(canonicalName);
 
     if (!m_moduleRegistry.contains(canonicalName)) {
@@ -486,6 +504,20 @@ auto Evaluator::loadPrelude() -> void {
 
 auto Evaluator::setReplMode(bool enabled) -> void {
     m_replMode = enabled;
+}
+
+auto Evaluator::setMocksAllowed(bool allowed) -> void {
+    m_mocksAllowed = allowed;
+}
+
+// Wording is shared with the BEAM gate (kex_test:require_mocks_allowed/1 in
+// runtime/src/kex_test.erl): both backends must deny with the same line, or
+// the -R parity suites diff them apart.
+auto Evaluator::requireMocksAllowed(const std::string& api) const -> void {
+    if (m_mocksAllowed) return;
+    throw std::runtime_error(
+        api + " is test-only — Mock.* runs in spec files (*.spec.kex), the "
+              "REPL, or with --allow-mocks");
 }
 
 auto Evaluator::setArgs(std::vector<std::string> args) -> void {
