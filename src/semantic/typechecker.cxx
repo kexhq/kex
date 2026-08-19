@@ -3724,7 +3724,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             return Type::named("Process", {freshTypeVar()});
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            inferBody(node.body);
+            if (node.counter) {
+                pushScope();
+                if (*node.counter != "_") defineVar(*node.counter, Type::integer());
+                inferBody(node.body);
+                popScope();
+            } else {
+                inferBody(node.body);
+            }
             return Type::voidType();  // infinite loop never returns
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {

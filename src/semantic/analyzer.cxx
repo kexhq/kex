@@ -449,9 +449,15 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             }
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
+            m_symbols.pushScope(m_inFoulContext);
+            if (node.counter && *node.counter != "_") {
+                m_symbols.define(Symbol{
+                    *node.counter, SymbolKind::Variable, false, false, true, expr.location});
+            }
             m_loopScopes.push_back(LoopScope::Loop);
             analyzeBody(node.body);
             m_loopScopes.pop_back();
+            m_symbols.popScope();
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
             if (node.condition) analyzeExpr(*node.condition);

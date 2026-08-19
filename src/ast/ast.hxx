@@ -288,6 +288,8 @@ struct ReceiveExpr {
 
 struct LoopExpr {
     std::vector<ExprPtr> body;
+    // `loop do |i| ... end` binds a 0-based iteration counter.
+    std::optional<std::string> counter;
 };
 
 struct WhileExpr {

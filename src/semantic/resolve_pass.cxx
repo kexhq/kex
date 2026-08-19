@@ -515,7 +515,14 @@ auto ResolvePass::resolveExpr(const ast::Expr& expr) -> void {
             if (node.afterBody) resolveExpr(**node.afterBody);
         }
         else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
-            resolveBody(node.body);
+            if (node.counter) {
+                pushScope();
+                defineLocal(*node.counter);
+                resolveBody(node.body);
+                popScope();
+            } else {
+                resolveBody(node.body);
+            }
         }
         else if constexpr (std::is_same_v<T, ast::WhileExpr>) {
             if (node.condition) resolveExpr(*node.condition);

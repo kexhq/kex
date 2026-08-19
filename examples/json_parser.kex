@@ -37,7 +37,7 @@ make Parser do
 
     let skipWhitespace() -> Parser do
       var p = this
-      loop
+      loop do
         match p.current do
           Just(' ')  -> p = p.advance
           Just('\n') -> p = p.advance
@@ -65,7 +65,7 @@ make Parser do
     let expectLiteral(word: String) -> Parser or! ParseError do
       var p = this
       var i = 0
-      loop
+      loop do
         return Ok(p) if i >= word.count
         if p.current == Just(word.at(i))
           p = p.advance
@@ -87,7 +87,7 @@ make Parser do
     let parseString() -> (Json, Parser) or! ParseError do
       var p = this.advance
       var chars: [Char] = []
-      loop
+      loop do
         match p.current do
           None      -> return Error(UnexpectedEnd)
           Just('"') -> return Ok((JsonString(chars.join("")), p.advance))
@@ -113,7 +113,7 @@ make Parser do
       var p = this.advance.skipWhitespace
       var items: [Json] = []
       return Ok((JsonArray([]), p.advance)) if p.current == Just(']')
-      loop
+      loop do
         let (value, nextP) = match p.parseValue() do
           Error(e) -> return Error(e)
           Ok(v)    -> v
@@ -132,7 +132,7 @@ make Parser do
       var p = this.advance.skipWhitespace
       var obj: { String: Json } = {}
       return Ok((JsonObject({}), p.advance)) if p.current == Just('}')
-      loop
+      loop do
         let (JsonString(key), afterKey) = match p.parseString() do
           Error(e) -> return Error(e)
           Ok(v)    -> v
@@ -159,7 +159,7 @@ make Parser do
         chars.push!('-')
         p = p.advance
       end
-      loop
+      loop do
         match p.current do
           Just(c) when c.digit? || c == '.' -> do
             chars.push!(c)

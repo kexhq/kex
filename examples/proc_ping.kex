@@ -4,7 +4,7 @@
 
 foul pingServer do
   spawn do
-    loop
+    loop do
       receive do |sender|
         :ping -> sender.send(:pong)
       end

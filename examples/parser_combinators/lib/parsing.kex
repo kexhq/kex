@@ -59,7 +59,7 @@ make Parser do
   let many(f: Parser -> Result<(T, Parser), ParseError>) -> ([T], Parser) do
     var results: [T] = []
     var p = this
-    loop
+    loop do
       trying do
         let (v, p2) = f(p).try
         results.push!(v)
@@ -79,7 +79,7 @@ make Parser do
   # Try each alternative in order, returning the first that succeeds.
   let choice(alts: [Parser -> Result<(T, Parser), ParseError>]) -> (T, Parser) or! ParseError do
     var i = 0
-    loop
+    loop do
       break if i >= alts.count
       trying do
         let f = alts.at(i)

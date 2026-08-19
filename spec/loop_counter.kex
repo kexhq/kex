@@ -1,0 +1,37 @@
+# `loop do |i|` binds a 0-based iteration counter.
+main do
+  loop do |counter|
+    IO.printLine(counter)
+    break if counter >= 9
+  end
+
+  # `next` advances the counter just like falling off the end of the body.
+  var odds = 0
+  loop do |i|
+    next if i % 2 == 0
+    odds = odds + i
+    break if i > 7
+  end
+  IO.printLine("odds: ${odds}")
+
+  # Independent counters, innermost binding wins.
+  loop do |outer|
+    loop do |inner|
+      IO.printLine("${outer}-${inner}")
+      break if inner == 1
+    end
+    break if outer == 1
+  end
+
+  # The counter is optional, and `_` discards it.
+  var n = 0
+  loop do
+    n = n + 1
+    break if n == 3
+  end
+  loop do |_|
+    n = n + 1
+    break
+  end
+  IO.printLine("n: ${n}")
+end

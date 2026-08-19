@@ -986,7 +986,7 @@ int main() {
             auto result = run(
                 "let countTo(limit: Int) -> Int do\n"
                 "  var i = 0\n"
-                "  loop\n"
+                "  loop do\n"
                 "    if i >= limit\n"
                 "      return i\n"
                 "    end\n"
@@ -2039,7 +2039,7 @@ int main() {
             auto out = runOutput(
                 "foul pingServer do\n"
                 "  spawn do\n"
-                "    loop\n"
+                "    loop do\n"
                 "      receive do |sender|\n"
                 "        :ping -> sender.send(:pong)\n"
                 "      end\n"
@@ -2403,7 +2403,7 @@ int main() {
             auto out = runOutput(
                 "foul pingServer do\n"
                 "  spawn do\n"
-                "    loop\n"
+                "    loop do\n"
                 "      receive do |sender|\n"
                 "        :ping -> sender.send(:pong)\n"
                 "      end\n"

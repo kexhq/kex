@@ -1,0 +1,6 @@
+# `loop` requires a `do ... end` block.
+main do
+  loop
+    break
+  end
+end

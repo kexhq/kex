@@ -1,0 +1,2 @@
+spec/error_loop_without_do.kex:3:7: error: Expected 'do' after 'loop', got Newline
+Aborted: 1 syntax error — fix before running.

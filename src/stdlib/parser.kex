@@ -80,6 +80,6 @@ module Parser do
     | Spread(Expression)
     | TrailingIf(Expression, Expression)
     | While(Expression, [Expression])
-    | Loop([Expression])
+    | Loop([String], [Expression])
     | RangeLit(Expression, Expression)
 end

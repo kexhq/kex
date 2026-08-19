@@ -21,7 +21,6 @@ auto parseFails(const std::string& source) -> bool {
 }
 
 auto itemCount(const std::string& source) -> size_t {
-
     return parse(source).items.size();
 }
 
@@ -573,7 +572,7 @@ int main() {
             auto program = parse(
                 "main do\n"
                 "  let pid = spawn do\n"
-                "    loop\n"
+                "    loop do\n"
                 "      receive do\n"
                 "        :ping -> :pong\n"
                 "      end\n"

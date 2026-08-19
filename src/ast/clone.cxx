@@ -285,7 +285,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.senderBinding = node.senderBinding;
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, LoopExpr>) {
-                out->kind = LoopExpr{cloneVec(node.body)};
+                out->kind = LoopExpr{cloneVec(node.body), node.counter};
             } else if constexpr (std::is_same_v<T, WhileExpr>) {
                 out->kind = WhileExpr{clone(node.condition), cloneVec(node.body)};
             } else if constexpr (std::is_same_v<T, LetExpr>) {

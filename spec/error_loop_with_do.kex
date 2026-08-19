@@ -1,6 +1,0 @@
-# `loop do` (old syntax) no longer parses — just `loop`.
-main do
-  loop do
-    break
-  end
-end

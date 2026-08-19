@@ -2603,6 +2603,21 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
   auto expr = std::make_unique<ast::Expr>();
   expr->location = currentLocation();
   expect(TokenType::Loop, "Expected 'loop'");
+
+  // `loop do ... end`, optionally binding a 0-based iteration counter:
+  // `loop do |i| ... end`.
+  expect(TokenType::Do, "Expected 'do' after 'loop'");
+  std::optional<std::string> counter;
+  if (match(TokenType::Pipe)) {
+    if (check(TokenType::Underscore)) {
+      advance();
+      counter = "_";
+    } else {
+      counter =
+          expect(TokenType::LowerIdent, "Expected loop counter name").value;
+    }
+    expect(TokenType::Pipe, "Expected '|' to close loop counter");
+  }
   skipNewlines();
 
   std::vector<ast::ExprPtr> body;
@@ -2613,7 +2628,7 @@ auto Parser::parseLoopExpr() -> ast::ExprPtr {
 
   expect(TokenType::End, "Expected 'end' to close loop");
 
-  expr->kind = ast::LoopExpr{std::move(body)};
+  expr->kind = ast::LoopExpr{std::move(body), std::move(counter)};
   return expr;
 }
 

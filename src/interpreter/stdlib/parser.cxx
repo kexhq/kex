@@ -742,7 +742,11 @@ static auto convertExpr(const ast::Expr& expr) -> ValuePtr {
         } else if constexpr (std::is_same_v<T, ast::LoopExpr>) {
             std::vector<ValuePtr> bodyVals;
             for (const auto& e : node.body) bodyVals.push_back(convertExprPtr(e));
+            // The counter is a 0-or-1 element list, mirroring Lambda's params.
+            std::vector<ValuePtr> counterVals;
+            if (node.counter) counterVals.push_back(Value::string(*node.counter));
             return Value::variant("Loop", "Parser.Expression", {
+                Value::list(std::move(counterVals)),
                 Value::list(std::move(bodyVals))
             });
         } else if constexpr (std::is_same_v<T, ast::RangeExpr>) {
