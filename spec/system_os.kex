@@ -8,10 +8,10 @@ main do
   # exclusive. (The atom itself is not printed — the expected output has to
   # hold wherever the suite runs.)
   let consistent = match System.OS do
-    :macos   -> System.macOS?
-    :linux   -> System.linux?
-    :windows -> System.windows?
-    _        -> !System.macOS? && !System.linux? && !System.windows?
+    :macos   => System.macOS?
+    :linux   => System.linux?
+    :windows => System.windows?
+    _        => !System.macOS? && !System.linux? && !System.windows?
   end
   IO.printLine("${consistent}")
   let flags = [System.macOS?, System.linux?, System.windows?]

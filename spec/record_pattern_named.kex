@@ -19,8 +19,8 @@ type Failure = Miss | Other
 
 let describe(f: Failure) -> String do
   match f do
-    Miss { value, rest } -> "parse ${value}/${rest}"
-    Other { value, rest }      -> "other ${value}/${rest}"
+    Miss { value, rest } => "parse ${value}/${rest}"
+    Other { value, rest }      => "other ${value}/${rest}"
   end
 end
 
@@ -67,9 +67,9 @@ main do
 
   # --- match with a nested named pattern, and a fallback arm
   match wrappedOther do
-    Error(Miss { value, rest }) -> IO.printLine("match wrong ${value}${rest}")
-    Error(Other { value, rest })      -> IO.printLine("match nested other ${value}/${rest}")
-    _                                 -> IO.printLine("match fallback")
+    Error(Miss { value, rest }) => IO.printLine("match wrong ${value}${rest}")
+    Error(Other { value, rest })      => IO.printLine("match nested other ${value}/${rest}")
+    _                                 => IO.printLine("match fallback")
   end
 
   # --- let destructuring with a named pattern
@@ -78,7 +78,7 @@ main do
 
   # --- a named pattern only binds the fields it lists; others are ignored
   match pe do
-    Miss { value } -> IO.printLine("partial ${value}")
-    _                    -> IO.printLine("partial no match")
+    Miss { value } => IO.printLine("partial ${value}")
+    _                    => IO.printLine("partial no match")
   end
 end

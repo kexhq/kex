@@ -36,8 +36,8 @@ module Money do
   type MoneyError = NoCurrency(Float) | UnsupportedCurrency(String)
   let fromValue(value: String) -> Money or! MoneyError do
     match Float.parse(value) do
-      Ok(_) -> Error(NoCurrency(value))
-      Error(ParseError { value, rest }) -> do
+      Ok(_) => Error(NoCurrency(value))
+      Error(ParseError { value, rest }) => do
         let rem = rest.trim
         let curr = Currency.fromCode(rem)
 
@@ -53,8 +53,8 @@ make Money do
   let display(currencies: [Currency]) do
     let currency = currencies.find { |c| c.code == @currency }
     match currency do
-      Just(c) -> return this.displayWithCurrency(c)
-      None -> return "${@value} ${@currency.to(String).try.upperCase}"
+      Just(c) => return this.displayWithCurrency(c)
+      None => return "${@value} ${@currency.to(String).try.upperCase}"
     end
   end
 
@@ -74,8 +74,8 @@ main(args) do
     # IO.inspect(money)
     # IO.inspect(currency)
     match money do
-      Ok(m) -> IO.printLine(m.display(ACCEPTED_CURRENCY))
-      Error(e) -> IO.inspect(e)
+      Ok(m) => IO.printLine(m.display(ACCEPTED_CURRENCY))
+      Error(e) => IO.inspect(e)
     end
     # IO.inspect(Money.fromValue(value))
     IO.printLine()

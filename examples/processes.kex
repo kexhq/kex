@@ -10,9 +10,9 @@ type CounterMessage = Increment | Reset | Get(Process<Int>)
 
 foul counterLoop(n: Int) do
   receive do
-    Increment -> counterLoop(n + 1)
-    Reset -> counterLoop(0)
-    Get(sender) -> do
+    Increment => counterLoop(n + 1)
+    Reset => counterLoop(0)
+    Get(sender) => do
       sender.send(n)
       counterLoop(n)
     end
@@ -31,9 +31,9 @@ type ChatMessage = Join(String) | Leave(String) | Broadcast(String, String)
 
 foul chatLoop(users: [String]) do
   receive do
-    Join(name) -> chatLoop([name | users])
-    Leave(name) -> chatLoop(users.reject { |u| u == name })
-    Broadcast(from, text) -> do
+    Join(name) => chatLoop([name | users])
+    Leave(name) => chatLoop(users.reject { |u| u == name })
+    Broadcast(from, text) => do
       IO.printLine("[chat] " + from + ": " + text)
       chatLoop(users)
     end
@@ -77,7 +77,7 @@ main do
   counter.send(Increment)
   counter.send(Get(Process.self))
   receive do
-    n -> IO.printLine("counter = " + n.to(String).or(""))
+    n => IO.printLine("counter = " + n.to(String).or(""))
   end
 
   # --- Chat room ---
@@ -91,12 +91,12 @@ main do
   let t1 = Task.start { slowSquare(6) }
   let t2 = Task.start { slowSquare(7) }
   match t1.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("6^2 = " + v.to(String).or(""))
-    Error(_) -> IO.printLine("6^2 task failed")
+    Ok(v) => IO.printLine("6^2 = " + v.to(String).or(""))
+    Error(_) => IO.printLine("6^2 task failed")
   end
   match t2.await(timeout: 5000) do
-    Ok(v) -> IO.printLine("7^2 = " + v.to(String).or(""))
-    Error(_) -> IO.printLine("7^2 task failed")
+    Ok(v) => IO.printLine("7^2 = " + v.to(String).or(""))
+    Error(_) => IO.printLine("7^2 task failed")
   end
 
   # --- Supervision tree ---
@@ -104,7 +104,7 @@ main do
     [worker { startCounterWorker() }]
   end
   match supResult do
-    Ok(pid) -> IO.printLine("supervisor pid: " + pid.to(String).or(""))
-    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String).or(""))
+    Ok(pid) => IO.printLine("supervisor pid: " + pid.to(String).or(""))
+    Error(reason) => IO.printLine("supervisor error: " + reason.to(String).or(""))
   end
 end

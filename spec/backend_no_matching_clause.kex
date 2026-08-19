@@ -6,7 +6,7 @@ type Flag = On | Off
 
 let describe(f: Flag) -> String do
   return match f do
-    Off -> "off"
+    Off => "off"
   end
 end
 

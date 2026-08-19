@@ -17,10 +17,10 @@ let fizzBuzzString(n: Int) -> String do
   let buzz = fizzBuzzRule(n, "Buzz", 5)
   
   match (fizz, buzz) do
-    (Just(f), Just(b)) -> f + b
-    (Just(f), None)    -> f
-    (None, Just(b))    -> b
-    (None, None)       -> n.to(String).or("")
+    (Just(f), Just(b)) => f + b
+    (Just(f), None)    => f
+    (None, Just(b))    => b
+    (None, None)       => n.to(String).or("")
   end
 end
 

@@ -24,8 +24,8 @@ main(args) do
 
   IO.printLine("list = ${list}")
   match list.head do
-    Just(x) -> IO.printLine("head = ${x}")
-    None -> IO.printLine("No elems")
+    Just(x) => IO.printLine("head = ${x}")
+    None => IO.printLine("No elems")
   end
   IO.printLine("tail = ${list.tail}")
   IO.printLine("count = ${list.count}")

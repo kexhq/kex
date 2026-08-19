@@ -24,7 +24,7 @@ foul readOrMissing(path: String) -> String do
     file.close()
     content
   rescue
-    OpenFailed(_) -> "(missing)"
+    OpenFailed(_) => "(missing)"
   end
 end
 

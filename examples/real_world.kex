@@ -86,8 +86,8 @@ module Http do
 
       let handle({ }, request: Request) -> Response do
         match this.matchRoute(request) do
-          Just(route) -> route.handler(request)
-          None -> Response.notFound
+          Just(route) => route.handler(request)
+          None => Response.notFound
         end
       end
     end
@@ -108,14 +108,14 @@ module App do
 
     let handleCreateUser(req: Request) -> Response do
       match req.body do
-        Just(body) -> do
+        Just(body) => do
           let result = UserService.create(body)
           match result do
-            Ok(user) -> Response.json(user.to(String).or(""))
-            Error(e) -> Response { status: 400, body: e.message }
+            Ok(user) => Response.json(user.to(String).or(""))
+            Error(e) => Response { status: 400, body: e.message }
           end
         end
-        None -> Response { status: 400, body: "Body required" }
+        None => Response { status: 400, body: "Body required" }
       end
     end
 

@@ -32,6 +32,12 @@ auto Evaluator::registerConsoleBuiltins() -> void {
     constant("Gray", color::gray);
     constant("Purple", color::purple);
 
+    // Cursor/screen control, gated on the same switch as colors: a clear
+    // sequence written into a pipe is noise, not a cleared display.
+    constant("Clear", color::clearScreen);
+    constant("Home", color::home);
+    constant("ClearLine", color::clearLine);
+
     reg("Console::enabled?", [](std::vector<ValuePtr>) {
         return Value::boolean(color::enabled);
     });

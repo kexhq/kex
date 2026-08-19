@@ -12,7 +12,7 @@ main do
   IO.printLine(firstLine("alpha\nbeta"))
   IO.printLine("alpha\nbeta".lines.count.to(String).or("?"))
   match FS.File.readLines("/no/such/kex_spec_missing.txt") do
-    None -> IO.printLine("none")
-    Just(ls) -> IO.printLine(ls.count.to(String).or("?"))
+    None => IO.printLine("none")
+    Just(ls) => IO.printLine(ls.count.to(String).or("?"))
   end
 end

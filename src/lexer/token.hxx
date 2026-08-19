@@ -49,6 +49,7 @@ enum class TokenType {
 
     // Symbols
     Arrow,        // ->
+    FatArrow,     // => (match, when and receive arms)
     Amp,          // &
     At,           // @
     Bang,         // !

@@ -440,16 +440,16 @@ module Time do
   # "2:03 pm", not about "03 pm".
   let digitsIn(fragment: String, whole: String) -> Result<Integer, TimeError> do
     match Time.digitsToInteger(fragment) do
-      Ok(value) -> return Ok(value)
-      Error(_) -> return Error(InvalidFormat(whole))
+      Ok(value) => return Ok(value)
+      Error(_) => return Error(InvalidFormat(whole))
     end
   end
 
   let digitsToInteger(text: String) -> Result<Integer, TimeError> do
     return Error(InvalidFormat(text)) if text.blank?
     match Integer.parse(text) do
-      Ok(value) -> return Ok(value)
-      Error(_) -> return Error(InvalidFormat(text))
+      Ok(value) => return Ok(value)
+      Error(_) => return Error(InvalidFormat(text))
     end
   end
 

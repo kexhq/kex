@@ -4,12 +4,12 @@ let parsePort(s: String) -> Result<Int, ParseError> do
   return Error(EmptyInput) if s.empty?
 
   match Integer.parse(s) do
-    Ok(n)    -> do
+    Ok(n)    => do
       return Error(Overflow) if n > 65535
 
       return Ok(n)
     end
-    Error(_) -> Error(InvalidFormat(s))
+    Error(_) => Error(InvalidFormat(s))
   end
 end
 
@@ -18,12 +18,12 @@ let parsePortAlt(s: String) -> Int or! ParseError do
   return Error(EmptyInput) if s.empty?
 
   match Integer.parse(s) do
-    Ok(n)    -> do
+    Ok(n)    => do
       return Error(Overflow) if n > 65535
 
       return Ok(n)
     end
-    Error(_) -> Error(InvalidFormat(s))
+    Error(_) => Error(InvalidFormat(s))
   end
 end
 

@@ -14,7 +14,7 @@ let v1 = trying do
   let x = Error("oops").try
   x
 rescue
-  _ -> "recovered"
+  _ => "recovered"
 end
 IO.printLine(v1)
 
@@ -25,8 +25,8 @@ let v2 = trying do
   let y = Error(NotFound("user")).try
   y
 rescue
-  NotFound(name) -> "not found: ${name}"
-  Timeout(ms) -> "timeout: ${ms}"
+  NotFound(name) => "not found: ${name}"
+  Timeout(ms) => "timeout: ${ms}"
 end
 IO.printLine(v2)
 
@@ -45,13 +45,13 @@ IO.printLine(safeDivide(10, 0))
 # Function-level rescue with pattern matching
 let lookup(key: String) -> String do
   let data = match key do
-    "name" -> Ok("Alice")
-    "age" -> Ok("30")
-    k -> Error(NotFound(k))
+    "name" => Ok("Alice")
+    "age" => Ok("30")
+    k => Error(NotFound(k))
   end
   data.try
 rescue
-  NotFound(k) -> "unknown key: ${k}"
+  NotFound(k) => "unknown key: ${k}"
 end
 
 IO.printLine(lookup("name"))
@@ -73,7 +73,7 @@ let fromOption(val: Optional<Int>) -> String do
   let n = val.try
   "got: ${n}"
 rescue
-  _ -> "was none"
+  _ => "was none"
 end
 
 IO.printLine(fromOption(Just(7)))
@@ -84,10 +84,10 @@ let v3 = trying do
   let inner = trying do
     Error("inner fail").try
   rescue
-    _ -> "inner caught"
+    _ => "inner caught"
   end
   inner
 rescue
-  _ -> "outer caught"
+  _ => "outer caught"
 end
 IO.printLine(v3)

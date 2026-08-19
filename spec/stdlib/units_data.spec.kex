@@ -35,12 +35,12 @@ describe("Units.Data") do
 
   it("converts display units without losing the canonical value") do
     match 10.megabytes.convertTo(MiB) do
-      Ok(size) -> do
+      Ok(size) => do
         assert(size.canonical == 10000000.0)
         assert(size.value == 9.5367431640625)
         assert(size.unit.symbol == "MiB")
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
@@ -55,18 +55,18 @@ describe("Units.Data") do
 
   it("adds data measures using canonical bytes") do
     match 1.megabytes + 500.kilobytes do
-      Ok(total) -> do
+      Ok(total) => do
         assert(total.canonical == 1500000.0)
         assert(total.value == 1.5)
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
   it("rejects converting a non-data measure") do
     match 1.sec.convertTo(KB) do
-      Ok(_) -> assert(false)
-      Error(_) -> assert(true)
+      Ok(_) => assert(false)
+      Error(_) => assert(true)
     end
   end
 end

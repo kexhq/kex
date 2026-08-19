@@ -6,11 +6,11 @@ type Msg = Ping | Pong
 main do
   let server = spawn do
     receive do |sender|
-      Ping -> sender.send(Pong)
+      Ping => sender.send(Pong)
     end
   end
   server.send(Ping)
   receive do
-    Pong -> IO.printLine("pong received")
+    Pong => IO.printLine("pong received")
   end
 end

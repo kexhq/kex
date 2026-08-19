@@ -50,7 +50,7 @@ foul counter = spawn do
   var state = 0       # foul — persists across receives
   loop do
     receive do
-      :increment -> state = state + 1
+      :increment => state = state + 1
     end
   end
 end

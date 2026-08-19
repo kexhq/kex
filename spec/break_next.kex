@@ -56,8 +56,8 @@ main do
   while q < 10
     q = q + 1
     match q do
-      5 -> break
-      _ -> IO.printLine("match q=${q}")
+      5 => break
+      _ => IO.printLine("match q=${q}")
     end
   end
   IO.printLine("while exited via break in match: ${q}")

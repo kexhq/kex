@@ -72,8 +72,8 @@ IO.printLine(opaque(Type.of("x")).name)
 # The same collision on a prelude record reached through a Result — this is
 # the ParseError case, where `rest` and `value` are both fields.
 match Float.parse("1.5xy") do
-  Ok(v) -> IO.printLine("unexpected ok ${v}")
-  Error(e) -> do
+  Ok(v) => IO.printLine("unexpected ok ${v}")
+  Error(e) => do
     IO.printLine(e.input)
     IO.printLine(e.position)
     IO.printLine(e.value)

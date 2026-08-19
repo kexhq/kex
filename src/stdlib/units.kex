@@ -154,12 +154,12 @@ make Measure do
       notation: unit.symbol
     }
     match this.unit.kind == target.kind do
-      true -> return Ok(Measure {
+      true => return Ok(Measure {
         canonical: this.canonical,
         value: this.canonical / target.factor,
         unit: target
       })
-      false -> return Error("Cannot convert between different measurement kinds")
+      false => return Error("Cannot convert between different measurement kinds")
     end
   end
 
@@ -170,7 +170,7 @@ make Measure do
 
   let +(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
-      true -> do
+      true => do
         let total = this.canonical + other.canonical
         return Ok(Measure {
           canonical: total,
@@ -178,13 +178,13 @@ make Measure do
           unit: this.unit
         })
       end
-      false -> return Error("Cannot add measures of different kinds")
+      false => return Error("Cannot add measures of different kinds")
     end
   end
 
   let -(other: Measure) -> Result<Measure, String> do
     match this.unit.kind == other.unit.kind do
-      true -> do
+      true => do
         let total = this.canonical - other.canonical
         return Ok(Measure {
           canonical: total,
@@ -192,7 +192,7 @@ make Measure do
           unit: this.unit
         })
       end
-      false -> return Error("Cannot subtract measures of different kinds")
+      false => return Error("Cannot subtract measures of different kinds")
     end
   end
 end

@@ -115,8 +115,8 @@ describe("Units.SI") do
 
   it("rejects addition across measurement kinds") do
     match 1.meter + 1.watt do
-      Ok(_) -> assert(false)
-      Error(_) -> assert(true)
+      Ok(_) => assert(false)
+      Error(_) => assert(true)
     end
   end
 end

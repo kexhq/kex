@@ -6,13 +6,13 @@ let OPTIONS = OptionParser.define("testapp", "A test CLI")
 describe("OptionParser.parse") do
   it("parses values, defaults, flags, and positionals") do
     match OPTIONS.parse(["run", "-n", "Alice", "-v"]) do
-      Ok(options) -> do
+      Ok(options) => do
         assert(options.arguments == ["run"])
         assert(options.value("name", "") == "Alice")
         assert(options.integerValue("port") == Just(3000))
         assert(options.flagEnabled?("verbose"))
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 

@@ -68,8 +68,8 @@ end
 
 foul demoMatch do
   match "order #4271 shipped".matches(regex`#(\d+)`) do
-    Just(m) -> IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
-    None    -> IO.printLine("no match")
+    Just(m) => IO.printLine("whole: ${m.get(0, "")}, id: ${m.get(1, "")}")   # whole: #4271, id: 4271
+    None    => IO.printLine("no match")
   end
 
   # Boolean-only test when you don't need the captures.
@@ -147,9 +147,9 @@ let logRe = regex`^\[(?<level>\w+)\]\s+(?<msg>.+)$`
 
 let parseLog(line: String) -> LogLine? do
   match line.matches(logRe) do
-    Just(m) -> return Just(LogLine { level: m.get(:level, ""),
+    Just(m) => return Just(LogLine { level: m.get(:level, ""),
                                      msg: m.get(:msg, "") })
-    None    -> return None
+    None    => return None
   end
 end
 
@@ -158,13 +158,13 @@ main(_args) do
   demoBulk()
 
   match parseLog("[WARN] disk almost full") do
-    Just(entry) -> IO.printLine("${entry.level}: ${entry.msg}")   # WARN: disk almost full
-    None        -> IO.printLine("unparseable")
+    Just(entry) => IO.printLine("${entry.level}: ${entry.msg}")   # WARN: disk almost full
+    None        => IO.printLine("unparseable")
   end
 
   match parseDate("2026-07-27") do
-    Just(d) -> IO.printLine("y=${d.get(:year, "?")}")
-    None    -> IO.printLine("bad date")
+    Just(d) => IO.printLine("y=${d.get(:year, "?")}")
+    None    => IO.printLine("bad date")
   end
 
   # The interpolated value was escaped, so `.` matches a literal dot only.

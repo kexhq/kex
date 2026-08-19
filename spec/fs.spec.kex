@@ -164,7 +164,7 @@ describe("FS.File.open — typed Result (mocked)") do
       FS.File.open("/no/such/kex_test_xyz.txt", FS.Read).try
       "opened"
     rescue
-      OpenFailed(_) -> "failed"
+      OpenFailed(_) => "failed"
     end
     assert(message == "failed")
   end

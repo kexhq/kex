@@ -42,8 +42,8 @@ trait Foldable do
   # The first item satisfying +pred+ wrapped in Just, or None.
   let find(pred) = this.reduce(None) do |acc, item|
     match acc do
-      Just(_) -> acc
-      None    -> Kex.Intrinsic.Fun.applyItem(pred, item) then Just(item) else None
+      Just(_) => acc
+      None    => Kex.Intrinsic.Fun.applyItem(pred, item) then Just(item) else None
     end
   end
 
@@ -74,11 +74,11 @@ trait Enumerable do
   let mapIndexed(f) do
     let folded = this.reduce(([], 0)) do |state, item|
       match state do
-        (acc, i) -> ([Kex.Intrinsic.Fun.applyIndexed(f, item, i) | acc], i + 1)
+        (acc, i) => ([Kex.Intrinsic.Fun.applyIndexed(f, item, i) | acc], i + 1)
       end
     end
     return match folded do
-      (acc, _) -> acc.reverse
+      (acc, _) => acc.reverse
     end
   end
 
@@ -101,8 +101,8 @@ trait Enumerable do
   let collect(f) do
     let acc = this.reduce([]) do |a, item|
       match Kex.Intrinsic.Fun.applyItem(f, item) do
-        Just(y) -> [y | a]
-        None    -> a
+        Just(y) => [y | a]
+        None    => a
       end
     end
     return acc.reverse

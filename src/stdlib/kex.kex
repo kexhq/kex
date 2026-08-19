@@ -106,14 +106,14 @@ foul module Kex do
 
       number : String
       let number = match this.revision do
-        Just(hash) -> "${this.release} (${hash})"
-        None -> this.release
+        Just(hash) => "${this.release} (${hash})"
+        None => this.release
       end
     end
 
     VERSION : Version
     let VERSION = match Kex.Intrinsic.Kex.version() do
-      (major, minor, patch, revision) ->
+      (major, minor, patch, revision) =>
         Version { major: major, minor: minor, patch: patch, revision: revision,
                   preRelease: Kex.Intrinsic.Kex.versionPreRelease() }
     end

@@ -193,9 +193,9 @@ int main() {
             ReplSession repl;
             auto result = repl.eval(
                 "match 42 do\n"
-                "  0 -> \"zero\"\n"
-                "  42 -> \"the answer\"\n"
-                "  _ -> \"other\"\n"
+                "  0 => \"zero\"\n"
+                "  42 => \"the answer\"\n"
+                "  _ => \"other\"\n"
                 "end"
             );
             assertEqual(result, std::string("\"the answer\""));

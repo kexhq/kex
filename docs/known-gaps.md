@@ -113,7 +113,7 @@ let mk(w: Cursor) -> Result<(Integer, Cursor), String> = Ok((1, w))
 
 main do
   let w = Cursor { n: 0 }
-  match w.mixed("x", mk) do Ok((v, _)) -> IO.printLine("${v}") Error(_) -> () end
+  match w.mixed("x", mk) do Ok((v, _)) => IO.printLine("${v}") Error(_) => () end
 end
 # error: `mixed` expects argument 3 to be Cursor -> Result<(Unknown, Cursor), String>,
 #        but got Result<(Integer, Cursor), String>

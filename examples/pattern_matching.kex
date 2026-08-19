@@ -8,9 +8,9 @@ type Shape
 
 let area(shape: Shape) -> Float do
   match shape do
-    Circle(r) -> 3.14159 * r * r
-    Rectangle(w, h) -> w * h
-    Triangle(a, b, c) -> do
+    Circle(r) => 3.14159 * r * r
+    Rectangle(w, h) => w * h
+    Triangle(a, b, c) => do
       let s = (a + b + c) / 2.0
       (s * (s - a) * (s - b) * (s - c)).sqrt
     end
@@ -47,10 +47,10 @@ make Point do
 
   let quadrant({ x, y }) do
     match (x > 0.0, y > 0.0) do
-      (true, true) -> 1
-      (false, true) -> 2
-      (false, false) -> 3
-      (true, false) -> 4
+      (true, true) => 1
+      (false, true) => 2
+      (false, false) => 3
+      (true, false) => 4
     end
   end
 end
@@ -69,27 +69,27 @@ end
 # Guards in match
 let classify(n: Int) -> String do
   match n do
-    0 -> "zero"
-    n when n > 0 -> "positive"
-    _ -> "negative"
+    0 => "zero"
+    n when n > 0 => "positive"
+    _ => "negative"
   end
 end
 
 # List pattern matching
 let describe(list: [Int]) -> String do
   match list do
-    [] -> "empty"
-    [x] -> "single: ${x}"
-    [x, y] -> "pair: ${x}, ${y}"
-    [x | _] -> "starts with ${x}"
+    [] => "empty"
+    [x] => "single: ${x}"
+    [x, y] => "pair: ${x}, ${y}"
+    [x | _] => "starts with ${x}"
   end
 end
 
 # Tuple patterns in receive
 foul handleMessage do
   receive do
-    (:ok, value) -> process(value)
-    (:error, reason) -> log("Failed: ${reason}")
-    (:timeout) -> retry()
+    (:ok, value) => process(value)
+    (:error, reason) => log("Failed: ${reason}")
+    (:timeout) => retry()
   end
 end

@@ -139,8 +139,8 @@ module FS do
     let basename(path) do
       let parts = FS.Path.segments(path)
       match parts.last do
-        Just(name) -> return name
-        None -> return FS.Path.absolute?(path) then FS.Path.separator else "."
+        Just(name) => return name
+        None => return FS.Path.absolute?(path) then FS.Path.separator else "."
       end
     end
 
@@ -153,8 +153,8 @@ module FS do
       let pieces = name.split(".")
       return "" if pieces.count < 2
       match pieces.last do
-        Just(suffix) -> return ".${suffix}"
-        None -> return ""
+        Just(suffix) => return ".${suffix}"
+        None => return ""
       end
     end
 
@@ -213,8 +213,8 @@ module FS do
       let resolveStep(acc: [String], part: String, rooted: Bool) -> [String] do
         return acc.push(part) if part != ".."
         let top = match acc.last do
-          Just(value) -> value
-          None -> ""
+          Just(value) => value
+          None => ""
         end
         return acc.take(acc.count - 1) if top != "" && top != ".."
         return acc if rooted

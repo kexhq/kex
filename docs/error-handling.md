@@ -18,8 +18,8 @@ end
 
 # Handle with pattern matching
 match findUser(users, "alice") do
-  Just(user) -> "Found ${user.name}"
-  None -> "Not found"
+  Just(user) => "Found ${user.name}"
+  None => "Not found"
 end
 
 # Or with map/flatMap
@@ -56,8 +56,8 @@ Chain `Result`/`Optional` computations with `flatMap`:
 ```kex
 foul getUserEmail(id: Int) -> Result<String, AppError> do
   fetchUser(id).flatMap { |user| match user.email do
-    Just(email) -> Ok(email)
-    None -> Error(AppError(:no_email))
+    Just(email) => Ok(email)
+    None => Error(AppError(:no_email))
   end}
 end
 ```

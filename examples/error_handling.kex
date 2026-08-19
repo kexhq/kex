@@ -7,26 +7,26 @@ let parsePort(s: String) -> Result<Int, ParseError> do
   return Error(EmptyInput) if s.empty?
 
   match Integer.parse(s) do
-    Ok(n)    -> do
+    Ok(n)    => do
       return Error(Overflow) if n > 65535
 
       return Ok(n)
     end
-    Error(_) -> Error(InvalidFormat(s))
+    Error(_) => Error(InvalidFormat(s))
   end
 end
 
 # Aspirational: file I/O and Config not yet in stdlib
 foul loadConfig(path: String) -> Result<Config, AppError> do
   match IO.read(path) do
-    Error(e) -> return Error(AppError(e))
-    Ok(content) -> do
+    Error(e) => return Error(AppError(e))
+    Ok(content) => do
       match Config.parse(content) do
-        Error(e) -> return Error(e)
-        Ok(parsed) -> do
+        Error(e) => return Error(e)
+        Ok(parsed) => do
           match parsePort(parsed.get("port")) do
-            Error(e) -> return Error(AppError(e))
-            Ok(port) -> return Ok(Config { port: port, host: parsed.get("host") })
+            Error(e) => return Error(AppError(e))
+            Ok(port) => return Ok(Config { port: port, host: parsed.get("host") })
           end
         end
       end
@@ -41,19 +41,19 @@ end
 
 let greetUser(users: [User], name: String) -> String do
   match findUser(users, name) do
-    Just(user) -> "Hello, ${user.name}!"
-    None -> "User not found"
+    Just(user) => "Hello, ${user.name}!"
+    None => "User not found"
   end
 end
 
 # Aspirational: fetchUser not yet in stdlib
 foul getUserEmail(id: Int) -> Result<String, AppError> do
   match fetchUser(id) do
-    Error(e) -> return Error(e)
-    Ok(user) -> do
+    Error(e) => return Error(e)
+    Ok(user) => do
       match user.email do
-        Just(email) -> Ok(email)
-        None -> Error(AppError(:no_email))
+        Just(email) => Ok(email)
+        None => Error(AppError(:no_email))
       end
     end
   end
@@ -68,7 +68,7 @@ end
 
 main do
   match parsePort("8080") do
-    Ok(port)    -> IO.printLine("listening on ${port}")
-    Error(why)  -> IO.printLine("bad port: ${why}")
+    Ok(port)    => IO.printLine("listening on ${port}")
+    Error(why)  => IO.printLine("bad port: ${why}")
   end
 end

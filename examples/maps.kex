@@ -79,8 +79,8 @@ main do
   IO.printLine("\n=== Find and entries ===")
 
   match scores.find { |k, v| v > 90 } do
-    None         -> IO.printLine("no one above 90")
-    Just((k, v)) -> IO.printLine("first above 90: ${k} with ${v}")
+    None         => IO.printLine("no one above 90")
+    Just((k, v)) => IO.printLine("first above 90: ${k} with ${v}")
   end
 
   IO.printLine("entries:")

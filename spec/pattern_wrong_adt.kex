@@ -22,8 +22,8 @@ end
 
 let matchedWrong(x: Integer?) -> String do
   match x do
-    Ok(v) -> "ok"
-    _     -> "other"
+    Ok(v) => "ok"
+    _     => "other"
   end
 end
 

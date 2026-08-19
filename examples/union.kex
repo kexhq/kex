@@ -2,9 +2,9 @@ type ParseError = InvalidFormat(String) | Overflow | EmptyInput
 
 let describe(e: ParseError) -> String do
   match e do
-    InvalidFormat(s) -> "bad input: ${s}"
-    Overflow         -> "out of range"
-    EmptyInput       -> "got nothing"
+    InvalidFormat(s) => "bad input: ${s}"
+    Overflow         => "out of range"
+    EmptyInput       => "got nothing"
   end
 end
 

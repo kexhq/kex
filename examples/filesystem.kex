@@ -12,9 +12,9 @@ end
 # Count non-empty lines in a file.
 foul countLines(path: String) -> Int do
   match FS.File.readLines(path) do
-    None       -> 0
-    Just(ls)   -> ls.count { |l| !l.empty? }
-    lines      -> lines.count { |l| !l.empty? }
+    None       => 0
+    Just(ls)   => ls.count { |l| !l.empty? }
+    lines      => lines.count { |l| !l.empty? }
   end
 end
 
@@ -39,8 +39,8 @@ main do
   IO.printLine("size:      ${FS.File.size(tmp).or(-1)} bytes")
 
   match FS.File.read(tmp) do
-    None    -> IO.printLine("(could not read)")
-    content -> IO.printLine("content:\n${content}")
+    None    => IO.printLine("(could not read)")
+    content => IO.printLine("content:\n${content}")
   end
 
   # ── Lines and feed ──────────────────────────────────────────────────
@@ -52,8 +52,8 @@ main do
 
   IO.printLine("first 2 via feed:")
   match FS.File.feed(tmp) do
-    None -> IO.printLine("  (unavailable)")
-    s    -> s.take(2).each { |l| IO.printLine("  > ${l}") }
+    None => IO.printLine("  (unavailable)")
+    s    => s.take(2).each { |l| IO.printLine("  > ${l}") }
   end
 
   # ── Mode-safe handles ───────────────────────────────────────────────

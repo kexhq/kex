@@ -4,8 +4,8 @@ describe("Time") do
     # Result is a type error (spec/error_method_on_wrong_receiver.kex).
     assert(Date.of(2026, 2, 22).try.iso == "2026-02-22")
     match Date.of(2026, 2, 22) do
-      Ok(date) -> assert(date.iso == "2026-02-22")
-      Error(_) -> assert(false)
+      Ok(date) => assert(date.iso == "2026-02-22")
+      Error(_) => assert(false)
     end
   end
 
@@ -142,18 +142,18 @@ describe("Time") do
     # Not against the fragment that failed: "2:03 pm" complains about
     # "2:03 pm", not about "03 pm".
     match Time.parse("2:03 pm") do
-      Ok(_) -> assert(false)
-      Error(error) -> assert(Time.errorMessage(error) ==
+      Ok(_) => assert(false)
+      Error(error) => assert(Time.errorMessage(error) ==
                              "cannot parse as a date/time: 2:03 pm")
     end
     match Date.parse("20x6-07-30") do
-      Ok(_) -> assert(false)
-      Error(error) -> assert(Time.errorMessage(error) ==
+      Ok(_) => assert(false)
+      Error(error) => assert(Time.errorMessage(error) ==
                              "cannot parse as a date/time: 20x6-07-30")
     end
     match DateTime.parse("2026-07-30T14:03:00+0z:00") do
-      Ok(_) -> assert(false)
-      Error(error) -> assert(Time.errorMessage(error) ==
+      Ok(_) => assert(false)
+      Error(error) => assert(Time.errorMessage(error) ==
                              "cannot parse as a date/time: 2026-07-30T14:03:00+0z:00")
     end
   end
@@ -169,12 +169,12 @@ describe("Time") do
 
   it("describes what went wrong") do
     match Date.of(2026, 2, 30) do
-      Ok(_) -> assert(false)
-      Error(error) -> assert(Time.errorMessage(error) == "not a calendar date: 2026-2-30")
+      Ok(_) => assert(false)
+      Error(error) => assert(Time.errorMessage(error) == "not a calendar date: 2026-2-30")
     end
     match Date.parse("nope") do
-      Ok(_) -> assert(false)
-      Error(error) -> assert(Time.errorMessage(error) == "cannot parse as a date/time: nope")
+      Ok(_) => assert(false)
+      Error(error) => assert(Time.errorMessage(error) == "cannot parse as a date/time: nope")
     end
   end
 

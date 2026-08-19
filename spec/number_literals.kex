@@ -56,16 +56,16 @@ IO.printLine(255.to(String, radix: 99).or("bad radix"))
 
 # Integer.parse with a radix reports the same failures as an Error.
 match Integer.parse("ff", radix: 16) do
-  Ok(n) -> IO.printLine("ok ${n}")
-  Error(e) -> IO.printLine("err ${e.message}")
+  Ok(n) => IO.printLine("ok ${n}")
+  Error(e) => IO.printLine("err ${e.message}")
 end
 match Integer.parse("12z", radix: 16) do
-  Ok(n) -> IO.printLine("ok ${n}")
-  Error(e) -> IO.printLine("err ${e.message}")
+  Ok(n) => IO.printLine("ok ${n}")
+  Error(e) => IO.printLine("err ${e.message}")
 end
 match Integer.parse("10", radix: 99) do
-  Ok(n) -> IO.printLine("ok ${n}")
-  Error(e) -> IO.printLine("err ${e.message}")
+  Ok(n) => IO.printLine("ok ${n}")
+  Error(e) => IO.printLine("err ${e.message}")
 end
 
 # Round trip through an arbitrary base.

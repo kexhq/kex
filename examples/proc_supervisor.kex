@@ -4,11 +4,11 @@
 
 foul counter(name: String, n: Int) do
   receive do
-    :ping -> do
+    :ping => do
       IO.printLine(name + " ping #" + n.to(String).or(""))
       counter(name, n + 1)
     end
-    :boom -> IO.printLine(name + " crashing!")
+    :boom => IO.printLine(name + " crashing!")
   end
 end
 
@@ -23,7 +23,7 @@ main do
     [worker { startCounter("counter-A") }]
   end
   match result do
-    Ok(pid) -> IO.printLine("supervisor started: " + pid.to(String).or(""))
-    Error(reason) -> IO.printLine("supervisor error: " + reason.to(String).or(""))
+    Ok(pid) => IO.printLine("supervisor started: " + pid.to(String).or(""))
+    Error(reason) => IO.printLine("supervisor error: " + reason.to(String).or(""))
   end
 end

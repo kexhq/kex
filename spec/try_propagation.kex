@@ -20,8 +20,8 @@ type Failure = Bad(String)
 
 let mk(v: String) -> Result<Int, Failure> do
   match v do
-    "ok" -> Ok(1)
-    _    -> Error(Bad(v))
+    "ok" => Ok(1)
+    _    => Error(Bad(v))
   end
 end
 
@@ -48,7 +48,7 @@ main do
   let held = trying do
     ["no"].map do |v| mk(v).try end
   rescue
-    _ -> "rescued"
+    _ => "rescued"
   end
   IO.printLine("${held}")
 
@@ -57,7 +57,7 @@ main do
   let caught = trying do
     mk("no").try
   rescue
-    _ -> -1
+    _ => -1
   end
   IO.printLine("${caught}")
 

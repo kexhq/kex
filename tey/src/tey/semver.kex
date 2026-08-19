@@ -17,12 +17,12 @@ let parseVersion(text: String) -> SemanticVersion? do
   let core = withoutBuild.split("-").first.or(withoutBuild).trim
   let preRelease = withoutBuild.split("-").drop(1).join("-").trim
   let parts = core.split(".")
-  let major = match parts.first do Just(x) -> Integer.parse(x) _ -> Error(ParseError { value: core, rest: core }) end
-  let minor = match parts.second do Just(x) -> Integer.parse(x) _ -> Ok(0) end
-  let patch = match parts.third do Just(x) -> Integer.parse(x.split(" ").first.or("0")) _ -> Ok(0) end
+  let major = match parts.first do Just(x) => Integer.parse(x) _ => Error(ParseError { value: core, rest: core }) end
+  let minor = match parts.second do Just(x) => Integer.parse(x) _ => Ok(0) end
+  let patch = match parts.third do Just(x) => Integer.parse(x.split(" ").first.or("0")) _ => Ok(0) end
   match (major, minor, patch) do
-    (Ok(a), Ok(b), Ok(c)) -> Just(SemanticVersion { major: a, minor: b, patch: c, preRelease: preRelease })
-    _ -> None
+    (Ok(a), Ok(b), Ok(c)) => Just(SemanticVersion { major: a, minor: b, patch: c, preRelease: preRelease })
+    _ => None
   end
 end
 
@@ -30,8 +30,8 @@ end
 # pre-release should count as its eventual release.
 let release(text: String) -> String do
   match Tey.Semver.parseVersion(text) do
-    Just(version) -> return "${version.major}.${version.minor}.${version.patch}"
-    None -> return text
+    Just(version) => return "${version.major}.${version.minor}.${version.patch}"
+    None => return text
   end
 end
 
@@ -39,8 +39,8 @@ end
 # question a download page asks: "what is the current stable Kex?".
 let stable?(text: String) -> Bool do
   match Tey.Semver.parseVersion(text) do
-    Just(version) -> return version.preRelease == ""
-    None -> return false
+    Just(version) => return version.preRelease == ""
+    None => return false
   end
 end
 
@@ -144,10 +144,10 @@ end
 # displace a release.
 let newer?(a: String, b: String) -> Bool do
   match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
-    (Just(left), Just(right)) -> return Tey.Semver.compareVersions(left, right) > 0
-    (Just(_), None) -> return true
-    (None, Just(_)) -> return false
-    _ -> return false
+    (Just(left), Just(right)) => return Tey.Semver.compareVersions(left, right) > 0
+    (Just(_), None) => return true
+    (None, Just(_)) => return false
+    _ => return false
   end
 end
 
@@ -190,8 +190,8 @@ private do
     let digits = preRelease.chars.filter { |c| c.digit? }.join("")
     return 0 if digits.empty?
     match Integer.parse(digits) do
-      Ok(number) -> return number
-      Error(_) -> return 0
+      Ok(number) => return number
+      Error(_) => return 0
     end
   end
 
@@ -221,14 +221,14 @@ private do
     return false if wanted == None
     let order = Tey.Semver.compareVersions(version, wanted.try)
     match op do
-      ">=" -> order >= 0
-      "<=" -> order <= 0
-      ">" -> order > 0
-      "<" -> order < 0
-      "=" -> order == 0
-      "^" -> order >= 0 && version.major == wanted.try.major
-      "~>" -> order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
-      _ -> false
+      ">=" => order >= 0
+      "<=" => order <= 0
+      ">" => order > 0
+      "<" => order < 0
+      "=" => order == 0
+      "^" => order >= 0 && version.major == wanted.try.major
+      "~>" => order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
+      _ => false
     end
   end
 end

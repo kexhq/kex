@@ -347,14 +347,16 @@ if_expr
 match_expr = MATCH expr DO ( PIPE LOWER_IDENT PIPE )? match_clause+ END ;
 
 match_clause
-  = pattern ( COMMA pattern )* ( WHEN expr )? ARROW expr
-  | WHEN expr ARROW expr   (* bare when = _ when *)
+  = pattern ( COMMA pattern )* ( WHEN expr )? FAT_ARROW expr
+  | WHEN expr FAT_ARROW expr   (* bare when = _ when *)
   ;
 
-receive_expr
-  = RECEIVE DO match_clause+ END
-  | RECEIVE TIMEOUT COLON expr DO match_clause+ AFTER ARROW expr END
-  ;
+receive_expr = RECEIVE DO match_clause* after_clause? END ;
+
+(* The timeout belongs to the branch it governs. A receive with no
+   `after` blocks until a message matches; one with no clauses and only an
+   `after` is a plain wait. The body is closed by the receive's own `end`. *)
+after_clause = AFTER TIMEOUT COLON expr NEWLINE body ;
 
 loop_expr = LOOP DO ( PIPE ( LOWER_IDENT | UNDERSCORE ) PIPE )? NEWLINE body END ;
 (* The optional binding is a 0-based iteration counter: loop do |i| ... end *)
@@ -511,7 +513,8 @@ WHEN     = "when" ;
 WHILE    = "while" ;
 
 (* Symbols *)
-ARROW        = "->" ;
+ARROW        = "->" ;   (* types only: function type, return annotation *)
+FAT_ARROW    = "=>" ;   (* arms only: match, bare when, receive, rescue *)
 AMP          = "&" ;
 AT           = "@" ;
 BANG         = "!" ;

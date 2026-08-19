@@ -1,0 +1,6 @@
+# The timeout is not part of the `receive` header — it belongs to `after`.
+main do
+  receive timeout: 100 do
+    msg => IO.printLine("got: ${msg}")
+  end
+end

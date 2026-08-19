@@ -3,10 +3,10 @@
 
 let fizzBuzzString(n: Int) -> String do
   match (n.modulo(3), n.modulo(5)) do
-    (0, 0) -> "FizzBuzz"
-    (0, _) -> "Fizz"
-    (_, 0) -> "Buzz"
-    (_, _) -> "${n}"
+    (0, 0) => "FizzBuzz"
+    (0, _) => "Fizz"
+    (_, 0) => "Buzz"
+    (_, _) => "${n}"
   end
 end
 

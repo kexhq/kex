@@ -10,7 +10,7 @@ main(args) do
 
   let unknown = "<unknown>"
   match readPackageJson(file_name) do
-    Ok(json) -> do
+    Ok(json) => do
       let name = json["name"].or(unknown)
       let desc = json["description"].or(unknown)
       let version = json["version"].or(unknown)
@@ -22,7 +22,7 @@ main(args) do
       IO.printLine("\tVersion: ${version}")
       IO.printLine("\tLicense: ${license}")
     end
-    Error(err) -> do
+    Error(err) => do
       IO.printError("Something wrong with this file: '${file_name}'")
       IO.printError(err)
     end

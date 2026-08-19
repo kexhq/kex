@@ -20,8 +20,8 @@ let integer(p: Parser) -> (Expr, Parser) or! ParseError do
   let (digits, p2) = p1.some { |q| q.charWhen(&.digit?) }.try
   let n = Integer.parse(digits.join(""))
   match n do
-    Ok(v) -> Ok((IntLit(v), p2))
-    _     -> Error(Unexpected("not a number", p1.pos))
+    Ok(v) => Ok((IntLit(v), p2))
+    _     => Error(Unexpected("not a number", p1.pos))
   end
 end
 
@@ -44,31 +44,31 @@ let expression(p: Parser) -> (Expr, Parser) or! ParseError do
     let (right, p3) = p2.expression.try
     Ok((BinOp(op, left, right), p3))
   rescue
-    _ -> Ok((left, p1))
+    _ => Ok((left, p1))
   end
 end
 
 let formatExpr(e: Expr) -> String do
   match e do
-    IntLit(n)       -> "${n}"
-    BinOp(op, l, r) -> "(${formatExpr(l)} ${op} ${formatExpr(r)})"
+    IntLit(n)       => "${n}"
+    BinOp(op, l, r) => "(${formatExpr(l)} ${op} ${formatExpr(r)})"
   end
 end
 
 let applyOp(op: String, a: Int, b: Int) -> Int do
   match op do
-    "+" -> a + b
-    "-" -> a - b
-    "*" -> a * b
-    _   -> 0
+    "+" => a + b
+    "-" => a - b
+    "*" => a * b
+    _   => 0
   end
 end
 
 # A tree-walking evaluator: fold the parsed Expr down to its integer value.
 let eval(e: Expr) -> Int do
   match e do
-    IntLit(n)       -> n
-    BinOp(op, l, r) -> applyOp(op, eval(l), eval(r))
+    IntLit(n)       => n
+    BinOp(op, l, r) => applyOp(op, eval(l), eval(r))
   end
 end
 
@@ -78,8 +78,8 @@ main do
   inputs.each do |input|
     let p = Parser { input: input }
     match p.expression do
-      Ok((expr, _)) -> IO.printLine("${input} => ${formatExpr(expr)} = ${eval(expr)}")
-      Error(e)      -> IO.printLine("${input} => error: ${e}")
+      Ok((expr, _)) => IO.printLine("${input} => ${formatExpr(expr)} = ${eval(expr)}")
+      Error(e)      => IO.printLine("${input} => error: ${e}")
     end
   end
 end

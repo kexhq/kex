@@ -32,8 +32,8 @@ main do
 
   # A wrong-arity pattern simply fails to match in a `match` (no crash).
   match Just(1) do
-    Circle(r) -> IO.printLine("circle ${r}")
-    Just(n)   -> IO.printLine("just ${n}")
-    _         -> IO.printLine("other")
+    Circle(r) => IO.printLine("circle ${r}")
+    Just(n)   => IO.printLine("just ${n}")
+    _         => IO.printLine("other")
   end
 end

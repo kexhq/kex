@@ -35,9 +35,9 @@ make Input do
 
   let charWhen(pred: Char -> Bool) -> Result<(Char, Input), ParseError> do
     match this.peek do
-      Just(c) when pred(c) -> Ok((c, this.advance))
-      Just(c) -> Error(Unexpected("${c}", @pos))
-      None -> Error(Unexpected("EOF", @pos))
+      Just(c) when pred(c) => Ok((c, this.advance))
+      Just(c) => Error(Unexpected("${c}", @pos))
+      None => Error(Unexpected("EOF", @pos))
     end
   end
 
@@ -117,7 +117,7 @@ make Input do
         let result = f(this).try
         return Ok(result)
       rescue
-        _ -> index = index + 1
+        _ => index = index + 1
       end
     end
     Error(NoMatch(@pos))

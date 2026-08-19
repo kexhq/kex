@@ -38,8 +38,8 @@ module StringUtils do
     repeat : String -> Integer -> String
     let repeat(s, n) do
       match n do
-        0 -> ""
-        _ -> s + repeat(s, n - 1)
+        0 => ""
+        _ => s + repeat(s, n - 1)
       end
     end
   end
@@ -47,16 +47,16 @@ module StringUtils do
   let padLeft(s: String, width: Integer) -> String do
     let padding = width - s.length
     match padding > 0 do
-      true -> repeat(" ", padding) + s
-      false -> s
+      true => repeat(" ", padding) + s
+      false => s
     end
   end
 
   let padRight(s: String, width: Integer) -> String do
     let padding = width - s.length
     match padding > 0 do
-      true -> s + repeat(" ", padding)
-      false -> s
+      true => s + repeat(" ", padding)
+      false => s
     end
   end
 end

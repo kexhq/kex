@@ -274,8 +274,8 @@ make String, implement: Enumerable, Foldable do
   let lines do
     let parts = this.split("\n")
     match parts.last do
-      Just("") -> parts.take(parts.count - 1)
-      _        -> parts
+      Just("") => parts.take(parts.count - 1)
+      _        => parts
     end
   end
   split :> [String]
@@ -389,8 +389,8 @@ make String, implement: Enumerable, Foldable do
   # needs a list to flatten. Any real fix has to keep both readings working.
   # Until then `chars` is explicit on both backends.
   let capitalize = match this.chars do
-    []       -> ""
-    [c | cs] -> "${c.upperCase}${cs.join("").lowerCase}"
+    []       => ""
+    [c | cs] => "${c.upperCase}${cs.join("").lowerCase}"
   end
 
   # Returns the string with its characters in reverse order.

@@ -14,8 +14,8 @@
 
 main do
   match Process.run("sh", ["-c", "echo to-stdout; echo to-stderr 1>&2; exit 3"]) do
-    Error(error) -> IO.printLine("error: ${error}")
-    Ok(result) -> do
+    Error(error) => IO.printLine("error: ${error}")
+    Ok(result) => do
       IO.printLine("exit ${result.exitCode}")
       IO.printLine("out [${result.stdout.trim}]")
       IO.printLine("err [${result.stderr.trim}]")
@@ -23,12 +23,12 @@ main do
   end
 
   match Process.run("echo", ["a b; rm -rf /", "$HOME", "`whoami`"]) do
-    Error(error) -> IO.printLine("error: ${error}")
-    Ok(result) -> IO.printLine("args [${result.stdout.trim}]")
+    Error(error) => IO.printLine("error: ${error}")
+    Ok(result) => IO.printLine("args [${result.stdout.trim}]")
   end
 
   match Process.run("definitely-not-a-real-program", []) do
-    Error(error) -> IO.printLine("missing: ${error}")
-    Ok(_) -> IO.printLine("missing: unexpectedly ran")
+    Error(error) => IO.printLine("missing: ${error}")
+    Ok(_) => IO.printLine("missing: unexpectedly ran")
   end
 end

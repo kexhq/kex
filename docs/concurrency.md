@@ -17,7 +17,7 @@ Kex uses an Elixir-style process model with lightweight, isolated processes comm
 foul pid = spawn do
   loop do
     receive do
-      (:ping, sender) -> sender.send(:pong)
+      (:ping, sender) => sender.send(:pong)
     end
   end
 end
@@ -34,9 +34,9 @@ foul counter: Process<CounterMessage> = spawn do
   var state = 0
   loop do
     receive do
-      :increment -> state = state + 1
-      :reset -> state = 0
-      (:get, sender) -> sender.send(state)
+      :increment => state = state + 1
+      :reset => state = 0
+      (:get, sender) => sender.send(state)
     end
   end
 end
@@ -60,7 +60,7 @@ foul counter = spawn do
   var state = 0
   loop do
     receive do
-      :increment -> state = state + 1
+      :increment => state = state + 1
     end
   end
 end
@@ -72,8 +72,8 @@ Functional (recursive):
 foul counter = spawn do
   let loop(state: Int) do
     receive do
-      :increment -> loop(state + 1)
-      (:get, sender) -> do
+      :increment => loop(state + 1)
+      (:get, sender) => do
         sender.send(state)
         loop(state)
       end
@@ -116,9 +116,28 @@ When a child crashes, the supervisor restarts it based on its restart policy.
 
 ## Receive with Timeout
 
+The timeout belongs to the `after` clause it governs:
+
 ```kex
-receive timeout: 5000 do
-  msg -> handle(msg)
-after -> handleTimeout()
+receive do
+  msg => handle(msg)
+after timeout: 5000
+  handleTimeout()
 end
 ```
+
+`after` runs when nothing arrived, so it takes no pattern and no arrow, and its
+body runs to the receive's own `end` — there is no second block to close.
+
+A receive with no clauses and only an `after` is how a process waits:
+
+```kex
+foul sleep(ms: Int) do
+  receive do
+  after timeout: ms
+  end
+end
+```
+
+`after timeout: 0` polls the mailbox without blocking, and a receive with no
+`after` blocks until a message matches.

@@ -112,7 +112,7 @@ const std::string CRASHING_VALIDATION_SRC =
     "parts.first.or(\"\")\n"
     "let validateDemo(source: String) -> [TaggedValidation.Issue] do\n"
     "  match source do\n"
-    "    \"never\" -> []\n"
+    "    \"never\" => []\n"
     "  end\n"
     "end\n"
     "main do demo`abcde` end\n";

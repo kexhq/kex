@@ -58,11 +58,11 @@ describe("Parsing primitive parsers") do
     let input = Input { input: "abc" }
 
     match input.charWhen(&.lower?) do
-      Ok((char, advanced)) -> do
+      Ok((char, advanced)) => do
         assert(char == 'a')
         assert(advanced.pos == 1)
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
   end
 
@@ -82,11 +82,11 @@ describe("Parsing primitive parsers") do
 
     assert(input.char('-') == Error(Unexpected("+", 0)))
     match input.char('+') do
-      Ok((char, advanced)) -> do
+      Ok((char, advanced)) => do
         assert(char == '+')
         assert(advanced.remaining == "-")
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
   end
 end
@@ -120,11 +120,11 @@ describe("Parsing combinators") do
     let input = Input { input: "42abc" }
 
     match input.some { |p| p.charWhen(&.digit?) } do
-      Ok((digits, advanced)) -> do
+      Ok((digits, advanced)) => do
         assert(digits.join("") == "42")
         assert(advanced.remaining == "abc")
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
 
     assert(
@@ -140,11 +140,11 @@ describe("Parsing combinators") do
     ]
 
     match Input { input: "-" }.choice(alternatives) do
-      Ok((char, advanced)) -> do
+      Ok((char, advanced)) => do
         assert(char == '-')
         assert(advanced.atEnd?)
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
   end
 
@@ -162,20 +162,20 @@ describe("Parsing combinators") do
 
   it("rescue-less .try propagates parser errors from Result functions") do
     match twoDigitsForSpec(Input { input: "42x" }) do
-      Ok((digits, advanced)) -> do
+      Ok((digits, advanced)) => do
         assert(digits == "42")
         assert(advanced.pos == 2)
         assert(advanced.remaining == "x")
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
 
     match twoDigitsForSpec(Input { input: "4x" }) do
-      Error(Unexpected(char, pos)) -> do
+      Error(Unexpected(char, pos)) => do
         assert(char == "x")
         assert(pos == 1)
       end
-      _ -> assert(false)
+      _ => assert(false)
     end
   end
 end
@@ -183,11 +183,11 @@ end
 describe("Parsing.string") do
   it("matches an exact literal and advances past it") do
     match Input { input: "version(1)" }.string("version(") do
-      Ok((literal, rest)) -> do
+      Ok((literal, rest)) => do
         assert(literal == "version(")
         assert(rest.remaining == "1)")
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
@@ -195,19 +195,19 @@ describe("Parsing.string") do
     # Partway through is where the parser noticed; the start is where a person
     # reading the error expects the caret.
     match Input { input: "verzion(" }.string("version(") do
-      Ok(_) -> assert(false)
-      Error(Expected(what, at)) -> do
+      Ok(_) => assert(false)
+      Error(Expected(what, at)) => do
         assert(what == "version(")
         assert(at == 0)
       end
-      Error(_) -> assert(false)
+      Error(_) => assert(false)
     end
   end
 
   it("fails rather than matching a truncated input") do
     match Input { input: "ver" }.string("version(") do
-      Ok(_) -> assert(false)
-      Error(_) -> assert(true)
+      Ok(_) => assert(false)
+      Error(_) => assert(true)
     end
   end
 end

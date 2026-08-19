@@ -182,6 +182,7 @@ auto Lexer::scanToken() -> Token {
 
         case '=':
             if (match('=')) return makeToken(TokenType::EqEq);
+            if (match('>')) return makeToken(TokenType::FatArrow);
             return makeToken(TokenType::Equals);
 
         case '!':

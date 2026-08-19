@@ -2,7 +2,7 @@
 # Multi-statement receive arms require do...end; bare multi-line is illegal.
 foul counter(n: Int) do
   receive do
-    :ping ->
+    :ping =>
       IO.printLine("ping")
       counter(n + 1)
   end

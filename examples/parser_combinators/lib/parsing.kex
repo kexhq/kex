@@ -32,9 +32,9 @@ make Parser do
   # Consume one character satisfying `pred`, else fail.
   let charWhen(pred: Char -> Bool) -> Result<(Char, Parser), ParseError> do
     match this.peek do
-      Just(c) when pred(c) -> Ok((c, this.advance))
-      Just(c) -> Error(Unexpected("${c}", @pos))
-      None    -> Error(Unexpected("EOF", @pos))
+      Just(c) when pred(c) => Ok((c, this.advance))
+      Just(c) => Error(Unexpected("${c}", @pos))
+      None    => Error(Unexpected("EOF", @pos))
     end
   end
 
@@ -86,7 +86,7 @@ make Parser do
         let result = f(this).try
         return Ok(result)
       rescue
-        _ -> i = i + 1
+        _ => i = i + 1
       end
     end
     Error(NoMatch(@pos))

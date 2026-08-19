@@ -15,8 +15,8 @@ main do
   IO.printLine("day 211?  ${launch.dayOfYear == 211}")
 
   match Date.of(2026, 2, 30) do
-    Ok(date) -> IO.printLine("impossible: ${date.iso}")
-    Error(error) -> IO.printLine("rejected: ${Time.errorMessage(error)}")
+    Ok(date) => IO.printLine("impossible: ${date.iso}")
+    Error(error) => IO.printLine("rejected: ${Time.errorMessage(error)}")
   end
 
   IO.printLine("")

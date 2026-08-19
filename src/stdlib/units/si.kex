@@ -102,8 +102,8 @@ let to(measure: Measure, String, @Micro) -> String? = Just(displayWithPrefix(mea
 let to(measure: Measure, String, @Nano) -> String? = Just(displayWithPrefix(measure, 0.000000001, "n"))
 let to(measure: Measure, String, in: SIPrefix) -> String? do
   match measure.kind == in.kind do
-    true -> return Just("${prefixScaled(measure.canonical, in.factor)} ${in.symbol}")
-    false -> return None
+    true => return Just("${prefixScaled(measure.canonical, in.factor)} ${in.symbol}")
+    false => return None
   end
 end
 

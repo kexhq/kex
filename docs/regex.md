@@ -54,8 +54,8 @@ returns `Result<Regex, RegexError>`:
 
 ```kex
 match regex("\\d+") do
-  Ok(re)   -> IO.printLine("compiled")
-  Error(e) -> IO.printLine("bad pattern at ${e.position}: ${e.message}")
+  Ok(re)   => IO.printLine("compiled")
+  Error(e) => IO.printLine("bad pattern at ${e.position}: ${e.message}")
 end
 ```
 
@@ -110,8 +110,8 @@ whole-string match.
 using Regex
 
 match "order #4271 shipped".matches(regex`#(\d+)`) do
-  Just(m) -> IO.printLine("id: ${m.get(1, "")}")   # id: 4271
-  None    -> IO.printLine("no match")
+  Just(m) => IO.printLine("id: ${m.get(1, "")}")   # id: 4271
+  None    => IO.printLine("no match")
 end
 ```
 
@@ -144,8 +144,8 @@ using Regex
 let dateRe = regex`(?<year>\d{4})-(?<month>\d{2})-(?<day>\d{2})`
 
 match "2026-07-27".matches(dateRe) do
-  Just(m) -> { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
-  None    -> { year: "", month: "", day: "" }
+  Just(m) => { year: m.get(:year, ""), month: m.get(:month, ""), day: m.get(:day, "") }
+  None    => { year: "", month: "", day: "" }
 end
 ```
 

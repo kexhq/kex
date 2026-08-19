@@ -23,15 +23,15 @@ end
 make final: Bool do
   let to(String) do
     match this do
-      true -> Just("true")
-      false -> Just("false")
+      true => Just("true")
+      false => Just("false")
     end
   end
 
   let +(other: String) -> String do
     match this do
-      true -> "true" + other
-      false -> "false" + other
+      true => "true" + other
+      false => "false" + other
     end
   end
 end
