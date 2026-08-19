@@ -45,7 +45,7 @@ private do
   # own `otp(...)` and the toolchain's runtime-beam floor. `None` when neither
   # says anything, which is the ordinary case for a package with no interop
   # needs on a toolchain built without erlc.
-  let effectiveOtpFloor(requirement: String) -> Integer? do
+  foul effectiveOtpFloor(requirement: String) -> Integer? do
     let toolchain = Tey.Toolchain.runtimeOtpFloor
     let declared = Tey.Resolver.lowestSatisfying(requirement)
     match (declared, toolchain) do
@@ -79,7 +79,7 @@ private do
   end
 
   # The exact tag to pin. Anything but a tag range is taken as written.
-  let chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
+  foul chooseTag(name: String, git: String, selector: String, requested: String) -> String or! String do
     return Ok(requested) if selector != "tag" || !Tey.Semver.range?(requested)
     let tags = match Tey.Git.tags(git) do
       Error(error) => return Error(error)
@@ -179,7 +179,7 @@ private do
     end
   end
 
-  let resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
+  foul resolveDependency(Tey.Manifest.Dependency { manifestName, manifestGit, manifestSelector, manifestRequested, manifestGroups }) -> Tey.Lockfile.Dependency or! String do
     # A range is resolved HERE, not pinned: the manifest keeps the question
     # (`~> 0.2`) and the lockfile records the answer (`v0.2.1`), so the same
     # manifest can pick up a compatible release while a build stays exact.
