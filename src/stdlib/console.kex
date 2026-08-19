@@ -20,6 +20,14 @@ module Console do
   let GRAY = Kex.Intrinsic.Console.Gray
   let PURPLE = Kex.Intrinsic.Console.Purple
 
+  # Cursor and screen control, empty under --no-colors like the styles above.
+  # CLEAR erases the screen and homes the cursor; HOME only moves the cursor,
+  # so a redraw paints over the previous frame without a blank flash between
+  # them; CLEARLINE erases the current line and returns to its start.
+  let CLEAR = Kex.Intrinsic.Console.Clear
+  let HOME = Kex.Intrinsic.Console.Home
+  let CLEARLINE = Kex.Intrinsic.Console.ClearLine
+
   # Wrap +text+ in an ANSI style and reset attributes afterwards.
   colorize : String -> String -> String
   let colorize(text, color) = Kex.Intrinsic.Console.colorize(text, color)

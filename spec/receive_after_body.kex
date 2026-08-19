@@ -1,0 +1,51 @@
+# The timeout belongs to the `after` clause it governs: no pattern, no arrow,
+# and a newline-delimited body closed by the receive's own `end`.
+
+foul pingServer do
+  spawn do
+    loop do
+      receive do |sender|
+        :ping => sender.send(:pong)
+      end
+    end
+  end
+end
+
+main do
+  # A timeout body, closed by the receive's `end`.
+  receive do
+    msg => IO.printLine("got: ${msg}")
+  after timeout: 100
+    IO.printLine("cleanup")
+    IO.printLine("timed out")
+  end
+
+  # No clauses and only an `after` — a plain wait.
+  IO.printLine("waiting")
+  receive do
+  after timeout: 100
+  end
+  IO.printLine("waited")
+
+  # `after timeout: 0` polls the mailbox without blocking.
+  receive do
+    :anything => IO.printLine("had mail")
+  after timeout: 0
+    IO.printLine("mailbox empty")
+  end
+
+  # A message arrives: the arm binds it and `after` never runs.
+  let server = pingServer()
+  server.send(:ping)
+  receive do
+    msg => IO.printLine("got: ${msg}")
+  after timeout: 1000
+    IO.printLine("should not print")
+  end
+
+  # No `after` at all: blocks until a message matches.
+  server.send(:ping)
+  receive do
+    :pong => IO.printLine("blocked until :pong")
+  end
+end

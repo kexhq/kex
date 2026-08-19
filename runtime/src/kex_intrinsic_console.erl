@@ -3,7 +3,8 @@
          'Blink'/0, 'Reverse'/0, 'Hidden'/0, 'Strikethrough'/0,
          'Red'/0, 'Green'/0, 'Yellow'/0,
          'Blue'/0, 'Magenta'/0, 'Cyan'/0, 'White'/0, 'Gray'/0,
-         'Purple'/0, 'enabled?'/0, colorize/2]).
+         'Purple'/0, 'Clear'/0, 'Home'/0, 'ClearLine'/0,
+         'enabled?'/0, colorize/2]).
 
 'Reset'() -> code(<<27, "[0m">>).
 'Bold'() -> code(<<27, "[1m">>).
@@ -23,6 +24,12 @@
 'White'() -> code(<<27, "[37m">>).
 'Gray'() -> code(<<27, "[90m">>).
 'Purple'() -> code(<<27, "[95m">>).
+
+%% Cursor/screen control, gated on the same switch as the colors: a clear
+%% sequence written into a pipe is noise, not a cleared display.
+'Clear'() -> code(<<27, "[2J", 27, "[H">>).
+'Home'() -> code(<<27, "[H">>).
+'ClearLine'() -> code(<<27, "[2K", "\r">>).
 
 enabled() ->
     os:getenv("KEX_COLORS", "1") =/= "0".

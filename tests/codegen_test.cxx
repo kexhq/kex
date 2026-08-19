@@ -1614,9 +1614,10 @@ int main() {
             auto out = emit(
                 "# kex: no-check\n"
                 "foul waitOne do\n"
-                "  receive timeout: 1000 do\n"
+                "  receive do\n"
                 "    :ok => IO.printLine(\"got it\")\n"
-                "  after IO.printLine(\"timeout\")\n"
+                "  after timeout: 1000\n"
+                "    IO.printLine(\"timeout\")\n"
                 "  end\n"
                 "end\n"
                 "main do waitOne() end\n"

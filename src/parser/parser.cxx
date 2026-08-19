@@ -2552,10 +2552,11 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
   expr->location = currentLocation();
   expect(TokenType::Receive, "Expected 'receive'");
 
-  std::optional<ast::ExprPtr> timeout;
-  if (match(TokenType::Timeout)) {
-    expect(TokenType::Colon, "Expected ':' after 'timeout'");
-    timeout = parseExpr();
+  if (check(TokenType::Timeout)) {
+    error("the timeout belongs to the `after` clause: "
+          "`receive do ... after timeout: 1000 ... end`");
+    advance();
+    if (match(TokenType::Colon)) parseExpr();
   }
 
   expect(TokenType::Do, "Expected 'do' after receive");
@@ -2585,12 +2586,33 @@ auto Parser::parseReceiveExpr() -> ast::ExprPtr {
     skipNewlines();
   }
 
+  // `after timeout: <ms>` — the duration sits with the branch it governs, and
+  // its body runs to the receive's own `end` rather than opening a block of
+  // its own. An empty body is a plain wait. A timeout without an `after` is
+  // unrepresentable by construction, which is what keeps a timeout from being
+  // silently dropped.
+  std::optional<ast::ExprPtr> timeout;
   std::optional<ast::ExprPtr> afterBody;
   if (match(TokenType::After)) {
-    // `after` takes a bare expression: nothing sits to its left, so there is
-    // no arrow to carry information.
-    afterBody = parseExpr();
+    auto afterLocation = currentLocation();
+    expect(TokenType::Timeout, "Expected 'timeout:' after 'after'");
+    expect(TokenType::Colon, "Expected ':' after 'timeout'");
+    // The body starts on the next line, so the timeout expression must not
+    // swallow a trailing `do` block — the same guard `while` puts around its
+    // condition.
+    m_noDoBlocks = true;
+    timeout = parseExpr();
+    m_noDoBlocks = false;
     skipNewlines();
+    std::vector<ast::ExprPtr> body;
+    while (!check(TokenType::End) && !atEnd()) {
+      body.push_back(parseExpr());
+      skipNewlines();
+    }
+    auto block = std::make_unique<ast::Expr>();
+    block->location = afterLocation;
+    block->kind = ast::BlockExpr{std::move(body)};
+    afterBody = std::move(block);
   }
 
   expect(TokenType::End, "Expected 'end' to close receive");

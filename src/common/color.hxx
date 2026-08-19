@@ -21,6 +21,13 @@ constexpr auto white   = "\033[37m";
 constexpr auto gray    = "\033[90m";
 constexpr auto purple  = "\033[95m";
 
+// Cursor/screen control. `clear` erases the screen AND homes the cursor, which
+// is what "clear the display" means to a caller; `home` alone redraws over the
+// previous frame without the blank flash in between.
+constexpr auto clearScreen = "\033[2J\033[H";
+constexpr auto home        = "\033[H";
+constexpr auto clearLine   = "\033[2K\r";
+
 inline bool enabled = true;
 
 inline auto apply(const char* code) -> const char* {

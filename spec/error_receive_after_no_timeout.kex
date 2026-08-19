@@ -1,0 +1,8 @@
+# `after` always carries the timeout it governs — a bare `after` can never fire.
+main do
+  receive do
+    msg => IO.printLine("got: ${msg}")
+  after
+    IO.printLine("timed out")
+  end
+end

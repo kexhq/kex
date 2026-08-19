@@ -763,9 +763,10 @@ int main() {
             auto prog = parse(
                 "# kex: no-check\n"
                 "foul wait do\n"
-                "  receive timeout: 500 do\n"
+                "  receive do\n"
                 "    :msg => :got\n"
-                "  after :timeout\n"
+                "  after timeout: 500\n"
+                "    :timeout\n"
                 "  end\n"
                 "end\n"
             );

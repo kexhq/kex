@@ -3827,9 +3827,14 @@ struct Lowering {
             subst = snap;
             r.clauses.push_back(std::move(rc));
         }
-        if (n.timeout && n.afterBody) {
+        if (n.timeout) {
+            // The timeout stands on its own: `receive timeout: N do ... end`
+            // with no `after` clause waits N milliseconds and yields None,
+            // matching the walker (scheduler.hxx:115). Gating the timeout on
+            // the after body dropped it entirely and blocked forever.
             r.timeout = lower(*n.timeout);
-            r.afterBody = lower(*n.afterBody);
+            r.afterBody = n.afterBody ? lower(*n.afterBody)
+                                      : lit(LitKind::None, "none");
         }
         auto e = std::make_unique<Expr>(); e->node = std::move(r);
         return e;

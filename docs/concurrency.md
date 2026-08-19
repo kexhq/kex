@@ -116,9 +116,28 @@ When a child crashes, the supervisor restarts it based on its restart policy.
 
 ## Receive with Timeout
 
+The timeout belongs to the `after` clause it governs:
+
 ```kex
-receive timeout: 5000 do
+receive do
   msg => handle(msg)
-after handleTimeout()
+after timeout: 5000
+  handleTimeout()
 end
 ```
+
+`after` runs when nothing arrived, so it takes no pattern and no arrow, and its
+body runs to the receive's own `end` — there is no second block to close.
+
+A receive with no clauses and only an `after` is how a process waits:
+
+```kex
+foul sleep(ms: Int) do
+  receive do
+  after timeout: ms
+  end
+end
+```
+
+`after timeout: 0` polls the mailbox without blocking, and a receive with no
+`after` blocks until a message matches.

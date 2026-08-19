@@ -19,8 +19,9 @@ main do
   IO.printLine("child alive? " + child.alive?().to(String).or(""))
   child.send(:go)
   # Small timeout to let the child finish
-  receive timeout: 200 do
+  receive do
     _ => IO.printLine("unexpected message")
-  after IO.printLine("parent: child has exited")
+  after timeout: 200
+    IO.printLine("parent: child has exited")
   end
 end

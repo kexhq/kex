@@ -1262,9 +1262,23 @@ end
 ### Receive with Timeout
 
 ```kex
-receive timeout: 5000 do
+receive do
   (:ok, value) => handle(value)
-after IO.printLine("timed out")
+after timeout: 5000
+  IO.printLine("timed out")
+end
+```
+
+The timeout belongs to the `after` clause it governs. `after` takes no pattern
+and no arrow — it runs when nothing arrived, so there is nothing to bind — and
+its body is newline-delimited, closing with the receive's own `end`.
+
+A receive with no clauses and only an `after` waits out the timeout; one with
+no `after` blocks until a message matches:
+
+```kex
+receive do
+after timeout: 1000     # a plain wait
 end
 ```
 
