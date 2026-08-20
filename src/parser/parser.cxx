@@ -97,7 +97,16 @@ auto Parser::skipNewlines() -> void {
 }
 
 auto Parser::currentLocation() const -> SourceLocation {
-  return peek().location;
+  auto location = peek().location;
+  // Token::startOffset/endOffset predate byte ranges on SourceLocation, and
+  // some tests and embedding callers still construct Token values directly.
+  // Normalize at this single parser boundary instead of scattering fallback
+  // logic through every AST constructor.
+  if (location.startOffset < 0)
+    location.startOffset = peek().startOffset;
+  if (location.endOffset < 0)
+    location.endOffset = peek().endOffset;
+  return location;
 }
 
 // A single uppercase letter is a type PARAMETER — `T` in

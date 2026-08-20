@@ -309,6 +309,8 @@ int main() {
             assertEqual(raw.type, TokenType::RawString);
             assertEqual(raw.startOffset, 12);
             assertEqual(raw.endOffset, 17);
+            assertEqual(raw.location.startOffset, 12);
+            assertEqual(raw.location.endOffset, 17);
         });
 
         it("tokenizes interpolating backticks", []() {
