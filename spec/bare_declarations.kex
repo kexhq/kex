@@ -28,15 +28,15 @@ record Settings do
 end
 
 let localDeclarations do
-  let text: String = "function let"
-  var count: Integer = 1
+  let text : String = "function let"
+  var count : Integer = 1
   count = count + 1
   return "${text}, ${count}"
 end
 
 main do
-  let text: String = "main let"
-  var count: Integer = 40
+  let text : String = "main let"
+  var count : Integer = 40
   count = count + 2
 
   IO.printLine(label)

@@ -2125,12 +2125,12 @@ int main() {
         it("checks let and var annotations inside main and other functions", []() {
             assertTrue(hasError(
                 "main do\n"
-                "  let value: String = 1\n"
+                "  let value : String = 1\n"
                 "end\n",
                 "Type mismatch"));
             assertTrue(hasError(
                 "let run do\n"
-                "  var value: String = 1\n"
+                "  var value : String = 1\n"
                 "end\n",
                 "Type mismatch"));
         });
