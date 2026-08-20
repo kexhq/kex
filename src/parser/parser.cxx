@@ -1751,6 +1751,8 @@ auto Parser::parseInterpolatedBody(const Token &token,
           innerToken.startOffset += absoluteInnerOffset;
         if (innerToken.endOffset >= 0)
           innerToken.endOffset += absoluteInnerOffset;
+        innerToken.location.startOffset = innerToken.startOffset;
+        innerToken.location.endOffset = innerToken.endOffset;
       }
     }
     if (!tokens.empty() && tokens.front().type == TokenType::Error)

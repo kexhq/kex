@@ -132,6 +132,25 @@ int main() {
             assertTrue(function->location.endOffset <=
                        module->location.endOffset);
         });
+
+        it("keeps UTF-8 interpolation spans in outer-source bytes", []() {
+            const std::string source = "$`é ${1 + 2}`";
+            auto program = parse(source);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& literal = std::get<ast::StringLiteral>(main->body[0]->kind);
+            auto& showCall = std::get<ast::MethodCall>(literal.values[0]->kind);
+            auto& interpolation = *showCall.receiver;
+            const auto start = static_cast<int>(source.find("1 + 2"));
+
+            assertEqual(interpolation.location.startOffset, start);
+            assertEqual(interpolation.location.endOffset, start + 5);
+            assertEqual(std::get<ast::BinaryOp>(interpolation.kind)
+                            .left->location.endOffset,
+                        start + 1);
+            assertTrue(interpolation.location.endOffset <=
+                       main->body[0]->location.endOffset);
+        });
     });
 
     describe("Parser — Top Level", []() {

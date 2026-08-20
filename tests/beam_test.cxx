@@ -45,6 +45,25 @@ int main() {
             test::assertEqual(decoded->asInt(), large);
         });
 
+        test::it("round-trips arbitrary-precision integers", []() {
+            mpz_class large("1234567890123456789012345678901234567890");
+            auto decoded = decodeEtf(encodeEtf(Term::integer(large)));
+            test::assertEqual(decoded->asBigInt().get_str(), large.get_str());
+        });
+
+        test::it("round-trips negative LARGE_BIG_EXT integers", []() {
+            mpz_class large = -(mpz_class(1) << 2048);
+            auto bytes = encodeEtf(Term::integer(large));
+            test::assertEqual(bytes[1], uint8_t(111));
+            auto decoded = decodeEtf(bytes);
+            test::assertEqual(decoded->asBigInt().get_str(), large.get_str());
+        });
+
+        test::it("round-trips NEW_FLOAT_EXT", []() {
+            auto decoded = decodeEtf(encodeEtf(Term::floating(3.141592653589793)));
+            test::assertEqual(decoded->asFloat(), 3.141592653589793);
+        });
+
         test::it("round-trips binary", []() {
             auto t = Term::binary("hello world");
             auto bytes = encodeEtf(t);
