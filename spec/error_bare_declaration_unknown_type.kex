@@ -1,0 +1,24 @@
+# Unknown types in bare declarations are rejected wherever declarations are
+# legal. Bare declarations are not statements, so local bindings use their
+# own annotated `let`/`var` syntax (covered by bare_declarations.kex).
+
+value : MissingTopLevel
+let value = 1
+
+module Example do
+  moduleValue : MissingModuleType
+  let moduleValue = 1
+end
+
+trait ExampleTrait do
+  traitValue : MissingTraitType
+end
+
+type Box
+make Box do
+  makeValue :> MissingMakeType
+  let makeValue = 1
+end
+
+main do
+end

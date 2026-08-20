@@ -63,7 +63,9 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-bare-type.kex","languageId":"kex","version":1,"text":"value : MissingType\nlet value = 1\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-bare-type.kex","languageId":"kex","version":1,"text":"value : MissingTopLevel\nlet value = 1\nmodule Example do\n  moduleValue : MissingModuleType\n  let moduleValue = 1\nend\ntrait ExampleTrait do\n  traitValue : MissingTraitType\nend\ntype Box\nmake Box do\n  makeValue :> MissingMakeType\n  let makeValue = 1\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-declaration-defaults.kex","languageId":"kex","version":1,"text":"record Settings do\n  retries : Integer = \"many\"\nend\nlet retry(count: Integer = \"many\") = count\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
             messages += frame(
@@ -75,9 +77,13 @@ int main() {
             const auto result = output.str();
             assertTrue(result.find("publishDiagnostics") != std::string::npos,
                        "missing diagnostics notification");
-            assertTrue(result.find("Unknown type `MissingType`") !=
-                           std::string::npos,
-                       "bare declaration diagnostic did not reach the LSP");
+            for (const auto* type : {"MissingTopLevel", "MissingModuleType",
+                                     "MissingTraitType", "MissingMakeType"})
+                assertTrue(result.find("Unknown type `" + std::string(type) + "`") !=
+                               std::string::npos,
+                           std::string("missing LSP diagnostic for ") + type);
+            assertTrue(occurrences(result, "Type mismatch: expected Integer, got String") >= 2,
+                       "declaration-default diagnostics did not reach the LSP");
         });
 
         it("serves diagnostics and completion for unsaved buffers", []() {

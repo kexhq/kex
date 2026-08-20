@@ -1,0 +1,49 @@
+# Bare declarations are compile-time contracts. This file deliberately runs
+# with checking enabled and exercises every scope where they are legal.
+
+type Marker = | Marked
+
+label : String
+let label = "top level"
+
+identity : A -> A
+let identity(value) = value
+
+module Labels do
+  default : String
+  let default = "module"
+end
+
+trait Described do
+  description : String
+end
+
+make Marker do
+  description :> String
+  let description = "marked"
+end
+
+record Settings do
+  retries : Integer = 3
+end
+
+let localDeclarations do
+  let text: String = "function let"
+  var count: Integer = 1
+  count = count + 1
+  return "${text}, ${count}"
+end
+
+main do
+  let text: String = "main let"
+  var count: Integer = 40
+  count = count + 2
+
+  IO.printLine(label)
+  IO.printLine(Labels.default)
+  IO.printLine(Marked.description)
+  IO.printLine(identity(text))
+  IO.printLine("${count}")
+  IO.printLine("${Settings {}.retries}")
+  IO.printLine(localDeclarations())
+end
