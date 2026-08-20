@@ -6458,17 +6458,17 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // so dispatchers can wildcard-match them (see the nested module
                 // handler below for the same logic).
                 if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
-                    if (node && node->variants) {
+                    if (node) {
                         std::vector<std::string> tags;
-                        for (const auto& v : *node->variants) {
-                            auto t = Lowering::simpleTypeName(v);
-                            if (!t.empty()) {
-                                tags.push_back(t);
-                                if (std::holds_alternative<ast::TypeName>(v->kind))
-                                    L.nullaryVariantTags.insert(t);
+                        if (auto constructors = kex::typeConstructors(*node)) {
+                            for (const auto& constructor : *constructors) {
+                                tags.push_back(constructor.name);
+                                if (constructor.arity == 0)
+                                    L.nullaryVariantTags.insert(
+                                        constructor.name);
                             }
                         }
-                        if (!tags.empty() && tags.size() >= 2)
+                        if (!tags.empty())
                             L.typeVariantTags[node->name] = std::move(tags);
                     }
                 }

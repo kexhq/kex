@@ -1,0 +1,10 @@
+# Defaults are values too, so they must satisfy their declaration types.
+
+record Settings do
+  retries : Integer = "many"
+end
+
+let retry(count: Integer = "many") = count
+
+main do
+end

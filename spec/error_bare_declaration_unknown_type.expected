@@ -1,0 +1,8 @@
+spec/error_bare_declaration_unknown_type.kex:5:9: error: Unknown type `MissingTopLevel`
+spec/error_bare_declaration_unknown_type.kex:9:17: error: Unknown type `MissingModuleType`
+spec/error_bare_declaration_unknown_type.kex:14:16: error: Unknown type `MissingTraitType`
+spec/error_bare_declaration_unknown_type.kex:19:16: error: Unknown type `MissingMakeType`
+spec/error_bare_declaration_unknown_type.kex:6:1: error: Type mismatch: expected MissingTopLevel, got Integer
+spec/error_bare_declaration_unknown_type.kex:10:3: error: `moduleValue` declared to return MissingModuleType but body returns Integer
+spec/error_bare_declaration_unknown_type.kex:20:3: error: `makeValue` declared to return MissingMakeType but body returns Integer
+Aborted: 7 type errors — fix before running (use --no-check to skip).

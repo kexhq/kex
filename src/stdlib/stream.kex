@@ -1,3 +1,5 @@
+type Stream<A>
+
 module Stream do
   # Creates an infinite stream starting at +from+, applying +step+ to
   # produce each successive element.

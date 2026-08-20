@@ -56,6 +56,36 @@ auto occurrences(const std::string& text, std::string_view needle) -> size_t {
 
 int main() {
     describe("Kex LSP", []() {
+        it("publishes diagnostics for unknown types in bare declarations", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-bare-type.kex","languageId":"kex","version":1,"text":"value : MissingTopLevel\nlet value = 1\nmodule Example do\n  moduleValue : MissingModuleType\n  let moduleValue = 1\nend\ntrait ExampleTrait do\n  traitValue : MissingTraitType\nend\ntype Box\nmake Box do\n  makeValue :> MissingMakeType\n  let makeValue = 1\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-declaration-defaults.kex","languageId":"kex","version":1,"text":"record Settings do\n  retries : Integer = \"many\"\nend\nlet retry(count: Integer = \"many\") = count\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("publishDiagnostics") != std::string::npos,
+                       "missing diagnostics notification");
+            for (const auto* type : {"MissingTopLevel", "MissingModuleType",
+                                     "MissingTraitType", "MissingMakeType"})
+                assertTrue(result.find("Unknown type `" + std::string(type) + "`") !=
+                               std::string::npos,
+                           std::string("missing LSP diagnostic for ") + type);
+            assertTrue(occurrences(result, "Type mismatch: expected Integer, got String") >= 2,
+                       "declaration-default diagnostics did not reach the LSP");
+        });
+
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(
