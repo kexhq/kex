@@ -10,8 +10,8 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-// 7: KexiRecord carries its tuple tag alongside its source name.
-static constexpr int KEXI_SCHEMA_VERSION = 7;
+// 8: type exports retain distinct-type backing representations.
+static constexpr int KEXI_SCHEMA_VERSION = 8;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -74,6 +74,8 @@ struct KexiTypeExport {
     std::string name;
     std::vector<std::string> genericParams;
     std::vector<std::string> constructors;
+    bool isDistinct = false;
+    KexiTypePtr backingType;
 };
 
 struct KexiMethod {

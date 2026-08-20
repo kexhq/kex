@@ -155,6 +155,8 @@ auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
     auto out = std::make_unique<TypeDef>();
     out->location = type.location;
     out->name = type.name;
+    out->isDistinct = type.isDistinct;
+    out->leadingPipe = type.leadingPipe;
     out->typeParams = type.typeParams;
     out->parents = type.parents;
     if (type.variants) out->variants = cloneVec(*type.variants);
@@ -246,6 +248,7 @@ auto clone(const ExprPtr& expr) -> ExprPtr {
                 copy.block = cloneOpt(node.block);
                 copy.mutating = node.mutating;
                 copy.parenthesized = node.parenthesized;
+                copy.targetType = clone(node.targetType);
                 out->kind = std::move(copy);
             } else if constexpr (std::is_same_v<T, FunctionCall>) {
                 FunctionCall copy;

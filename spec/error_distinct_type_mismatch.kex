@@ -1,0 +1,10 @@
+distinct type UserId = Integer
+distinct type OrderId = Integer
+
+let acceptUser(id: UserId) = id
+
+main do
+  acceptUser(1)
+  let order = 1.as(OrderId)
+  acceptUser(order)
+end

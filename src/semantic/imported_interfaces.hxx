@@ -89,6 +89,11 @@ struct ImportedADT {
     std::unordered_map<std::string, std::vector<TypePtr>> constructorParamTypes;
 };
 
+struct ImportedDistinctType {
+    std::vector<std::string> typeParams;
+    TypePtr backingType;
+};
+
 // Backend-neutral checked interface snapshot. Ordinary module exports retain
 // their owner; receiver functions are populated separately and only after
 // package policy has approved their provider module.
@@ -117,6 +122,7 @@ struct ImportedInterfaces {
     // name resolution needs, because a bare type name is a legal value in a
     // type-directed call like `xs.to(List)`.
     std::unordered_set<std::string> typeNames;
+    std::unordered_map<std::string, ImportedDistinctType> distinctTypes;
     std::vector<TraitDef> traits;
 };
 

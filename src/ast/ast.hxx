@@ -191,6 +191,10 @@ struct MethodCall {
     // are otherwise the same node — a zero-argument MethodCall — and
     // `Type.of` has to tell a function REFERENCE from a call to it.
     bool parenthesized = false;
+    // Full type syntax supplied to `.to(T)` / `.as(T)`. The runtime argument
+    // remains the erased head type value, while semantic analysis retains
+    // generic/structural arguments here.
+    TypeExprPtr targetType;
 };
 
 struct FunctionCall {
@@ -537,6 +541,7 @@ struct AbstractFunction {
 struct TypeDef {
     SourceLocation location;
     std::string name;
+    bool isDistinct = false;
     std::vector<std::string> typeParams;
     std::vector<TypeName> parents;
     std::optional<std::vector<TypeExprPtr>> variants; // sum type

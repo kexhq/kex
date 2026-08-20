@@ -323,10 +323,17 @@ public:
                                  semantic::StaticTypeAnswer>* calls) -> void {
         m_staticTypeOfCalls = calls;
     }
+    auto setExpressionTypes(
+        const std::unordered_map<const ast::Expr*, semantic::TypePtr>* types)
+        -> void {
+        m_expressionTypes = types;
+    }
 
 private:
     const std::unordered_map<const ast::MethodCall*,
                              semantic::StaticTypeAnswer>* m_staticTypeOfCalls = nullptr;
+    const std::unordered_map<const ast::Expr*, semantic::TypePtr>*
+        m_expressionTypes = nullptr;
     auto registerBitsBuiltins() -> void;
     auto registerConsoleBuiltins() -> void;
     auto registerTestBuiltins() -> void;

@@ -468,6 +468,14 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
         };
 
         auto collectTypeAlias = [&](const ast::TypeDef& td) {
+            if (td.isDistinct && td.variants && td.variants->size() == 1) {
+                std::unordered_map<std::string, kex::semantic::TypePtr> vars;
+                auto backing = resolveSourceType(
+                    *td.variants->front(), vars, &typeAliases);
+                ifaces.distinctTypes[td.name] = {td.typeParams,
+                                                 std::move(backing)};
+                return;
+            }
             if (kex::isTransparentTypeAlias(td)) {
                 std::unordered_map<std::string, kex::semantic::TypePtr> noVars;
                 auto resolved = resolveSourceType(*(*td.variants)[0], noVars, &typeAliases);
@@ -665,7 +673,8 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
                 // whose constructor happens to be spelled `String` — treating
                 // it as one made `String` a constructor of `FilePath`, so a
                 // bare `String` widened to `FilePath`.
-                if (kex::isTransparentTypeAlias(**td)) return;
+                if ((*td)->isDistinct || kex::isTransparentTypeAlias(**td))
+                    return;
                 kex::semantic::ImportedADT adt;
                 adt.name = (*td)->name;
                 adt.typeParamCount = (*td)->typeParams.size();

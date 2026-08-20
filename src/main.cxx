@@ -4264,8 +4264,10 @@ int main(int argc, char *argv[]) {
       // Mock.* is denied by default — a spec earns it by being a spec, and
       // anything else has to say --allow-mocks (issue #144).
       evaluator.setMocksAllowed(allowMocks || isSpecEntry(filepath));
-      if (runAnalyzed)
+      if (runAnalyzed) {
         evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
+        evaluator.setExpressionTypes(&runAnalyzer.typeMap());
+      }
 
       // The Kex-written stdlib is loaded by the Evaluator's constructor
       // (loadPrelude), so no explicit load is needed here.

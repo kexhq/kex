@@ -1,0 +1,5 @@
+distinct type UserId = Integer
+
+main do
+  "not an integer".as(UserId)
+end

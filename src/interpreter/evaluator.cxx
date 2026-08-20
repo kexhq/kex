@@ -1696,6 +1696,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
 
+            // Distinct conversions are representation-erased: checking has
+            // already proved the retag is valid, so the runtime value is
+            // unchanged. String is the one non-erased total conversion and
+            // uses the same universal display representation as to(String).
+            if (node.method == "as" && node.args.size() == 1 &&
+                node.args[0] && node.receiver && node.namedArgs.empty() &&
+                !node.block) {
+                auto value = eval(*node.receiver);
+                if (const auto* target =
+                        std::get_if<ast::UpperIdentifier>(
+                            &node.args[0]->kind);
+                    target && target->name == "String")
+                    return Value::string(value->toString());
+                return value;
+            }
+
             // `Kex.Intrinsic.<Category>.<fn>(args)` — the primitive boundary.
             // `Kex`, `Intrinsic`, `<Category>` are nested modules; dispatch the
             // function to its native C++ builtin (the walker's intrinsics stay
@@ -2004,6 +2020,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 return callFunction(*imported, std::move(args),
                                     std::move(namedArgs), expr.location);
             auto specificMethod = resolveMethodName(receiver, node.method, &args);
+            // Erased distinct values have the backing value's runtime name,
+            // but their receiver methods were selected using the static
+            // nominal type. Prefer that method when semantic analysis kept a
+            // concrete named receiver type for this exact expression.
+            if (m_expressionTypes) {
+                if (auto found = m_expressionTypes->find(node.receiver.get());
+                    found != m_expressionTypes->end() && found->second) {
+                    if (const auto* named = std::get_if<semantic::NamedType>(
+                            &found->second->kind)) {
+                        const auto candidate = named->name + "::" + node.method;
+                        if (m_functionValues.count(candidate) ||
+                            m_env->get(candidate))
+                            specificMethod = candidate;
+                    }
+                }
+            }
 
             auto mangledName = std::move(specificMethod);
 

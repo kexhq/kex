@@ -56,6 +56,41 @@ auto occurrences(const std::string& text, std::string_view needle) -> size_t {
 
 int main() {
     describe("Kex LSP", []() {
+        it("preserves distinct declarations, inferred types, and diagnostics", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex","languageId":"kex","version":1,"text":"distinct type UserId = Integer\nmain do\n  let id = 1.as(UserId)\n  let wrong : UserId = 1\n  id\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex"},"position":{"line":0,"character":15}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex"},"position":{"line":4,"character":3}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            const auto declarationHover = responseForId(result, 2);
+            assertTrue(declarationHover.find("distinct type UserId =") !=
+                           std::string::npos &&
+                           declarationHover.find("Integer") != std::string::npos,
+                       "distinct declaration hover lost its modifier or backing type");
+            assertTrue(responseForId(result, 3).find("id : UserId") !=
+                           std::string::npos,
+                       "distinct local binding hover lost its nominal type");
+            assertTrue(result.find(
+                           "Type mismatch: expected UserId, got Integer") !=
+                           std::string::npos,
+                       "distinct nominal mismatch did not reach LSP diagnostics");
+        });
+
         it("publishes diagnostics for unknown types in bare declarations", []() {
             std::string messages;
             messages += frame(

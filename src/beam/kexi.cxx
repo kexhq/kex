@@ -238,7 +238,10 @@ auto typeExportToTerm(const KexiTypeExport& te) -> TermPtr {
     for (const auto& c : te.constructors) cs.push_back(Term::binary(c));
     return Term::tuple({Term::binary(te.name),
                         Term::list(std::move(gp)),
-                        Term::list(std::move(cs))});
+                        Term::list(std::move(cs)),
+                        Term::atom(te.isDistinct ? "true" : "false"),
+                        te.backingType ? typeToTerm(te.backingType)
+                                       : typeToTerm(kexiUnknown())});
 }
 
 auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
@@ -247,6 +250,10 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     te.name = t[0]->asBinaryStr();
     for (const auto& g : t[1]->asList()) te.genericParams.push_back(g->asBinaryStr());
     for (const auto& c : t[2]->asList()) te.constructors.push_back(c->asBinaryStr());
+    if (t.size() >= 5) {
+        te.isDistinct = t[3]->asAtom() == "true";
+        if (te.isDistinct) te.backingType = termToType(t[4]);
+    }
     return te;
 }
 
