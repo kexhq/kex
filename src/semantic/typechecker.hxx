@@ -106,6 +106,10 @@ private:
     auto registerTypeAliases(const ast::Program& program) -> void;
     auto registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void;
     auto typeDefToType(const ast::TypeDef& def) -> TypePtr;
+    auto distinctBacking(const TypePtr& type) const -> TypePtr;
+    auto resolveDistinctName(const std::string& name) const -> std::string;
+    auto representationsCompatible(const TypePtr& from,
+                                   const TypePtr& to) -> bool;
     auto checkRecordDef(const ast::RecordDef& def) -> void;
 
     // Standalone type signatures (`fact : Integer -> Integer`) — registered
@@ -340,6 +344,7 @@ private:
 
     // Type alias map — populated before function bodies are checked.
     std::unordered_map<std::string, TypePtr> m_typeAliases;
+    std::unordered_map<std::string, ImportedDistinctType> m_distinctTypes;
 
     // Functions whose signatures came from a standalone TypeAnnotation
     // (`fact : Integer -> Integer`) — these are "declared" and checkFunctionDef

@@ -1,0 +1,46 @@
+# `distinct type` is nominal at compile time and erased at runtime.
+
+distinct type UserId = Integer
+distinct type OrderId = Integer
+distinct type Labels<A> = [A]
+
+module Accounts do
+  distinct type AccountId = Integer
+
+  make AccountId do
+    let successor -> AccountId = (this.as(Integer) + 1).as(AccountId)
+  end
+end
+
+using Accounts
+
+make UserId do
+  doubled :> UserId
+  let doubled = (this.as(Integer) * 2).as(UserId)
+end
+
+let describe(id: UserId) -> String = "user ${id.as(Integer)}"
+
+main do
+  # `distinct` remains an ordinary identifier outside `distinct type`.
+  let distinct = "contextual"
+  let user = 21.as(UserId)
+  let order = user.as(OrderId)
+  let labels = ["one", "two"].as(Labels<String>)
+  let plain = labels.as([String])
+  let account = 40.as(AccountId)
+  let successor = account.successor.as(Integer)
+
+  IO.printLine(describe(user))
+  IO.printLine("${user.doubled.as(Integer)}")
+  IO.printLine("${order.as(Integer)}")
+  IO.printLine("${plain.count}")
+  IO.printLine(user.as(String))
+  IO.printLine(Type.of(user).name)
+
+  # Runtime reflection is honest after the static type is erased through Any.
+  let erased: Any = user
+  IO.printLine(Type.of(erased).name)
+  IO.printLine(distinct)
+  IO.printLine("${successor}")
+end

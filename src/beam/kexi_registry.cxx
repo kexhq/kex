@@ -709,8 +709,14 @@ auto KexiRegistry::buildSemanticInterfaces() const
     // `type List<X> = [X]` are picked up here rather than being invisible.
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)
-            for (const auto& te : module.chunk.typeInterface.types)
+            for (const auto& te : module.chunk.typeInterface.types) {
                 interfaces.typeNames.insert(te.name);
+                if (te.isDistinct && te.backingType) {
+                    TypeVarMap vars;
+                    interfaces.distinctTypes[te.name] = {
+                        te.genericParams, semanticType(te.backingType, vars)};
+                }
+            }
 
     for (const auto& [_, unit] : m_units)
         for (const auto& module : unit.modules)

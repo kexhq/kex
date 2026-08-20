@@ -602,9 +602,12 @@ void collectFromTypeDef(const kex::ast::TypeDef& td, KexiTypeInterface& iface,
     KexiTypeExport te;
     te.name = td.name;
     te.genericParams = td.typeParams;
+    te.isDistinct = td.isDistinct;
+    if (td.isDistinct && td.variants && !td.variants->empty())
+        te.backingType = convertTypeExpr(td.variants->front());
     // A transparent alias (`type FilePath = String`) has no constructors —
     // recording `String` as one made every bare `String` widen to `FilePath`.
-    if (td.variants && !kex::isTransparentTypeAlias(td)) {
+    if (td.variants && !td.isDistinct && !kex::isTransparentTypeAlias(td)) {
         KexiADT adt;
         adt.name = td.name;
         adt.typeParams = td.typeParams;

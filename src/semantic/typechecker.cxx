@@ -83,6 +83,10 @@ auto TypeChecker::check(const ast::Program& program,
     m_qualifiedPublished.clear();
     m_overloadPurity.clear();
     m_scopedDeclaredSignatures.clear();
+    m_typeAliases.clear();
+    m_distinctTypes.clear();
+    if (m_importedInterfaces)
+        m_distinctTypes = m_importedInterfaces->distinctTypes;
     m_currentModulePath.clear();
     m_scopeStack.clear();
     m_importScopeStack.clear();
@@ -663,7 +667,7 @@ auto TypeChecker::resolveRecordName(const std::string& name) const
 auto TypeChecker::registerAdt(const ast::TypeDef& def) -> void {
     if (!def.variants) return;
 
-    if (kex::isTransparentTypeAlias(def)) return;
+    if (def.isDistinct || kex::isTransparentTypeAlias(def)) return;
 
     std::vector<std::string> names;
     for (const auto& variant : *def.variants) {
@@ -805,6 +809,86 @@ auto TypeChecker::typeDefToType(const ast::TypeDef& def) -> TypePtr {
     return std::make_shared<Type>(Type{UnionType{std::move(parts)}});
 }
 
+auto TypeChecker::resolveDistinctName(const std::string& name) const
+    -> std::string {
+    if (name.find('.') != std::string::npos && m_distinctTypes.count(name))
+        return name;
+    auto scope = m_currentModulePath;
+    while (!scope.empty()) {
+        const auto candidate = scope + "." + name;
+        if (m_distinctTypes.count(candidate)) return candidate;
+        const auto dot = scope.rfind('.');
+        if (dot == std::string::npos) break;
+        scope.resize(dot);
+    }
+    return name;
+}
+
+auto TypeChecker::distinctBacking(const TypePtr& type) const -> TypePtr {
+    if (!type) return type;
+    const auto* named = std::get_if<NamedType>(&type->kind);
+    if (!named) return type;
+    auto found = m_distinctTypes.find(named->name);
+    if (found == m_distinctTypes.end()) {
+        const auto resolvedName = resolveDistinctName(named->name);
+        found = m_distinctTypes.find(resolvedName);
+    }
+    if (found == m_distinctTypes.end() || !found->second.backingType)
+        return type;
+
+    std::unordered_map<int, TypePtr> substitutions;
+    for (size_t i = 0; i < named->typeArgs.size(); ++i)
+        substitutions[-static_cast<int>(i + 1)] = named->typeArgs[i];
+    std::function<TypePtr(const TypePtr&)> substitute =
+        [&](const TypePtr& part) -> TypePtr {
+            if (!part) return part;
+            if (const auto* var = std::get_if<TypeVar>(&part->kind)) {
+                if (auto value = substitutions.find(var->id);
+                    value != substitutions.end())
+                    return value->second;
+                return part;
+            }
+            if (const auto* n = std::get_if<NamedType>(&part->kind)) {
+                std::vector<TypePtr> args;
+                for (const auto& arg : n->typeArgs)
+                    args.push_back(substitute(arg));
+                return Type::named(n->name, std::move(args));
+            }
+            if (const auto* list = std::get_if<ListType>(&part->kind))
+                return Type::list(substitute(list->element));
+            if (const auto* map = std::get_if<MapType>(&part->kind))
+                return Type::map(substitute(map->key), substitute(map->value));
+            if (const auto* optional = std::get_if<OptionalType>(&part->kind))
+                return Type::optional(substitute(optional->inner));
+            if (const auto* tuple = std::get_if<TupleType>(&part->kind)) {
+                std::vector<TypePtr> elements;
+                for (const auto& element : tuple->elements)
+                    elements.push_back(substitute(element));
+                return Type::tuple(std::move(elements));
+            }
+            if (const auto* fn = std::get_if<FuncType>(&part->kind)) {
+                std::vector<TypePtr> params;
+                for (const auto& param : fn->params)
+                    params.push_back(substitute(param));
+                return Type::func(std::move(params), substitute(fn->result));
+            }
+            return part;
+        };
+    auto backing = substitute(found->second.backingType);
+    return distinctBacking(backing);
+}
+
+auto TypeChecker::representationsCompatible(const TypePtr& from,
+                                            const TypePtr& to) -> bool {
+    const auto source = distinctBacking(resolve(from));
+    const auto target = distinctBacking(resolve(to));
+    if (typesEqual(source, target)) return true;
+    return (m_traits.satisfies(source, "Integer") &&
+            m_traits.satisfies(target, "Integer")) ||
+           (m_traits.satisfies(source, "Float") &&
+            m_traits.satisfies(target, "Float"));
+}
+
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {
@@ -844,6 +928,16 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
+                if (node->isDistinct) {
+                    std::unordered_map<std::string, TypePtr> vars;
+                    for (size_t i = 0; i < node->typeParams.size(); ++i)
+                        vars[node->typeParams[i]] =
+                            Type::typeVar(-static_cast<int>(i + 1));
+                    m_distinctTypes[node->name] = {
+                        node->typeParams,
+                        resolveTypeExpr(*node->variants->front(), vars)};
+                    return;
+                }
                 // `type Row = Type.returnedBy(parseRow)` resolves against
                 // function signatures, which are registered after this pass —
                 // so it is deferred rather than resolved here.
@@ -891,6 +985,19 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::TypeDef>>) {
                 if (!node->variants) return;
+                if (node->isDistinct) {
+                    std::unordered_map<std::string, TypePtr> vars;
+                    for (size_t i = 0; i < node->typeParams.size(); ++i)
+                        vars[node->typeParams[i]] =
+                            Type::typeVar(-static_cast<int>(i + 1));
+                    ImportedDistinctType info{
+                        node->typeParams,
+                        resolveTypeExpr(*node->variants->front(), vars)};
+                    m_distinctTypes[node->name] = info;
+                    m_distinctTypes[m_currentModulePath + "." + node->name] =
+                        std::move(info);
+                    return;
+                }
                 // `type Row = Type.returnedBy(parseRow)` resolves against
                 // function signatures, which are registered after this pass —
                 // so it is deferred rather than resolved here.
@@ -1411,6 +1518,9 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             // (see check()'s comment) — so a param annotated `Float` means
             // "any T satisfying Float", same as an explicit constraint.
             if (m_traits.get(last)) return Type::constrained(last, last);
+            if (auto distinct = resolveDistinctName(last);
+                m_distinctTypes.count(distinct))
+                return Type::named(distinct);
             // User type alias (e.g. `type Level = :debug | :info | ...`)
             auto aliasIt = m_typeAliases.find(last);
             if (aliasIt != m_typeAliases.end()) return aliasIt->second;
@@ -1433,6 +1543,9 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
                 return Type::optional(args[0]);
             if (name == "Map" && args.size() == 2)
                 return Type::map(args[0], args[1]);
+            if (auto distinct = resolveDistinctName(name);
+                m_distinctTypes.count(distinct))
+                return Type::named(distinct, std::move(args));
             return Type::named(name, std::move(args));
         }
         else if constexpr (std::is_same_v<T, ast::FunctionType>) {
@@ -3307,6 +3420,38 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         }
                 }
             }
+            // `value.as(Target)` is a total, compile-time checked conversion.
+            // Distinct types erase to their backing representation, so a
+            // compatible retag changes only the static type. String is the
+            // universal display target and is lowered to the existing total
+            // display conversion by both backends.
+            if (node.method == "as" && node.args.size() == 1 && node.args[0] &&
+                node.namedArgs.empty() && !node.block) {
+                std::unordered_map<std::string, TypePtr> targetGenerics;
+                auto target = node.targetType
+                    ? resolveTypeExpr(*node.targetType, targetGenerics)
+                    : typeNameReference(*node.args[0]);
+                if (!target) {
+                    error(expr.location,
+                          "`.as` needs a type name as its target");
+                    return Type::unknown();
+                }
+                auto source = node.receiver ? inferExpr(*node.receiver)
+                                            : Type::unknown();
+                const auto targetIsString = [](const TypePtr& type) {
+                    const auto* primitive =
+                        std::get_if<PrimitiveType>(&type->kind);
+                    return primitive &&
+                           primitive->kind == PrimitiveType::String;
+                };
+                if (!targetIsString(target) &&
+                    !representationsCompatible(source, target)) {
+                    error(expr.location,
+                          "Cannot convert " + typeToString(source) + " to " +
+                              typeToString(target) + " with `.as`");
+                }
+                return target;
+            }
             // `x.to(T)` answers `T?`. The clauses implementing the protocol
             // take their target as an ordinary VALUE parameter
             // (`let to(value, String) = ...`), so every one of them has an
@@ -3328,8 +3473,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     auto* prim = std::get_if<PrimitiveType>(&t->kind);
                     return prim && prim->kind == PrimitiveType::String;
                 };
-                if (auto target = typeNameReference(*node.args[0]);
-                    target && !targetIsString(target)) {
+                std::unordered_map<std::string, TypePtr> targetGenerics;
+                auto target = node.targetType
+                    ? resolveTypeExpr(*node.targetType, targetGenerics)
+                    : typeNameReference(*node.args[0]);
+                if (target && !targetIsString(target)) {
                     for (const auto& argument : node.args) inferExpr(*argument);
                     if (node.receiver) inferExpr(*node.receiver);
                     return Type::optional(target);

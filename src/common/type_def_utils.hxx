@@ -22,7 +22,8 @@ struct TypeConstructorInfo {
 // one-variant ADT with a nullary constructor. That marker is the only thing
 // separating the two readings, since both are a single capitalized name.
 inline auto isTransparentTypeAlias(const ast::TypeDef& def) -> bool {
-    return !def.leadingPipe && def.variants && def.variants->size() == 1 &&
+    return !def.isDistinct && !def.leadingPipe && def.variants &&
+           def.variants->size() == 1 &&
            (*def.variants)[0] &&
            std::holds_alternative<ast::TypeName>(
                (*def.variants)[0]->kind);
@@ -94,7 +95,7 @@ inline auto makeTargetNames(const ast::TypeExprPtr& target)
 
 inline auto typeConstructors(const ast::TypeDef& def)
     -> std::optional<std::vector<TypeConstructorInfo>> {
-    if (!def.variants || isTransparentTypeAlias(def))
+    if (!def.variants || def.isDistinct || isTransparentTypeAlias(def))
         return std::vector<TypeConstructorInfo>{};
 
     std::vector<TypeConstructorInfo> result;

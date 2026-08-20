@@ -253,7 +253,8 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
     info.definition = def.location;
     info.module = module;
     info.type = Type::unknown();
-    info.detail = "type " + def.name;
+    info.detail = std::string(def.isDistinct ? "distinct type " : "type ") +
+                  def.name;
     if (!def.typeParams.empty()) {
         info.detail += "<";
         for (size_t i = 0; i < def.typeParams.size(); ++i) {
@@ -275,7 +276,7 @@ auto CollectPass::collectType(const ast::TypeDef& def, const std::string& module
     m_state->symbols.push_back(std::move(info));
 
     // Variant constructors are also top-level names
-    if (def.variants) {
+    if (def.variants && !def.isDistinct) {
         for (const auto& variant : *def.variants) {
             // variants are TypeExprPtrs; each top-level TypeName is a constructor
             if (!variant) continue;

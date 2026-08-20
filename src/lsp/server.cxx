@@ -2650,7 +2650,8 @@ private:
         } else if (traitName && moduleQualifier.empty()) {
             detail = "type " + word.text + "\ntrait " + word.text;
         } else if (symbol && symbol->kind == semantic::SymbolKind::Type &&
-                   symbol->detail.rfind("type ", 0) == 0 &&
+                   (symbol->detail.rfind("type ", 0) == 0 ||
+                    symbol->detail.rfind("distinct type ", 0) == 0) &&
                    (symbolDefinitionAtPosition || typeReference)) {
             detail = symbol->detail;
             if (const auto* definitionState =

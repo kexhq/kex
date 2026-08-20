@@ -1,0 +1,2 @@
+spec/error_distinct_type_invalid_as.kex:4:22: error: Cannot convert String to UserId with `.as`
+Aborted: 1 type error — fix before running (use --no-check to skip).

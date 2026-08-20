@@ -59,7 +59,7 @@ visibility_block = ( PUBLIC | PRIVATE ) DO module_item* END ;
    name: `type E = | DivideByZero` declares a one-variant ADT, while
    `type FilePath = String` (no pipe) is a transparent alias. *)
 type_def
-  = TYPE UPPER_IDENT type_params? inheritance? EQUALS PIPE? type_expr ( PIPE type_expr )*
+  = DISTINCT? TYPE UPPER_IDENT type_params? inheritance? EQUALS PIPE? type_expr ( PIPE type_expr )*
   | TYPE UPPER_IDENT type_params? inheritance? DO type_body END
   | TYPE UPPER_IDENT type_params? inheritance?
   ;

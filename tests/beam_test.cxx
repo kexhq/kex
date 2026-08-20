@@ -489,6 +489,26 @@ int main() {
             test::assertEqual(r.fields[0].type->name, std::string("Integer"));
         });
 
+        test::it("round-trips distinct types with their backing type", []() {
+            KexiChunk chunk;
+            chunk.metadata.moduleAtom = "Kex.Accounts";
+            KexiTypeExport type;
+            type.name = "AccountId";
+            type.isDistinct = true;
+            type.backingType = kexiPrimitive("Integer");
+            chunk.typeInterface.types.push_back(std::move(type));
+            chunk.interfaceHash = computeInterfaceHash(chunk);
+
+            auto decoded = deserializeKexi(serializeKexi(chunk));
+            test::assertEqual(decoded.typeInterface.types.size(), size_t(1));
+            const auto& distinct = decoded.typeInterface.types.front();
+            test::assertEqual(distinct.name, std::string("AccountId"));
+            test::assertTrue(distinct.isDistinct);
+            test::assertTrue(distinct.backingType != nullptr);
+            test::assertEqual(distinct.backingType->name,
+                              std::string("Integer"));
+        });
+
         test::it("round-trips complex type terms", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "kex_test";

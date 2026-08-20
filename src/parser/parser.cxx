@@ -186,7 +186,9 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
       (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
     return parseModuleDef();
   }
-  if (check(TokenType::Type))
+  if (check(TokenType::Type) ||
+      (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+       peekNext().type == TokenType::Type))
     return parseTypeDef();
   if (check(TokenType::Record))
     return parseRecordDef();
@@ -294,7 +296,9 @@ auto Parser::parseModuleDef(bool allowStandalone,
     if (check(TokenType::Module) ||
         (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
       mod->body.push_back(parseModuleDef(false, mod->name));
-    } else if (check(TokenType::Type)) {
+    } else if (check(TokenType::Type) ||
+               (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                peekNext().type == TokenType::Type)) {
       mod->body.push_back(parseTypeDef());
     } else if (check(TokenType::Record)) {
       mod->body.push_back(parseRecordDef());
@@ -339,6 +343,10 @@ auto Parser::parseModuleDef(bool allowStandalone,
 auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
   auto def = std::make_unique<ast::TypeDef>();
   def->location = currentLocation();
+  if (check(TokenType::LowerIdent) && peek().value == "distinct") {
+    advance();
+    def->isDistinct = true;
+  }
   expect(TokenType::Type, "Expected 'type'");
 
   def->name = expect(TokenType::UpperIdent, "Expected type name").value;
@@ -512,6 +520,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
     }
     expect(TokenType::End, "Expected 'end' to close type");
   }
+
+  if (def->isDistinct &&
+      (!def->variants || def->variants->size() != 1 || def->leadingPipe))
+    error("A distinct type needs exactly one backing type after '='");
 
   return def;
 }
@@ -1454,6 +1466,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       std::vector<ast::ExprPtr> args;
       std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
       std::optional<ast::ExprPtr> block;
+      ast::TypeExprPtr targetType;
 
       bool hasParens = false;
       if (match(TokenType::LParen)) {
@@ -1468,7 +1481,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
               auto name = advance().value;
               advance(); // :
               namedArgs.push_back({name, parseExpr()});
-            } else if (method == "to" && !toArgumentIsValue() &&
+            } else if ((method == "to" || method == "as") &&
+                       !toArgumentIsValue() &&
                        (check(TokenType::UpperIdent) ||
                         (check(TokenType::LBracket) &&
                          peekNext().type == TokenType::UpperIdent))) {
@@ -1500,6 +1514,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
               mod->location = currentLocation();
               mod->kind = ast::UpperIdentifier{std::move(head)};
               args.push_back(std::move(mod));
+              targetType = std::move(ty);
             } else {
               args.push_back(parseExpr());
             }
@@ -1518,6 +1533,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       call->kind = ast::MethodCall{
           std::move(expr),  method,   std::move(args), std::move(namedArgs),
           std::move(block), mutating, hasParens};
+      std::get<ast::MethodCall>(call->kind).targetType =
+          std::move(targetType);
       expr = std::move(call);
       continue;
     }
@@ -3573,7 +3590,9 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
       block->items.push_back(parseRecordDef());
     }
     // type definition inside compiled
-    else if (check(TokenType::Type)) {
+    else if (check(TokenType::Type) ||
+             (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+              peekNext().type == TokenType::Type)) {
       block->items.push_back(parseTypeDef());
     }
     // %name :> TypeAnnotation or %name : TypeAnnotation (type annotation for
@@ -3746,11 +3765,15 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
       block->items.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       block->items.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent)) {
+    } else if (check(TokenType::LowerIdent) &&
+               !(peek().value == "distinct" &&
+                 peekNext().type == TokenType::Type)) {
       block->items.push_back(parseTypeAnnotation());
     } else if (check(TokenType::Make)) {
       block->items.push_back(parseMakeDef());
-    } else if (check(TokenType::Type)) {
+    } else if (check(TokenType::Type) ||
+               (check(TokenType::LowerIdent) && peek().value == "distinct" &&
+                peekNext().type == TokenType::Type)) {
       block->items.push_back(parseTypeDef());
     } else if (check(TokenType::Record)) {
       block->items.push_back(parseRecordDef());

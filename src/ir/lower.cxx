@@ -1943,6 +1943,17 @@ struct Lowering {
             return callE("erlang", "error", 1, one(
                 lit(LitKind::String, loc + "runtime error: '!' requires a variable binding as the receiver")));
         }
+        // `.as(T)` is checked statically. Distinct/backing conversions erase
+        // to the receiver; `.as(String)` is the universal total display path.
+        if (n.method == "as" && n.args.size() == 1 && n.args[0] &&
+            n.receiver && n.namedArgs.empty() && !n.block) {
+            if (const auto* target =
+                    std::get_if<ast::UpperIdentifier>(&n.args[0]->kind);
+                target && target->name == "String")
+                return callE("kex_intrinsic_kex", "show", 1,
+                             one(lower(n.receiver)));
+            return lower(n.receiver);
+        }
         // A method on a trait-typed lexical parameter dispatches through the
         // hidden dictionary supplied by its caller. The tuple slots follow
         // the trait declaration's required-method order.
