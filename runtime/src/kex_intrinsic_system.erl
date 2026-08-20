@@ -44,11 +44,18 @@ bitWidth() ->
 %% Mock.System — makes the machine claim to be something else, so a test for
 %% Windows behaviour can run anywhere. Process-dictionary state, like the
 %% file and IO mocks in kex_file/kex_io.
-mockOS(Name) -> put(kex_mock_os, Name), 'Kex.Unit'.
+mockOS(Name) ->
+    kex_test:require_mocks_allowed(<<"Mock.System.OS">>),
+    put(kex_mock_os, Name),
+    'Kex.Unit'.
 
-mockBitWidth(Bits) -> put(kex_mock_bit_width, Bits), 'Kex.Unit'.
+mockBitWidth(Bits) ->
+    kex_test:require_mocks_allowed(<<"Mock.System.BITWIDTH">>),
+    put(kex_mock_bit_width, Bits),
+    'Kex.Unit'.
 
 mockClear() ->
+    kex_test:require_mocks_allowed(<<"Mock.System.clear">>),
     erase(kex_mock_os),
     erase(kex_mock_bit_width),
     'Kex.Unit'.

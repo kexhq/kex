@@ -1,0 +1,130 @@
+# Mock — deterministic stand-ins for the world outside the program: the
+# filesystem, the network, the environment, the platform, the console.
+#
+# Opt-in on purpose (issue #144): this module used to ride along inside
+# http.kex, so `using HTTP` in the prelude made every Mock.* reachable from
+# every program without anyone asking for it. Reachable is still not
+# callable — the runtime denies the mock intrinsics outside spec files, the
+# REPL, and --allow-mocks — but it should also not be in scope by accident.
+# A qualified `Mock.FS.File(...)` auto-loads this file like any other
+# opt-in module.
+#
+# All Mock.* sub-modules live in a single `module Mock` block so merged
+# compilation units never see duplicate top-level `Mock` modules.
+module Mock do
+  module FS do
+    File : FS.FilePath -> String -> Void
+    Directory : FS.FilePath -> Void
+    clear : Void
+
+    foul File(path: FS.FilePath, content: String) -> Void do
+      return Kex.Intrinsic.FS.file(path, content)
+    end
+
+    foul Directory(path: FS.FilePath) -> Void do
+      return Kex.Intrinsic.FS.directory(path)
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.FS.clear()
+    end
+  end
+
+  module Http do
+    start   : Void
+    respond : Integer -> String -> Void
+    respond : Integer -> String -> Map<String, String> -> Void
+    stop    : Void
+
+    foul start() -> Void do
+      return Kex.Intrinsic.Http.mockStart()
+    end
+
+    foul respond(status: Integer, body: String) -> Void do
+      return Kex.Intrinsic.Http.mockRespond(status, body)
+    end
+
+    foul respond(status: Integer, body: String, headers: Map<String, String>) -> Void do
+      return Kex.Intrinsic.Http.mockRespond(status, body, headers)
+    end
+
+    foul stop() -> Void do
+      return Kex.Intrinsic.Http.mockStop()
+    end
+  end
+
+  # Overlays the process environment, so a test can say what `ENV` holds
+  # instead of depending on how it was launched. `unset` is separate because
+  # a variable being ABSENT is an answer programs act on.
+  module ENV do
+    set : String -> String -> Void
+    unset : String -> Void
+    clear : Void
+
+    foul set(name: String, value: String) -> Void do
+      return Kex.Intrinsic.Env.mockSet(name, value)
+    end
+
+    foul unset(name: String) -> Void do
+      return Kex.Intrinsic.Env.mockUnset(name)
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.Env.mockClear()
+    end
+  end
+
+  # Makes the machine claim to be something else, so a test for another
+  # system's behaviour can run on this one. Setter per fact, like Mock.FS.
+  module System do
+    OS : System.OperatingSystem -> Void
+    BITWIDTH : Integer -> Void
+    clear : Void
+
+    foul OS(name: System.OperatingSystem) -> Void do
+      return Kex.Intrinsic.System.mockOS(name)
+    end
+
+    foul BITWIDTH(bits: Integer) -> Void do
+      return Kex.Intrinsic.System.mockBitWidth(bits)
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.System.mockClear()
+    end
+  end
+
+  module IO do
+    foul start() -> Void do
+      return Kex.Intrinsic.IO.ioMockStart()
+    end
+
+    foul stop() -> Void do
+      return Kex.Intrinsic.IO.ioMockStop()
+    end
+
+    foul output() -> String do
+      return Kex.Intrinsic.IO.ioMockOutput()
+    end
+
+    foul clear() -> Void do
+      return Kex.Intrinsic.IO.ioMockClear()
+    end
+
+    foul input(lines) -> Void do
+      return Kex.Intrinsic.IO.ioMockInput(lines)
+    end
+
+    foul input(first, second) -> Void do
+      return Kex.Intrinsic.IO.ioMockInput([first, second])
+    end
+
+    foul input(first, second, third) -> Void do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third])
+    end
+
+    foul input(first, second, third, fourth) -> Void do
+      return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
+    end
+  end
+end

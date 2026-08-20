@@ -19,8 +19,17 @@ head(Url, Opts)   -> kex_http:head(Url, Opts).
 options(Url)      -> kex_http:options(Url).
 options(Url, Opts) -> kex_http:options(Url, Opts).
 
-mockStart() -> kex_http:mock_start().
-mockRespond(Status, Body) -> kex_http:mock_respond(Status, Body).
+%% Mock.Http — deterministic responses for tests, and therefore test-only
+%% like every other Mock.* intrinsic (issue #144).
+mockStart() ->
+    kex_test:require_mocks_allowed(<<"Mock.Http.start">>),
+    kex_http:mock_start().
+mockRespond(Status, Body) ->
+    kex_test:require_mocks_allowed(<<"Mock.Http.respond">>),
+    kex_http:mock_respond(Status, Body).
 mockRespond(Status, Body, Headers) ->
+    kex_test:require_mocks_allowed(<<"Mock.Http.respond">>),
     kex_http:mock_respond(Status, Body, Headers).
-mockStop() -> kex_http:mock_stop().
+mockStop() ->
+    kex_test:require_mocks_allowed(<<"Mock.Http.stop">>),
+    kex_http:mock_stop().

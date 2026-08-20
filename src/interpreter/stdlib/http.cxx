@@ -32,12 +32,14 @@ auto Evaluator::registerHttpBuiltins() -> void {
     }
 
     auto mockStart = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.Http.start");
         m_mockHttp = true;
         m_mockHttpResponses.clear();
         return Value::unit();
     };
 
     auto mockRespond = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.Http.respond");
         if (args.size() < 2) return Value::unit();
         auto status = args[0];
         auto body = args[1];
@@ -59,6 +61,7 @@ auto Evaluator::registerHttpBuiltins() -> void {
     };
 
     auto mockStop = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.Http.stop");
         m_mockHttp = false;
         m_mockHttpResponses.clear();
         return Value::unit();

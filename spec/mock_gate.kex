@@ -1,0 +1,15 @@
+# Mock.* is refused outside a test (issue #144). A mock lets one part of a
+# program lie to another about the filesystem, the environment, the platform,
+# the network or the console, and the lie is invisible at the call that
+# believes it — so this file, an ordinary program run without --allow-mocks,
+# must not be able to install one.
+#
+# The file name is the point: this is `mock_gate.kex`, not `mock_gate.spec.kex`,
+# so the runtime treats it as an ordinary program. The golden output IS the
+# refusal, and both backends must refuse identically.
+
+main do
+  IO.printLine("before: ${FS.File.exists?("/nonexistent/kex/path/xyz")}")
+  Mock.FS.File("/nonexistent/kex/path/xyz", "forged")
+  IO.printLine("after:  ${FS.File.exists?("/nonexistent/kex/path/xyz")}")
+end

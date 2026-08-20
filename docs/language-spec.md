@@ -1934,6 +1934,14 @@ end
 | `Mock.FS` | `File(path, content)`, `Directory(path)`, `clear()` |
 | `Mock.Http` | `start()`, `respond(status, body)`, `respond(status, body, headers)`, `stop()` |
 | `Mock.IO` | `start()`, `stop()`, `output()`, `clear()`, `input(lines)` |
+| `Mock.ENV` | `set(name, value)`, `unset(name)`, `clear()` |
+| `Mock.System` | `OS(name)`, `BITWIDTH(bits)`, `clear()` |
+
+`Mock` is an opt-in module, not part of the prelude, and its functions are
+refused outside a test: a `*.spec.kex` entry file, a REPL session, or a run
+started with `--allow-mocks`. Everywhere else — including a compiled program
+booted straight from `erl` — every `Mock.*` call fails with an error naming
+it. See [testing.md](testing.md#mocks-are-test-only).
 
 ### 23.22 Conversion
 

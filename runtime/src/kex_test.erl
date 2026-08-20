@@ -1,7 +1,34 @@
 -module(kex_test).
 -export([describe/2, it/2, before/1, before/2, 'after'/1, 'after'/2,
           maybe_print_summary/0,
-          assert/1, assert/2, is_truthy/1]).
+          assert/1, assert/2, is_truthy/1,
+          allow_mocks/0, mocks_allowed/0, require_mocks_allowed/1]).
+
+%% Mock.* is test-only (issue #144): a mock lets one part of a program lie
+%% to another about the filesystem, environment, platform, network or
+%% console, so the intrinsic backends (kex_intrinsic_fs/env/system/io/http)
+%% call require_mocks_allowed/1 before touching mock state. The flag is
+%% process-local like the mock state itself, and it is the RUNNER that grants
+%% it, never the emitted module: `kex -R` prepends kex_test:allow_mocks() to
+%% its -eval for a *.spec.kex entry or --allow-mocks, and the BEAM REPL does
+%% the same before kex_repl_driver:loop() (both in src/main.cxx). So the very
+%% same .beam started by `erl -pa ebin` begins with mocks denied. Mirrors
+%% Evaluator::setMocksAllowed in the tree-walker, error line included — the
+%% -R parity suites diff the two backends' output.
+allow_mocks() -> put(kex_mocks_allowed, true), 'Kex.Unit'.
+
+mocks_allowed() -> get(kex_mocks_allowed) =:= true.
+
+require_mocks_allowed(Api) ->
+    case mocks_allowed() of
+        true -> ok;
+        %% `/utf8` on the literal, not just on the file: a plain <<"…">>
+        %% truncates each character to a byte, which turned the em dash into
+        %% a lone \x14 and made the BEAM message differ from the walker's.
+        false -> erlang:error(<<Api/binary,
+            " is test-only — Mock.* runs in spec files (*.spec.kex), the "
+            "REPL, or with --allow-mocks"/utf8>>)
+    end.
 
 %% Minimal RSpec-style describe/it DSL, mirroring
 %% src/interpreter/stdlib/test.cxx exactly: describe is purely

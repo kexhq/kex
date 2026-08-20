@@ -8,6 +8,28 @@ Testing is a library, not a language feature. `describe`, `it`, `before`, and
 runs inner-to-outer in reverse declaration order. `Mock.FS` and `Mock.Http` are
 also implemented; `using Test` and the `kex test` subcommand remain aspirational.
 
+## Mocks are test-only
+
+A mock lets one part of a program lie to another about the filesystem, the
+environment, the platform, the network, or the console — and the lie is global
+and invisible at the call that believes it: `FS.File.read(configPath)` reviews
+as safe no matter who mocked that path. So `Mock.*` is refused unless the run
+is a test:
+
+| Where | Mocks |
+| --- | --- |
+| `kex foo.spec.kex`, `kex -R foo.spec.kex` | allowed — the entry file is a spec |
+| `kex -i` / `kex -R` REPL, the browser REPL | allowed — nothing else is present to deceive |
+| `kex --allow-mocks foo.kex` | allowed — explicitly asked for |
+| anything else, including a compiled `.beam` run straight from `erl` | **denied**, with an error naming the call |
+
+Both backends deny with the same message, and the grant is made by whatever
+starts the program, never baked into the artifact — so a compiled program
+cannot be hijacked by a dependency that calls `Mock.ENV.set` at load time.
+
+`Mock` is also no longer part of the automatic prelude. Qualified use
+(`Mock.FS.File(...)`) loads it on demand, like any other opt-in stdlib module.
+
 ## Syntax
 
 ```kex

@@ -1,7 +1,9 @@
 # Mode-safe file handles
 #
 # The mode passed to FS.File.open determines which methods the returned
-# FileHandle exposes. Mock.FS keeps this example self-contained.
+# FileHandle exposes. Mock.FS keeps this example self-contained — and since
+# Mock.* is test-only, run it as:
+#   kex --allow-mocks examples/file_modes.kex
 
 using FS
 

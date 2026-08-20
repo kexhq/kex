@@ -1000,6 +1000,18 @@ auto printSemanticDiagnostic(const kex::semantic::Diagnostic &diag) -> void {
 
 } // namespace
 
+// Is this entry file a spec — the one kind of program allowed to install
+// mocks without asking (issue #144)? Deliberately the FILE NAME and not, say,
+// "the program called describe somewhere": the answer has to be known before
+// a single line runs, and it has to be something a reader of the command line
+// can check. Everything else needs --allow-mocks.
+auto isSpecEntry(const std::string &filepath) -> bool {
+  static const std::string suffix = ".spec.kex";
+  return filepath.size() > suffix.size() &&
+         filepath.compare(filepath.size() - suffix.size(), suffix.size(),
+                          suffix) == 0;
+}
+
 // Convention: `<name>.spec.kex` is a spec for `<name>.kex` and doesn't need
 // to redeclare its types/records/functions — running the spec auto-loads
 // the base file's declarations (skipping its own `main` block(s), so its
@@ -1862,6 +1874,11 @@ auto printUsage(const char *progName) -> void {
          ".)\n"
       << "      --source-root <dir>\n"
       << "                    Add a module source root (repeatable)\n"
+      << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
+         "of a\n"
+      << "                    program lie to another, so it is off unless the "
+         "entry\n"
+      << "                    file is a *.spec.kex or you ask for it here\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "      --info        Print this build's details as JSON, for tools\n"
@@ -1933,6 +1950,13 @@ int main(int argc, char *argv[]) {
       {"no-colors", no_argument, nullptr, 'N'},
       {"no-prelude", no_argument, nullptr, 1003},
       {"source-root", required_argument, nullptr, 1008},
+      // Mock.* is test-only (issue #144): a mock lets one part of a program
+      // lie to another about the filesystem, environment, platform, network
+      // or console, so the runtime denies the mock intrinsics unless the
+      // entry file is a `*.spec.kex`, this is a REPL, or the user says so
+      // here. Long-only and deliberately verbose — nobody should reach for
+      // it by habit.
+      {"allow-mocks", no_argument, nullptr, 1010},
       {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
@@ -1961,6 +1985,7 @@ int main(int argc, char *argv[]) {
   bool compileRun = false;
   bool skipPrelude = false;
   bool collapseReport = false;
+  bool allowMocks = false;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -1972,6 +1997,9 @@ int main(int argc, char *argv[]) {
       break;
     case 1005:
       collapseReport = true;
+      break;
+    case 1010:
+      allowMocks = true;
       break;
     case 1007:
 #ifdef KEX_HAS_LSP
@@ -2190,7 +2218,12 @@ int main(int argc, char *argv[]) {
         erlArgs.push_back(rtPaDir);
       }
       erlArgs.push_back("-eval");
-      erlArgs.push_back(beamOtpFloorGuard() + "kex_repl_driver:loop()");
+      // allow_mocks/0 before the loop, in the same process the driver
+      // evaluates input in — the BEAM half of "a REPL may mock" (issue #144).
+      // The flag lives in the process dictionary, so this grants it for the
+      // session and for nothing else.
+      erlArgs.push_back(beamOtpFloorGuard() +
+                        "kex_test:allow_mocks(), kex_repl_driver:loop()");
       if (!vm.start(erlArgs)) {
         std::cerr << "error: could not start erl VM for BEAM REPL\n";
         std::filesystem::remove_all(beamDir);
@@ -3077,6 +3110,10 @@ int main(int argc, char *argv[]) {
 
     kex::interpreter::Evaluator evaluator;
     evaluator.setReplMode(true);
+    // A REPL session is the user experimenting with their own machine, and
+    // there is no other code present for a mock to deceive — the reason
+    // Mock.* is gated elsewhere (issue #144) does not exist here.
+    evaluator.setMocksAllowed(true);
     // Without this the evaluator keeps its default relative {"lib", "src"}
     // roots, so `using Regex` (or any opt-in stdlib module) failed with
     // "Unknown module" in the interpreter REPL while working both in scripts
@@ -3580,10 +3617,14 @@ int main(int argc, char *argv[]) {
     // `\x{2717}` for `✗` and mangles every non-ASCII byte, so a Kex program's
     // output depended on the environment: identical source printed `[h, é, é]`
     // here and `[h, \ufffd, \ufffd]` there.
+    // A prebuilt .beam carries no evidence of being a spec — the file name it
+    // was compiled from is gone — so mocks here are strictly opt-in
+    // (issue #144).
     std::string mainCall =
         beamOtpFloorGuard() +
         "io:setopts(standard_io, [{encoding, unicode}]), "
-        "io:setopts(standard_error, [{encoding, unicode}]), "
+        "io:setopts(standard_error, [{encoding, unicode}]), " +
+        (allowMocks ? "kex_test:allow_mocks(), " : "") +
         "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
         "\"), "
         "code:load_binary('" +
@@ -4122,15 +4163,23 @@ int main(int argc, char *argv[]) {
         const std::string utf8Io =
             "io:setopts(standard_io, [{encoding, unicode}]), "
             "io:setopts(standard_error, [{encoding, unicode}]), ";
+        // Mock.* gate, BEAM side (issue #144). The grant is made by the
+        // RUNNER, not baked into the emitted module: the same .beam handed to
+        // `erl -pa ebin` — or to `kex prog.beam` — starts with mocks denied,
+        // which is what makes a compiled program un-hijackable. main/0 runs in
+        // this process, so the process-dictionary flag covers exactly it.
+        const std::string mockGate =
+            (allowMocks || isSpecEntry(filepath)) ? "kex_test:allow_mocks(), "
+                                                  : "";
         std::string mainCall =
             result.mainArity == 1
-                ? beamOtpFloorGuard() + utf8Io + "try " + loadExpr + "'" +
+                ? beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + "'" +
                       result.moduleName +
                       "':main([unicode:characters_to_binary(A) || A <- "
                       "init:get_plain_arguments()]) of Result -> halt() catch "
                       "_:Reason:_ -> " +
                       reasonFmt + ", halt(1) end"
-                : beamOtpFloorGuard() + utf8Io + "try " + loadExpr + "'" +
+                : beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + "'" +
                       result.moduleName +
                       "':main() of Result -> halt() catch _:Reason:_ -> " +
                       reasonFmt + ", halt(1) end";
@@ -4212,6 +4261,9 @@ int main(int argc, char *argv[]) {
       kex::interpreter::Evaluator evaluator;
       evaluator.setArgs(scriptArgs);
       evaluator.setModuleRoots(moduleRootsFor(filepath));
+      // Mock.* is denied by default — a spec earns it by being a spec, and
+      // anything else has to say --allow-mocks (issue #144).
+      evaluator.setMocksAllowed(allowMocks || isSpecEntry(filepath));
       if (runAnalyzed)
         evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
 

@@ -688,6 +688,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
 auto Evaluator::registerMockBuiltins() -> void {
     // Mock.FS.File(path, content) -> Void  — register an in-memory file
     auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.FS.File");
         if (args.size() < 2) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
@@ -697,6 +698,7 @@ auto Evaluator::registerMockBuiltins() -> void {
 
     // Mock.FS.Directory(path) -> Void  — register an in-memory directory
     auto mockDirectory = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.FS.Directory");
         if (args.empty()) return Value::unit();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::unit();
@@ -706,6 +708,7 @@ auto Evaluator::registerMockBuiltins() -> void {
 
     // Mock.FS.clear() -> Void  — reset all FS mocks
     auto mockClear = [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.FS.clear");
         m_mockFiles.clear();
         m_mockDirs.clear();
         return Value::unit();

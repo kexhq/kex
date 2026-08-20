@@ -86,6 +86,9 @@ KexReplSession* kex_repl_create() {
     // execMainBlock's `!m_replMode && !block.synthetic` check), which
     // would make a `let` on one call invisible on the next.
     session->evaluator.setReplMode(true);
+    // Same rule as the native REPL: a session may mock, because there is no
+    // other code present for a mock to deceive (issue #144).
+    session->evaluator.setMocksAllowed(true);
     // Opt-in stdlib modules are embedded at /stdlib. The native CLI adds its
     // discovered stdlib roots before evaluating REPL input; do the same here
     // so `using Units.SI` and other source-module imports resolve in wasm.
@@ -174,6 +177,7 @@ void kex_repl_eval(KexReplSession* session, const char* sourceIn) {
             session->evaluator.~Evaluator();
             new (&session->evaluator) kex::interpreter::Evaluator();
             session->evaluator.setReplMode(true);
+            session->evaluator.setMocksAllowed(true);
             session->evaluator.setModuleRoots(kex::standardLibraryModuleRoots());
             session->replAccumSource.clear();
             g_programs.clear();

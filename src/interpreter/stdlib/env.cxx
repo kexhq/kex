@@ -22,7 +22,9 @@ auto Evaluator::registerEnvBuiltins() -> void {
     // Mock.ENV — the overlay a test writes. ENV is a snapshot, so setting a
     // variable rebuilds it; that is also what makes `keys`, `count` and
     // `each` agree with `get` instead of only the lookup being mocked.
+    // Test-only like every Mock.* intrinsic (issue #144).
     defineIntrinsic("Env::mockSet", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.ENV.set");
         if (args.size() >= 2) {
             auto* name = std::get_if<StringValue>(&args[0]->data);
             auto* value = std::get_if<StringValue>(&args[1]->data);
@@ -36,6 +38,7 @@ auto Evaluator::registerEnvBuiltins() -> void {
     });
 
     defineIntrinsic("Env::mockUnset", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.ENV.unset");
         if (!args.empty())
             if (auto* name = std::get_if<StringValue>(&args[0]->data)) {
                 m_mockEnv.erase(name->value);
@@ -46,6 +49,7 @@ auto Evaluator::registerEnvBuiltins() -> void {
     });
 
     defineIntrinsic("Env::mockClear", [this](std::vector<ValuePtr>) -> ValuePtr {
+        requireMocksAllowed("Mock.ENV.clear");
         m_mockEnv.clear();
         m_mockEnvUnset.clear();
         rebuildEnvMap();
