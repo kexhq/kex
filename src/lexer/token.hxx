@@ -106,8 +106,13 @@ enum class TokenType {
 
 struct SourceLocation {
     std::string_view file;
-    int line;
-    int column;
+    int line = 0;
+    int column = 0;
+    // Byte range in the original UTF-8 source. Keeping the range on the
+    // location makes one source-coordinate type usable by tokens, AST nodes,
+    // diagnostics, and source-editing tools.
+    int startOffset = -1;
+    int endOffset = -1; // exclusive
 };
 
 struct Token {

@@ -657,16 +657,24 @@ auto Lexer::lexSpliceIdent() -> Token {
 }
 
 auto Lexer::makeToken(TokenType type) -> Token {
-    return Token{type, "", currentLocation(), m_tokenStartOffset, m_pos};
+    auto location = currentLocation();
+    location.startOffset = m_tokenStartOffset;
+    location.endOffset = m_pos;
+    return Token{type, "", location, m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::makeToken(TokenType type, std::string value) -> Token {
-    return Token{type, std::move(value), currentLocation(),
-                 m_tokenStartOffset, m_pos};
+    auto location = currentLocation();
+    location.startOffset = m_tokenStartOffset;
+    location.endOffset = m_pos;
+    return Token{type, std::move(value), location, m_tokenStartOffset, m_pos};
 }
 
 auto Lexer::errorToken(std::string message) -> Token {
-    return Token{TokenType::Error, std::move(message), currentLocation(),
+    auto location = currentLocation();
+    location.startOffset = m_tokenStartOffset;
+    location.endOffset = m_pos;
+    return Token{TokenType::Error, std::move(message), location,
                  m_tokenStartOffset, m_pos};
 }
 
