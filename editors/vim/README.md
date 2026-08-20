@@ -24,8 +24,27 @@ Or, while working on Kex itself, one line in your config:
 set rtp+=/path/to/kex/editors/vim
 ```
 
-Neovim users on a plugin manager can load it as a plain directory plugin
-(`lazy.nvim`: `{ dir = '/path/to/kex/editors/vim' }`).
+Neovim users on a plugin manager can load it as a plain directory plugin.
+With `lazy.nvim`, as `~/.config/nvim/lua/plugins/kex.lua`:
+
+```lua
+return {
+  {
+    dir = vim.fn.expand("~/src/kex/editors/vim"),
+    name = "kex",
+    -- Not lazy-loaded on `ft = "kex"`: this plugin's own ftdetect is what
+    -- sets that filetype in the first place.
+    lazy = false,
+    config = function()
+      vim.lsp.enable("kex")
+    end,
+  },
+}
+```
+
+Nothing is fetched for a `dir` plugin, so there is no sync step — and because
+the files are read out of the checkout, edits to them take effect on the next
+restart.
 
 ## Language server (Neovim)
 

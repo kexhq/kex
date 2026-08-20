@@ -30,15 +30,16 @@ concurrency:
 
 jobs:
   # Which files this run is about. The compiler suites cannot be affected by
-  # an editors/ change, and the extension cannot be affected by anything
+  # an editors/ change, and neither editor's files can be affected by anything
   # outside editors/, so both sides filter on one file list. Workflow-level
   # `paths:` would be the wrong tool: it skips the ENTIRE workflow, taking the
-  # extension check — the one job an extension-only change needs — down with
-  # the suites it does not.
+  # editor checks — the ones an editors-only change needs — down with the
+  # suites it does not.
   changes:
     runs-on: ubuntu-latest
     outputs:
-      extension: ${{ steps.filter.outputs.extension }}
+      vscode: ${{ steps.filter.outputs.vscode }}
+      vim: ${{ steps.filter.outputs.vim }}
       extension-only: ${{ steps.filter.outputs.extension-only }}
     steps:
       - uses: actions/checkout@v4
@@ -59,19 +60,25 @@ jobs:
             git rev-parse -q --verify "${base}^{commit}" >/dev/null 2>&1 || base=HEAD^
           fi
           changed=$(git diff --name-only "${base}...HEAD")
-          extension=false
+          vscode=false
+          vim=false
           extension_only=true
           while IFS= read -r file; do
             [ -n "${file}" ] || continue
             case "${file}" in
-              editors/*) extension=true ;;
+              editors/vscode/*) vscode=true ;;
+              editors/vim/*) vim=true ;;
+              # Anything else under editors/ belongs to neither in
+              # particular, so it goes to both rather than to nothing.
+              editors/*) vscode=true; vim=true ;;
               *) extension_only=false ;;
             esac
           done <<< "${changed}"
           # An empty diff (nothing distinguishable) says nothing, so err on
           # the side of running the suites.
           [ -n "${changed}" ] || extension_only=false
-          echo "extension=${extension}" >> "$GITHUB_OUTPUT"
+          echo "vscode=${vscode}" >> "$GITHUB_OUTPUT"
+          echo "vim=${vim}" >> "$GITHUB_OUTPUT"
           echo "extension-only=${extension_only}" >> "$GITHUB_OUTPUT"
 
   # The VS Code extension: same install/compile/package path the release
@@ -80,7 +87,7 @@ jobs:
   # editors/ changes because nothing else feeds into it.
   extension:
     needs: changes
-    if: needs.changes.outputs.extension == 'true'
+    if: needs.changes.outputs.vscode == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,6 +111,33 @@ jobs:
       - name: Package the .vsix
         run: bunx --bun @vscode/vsce package --no-dependencies
         working-directory: editors/vscode
+
+  # The Vim/Neovim runtime files: editors/vim/test/run.vim reindents a
+  # fixture written the way `=` should leave it, fails on any line that moved,
+  # and checks the syntax group a dozen constructs land in. Run under both
+  # editors because the files target both and the two are not the same
+  # program — Vim never sources the .lua half, and its regexp and syntax
+  # engines are separate implementations from Neovim's.
+  vim-runtime:
+    needs: changes
+    if: needs.changes.outputs.vim == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Vim and Neovim
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y vim neovim
+
+      # Both invocations exit nonzero on failure and name what moved where.
+      - name: Neovim
+        run: nvim --headless -u editors/vim/test/run.vim
+
+      # `-es` reads commands from stdin; without the redirect Vim waits on a
+      # terminal that CI does not have.
+      - name: Vim
+        run: vim -es -u NONE -N -c 'source editors/vim/test/run.vim' < /dev/null
 
   # Both platforms, because they genuinely disagree. libm is only required to
   # correctly round some operations (sqrt, the arithmetic operators); for the
