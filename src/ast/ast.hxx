@@ -492,6 +492,7 @@ struct Expr {
 // ===== Top-Level Declarations =====
 
 struct TypeAnnotation {
+    SourceLocation location;
     std::string name;
     TypeExprPtr type;
     bool implicitThis; // :> vs :
@@ -568,6 +569,7 @@ struct RecordDef {
 struct UsingBlock;
 
 struct VisibilityBlock {
+    SourceLocation location;
     bool isPublic;
     std::vector<std::variant<
         std::unique_ptr<FunctionDef>,

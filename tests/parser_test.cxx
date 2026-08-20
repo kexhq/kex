@@ -31,6 +31,58 @@ auto firstItemIs(const ast::Program& program) -> bool {
 }
 
 int main() {
+    describe("Parser — Source Spans", []() {
+        it("nests binary expression byte spans", []() {
+            auto program = parse("1 + 2 * 3");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& addition = *main->body[0];
+            auto& additionOp = std::get<ast::BinaryOp>(addition.kind);
+            auto& multiplication = *additionOp.right;
+
+            assertEqual(addition.location.startOffset, 0);
+            assertEqual(addition.location.endOffset, 9);
+            assertEqual(multiplication.location.startOffset, 4);
+            assertEqual(multiplication.location.endOffset, 9);
+            assertTrue(addition.location.startOffset <=
+                       multiplication.location.startOffset);
+            assertTrue(multiplication.location.endOffset <=
+                       addition.location.endOffset);
+        });
+
+        it("includes grouping and postfix syntax in type spans", []() {
+            auto program = parse("value : (Int | String)?");
+            auto& annotation =
+                std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
+            auto& optional = *annotation->type;
+            auto& unionType = *std::get<ast::OptionalType>(optional.kind).inner;
+
+            assertEqual(annotation->location.startOffset, 0);
+            assertEqual(annotation->location.endOffset, 23);
+            assertEqual(optional.location.startOffset, 8);
+            assertEqual(optional.location.endOffset, 23);
+            assertEqual(unionType.location.startOffset, 8);
+            assertEqual(unionType.location.endOffset, 22);
+        });
+
+        it("includes pattern delimiters in parent spans", []() {
+            auto program = parse("let pick([head | tail]) = head");
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
+                program.items[0]);
+            auto& list = **function->clauses[0].params[0].pattern;
+            auto& listPattern = std::get<ast::ListPattern>(list.kind);
+
+            assertEqual(list.location.startOffset, 9);
+            assertEqual(list.location.endOffset, 22);
+            assertTrue(list.location.startOffset <=
+                       listPattern.elements[0]->location.startOffset);
+            assertTrue(listPattern.elements[0]->location.endOffset <=
+                       list.location.endOffset);
+            assertTrue((*listPattern.rest)->location.endOffset <=
+                       list.location.endOffset);
+        });
+    });
+
     describe("Parser — Top Level", []() {
         it("parses empty program", []() {
             auto program = parse("");
