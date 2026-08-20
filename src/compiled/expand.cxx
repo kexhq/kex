@@ -1079,6 +1079,22 @@ auto expand(ast::Program& program,
                     };
                     finder.substitute(*expr);
                 }
+                // Generation effects may live in an ordinary compiled helper
+                // function (`let emit(name) do record %name ... end`). Find
+                // those templates too, or records emitted by a helper inside
+                // a module would incorrectly be appended at top level.
+                Constants none;
+                Substituter finder{none, diagnostics, {}, {}, {}};
+                finder.onGenerated = [&](const ast::GeneratedDecl& decl) {
+                    templateOwner[templateId(decl.function)] = owner;
+                };
+                walkBodies((*block)->items, [&](auto& target) {
+                    using T = std::decay_t<decltype(target)>;
+                    if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                        finder.functionBody(target);
+                    else
+                        finder.substitute(target);
+                });
             }
         };
         record(record, program.items, nullptr);
@@ -1200,6 +1216,7 @@ auto expand(ast::Program& program,
             // the same reason a `type` does.
             const bool wantsUpper =
                 std::holds_alternative<std::shared_ptr<ast::TypeDef>>(decl.function) ||
+                std::holds_alternative<std::shared_ptr<ast::RecordDef>>(decl.function) ||
                 std::holds_alternative<std::shared_ptr<ast::MakeDef>>(decl.function);
             const unsigned char lead =
                 static_cast<unsigned char>(decl.name.front());
@@ -1211,7 +1228,10 @@ auto expand(ast::Program& program,
                              (std::holds_alternative<std::shared_ptr<ast::MakeDef>>(
                                   decl.function)
                                   ? "make target"
-                                  : "type") +
+                                  : std::holds_alternative<std::shared_ptr<ast::RecordDef>>(
+                                        decl.function)
+                                      ? "record"
+                                      : "type") +
                              " name `" + decl.name +
                              "` must start with an upper-case letter" +
                              (isLower ? " — try `%{name.capitalize}`" : ""));
@@ -1289,7 +1309,49 @@ auto expand(ast::Program& program,
             // nothing for the hygiene substitution to do here.
             if (into) into->body.push_back(std::move(copy));
             else program.items.push_back(std::move(copy));
+            continue;
         }
+
+        if (auto* recordTemplate =
+                std::get_if<std::shared_ptr<ast::RecordDef>>(&decl.function)) {
+            if (!*recordTemplate) continue;
+            auto copy = ast::clone(**recordTemplate);
+            copy->name = decl.name;
+            copy->location = decl.location;
+            Constants captured;
+            for (const auto& [bound, value] : decl.bindings)
+                captured.emplace(bound, value);
+            Substituter scope{
+                captured, diagnostics, {}, {}, {}, {}, {}, {&layouts}};
+            for (auto& field : copy->fields)
+                if (field.defaultValue) scope.substitute(*field.defaultValue);
+            if (into) into->body.push_back(std::move(copy));
+            else program.items.push_back(std::move(copy));
+        }
+    }
+
+    // GeneratedDecl is a compile-time EFFECT. Helpers that contain one are
+    // still ordinary functions and may be hoisted out of `compiled`, so every
+    // executed effect must become Unit before semantic analysis and lowering.
+    // Leaving the node behind makes the BEAM path fail with "unimplemented
+    // expr node GeneratedDecl" even though its record was emitted correctly.
+    {
+        Constants none;
+        Substituter eraser{none, diagnostics, {}, {}, {}};
+        eraser.onSlot = [](ast::ExprPtr& slot) {
+            if (!slot ||
+                !std::holds_alternative<ast::GeneratedDecl>(slot->kind))
+                return false;
+            slot->kind = ast::TupleExpr{{}};
+            return true;
+        };
+        walkBodies(program.items, [&](auto& target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ast::FunctionDef>)
+                eraser.functionBody(target);
+            else
+                eraser.substitute(target);
+        });
     }
 
     // --- 4. Collapse compiled-builder chains that are already fully known.

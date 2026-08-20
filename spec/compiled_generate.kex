@@ -40,6 +40,21 @@ compiled do
   end
 end
 
+compiled do
+  let emitRecord(name, initial) do
+    record %name do
+      value : Int = initial
+    end
+  end
+  let emitValueRecord(name) do
+    record %{name + "Value"} do
+      value : Int = 3
+    end
+  end
+  emitRecord("Point", 4)
+  emitValueRecord("Size")
+end
+
 main do
   let small: Small = 1
   let large: Large = 2
@@ -49,4 +64,5 @@ main do
   IO.printLine(tagGamma(7))
   IO.printLine(get_one(1))
   IO.printLine(get_two(2))
+  IO.printLine("${Point {}.value} ${SizeValue {}.value}")
 end

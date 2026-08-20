@@ -418,6 +418,7 @@ struct ErrorNode {
 // ast::clone of it.
 using GeneratedTemplate = std::variant<std::shared_ptr<struct FunctionDef>,
                                        std::shared_ptr<struct TypeDef>,
+                                       std::shared_ptr<struct RecordDef>,
                                        std::shared_ptr<struct MakeDef>>;
 
 struct GeneratedDecl {
