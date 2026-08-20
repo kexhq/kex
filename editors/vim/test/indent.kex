@@ -1,0 +1,99 @@
+# Fixture for the indent tests: every line here is where `=` should put it.
+# @param nothing — the doc tag is here for the syntax test to find.
+
+using Parsing
+
+type Weekday = Monday | Tuesday | Wednesday
+  | Thursday | Friday
+
+type Shape
+  = Circle(Number)
+  | Square(Number)
+
+module Demo do
+  record Point do
+    x : Integer
+    y : Integer
+  end
+
+  make Point, implement: Showable do
+    show :> String
+    let show(this) -> String do
+      "point ${this.x}, `raw` and $`interp ${1 + 2}`"
+    end
+  end
+
+  # A multi-line raw string keeps its own indentation, and the code after it
+  # takes its bearings from the line that opened the string.
+  let query = `
+    SELECT id, email
+    FROM users
+  `
+
+  foul log(msg: String) -> Void or! Error do
+    let pattern = re`^[a-z]+\.(foo|bar){2,3}$`
+    let n = 0xFF_1 + 1_000.5e-3
+    let m = { name: "kex", size: 3 }
+    let day = if n > 0 then Monday else Tuesday end
+
+    # A `do` at the end of a comment must not open a block.
+    [1, 2, 3].each do |item|
+      if item > 2
+        IO.printLine("big ${item}")
+      elif item == 2
+        IO.printLine("two")
+      else
+        IO.printLine(item * 2)
+      end
+    end
+
+    var i = 0
+    while i < 10
+      i = i + 1
+      break if i > 3
+    end
+
+    match m do
+      { name: name } => IO.printLine(name)
+      _ => IO.printLine("none")
+    end
+
+    # A chain hangs one level under its head, and a block hung off a step
+    # keeps its own body one level further in.
+    let primes = Stream.Sequence(from: 2) { |n| n + 1 }
+      .filter do |n|
+        (2..n - 1).all? { |d| n.modulo(d) != 0 }
+      end
+      .take(10)
+
+    let config = OptionParser.new("demo")
+      .flag("verbose", 'v', "say more")
+      .command("run", "<file>", "run it") do |options|
+        IO.printLine("run ${options.arguments.join(" ")}")
+        0
+      end
+
+    # A wrapped argument list indents one level, and its closer comes back.
+    let record = Point {
+      x: 1,
+      y: 2
+    }
+    IO.printLine(record.x)
+
+    trying do
+      let value = m.get("name").try
+      IO.printLine(value)
+    rescue return -1
+    end
+
+    receive do
+      _ => IO.printLine("message")
+    after timeout: 200
+      IO.printLine("waited")
+    end
+  end
+end
+
+main do
+  Demo.log("hello")
+end

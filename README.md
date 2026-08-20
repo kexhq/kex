@@ -423,6 +423,11 @@ The VS Code extension in [`editors/vscode`](editors/vscode) adds Kex syntax
 highlighting and launches this server. See its README for development and
 installation instructions.
 
+The Vim/Neovim runtime files in [`editors/vim`](editors/vim) add syntax
+highlighting, indentation, and `%` matching on `do`/`end`; on Neovim they also
+ship a `vim.lsp.config` entry for the same server. See its README for how to
+put them on your `runtimepath`.
+
 Install the binary somewhere on your `PATH`:
 
 ```sh
