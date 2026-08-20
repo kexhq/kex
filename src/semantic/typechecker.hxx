@@ -106,6 +106,7 @@ private:
     auto registerTypeAliases(const ast::Program& program) -> void;
     auto registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void;
     auto typeDefToType(const ast::TypeDef& def) -> TypePtr;
+    auto checkRecordDef(const ast::RecordDef& def) -> void;
 
     // Standalone type signatures (`fact : Integer -> Integer`) — registered
     // before function bodies are checked so the annotation acts as a declared

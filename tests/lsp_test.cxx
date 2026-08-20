@@ -56,6 +56,30 @@ auto occurrences(const std::string& text, std::string_view needle) -> size_t {
 
 int main() {
     describe("Kex LSP", []() {
+        it("publishes diagnostics for unknown types in bare declarations", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-bare-type.kex","languageId":"kex","version":1,"text":"value : MissingType\nlet value = 1\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("publishDiagnostics") != std::string::npos,
+                       "missing diagnostics notification");
+            assertTrue(result.find("Unknown type `MissingType`") !=
+                           std::string::npos,
+                       "bare declaration diagnostic did not reach the LSP");
+        });
+
         it("serves diagnostics and completion for unsaved buffers", []() {
             std::string messages;
             messages += frame(

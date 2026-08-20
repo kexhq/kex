@@ -2,6 +2,11 @@
 # the BEAM runtime. Pid is an opaque BEAM process identifier; Task wraps a
 # spawned process with an awaitable result.
 
+type Pid
+type Task<A>
+type Reference
+type Process<A>
+
 module Process do
   # Run an executable directly with an argv vector. No shell is involved.
   # Output is captured as UTF-8 strings; a non-zero child status is still a

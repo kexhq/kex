@@ -2087,6 +2087,65 @@ int main() {
     });
 
     describe("Semantic — standalone type annotations", []() {
+        it("rejects unknown types in bare declarations in every declaration scope", []() {
+            assertTrue(hasError("value : MissingType\nlet value = 1\n",
+                                "Unknown type `MissingType`"));
+            assertTrue(hasError("convert : MissingType -> Integer\nlet convert(x) = 1\n",
+                                "Unknown type `MissingType`"));
+            assertTrue(hasError(
+                "module Example do\n"
+                "  value : MissingType\n"
+                "  let value = 1\n"
+                "end\n",
+                "Unknown type `MissingType`"));
+            assertTrue(hasError(
+                "trait Example do\n"
+                "  value : MissingType\n"
+                "end\n",
+                "Unknown type `MissingType`"));
+            assertTrue(hasError(
+                "type Box\n"
+                "make Box do\n"
+                "  value :> MissingType\n"
+                "  let value = 1\n"
+                "end\n",
+                "Unknown type `MissingType`"));
+        });
+
+        it("accepts declared, generic, and forward-referenced declaration types", []() {
+            assertTrue(noErrors(
+                "identity : A -> A\n"
+                "let identity(value) = value\n"
+                "later : Later -> Later\n"
+                "let later(value) = value\n"
+                "type Later\n"
+            ));
+        });
+
+        it("checks let and var annotations inside main and other functions", []() {
+            assertTrue(hasError(
+                "main do\n"
+                "  let value: String = 1\n"
+                "end\n",
+                "Type mismatch"));
+            assertTrue(hasError(
+                "let run do\n"
+                "  var value: String = 1\n"
+                "end\n",
+                "Type mismatch"));
+        });
+
+        it("checks defaults against record fields and function parameters", []() {
+            assertTrue(hasError(
+                "record Settings do\n"
+                "  retries : Integer = \"many\"\n"
+                "end\n",
+                "Type mismatch"));
+            assertTrue(hasError(
+                "let retry(count: Integer = \"many\") = count\n",
+                "Type mismatch"));
+        });
+
         it("applies declarations inside module visibility blocks", []() {
             assertTrue(noErrors(
                 "module Text do\n"

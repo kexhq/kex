@@ -5,6 +5,8 @@
 # make blocks, and doc-comments extracted from +#+ lines.
 #
 # Function bodies are intentionally omitted from the output.
+type Program
+
 module Parser do
   # Parses a Kex source string into a structured AST.
   parse : String -> Result<Program, ParseError>

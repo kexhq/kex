@@ -1,5 +1,6 @@
 #include "typechecker.hxx"
 #include "analyzer.hxx"
+#include "declaration_validator.hxx"
 #include "../common/type_def_utils.hxx"
 #include <functional>
 #include <set>
@@ -293,6 +294,7 @@ auto TypeChecker::check(const ast::Program& program,
     for (const auto& [name, query] : m_computedAliases)
         m_typeAliases[name] = resolveTypeQuery(*query);
     m_computedAliases.clear();
+    validateDeclarations(program, m_importedInterfaces, m_traits, diagnostics);
     registerDeclaredSignatures(program);
     registerMakeSignatures(program);
     preRegisterFunctionSigs(program);
@@ -1750,6 +1752,8 @@ auto TypeChecker::checkTopLevel(const ast::TopLevelItem& item) -> void {
             checkMainBlock(*node);
         } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
             checkUsingBlock(*node);
+        } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+            checkRecordDef(*node);
         }
     }, item);
 }
@@ -1772,6 +1776,8 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
                 checkModule(*node);
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::UsingBlock>>) {
                 checkUsingBlock(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::RecordDef>>) {
+                checkRecordDef(*node);
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<ast::VisibilityBlock>>) {
                 if (!node) return;
@@ -1787,6 +1793,9 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
                         } else if constexpr (std::is_same_v<
                                                  M, std::unique_ptr<ast::UsingBlock>>) {
                             if (member) checkUsingBlock(*member);
+                        } else if constexpr (std::is_same_v<
+                                                 M, std::unique_ptr<ast::RecordDef>>) {
+                            if (member) checkRecordDef(*member);
                         }
                     }, visible);
                 }
@@ -1795,6 +1804,21 @@ auto TypeChecker::checkModule(const ast::ModuleDef& mod) -> void {
     }
     popScope();
     m_currentModulePath = std::move(previousModulePath);
+}
+
+auto TypeChecker::checkRecordDef(const ast::RecordDef& def) -> void {
+    std::unordered_map<std::string, TypePtr> generics;
+    for (const auto& name : def.typeParams)
+        generics.emplace(name, freshTypeVar());
+    for (const auto& field : def.fields) {
+        if (!field.type || !field.defaultValue || !*field.defaultValue) continue;
+        auto declared = resolveTypeExpr(*field.type, generics);
+        auto actual = resolve(inferExpr(**field.defaultValue));
+        if (!std::holds_alternative<UnknownType>(actual->kind) &&
+            !std::holds_alternative<TypeVar>(actual->kind) &&
+            !argMatchesParam(actual, declared))
+            typeMismatch((*field.defaultValue)->location, declared, actual);
+    }
 }
 
 auto TypeChecker::checkUsingBlock(const ast::UsingBlock& block) -> void {
@@ -1975,6 +1999,14 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
             }
             if (param.pattern) {
                 bindPatternVars(**param.pattern, paramType);
+            }
+            if (param.defaultValue && *param.defaultValue) {
+                auto actual = resolve(inferExpr(**param.defaultValue));
+                if (!std::holds_alternative<UnknownType>(actual->kind) &&
+                    !std::holds_alternative<TypeVar>(actual->kind) &&
+                    !argMatchesParam(actual, paramType))
+                    typeMismatch((*param.defaultValue)->location, paramType,
+                                 actual);
             }
         }
         if (declared && declared->params.size() != clause.params.size()) {
