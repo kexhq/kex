@@ -63,6 +63,13 @@ Not on macOS or Linux with Homebrew? Build from source — see the
 | --- | --- |
 | **Kex: Restart Language Server** | Restarts the server without reloading the window. |
 
+## Other editors
+
+Vim and Neovim have their own runtime files in
+[`editors/vim`](../vim). The syntax file there is a port of this extension's
+TextMate grammar (`syntaxes/kex.tmLanguage.json`) — when the grammar changes,
+change both.
+
 ## Extension Development
 
 1. Build Kex from the repository root: `cmake --build build --target kex`.
