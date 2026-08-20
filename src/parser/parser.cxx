@@ -215,7 +215,6 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     return parsePragma();
 
   if (check(TokenType::Foul)) {
-    advance(); // consume foul
     return parseFunctionDef(true);
   }
   if (check(TokenType::Let)) {
@@ -328,7 +327,6 @@ auto Parser::parseModuleDef(bool allowStandalone,
         error("'main' blocks are not allowed inside block modules");
       m_deferredTopLevelItems.push_back(parseMainBlock());
     } else if (check(TokenType::Foul)) {
-      advance();
       mod->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       mod->body.push_back(parseFunctionDef());
@@ -447,7 +445,7 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         // Optional suffix: Name?
         if (match(TokenType::Question)) {
           auto opt = std::make_unique<ast::TypeExpr>();
-          opt->location = currentLocation();
+          opt->location = variant->location;
           opt->kind = ast::OptionalType{std::move(variant)};
           variant = std::move(opt);
         }
@@ -457,10 +455,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
           advance(); // ->
           auto right = parseTypeFunction();
           auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = currentLocation();
+          funcType->location = variant->location;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
-          return funcType;
+          return complete(std::move(funcType));
         }
       } else if (check(TokenType::Atom)) {
         variant->kind = ast::AtomType{advance().value};
@@ -471,15 +469,15 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
           advance();
           auto right = parseTypeFunction();
           auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = currentLocation();
+          funcType->location = variant->location;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
-          return funcType;
+          return complete(std::move(funcType));
         }
       } else {
         variant = parseTypeExpr();
       }
-      return variant;
+      return complete(std::move(variant));
     };
 
     // An optional leading `|` marks the list as variants even when only
@@ -631,7 +629,6 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         ann->isFoul = true;
         def->body.push_back(std::move(ann));
       } else {
-        advance(); // consume foul
         def->body.push_back(parseFunctionDef(true));
       }
     } else if (check(TokenType::Let)) {
@@ -719,7 +716,6 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
     if (check(TokenType::Public) || check(TokenType::Private)) {
       def->body.push_back(parseVisibilityBlock());
     } else if (check(TokenType::Foul)) {
-      advance();
       def->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef());
@@ -750,9 +746,10 @@ auto Parser::parseFunctionDef(bool isFoul)
   def->location = currentLocation();
   def->isFoul = isFoul;
 
-  if (!isFoul) {
+  if (isFoul)
+    expect(TokenType::Foul, "Expected 'foul'");
+  else
     expect(TokenType::Let, "Expected 'let'");
-  }
 
   // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
   // time. Checked before the operator branch below, which would otherwise
@@ -1440,9 +1437,9 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       if (check(TokenType::Try)) {
         advance();
         auto tryExpr = std::make_unique<ast::Expr>();
-        tryExpr->location = currentLocation();
+        tryExpr->location = expr->location;
         tryExpr->kind = ast::TryExpr{std::move(expr)};
-        expr = std::move(tryExpr);
+        expr = complete(std::move(tryExpr));
         continue;
       }
 
@@ -1475,14 +1472,14 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         else
           tagged.parts.push_back(body.value);
         tagExpr->kind = std::move(tagged);
-        expr = std::move(tagExpr);
+        expr = complete(std::move(tagExpr));
         continue;
       }
 
       bool mutating = match(TokenType::Bang);
 
       auto call = std::make_unique<ast::Expr>();
-      call->location = currentLocation();
+      call->location = expr->location;
 
       std::vector<ast::ExprPtr> args;
       std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
@@ -1532,7 +1529,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                 head = "Map";
               }
               auto mod = std::make_unique<ast::Expr>();
-              mod->location = currentLocation();
+              mod->location = ty->location;
               mod->kind = ast::UpperIdentifier{std::move(head)};
               args.push_back(std::move(mod));
               targetType = std::move(ty);
@@ -1556,7 +1553,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           std::move(block), mutating, hasParens};
       std::get<ast::MethodCall>(call->kind).targetType =
           std::move(targetType);
-      expr = std::move(call);
+      expr = complete(std::move(call));
       continue;
     }
 
@@ -1566,30 +1563,30 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       expect(TokenType::RBracket, "Expected ']' after index");
 
       auto call = std::make_unique<ast::Expr>();
-      call->location = currentLocation();
+      call->location = expr->location;
       // Desugar to method call: expr.get(key)
       std::vector<ast::ExprPtr> args;
       args.push_back(std::move(key));
       call->kind = ast::MethodCall{std::move(expr), "get", std::move(args), {},
                                    std::nullopt,    false};
-      expr = std::move(call);
+      expr = complete(std::move(call));
       continue;
     }
 
     // Range: expr..expr
     if (match(TokenType::DotDot)) {
       auto range = std::make_unique<ast::Expr>();
-      range->location = currentLocation();
+      range->location = expr->location;
       auto end = parseAddition();
       range->kind = ast::RangeExpr{std::move(expr), std::move(end)};
-      expr = std::move(range);
+      expr = complete(std::move(range));
       continue;
     }
 
     break;
   }
 
-  return expr;
+  return complete(std::move(expr));
 }
 
 // In a STRING literal, `${expr}` is sugar for a call to the show protocol, so
@@ -2598,7 +2595,9 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
 
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
   // do...end block: required for multi-statement arm bodies.
-  if (match(TokenType::Do)) {
+  if (check(TokenType::Do)) {
+    auto location = currentLocation();
+    advance();
     skipNewlines();
     std::vector<ast::ExprPtr> body;
     while (!check(TokenType::End) && !atEnd()) {
@@ -2607,9 +2606,9 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
     }
     expect(TokenType::End, "Expected 'end' to close match clause body");
     auto blockExpr = std::make_unique<ast::Expr>();
-    blockExpr->location = currentLocation();
+    blockExpr->location = location;
     blockExpr->kind = ast::BlockExpr{std::move(body)};
-    return blockExpr;
+    return complete(std::move(blockExpr));
   }
   // Single expression — inline or on the next line.
   // Multi-statement arms require do...end to avoid ambiguity.
@@ -2944,9 +2943,10 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
   // special handling here — parseExpr() already produces
   // TrailingIf{EXPR, COND} for that on its own.
   if (check(TokenType::If)) {
+    auto ifLocation = currentLocation();
     advance(); // if
     auto trailing = std::make_unique<ast::Expr>();
-    trailing->location = currentLocation();
+    trailing->location = ifLocation;
     auto condition = parseExpr();
     trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
     expr->kind = ast::ReturnExpr{std::move(trailing)};
@@ -3190,7 +3190,7 @@ auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
   auto expr = std::make_unique<ast::Expr>();
   expr->location = loc;
   expr->kind = ast::SpreadExpr{parseExpr()};
-  return expr;
+  return complete(std::move(expr));
 }
 
 auto Parser::parseListExpr() -> ast::ExprPtr {
@@ -3786,7 +3786,6 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 
   while (!check(TokenType::End) && !atEnd()) {
     if (check(TokenType::Foul)) {
-      advance();
       block->items.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       block->items.push_back(parseFunctionDef());

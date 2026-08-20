@@ -81,6 +81,57 @@ int main() {
             assertTrue((*listPattern.rest)->location.endOffset <=
                        list.location.endOffset);
         });
+
+        it("completes every step of a postfix chain", []() {
+            auto program = parse("foo.bar(1)[0]");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& indexCall = std::get<ast::MethodCall>(main->body[0]->kind);
+            auto& methodCall =
+                std::get<ast::MethodCall>(indexCall.receiver->kind);
+
+            assertEqual(indexCall.receiver->location.startOffset, 0);
+            assertEqual(indexCall.receiver->location.endOffset, 10);
+            assertEqual(main->body[0]->location.startOffset, 0);
+            assertEqual(main->body[0]->location.endOffset, 13);
+            assertEqual(methodCall.receiver->location.startOffset, 0);
+            assertEqual(methodCall.receiver->location.endOffset, 3);
+        });
+
+        it("extends spread nodes through their operand", []() {
+            auto program = parse("[...items]");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& list = std::get<ast::ListExpr>(main->body[0]->kind);
+
+            assertEqual(list.elements[0]->location.startOffset, 1);
+            assertEqual(list.elements[0]->location.endOffset, 9);
+        });
+
+        it("includes effect markers and closing ends in declaration spans", []() {
+            const std::string source =
+                "module Demo do\n"
+                "  foul run() = 1\n"
+                "end";
+            auto program = parse(source);
+            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(
+                program.items[0]);
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
+                module->body[0]);
+
+            assertEqual(module->location.startOffset, 0);
+            assertEqual(module->location.endOffset,
+                        static_cast<int>(source.size()));
+            assertEqual(function->location.startOffset,
+                        static_cast<int>(source.find("foul")));
+            assertEqual(function->location.endOffset,
+                        static_cast<int>(source.find('\n',
+                                                     source.find("foul"))));
+            assertTrue(module->location.startOffset <=
+                       function->location.startOffset);
+            assertTrue(function->location.endOffset <=
+                       module->location.endOffset);
+        });
     });
 
     describe("Parser — Top Level", []() {
