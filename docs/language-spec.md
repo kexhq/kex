@@ -1943,6 +1943,12 @@ started with `--allow-mocks`. Everywhere else — including a compiled program
 booted straight from `erl` — every `Mock.*` call fails with an error naming
 it. See [testing.md](testing.md#mocks-are-test-only).
 
+`Mock.IO` captures what the mocking process writes AND what the processes it
+spawns write — the capture is inherited across `spawn` and `Task.start`, the
+same way a spawned Erlang process inherits its parent's group leader — so a
+test can assert on output produced by a worker it started. Both backends agree
+on this (issue #141); `Mock.IO.stop()` hands real output back.
+
 ### 23.22 Conversion
 
 The universal `to(value, Type)` method converts between types, returning an

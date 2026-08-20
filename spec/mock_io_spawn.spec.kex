@@ -1,0 +1,30 @@
+# `Mock.IO` captures the output of SPAWNED processes too, not just the
+# process that started it (issue #141).
+#
+# The two backends used to disagree: the tree walker keeps the mock on the
+# Evaluator every fiber shares, so a child's output landed in the buffer,
+# while BEAM kept it in the process dictionary — which a spawned process does
+# not inherit — so the child's line escaped to the real stdout and the
+# assertion depended on which backend ran. Erlang's own answer for "where
+# does this process's IO go" is the group leader, and that IS inherited by
+# spawn, so that is what the BEAM mock installs now.
+
+main do
+  let parent = Process.self
+
+  Mock.IO.start()
+  IO.printLine("from the parent")
+  spawn do
+    IO.printLine("from the child")
+    parent.send(:child_done)
+  end
+  receive do
+    :child_done => 0
+  end
+  let captured = Mock.IO.output()
+  Mock.IO.stop()
+
+  # Real output again — the buffer holds both lines, in order.
+  IO.print(captured)
+  IO.printLine("mock stopped, this is real output")
+end

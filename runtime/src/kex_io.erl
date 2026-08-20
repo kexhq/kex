@@ -63,57 +63,182 @@ read_char() ->
             end
     end.
 
+%% Mock.IO state lives in a process that the mocking process installs as its
+%% GROUP LEADER, not in the process dictionary (issue #141). The dictionary is
+%% per-process and starts empty in a spawned process, so a child's output
+%% escaped the buffer and hit the real stdout, while the tree walker — whose
+%% mock flag is an Evaluator member every fiber shares — captured it. The
+%% group leader is exactly Erlang's own answer to "where does this process's
+%% IO go", and it IS inherited by spawn, so a child now writes into the
+%% buffer its parent opened, on both backends.
+%%
+%% The server also proxies the real io protocol: anything that talks to the
+%% group leader directly (io:format from kex_test's reporter, crash reports,
+%% the REPL) is forwarded verbatim to the leader we displaced, so mocking
+%% Kex-level IO does not swallow the runner's own output. The io server
+%% answers From/ReplyAs itself, so forwarding the message unchanged is all
+%% the relay needs to be.
 mock_start() ->
-    put(kex_mock_io_active, true),
-    mock_clear().
+    case mock_server() of
+        undefined ->
+            Parent = group_leader(),
+            Starter = self(),
+            Pid = spawn(fun() ->
+                put(kex_mock_io_server, true),
+                Starter ! {kex_mock_io_ready, self()},
+                mock_loop(Parent, <<>>, [])
+            end),
+            %% Wait for the marker to be in place before anyone can look for
+            %% it: mock_server/0 probes the leader's dictionary, and a fresh
+            %% process has not necessarily run its first instruction yet. Skip
+            %% the handshake and the starting process itself can lose the race
+            %% with its own server, cache "not mocked" for it, and print to
+            %% the real terminal for the rest of the mock's life.
+            receive {kex_mock_io_ready, Pid} -> ok after 5000 -> ok end,
+            group_leader(Pid, self()),
+            erase(kex_mock_io_plain),
+            put(kex_mock_io_leader, Pid),
+            'Kex.Unit';
+        _Pid ->
+            %% Already mocking (a nested start, or a `before` block that runs
+            %% per example): reuse the buffer's owner and start it empty
+            %% rather than stacking a second leader nobody will restore.
+            mock_clear()
+    end.
 
 mock_input(Lines) ->
-    Existing = case get(kex_mock_io_input) of undefined -> []; V -> V end,
-    put(kex_mock_io_input, Existing ++ [to_string_bin(L) || L <- Lines]),
+    mock_call({input, [to_string_bin(L) || L <- Lines]}),
     'Kex.Unit'.
 
 mock_output() ->
-    case get(kex_mock_io_output) of undefined -> <<>>; V -> V end.
+    case mock_call(output) of
+        no_mock -> <<>>;
+        Out -> Out
+    end.
 
 mock_clear() ->
-    put(kex_mock_io_output, <<>>),
-    put(kex_mock_io_input, []),
+    mock_call(clear),
     'Kex.Unit'.
 
 mock_stop() ->
-    erase(kex_mock_io_active),
-    erase(kex_mock_io_output),
-    erase(kex_mock_io_input),
-    'Kex.Unit'.
+    case mock_server() of
+        undefined -> 'Kex.Unit';
+        Pid ->
+            Orig = case mock_call(orig_leader) of
+                no_mock -> whereis(user);
+                L -> L
+            end,
+            case is_pid(Orig) andalso is_process_alive(Orig) of
+                true -> group_leader(Orig, self());
+                false -> ok
+            end,
+            Pid ! kex_mock_io_stop,
+            erase(kex_mock_io_leader),
+            erase(kex_mock_io_plain),
+            'Kex.Unit'
+    end.
 
-mock_active() -> get(kex_mock_io_active) =:= true.
+mock_active() -> mock_server() =/= undefined.
+
+%% The mock server for THIS process, or undefined when its output is real.
+%% Probed through the leader's dictionary marker (a request/reply handshake
+%% would have to time out against a genuine io server, on every single
+%% print), and then cached against the leader's pid: the cache is only ever
+%% consulted for the leader currently installed, and installing or restoring
+%% one changes that pid, so a stale entry cannot be believed.
+mock_server() ->
+    GL = group_leader(),
+    case get(kex_mock_io_leader) of
+        GL when is_pid(GL) ->
+            case is_process_alive(GL) of
+                true -> GL;
+                %% The server died (its starter stopped the mock while this
+                %% process still had it as a leader) — re-probe rather than
+                %% keep talking to a dead pid.
+                false -> erase(kex_mock_io_leader), mock_server_probe(GL)
+            end;
+        _ ->
+            case get(kex_mock_io_plain) of
+                GL -> undefined;
+                _ -> mock_server_probe(GL)
+            end
+    end.
+
+mock_server_probe(GL) ->
+    IsMock = is_pid(GL) andalso
+        case erlang:process_info(GL, dictionary) of
+            {dictionary, D} -> proplists:get_value(kex_mock_io_server, D) =:= true;
+            _ -> false
+        end,
+    case IsMock of
+        true -> put(kex_mock_io_leader, GL), GL;
+        false -> put(kex_mock_io_plain, GL), undefined
+    end.
+
+mock_call(Request) ->
+    case mock_server() of
+        undefined -> no_mock;
+        Pid ->
+            Ref = make_ref(),
+            Mon = erlang:monitor(process, Pid),
+            Pid ! {kex_mock_io, self(), Ref, Request},
+            receive
+                {kex_mock_io_reply, Ref, Reply} ->
+                    erlang:demonitor(Mon, [flush]),
+                    Reply;
+                {'DOWN', Mon, process, Pid, _} -> no_mock
+            end
+    end.
+
+mock_loop(Orig, Out, In) ->
+    receive
+        {io_request, _From, _ReplyAs, _Req} = Msg ->
+            Orig ! Msg,
+            mock_loop(Orig, Out, In);
+        {kex_mock_io, From, Ref, orig_leader} ->
+            From ! {kex_mock_io_reply, Ref, Orig},
+            mock_loop(Orig, Out, In);
+        {kex_mock_io, From, Ref, Request} ->
+            {Reply, Out2, In2} = mock_handle(Request, Out, In),
+            From ! {kex_mock_io_reply, Ref, Reply},
+            mock_loop(Orig, Out2, In2);
+        kex_mock_io_stop -> ok;
+        _Other -> mock_loop(Orig, Out, In)
+    end.
+
+mock_handle({append, Bin}, Out, In) -> {'Kex.Unit', <<Out/binary, Bin/binary>>, In};
+mock_handle({input, Lines}, Out, In) -> {'Kex.Unit', Out, In ++ Lines};
+mock_handle(output, Out, In) -> {Out, Out, In};
+mock_handle(clear, _Out, _In) -> {'Kex.Unit', <<>>, []};
+mock_handle(take_line, Out, [Line | Rest]) -> {Line, Out, Rest};
+mock_handle(take_line, Out, []) -> {'None', Out, []};
+mock_handle(take_char, Out, [Line | Rest]) ->
+    case unicode:characters_to_list(Line) of
+        [Char | More] ->
+            Next = case More of
+                [] -> Rest;
+                _ -> [unicode:characters_to_binary(More) | Rest]
+            end,
+            {unicode:characters_to_binary([Char]), Out, Next};
+        _ -> mock_handle(take_char, Out, Rest)
+    end;
+mock_handle(take_char, Out, []) -> {'None', Out, []}.
 
 mock_append(X, Suffix) ->
-    Current = mock_output(),
     Text = to_string_bin(X),
-    put(kex_mock_io_output, <<Current/binary, Text/binary, Suffix/binary>>),
+    mock_call({append, <<Text/binary, Suffix/binary>>}),
     'Kex.Unit'.
 
 mock_take_line() ->
-    case get(kex_mock_io_input) of
-        [Line | Rest] -> put(kex_mock_io_input, Rest), Line;
-        _ -> 'None'
+    case mock_call(take_line) of
+        no_mock -> 'None';
+        Line -> Line
     end.
 
 mock_take_char() ->
-    case get(kex_mock_io_input) of
-        [Line | Rest] ->
-            case unicode:characters_to_list(Line) of
-                [Char | More] ->
-                    Tail = unicode:characters_to_binary(More),
-                    Next = case More of [] -> Rest; _ -> [Tail | Rest] end,
-                    put(kex_mock_io_input, Next),
-                    unicode:characters_to_binary([Char]);
-                [] ->
-                    put(kex_mock_io_input, Rest),
-                    mock_take_char()
-            end;
-        _ -> 'None'
+    case mock_call(take_char) of
+        no_mock -> 'None';
+        Char -> Char
     end.
 
 %% IO.inspect — print "<value> : <Type>" with ANSI colours, returns value.
