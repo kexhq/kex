@@ -39,7 +39,7 @@ main do
   IO.printLine(Type.of(user).name)
 
   # Runtime reflection is honest after the static type is erased through Any.
-  let erased: Any = user
+  let erased : Any = user
   IO.printLine(Type.of(erased).name)
   IO.printLine(distinct)
   IO.printLine("${successor}")

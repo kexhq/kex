@@ -63,7 +63,7 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex","languageId":"kex","version":1,"text":"distinct type UserId = Integer\nmain do\n  let id = 1.as(UserId)\n  let wrong: UserId = 1\n  id\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex","languageId":"kex","version":1,"text":"distinct type UserId = Integer\nmain do\n  let id = 1.as(UserId)\n  let wrong : UserId = 1\n  id\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-distinct.kex"},"position":{"line":0,"character":15}}})");
             messages += frame(
