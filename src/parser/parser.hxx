@@ -45,6 +45,7 @@ private:
                         const std::string& parentModule = "") -> std::unique_ptr<ast::ModuleDef>;
     auto parseTypeDef() -> std::unique_ptr<ast::TypeDef>;
     auto parseRecordDef() -> std::unique_ptr<ast::RecordDef>;
+    auto parseRecordBody(ast::RecordDef& into) -> void;
     auto parseTraitDef() -> std::unique_ptr<ast::TraitDef>;
     auto parseMakeDef() -> std::unique_ptr<ast::MakeDef>;
     // The two halves of a `make` that `make %name` generation reuses: it has a

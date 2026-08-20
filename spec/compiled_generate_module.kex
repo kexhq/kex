@@ -35,9 +35,23 @@ module ConstantDriven do
   end
 end
 
+# A generation effect inside a compiled helper must inherit the helper's
+# module ownership, and the effect itself must be erased before IR lowering.
+module GeneratedRecords do
+  compiled do
+    let emit(name) do
+      record %name do
+        value : Int = 9
+      end
+    end
+    emit("Point")
+  end
+end
+
 main do
   IO.printLine("${Tags.alpha(10)}")
   IO.printLine("${Tags.beta(10)}")
   IO.printLine(CompiledOuter.CompiledInner.nested(4))
   IO.printLine(ConstantDriven.fromConstant(5))
+  IO.printLine(GeneratedRecords.Point {}.value)
 end

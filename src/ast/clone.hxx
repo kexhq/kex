@@ -26,6 +26,7 @@ auto clone(const RescueBlock& rescue) -> RescueBlock;
 auto clone(const FunctionDef& function) -> std::unique_ptr<FunctionDef>;
 auto clone(const AbstractFunction& fn) -> AbstractFunction;
 auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef>;
+auto clone(const RecordDef& record) -> std::unique_ptr<RecordDef>;
 // A `make` block, methods and all. Needed because `make %name` generation
 // instantiates one template into N independent blocks, each with its own bodies
 // for hygiene substitution to rewrite.

@@ -163,6 +163,17 @@ auto clone(const TypeDef& type) -> std::unique_ptr<TypeDef> {
     return out;
 }
 
+auto clone(const RecordDef& record) -> std::unique_ptr<RecordDef> {
+    auto out = std::make_unique<RecordDef>();
+    out->location = record.location;
+    out->name = record.name;
+    out->typeParams = record.typeParams;
+    for (const auto& field : record.fields)
+        out->fields.push_back(RecordField{
+            field.name, clone(field.type), cloneOpt(field.defaultValue)});
+    return out;
+}
+
 auto clone(const MakeDef& make) -> std::unique_ptr<MakeDef> {
     auto out = std::make_unique<MakeDef>();
     out->location = make.location;
