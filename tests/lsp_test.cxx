@@ -605,13 +605,18 @@ int main() {
             // imported by nobody, so a manifest used to open with one
             // "undefined function" per line. The declarations now arrive with
             // the file, which is what makes hover work here too.
+            //
+            // Every declaration the vocabulary defines appears below, and
+            // `group` and `toolchain` are the last two it declares: a
+            // vocabulary file that stops parsing part way through loses the
+            // declarations after the break and fails this test.
             std::string messages;
             messages += frame(
                 R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  kex(\">= 0.3.0\")\n  entrypoint(\"src/main.kex\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":1,"character":4}}})");
             messages += frame(
