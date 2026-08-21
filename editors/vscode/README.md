@@ -48,19 +48,50 @@ tey kex use <version>       # switch what `kex` runs
 ```
 
 Not on macOS or Linux with Homebrew? Build from source — see the
-[repository README](https://github.com/kexhq/kex#readme) — then point
-`kex.executablePath` at the binary.
+[repository README](https://github.com/kexhq/kex#readme) — then pick it with
+**Kex: Select Toolchain → Choose a Kex binary…**.
+
+## Choosing a toolchain
+
+The extension resolves its compiler through Tey, so it runs the same Kex your
+shell does. **Kex: Select Toolchain** lists the versions Tey has installed,
+marks the one Tey itself has selected, and adds two entries: *Use Tey's
+selection*, which follows `tey kex use` from then on, and *Choose a Kex
+binary…*, for a compiler you built yourself.
+
+The choice is saved per workspace, so a Kex checkout can run its own
+`build/kex` while every other window keeps the machine-wide selection. The
+status bar shows which compiler actually started — `Kex 0.4.0-alpha`, or
+`Kex 0.4.0-alpha (build/kex)` for a binary of your own — and turns into a
+restart button if the server goes down.
+
+Left alone, the extension follows the package you have open: a Tey package
+declares the Kex it builds against (`kex(">= 0.3.4")` in `package.kex`,
+resolved to an exact version in `tey.lock`), and that version is the one the
+editor uses, so diagnostics come from the same compiler as `tey build`. Pick
+*Use Tey's selection* to ignore the lock file.
+
+In full, the compiler is the first of:
+
+1. `kex.executablePath`, when you have set it — an escape hatch that overrides
+   everything below.
+2. The version pinned by `kex.toolchain` (what the picker writes).
+3. The version this package's `tey.lock` names, when it is installed.
+4. Tey's own selection, from `tey kex which`.
+5. A bare `kex` on PATH.
 
 ## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `kex.executablePath` | `kex` | Compiler used by the language server. Relative paths resolve from the workspace root, so `build/kex` works when developing Kex itself. |
+| `kex.toolchain` | *(empty)* | Toolchain the language server runs: empty follows this package's `tey.lock` and then Tey's selection, `tey` follows Tey's selection alone, a version such as `0.4.0` pins one Tey has installed, an absolute path runs your own build. Set it with **Kex: Select Toolchain**. |
+| `kex.executablePath` | `kex` | Compiler used by the language server, overriding Tey and `kex.toolchain`. Relative paths resolve from the workspace root. |
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
+| **Kex: Select Toolchain** | Pick which Kex the language server runs, and restart it on the new one. |
 | **Kex: Restart Language Server** | Restarts the server without reloading the window. |
 
 ## Other editors
@@ -76,8 +107,8 @@ change both.
 2. In this directory, run `bun install` and `bun run compile`.
 3. Open this directory in VS Code and press F5 to launch an Extension
    Development Host.
-4. Set `kex.executablePath` to `build/kex` when developing Kex itself, or
-   install `kex` on `PATH`.
+4. Run **Kex: Select Toolchain → Choose a Kex binary…** and pick `build/kex`
+   when developing Kex itself, or install `kex` on `PATH`.
 
 The server can also be driven by any LSP client:
 
@@ -87,6 +118,7 @@ kex --lsp
 
 It communicates over standard input/output using LSP `Content-Length` frames.
 
-When the configured executable is inside the workspace (for example
-`build/kex`), rebuilding it automatically restarts the language server. You can
-also run **Kex: Restart Language Server** from the command palette.
+Rebuilding the compiler automatically restarts the language server, wherever
+that binary lives — a workspace `build/kex`, a Tey toolchain, or `kex` on
+PATH. You can also run **Kex: Restart Language Server** from the command
+palette, or click the Kex status bar item when the server is down.

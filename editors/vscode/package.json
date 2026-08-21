@@ -2,7 +2,7 @@
   "name": "kex-language",
   "displayName": "Kex",
   "description": "Syntax highlighting, completion, type hover, and compiler diagnostics for Kex.",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "packageManager": "bun@1.3.13",
   "publisher": "Kex",
   "license": "MIT",
@@ -18,10 +18,16 @@
   "main": "./out/extension.js",
   "files": ["out/**", "syntaxes/**", "images/**", "language-configuration.json", "README.md", "LICENSE"],
   "contributes": {
-    "commands": [{
-      "command": "kex.restartLanguageServer",
-      "title": "Kex: Restart Language Server"
-    }],
+    "commands": [
+      {
+        "command": "kex.restartLanguageServer",
+        "title": "Kex: Restart Language Server"
+      },
+      {
+        "command": "kex.selectToolchain",
+        "title": "Kex: Select Toolchain"
+      }
+    ],
     "languages": [{
       "id": "kex",
       "aliases": ["Kex", "kex"],
@@ -43,7 +49,12 @@
         "kex.executablePath": {
           "type": "string",
           "default": "kex",
-          "description": "Kex compiler executable used by the language server. Relative paths are resolved from the workspace root."
+          "markdownDescription": "Kex compiler executable used by the language server. Setting this **overrides Tey**: it wins over `#kex.toolchain#` and over whatever `tey kex use` has selected. Relative paths are resolved from the workspace root. Leave it unset to let Tey choose."
+        },
+        "kex.toolchain": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Kex toolchain the language server runs. Empty follows this package's `tey.lock`, then Tey's own selection; `tey` follows Tey's selection alone, ignoring the lock file; a version number such as `0.4.0` pins one of the toolchains Tey has installed; an absolute path runs a compiler you built yourself. Set this with **Kex: Select Toolchain** rather than by hand. Overridden by `#kex.executablePath#` when that is set."
         }
       }
     }
