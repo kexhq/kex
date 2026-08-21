@@ -89,6 +89,10 @@ public:
             {"returnType", clause.returnAnnotation
                 ? m_builder.just(typeRef(**clause.returnAnnotation))
                 : m_builder.none()},
+            {"rescueInfo", clause.rescue
+                ? m_builder.just(rescueInfo(*clause.rescue))
+                : m_builder.none()},
+            {"hasParamList", m_builder.boolean(clause.hasParamList)},
         });
     }
 
@@ -109,12 +113,14 @@ public:
     }
 
     auto typeAnnotation(const TypeAnnotation& annotation,
-                        const std::string& doc) -> Value {
+                        const std::string& doc,
+                        const std::string& filename) -> Value {
         auto info = m_builder.record("AnnotationInfo", {
             {"name", m_builder.string(annotation.name)},
             {"type", typeRef(*annotation.type)},
             {"doc", optionalString(doc)},
             {"implicitThis", m_builder.boolean(annotation.implicitThis)},
+            {"location", location(annotation.location, filename)},
         });
         return nodeVariant("TypeAnnotation", {std::move(info)});
     }
@@ -186,7 +192,7 @@ public:
                 using T = std::decay_t<decltype(node)>;
                 if constexpr (std::is_same_v<T,
                               std::unique_ptr<TypeAnnotation>>) {
-                    body.push_back(typeAnnotation(*node, ""));
+                    body.push_back(typeAnnotation(*node, "", filename));
                 } else {
                     body.push_back(functionDef(*node, "", filename));
                 }
@@ -294,7 +300,7 @@ public:
                                        filename);
                 else if constexpr (std::is_same_v<T,
                                                   std::unique_ptr<TypeAnnotation>>)
-                    return typeAnnotation(*node, "");
+                    return typeAnnotation(*node, "", filename);
                 else if constexpr (std::is_same_v<T,
                                                   std::unique_ptr<MakeDef>>)
                     return makeDef(*node, filename, docs);
@@ -386,7 +392,7 @@ public:
                 return makeDef(*node, filename, docs);
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                return typeAnnotation(*node, "");
+                return typeAnnotation(*node, "", filename);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<CompiledBlock>>) {
                 return compiledBlock(*node, filename, docs);
@@ -436,7 +442,7 @@ public:
                 return pragma(*node, filename);
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                return typeAnnotation(*node, "");
+                return typeAnnotation(*node, "", filename);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<CompiledBlock>>) {
                 return compiledBlock(*node, filename, docs);
@@ -461,7 +467,7 @@ public:
                 items.push_back(std::move(converted));
         }
         return m_builder.record("Program", {
-            {"schemaVersion", m_builder.integer(int64_t{1})},
+            {"schemaVersion", m_builder.integer(int64_t{2})},
             {"items", m_builder.list(std::move(items))},
         });
     }
@@ -728,6 +734,10 @@ public:
                     m_builder.list(std::move(exceptNames)),
                     expressionList(node.body),
                 });
+            } else if constexpr (std::is_same_v<T, GeneratedDecl>) {
+                return expressionVariant("GeneratedDeclaration", {
+                    expressionPtr(node.name), generatedTemplate(node.function),
+                });
             } else if constexpr (std::is_same_v<T, ErrorNode>) {
                 return expressionVariant("ErrorExpression", {
                     m_builder.string(node.message),
@@ -816,9 +826,8 @@ public:
                     optionalExpressionList(node.elseBody),
                 });
             } else {
-                return expressionVariant("UnsupportedExpression", {
-                    m_builder.string(expressionKindName<T>()),
-                });
+                static_assert(alwaysFalse<T>,
+                              "Unhandled native AST expression variant");
             }
         }, expr.kind);
     }
@@ -851,6 +860,9 @@ private:
             {"doc", optionalString(docAt(docs, block.location.line))},
             {"params", m_builder.list(std::move(params))},
             {"body", expressionList(block.body)},
+            {"rescueInfo", block.rescue
+                ? m_builder.just(rescueInfo(*block.rescue))
+                : m_builder.none()},
             {"location", location(block.location, filename)},
         });
         return nodeVariant("MainDef", {std::move(info)});
@@ -866,7 +878,7 @@ private:
                     *node, docAt(docs, node->location.line), filename));
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
-                body.push_back(typeAnnotation(*node, ""));
+                body.push_back(typeAnnotation(*node, "", filename));
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<VisibilityBlock>>) {
                 for (const auto& nested : node->items)
@@ -947,13 +959,73 @@ private:
         return type ? m_builder.just(typeRef(**type)) : m_builder.none();
     }
 
-    template<typename T>
-    static constexpr auto expressionKindName() -> const char* {
-#define KEX_AST_EXPRESSION_NAME(Type) \
-        if constexpr (std::is_same_v<T, Type>) return #Type; else
-        KEX_AST_EXPRESSION_NAME(GeneratedDecl)
-        return "Unknown";
-#undef KEX_AST_EXPRESSION_NAME
+    template<typename>
+    static constexpr bool alwaysFalse = false;
+
+    auto generatedTemplate(const GeneratedTemplate& generated) -> Value {
+        return std::visit([&](const auto& node) -> Value {
+            using T = typename std::decay_t<decltype(node)>::element_type;
+            if constexpr (std::is_same_v<T, FunctionDef>) {
+                return m_builder.variant(
+                    "GeneratedNode", "Kex.AST.GeneratedTemplate",
+                    {functionDef(*node, "", "")});
+            } else if constexpr (std::is_same_v<T, TypeDef>) {
+                return m_builder.variant(
+                    "GeneratedNode", "Kex.AST.GeneratedTemplate",
+                    {typeDef(*node, "", "")});
+            } else if constexpr (std::is_same_v<T, RecordDef>) {
+                return m_builder.variant(
+                    "GeneratedNode", "Kex.AST.GeneratedTemplate",
+                    {recordDef(*node, "", "")});
+            } else if constexpr (std::is_same_v<T, MakeDef>) {
+                std::vector<Value> implements;
+                for (const auto& name : node->implements)
+                    implements.push_back(namedType(name, {}));
+                std::vector<Value> body;
+                const Docs docs;
+                for (const auto& item : node->body) {
+                    body.push_back(std::visit([&](const auto& child) -> Value {
+                        using Child = std::decay_t<decltype(child)>;
+                        Value converted;
+                        if constexpr (std::is_same_v<
+                                          Child,
+                                          std::unique_ptr<FunctionDef>>) {
+                            converted = functionDef(*child, "", "");
+                        } else if constexpr (std::is_same_v<
+                                                 Child,
+                                                 std::unique_ptr<TypeAnnotation>>) {
+                            converted = typeAnnotation(*child, "", "");
+                        } else if constexpr (std::is_same_v<
+                                                 Child,
+                                                 std::unique_ptr<VisibilityBlock>>) {
+                            converted = visibilityBlock(*child, "", docs);
+                        } else if constexpr (std::is_same_v<Child, ExprPtr>) {
+                            return m_builder.variant(
+                                "CompiledExpression", "Kex.AST.CompiledItem",
+                                {expressionPtr(child)});
+                        } else {
+                            static_assert(alwaysFalse<Child>,
+                                          "Unhandled generated make item");
+                        }
+                        return m_builder.variant(
+                            "CompiledNode", "Kex.AST.CompiledItem",
+                            {std::move(converted)});
+                    }, item));
+                }
+                auto info = m_builder.record("GeneratedMakeInfo", {
+                    {"isFinal", m_builder.boolean(node->isFinal)},
+                    {"implements", m_builder.list(std::move(implements))},
+                    {"body", m_builder.list(std::move(body))},
+                    {"location", location(node->location, "")},
+                });
+                return m_builder.variant(
+                    "GeneratedMake", "Kex.AST.GeneratedTemplate",
+                    {std::move(info)});
+            } else {
+                static_assert(alwaysFalse<T>,
+                              "Unhandled generated declaration template");
+            }
+        }, generated);
     }
 
     auto nodeVariant(std::string tag, std::vector<Value> args) -> Value {

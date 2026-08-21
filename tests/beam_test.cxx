@@ -236,7 +236,7 @@ int main() {
                 program, "fixture.kex", {{2, "Select a value"}});
             auto& programRecord = wholeProgram->asTuple();
             test::assertTrue(programRecord[0]->isAtom("Kex.AST.Program"));
-            test::assertEqual(programRecord[1]->asInt(), int64_t(1));
+            test::assertEqual(programRecord[1]->asInt(), int64_t(2));
             test::assertEqual(
                 programRecord[2]->asList().size(),
                 size_t(1));

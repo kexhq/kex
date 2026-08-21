@@ -173,14 +173,12 @@ module Kex.AST do
     | CurryPlaceholder
     | Curry(String, String?, Bool, [[Expression]])
     | Using(String, String?, [String], [String], [Expression])
+    | GeneratedDeclaration(Expression, GeneratedTemplate)
     | ErrorExpression(String)
     | Trying([Expression], RescueInfo)
     | While(Expression, [Expression])
     | Loop([String], [Expression])
     | RangeLit(Expression, Expression)
-    # Explicit marker for native AST nodes not represented by this schema
-    # version. This must never be confused with the source literal `None`.
-    | UnsupportedExpression(String)
 
   record NamedArgument do
     name : String
@@ -219,10 +217,24 @@ module Kex.AST do
     value : Expression
   end
 
+  # A declaration template whose name (and, for a make block, target) is
+  # computed by a `compiled do` expression.
+  type GeneratedTemplate
+    = GeneratedNode(Node)
+    | GeneratedMake(GeneratedMakeInfo)
+
+  record GeneratedMakeInfo do
+    isFinal : Bool
+    implements : [TypeRef]
+    body : [CompiledItem]
+    location : Location
+  end
+
   record MainInfo do
     doc : String?
     params : [ParamInfo]
     body : [Expression]
+    rescueInfo : RescueInfo?
     location : Location
   end
 
@@ -237,6 +249,8 @@ module Kex.AST do
     params : [ParamInfo]
     body : [Expression]
     returnType : TypeRef?
+    rescueInfo : RescueInfo?
+    hasParamList : Bool
   end
 
   record FunctionInfo do
@@ -253,6 +267,7 @@ module Kex.AST do
     type : TypeRef
     doc : String?
     implicitThis : Bool
+    location : Location
   end
 
   record VariantInfo do
