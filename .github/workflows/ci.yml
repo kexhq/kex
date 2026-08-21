@@ -319,6 +319,15 @@ jobs:
           export TEY_HOME="$(mktemp -d)"
           stage/bin/tey --version
           stage/bin/tey --help > /dev/null
+          # The offline JSON listing an editor's toolchain picker reads
+          # (kexhq/kex#160): valid JSON, an empty toolchains array, exit 0.
+          stage/bin/tey kex list --installed --json | python3 -m json.tool > /dev/null
+          # --json without --installed would reach the network, so it must be
+          # refused rather than half-answered.
+          if stage/bin/tey kex list --json; then
+            echo "::error::tey kex list --json should refuse without --installed"
+            exit 1
+          fi
           # Nothing installed and nothing bundled, so `latest` has nothing to
           # resolve to and the command must fail rather than invent a version.
           if stage/bin/tey kex use latest; then
