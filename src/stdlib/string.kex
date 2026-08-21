@@ -278,6 +278,28 @@ make String, implement: Enumerable, Foldable do
       _        => parts
     end
   end
+
+  # Indents every line but the first by +prefix+. That is what splicing a
+  # multi-line value into an indented `${...}` hole needs: the hole's own
+  # indentation already covers line one, the rest have to catch up. Blank
+  # lines stay blank, and — through `lines` — one trailing newline is
+  # dropped, so a block does not push a stray empty line into its slot.
+  #
+  # @param prefix [String]
+  # @return [String]
+  #
+  # @example
+  #   "a\nb\n".indentRest("  ")   # => "a\n  b"
+  #   "a".indentRest("  ")        # => "a"
+  indentRest :> String -> String
+  let indentRest(prefix) do
+    let all = this.lines
+    let rest = all.drop(1).map do |line|
+      if line.empty? then line else prefix + line end
+    end
+    ([all.first.or("")] + rest).join("\n")
+  end
+
   split :> [String]
   let split = Kex.Intrinsic.String.split(this)
 

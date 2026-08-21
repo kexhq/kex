@@ -1,0 +1,47 @@
+# Each block prints between markers so leading spaces are visible.
+# A, B and C differ only in where the closing backtick sits, and all three
+# produce the same value: the dedent comes from the content's shared margin.
+foul show(label: String, s: String) -> Void do
+  IO.printLine("--- " + label + " ---")
+  s.lines.each do |l|
+    IO.printLine("|" + l)
+  end
+end
+
+main do
+  # A: closer indented to the `let` column.
+  let a = `
+    def foo do
+      :ok
+    end
+  `
+  show("A closer indented", a)
+
+  # B: closer at column 0.
+  let b = `
+    def foo do
+      :ok
+    end
+`
+  show("B closer at col 0", b)
+
+  # C: closer on the last content line.
+  let c = `
+    def foo do
+      :ok
+    end`
+  show("C closer inline", c)
+
+  # D: a hole alone on its line is a block slot — `body` lands at the hole's
+  #    column, all of it, and its trailing newline does not open a gap.
+  let body = `
+    :ok
+    :also_ok
+  `
+  let d = $`
+    def foo do
+      ${body}
+    end
+  `
+  show("D interpolated block", d)
+end

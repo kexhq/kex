@@ -1,4 +1,4 @@
-let describe(n: Integer) -> String do
+let explain(n: Integer) -> String do
   match n do
     x when x < 0 => "negative"
     0            => "zero"
@@ -7,7 +7,7 @@ let describe(n: Integer) -> String do
 end
 
 main do
-  IO.printLine(describe(-5))
-  IO.printLine(describe(0))
-  IO.printLine(describe(5))
+  IO.printLine(explain(-5))
+  IO.printLine(explain(0))
+  IO.printLine(explain(5))
 end

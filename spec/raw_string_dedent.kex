@@ -1,0 +1,43 @@
+# A block-shaped backtick literal dedents by what its content shares, so the
+# closing delimiter's column is not part of the value, and a hole alone on its
+# line splices a block at that line's indentation.
+main do
+  let indented = `
+    def foo do
+      :ok
+    end
+  `
+  let flushLeft = `
+    def foo do
+      :ok
+    end
+`
+  let inlineCloser = `
+    def foo do
+      :ok
+    end`
+
+  IO.print(indented)
+  IO.printLine((flushLeft == indented).to(String))
+  IO.printLine((inlineCloser + "\n" == indented).to(String))
+
+  # The margin is only what every nonblank line shares; blank lines are
+  # emitted empty and never shrink it.
+  let uneven = `
+    outer
+      inner
+
+  edge
+  `
+  IO.print(uneven)
+
+  let body = `
+    :ok
+    :also_ok
+  `
+  IO.print($`
+    def bar do
+      ${body}
+    end
+  `)
+end

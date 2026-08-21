@@ -1177,6 +1177,50 @@ int main() {
                         std::string("first\n  second\n"));
         });
 
+        it("dedents by content, not by the closing backtick's column", []() {
+            auto result = run(
+                "main do\n"
+                "  `\n"
+                "    first\n"
+                "      second\n"
+                "`\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("first\n  second\n"));
+        });
+
+        it("re-indents a block spliced into an indented hole", []() {
+            auto result = run(
+                "main do\n"
+                "  let body = `\n"
+                "    :ok\n"
+                "    :also_ok\n"
+                "  `\n"
+                "  $`\n"
+                "    def foo do\n"
+                "      ${body}\n"
+                "    end\n"
+                "  `\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("def foo do\n  :ok\n  :also_ok\nend\n"));
+        });
+
+        it("leaves an inline hole unindented", []() {
+            auto result = run(
+                "main do\n"
+                "  let body = \"a\\nb\"\n"
+                "  $`\n"
+                "    x = ${body};\n"
+                "  `\n"
+                "end\n"
+            );
+            assertEqual(std::get<StringValue>(result->data).value,
+                        std::string("x = a\nb;\n"));
+        });
+
         it("calls raw tags with one part and an empty values list", []() {
             auto result = run(
                 "let rawTag(parts, values) = "

@@ -187,3 +187,22 @@ describe("String — substitute") do
     assert("$A$".substitute({"$A$": "<$B$>", "$B$": "done"}) == "<done>")
   end
 end
+
+describe("String — indentRest") do
+  it("indents every line but the first") do
+    assert("a\nb\nc".indentRest("  ") == "a\n  b\n  c")
+  end
+
+  it("leaves a single line alone") do
+    assert("a".indentRest("  ") == "a")
+    assert("".indentRest("  ") == "")
+  end
+
+  it("drops one trailing newline, so a block does not open a gap") do
+    assert("a\nb\n".indentRest("  ") == "a\n  b")
+  end
+
+  it("keeps blank lines blank rather than filling them with the prefix") do
+    assert("a\n\nb\n".indentRest("  ") == "a\n\n  b")
+  end
+end

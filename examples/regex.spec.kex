@@ -80,18 +80,19 @@ describe("literal semantics") do
     assert("$12.50".matches?(regex`\$\d+\.\d{2}`))
   end
 
-  it("the closing backtick sets the dedent margin") do
+  it("a block literal dedents by its own content") do
     let stripped = `
         a
-        b
+          b
       `
-    assert(stripped == "  a\n  b\n")     # margin 6, so 2 spaces survive
+    assert(stripped == "a\n  b\n")      # the shared margin goes, nesting stays
 
+    # Where the closing backtick sits does not change the value.
     let flush = `
       a
-      b
+        b
 `
-    assert(flush == "      a\n      b\n") # margin 0, nothing stripped
+    assert(flush == stripped)
   end
 end
 

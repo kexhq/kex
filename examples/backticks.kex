@@ -10,17 +10,20 @@ let interpolationSyntax = `hello ${name}`
 let quoted = `Kex calls these ``raw literals``.`
 let trailingSlash = `C:\temp\`
 
-# The exact whitespace before a closing backtick on its own line is removed
-# from every nonblank content line.
+# A literal whose opening backtick is followed by a newline is block-shaped:
+# the whitespace every nonblank line shares is removed, so the value is the
+# same wherever the literal sits and wherever its closing backtick lands.
 let query = `
     SELECT id, email
     FROM users
     WHERE active = true
     `
 
-# A flush-left closing backtick preserves the content indentation.
+# The margin is only what every nonblank line shares, so a line with no
+# indentation of its own leaves the deeper ones indented.
 let banner = `
-  * * *
+* * *
+  kex
 `
 
 # A tag is an ordinary function with the uniform (parts, values) ABI.
