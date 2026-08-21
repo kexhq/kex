@@ -106,6 +106,24 @@ jobs:
         run: bun run compile
         working-directory: editors/vscode
 
+      # Resolution: which compiler the language server runs, given settings, a
+      # Tey home and a package's lock file. Pure enough to test without an
+      # editor, and the half where a wrong answer is silent — the extension
+      # still works, just against the wrong Kex.
+      - name: Unit tests
+        run: bun run test
+        working-directory: editors/vscode
+
+      # The lifecycle: starting, restarting after the compiler is rebuilt or
+      # killed, and the toolchain picker. None of that can be checked without
+      # a real VS Code, so this downloads one and drives it. The compiler is a
+      # stub (test/fixtures/kex-stub.mjs), so no Kex is built here and nothing
+      # depends on what the runner has installed. Xvfb because VS Code is a
+      # GUI application even when nobody is looking.
+      - name: Integration tests
+        run: xvfb-run -a bun run test:integration
+        working-directory: editors/vscode
+
       # Producing the .vsix validates the rest of packaging: manifest
       # fields, the `files` list, README/LICENSE inclusion.
       - name: Package the .vsix

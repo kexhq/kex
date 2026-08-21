@@ -1,0 +1,3 @@
+# The VS Code that `bun run test:integration` downloads to run the extension
+# in. Hundreds of megabytes, platform-specific, and re-fetched on demand.
+.vscode-test/

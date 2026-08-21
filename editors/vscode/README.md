@@ -122,3 +122,23 @@ Rebuilding the compiler automatically restarts the language server, wherever
 that binary lives — a workspace `build/kex`, a Tey toolchain, or `kex` on
 PATH. You can also run **Kex: Restart Language Server** from the command
 palette, or click the Kex status bar item when the server is down.
+
+## Tests
+
+```sh
+bun run test              # resolution logic, no editor involved
+bun run test:integration  # the extension inside a real VS Code
+bun run test:all
+```
+
+Neither suite needs a Kex. `test/fixtures/kex-stub.mjs` is a compiler that
+answers `--info`, `--version` and a minimal `--lsp`, laid out in a throwaway
+`TEY_HOME` of fake toolchains, so the tests say the same thing on a machine
+with four toolchains installed and on a CI runner with none.
+
+- **`test/unit`** covers `src/toolchain.ts`: resolution order, `tey.lock`,
+  `$TEY_HOME` listing, version ordering. It runs in under a second.
+- **`test/integration`** downloads a VS Code and drives the extension in it —
+  that the server starts on the right compiler, comes back after that compiler
+  is rebuilt or killed, and that the picker writes what it says it writes.
+  Point it at another build with `KEX_TEST_EXTENSION=/path/to/extension`.
