@@ -5,40 +5,6 @@ They are kept explicit so temporary workarounds do not become accidental API.
 
 ## Tey package-manager limitations
 
-- The manifest reader still recognizes declarations by their leading word
-  rather than by a grammar. It now reports the line a problem is on, refuses a
-  declaration it does not know, and joins a declaration whose arguments span
-  several lines — but it does not understand nesting beyond `group`, and a
-  malformed argument list is reported as an unknown declaration rather than as
-  the specific mistake.
-
-  The intended fix is NOT a hand-written grammar in Tey: `package.kex` is Kex
-  source, so the compiler should hand its AST to Kex code and Tey should read
-  that. Most of it already exists — the prelude's `Parser` module parses Kex
-  into `Program`/`Node`/`Expression` values with locations. Three things stand
-  in the way, in increasing order of size:
-
-  1. `Parser` drops the `do ... end` block passed to a call, so
-     `bundle "demo" do ... end` parses to `Call(Identifier("bundle"),
-     [LitString("demo")])` with the manifest's entire contents missing.
-  2. `Expression`'s `Call` has no representation for named arguments, which
-     `tey("greet", git: ..., tag: ...)` depends on.
-  3. `Parser` exists only in the tree walker. Under `-R` it raises `undef` —
-     there is no `kex_intrinsic_parser.erl` — and Tey runs on BEAM. Closing
-     this means either exposing the C++ parser to the BEAM runtime through a
-     NIF/port, or a Kex-native parser (the self-hosting path). Either is a
-     project of its own, and worth doing for tooling generally (formatter,
-     linter, docgen, macros) rather than for this reader alone.
-
-  There is a middle option that is available TODAY: the stdlib's `Parsing`
-  combinators. Unlike `Parser` they run on BEAM — `spec/stdlib/parsing.spec.kex`
-  is part of the opt-in BEAM suite — so a combinator grammar for `package.kex`
-  would give real positions, real error messages, and nesting, without waiting
-  on any of the three blockers above. What it does not give is the guarantee
-  the AST path does: a hand-written grammar can drift from what the compiler
-  actually accepts, and then a manifest that Kex parses is one Tey rejects.
-  Worth taking if the reader needs to grow much further before the AST path is
-  reachable; not worth taking to save the line reader as it stands.
 - A dependency may ask for a RANGE — `tag: "~> 0.2"`, `"^1.0"`, `">= 0.3"` —
   and Tey lists the repository's tags and locks the highest that satisfies it,
   so the manifest keeps the constraint and the lockfile keeps the answer. An

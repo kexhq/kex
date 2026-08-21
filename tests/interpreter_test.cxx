@@ -203,6 +203,28 @@ int main() {
             assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
         });
 
+        it("qualifies a leaf declaration by its source path", []() {
+            namespace fs = std::filesystem;
+            const auto root =
+                fs::temp_directory_path() / "kex-qualified-leaf-load-test";
+            fs::remove_all(root);
+            fs::create_directories(root / "acme");
+            {
+                std::ofstream module(root / "acme/tools.kex");
+                module << "module Tools do\n"
+                          "  let answer() = 42\n"
+                          "end\n";
+            }
+            auto result = runWithModuleRoots(
+                "main do\n"
+                "  using Acme.Tools, only: [answer]\n"
+                "  answer()\n"
+                "end\n",
+                {root.string()});
+            fs::remove_all(root);
+            assertEqual(std::get<IntValue>(result->data).value, int64_t(42));
+        });
+
         it("resolves a relative using from the enclosing module", []() {
             namespace fs = std::filesystem;
             const auto root = fs::temp_directory_path() / "kex-relative-module-load-test";

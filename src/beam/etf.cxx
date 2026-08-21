@@ -15,6 +15,16 @@ auto Term::integer(int64_t v) -> TermPtr {
     t->value = Int{v};
     return t;
 }
+auto Term::integer(mpz_class v) -> TermPtr {
+    auto t = std::make_shared<Term>();
+    t->value = BigInt{std::move(v)};
+    return t;
+}
+auto Term::floating(double v) -> TermPtr {
+    auto t = std::make_shared<Term>();
+    t->value = Float{v};
+    return t;
+}
 auto Term::binary(std::vector<uint8_t> data) -> TermPtr {
     auto t = std::make_shared<Term>();
     t->value = Bin{std::move(data)};
@@ -58,6 +68,12 @@ auto Term::asAtom() const -> const std::string& {
 }
 auto Term::asInt() const -> int64_t {
     return std::get<Int>(value).value;
+}
+auto Term::asBigInt() const -> const mpz_class& {
+    return std::get<BigInt>(value).value;
+}
+auto Term::asFloat() const -> double {
+    return std::get<Float>(value).value;
 }
 auto Term::asBinary() const -> const std::vector<uint8_t>& {
     return std::get<Bin>(value).data;
@@ -109,9 +125,11 @@ constexpr uint8_t LIST_EXT           = 108;
 constexpr uint8_t BINARY_EXT         = 109;
 constexpr uint8_t SMALL_ATOM_EXT     = 115;
 constexpr uint8_t MAP_EXT            = 116;
+constexpr uint8_t NEW_FLOAT_EXT      = 70;
 constexpr uint8_t ATOM_UTF8_EXT      = 118;
 constexpr uint8_t SMALL_ATOM_UTF8_EXT = 119;
 constexpr uint8_t SMALL_BIG_EXT      = 110;
+constexpr uint8_t LARGE_BIG_EXT      = 111;
 
 void put8(std::vector<uint8_t>& out, uint8_t v) { out.push_back(v); }
 void put16(std::vector<uint8_t>& out, uint16_t v) {
@@ -123,6 +141,29 @@ void put32(std::vector<uint8_t>& out, uint32_t v) {
     out.push_back(uint8_t(v >> 16));
     out.push_back(uint8_t(v >> 8));
     out.push_back(uint8_t(v));
+}
+void put64(std::vector<uint8_t>& out, uint64_t v) {
+    put32(out, static_cast<uint32_t>(v >> 32));
+    put32(out, static_cast<uint32_t>(v));
+}
+
+void encodeBigInt(std::vector<uint8_t>& out, const mpz_class& value) {
+    mpz_class magnitude = value < 0 ? -value : value;
+    const size_t count = magnitude == 0
+                             ? 1
+                             : (mpz_sizeinbase(magnitude.get_mpz_t(), 2) + 7) / 8;
+    if (count <= 255) {
+        put8(out, SMALL_BIG_EXT);
+        put8(out, static_cast<uint8_t>(count));
+    } else {
+        put8(out, LARGE_BIG_EXT);
+        put32(out, static_cast<uint32_t>(count));
+    }
+    put8(out, value < 0 ? 1 : 0);
+    for (size_t i = 0; i < count; ++i) {
+        put8(out, static_cast<uint8_t>(mpz_get_ui(magnitude.get_mpz_t()) & 0xff));
+        magnitude >>= 8;
+    }
 }
 
 void encodeTerm(std::vector<uint8_t>& out, const TermPtr& term);
@@ -147,22 +188,16 @@ void encodeTerm(std::vector<uint8_t>& out, const TermPtr& term) {
                 put8(out, INTEGER_EXT);
                 put32(out, static_cast<uint32_t>(static_cast<int32_t>(node.value)));
             } else {
-                // Use SMALL_BIG_EXT for values outside int32 range
-                put8(out, SMALL_BIG_EXT);
-                uint64_t abs = node.value < 0
-                    ? static_cast<uint64_t>(-node.value)
-                    : static_cast<uint64_t>(node.value);
-                uint8_t sign = node.value < 0 ? 1 : 0;
-                uint8_t bytes[8];
-                int n = 0;
-                do {
-                    bytes[n++] = abs & 0xFF;
-                    abs >>= 8;
-                } while (abs > 0);
-                put8(out, static_cast<uint8_t>(n));
-                put8(out, sign);
-                out.insert(out.end(), bytes, bytes + n);
+                encodeBigInt(out, mpz_class(std::to_string(node.value)));
             }
+        } else if constexpr (std::is_same_v<T, Term::BigInt>) {
+            encodeBigInt(out, node.value);
+        } else if constexpr (std::is_same_v<T, Term::Float>) {
+            put8(out, NEW_FLOAT_EXT);
+            uint64_t bits;
+            static_assert(sizeof(bits) == sizeof(node.value));
+            std::memcpy(&bits, &node.value, sizeof(bits));
+            put64(out, bits);
         } else if constexpr (std::is_same_v<T, Term::Bin>) {
             put8(out, BINARY_EXT);
             put32(out, static_cast<uint32_t>(node.data.size()));
@@ -224,6 +259,23 @@ struct Decoder {
         pos += 4;
         return v;
     }
+    auto read64() -> uint64_t {
+        return (uint64_t(read32()) << 32) | read32();
+    }
+
+    auto readBig(size_t count) -> TermPtr {
+        const auto sign = read8();
+        mpz_class value = 0;
+        for (size_t i = 0; i < count; ++i)
+            value += mpz_class(read8()) << (8 * i);
+        if (sign)
+            value = -value;
+        const mpz_class min("-9223372036854775808");
+        const mpz_class max("9223372036854775807");
+        if (value >= min && value <= max)
+            return Term::integer(static_cast<int64_t>(std::stoll(value.get_str())));
+        return Term::integer(std::move(value));
+    }
     auto readBytes(size_t n) -> std::vector<uint8_t> {
         if (remaining() < n) throw EtfError("unexpected end of ETF data");
         std::vector<uint8_t> v(data + pos, data + pos + n);
@@ -246,16 +298,17 @@ struct Decoder {
             auto raw = read32();
             return Term::integer(static_cast<int32_t>(raw));
         }
-        case SMALL_BIG_EXT: {
-            uint8_t n = read8();
-            uint8_t sign = read8();
-            uint64_t val = 0;
-            for (int i = 0; i < n; i++)
-                val |= uint64_t(read8()) << (8 * i);
-            int64_t result = static_cast<int64_t>(val);
-            if (sign) result = -result;
-            return Term::integer(result);
+        case NEW_FLOAT_EXT: {
+            const auto bits = read64();
+            double value;
+            std::memcpy(&value, &bits, sizeof(value));
+            return Term::floating(value);
         }
+        case SMALL_BIG_EXT: {
+            return readBig(read8());
+        }
+        case LARGE_BIG_EXT:
+            return readBig(read32());
         case ATOM_EXT: {
             auto len = read16();
             return Term::atom(readString(len));

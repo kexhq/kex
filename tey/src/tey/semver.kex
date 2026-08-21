@@ -17,7 +17,7 @@ let parseVersion(text: String) -> SemanticVersion? do
   let core = withoutBuild.split("-").first.or(withoutBuild).trim
   let preRelease = withoutBuild.split("-").drop(1).join("-").trim
   let parts = core.split(".")
-  let major = match parts.first do Just(x) => Integer.parse(x) _ => Error(ParseError { value: core, rest: core }) end
+  let major = match parts.first do Just(x) => Integer.parse(x) _ => Integer.parse(core) end
   let minor = match parts.second do Just(x) => Integer.parse(x) _ => Ok(0) end
   let patch = match parts.third do Just(x) => Integer.parse(x.split(" ").first.or("0")) _ => Ok(0) end
   match (major, minor, patch) do

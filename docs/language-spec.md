@@ -1871,20 +1871,21 @@ See §18 for the full process API. Summary:
 - `Task.start { expr }`, `task.await(timeout)`, `Task.awaitAll([tasks])`
 - `Supervisor.start(restart: atom) do [worker { spawnFn }] end`
 
-### 23.18 Parser (Introspection)
+### 23.18 AST (Introspection)
 
 Runtime access to the Kex parser itself:
 
 | Function | Returns | Description |
 |---|---|---|
-| `Parser.parse(source)` | `Result<Program, ParseError>` | Parse a program |
-| `Parser.parse(source, filename)` | `Result<Program, ParseError>` | With filename |
-| `Parser.parseFile(path)` | `Result<Program, ParseError>` | Read + parse |
-| `Parser.parseType(source)` | `Result<TypeRef, ParseError>` | Parse a type |
-| `Parser.parseExpression(source)` | `Result<Expression, ParseError>` | Parse an expr |
+| `Kex.AST.parse(source)` | `Result<Program, ParseError>` | Parse a program |
+| `Kex.AST.parse(source, filename)` | `Result<Program, ParseError>` | With filename |
+| `Kex.AST.parseFile(path)` | `Result<Program, ParseError>` | Read + parse |
+| `Kex.AST.parseType(source)` | `Result<TypeRef, ParseError>` | Parse a type |
+| `Kex.AST.parseExpression(source)` | `Result<Expression, ParseError>` | Parse an expr |
 
-The returned AST types (`TypeRef`, `PatternRef`, `Expression`) model the full
-Kex syntax tree as values. See `src/prelude/parser.kex` for the complete ADT.
+The returned `Program`, declaration records, `TypeRef`, `PatternRef`, and
+`Expression` values use the same schema on the interpreter and BEAM. See
+`src/stdlib/kex/ast.kex` for the public types.
 
 ### 23.19 Evaluator (Sandboxed)
 

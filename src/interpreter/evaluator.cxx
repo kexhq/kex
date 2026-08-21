@@ -370,6 +370,20 @@ auto Evaluator::ensureModuleLoaded(const std::string& moduleName, SourceLocation
         throw RuntimeError("Failed to parse module " + canonicalName + ": " + diagnostic.message,
                            diagnostic.location);
     }
+    // A source root can supply a leading package namespace for leaf module
+    // declarations. Qualify such a declaration with the resolver's canonical
+    // identity before executing it, just as the compiled module loader does.
+    for (auto& item : program->items) {
+        auto* module = std::get_if<std::unique_ptr<ast::ModuleDef>>(&item);
+        if (!module || !*module || (*module)->name.find('.') != std::string::npos)
+            continue;
+        const auto dot = canonicalName.rfind('.');
+        if (dot != std::string::npos &&
+            canonicalName.substr(dot + 1) == (*module)->name) {
+            (*module)->name = canonicalName;
+            break;
+        }
+    }
     std::vector<semantic::Diagnostic> expandDiagnostics;
     if (!compiled::expand(*program, expandDiagnostics)) {
         const auto& diagnostic = expandDiagnostics.front();

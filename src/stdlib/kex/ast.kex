@@ -1,0 +1,389 @@
+# Parses Kex source code into a structured AST at runtime.
+#
+# Returns +Result<Program, ParseError>+ — the AST includes module
+# definitions, function signatures, type/record definitions, traits,
+# make blocks, and doc-comments extracted from +#+ lines.
+#
+module Kex.AST do
+  record Location do
+    file : String
+    line : Integer
+    column : Integer
+    startOffset : Integer
+    endOffset : Integer
+  end
+
+  record Program do
+    schemaVersion : Integer
+    items : [Node]
+  end
+
+  record ParseError do
+    message : String
+    location : Location?
+  end
+
+  # Parses a Kex source string into a structured AST.
+  parse : String -> Result<Program, ParseError>
+  parse : String -> String -> Result<Program, ParseError>
+  let parse(source) = Kex.Intrinsic.AST.parse(source)
+  let parse(source, filename) = Kex.Intrinsic.AST.parse(source, filename)
+
+  # Reads a file and parses it.
+  parseFile : FS.FilePath -> Result<Program, ParseError>
+  let parseFile(path) = Kex.Intrinsic.AST.parseFile(path)
+
+  # Parses a type expression string into a TypeRef.
+  parseType : String -> Result<TypeRef, ParseError>
+  let parseType(source) = Kex.Intrinsic.AST.parseType(source)
+
+  # Parses a single expression string into an Expression AST node.
+  parseExpression : String -> Result<Expression, ParseError>
+  let parseExpression(source) = Kex.Intrinsic.AST.parseExpression(source)
+
+  # Structured representation of type expressions.
+  type TypeRef
+    = NamedType(String, [TypeRef])
+    | FunctionType([TypeRef], TypeRef)
+    | TupleType([TypeRef])
+    | ListType(TypeRef)
+    | MapType(TypeRef, TypeRef)
+    | UnionType([TypeRef])
+    | NullableType(TypeRef)
+    | BlockType(TypeRef)
+    | AtomType(String)
+    | TypeQuery(String, Expression)
+    | TypeVar(String)
+    | AnyType
+    | NoneType
+
+  let typeRefText(NamedType(name, [])) -> String = name
+  let typeRefText(NamedType(name, args)) -> String = "${name}<${args.map { |arg| Kex.AST.typeRefText(arg) }.join(", ")}>"
+  let typeRefText(FunctionType(params, result)) -> String = "(${params.map { |param| Kex.AST.typeRefText(param) }.join(", ")}) -> ${Kex.AST.typeRefText(result)}"
+  let typeRefText(TupleType(elements)) -> String = "(${elements.map { |element| Kex.AST.typeRefText(element) }.join(", ")})"
+  let typeRefText(ListType(element)) -> String = "[${Kex.AST.typeRefText(element)}]"
+  let typeRefText(MapType(key, value)) -> String = "{${Kex.AST.typeRefText(key)}: ${Kex.AST.typeRefText(value)}}"
+  let typeRefText(UnionType(members)) -> String = members.map { |member| Kex.AST.typeRefText(member) }.join(" | ")
+  let typeRefText(NullableType(inner)) -> String = "${Kex.AST.typeRefText(inner)}?"
+  let typeRefText(BlockType(inner)) -> String = "Block<${Kex.AST.typeRefText(inner)}>"
+  let typeRefText(AtomType(name)) -> String = ":${name}"
+  let typeRefText(TypeQuery(query, _)) -> String = "Type.${query}(<expression>)"
+  let typeRefText(TypeVar(name)) -> String = name
+  let typeRefText(AnyType) -> String = "Any"
+  let typeRefText(NoneType) -> String = "None"
+
+  # Structured representation of patterns.
+  type PatternRef
+    = BindPattern(String)
+    | LiteralPattern(String)
+    | ConstructorPattern(String, [PatternRef])
+    | TuplePattern([PatternRef])
+    | ListPattern([PatternRef], PatternRef?)
+    | RecordPattern(String?, [PatternField])
+    | RangePattern(PatternRef, PatternRef)
+    | ThisPattern(PatternRef)
+    | WildcardPattern
+
+  record PatternField do
+    name : String
+    pattern : PatternRef?
+    stringKey : Bool
+  end
+
+  let patternRefText(BindPattern(name)) -> String = name
+  let patternRefText(LiteralPattern(value)) -> String = value
+  let patternRefText(ConstructorPattern(name, [])) -> String = name
+  let patternRefText(ConstructorPattern(name, args)) -> String = "${name}(${args.map { |arg| Kex.AST.patternRefText(arg) }.join(", ")})"
+  let patternRefText(TuplePattern(elements)) -> String = "(${elements.map { |element| Kex.AST.patternRefText(element) }.join(", ")})"
+  let patternRefText(ListPattern(elements, None)) -> String = "[${elements.map { |element| Kex.AST.patternRefText(element) }.join(", ")}]"
+  let patternRefText(ListPattern(elements, Just(rest))) -> String = "[${elements.map { |element| Kex.AST.patternRefText(element) }.join(", ")} | ${Kex.AST.patternRefText(rest)}]"
+  let patternRefText(RecordPattern(None, fields)) -> String = "{ ${fields.map { |field| Kex.AST.patternFieldText(field) }.join(", ")} }"
+  let patternRefText(RecordPattern(Just(typeName), fields)) -> String = "${typeName} { ${fields.map { |field| Kex.AST.patternFieldText(field) }.join(", ")} }"
+  let patternRefText(RangePattern(start, finish)) -> String = "${Kex.AST.patternRefText(start)}..${Kex.AST.patternRefText(finish)}"
+  let patternRefText(ThisPattern(inner)) -> String = "@${Kex.AST.patternRefText(inner)}"
+  let patternRefText(WildcardPattern) -> String = "_"
+
+  let patternFieldText(PatternField { name, pattern, stringKey }) -> String = Kex.AST.patternFieldText(name, pattern, stringKey)
+  let patternFieldText(name, None, false) -> String = name
+  let patternFieldText(name, None, true) -> String = "\"${name}\""
+  let patternFieldText(name, Just(pattern), false) -> String = "${name}: ${Kex.AST.patternRefText(pattern)}"
+  let patternFieldText(name, Just(pattern), true) -> String = "\"${name}\": ${Kex.AST.patternRefText(pattern)}"
+
+  let referenceText(NamedType(name, args)) -> String = Kex.AST.typeRefText(NamedType(name, args))
+  let referenceText(FunctionType(params, result)) -> String = Kex.AST.typeRefText(FunctionType(params, result))
+  let referenceText(TupleType(elements)) -> String = Kex.AST.typeRefText(TupleType(elements))
+  let referenceText(ListType(element)) -> String = Kex.AST.typeRefText(ListType(element))
+  let referenceText(MapType(key, value)) -> String = Kex.AST.typeRefText(MapType(key, value))
+  let referenceText(UnionType(members)) -> String = Kex.AST.typeRefText(UnionType(members))
+  let referenceText(NullableType(inner)) -> String = Kex.AST.typeRefText(NullableType(inner))
+  let referenceText(BlockType(inner)) -> String = Kex.AST.typeRefText(BlockType(inner))
+  let referenceText(AtomType(name)) -> String = Kex.AST.typeRefText(AtomType(name))
+  let referenceText(TypeQuery(query, argument)) -> String = Kex.AST.typeRefText(TypeQuery(query, argument))
+  let referenceText(TypeVar(name)) -> String = Kex.AST.typeRefText(TypeVar(name))
+  let referenceText(AnyType) -> String = "Any"
+  let referenceText(NoneType) -> String = "None"
+  let referenceText(BindPattern(name)) -> String = Kex.AST.patternRefText(BindPattern(name))
+  let referenceText(LiteralPattern(value)) -> String = Kex.AST.patternRefText(LiteralPattern(value))
+  let referenceText(ConstructorPattern(name, args)) -> String = Kex.AST.patternRefText(ConstructorPattern(name, args))
+  let referenceText(TuplePattern(elements)) -> String = Kex.AST.patternRefText(TuplePattern(elements))
+  let referenceText(ListPattern(elements, rest)) -> String = Kex.AST.patternRefText(ListPattern(elements, rest))
+  let referenceText(RecordPattern(typeName, fields)) -> String = Kex.AST.patternRefText(RecordPattern(typeName, fields))
+  let referenceText(RangePattern(start, finish)) -> String = Kex.AST.patternRefText(RangePattern(start, finish))
+  let referenceText(ThisPattern(inner)) -> String = Kex.AST.patternRefText(ThisPattern(inner))
+  let referenceText(WildcardPattern) -> String = "_"
+
+  # Structured representation of expression AST nodes.
+  type Expression
+    = LitInt(Int)
+    | LitFloat(Float)
+    | LitChar(Int)
+    | LitString(String)
+    | InterpolatedString([String], [Expression])
+    | LitBool(Bool)
+    | LitAtom(String)
+    | LitNone
+    | Identifier(String)
+    | This
+    | BinaryOp(Expression, String, Expression)
+    | UnaryOp(String, Expression)
+    | Call(Expression, [Expression], [NamedArgument], Expression?)
+    | TaggedLiteral(String, [String], [Expression])
+    | MethodCall(Expression, String, [Expression], [NamedArgument], Expression?, Bool, Bool, TypeRef?)
+    | If(Expression, PatternRef?, [Expression], [ElseIf], [Expression]?)
+    | Match(Expression, String?, [MatchArm])
+    | Receive(String?, [MatchArm], Expression?, Expression?)
+    | ListLit([Expression], Expression?)
+    | MapLit([MapItem])
+    | RecordLit(String, [RecordField])
+    | TupleLit([Expression])
+    | Block([Expression])
+    | Lambda([LambdaParam], [Expression], TypeRef?, RescueInfo?)
+    | Let(PatternRef, TypeRef?, Expression)
+    | Var(String, TypeRef?, Expression)
+    | Assign(String, Expression)
+    | Return(Expression)
+    | Break
+    | Next
+    | Spawn([Expression])
+    | Try(Expression)
+    | Spread(Expression)
+    | TrailingIf(Expression, Expression)
+    | ThenElse(Expression, Expression, Expression)
+    | ShorthandLambda(String, [Expression], Bool)
+    | CurryPlaceholder
+    | Curry(String, String?, Bool, [[Expression]])
+    | Using(String, String?, [String], [String], [Expression])
+    | GeneratedDeclaration(Expression, GeneratedTemplate)
+    | ErrorExpression(String)
+    | Trying([Expression], RescueInfo)
+    | While(Expression, [Expression])
+    | Loop([String], [Expression])
+    | RangeLit(Expression, Expression)
+
+  record NamedArgument do
+    name : String
+    value : Expression
+  end
+
+  record MatchArm do
+    patterns : [PatternRef]
+    guard : Expression?
+    body : Expression
+  end
+
+  record LambdaParam do
+    name : String
+    type : TypeRef?
+  end
+
+  record RescueInfo do
+    arms : [MatchArm]
+    catchAllName : String?
+    catchAllBody : [Expression]
+    inlineReturn : Expression?
+  end
+
+  record ElseIf do
+    condition : Expression
+    body : [Expression]
+  end
+
+  type MapItem
+    = MapEntry(Expression, Expression)
+    | MapSpread(Expression)
+
+  record RecordField do
+    name : String
+    value : Expression
+  end
+
+  # A declaration template whose name (and, for a make block, target) is
+  # computed by a `compiled do` expression.
+  type GeneratedTemplate
+    = GeneratedNode(Node)
+    | GeneratedMake(GeneratedMakeInfo)
+
+  record GeneratedMakeInfo do
+    isFinal : Bool
+    implements : [TypeRef]
+    body : [CompiledItem]
+    location : Location
+  end
+
+  record MainInfo do
+    doc : String?
+    params : [ParamInfo]
+    body : [Expression]
+    rescueInfo : RescueInfo?
+    location : Location
+  end
+
+  record ParamInfo do
+    name : String?
+    pattern : PatternRef?
+    type : TypeRef?
+    hasDefault : Bool
+  end
+
+  record ClauseInfo do
+    params : [ParamInfo]
+    body : [Expression]
+    returnType : TypeRef?
+    rescueInfo : RescueInfo?
+    hasParamList : Bool
+  end
+
+  record FunctionInfo do
+    name : String
+    doc : String?
+    isFoul : Bool
+    predicate : Bool
+    clauses : [ClauseInfo]
+    location : Location
+  end
+
+  record AnnotationInfo do
+    name : String
+    type : TypeRef
+    doc : String?
+    implicitThis : Bool
+    location : Location
+  end
+
+  record VariantInfo do
+    name : String
+    fields : [TypeRef]
+  end
+
+  record TypeInfo do
+    name : String
+    doc : String?
+    typeParams : [String]
+    parents : [TypeRef]
+    variants : [VariantInfo]?
+    location : Location
+  end
+
+  record FieldInfo do
+    name : String
+    type : TypeRef
+    hasDefault : Bool
+  end
+
+  record RecordInfo do
+    name : String
+    doc : String?
+    typeParams : [String]
+    fields : [FieldInfo]
+    location : Location
+  end
+
+  record TraitInfo do
+    name : String
+    doc : String?
+    typeParams : [String]
+    body : [Node]
+    location : Location
+  end
+
+  record MakeInfo do
+    target : TypeRef
+    isFinal : Bool
+    implements : [TypeRef]
+    body : [Node]
+    location : Location
+  end
+
+  record PragmaInfo do
+    name : String
+    value : String?
+    location : Location
+  end
+
+  record ModuleInfo do
+    name : String
+    doc : String?
+    items : [Node]
+    location : Location
+  end
+
+  record ConstantInfo do
+    name : String
+    doc : String?
+    type : TypeRef?
+    location : Location
+  end
+
+  record VisibilityInfo do
+    isPublic : Bool
+    items : [Node]
+    location : Location
+  end
+
+  record UsingInfo do
+    moduleName : String
+    alias : String?
+    onlyNames : [String]
+    exceptNames : [String]
+    body : [Expression]
+    location : Location
+  end
+
+  record ExportInfo do
+    moduleName : String
+    alias : String?
+    onlyNames : [String]
+    exceptNames : [String]
+    location : Location
+  end
+
+  type CompiledItem
+    = CompiledNode(Node)
+    | CompiledExpression(Expression)
+
+  record CompiledInfo do
+    items : [CompiledItem]
+    location : Location
+  end
+
+  type Node
+    = ModuleDef(ModuleInfo)
+    | FunctionDef(FunctionInfo)
+    | TypeAnnotation(AnnotationInfo)
+    | TypeDef(TypeInfo)
+    | RecordDef(RecordInfo)
+    | TraitDef(TraitInfo)
+    | MakeDef(MakeInfo)
+    | PragmaDef(PragmaInfo)
+    | ConstantDef(ConstantInfo)
+    | MainDef(MainInfo)
+    | Visibility(VisibilityInfo)
+    | UsingDef(UsingInfo)
+    | ExportDef(ExportInfo)
+    | Compiled(CompiledInfo)
+
+  # Source-like conversion through the standard `.to(String)` spelling.
+  make TypeRef | PatternRef do
+    let to(String) -> String? = Just(Kex.AST.referenceText(this))
+  end
+end

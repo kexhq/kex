@@ -38,6 +38,12 @@ private:
     auto expect(TokenType type, const std::string& message) -> const Token&;
     auto skipNewlines() -> void;
     auto currentLocation() const -> SourceLocation;
+    template<typename T>
+    auto complete(std::unique_ptr<T> node) const -> std::unique_ptr<T> {
+        if (node && m_pos > 0)
+            node->location.endOffset = m_tokens[m_pos - 1].endOffset;
+        return node;
+    }
 
     // Top-level
     auto parseTopLevelItem() -> ast::TopLevelItem;

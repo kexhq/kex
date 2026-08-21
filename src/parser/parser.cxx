@@ -215,7 +215,6 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     return parsePragma();
 
   if (check(TokenType::Foul)) {
-    advance(); // consume foul
     return parseFunctionDef(true);
   }
   if (check(TokenType::Let)) {
@@ -228,7 +227,7 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     mainBlock->location = currentLocation();
     mainBlock->synthetic = true;
     mainBlock->body.push_back(parseExpr());
-    return mainBlock;
+    return complete(std::move(mainBlock));
   }
 
   // Top-level type annotation: `name : Type` — must be checked before
@@ -256,7 +255,7 @@ auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
     auto mainBlock = std::make_unique<ast::MainBlock>();
     mainBlock->location = currentLocation();
     mainBlock->body.push_back(parseExpr());
-    return mainBlock;
+    return complete(std::move(mainBlock));
   }
 
   error("Unexpected token at top level: " +
@@ -328,7 +327,6 @@ auto Parser::parseModuleDef(bool allowStandalone,
         error("'main' blocks are not allowed inside block modules");
       m_deferredTopLevelItems.push_back(parseMainBlock());
     } else if (check(TokenType::Foul)) {
-      advance();
       mod->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       mod->body.push_back(parseFunctionDef());
@@ -344,7 +342,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
   if (!standalone) {
     expect(TokenType::End, "Expected 'end' to close module");
   }
-  return mod;
+  return complete(std::move(mod));
 }
 
 // ===== Type Def =====
@@ -446,8 +444,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
 
         // Optional suffix: Name?
         if (match(TokenType::Question)) {
+          auto startOffset = variant->location.startOffset;
           auto opt = std::make_unique<ast::TypeExpr>();
           opt->location = currentLocation();
+          opt->location.startOffset = startOffset;
           opt->kind = ast::OptionalType{std::move(variant)};
           variant = std::move(opt);
         }
@@ -456,11 +456,13 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         if (check(TokenType::Arrow)) {
           advance(); // ->
           auto right = parseTypeFunction();
+          auto startOffset = variant->location.startOffset;
           auto funcType = std::make_unique<ast::TypeExpr>();
           funcType->location = currentLocation();
+          funcType->location.startOffset = startOffset;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
-          return funcType;
+          return complete(std::move(funcType));
         }
       } else if (check(TokenType::Atom)) {
         variant->kind = ast::AtomType{advance().value};
@@ -470,16 +472,18 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         if (check(TokenType::Arrow)) {
           advance();
           auto right = parseTypeFunction();
+          auto startOffset = variant->location.startOffset;
           auto funcType = std::make_unique<ast::TypeExpr>();
           funcType->location = currentLocation();
+          funcType->location.startOffset = startOffset;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
-          return funcType;
+          return complete(std::move(funcType));
         }
       } else {
         variant = parseTypeExpr();
       }
-      return variant;
+      return complete(std::move(variant));
     };
 
     // An optional leading `|` marks the list as variants even when only
@@ -534,7 +538,7 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
       (!def->variants || def->variants->size() != 1 || def->leadingPipe))
     error("A distinct type needs exactly one backing type after '='");
 
-  return def;
+  return complete(std::move(def));
 }
 
 // ===== Record =====
@@ -548,7 +552,7 @@ auto Parser::parseRecordDef() -> std::unique_ptr<ast::RecordDef> {
   rejectSingleLetterTypeName(def->name, "record");
 
   parseRecordBody(*def);
-  return def;
+  return complete(std::move(def));
 }
 
 // The type parameters and `do ... end` half of a record, shared with
@@ -631,7 +635,6 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
         ann->isFoul = true;
         def->body.push_back(std::move(ann));
       } else {
-        advance(); // consume foul
         def->body.push_back(parseFunctionDef(true));
       }
     } else if (check(TokenType::Let)) {
@@ -646,7 +649,7 @@ auto Parser::parseTraitDef() -> std::unique_ptr<ast::TraitDef> {
   }
 
   expect(TokenType::End, "Expected 'end' to close trait");
-  return def;
+  return complete(std::move(def));
 }
 
 auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
@@ -669,7 +672,7 @@ auto Parser::parseMakeDef() -> std::unique_ptr<ast::MakeDef> {
       rejectSingleLetterTypeName(named->parts[0], "make target");
   parseMakeImplements(*def);
   parseMakeBody(*def);
-  return def;
+  return complete(std::move(def));
 }
 
 // `, implement: Trait1, Trait2` — optional, and shared with `make %name`
@@ -719,7 +722,6 @@ auto Parser::parseMakeBody(ast::MakeDef &into, bool allowDrivers) -> void {
     if (check(TokenType::Public) || check(TokenType::Private)) {
       def->body.push_back(parseVisibilityBlock());
     } else if (check(TokenType::Foul)) {
-      advance();
       def->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       def->body.push_back(parseFunctionDef());
@@ -750,9 +752,10 @@ auto Parser::parseFunctionDef(bool isFoul)
   def->location = currentLocation();
   def->isFoul = isFoul;
 
-  if (!isFoul) {
+  if (isFoul)
+    expect(TokenType::Foul, "Expected 'foul'");
+  else
     expect(TokenType::Let, "Expected 'let'");
-  }
 
   // `let %{expr}(...)` — the name is whatever `expr` evaluates to at compile
   // time. Checked before the operator branch below, which would otherwise
@@ -795,7 +798,7 @@ auto Parser::parseFunctionDef(bool isFoul)
   }
 
   def->clauses.push_back(parseFunctionClause());
-  return def;
+  return complete(std::move(def));
 }
 
 auto Parser::parseFunctionClause() -> ast::FunctionClause {
@@ -965,6 +968,7 @@ auto Parser::parseParam() -> ast::Param {
 
 auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   auto ann = std::make_unique<ast::TypeAnnotation>();
+  ann->location = currentLocation();
   if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
       check(TokenType::After))
     ann->name = advance().value;
@@ -979,7 +983,7 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   }
 
   ann->type = parseTypeExpr();
-  return ann;
+  return complete(std::move(ann));
 }
 
 // ===== Type Expressions =====
@@ -1011,51 +1015,57 @@ auto Parser::parseTypeOr() -> ast::TypeExprPtr {
     ast::TypeName typeName;
     typeName.parts = {isResult ? "Result" : "Either"};
     result->kind = ast::GenericType{std::move(typeName), std::move(args)};
-    return result;
+    return complete(std::move(result));
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
   auto left = parseTypeFunction();
 
   while (match(TokenType::Pipe)) {
+    auto startOffset = left->location.startOffset;
     auto unionType = std::make_unique<ast::TypeExpr>();
     unionType->location = currentLocation();
+    unionType->location.startOffset = startOffset;
     auto right = parseTypeFunction();
     unionType->kind = ast::UnionType{std::move(left), std::move(right)};
     left = std::move(unionType);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
   auto left = parseTypeOr();
 
   if (match(TokenType::Arrow)) {
+    auto startOffset = left->location.startOffset;
     auto funcType = std::make_unique<ast::TypeExpr>();
     funcType->location = currentLocation();
+    funcType->location.startOffset = startOffset;
     auto right = parseTypeFunction(); // right-associative
     funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
-    return funcType;
+    return complete(std::move(funcType));
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseTypePostfix() -> ast::TypeExprPtr {
   auto type = parseTypePrimary();
 
   if (match(TokenType::Question)) {
+    auto startOffset = type->location.startOffset;
     auto opt = std::make_unique<ast::TypeExpr>();
     opt->location = currentLocation();
+    opt->location.startOffset = startOffset;
     opt->kind = ast::OptionalType{std::move(type)};
-    return opt;
+    return complete(std::move(opt));
   }
 
-  return type;
+  return complete(std::move(type));
 }
 
 auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
@@ -1067,7 +1077,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto elem = parseTypeExpr();
     expect(TokenType::RBracket, "Expected ']' in list type");
     type->kind = ast::ListType{std::move(elem)};
-    return type;
+    return complete(std::move(type));
   }
 
   // Map type: { K: V }
@@ -1077,7 +1087,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto val = parseTypeExpr();
     expect(TokenType::RBrace, "Expected '}' in map type");
     type->kind = ast::MapType{std::move(key), std::move(val)};
-    return type;
+    return complete(std::move(type));
   }
 
   // Tuple type: (A, B, C) or unit type ()
@@ -1085,7 +1095,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     if (match(TokenType::RParen)) {
       // Void type ()
       type->kind = ast::TupleType{{}};
-      return type;
+      return complete(std::move(type));
     }
     std::vector<ast::TypeExprPtr> elements;
     elements.push_back(parseTypeExpr());
@@ -1094,10 +1104,12 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     }
     expect(TokenType::RParen, "Expected ')' in tuple type");
     if (elements.size() == 1) {
-      return std::move(elements[0]); // just grouping
+      auto grouped = std::move(elements[0]);
+      grouped->location.startOffset = type->location.startOffset;
+      return complete(std::move(grouped)); // just grouping
     }
     type->kind = ast::TupleType{std::move(elements)};
-    return type;
+    return complete(std::move(type));
   }
 
   // Block type
@@ -1107,13 +1119,13 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto inner = parseTypeExpr();
     expect(TokenType::GreaterThan, "Expected '>' to close Block type");
     type->kind = ast::BlockType{std::move(inner)};
-    return type;
+    return complete(std::move(type));
   }
 
   // Atom type
   if (check(TokenType::Atom)) {
     type->kind = ast::AtomType{advance().value};
-    return type;
+    return complete(std::move(type));
   }
 
   // Type parameters are uppercase, like every other type name. A lowercase
@@ -1143,7 +1155,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     auto argument = parseExpr();
     expect(TokenType::RParen, "Expected ')' after Type." + query + " argument");
     type->kind = ast::TypeQuery{std::move(query), std::move(argument)};
-    return type;
+    return complete(std::move(type));
   }
 
   // Named type (possibly with generics)
@@ -1161,7 +1173,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     } else {
       type->kind = std::move(name);
     }
-    return type;
+    return complete(std::move(type));
   }
 
   error("Expected type expression");
@@ -1197,15 +1209,15 @@ auto Parser::parseExpr() -> ast::ExprPtr {
       body.push_back(std::move(expr));
       guarded->kind = ast::IfExpr{
           std::move(condition), std::move(body), {}, std::nullopt, nullptr};
-      return guarded;
+      return complete(std::move(guarded));
     }
     auto trailing = std::make_unique<ast::Expr>();
     trailing->location = expr->location;
     trailing->kind = ast::TrailingIf{std::move(expr), std::move(condition)};
-    return trailing;
+    return complete(std::move(trailing));
   }
 
-  return expr;
+  return complete(std::move(expr));
 }
 
 auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
@@ -1229,7 +1241,7 @@ auto Parser::parseExprWithoutGuard() -> ast::ExprPtr {
     expr = std::move(thenElse);
   }
 
-  return expr;
+  return complete(std::move(expr));
 }
 
 auto Parser::parseAssignment() -> ast::ExprPtr {
@@ -1247,7 +1259,7 @@ auto Parser::parseAssignment() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
     expr->kind = ast::AssignExpr{std::move(name), std::move(value)};
-    return expr;
+    return complete(std::move(expr));
   }
   return parseOr();
 }
@@ -1256,47 +1268,53 @@ auto Parser::parseOr() -> ast::ExprPtr {
   auto left = parseAnd();
 
   while (check(TokenType::PipePipe)) {
+    auto startOffset = left->location.startOffset;
     auto opType = peek().type;
     advance();
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseAnd();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseAnd() -> ast::ExprPtr {
   auto left = parseEquality();
 
   while (check(TokenType::AmpAmp)) {
+    auto startOffset = left->location.startOffset;
     advance();
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseEquality();
     op->kind =
         ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseEquality() -> ast::ExprPtr {
   auto left = parseComparison();
 
   while (check(TokenType::EqEq) || check(TokenType::NotEq)) {
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseComparison();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseComparison() -> ast::ExprPtr {
@@ -1304,30 +1322,34 @@ auto Parser::parseComparison() -> ast::ExprPtr {
 
   while (check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
          check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseAddition();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseAddition() -> ast::ExprPtr {
   auto left = parseMultiplication();
 
   while (check(TokenType::Plus) || check(TokenType::Minus)) {
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseMultiplication();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseMultiplication() -> ast::ExprPtr {
@@ -1335,15 +1357,17 @@ auto Parser::parseMultiplication() -> ast::ExprPtr {
 
   while (check(TokenType::Star) || check(TokenType::Slash) ||
          check(TokenType::Percent)) {
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseUnary();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parseUnary() -> ast::ExprPtr {
@@ -1357,7 +1381,7 @@ auto Parser::parseUnary() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
     expr->kind = ast::UnaryOp{opType, std::move(operand)};
-    return expr;
+    return complete(std::move(expr));
   }
 
   // `...` is a spread, not an operator: it only means anything where a
@@ -1376,15 +1400,17 @@ auto Parser::parsePower() -> ast::ExprPtr {
   // Exponentiation is right-associative and binds more tightly than unary
   // negation: `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, while `-2 ^ 2` is `-(2 ^ 2)`.
   if (check(TokenType::Caret)) {
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
     op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseUnary();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
-    return op;
+    return complete(std::move(op));
   }
 
-  return left;
+  return complete(std::move(left));
 }
 
 auto Parser::parsePostfix() -> ast::ExprPtr {
@@ -1426,11 +1452,13 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     if (match(TokenType::Dot)) {
       // .try — postfix unwrap
       if (check(TokenType::Try)) {
+        auto startOffset = expr->location.startOffset;
         advance();
         auto tryExpr = std::make_unique<ast::Expr>();
         tryExpr->location = currentLocation();
+        tryExpr->location.startOffset = startOffset;
         tryExpr->kind = ast::TryExpr{std::move(expr)};
-        expr = std::move(tryExpr);
+        expr = complete(std::move(tryExpr));
         continue;
       }
 
@@ -1463,7 +1491,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
         else
           tagged.parts.push_back(body.value);
         tagExpr->kind = std::move(tagged);
-        expr = std::move(tagExpr);
+        expr = complete(std::move(tagExpr));
         continue;
       }
 
@@ -1471,6 +1499,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
 
       auto call = std::make_unique<ast::Expr>();
       call->location = currentLocation();
+      call->location.startOffset = expr->location.startOffset;
 
       std::vector<ast::ExprPtr> args;
       std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
@@ -1521,6 +1550,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
               }
               auto mod = std::make_unique<ast::Expr>();
               mod->location = currentLocation();
+              mod->location.startOffset = ty->location.startOffset;
               mod->kind = ast::UpperIdentifier{std::move(head)};
               args.push_back(std::move(mod));
               targetType = std::move(ty);
@@ -1544,7 +1574,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
           std::move(block), mutating, hasParens};
       std::get<ast::MethodCall>(call->kind).targetType =
           std::move(targetType);
-      expr = std::move(call);
+      expr = complete(std::move(call));
       continue;
     }
 
@@ -1555,12 +1585,13 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
 
       auto call = std::make_unique<ast::Expr>();
       call->location = currentLocation();
+      call->location.startOffset = expr->location.startOffset;
       // Desugar to method call: expr.get(key)
       std::vector<ast::ExprPtr> args;
       args.push_back(std::move(key));
       call->kind = ast::MethodCall{std::move(expr), "get", std::move(args), {},
                                    std::nullopt,    false};
-      expr = std::move(call);
+      expr = complete(std::move(call));
       continue;
     }
 
@@ -1568,16 +1599,17 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     if (match(TokenType::DotDot)) {
       auto range = std::make_unique<ast::Expr>();
       range->location = currentLocation();
+      range->location.startOffset = expr->location.startOffset;
       auto end = parseAddition();
       range->kind = ast::RangeExpr{std::move(expr), std::move(end)};
-      expr = std::move(range);
+      expr = complete(std::move(range));
       continue;
     }
 
     break;
   }
 
-  return expr;
+  return complete(std::move(expr));
 }
 
 // In a STRING literal, `${expr}` is sugar for a call to the show protocol, so
@@ -1742,6 +1774,8 @@ auto Parser::parseInterpolatedBody(const Token &token,
           innerToken.startOffset += absoluteInnerOffset;
         if (innerToken.endOffset >= 0)
           innerToken.endOffset += absoluteInnerOffset;
+        innerToken.location.startOffset = innerToken.startOffset;
+        innerToken.location.endOffset = innerToken.endOffset;
       }
     }
     if (!tokens.empty() && tokens.front().type == TokenType::Error)
@@ -2586,7 +2620,9 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
 
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
   // do...end block: required for multi-statement arm bodies.
-  if (match(TokenType::Do)) {
+  if (check(TokenType::Do)) {
+    auto startOffset = currentLocation().startOffset;
+    advance();
     skipNewlines();
     std::vector<ast::ExprPtr> body;
     while (!check(TokenType::End) && !atEnd()) {
@@ -2596,8 +2632,9 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
     expect(TokenType::End, "Expected 'end' to close match clause body");
     auto blockExpr = std::make_unique<ast::Expr>();
     blockExpr->location = currentLocation();
+    blockExpr->location.startOffset = startOffset;
     blockExpr->kind = ast::BlockExpr{std::move(body)};
-    return blockExpr;
+    return complete(std::move(blockExpr));
   }
   // Single expression — inline or on the next line.
   // Multi-statement arms require do...end to avoid ambiguity.
@@ -2932,9 +2969,11 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
   // special handling here — parseExpr() already produces
   // TrailingIf{EXPR, COND} for that on its own.
   if (check(TokenType::If)) {
+    auto startOffset = currentLocation().startOffset;
     advance(); // if
     auto trailing = std::make_unique<ast::Expr>();
     trailing->location = currentLocation();
+    trailing->location.startOffset = startOffset;
     auto condition = parseExpr();
     trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
     expr->kind = ast::ReturnExpr{std::move(trailing)};
@@ -3178,7 +3217,7 @@ auto Parser::parseSpreadableExpr() -> ast::ExprPtr {
   auto expr = std::make_unique<ast::Expr>();
   expr->location = loc;
   expr->kind = ast::SpreadExpr{parseExpr()};
-  return expr;
+  return complete(std::move(expr));
 }
 
 auto Parser::parseListExpr() -> ast::ExprPtr {
@@ -3348,7 +3387,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
     expr->kind = ast::TupleExpr{{}};
-    return expr;
+    return complete(std::move(expr));
   }
 
   auto first = parseExpr();
@@ -3366,12 +3405,13 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
     auto expr = std::make_unique<ast::Expr>();
     expr->location = loc;
     expr->kind = ast::TupleExpr{std::move(elements)};
-    return expr;
+    return complete(std::move(expr));
   }
 
   // Grouped expression: (expr)
   expect(TokenType::RParen, "Expected ')'");
-  return first;
+  first->location.startOffset = loc.startOffset;
+  return complete(std::move(first));
 }
 
 // ===== Patterns =====
@@ -3385,7 +3425,7 @@ auto Parser::parsePattern() -> ast::PatternPtr {
   if (match(TokenType::At)) {
     auto inner = parsePatternPrimary();
     pattern->kind = ast::ThisPattern{std::move(inner)};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   auto first = parsePatternPrimary();
@@ -3394,9 +3434,9 @@ auto Parser::parsePattern() -> ast::PatternPtr {
     auto rangePattern = std::make_unique<ast::Pattern>();
     rangePattern->location = first->location;
     rangePattern->kind = ast::RangePattern{std::move(first), std::move(end)};
-    return rangePattern;
+    return complete(std::move(rangePattern));
   }
-  return first;
+  return complete(std::move(first));
 }
 
 // Shared by the anonymous `{ ... }` and named `Foo { ... }` record/map
@@ -3440,7 +3480,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
   // Wildcard
   if (match(TokenType::Underscore)) {
     pattern->kind = ast::WildcardPattern{};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Negative numeric literal: -10, -3.5
@@ -3450,7 +3490,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     Token lit = advance();
     lit.value = "-" + lit.value;
     pattern->kind = ast::LiteralPattern{std::move(lit)};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Literals
@@ -3460,14 +3500,14 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
       check(TokenType::False) || check(TokenType::None) ||
       check(TokenType::Atom)) {
     pattern->kind = ast::LiteralPattern{advance()};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Record/map destructuring: { ... }
   if (match(TokenType::LBrace)) {
     auto fields = parseRecordPatternFields();
     pattern->kind = ast::RecordPattern{.fields = std::move(fields)};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // List pattern: [...]
@@ -3494,7 +3534,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
 
     expect(TokenType::RBracket, "Expected ']'");
     pattern->kind = ast::ListPattern{std::move(elements), std::move(rest)};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Tuple pattern: (a, b) — or just a grouped pattern (a) / (a..b) if there's
@@ -3509,10 +3549,12 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     }
     expect(TokenType::RParen, "Expected ')'");
     if (elements.size() == 1) {
-      return std::move(elements[0]);
+      auto grouped = std::move(elements[0]);
+      grouped->location.startOffset = loc.startOffset;
+      return complete(std::move(grouped));
     }
     pattern->kind = ast::TuplePattern{std::move(elements)};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Constructor pattern: Name(args) or just Name
@@ -3537,7 +3579,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
       auto fields = parseRecordPatternFields();
       pattern->kind =
           ast::RecordPattern{.typeName = name, .fields = std::move(fields)};
-      return pattern;
+      return complete(std::move(pattern));
     }
     if (match(TokenType::LParen)) {
       std::vector<ast::PatternPtr> args;
@@ -3552,13 +3594,13 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     } else {
       pattern->kind = ast::ConstructorPattern{name, {}};
     }
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   // Variable binding
   if (check(TokenType::LowerIdent)) {
     pattern->kind = ast::VarPattern{advance().value};
-    return pattern;
+    return complete(std::move(pattern));
   }
 
   error("Expected pattern");
@@ -3622,7 +3664,7 @@ auto Parser::parseCompiledBlock() -> std::unique_ptr<ast::CompiledBlock> {
   }
 
   expect(TokenType::End, "Expected 'end' to close compiled block");
-  return block;
+  return complete(std::move(block));
 }
 
 auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
@@ -3647,7 +3689,7 @@ auto Parser::parseUsingBlock() -> std::unique_ptr<ast::UsingBlock> {
   }
   // Bare using — no body (applies to enclosing scope)
 
-  return block;
+  return complete(std::move(block));
 }
 
 auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
@@ -3658,7 +3700,7 @@ auto Parser::parseExportDecl() -> std::unique_ptr<ast::ExportDecl> {
   if (match(TokenType::Comma)) {
     parseUsingOptions(decl->alias, decl->onlyNames, decl->exceptNames);
   }
-  return decl;
+  return complete(std::move(decl));
 }
 
 auto Parser::parseUsingOptions(std::optional<std::string> &alias,
@@ -3743,7 +3785,7 @@ auto Parser::parseMainBlock() -> std::unique_ptr<ast::MainBlock> {
   }
 
   expect(TokenType::End, "Expected 'end' to close main block");
-  return block;
+  return complete(std::move(block));
 }
 
 auto Parser::parsePragma() -> std::unique_ptr<ast::Pragma> {
@@ -3757,11 +3799,12 @@ auto Parser::parsePragma() -> std::unique_ptr<ast::Pragma> {
   }
 
   expect(TokenType::RBracket, "Expected ']' to close pragma");
-  return pragma;
+  return complete(std::move(pragma));
 }
 
 auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
   auto block = std::make_unique<ast::VisibilityBlock>();
+  block->location = currentLocation();
   block->isPublic = check(TokenType::Public);
   advance(); // consume public/private
 
@@ -3770,7 +3813,6 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
 
   while (!check(TokenType::End) && !atEnd()) {
     if (check(TokenType::Foul)) {
-      advance();
       block->items.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       block->items.push_back(parseFunctionDef());
@@ -3796,7 +3838,7 @@ auto Parser::parseVisibilityBlock() -> std::unique_ptr<ast::VisibilityBlock> {
   }
 
   expect(TokenType::End, "Expected 'end' to close visibility block");
-  return block;
+  return complete(std::move(block));
 }
 
 auto Parser::parseBody() -> std::vector<ast::ExprPtr> {

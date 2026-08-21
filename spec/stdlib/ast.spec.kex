@@ -1,0 +1,400 @@
+using Kex.AST
+
+describe("Kex.AST") do
+  it("parses programs with spans, named arguments, and call blocks") do
+    let program = Kex.AST.parse(`bundle "app" do
+  tey("dep", git: "https://example.test/dep")
+end
+`, "package.kex").try
+
+    assert(program.schemaVersion == 2)
+    match program.items do
+      [MainDef(info)] => do
+        assert(info.location.file == "package.kex", "filename was not preserved")
+        assert(info.location.startOffset == 0, "main span did not start at zero")
+        match info.body do
+          [Call(target, _, [], block)] => do
+            assert(target == Identifier("bundle"), "expected bundle target")
+            match block do
+              Just(Lambda(_, body, _, _)) => match body do
+                [Call(dependencyTarget, _, named, None)] => do
+                  assert(dependencyTarget == Identifier("tey"), "expected dependency target")
+                  match named do
+                    [NamedArgument { name, value }] => do
+                      assert(name == "git")
+                      assert(value == LitString("https://example.test/dep"))
+                    end
+                    _ => assert(false, "expected named git argument")
+                  end
+                end
+                _ => assert(false, "expected dependency call")
+              end
+              _ => assert(false, "expected bundle block")
+            end
+          end
+          _ => assert(false, "expected bundle call")
+        end
+      end
+      _ => assert(false, "expected main AST")
+    end
+  end
+
+  it("parses source and files through the convenience entry points") do
+    let sourceProgram = Kex.AST.parse("let answer = 42").try
+    assert(sourceProgram.schemaVersion == 2)
+    assert(sourceProgram.items.length == 1)
+
+    let fileProgram = Kex.AST.parseFile("examples/maps.kex").try
+    assert(fileProgram.schemaVersion == 2)
+    assert(!fileProgram.items.empty?)
+  end
+
+  it("parses standalone expressions and types") do
+    assert(
+      Kex.AST.parseExpression("answer(42)").try ==
+        Call(Identifier("answer"), [LitInt(42)], [], None)
+    )
+    assert(
+      Kex.AST.parseExpression("1 + -2").try ==
+        BinaryOp(LitInt(1), "+", UnaryOp("-", LitInt(2)))
+    )
+    assert(Kex.AST.parseExpression("'λ'").try == LitChar(955))
+    assert(
+      Kex.AST.parseExpression(`{"answer": 42, ...other}`).try == MapLit([
+        MapEntry(LitString("answer"), LitInt(42)),
+        MapSpread(Identifier("other"))
+      ]),
+      "map entries or spreads differ"
+    )
+    assert(
+      Kex.AST.parseExpression("Point { x: 1, y: answer }").try == RecordLit(
+        "Point",
+        [
+          RecordField { name: "x", value: LitInt(1) },
+          RecordField { name: "y", value: Identifier("answer") }
+        ]
+      ),
+      "record construction differs"
+    )
+    assert(
+      Kex.AST.parseExpression("[head | tail]").try ==
+        ListLit([Identifier("head")], Just(Identifier("tail"))),
+      "list tail differs"
+    )
+    let ifExpression = Kex.AST.parseExpression(`if let Just(value) = candidate
+  value
+elif fallback
+  2
+else
+  3
+end`).try
+    assert(ifExpression == If(
+      Identifier("candidate"),
+      Just(ConstructorPattern("Just", [BindPattern("value")])),
+      [Identifier("value")],
+      [ElseIf { condition: Identifier("fallback"), body: [LitInt(2)] }],
+      Just([LitInt(3)])
+    ), "if branches or if-let pattern differ")
+    assert(
+      Kex.AST.parseExpression("ready then 1 else 2").try ==
+        ThenElse(Identifier("ready"), LitInt(1), LitInt(2))
+    )
+    assert(
+      Kex.AST.parseExpression("&.render(1)").try ==
+        ShorthandLambda("render", [LitInt(1)], true)
+    )
+    assert(
+      Kex.AST.parseExpression("~Math.add(_, 1)").try == Curry(
+        "add", Just("Math"), false, [[CurryPlaceholder, LitInt(1)]]
+      )
+    )
+    assert(
+      Kex.AST.parseExpression("result.try").try ==
+        Try(Identifier("result"))
+    )
+    assert(
+      Kex.AST.parseExpression("items.push!(1)").try == MethodCall(
+        Identifier("items"), "push", [LitInt(1)], [], None,
+        true, true, None
+      )
+    )
+    match Kex.AST.parseExpression("value.to(Result<String, Integer>)").try do
+      MethodCall(_, "to", _, [], None, false, true, Just(targetType)) => do
+        assert(targetType == NamedType("Result", [
+          NamedType("String", []), NamedType("Integer", [])
+        ]))
+      end
+      _ => assert(false, "method target type or call flags differ")
+    end
+    let receiveExpression = Kex.AST.parseExpression(`receive do |sender|
+  :ping => sender
+after timeout: 10
+  cleanup()
+end`).try
+    match receiveExpression do
+      Receive(Just("sender"), [arm], Just(LitInt(10)), Just(Block(afterBody))) => do
+        assert(arm.patterns == [LiteralPattern("ping")])
+        assert(arm.guard == None)
+        assert(arm.body == Identifier("sender"))
+        assert(afterBody == [Call(Identifier("cleanup"), [], [], None)])
+      end
+      _ => assert(false, "receive clauses, sender, or timeout differ")
+    end
+    let tryingExpression = Kex.AST.parseExpression(`trying do
+  result.try
+rescue
+  Error(message) => message
+end`).try
+    match tryingExpression do
+      Trying([Try(Identifier("result"))], rescueInfo) => do
+        assert(rescueInfo.catchAllName == None)
+        assert(rescueInfo.catchAllBody == [])
+        assert(rescueInfo.inlineReturn == None)
+        match rescueInfo.arms do
+          [arm] => do
+            assert(arm.patterns == [ConstructorPattern(
+              "Error", [BindPattern("message")]
+            )])
+            assert(arm.body == Identifier("message"))
+          end
+          _ => assert(false, "trying rescue arms differ")
+        end
+      end
+      _ => assert(false, "trying body or rescue differs")
+    end
+    let matchExpression = Kex.AST.parseExpression(`match pair do |whole|
+  (:ok, value) when value > 0 => whole
+  _ => None
+end`).try
+    match matchExpression do
+      Match(Identifier("pair"), Just("whole"), [first, second]) => do
+        assert(first.patterns == [TuplePattern([
+          LiteralPattern("ok"), BindPattern("value")
+        ])], "match patterns differ")
+        assert(first.guard == Just(BinaryOp(
+          Identifier("value"), ">", LitInt(0)
+        )), "match guard differs")
+        assert(first.body == Identifier("whole"), "first match body differs")
+        assert(second.patterns == [WildcardPattern], "wildcard pattern differs")
+        assert(second.guard == None, "unguarded arm gained a guard")
+        assert(second.body == LitNone, "second match body differs")
+      end
+      _ => assert(false, "match clauses lost patterns, guards, or binding")
+    end
+    assert(
+      Kex.AST.parseType("Result<String, Integer>?").try ==
+        NullableType(NamedType("Result", [
+          NamedType("String", []), NamedType("Integer", [])
+        ]))
+    )
+    assert(
+      Kex.AST.parseType("Result<String, Integer>?").try.to(String).or("") ==
+        "Result<String, Integer>?"
+    )
+    assert(
+      Kex.AST.parseType("Block<[String]>").try ==
+        BlockType(ListType(NamedType("String", [])))
+    )
+    assert(Kex.AST.parseType(":ok").try == AtomType("ok"))
+    assert(
+      Kex.AST.parseType("Type.of(answer)").try ==
+        TypeQuery("of", Identifier("answer"))
+    )
+  end
+
+  it("preserves parameter pattern structure") do
+    let program = Kex.AST.parse(`let choose(
+  [head | tail],
+  Point { x, "label": name },
+  1..3,
+  @Some(value)
+) = value
+`).try
+
+    match program.items do
+      [FunctionDef(info)] => match info.clauses do
+        [clause] => match clause.params do
+          [listParam, recordParam, rangeParam, thisParam] => do
+            assert(listParam.pattern == Just(ListPattern(
+              [BindPattern("head")], Just(BindPattern("tail"))
+            )))
+            assert(recordParam.pattern == Just(RecordPattern(Just("Point"), [
+              PatternField { name: "x", pattern: None, stringKey: false },
+              PatternField {
+                name: "label",
+                pattern: Just(BindPattern("name")),
+                stringKey: true
+              }
+            ])))
+            assert(rangeParam.pattern == Just(RangePattern(
+              LiteralPattern("1"), LiteralPattern("3")
+            )))
+            assert(thisParam.pattern == Just(ThisPattern(
+              ConstructorPattern("Some", [BindPattern("value")])
+            )))
+            assert(listParam.pattern.try.to(String).or("") == "[head | tail]")
+            assert(
+              recordParam.pattern.try.to(String).or("") ==
+                "Point { x, \"label\": name }"
+            )
+            assert(rangeParam.pattern.try.to(String).or("") == "1..3")
+            assert(thisParam.pattern.try.to(String).or("") == "@Some(value)")
+          end
+          _ => assert(false, "expected four structured parameters")
+        end
+        _ => assert(false, "expected one function clause")
+      end
+      _ => assert(false, "expected function definition")
+    end
+  end
+
+  it("preserves typed and destructuring bindings") do
+    let program = Kex.AST.parse(`let bindings() do
+  let [head | tail]: [Integer] = values
+  var count: Integer = 0
+end
+`).try
+
+    match program.items do
+      [FunctionDef(info)] => match info.clauses do
+        [clause] => assert(clause.body == [
+          Let(
+            ListPattern([BindPattern("head")], Just(BindPattern("tail"))),
+            Just(ListType(NamedType("Integer", []))),
+            Identifier("values")
+          ),
+          Var("count", Just(NamedType("Integer", [])), LitInt(0))
+        ])
+        _ => assert(false, "expected one bindings clause")
+      end
+      _ => assert(false, "expected bindings function")
+    end
+  end
+
+  it("preserves nullary syntax, declaration rescue blocks, and generated declarations") do
+    let program = Kex.AST.parse(`let value = 1
+let compute() do
+  work().try
+rescue do |error|
+  error
+end
+main do
+  compute()
+rescue return 1
+end
+`).try
+
+    match program.items do
+      [FunctionDef(valueInfo), FunctionDef(computeInfo), MainDef(mainInfo)] => do
+        match valueInfo.clauses do
+          [clause] => assert(!clause.hasParamList)
+          _ => assert(false, "expected value clause")
+        end
+        match computeInfo.clauses do
+          [clause] => do
+            assert(clause.hasParamList)
+            match clause.rescueInfo do
+              Just(rescueInfo) => do
+                assert(rescueInfo.catchAllName == Just("error"))
+                assert(rescueInfo.catchAllBody == [Identifier("error")])
+              end
+              _ => assert(false, "function rescue was dropped")
+            end
+          end
+          _ => assert(false, "expected compute clause")
+        end
+        match mainInfo.rescueInfo do
+          Just(rescueInfo) => assert(rescueInfo.inlineReturn == Just(LitInt(1)))
+          _ => assert(false, "main rescue was dropped")
+        end
+      end
+      _ => assert(false, "expected two functions and an explicit main")
+    end
+
+    match Kex.AST.parseExpression("let %name() = 1").try do
+      GeneratedDeclaration(
+        Identifier("name"),
+        GeneratedNode(FunctionDef(functionInfo))
+      ) => match functionInfo.clauses do
+        [clause] => do
+          assert(clause.hasParamList)
+          assert(clause.body == [LitInt(1)])
+        end
+        _ => assert(false, "generated function clause was dropped")
+      end
+      _ => assert(false, "generated declaration was not represented")
+    end
+
+    match Kex.AST.parseExpression(`make %target do
+  generate()
+end`).try do
+      GeneratedDeclaration(
+        Identifier("target"),
+        GeneratedMake(makeInfo)
+      ) => assert(makeInfo.body == [CompiledExpression(
+        Call(Identifier("generate"), [], [], None)
+      )])
+      _ => assert(false, "generated make driver was dropped")
+    end
+  end
+
+  it("preserves module visibility, imports, exports, and compiled blocks") do
+    let program = Kex.AST.parse(`module Tools do
+  private do
+    let hidden() = 1
+  end
+  using Math, as: M, only: [square]
+  export Prelude, except: [subtract]
+  compiled do
+    let GENERATED = 42
+  end
+end
+`, "tools.kex").try
+
+    match program.items do
+      [ModuleDef(moduleInfo)] => match moduleInfo.items do
+        [Visibility(visibility), UsingDef(usingInfo), ExportDef(exportInfo), Compiled(compiledInfo)] => do
+          assert(!visibility.isPublic)
+          match visibility.items do
+            [FunctionDef(functionInfo)] => assert(functionInfo.name == "hidden")
+            _ => assert(false, "private declaration was dropped")
+          end
+          assert(usingInfo.moduleName == "Math")
+          assert(usingInfo.alias == Just("M"))
+          assert(usingInfo.onlyNames == ["square"])
+          assert(exportInfo.moduleName == "Prelude")
+          assert(exportInfo.exceptNames == ["subtract"])
+          match compiledInfo.items do
+            [CompiledNode(FunctionDef(functionInfo))] => do
+              assert(functionInfo.name == "GENERATED")
+            end
+            _ => assert(false, "compiled declaration was dropped")
+          end
+        end
+        _ => assert(false, "module wrapper declarations were dropped")
+      end
+      _ => assert(false, "expected Tools module")
+    end
+  end
+
+  it("returns a parse error for invalid source") do
+    match Kex.AST.parse("let", "broken.kex") do
+      Error(error) => do
+        assert(!error.message.empty?)
+        match error.location do
+          Just(location) => do
+            assert(location.file == "broken.kex")
+            assert(location.startOffset == 0)
+          end
+          None => assert(false, "syntax error lost its source location")
+        end
+      end
+      Ok(_) => assert(false, "invalid source unexpectedly parsed")
+    end
+
+    match Kex.AST.parseFile("does-not-exist.kex") do
+      Error(error) => assert(error.location == None)
+      Ok(_) => assert(false, "missing file unexpectedly parsed")
+    end
+  end
+end

@@ -31,6 +31,128 @@ auto firstItemIs(const ast::Program& program) -> bool {
 }
 
 int main() {
+    describe("Parser — Source Spans", []() {
+        it("nests binary expression byte spans", []() {
+            auto program = parse("1 + 2 * 3");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& addition = *main->body[0];
+            auto& additionOp = std::get<ast::BinaryOp>(addition.kind);
+            auto& multiplication = *additionOp.right;
+
+            assertEqual(addition.location.startOffset, 0);
+            assertEqual(addition.location.endOffset, 9);
+            assertEqual(multiplication.location.startOffset, 4);
+            assertEqual(multiplication.location.endOffset, 9);
+            assertTrue(addition.location.startOffset <=
+                       multiplication.location.startOffset);
+            assertTrue(multiplication.location.endOffset <=
+                       addition.location.endOffset);
+        });
+
+        it("includes grouping and postfix syntax in type spans", []() {
+            auto program = parse("value : (Int | String)?");
+            auto& annotation =
+                std::get<std::unique_ptr<ast::TypeAnnotation>>(program.items[0]);
+            auto& optional = *annotation->type;
+            auto& unionType = *std::get<ast::OptionalType>(optional.kind).inner;
+
+            assertEqual(annotation->location.startOffset, 0);
+            assertEqual(annotation->location.endOffset, 23);
+            assertEqual(optional.location.startOffset, 8);
+            assertEqual(optional.location.endOffset, 23);
+            assertEqual(unionType.location.startOffset, 8);
+            assertEqual(unionType.location.endOffset, 22);
+        });
+
+        it("includes pattern delimiters in parent spans", []() {
+            auto program = parse("let pick([head | tail]) = head");
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
+                program.items[0]);
+            auto& list = **function->clauses[0].params[0].pattern;
+            auto& listPattern = std::get<ast::ListPattern>(list.kind);
+
+            assertEqual(list.location.startOffset, 9);
+            assertEqual(list.location.endOffset, 22);
+            assertTrue(list.location.startOffset <=
+                       listPattern.elements[0]->location.startOffset);
+            assertTrue(listPattern.elements[0]->location.endOffset <=
+                       list.location.endOffset);
+            assertTrue((*listPattern.rest)->location.endOffset <=
+                       list.location.endOffset);
+        });
+
+        it("completes every step of a postfix chain", []() {
+            auto program = parse("foo.bar(1)[0]");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& indexCall = std::get<ast::MethodCall>(main->body[0]->kind);
+            auto& methodCall =
+                std::get<ast::MethodCall>(indexCall.receiver->kind);
+
+            assertEqual(indexCall.receiver->location.startOffset, 0);
+            assertEqual(indexCall.receiver->location.endOffset, 10);
+            assertEqual(main->body[0]->location.startOffset, 0);
+            assertEqual(main->body[0]->location.endOffset, 13);
+            assertEqual(methodCall.receiver->location.startOffset, 0);
+            assertEqual(methodCall.receiver->location.endOffset, 3);
+        });
+
+        it("extends spread nodes through their operand", []() {
+            auto program = parse("[...items]");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& list = std::get<ast::ListExpr>(main->body[0]->kind);
+
+            assertEqual(list.elements[0]->location.startOffset, 1);
+            assertEqual(list.elements[0]->location.endOffset, 9);
+        });
+
+        it("includes effect markers and closing ends in declaration spans", []() {
+            const std::string source =
+                "module Demo do\n"
+                "  foul run() = 1\n"
+                "end";
+            auto program = parse(source);
+            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(
+                program.items[0]);
+            auto& function = std::get<std::unique_ptr<ast::FunctionDef>>(
+                module->body[0]);
+
+            assertEqual(module->location.startOffset, 0);
+            assertEqual(module->location.endOffset,
+                        static_cast<int>(source.size()));
+            assertEqual(function->location.startOffset,
+                        static_cast<int>(source.find("foul")));
+            assertEqual(function->location.endOffset,
+                        static_cast<int>(source.find('\n',
+                                                     source.find("foul"))));
+            assertTrue(module->location.startOffset <=
+                       function->location.startOffset);
+            assertTrue(function->location.endOffset <=
+                       module->location.endOffset);
+        });
+
+        it("keeps UTF-8 interpolation spans in outer-source bytes", []() {
+            const std::string source = "$`é ${1 + 2}`";
+            auto program = parse(source);
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(
+                program.items[0]);
+            auto& literal = std::get<ast::StringLiteral>(main->body[0]->kind);
+            auto& showCall = std::get<ast::MethodCall>(literal.values[0]->kind);
+            auto& interpolation = *showCall.receiver;
+            const auto start = static_cast<int>(source.find("1 + 2"));
+
+            assertEqual(interpolation.location.startOffset, start);
+            assertEqual(interpolation.location.endOffset, start + 5);
+            assertEqual(std::get<ast::BinaryOp>(interpolation.kind)
+                            .left->location.endOffset,
+                        start + 1);
+            assertTrue(interpolation.location.endOffset <=
+                       main->body[0]->location.endOffset);
+        });
+    });
+
     describe("Parser — Top Level", []() {
         it("parses empty program", []() {
             auto program = parse("");
