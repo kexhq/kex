@@ -10,6 +10,8 @@ struct TermBuilder {
 
     auto variant(std::string tag, std::string,
                  std::vector<Value> args) const -> Value {
+        if (args.empty())
+            return Term::atom(std::move(tag));
         std::vector<Value> elements;
         elements.reserve(args.size() + 1);
         elements.push_back(Term::atom(std::move(tag)));

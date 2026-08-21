@@ -200,6 +200,13 @@ int main() {
                 size_t(2));
         });
 
+        test::it("encodes nullary AST variants as Kex constructor atoms", []() {
+            TermBuilder builder;
+            auto wildcard = builder.variant(
+                "WildcardPattern", "Kex.AST.PatternRef", {});
+            test::assertTrue(wildcard->isAtom("WildcardPattern"));
+        });
+
         test::it("uses the shared declaration converter", []() {
             kex::Lexer lexer(
                 "# Select a value\nlet pick(value : String) : String = value");

@@ -70,6 +70,9 @@ public:
         return m_builder.record("ParamInfo", {
             {"name", param.name ? m_builder.just(m_builder.string(*param.name))
                                 : m_builder.none()},
+            {"pattern", param.pattern
+                ? m_builder.just(patternRef(**param.pattern))
+                : m_builder.none()},
             {"type", param.type ? m_builder.just(typeRef(**param.type))
                                 : m_builder.none()},
             {"hasDefault", m_builder.boolean(param.defaultValue.has_value())},
@@ -249,6 +252,112 @@ public:
         return nodeVariant("ModuleDef", {std::move(info)});
     }
 
+    auto usingBlock(const UsingBlock& block, const std::string& filename)
+        -> Value {
+        auto info = m_builder.record("UsingInfo", {
+            {"moduleName", m_builder.string(joinName(block.module))},
+            {"alias", block.alias
+                ? m_builder.just(m_builder.string(*block.alias))
+                : m_builder.none()},
+            {"onlyNames", stringList(block.onlyNames)},
+            {"exceptNames", stringList(block.exceptNames)},
+            {"body", expressionList(block.body)},
+            {"location", location(block.location, filename)},
+        });
+        return nodeVariant("UsingDef", {std::move(info)});
+    }
+
+    auto exportDef(const ExportDecl& decl, const std::string& filename)
+        -> Value {
+        auto info = m_builder.record("ExportInfo", {
+            {"moduleName", m_builder.string(joinName(decl.module))},
+            {"alias", decl.alias
+                ? m_builder.just(m_builder.string(*decl.alias))
+                : m_builder.none()},
+            {"onlyNames", stringList(decl.onlyNames)},
+            {"exceptNames", stringList(decl.exceptNames)},
+            {"location", location(decl.location, filename)},
+        });
+        return nodeVariant("ExportDef", {std::move(info)});
+    }
+
+    auto visibilityBlock(const VisibilityBlock& block,
+                         const std::string& filename, const Docs& docs)
+        -> Value {
+        std::vector<Value> items;
+        for (const auto& item : block.items) {
+            auto converted = std::visit([&](const auto& node) -> Value {
+                using T = std::decay_t<decltype(node)>;
+                if constexpr (std::is_same_v<T,
+                                             std::unique_ptr<FunctionDef>>)
+                    return functionDef(*node, docAt(docs, node->location.line),
+                                       filename);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<TypeAnnotation>>)
+                    return typeAnnotation(*node, "");
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<MakeDef>>)
+                    return makeDef(*node, filename, docs);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<TypeDef>>)
+                    return typeDef(*node, docAt(docs, node->location.line),
+                                   filename);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<RecordDef>>)
+                    return recordDef(*node, docAt(docs, node->location.line),
+                                     filename);
+                else
+                    return usingBlock(*node, filename);
+            }, item);
+            if (converted)
+                items.push_back(std::move(converted));
+        }
+        auto info = m_builder.record("VisibilityInfo", {
+            {"isPublic", m_builder.boolean(block.isPublic)},
+            {"items", m_builder.list(std::move(items))},
+            {"location", location(block.location, filename)},
+        });
+        return nodeVariant("Visibility", {std::move(info)});
+    }
+
+    auto compiledBlock(const CompiledBlock& block, const std::string& filename,
+                       const Docs& docs) -> Value {
+        std::vector<Value> items;
+        for (const auto& item : block.items) {
+            items.push_back(std::visit([&](const auto& node) -> Value {
+                using T = std::decay_t<decltype(node)>;
+                Value converted;
+                if constexpr (std::is_same_v<T,
+                                             std::unique_ptr<FunctionDef>>)
+                    converted = functionDef(
+                        *node, docAt(docs, node->location.line), filename);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<MakeDef>>)
+                    converted = makeDef(*node, filename, docs);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<RecordDef>>)
+                    converted = recordDef(
+                        *node, docAt(docs, node->location.line), filename);
+                else if constexpr (std::is_same_v<T,
+                                                  std::unique_ptr<TypeDef>>)
+                    converted = typeDef(
+                        *node, docAt(docs, node->location.line), filename);
+                else
+                    return m_builder.variant(
+                        "CompiledExpression", "Kex.AST.CompiledItem",
+                        {expressionPtr(node)});
+                return m_builder.variant(
+                    "CompiledNode", "Kex.AST.CompiledItem",
+                    {std::move(converted)});
+            }, item));
+        }
+        auto info = m_builder.record("CompiledInfo", {
+            {"items", m_builder.list(std::move(items))},
+            {"location", location(block.location, filename)},
+        });
+        return nodeVariant("Compiled", {std::move(info)});
+    }
+
     auto moduleItem(const ModuleItem& item, const std::string& filename,
                     const Docs& docs) -> Value {
         return std::visit([&](const auto& node) -> Value {
@@ -278,6 +387,18 @@ public:
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
                 return typeAnnotation(*node, "");
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<CompiledBlock>>) {
+                return compiledBlock(*node, filename, docs);
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<VisibilityBlock>>) {
+                return visibilityBlock(*node, filename, docs);
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<UsingBlock>>) {
+                return usingBlock(*node, filename);
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<ExportDecl>>) {
+                return exportDef(*node, filename);
             } else {
                 return {};
             }
@@ -316,6 +437,12 @@ public:
             } else if constexpr (std::is_same_v<
                                      T, std::unique_ptr<TypeAnnotation>>) {
                 return typeAnnotation(*node, "");
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<CompiledBlock>>) {
+                return compiledBlock(*node, filename, docs);
+            } else if constexpr (std::is_same_v<T,
+                                                 std::unique_ptr<UsingBlock>>) {
+                return usingBlock(*node, filename);
             } else if constexpr (std::is_same_v<T,
                                                  std::unique_ptr<MainBlock>>) {
                 return mainBlock(*node, filename, docs);
@@ -364,13 +491,15 @@ public:
             } else if constexpr (std::is_same_v<T, OptionalType>) {
                 return variant("NullableType", {typeRef(*node.inner)});
             } else if constexpr (std::is_same_v<T, BlockType>) {
-                return typeRef(*node.inner);
+                return variant("BlockType", {typeRef(*node.inner)});
             } else if constexpr (std::is_same_v<T, AtomType>) {
-                return namedType(node.name, {});
+                return variant("AtomType", {m_builder.string(node.name)});
             } else if constexpr (std::is_same_v<T, GenericVar>) {
                 return variant("TypeVar", {m_builder.string(node.name)});
-            } else {
-                return variant("AnyType", {});
+            } else if constexpr (std::is_same_v<T, TypeQuery>) {
+                return variant("TypeQuery", {
+                    m_builder.string(node.query), expressionPtr(node.argument),
+                });
             }
         }, expr.kind);
     }
@@ -389,22 +518,32 @@ public:
             } else if constexpr (std::is_same_v<T, TuplePattern>) {
                 return patternVariant("TuplePattern", {patternList(node.elements)});
             } else if constexpr (std::is_same_v<T, ListPattern>) {
-                return patternVariant("ListPattern", {patternList(node.elements)});
+                return patternVariant("ListPattern", {
+                    patternList(node.elements), optionalPattern(node.rest),
+                });
             } else if constexpr (std::is_same_v<T, WildcardPattern>) {
                 return patternVariant("WildcardPattern", {});
             } else if constexpr (std::is_same_v<T, RecordPattern>) {
                 std::vector<Value> fields;
-                for (const auto& field : node.fields)
-                    fields.push_back(patternVariant(
-                        "BindPattern", {m_builder.string(field.name)}));
-                return patternVariant("ConstructorPattern",
-                    {m_builder.string("{}"), m_builder.list(std::move(fields))});
+                for (const auto& field : node.fields) {
+                    fields.push_back(m_builder.record("PatternField", {
+                        {"name", m_builder.string(field.name)},
+                        {"pattern", optionalPattern(field.pattern)},
+                        {"stringKey", m_builder.boolean(field.isStringKey)},
+                    }));
+                }
+                return patternVariant("RecordPattern", {
+                    node.typeName.empty()
+                        ? m_builder.none()
+                        : m_builder.just(m_builder.string(node.typeName)),
+                    m_builder.list(std::move(fields)),
+                });
             } else if constexpr (std::is_same_v<T, RangePattern>) {
-                return patternVariant("LiteralPattern",
-                                      {m_builder.string("<range>")});
+                return patternVariant("RangePattern", {
+                    patternRef(*node.start), patternRef(*node.end),
+                });
             } else if constexpr (std::is_same_v<T, ThisPattern>) {
-                return node.inner ? patternRef(*node.inner)
-                                  : patternVariant("WildcardPattern", {});
+                return patternVariant("ThisPattern", {patternRef(*node.inner)});
             } else {
                 return patternVariant("WildcardPattern", {});
             }
@@ -421,9 +560,12 @@ public:
                 return expressionVariant(
                     "LitFloat", {m_builder.floating(std::stod(node.value))});
             } else if constexpr (std::is_same_v<T, StringLiteral>) {
-                if (node.parts.empty())
+                if (node.values.empty()) {
+                    const auto& value = node.parts.empty()
+                        ? node.value : node.parts.front();
                     return expressionVariant(
-                        "LitString", {m_builder.string(node.value)});
+                        "LitString", {m_builder.string(value)});
+                }
                 std::vector<Value> parts;
                 for (const auto& part : node.parts)
                     parts.push_back(m_builder.string(part));
@@ -461,6 +603,11 @@ public:
                     expressionPtr(node.receiver), m_builder.string(node.method),
                     expressionList(node.args), namedArguments(node.namedArgs),
                     optionalExpression(node.block),
+                    m_builder.boolean(node.mutating),
+                    m_builder.boolean(node.parenthesized),
+                    node.targetType
+                        ? m_builder.just(typeRef(*node.targetType))
+                        : m_builder.none(),
                 });
             } else if constexpr (std::is_same_v<T, TaggedLiteral>) {
                 std::vector<Value> parts;
@@ -485,14 +632,22 @@ public:
                 return expressionVariant("Block", {expressionList(node.body)});
             } else if constexpr (std::is_same_v<T, Lambda>) {
                 std::vector<Value> params;
-                for (const auto& param : node.params)
-                    params.push_back(m_builder.string(param.name));
+                for (const auto& param : node.params) {
+                    params.push_back(m_builder.record("LambdaParam", {
+                        {"name", m_builder.string(param.name)},
+                        {"type", optionalType(param.type)},
+                    }));
+                }
                 return expressionVariant("Lambda", {
                     m_builder.list(std::move(params)), expressionList(node.body),
+                    optionalType(node.returnAnnotation),
+                    node.rescue
+                        ? m_builder.just(rescueInfo(*node.rescue))
+                        : m_builder.none(),
                 });
             } else if constexpr (std::is_same_v<T, ListExpr>) {
                 return expressionVariant("ListLit", {
-                    expressionList(node.elements),
+                    expressionList(node.elements), optionalExpression(node.rest),
                 });
             } else if constexpr (std::is_same_v<T, TupleExpr>) {
                 return expressionVariant("TupleLit", {
@@ -504,7 +659,13 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, VarExpr>) {
                 return expressionVariant("Var", {
-                    m_builder.string(node.name), expressionPtr(node.value),
+                    m_builder.string(node.name), optionalType(node.type),
+                    expressionPtr(node.value),
+                });
+            } else if constexpr (std::is_same_v<T, LetExpr>) {
+                return expressionVariant("Let", {
+                    patternRef(*node.pattern), optionalType(node.type),
+                    expressionPtr(node.value),
                 });
             } else if constexpr (std::is_same_v<T, AssignExpr>) {
                 return expressionVariant("Assign", {
@@ -512,11 +673,68 @@ public:
                 });
             } else if constexpr (std::is_same_v<T, ReturnExpr>) {
                 return expressionVariant("Return", {expressionPtr(node.value)});
+            } else if constexpr (std::is_same_v<T, BreakExpr>) {
+                return expressionVariant("Break", {});
+            } else if constexpr (std::is_same_v<T, NextExpr>) {
+                return expressionVariant("Next", {});
+            } else if constexpr (std::is_same_v<T, SpawnExpr>) {
+                return expressionVariant("Spawn", {expressionList(node.body)});
+            } else if constexpr (std::is_same_v<T, TryExpr>) {
+                return expressionVariant("Try", {expressionPtr(node.operand)});
             } else if constexpr (std::is_same_v<T, SpreadExpr>) {
                 return expressionVariant("Spread", {expressionPtr(node.inner)});
             } else if constexpr (std::is_same_v<T, TrailingIf>) {
                 return expressionVariant("TrailingIf", {
                     expressionPtr(node.expr), expressionPtr(node.condition),
+                });
+            } else if constexpr (std::is_same_v<T, ThenElseExpr>) {
+                return expressionVariant("ThenElse", {
+                    expressionPtr(node.condition), expressionPtr(node.thenExpr),
+                    expressionPtr(node.elseExpr),
+                });
+            } else if constexpr (std::is_same_v<T, ShorthandLambda>) {
+                return expressionVariant("ShorthandLambda", {
+                    m_builder.string(node.name), expressionList(node.args),
+                    m_builder.boolean(
+                        node.kind == ShorthandLambda::Kind::MethodWithArgs),
+                });
+            } else if constexpr (std::is_same_v<T, CurryPlaceholder>) {
+                return expressionVariant("CurryPlaceholder", {});
+            } else if constexpr (std::is_same_v<T, CurryExpr>) {
+                std::vector<Value> groups;
+                for (const auto& group : node.argGroups)
+                    groups.push_back(expressionList(group));
+                return expressionVariant("Curry", {
+                    m_builder.string(node.name),
+                    node.module.empty()
+                        ? m_builder.none()
+                        : m_builder.just(m_builder.string(node.module)),
+                    m_builder.boolean(node.isOperator),
+                    m_builder.list(std::move(groups)),
+                });
+            } else if constexpr (std::is_same_v<T, UsingExpr>) {
+                std::vector<Value> onlyNames;
+                for (const auto& name : node.onlyNames)
+                    onlyNames.push_back(m_builder.string(name));
+                std::vector<Value> exceptNames;
+                for (const auto& name : node.exceptNames)
+                    exceptNames.push_back(m_builder.string(name));
+                return expressionVariant("Using", {
+                    m_builder.string(joinName(node.module)),
+                    node.alias
+                        ? m_builder.just(m_builder.string(*node.alias))
+                        : m_builder.none(),
+                    m_builder.list(std::move(onlyNames)),
+                    m_builder.list(std::move(exceptNames)),
+                    expressionList(node.body),
+                });
+            } else if constexpr (std::is_same_v<T, ErrorNode>) {
+                return expressionVariant("ErrorExpression", {
+                    m_builder.string(node.message),
+                });
+            } else if constexpr (std::is_same_v<T, TryingExpr>) {
+                return expressionVariant("Trying", {
+                    expressionList(node.body), rescueInfo(node.rescue),
                 });
             } else if constexpr (std::is_same_v<T, WhileExpr>) {
                 return expressionVariant("While", {
@@ -528,6 +746,74 @@ public:
                     counters.push_back(m_builder.string(*node.counter));
                 return expressionVariant("Loop", {
                     m_builder.list(std::move(counters)), expressionList(node.body),
+                });
+            } else if constexpr (std::is_same_v<T, MatchExpr>) {
+                std::vector<Value> clauses;
+                for (const auto& clause : node.clauses)
+                    clauses.push_back(matchArm(clause));
+                return expressionVariant("Match", {
+                    expressionPtr(node.subject),
+                    node.subjectBinding
+                        ? m_builder.just(m_builder.string(*node.subjectBinding))
+                        : m_builder.none(),
+                    m_builder.list(std::move(clauses)),
+                });
+            } else if constexpr (std::is_same_v<T, ReceiveExpr>) {
+                std::vector<Value> clauses;
+                for (const auto& clause : node.clauses)
+                    clauses.push_back(matchArm(clause));
+                return expressionVariant("Receive", {
+                    node.senderBinding
+                        ? m_builder.just(m_builder.string(*node.senderBinding))
+                        : m_builder.none(),
+                    m_builder.list(std::move(clauses)),
+                    optionalExpression(node.timeout),
+                    optionalExpression(node.afterBody),
+                });
+            } else if constexpr (std::is_same_v<T, MapExpr>) {
+                std::vector<Value> entries;
+                for (const auto& entry : node.entries) {
+                    if (entry.spread) {
+                        entries.push_back(m_builder.variant(
+                            "MapSpread", "Kex.AST.MapItem",
+                            {expressionPtr(entry.value)}));
+                    } else {
+                        entries.push_back(m_builder.variant(
+                            "MapEntry", "Kex.AST.MapItem",
+                            {expressionPtr(entry.key), expressionPtr(entry.value)}));
+                    }
+                }
+                return expressionVariant("MapLit", {
+                    m_builder.list(std::move(entries)),
+                });
+            } else if constexpr (std::is_same_v<T, RecordConstruction>) {
+                std::vector<Value> fields;
+                for (const auto& [name, value] : node.fields) {
+                    fields.push_back(m_builder.record("RecordField", {
+                        {"name", m_builder.string(name)},
+                        {"value", expressionPtr(value)},
+                    }));
+                }
+                return expressionVariant("RecordLit", {
+                    m_builder.string(node.typeName),
+                    m_builder.list(std::move(fields)),
+                });
+            } else if constexpr (std::is_same_v<T, IfExpr>) {
+                std::vector<Value> elifs;
+                for (const auto& [condition, body] : node.elifs) {
+                    elifs.push_back(m_builder.record("ElseIf", {
+                        {"condition", expressionPtr(condition)},
+                        {"body", expressionList(body)},
+                    }));
+                }
+                return expressionVariant("If", {
+                    expressionPtr(node.condition),
+                    node.letPattern
+                        ? m_builder.just(patternRef(*node.letPattern))
+                        : m_builder.none(),
+                    expressionList(node.thenBody),
+                    m_builder.list(std::move(elifs)),
+                    optionalExpressionList(node.elseBody),
                 });
             } else {
                 return expressionVariant("UnsupportedExpression", {
@@ -651,28 +937,21 @@ private:
                           : m_builder.none();
     }
 
+    auto optionalExpressionList(
+        const std::optional<std::vector<ExprPtr>>& expressions) -> Value {
+        return expressions ? m_builder.just(expressionList(*expressions))
+                           : m_builder.none();
+    }
+
+    auto optionalType(const std::optional<TypeExprPtr>& type) -> Value {
+        return type ? m_builder.just(typeRef(**type)) : m_builder.none();
+    }
+
     template<typename T>
     static constexpr auto expressionKindName() -> const char* {
 #define KEX_AST_EXPRESSION_NAME(Type) \
         if constexpr (std::is_same_v<T, Type>) return #Type; else
-        KEX_AST_EXPRESSION_NAME(RecordConstruction)
-        KEX_AST_EXPRESSION_NAME(MapExpr)
-        KEX_AST_EXPRESSION_NAME(IfExpr)
-        KEX_AST_EXPRESSION_NAME(MatchExpr)
-        KEX_AST_EXPRESSION_NAME(ReceiveExpr)
-        KEX_AST_EXPRESSION_NAME(BreakExpr)
-        KEX_AST_EXPRESSION_NAME(NextExpr)
-        KEX_AST_EXPRESSION_NAME(LetExpr)
-        KEX_AST_EXPRESSION_NAME(SpawnExpr)
-        KEX_AST_EXPRESSION_NAME(ShorthandLambda)
-        KEX_AST_EXPRESSION_NAME(ThenElseExpr)
-        KEX_AST_EXPRESSION_NAME(CurryPlaceholder)
-        KEX_AST_EXPRESSION_NAME(CurryExpr)
-        KEX_AST_EXPRESSION_NAME(TryExpr)
-        KEX_AST_EXPRESSION_NAME(TryingExpr)
-        KEX_AST_EXPRESSION_NAME(ErrorNode)
         KEX_AST_EXPRESSION_NAME(GeneratedDecl)
-        KEX_AST_EXPRESSION_NAME(UsingExpr)
         return "Unknown";
 #undef KEX_AST_EXPRESSION_NAME
     }
@@ -703,10 +982,47 @@ private:
         return m_builder.list(std::move(values));
     }
 
+    auto matchArm(const MatchClause& clause) -> Value {
+        return m_builder.record("MatchArm", {
+            {"patterns", patternList(clause.patterns)},
+            {"guard", optionalExpression(clause.guard)},
+            {"body", expressionPtr(clause.body)},
+        });
+    }
+
+    auto rescueInfo(const RescueBlock& rescue) -> Value {
+        std::vector<Value> arms;
+        for (const auto& clause : rescue.clauses)
+            arms.push_back(matchArm(clause));
+        return m_builder.record("RescueInfo", {
+            {"arms", m_builder.list(std::move(arms))},
+            {"catchAllName", rescue.isCatchAll
+                ? m_builder.just(m_builder.string(rescue.catchAllParam))
+                : m_builder.none()},
+            {"catchAllBody", expressionList(rescue.catchAllBody)},
+            {"inlineReturn", rescue.isInlineReturn && rescue.inlineReturnExpr
+                ? m_builder.just(expressionPtr(rescue.inlineReturnExpr))
+                : m_builder.none()},
+        });
+    }
+
+    auto optionalPattern(const std::optional<PatternPtr>& pattern) -> Value {
+        return pattern && *pattern
+            ? m_builder.just(patternRef(**pattern))
+            : m_builder.none();
+    }
+
     auto typeList(const std::vector<TypeExprPtr>& types) -> Value {
         std::vector<Value> values;
         for (const auto& type : types)
             values.push_back(typeRef(*type));
+        return m_builder.list(std::move(values));
+    }
+
+    auto stringList(const std::vector<std::string>& strings) -> Value {
+        std::vector<Value> values;
+        for (const auto& value : strings)
+            values.push_back(m_builder.string(value));
         return m_builder.list(std::move(values));
     }
 

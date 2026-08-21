@@ -137,7 +137,7 @@ private do
       [MainDef(info)] => if info.body.count == 1
         match info.body.first.try do
           Call(target, arguments, _, block) => match (target, block) do
-            (Identifier(name), Just(Lambda(_, body))) => if name == "bundle"
+            (Identifier(name), Just(Lambda(_, body, _, _))) => if name == "bundle"
               match Tey.Manifest.argument(arguments) do
                 Just(bundleName) => Just((bundleName, body))
                 None => None
@@ -169,7 +169,7 @@ private do
             end
             let groupBody = match block do
               Just(value) => match value do
-                Lambda(_, body) => Just(body)
+                Lambda(_, body, _, _) => Just(body)
                 _ => None
               end
               None => None
