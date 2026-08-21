@@ -4,5 +4,5 @@ bundle "tey" do
   kex(">= 0.3.0")
   license("MIT")
   entrypoint("src/main.kex")
-  target("tey", entrypoint: "src/main.kex")
+  target("tey")
 end
