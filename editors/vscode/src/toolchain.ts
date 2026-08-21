@@ -1,11 +1,11 @@
 // Finding a Kex compiler, and saying which one it is.
 //
-// Tey owns Kex installation, so the extension asks Tey rather than guessing.
-// It reads the Tey home directly instead of shelling out to `tey kex list`:
-// that command reaches the network for released versions and prints prose
-// meant for a human, neither of which a picker wants. The layout it reads —
-// `toolchains/<version>/bin/kex` and a `current` file naming the selection —
-// is the same one `tey/src/tey/toolchain.kex` writes.
+// Tey owns Kex installation, so the extension asks Tey rather than guessing:
+// `tey kex list --installed --json` is offline and machine-readable, and it
+// owns the on-disk layout. The filesystem read stays as the fallback for a
+// Tey too old to have the command — it reads `toolchains/<version>/bin/kex`
+// and a `current` file naming the selection, the same layout
+// `tey/src/tey/toolchain.kex` writes.
 
 import * as vscode from 'vscode';
 import * as cp from 'node:child_process';
@@ -33,6 +33,8 @@ export interface InstalledToolchain {
   binary: string;
   /** True for the version Tey itself has selected in its `current` file. */
   selected: boolean;
+  /** True for a Kex bundled beside Tey — runnable, not yet installed. */
+  bundled?: boolean;
 }
 
 export interface KexInfo {
@@ -49,11 +51,73 @@ export function teyHome(): string {
 }
 
 /**
- * Versions installed under this Tey home, newest first. Staging leftovers
- * (`.partial`, `.previous`) are not installations, and a directory without a
- * `bin/kex` is a half-removed one.
+ * Versions Tey can select, newest first — asked of Tey, falling back to
+ * reading the Tey home for a Tey too old to have the listing command.
+ *
+ * The command is offline, so asking it never blocks on a network, and an
+ * empty answer (a Tey home with nothing in it) is a valid one.
  */
 export function installedToolchains(): InstalledToolchain[] {
+  return teyListInstalled() ?? installedToolchainsOnDisk();
+}
+
+/**
+ * `tey kex list --installed --json`, or undefined when there is no tey to
+ * ask, it fails, or its answer is not about THIS machine's Tey home.
+ */
+function teyListInstalled(): InstalledToolchain[] | undefined {
+  let listed: InstalledToolchain[] | undefined;
+  try {
+    const result = cp.spawnSync('tey', ['kex', 'list', '--installed', '--json'], {
+      encoding: 'utf8',
+      timeout: 5000,
+    });
+    listed = result.status === 0 ? parseTeyListing(result.stdout ?? '') : undefined;
+  } catch {
+    listed = undefined;
+  }
+  return listed;
+}
+
+/**
+ * The document `tey kex list --installed --json` prints, as toolchains.
+ * Undefined rather than a best effort for anything off about it: a wrong
+ * shape is a Tey this extension does not understand, and the fallback knows
+ * how to read the disk for exactly that case.
+ */
+export function parseTeyListing(text: string): InstalledToolchain[] | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+  const { home, toolchains } = parsed as { home?: unknown; toolchains?: unknown };
+  if (typeof home !== 'string' || !Array.isArray(toolchains)) return undefined;
+  // A listing for another Tey home — one reached through a wrapper, or a
+  // TEY_HOME that changed under us — describes a different disk than the one
+  // this extension is configured to read.
+  if (path.resolve(home) !== path.resolve(teyHome())) return undefined;
+  const found: InstalledToolchain[] = [];
+  for (const entry of toolchains) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) return undefined;
+    const { version, binary, selected, bundled } = entry as Record<string, unknown>;
+    if (typeof version !== 'string' || typeof binary !== 'string') return undefined;
+    if (typeof selected !== 'boolean' || typeof bundled !== 'boolean') return undefined;
+    found.push({ version, binary, selected, bundled });
+  }
+  // Tey already answers newest first; sorting again only defends against a
+  // listing that does not, and costs nothing.
+  return found.sort((a, b) => compareVersions(b.version, a.version));
+}
+
+/**
+ * The fallback: versions installed under this Tey home, read off the disk.
+ * Staging leftovers (`.partial`, `.previous`) are not installations, and a
+ * directory without a `bin/kex` is a half-removed one.
+ */
+function installedToolchainsOnDisk(): InstalledToolchain[] {
   const root = path.join(teyHome(), 'toolchains');
   let entries: fs.Dirent[];
   try {
@@ -184,6 +248,13 @@ export function resolveToolchain(folder?: vscode.Uri): ResolvedToolchain {
     const binary = toolchainBinary(pinned);
     if (isExecutableFile(binary)) {
       return { command: binary, origin: { kind: 'toolchain' } };
+    }
+    // Not under the Tey home — but a Kex bundled beside Tey is runnable where
+    // it lies, and the listing knows that path.
+    const listed = installedToolchains().find(
+      t => t.version === pinned && isExecutableFile(t.binary));
+    if (listed) {
+      return { command: listed.binary, origin: { kind: 'toolchain' } };
     }
     // A pinned version somebody has since uninstalled. Falling through to
     // Tey's selection keeps the editor working; the status bar shows which

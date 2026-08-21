@@ -40,6 +40,25 @@ describe("Tey.Toolchain selection with no bundled Kex") do
     assert(!Tey.Toolchain.installed?("9.9.9"))
   end
 
+  # The listing `kex list --installed --json` prints: each selectable version
+  # with the binary that runs it. A listing without the binary is what made an
+  # editor read the Tey home's layout for itself (issue #160).
+  it("pairs each installed version with its binary") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+    Mock.FS.Directory("/tey/toolchains/0.3.2")
+    Mock.FS.File("/tey/toolchains/0.3.2/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.4.0")
+    Mock.FS.File("/tey/toolchains/0.4.0/bin/kex", "")
+
+    assert(Tey.Toolchain.selectableToolchains == [
+      Toolchain { version: "0.4.0", binary: "/tey/toolchains/0.4.0/bin/kex" },
+      Toolchain { version: "0.3.2", binary: "/tey/toolchains/0.3.2/bin/kex" }
+    ])
+  end
+
   it("resolves latest to the newest installed version") do
     Mock.ENV.set("TEY_HOME", "/tey")
     Mock.ENV.unset("TEY_BUNDLED_KEX")
@@ -81,6 +100,24 @@ describe("Tey.Toolchain selection with no bundled Kex") do
     assert(Tey.Toolchain.installedVersions == ["0.3.0"])
     assert(Tey.Toolchain.resolveSelector("latest") == Just("0.3.0"))
   end
+
+  # A directory whose `bin/kex` is gone is a half-removed installation, and
+  # offering it — to `use`, or to an editor reading the JSON listing — would
+  # name a binary that is not there.
+  it("ignores a directory without a compiler in it") do
+    Mock.ENV.set("TEY_HOME", "/tey")
+    Mock.ENV.unset("TEY_BUNDLED_KEX")
+    Mock.FS.clear()
+    Mock.FS.Directory("/tey/toolchains")
+    Mock.FS.Directory("/tey/toolchains/0.3.0")
+    Mock.FS.File("/tey/toolchains/0.3.0/bin/kex", "")
+    Mock.FS.Directory("/tey/toolchains/0.5.0")
+
+    assert(Tey.Toolchain.installedVersions == ["0.3.0"])
+    assert(Tey.Toolchain.selectableToolchains == [
+      Toolchain { version: "0.3.0", binary: "/tey/toolchains/0.3.0/bin/kex" }
+    ])
+  end
 end
 
 describe("Tey.Toolchain selection with a bundled Kex") do
@@ -105,6 +142,12 @@ describe("Tey.Toolchain selection with a bundled Kex") do
     assert(Tey.Toolchain.installedVersions == [])
     assert(Tey.Toolchain.selectableVersions == ["9.9.9"])
     assert(Tey.Toolchain.resolveSelector("latest") == Just("9.9.9"))
+    # The seed runs where it lies: its binary is the bundled path, not a
+    # toolchains/<version> one that does not exist, and it is flagged so a
+    # listing can say the difference between it and an installation.
+    assert(Tey.Toolchain.selectableToolchains == [
+      Toolchain { version: "9.9.9", binary: seed, bundled?: true }
+    ])
   end
 
   it("has no bundled version when none is pointed at") do

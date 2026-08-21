@@ -37,15 +37,24 @@ foul selected -> String? do
 end
 
 # Versions installed under this Tey home, newest first. Staging leftovers are
-# not installations.
+# not installations, and neither is a directory whose `bin/kex` is gone — a
+# half-removed toolchain must not be offered as one somebody can run.
 foul installedVersions -> [String] do
   let entries = FS.Directory.directories("${Tey.Toolchain.home}/toolchains").or([])
-  let names = entries.filter { |name| !name.endsWith?(".partial") && !name.endsWith?(".previous") }
+  let names = entries.filter do |name|
+    !name.endsWith?(".partial") && !name.endsWith?(".previous") && Tey.Toolchain.installed?(name)
+  end
   return Tey.Toolchain.newestFirst(names)
 end
 
+# The `bin/kex` naming an installed version — the toolchain layout every
+# consumer (the shim, `resolved`, the listings) agrees on, in one place.
+foul binaryOf(version: String) -> String do
+  return "${Tey.Toolchain.home}/toolchains/${version}/bin/kex"
+end
+
 foul installed?(version: String) -> Bool do
-  return FS.File.file?("${Tey.Toolchain.home}/toolchains/${version}/bin/kex")
+  return FS.File.file?(Tey.Toolchain.binaryOf(version))
 end
 
 # Released versions, newest first, read from the repository's tags. Tags that
@@ -93,7 +102,7 @@ foul installedKex -> String? do
     Just(path) => Just(path)
     None => do
       match FS.File.read("${Tey.Toolchain.home}/current") do
-        Just(version) => Just("${Tey.Toolchain.home}/toolchains/${version.trim}/bin/kex")
+        Just(version) => Just(Tey.Toolchain.binaryOf(version.trim))
         None => None
       end
     end
@@ -128,23 +137,41 @@ foul bundledVersion -> String? do
   end
 end
 
+# One selectable Kex: the version `tey kex use` names it by, the binary that
+# runs it, and whether it is the bundled seed lying beside Tey rather than an
+# installation in the Tey home.
+record Toolchain do
+  version : String
+  binary : String
+  bundled? : Bool = false
+end
+
 # Every version `tey kex use` can select, newest first: the ones in the Tey
-# home, plus the bundled one.
+# home, plus the bundled one — each carrying the binary that runs it, which
+# is what a listing meant for tools (`kex list --installed --json`) needs.
 #
 # The seed belongs here even though it is not installed. It is a real compiler
 # already on the disk, and on a fresh keg it is the one a bare `kex` runs — so
 # leaving it out made `tey kex use <that version>` refuse a version the user
 # had just watched run, with no way back to it short of downloading a second
 # copy of what was already there.
-foul selectableVersions -> [String] do
+foul selectableToolchains -> [Toolchain] do
   let installed = Tey.Toolchain.installedVersions
   match Tey.Toolchain.bundledVersion do
-    None => return installed
-    Just(version) => do
-      return installed if installed.contains?(version)
-      return Tey.Toolchain.newestFirst([...installed, version])
+    None => return installed.map { |version| Tey.Toolchain.installedToolchain(version) }
+    Just(bundledVersion) => do
+      return installed.map { |version| Tey.Toolchain.installedToolchain(version) } if installed.contains?(bundledVersion)
+      let seed = Tey.Toolchain.bundledToolchain(bundledVersion)
+      return Tey.Toolchain.newestFirst([...installed, bundledVersion]).map do |version|
+        version == bundledVersion then seed else Tey.Toolchain.installedToolchain(version)
+      end
     end
   end
+end
+
+# Every version `tey kex use` can select, newest first.
+foul selectableVersions -> [String] do
+  Tey.Toolchain.selectableToolchains.map { |toolchain| toolchain.version }
 end
 
 # Turns what someone typed after `tey kex use` into a version number.
@@ -399,6 +426,16 @@ foul use(version: String) -> Bool do
 end
 
 private do
+  # The two shapes a selectable Kex has: an installation in the Tey home,
+  # named by its version, and the seed, run where it lies.
+  foul installedToolchain(version: String) -> Toolchain do
+    Toolchain { version: version, binary: Tey.Toolchain.binaryOf(version) }
+  end
+
+  foul bundledToolchain(version: String) -> Toolchain do
+    Toolchain { version: version, binary: Tey.Toolchain.bundled.or(""), bundled?: true }
+  end
+
   # Downloads the published archive for this machine and installs it. The
   # archive holds one directory — the same CMake install tree `installSource`
   # produces — so unpacking and publishing it is the whole job.
@@ -623,7 +660,7 @@ private do
   # runtime relative to the REAL path, which the link preserves.
   foul link(version: String) -> Bool do
     return false if !FS.Directory.create(Tey.Toolchain.binDirectory)
-    let target = "${Tey.Toolchain.home}/toolchains/${version}/bin/kex"
+    let target = Tey.Toolchain.binaryOf(version)
     return false if !FS.File.file?(target)
     match Process.run("ln", ["-sfn", target, Tey.Toolchain.shimPath]) do
       Error(_) => return false
