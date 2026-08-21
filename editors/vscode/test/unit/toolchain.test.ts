@@ -35,7 +35,8 @@ mock.module('vscode', () => ({
 
 const {
   compareVersions, expandPath, installedToolchains, kexInfo, lockedVersion,
-  resolveToolchain, teyHome, teySelectedVersion, toolchainBinary,
+  parseTeyListing, resolveToolchain, teyHome, teySelectedVersion,
+  toolchainBinary,
 } = await import('../../src/toolchain');
 
 const folder = (fsPath: string) => ({ scheme: 'file', fsPath }) as never;
@@ -215,6 +216,55 @@ describe('asking a compiler what it is', () => {
 
   test('a path that is not there says nothing', async () => {
     expect(await kexInfo(path.join(workspace, 'absent'))).toBeUndefined();
+  });
+});
+
+describe('the tey listing command', () => {
+  // The shape `tey kex list --installed --json` prints; kept as a literal so
+  // a change on tey's side shows up here as a parse failure, not a silence.
+  const document = (home: string) => JSON.stringify({
+    home,
+    selected: '0.8.1',
+    toolchains: [
+      { version: '0.9.0', binary: toolchainBinary('0.9.0'), selected: false, bundled: false },
+      { version: '0.8.1', binary: toolchainBinary('0.8.1'), selected: true, bundled: false },
+      // The seed bundled beside Tey: runnable where it lies, newest, and not
+      // under the toolchains directory at all.
+      { version: '9.8.0', binary: '/opt/homebrew/opt/kex/bin/kex', selected: false, bundled: true },
+    ],
+  });
+
+  test('parses the document, newest first, with selection and bundling', () => {
+    const listed = parseTeyListing(document(teyHome()));
+    expect(listed).toEqual([
+      { version: '9.8.0', binary: '/opt/homebrew/opt/kex/bin/kex', selected: false, bundled: true },
+      { version: '0.9.0', binary: toolchainBinary('0.9.0'), selected: false, bundled: false },
+      { version: '0.8.1', binary: toolchainBinary('0.8.1'), selected: true, bundled: false },
+    ]);
+  });
+
+  test('an empty toolchains array is a valid answer', () => {
+    const empty = JSON.stringify({ home: teyHome(), selected: null, toolchains: [] });
+    expect(parseTeyListing(empty)).toEqual([]);
+  });
+
+  test('a listing for a different Tey home is not this machine\'s answer', () => {
+    expect(parseTeyListing(document('/somewhere/else'))).toBeUndefined();
+  });
+
+  test.each([
+    ['prose, not JSON', 'not json'],
+    ['no home', JSON.stringify({ selected: null, toolchains: [] })],
+    ['toolchains not an array', JSON.stringify({ home: teyHome(), selected: null, toolchains: {} })],
+    ['an entry missing fields', JSON.stringify({
+      home: teyHome(), selected: null, toolchains: [{ version: '0.9.0' }],
+    })],
+    ['an entry with the wrong types', JSON.stringify({
+      home: teyHome(), selected: null,
+      toolchains: [{ version: '0.9.0', binary: '/x', selected: 'yes', bundled: false }],
+    })],
+  ])('rejects %s', (_name, text) => {
+    expect(parseTeyListing(text as string)).toBeUndefined();
   });
 });
 

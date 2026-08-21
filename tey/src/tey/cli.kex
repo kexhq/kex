@@ -17,6 +17,8 @@ let parser -> OptionConfig do
     .flag("remove", None, "Remove configuration installed by `tey setup`")
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
+    .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
+    .flag("json", None, "Print `tey kex list` as one JSON document (needs --installed)")
 end
 
 foul dispatch(args: [String]) -> Integer do
@@ -71,6 +73,57 @@ private do
     return "${marker} ${version}  ${all.join(", ")}"
   end
 
+  # The offline listing: what is on this machine, newest first, in the same
+  # dress as the full one. Every entry is installed except possibly the
+  # bundled seed, so "installed" is not spelled out per line — only the seed
+  # gets a note, saying why `tey kex use` accepts it anyway.
+  foul listInstalled -> Integer do
+    let toolchains = Tey.Toolchain.selectableToolchains
+    if toolchains.empty?
+      IO.printLine("No Kex toolchains installed")
+      return 0
+    end
+    let selected = Tey.Toolchain.selected.or("")
+    toolchains.each do |toolchain|
+      let marker = toolchain.version == selected then "*" else " "
+      let notes = toolchain.bundled? then ["bundled, not installed"] else []
+      let line = notes.empty? then "${marker} ${toolchain.version}" else "${marker} ${toolchain.version}  ${notes.join(", ")}"
+      IO.printLine(line)
+    end
+    if !Tey.Toolchain.selectionHealthy?
+      IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+    end
+    Tey.Cli.reportShim(selected)
+    0
+  end
+
+  # `tey kex list --installed --json` — the same listing as `listInstalled`,
+  # as one JSON document for a tool (an editor's toolchain picker) to read.
+  # Nothing here touches the network: an editor asks on its own schedule, and
+  # a picker that stalled on a release list would be worse than one that
+  # listed nothing. Nothing installed is an empty array rather than an error
+  # for the same reason — an empty picker is a state, not a failure.
+  foul listInstalledJson -> Integer do
+    let selected = Tey.Toolchain.selected
+    let toolchains = Tey.Toolchain.selectableToolchains.map do |toolchain|
+      {
+        version: toolchain.version,
+        binary: toolchain.binary,
+        selected: selected == Just(toolchain.version),
+        bundled: toolchain.bundled?
+      }
+    end
+    # Just(...) unwrapped rather than stringified: an optional prints as
+    # `Just("0.4.0")`, and the document wants "0.4.0" — or null, for no
+    # selection, which is what None already stringifies to.
+    let selectedText = match selected do
+      Just(version) => version
+      None => None
+    end
+    IO.printLine(JSON.stringify({ home: Tey.Toolchain.home, selected: selectedText, toolchains: toolchains }))
+    0
+  end
+
   # Whether a `kex` is reachable as a command. Installed beside `tey` — which
   # is how brew and the release tarball put it there — it already is, and
   # telling someone to edit PATH when their shell can run `kex` would be
@@ -121,6 +174,9 @@ Commands:
   clean [--cache]          inspect or remove the global cache
   setup merge-driver      configure Git's tey.lock merge driver
   kex list [--pre]         show Kex versions, newest first
+  kex list --installed     show only the Kex toolchains on this machine
+  kex list --installed --json
+                            print them as one JSON document, offline
   kex install [<version>]  install a Kex (newest release by default)
   kex install latest       install the newest release by name
   kex install --pre        install the newest Kex of any channel
@@ -168,6 +224,17 @@ Commands:
   end
 
   foul dispatchCommand(["kex", "list"], options: ParsedOptions) -> Integer do
+    # JSON is the offline half only, for now: `--json` over released versions
+    # would have to touch the network and decide a shape for entries no tool
+    # has asked to consume. Saying so beats half-doing it.
+    if options.flagEnabled?("json")
+      if !options.flagEnabled?("installed")
+        IO.printError("tey: --json needs --installed; released versions have no JSON form\n")
+        return 1
+      end
+      return Tey.Cli.listInstalledJson()
+    end
+    return Tey.Cli.listInstalled() if options.flagEnabled?("installed")
     let available = match Tey.Toolchain.availableVersions do
       Error(error) => do
         # A release list needs the network; the installed ones do not, and

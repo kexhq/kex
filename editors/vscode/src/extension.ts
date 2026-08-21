@@ -500,6 +500,9 @@ function toolchainItem(toolchain: InstalledToolchain, pinned: string): Toolchain
   const notes: string[] = [];
   if (toolchain.selected) notes.push("Tey's");
   if (toolchain.version === pinned) notes.push('pinned');
+  // A bundled Kex runs where it lies; the detail line already says where, so
+  // the note says the one thing that is not obvious from the path.
+  if (toolchain.bundled) notes.push('bundled with Tey, not installed');
   return {
     label: `${mark(toolchain.version === pinned)}Kex ${toolchain.version}`,
     description: notes.join(', '),
