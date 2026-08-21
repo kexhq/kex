@@ -124,19 +124,21 @@ describe("Tey.Lockfile.decode") do
     # An entry without a commit pins nothing, and one without a digest cannot
     # be verified — either would let `tey install` fetch something and report
     # success, which is the failure this format exists to prevent.
-    let noCommit: LockState or! String = Tey.Lockfile.decode(
-      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-        "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
-                           "commit": "", "sha256": "deadbeef", "groups": []}}}`)
+    let noCommit: LockState or! String = Tey.Lockfile.decode(`
+      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+       "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
+                          "commit": "", "sha256": "deadbeef", "groups": []}}}
+    `)
     match noCommit do
       Error(message) => assert(message.contains?("incomplete"))
       Ok(_) => assert(false)
     end
 
-    let noDigest: LockState or! String = Tey.Lockfile.decode(
-      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-        "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
-                           "commit": "abc123", "sha256": "", "groups": []}}}`)
+    let noDigest: LockState or! String = Tey.Lockfile.decode(`
+      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+       "deps": {"greet": {"git": "https://example.com/g", "resolved": "main",
+                          "commit": "abc123", "sha256": "", "groups": []}}}
+    `)
     match noDigest do
       Error(message) => assert(message.contains?("incomplete"))
       Ok(_) => assert(false)
@@ -179,9 +181,10 @@ describe("Tey.Lockfile — the OTP record") do
   it("reads a lockfile written before the OTP block existed") do
     # The compatibility that lets an old lockfile keep working: absent means
     # "this resolve had no opinion", not "malformed".
-    let old = Tey.Lockfile.decode(
-      `{"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
-        "deps": {}}`).try
+    let old = Tey.Lockfile.decode(`
+      {"version": 1, "kex": {"requirement": ">= 0.3.0", "version": "0.3.4"},
+       "deps": {}}
+    `).try
     assert(old.otpRequirement == "")
     assert(old.otpRelease == 0)
     assert(old.kexVersion == "0.3.4")

@@ -37,10 +37,11 @@ foul add(name: String, options: ParsedOptions) -> Integer do
   end
   return Tey.Commands.fail("package.kex must end with 'end'") if !text.endsWith?("end")
   let body = text.chars.take(text.count - 3).join("")
-  let updated = `$BODY$  tey("$NAME$", git: "$GIT$", $SELECTOR$: "$REQUESTED$")
-end
-`.substitute({"$BODY$": body, "$NAME$": name, "$GIT$": git,
-              "$SELECTOR$": selector, "$REQUESTED$": requested})
+  let updated = `
+    $BODY$  tey("$NAME$", git: "$GIT$", $SELECTOR$: "$REQUESTED$")
+    end
+  `.substitute({"$BODY$": body, "$NAME$": name, "$GIT$": git,
+                "$SELECTOR$": selector, "$REQUESTED$": requested})
   return Tey.Commands.fail("could not update package.kex") if !FS.File.write("package.kex", updated)
   Tey.Commands.lock
 end
@@ -435,54 +436,57 @@ private do
     # $T$ stands in for a backtick. A raw string is delimited by backticks,
     # so a Markdown code fence cannot be written inside one — and Markdown
     # without fences is not much of a README.
-    let libraryUsage = `## Use it
+    let libraryUsage = `
+      ## Use it
 
-In the depending package's $T$package.kex$T$:
+      In the depending package's $T$package.kex$T$:
 
-$T$$T$$T$kex
-tey("$NAME$", git: "https://github.com/you/$NAME$", tag: "~> 0.1")
-$T$$T$$T$
+      $T$$T$$T$kex
+      tey("$NAME$", git: "https://github.com/you/$NAME$", tag: "~> 0.1")
+      $T$$T$$T$
 
-Then $T$tey install$T$, and in the source:
+      Then $T$tey install$T$, and in the source:
 
-$T$$T$$T$kex
-using $MODULE$
+      $T$$T$$T$kex
+      using $MODULE$
 
-main(args) do
-  IO.printLine($MODULE$.greeting("world"))
-end
-$T$$T$$T$
+      main(args) do
+        IO.printLine($MODULE$.greeting("world"))
+      end
+      $T$$T$$T$
 
-## Release it
+      ## Release it
 
-$T$$T$$T$sh
-git tag v0.1.0 && git push origin v0.1.0
-$T$$T$$T$
+      $T$$T$$T$sh
+      git tag v0.1.0 && git push origin v0.1.0
+      $T$$T$$T$
 
-The tag is the release: Tey resolves $T$tag: "~> 0.1"$T$ by listing this
-repository's tags. Keep it in step with $T$version$T$ in $T$package.kex$T$.
-`
-    let applicationUsage = `## Run it
+      The tag is the release: Tey resolves $T$tag: "~> 0.1"$T$ by listing this
+      repository's tags. Keep it in step with $T$version$T$ in $T$package.kex$T$.
+    `
+    let applicationUsage = `
+      ## Run it
 
-$T$$T$$T$sh
-tey install
-tey run
-$T$$T$$T$
-`
+      $T$$T$$T$sh
+      tey install
+      tey run
+      $T$$T$$T$
+    `
     let usage = library then libraryUsage else applicationUsage
-    let body = `# $NAME$
+    let body = `
+      # $NAME$
 
-A Kex package.
+      A Kex package.
 
-## Develop
+      ## Develop
 
-$T$$T$$T$sh
-tey install   # fetch dependencies
-tey build     # compile into ebin/
-tey test      # run spec/*.spec.kex
-$T$$T$$T$
+      $T$$T$$T$sh
+      tey install   # fetch dependencies
+      tey build     # compile into ebin/
+      tey test      # run spec/*.spec.kex
+      $T$$T$$T$
 
-$USAGE$`
+      $USAGE$`
     # Two passes, and they cannot be one: substitution runs in sorted key
     # order, so `$USAGE$` would be spliced in LAST — after the placeholders
     # it contains had already been looked for — and the usage section would
@@ -500,9 +504,9 @@ $USAGE$`
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
-    # Backtick strings are raw: every line below lands verbatim in the
-    # generated file, so the indentation here is the GENERATED file's, not
-    # this function's.
+    # This fragment is spliced INTO the generated `bundle` block, so its
+    # two-space indent belongs to the generated file and has to survive.
+    # Block-shaped, it would be dedented away — every line shares it.
     let entry = library then "" else `  entrypoint("src/main.kex")
 
   target("$NAME$", entrypoint: "src/main.kex")
@@ -512,25 +516,28 @@ $USAGE$`
     # lands before `$NAME$` is looked for and the placeholder INSIDE the
     # inserted entry is filled by the same pass.
     let fields = {"$NAME$": name, "$MODULE$": moduleName, "$ENTRY$": entry}
-    let libraryModule = `module $MODULE$
+    let libraryModule = `
+      module $MODULE$
 
-foul greeting(name: String) = "Hello, ${name}!"
-`
-    let application = `main(args) do
-  IO.printLine("Hello from $NAME$!")
-end
-`
+      foul greeting(name: String) = "Hello, ${name}!"
+    `
+    let application = `
+      main(args) do
+        IO.printLine("Hello from $NAME$!")
+      end
+    `
     # A library ships one function that works and one spec that proves it.
     # An empty `module X do end` with an empty spec/ meant a new package's
     # first `tey test` said "No specs found" — the on-ramp taught nothing and
     # left the author to discover the spec layout from a doc.
     let source = (library then libraryModule else application).substitute(fields)
-    let manifestText = `bundle "$NAME$" do
-  version("0.1.0")
-  description("A Kex package")
-  kex(">= 0.3.0")
-$ENTRY$end
-`.substitute(fields)
+    let manifestText = `
+      bundle "$NAME$" do
+        version("0.1.0")
+        description("A Kex package")
+        kex(">= 0.3.0")
+      $ENTRY$end
+    `.substitute(fields)
     # The resolver finds a module by lowercasing its name and looking for that
     # file (see sourcePath in src/module/resolver.cxx), so the file has to be
     # named after the MODULE, not after the package: `hello-world` produces
@@ -542,12 +549,13 @@ $ENTRY$end
       return Tey.Commands.fail("could not write project '${name}'")
     end
     if library
-      let spec = `describe "$MODULE$" do
-  it "greets by name" do
-    Assert.equal($MODULE$.greeting("Kex"), "Hello, Kex!")
-  end
-end
-`.substitute(fields)
+      let spec = `
+        describe "$MODULE$" do
+          it "greets by name" do
+            Assert.equal($MODULE$.greeting("Kex"), "Hello, Kex!")
+          end
+        end
+      `.substitute(fields)
       if !FS.File.write("${directory}/spec/${moduleFile}.spec.kex", spec)
         return Tey.Commands.fail("could not write project '${name}'")
       end
