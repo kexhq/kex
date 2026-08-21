@@ -131,7 +131,6 @@ make Float do
   # Truncates toward zero, converting to an +Integer+.
   toInteger :> Integer
   let toInteger = Kex.Intrinsic.Number.toInteger(this)
-
 end
 
 module Integer do
@@ -159,3 +158,4 @@ module Number do
   parse : String -> Result<Number, ParseError>
   let parse(s) = Kex.Intrinsic.Number.parse(s)
 end
+
