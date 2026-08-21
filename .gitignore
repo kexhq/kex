@@ -85,3 +85,12 @@ tey/src/tey/version.kex
 # land in the repo root whenever a spec, an example or the REPL takes down an
 # erl. Never source, never worth committing.
 erl_crash.dump
+
+# The source-tree Tey launcher, written by the top-level Makefile's `tey-run`
+# target. Generated rather than tracked for the same reason `make -C tey
+# install` generates one: it bakes in the `erl` that sits beside the `erlc`
+# which built tey/ebin, and that path is machine-specific. It was a tracked
+# symlink to tey/bin/tey once, which could not work — that script is the
+# INSTALLED launcher and defaults TEY_EBIN to the $PREFIX/lib layout `make -C
+# tey install` creates, not to the tey/ebin a checkout builds.
+/tey-run
