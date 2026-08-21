@@ -11,6 +11,13 @@ import {
 } from './toolchain';
 
 let client: LanguageClient | undefined;
+// The watcher feeding that client its `didChangeWatchedFiles`. Held here
+// because `LanguageClient` disposes what it creates and not what it is handed:
+// a watcher passed in through `synchronize` outlives the client, and a
+// leftover one keeps reporting file changes to a connection that is closed —
+// one "Notify file events failed." per restart, accumulating.
+let sourceWatcher: vscode.FileSystemWatcher | undefined;
+let output: vscode.OutputChannel | undefined;
 let restartTimer: NodeJS.Timeout | undefined;
 let executableWatcher: fs.FSWatcher | undefined;
 let status: vscode.StatusBarItem;
@@ -47,6 +54,64 @@ function workspaceFolder(): vscode.Uri | undefined {
 // ---------------------------------------------------------------- lifecycle
 
 /**
+ * The one output channel every client writes to.
+ *
+ * Created lazily and never disposed until the extension is: it outlives the
+ * clients on purpose, so the log of what happened survives the restart that
+ * happened because of it.
+ */
+function sharedOutput(): vscode.OutputChannel {
+  output ??= vscode.window.createOutputChannel('Kex Language Server');
+  return output;
+}
+
+/**
+ * Runs a request, and treats a failure as "no answer" rather than an incident.
+ *
+ * A request in flight when the server exits rejects, and the client's default
+ * response is a popup naming the LSP method — which reads as though the
+ * editor broke. The server going down is already reported once, in the status
+ * bar and the output channel; this keeps it from being reported again per
+ * keystroke.
+ */
+async function quietly<T>(run: () => T | PromiseLike<T>): Promise<T | null> {
+  try {
+    return await run();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Takes down the running client and everything wired to it.
+ *
+ * `stop()` is asked first so a live server gets an orderly shutdown, but its
+ * failure must not skip the rest: a hung server — the usual state after its
+ * binary was replaced underneath it — makes `stop` time out, and a client left
+ * undisposed keeps its providers registered. VS Code then routes a hover to a
+ * connection that is gone and reports the request as failed. Hence the
+ * `finally`: whatever `stop` does, the client and its watcher go.
+ */
+async function disposeClient(): Promise<void> {
+  const previous = client;
+  const watcher = sourceWatcher;
+  client = undefined;
+  sourceWatcher = undefined;
+  if (!previous) {
+    watcher?.dispose();
+    return;
+  }
+  try {
+    await previous.stop(2000);
+  } catch {
+    // A server that already died cannot be asked politely.
+  } finally {
+    await previous.dispose(2000).catch(() => undefined);
+    watcher?.dispose();
+  }
+}
+
+/**
  * Stops whatever is running and starts a NEW client.
  *
  * Not `client.restart()`: that rejects once the client has reached `Stopped`
@@ -56,26 +121,51 @@ function workspaceFolder(): vscode.Uri | undefined {
  * means a toolchain switch takes effect here too.
  */
 async function startLanguageServer(context: vscode.ExtensionContext): Promise<void> {
-  const previous = client;
-  client = undefined;
-  if (previous) {
-    // Best effort: a server that already died cannot be asked politely.
-    await previous.stop(2000).catch(() => undefined);
-    await previous.dispose(2000).catch(() => undefined);
-  }
+  await disposeClient();
 
   const resolved = resolveToolchain(workspaceFolder());
   currentBinary = resolved.command;
   watchExecutable(resolved.command, context);
   showStarting();
 
+  // One watcher per client, disposed with it by `disposeClient`.
+  sourceWatcher = vscode.workspace.createFileSystemWatcher('**/*.kex');
+
   const serverOptions: ServerOptions = {
     run: { command: resolved.command, args: ['--lsp'] },
     debug: { command: resolved.command, args: ['--lsp'] },
   };
+  // Whether this client is the one in charge AND has a live connection.
+  // Everything below asks before speaking: a request sent into a closed
+  // connection is reported to the user as "Request textDocument/hover
+  // failed.", which says nothing they can act on and buries the one message
+  // that matters — that the server is down and why.
+  let self: LanguageClient | undefined;
+  const live = () => self !== undefined && client === self && self.isRunning();
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'kex' }],
-    synchronize: { fileEvents: vscode.workspace.createFileSystemWatcher('**/*.kex') },
+    synchronize: { fileEvents: sourceWatcher },
+    // One channel for the life of the extension. A fresh `LanguageClient` per
+    // restart otherwise creates a fresh "Kex Language Server" output channel
+    // per restart, and an afternoon of rebuilds fills the Output dropdown with
+    // identically named dead ones.
+    outputChannel: sharedOutput(),
+    middleware: {
+      provideHover: async (document, position, token, next) =>
+        live() ? quietly(() => next(document, position, token)) : null,
+      provideCompletionItem: async (document, position, context, token, next) =>
+        live() ? quietly(() => next(document, position, context, token)) : null,
+      provideDefinition: async (document, position, token, next) =>
+        live() ? quietly(() => next(document, position, token)) : null,
+      provideReferences: async (document, position, options, token, next) =>
+        live() ? quietly(() => next(document, position, options, token)) : null,
+      workspace: {
+        didChangeWatchedFile: async (event, next) => {
+          if (live()) await quietly(() => next(event));
+        },
+      },
+    },
     errorHandler: {
       error(_error: Error, _message: Message | undefined, count: number | undefined): ErrorHandlerResult {
         // Protocol errors are not a dead server. Only give up once they are
@@ -98,6 +188,7 @@ async function startLanguageServer(context: vscode.ExtensionContext): Promise<vo
   };
 
   const started = new LanguageClient('kex', 'Kex Language Server', serverOptions, clientOptions);
+  self = started;
   const mine = (generation += 1);
   client = started;
   startedAt = Date.now();
@@ -447,8 +538,7 @@ export function activate(context: vscode.ExtensionContext): void {
 export function deactivate(): Thenable<void> | undefined {
   if (restartTimer) clearTimeout(restartTimer);
   executableWatcher?.close();
-  // A client that already died rejects rather than stopping, and an unhandled
-  // rejection on the way out is noise about a server that is going away
-  // anyway.
-  return client?.stop().catch(() => undefined);
+  // The same teardown a restart does: a client that already died rejects
+  // rather than stopping, and its watcher has to go either way.
+  return disposeClient();
 }
