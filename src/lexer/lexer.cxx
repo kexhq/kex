@@ -1,4 +1,5 @@
 #include "lexer.hxx"
+#include "../common/raw_string_margin.hxx"
 #include "../common/unicode_category.hxx"
 #include "../common/utf8.hxx"
 #include <algorithm>
@@ -533,62 +534,48 @@ auto Lexer::lexRawString(bool interpolating) -> Token {
             }
             advance(); // closing backtick
 
-            bool opensWithNewline = raw.starts_with("\n") ||
-                                    raw.starts_with("\r\n");
-            if (opensWithNewline) {
+            // A literal whose opening delimiter is followed immediately by a
+            // newline is block-shaped, and only those are dedented. The
+            // amount stripped comes from the content itself — the longest
+            // leading-whitespace run shared by every nonblank line — so the
+            // literal spells the same bytes wherever it sits in the source,
+            // and the closing delimiter's placement is not load-bearing.
+            bool blockShaped = raw.starts_with("\n") || raw.starts_with("\r\n");
+            if (blockShaped) {
+                // The opening newline is syntax. The closing delimiter's own
+                // line goes too when it holds nothing else, keeping the
+                // newline before it so block literals end in '\n'.
                 raw.erase(0, raw.starts_with("\r\n") ? 2 : 1);
-            }
+                if (auto closingLine = rawStringClosingLineStart(raw))
+                    raw.erase(*closingLine);
 
-            // A closing delimiter on an otherwise-empty line contributes its
-            // exact leading whitespace as the dedent prefix. The prefix is
-            // syntax, not part of the resulting string; the preceding newline
-            // remains, so block-shaped literals end in '\n'.
-            auto lastNewline = raw.rfind('\n');
-            if (lastNewline != std::string::npos) {
-                std::string margin = raw.substr(lastNewline + 1);
-                bool closingOnOwnLine = std::all_of(
-                    margin.begin(), margin.end(),
-                    [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
-                if (closingOnOwnLine) {
-                    if (!margin.empty() && margin.back() == '\r')
-                        margin.pop_back();
-                    bool hasSpace = margin.find(' ') != std::string::npos;
-                    bool hasTab = margin.find('\t') != std::string::npos;
-                    if (hasSpace && hasTab)
-                        return errorToken(
-                            "Backtick literal closing margin cannot mix spaces and tabs");
+                const auto margin = rawStringMargin(raw);
+                std::string dedented;
+                size_t lineStart = 0;
+                while (lineStart < raw.size()) {
+                    auto lineEnd = raw.find('\n', lineStart);
+                    bool hasNewline = lineEnd != std::string::npos;
+                    if (!hasNewline) lineEnd = raw.size();
+                    auto line = raw.substr(lineStart, lineEnd - lineStart);
 
-                    raw.erase(lastNewline + 1);
-                    if (!margin.empty()) {
-                        std::string dedented;
-                        size_t lineStart = 0;
-                        while (lineStart < raw.size()) {
-                            auto lineEnd = raw.find('\n', lineStart);
-                            bool hasNewline = lineEnd != std::string::npos;
-                            if (!hasNewline) lineEnd = raw.size();
-                            auto line = raw.substr(lineStart, lineEnd - lineStart);
-
-                            auto contentEnd = line.size();
-                            if (contentEnd > 0 && line[contentEnd - 1] == '\r')
-                                contentEnd--;
-                            bool blank = std::all_of(
-                                line.begin(), line.begin() + contentEnd,
-                                [](char c) { return c == ' ' || c == '\t'; });
-                            if (blank) {
-                                if (contentEnd < line.size()) dedented += '\r';
-                            } else if (line.starts_with(margin)) {
-                                dedented += line.substr(margin.size());
-                            } else {
-                                return errorToken(
-                                    "Backtick literal line is less indented than its closing margin");
-                            }
-
-                            if (hasNewline) dedented += '\n';
-                            lineStart = lineEnd + (hasNewline ? 1 : 0);
-                        }
-                        raw = std::move(dedented);
+                    auto contentEnd = line.size();
+                    if (contentEnd > 0 && line[contentEnd - 1] == '\r')
+                        contentEnd--;
+                    bool blank = std::all_of(
+                        line.begin(), line.begin() + contentEnd,
+                        [](char c) { return c == ' ' || c == '\t'; });
+                    if (blank) {
+                        // A blank line never participates in the margin, so
+                        // it carries no content either: it is emitted empty.
+                        if (contentEnd < line.size()) dedented += '\r';
+                    } else {
+                        dedented += line.substr(margin.size());
                     }
+
+                    if (hasNewline) dedented += '\n';
+                    lineStart = lineEnd + (hasNewline ? 1 : 0);
                 }
+                raw = std::move(dedented);
             }
 
             return makeToken(

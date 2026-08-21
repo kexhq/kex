@@ -113,6 +113,27 @@ int main() {
             assertEqual(diagnostics[0].location.column, 15);
         });
 
+
+        it("maps offsets through a block literal's content dedent", []() {
+            // The literal dedents by its content's shared margin, so the
+            // cooked body is "abc\n" — offset 1 is the 'b', which sits at
+            // column 6 of the source line that spells it.
+            auto diagnostics = validateFile(
+                "let demo(parts: [String], values: [Any]) -> String = "
+                "parts.first.or(\"\")\n"
+                "let validateDemo(source: String) -> "
+                "[TaggedValidation.Issue] = "
+                "[TaggedValidation.warnAt(1, \"positioned warning\")]\n"
+                "main do\n"
+                "  demo`\n"
+                "    abc\n"
+                "`\n"
+                "end\n");
+            assertEqual(diagnostics.size(), size_t(1));
+            assertEqual(diagnostics[0].location.line, 15);
+            assertEqual(diagnostics[0].location.column, 6);
+        });
+
         it("preserves Between as an exclusive source range", []() {
             auto diagnostics = validateFile(
                 "let demo(parts: [String], values: [Any]) -> String = "

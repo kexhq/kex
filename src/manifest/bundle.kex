@@ -21,6 +21,10 @@ end
 let version(version: String) -> Void do
 end
 
+# One sentence about what the package is, shown wherever it is listed.
+let description(text: String) -> Void do
+end
+
 # The license the package is distributed under, as an SPDX identifier
 # (`"MIT"`, `"Apache-2.0"`).
 let license(identifier: String) -> Void do
@@ -55,11 +59,16 @@ end
 #     tey("mock", git: "...", tag: "v1.0.0")
 #   end
 let group(name: Atom, body: Block<Void>) -> Void do
+end
 
-# Sets the license of the package 
-#
-# @example
-#   license("MIT")
-#   license("GPL")
-let license(name: Atom, body: Block<Void>) -> Void do
+# The Erlang/OTP releases this package needs, as a requirement: `">= 26"`.
+# Absent means the package has no opinion.
+let otp(requirement: String) -> Void do
+end
+
+# A toolchain package: a compiler executable plus the runtime and standard
+# library it was built with, installed together so the three can never drift
+# apart. Kex's own `package.kex` is the one that declares it.
+let toolchain(name: String, compiler: String = "", runtime: String = "",
+              stdlib: String = "") -> Void do
 end

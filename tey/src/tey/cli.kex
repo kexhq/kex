@@ -157,36 +157,36 @@ private do
 
   foul showHelp -> Integer do
     IO.printLine(Tey.Cli.parser.help)
-    # Raw string: these lines are the OUTPUT, so they stay flush with the
-    # left margin rather than with the code around them.
+    # The block literal dedents by its own margin, so this list can sit
+    # with the code and still print flush left.
     IO.printLine(`
-Commands:
-  new <name> [--lib]       create a Kex package in a new directory
-  init [<name>] [--lib]    create a Kex package in this directory
-  add <name>               add a Git dependency and update tey.lock
-  install                  fetch dependencies, and install this package's targets
-  update [name]            re-resolve dependencies
-  lock                     resolve and write tey.lock
-  list                     show locked dependencies
-  run [args...]            run the package entrypoint
-  build                    compile the package, and each target(...) into an executable
-  test                     run spec/*.spec.kex
-  clean [--cache]          inspect or remove the global cache
-  setup merge-driver      configure Git's tey.lock merge driver
-  kex list [--pre]         show Kex versions, newest first
-  kex list --installed     show only the Kex toolchains on this machine
-  kex list --installed --json
-                            print them as one JSON document, offline
-  kex install [<version>]  install a Kex (newest release by default)
-  kex install latest       install the newest release by name
-  kex install --pre        install the newest Kex of any channel
-  kex install <src> <version>
-                           build and install from a source checkout
-  kex uninstall <version>  remove an installed Kex
-  kex use <version>        select an installed Kex toolchain
-  kex use latest           select the newest Kex already on this machine
-  kex which                print the compiler the kex command runs
-`)
+      Commands:
+        new <name> [--lib]       create a Kex package in a new directory
+        init [<name>] [--lib]    create a Kex package in this directory
+        add <name>               add a Git dependency and update tey.lock
+        install                  fetch dependencies, and install this package's targets
+        update [name]            re-resolve dependencies
+        lock                     resolve and write tey.lock
+        list                     show locked dependencies
+        run [args...]            run the package entrypoint
+        build                    compile the package, and each target(...) into an executable
+        test                     run spec/*.spec.kex
+        clean [--cache]          inspect or remove the global cache
+        setup merge-driver      configure Git's tey.lock merge driver
+        kex list [--pre]         show Kex versions, newest first
+        kex list --installed     show only the Kex toolchains on this machine
+        kex list --installed --json
+                                  print them as one JSON document, offline
+        kex install [<version>]  install a Kex (newest release by default)
+        kex install latest       install the newest release by name
+        kex install --pre        install the newest Kex of any channel
+        kex install <src> <version>
+                                 build and install from a source checkout
+        kex uninstall <version>  remove an installed Kex
+        kex use <version>        select an installed Kex toolchain
+        kex use latest           select the newest Kex already on this machine
+        kex which                print the compiler the kex command runs
+    `)
     return 0
   end
 

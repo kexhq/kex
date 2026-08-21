@@ -1,7 +1,8 @@
 bundle "tey" do
+  description("Yet another manager, Kex's default package manager.")
   version("0.2.0")
   kex(">= 0.3.0")
   license("MIT")
   entrypoint("src/main.kex")
-  target("tey", entrypoint: "src/main.kex")
+  target("tey")
 end

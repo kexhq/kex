@@ -1625,6 +1625,57 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
 namespace {
 constexpr const char *kShowMethod = "showValue";
 
+// A hole that is the only thing on its line stands for a block, not for a
+// word: whatever it holds should land at the hole's own column. Only line
+// one gets that for free — the literal's own text put it there — so lines
+// two onward are indented to match, and one trailing newline is swallowed
+// so the value does not push a blank line into the slot.
+auto alignBlockHoles(const std::vector<std::string> &parts,
+                     std::vector<ast::ExprPtr> &values,
+                     const SourceLocation &at) -> void {
+  for (size_t index = 0; index < values.size(); ++index) {
+    if (!values[index] || index >= parts.size())
+      continue;
+
+    const auto &before = parts[index];
+    auto lineStart = before.rfind('\n');
+    // The text before the hole is its line's indentation, either from the
+    // literal's start or from the last newline.
+    if (lineStart == std::string::npos) {
+      if (index != 0)
+        continue;
+      lineStart = 0;
+    } else {
+      lineStart += 1;
+    }
+    auto indent = before.substr(lineStart);
+    if (!std::all_of(indent.begin(), indent.end(),
+                     [](char c) { return c == ' ' || c == '\t'; }))
+      continue;
+
+    // Nothing may follow on the line either, or the hole is inline text.
+    const bool endsLine = index + 1 >= parts.size() ||
+                          parts[index + 1].empty() ||
+                          parts[index + 1].starts_with("\n") ||
+                          parts[index + 1].starts_with("\r\n");
+    if (!endsLine)
+      continue;
+
+    auto prefix = std::make_unique<ast::Expr>();
+    prefix->location = at;
+    prefix->kind = ast::StringLiteral{indent, false};
+
+    auto call = std::make_unique<ast::Expr>();
+    call->location = at;
+    ast::MethodCall method;
+    method.receiver = std::move(values[index]);
+    method.method = "indentRest";
+    method.args.push_back(std::move(prefix));
+    call->kind = std::move(method);
+    values[index] = std::move(call);
+  }
+}
+
 auto wrapInShowCalls(std::vector<ast::ExprPtr> &values,
                      const SourceLocation &at) -> void {
   for (auto &value : values) {
@@ -1834,6 +1885,7 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     literal.interpolating = true;
     parseInterpolatedBody(body, literal.parts, literal.values, true);
     wrapInShowCalls(literal.values, body.location);
+    alignBlockHoles(literal.parts, literal.values, body.location);
     expr->kind = std::move(literal);
     return expr;
   }

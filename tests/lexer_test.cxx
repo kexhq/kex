@@ -275,7 +275,7 @@ int main() {
             assertEqual(tok.value, std::string("ends-with-\\"));
         });
 
-        it("dedents multiline raw strings by the closing prefix", []() {
+        it("dedents multiline raw strings by their own content", []() {
             auto tok = firstToken(
                 "`\n"
                 "    first\n"
@@ -285,22 +285,56 @@ int main() {
             assertEqual(tok.value, std::string("first\n  second\n"));
         });
 
-        it("preserves indentation when the closing backtick is flush left", []() {
-            auto tok = firstToken(
+        it("dedents the same however the closing backtick is placed", []() {
+            auto flushLeft = firstToken(
                 "`\n"
-                "  first\n"
+                "    first\n"
+                "      second\n"
                 "`");
-            assertEqual(tok.type, TokenType::RawString);
-            assertEqual(tok.value, std::string("  first\n"));
+            auto inline_ = firstToken(
+                "`\n"
+                "    first\n"
+                "      second`");
+            assertEqual(flushLeft.value, std::string("first\n  second\n"));
+            assertEqual(inline_.value, std::string("first\n  second"));
         });
 
-        it("rejects content left of the closing margin", []() {
+        it("takes the margin from the least indented nonblank line", []() {
             auto tok = firstToken(
                 "`\n"
                 "    first\n"
                 "  second\n"
                 "    `");
-            assertEqual(tok.type, TokenType::Error);
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("  first\nsecond\n"));
+        });
+
+        it("ignores blank lines when measuring the margin", []() {
+            auto tok = firstToken(
+                "`\n"
+                "    first\n"
+                "\n"
+                "   \n"
+                "    second\n"
+                "    `");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("first\n\n\nsecond\n"));
+        });
+
+        it("shares only the literal prefix when tabs and spaces mix", []() {
+            auto tok = firstToken(
+                "`\n"
+                "  \tfirst\n"
+                "  second\n"
+                "`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("\tfirst\nsecond\n"));
+        });
+
+        it("leaves a literal that does not open with a newline alone", []() {
+            auto tok = firstToken("`  first`");
+            assertEqual(tok.type, TokenType::RawString);
+            assertEqual(tok.value, std::string("  first"));
         });
 
         it("records token byte spans", []() {

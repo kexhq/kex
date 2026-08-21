@@ -121,10 +121,13 @@ let text = `the syntax ${name} stays unchanged`
 let quoted = `a ``backtick```
 ```
 
-When the opening backtick is followed immediately by a newline and the closing
-backtick sits on its own line, the exact whitespace prefix before the closing
-backtick is removed from every nonblank content line. The opening newline is
-omitted; the newline before the closing line remains.
+A literal whose opening backtick is followed immediately by a newline is
+block-shaped. The opening newline is dropped, the closing delimiter's line is
+dropped when it holds only whitespace (the newline before it stays, so a block
+literal ends in `\n`), and the longest leading-whitespace run shared by every
+nonblank line is removed. Blank lines do not count towards that margin and are
+emitted empty. The value therefore does not depend on where the literal or its
+closing backtick sits in the source.
 
 ### Raw Tagged Literals
 
@@ -165,6 +168,12 @@ let captured = capture$`SELECT * FROM users WHERE id = ${userId}`
 This calls `capture(["SELECT * FROM users WHERE id = ", ""], [userId])`.
 Values are passed in their original types; the tag decides whether to escape,
 bind, convert, or reject them.
+
+In an untagged interpolating literal, a `${...}` hole that is the only thing on
+its line stands for a block: the value's lines after the first are indented to
+the hole's own column and one trailing newline is dropped, so a spliced
+fragment keeps its shape instead of drifting to the left margin. A tagged
+literal is untouched — its values reach the tag in their original types.
 
 ### Compile-Time Tag Validation
 

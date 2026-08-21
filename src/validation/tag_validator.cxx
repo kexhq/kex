@@ -3,6 +3,7 @@
 #include "../interpreter/evaluator.hxx"
 #include "../lexer/lexer.hxx"
 #include "../module/resolver.hxx"
+#include "../common/raw_string_margin.hxx"
 #include "../parser/parser.hxx"
 #include "../semantic/types.hxx"
 #include <algorithm>
@@ -352,56 +353,52 @@ auto sourceLocationForOffset(
         decoded.erase(0, count);
         offsets.erase(offsets.begin(), offsets.begin() + count);
     };
-    if (decoded.starts_with("\r\n")) erasePrefix(2);
-    else if (decoded.starts_with("\n")) erasePrefix(1);
 
-    auto lastNewline = decoded.rfind('\n');
-    if (lastNewline != std::string::npos) {
-        auto margin = decoded.substr(lastNewline + 1);
-        bool closingOnOwnLine = std::all_of(
-            margin.begin(), margin.end(),
-            [](char c) { return c == ' ' || c == '\t' || c == '\r'; });
-        if (closingOnOwnLine) {
-            if (!margin.empty() && margin.back() == '\r')
-                margin.pop_back();
-            decoded.erase(lastNewline + 1);
+    // Only a block-shaped literal is dedented, and by the margin its own
+    // content shares — this must strip exactly what the lexer strips, or a
+    // diagnostic's line and column land somewhere the tag never looked.
+    bool blockShaped =
+        decoded.starts_with("\n") || decoded.starts_with("\r\n");
+    if (blockShaped) {
+        erasePrefix(decoded.starts_with("\r\n") ? 2 : 1);
+
+        if (auto closingLine = rawStringClosingLineStart(decoded)) {
+            decoded.erase(*closingLine);
             offsets.erase(
-                offsets.begin() + lastNewline + 1, offsets.end() - 1);
+                offsets.begin() + static_cast<long>(*closingLine),
+                offsets.end() - 1);
             offsets.back() = end;
-
-            if (!margin.empty()) {
-                std::string cooked;
-                std::vector<size_t> cookedOffsets;
-                size_t lineStart = 0;
-                while (lineStart < decoded.size()) {
-                    auto lineEnd = decoded.find('\n', lineStart);
-                    bool hasNewline = lineEnd != std::string::npos;
-                    if (!hasNewline) lineEnd = decoded.size();
-                    auto contentEnd = lineEnd;
-                    if (contentEnd > lineStart &&
-                        decoded[contentEnd - 1] == '\r')
-                        contentEnd--;
-                    bool blank = std::all_of(
-                        decoded.begin() + lineStart,
-                        decoded.begin() + contentEnd,
-                        [](char c) { return c == ' ' || c == '\t'; });
-                    auto keepStart =
-                        blank ? contentEnd : lineStart + margin.size();
-                    for (size_t i = keepStart; i < lineEnd; ++i) {
-                        cooked += decoded[i];
-                        cookedOffsets.push_back(offsets[i]);
-                    }
-                    if (hasNewline) {
-                        cooked += '\n';
-                        cookedOffsets.push_back(offsets[lineEnd]);
-                    }
-                    lineStart = lineEnd + (hasNewline ? 1 : 0);
-                }
-                cookedOffsets.push_back(end);
-                decoded = std::move(cooked);
-                offsets = std::move(cookedOffsets);
-            }
         }
+
+        const auto margin = rawStringMargin(decoded);
+        std::string cooked;
+        std::vector<size_t> cookedOffsets;
+        size_t lineStart = 0;
+        while (lineStart < decoded.size()) {
+            auto lineEnd = decoded.find('\n', lineStart);
+            bool hasNewline = lineEnd != std::string::npos;
+            if (!hasNewline) lineEnd = decoded.size();
+            auto contentEnd = lineEnd;
+            if (contentEnd > lineStart && decoded[contentEnd - 1] == '\r')
+                contentEnd--;
+            bool blank = std::all_of(
+                decoded.begin() + static_cast<long>(lineStart),
+                decoded.begin() + static_cast<long>(contentEnd),
+                [](char c) { return c == ' ' || c == '\t'; });
+            auto keepStart = blank ? contentEnd : lineStart + margin.size();
+            for (size_t i = keepStart; i < lineEnd; ++i) {
+                cooked += decoded[i];
+                cookedOffsets.push_back(offsets[i]);
+            }
+            if (hasNewline) {
+                cooked += '\n';
+                cookedOffsets.push_back(offsets[lineEnd]);
+            }
+            lineStart = lineEnd + (hasNewline ? 1 : 0);
+        }
+        cookedOffsets.push_back(end);
+        decoded = std::move(cooked);
+        offsets = std::move(cookedOffsets);
     }
 
     auto cookedOffset = static_cast<size_t>(*offset);

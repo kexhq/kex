@@ -2,10 +2,11 @@ using Kex.AST
 
 describe("Kex.AST") do
   it("parses programs with spans, named arguments, and call blocks") do
-    let program = Kex.AST.parse(`bundle "app" do
-  tey("dep", git: "https://example.test/dep")
-end
-`, "package.kex").try
+    let program = Kex.AST.parse(`
+      bundle "app" do
+        tey("dep", git: "https://example.test/dep")
+      end
+    `, "package.kex").try
 
     assert(program.schemaVersion == 2)
     match program.items do
@@ -81,13 +82,14 @@ end
         ListLit([Identifier("head")], Just(Identifier("tail"))),
       "list tail differs"
     )
-    let ifExpression = Kex.AST.parseExpression(`if let Just(value) = candidate
-  value
-elif fallback
-  2
-else
-  3
-end`).try
+    let ifExpression = Kex.AST.parseExpression(`
+      if let Just(value) = candidate
+        value
+      elif fallback
+        2
+      else
+        3
+      end`).try
     assert(ifExpression == If(
       Identifier("candidate"),
       Just(ConstructorPattern("Just", [BindPattern("value")])),
@@ -126,11 +128,12 @@ end`).try
       end
       _ => assert(false, "method target type or call flags differ")
     end
-    let receiveExpression = Kex.AST.parseExpression(`receive do |sender|
-  :ping => sender
-after timeout: 10
-  cleanup()
-end`).try
+    let receiveExpression = Kex.AST.parseExpression(`
+      receive do |sender|
+        :ping => sender
+      after timeout: 10
+        cleanup()
+      end`).try
     match receiveExpression do
       Receive(Just("sender"), [arm], Just(LitInt(10)), Just(Block(afterBody))) => do
         assert(arm.patterns == [LiteralPattern("ping")])
@@ -140,11 +143,12 @@ end`).try
       end
       _ => assert(false, "receive clauses, sender, or timeout differ")
     end
-    let tryingExpression = Kex.AST.parseExpression(`trying do
-  result.try
-rescue
-  Error(message) => message
-end`).try
+    let tryingExpression = Kex.AST.parseExpression(`
+      trying do
+        result.try
+      rescue
+        Error(message) => message
+      end`).try
     match tryingExpression do
       Trying([Try(Identifier("result"))], rescueInfo) => do
         assert(rescueInfo.catchAllName == None)
@@ -162,10 +166,11 @@ end`).try
       end
       _ => assert(false, "trying body or rescue differs")
     end
-    let matchExpression = Kex.AST.parseExpression(`match pair do |whole|
-  (:ok, value) when value > 0 => whole
-  _ => None
-end`).try
+    let matchExpression = Kex.AST.parseExpression(`
+      match pair do |whole|
+        (:ok, value) when value > 0 => whole
+        _ => None
+      end`).try
     match matchExpression do
       Match(Identifier("pair"), Just("whole"), [first, second]) => do
         assert(first.patterns == [TuplePattern([
@@ -203,13 +208,14 @@ end`).try
   end
 
   it("preserves parameter pattern structure") do
-    let program = Kex.AST.parse(`let choose(
-  [head | tail],
-  Point { x, "label": name },
-  1..3,
-  @Some(value)
-) = value
-`).try
+    let program = Kex.AST.parse(`
+      let choose(
+        [head | tail],
+        Point { x, "label": name },
+        1..3,
+        @Some(value)
+      ) = value
+    `).try
 
     match program.items do
       [FunctionDef(info)] => match info.clauses do
@@ -249,11 +255,12 @@ end`).try
   end
 
   it("preserves typed and destructuring bindings") do
-    let program = Kex.AST.parse(`let bindings() do
-  let [head | tail]: [Integer] = values
-  var count: Integer = 0
-end
-`).try
+    let program = Kex.AST.parse(`
+      let bindings() do
+        let [head | tail]: [Integer] = values
+        var count: Integer = 0
+      end
+    `).try
 
     match program.items do
       [FunctionDef(info)] => match info.clauses do
@@ -272,17 +279,18 @@ end
   end
 
   it("preserves nullary syntax, declaration rescue blocks, and generated declarations") do
-    let program = Kex.AST.parse(`let value = 1
-let compute() do
-  work().try
-rescue do |error|
-  error
-end
-main do
-  compute()
-rescue return 1
-end
-`).try
+    let program = Kex.AST.parse(`
+      let value = 1
+      let compute() do
+        work().try
+      rescue do |error|
+        error
+      end
+      main do
+        compute()
+      rescue return 1
+      end
+    `).try
 
     match program.items do
       [FunctionDef(valueInfo), FunctionDef(computeInfo), MainDef(mainInfo)] => do
@@ -325,9 +333,10 @@ end
       _ => assert(false, "generated declaration was not represented")
     end
 
-    match Kex.AST.parseExpression(`make %target do
-  generate()
-end`).try do
+    match Kex.AST.parseExpression(`
+      make %target do
+        generate()
+      end`).try do
       GeneratedDeclaration(
         Identifier("target"),
         GeneratedMake(makeInfo)
@@ -339,17 +348,18 @@ end`).try do
   end
 
   it("preserves module visibility, imports, exports, and compiled blocks") do
-    let program = Kex.AST.parse(`module Tools do
-  private do
-    let hidden() = 1
-  end
-  using Math, as: M, only: [square]
-  export Prelude, except: [subtract]
-  compiled do
-    let GENERATED = 42
-  end
-end
-`, "tools.kex").try
+    let program = Kex.AST.parse(`
+      module Tools do
+        private do
+          let hidden() = 1
+        end
+        using Math, as: M, only: [square]
+        export Prelude, except: [subtract]
+        compiled do
+          let GENERATED = 42
+        end
+      end
+    `, "tools.kex").try
 
     match program.items do
       [ModuleDef(moduleInfo)] => match moduleInfo.items do

@@ -1,0 +1,13 @@
+def foo do
+  :ok
+end
+true
+true
+  outer
+    inner
+
+edge
+def bar do
+  :ok
+  :also_ok
+end
