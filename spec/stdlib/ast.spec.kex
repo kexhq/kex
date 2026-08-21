@@ -1,0 +1,99 @@
+using Kex.AST
+
+describe("Kex.AST") do
+  it("parses programs with spans, named arguments, and call blocks") do
+    let program = Kex.AST.parse(`bundle "app" do
+  tey("dep", git: "https://example.test/dep")
+end
+`, "package.kex").try
+
+    assert(program.schemaVersion == 1)
+    match program.items do
+      [MainDef(info)] => do
+        assert(info.location.file == "package.kex", "filename was not preserved")
+        assert(info.location.startOffset == 0, "main span did not start at zero")
+        match info.body do
+          [Call(target, _, [], block)] => do
+            assert(target == Identifier("bundle"), "expected bundle target")
+            match block do
+              Just(Lambda(_, body)) => match body do
+                [Call(dependencyTarget, _, named, None)] => do
+                  assert(dependencyTarget == Identifier("tey"), "expected dependency target")
+                  match named do
+                    [NamedArgument { name, value }] => do
+                      assert(name == "git")
+                      assert(value == InterpolatedString(["https://example.test/dep"], []))
+                    end
+                    _ => assert(false, "expected named git argument")
+                  end
+                end
+                _ => assert(false, "expected dependency call")
+              end
+              _ => assert(false, "expected bundle block")
+            end
+          end
+          _ => assert(false, "expected bundle call")
+        end
+      end
+      _ => assert(false, "expected main AST")
+    end
+  end
+
+  it("parses source and files through the convenience entry points") do
+    let sourceProgram = Kex.AST.parse("let answer = 42").try
+    assert(sourceProgram.schemaVersion == 1)
+    assert(sourceProgram.items.length == 1)
+
+    let fileProgram = Kex.AST.parseFile("examples/maps.kex").try
+    assert(fileProgram.schemaVersion == 1)
+    assert(!fileProgram.items.empty?)
+  end
+
+  it("parses standalone expressions and types") do
+    assert(
+      Kex.AST.parseExpression("answer(42)").try ==
+        Call(Identifier("answer"), [LitInt(42)], [], None)
+    )
+    assert(
+      Kex.AST.parseExpression("1 + -2").try ==
+        BinaryOp(LitInt(1), "+", UnaryOp("-", LitInt(2)))
+    )
+    assert(Kex.AST.parseExpression("'λ'").try == LitChar(955))
+    assert(
+      Kex.AST.parseExpression(`{"answer": 42}`).try ==
+        UnsupportedExpression("MapExpr"),
+      "an unsupported node must not be reported as the source literal None"
+    )
+    assert(
+      Kex.AST.parseType("Result<String, Integer>?").try ==
+        NullableType(NamedType("Result", [
+          NamedType("String", []), NamedType("Integer", [])
+        ]))
+    )
+    assert(
+      Kex.AST.parseType("Result<String, Integer>?").try.to(String).or("") ==
+        "Result<String, Integer>?"
+    )
+  end
+
+  it("returns a parse error for invalid source") do
+    match Kex.AST.parse("let", "broken.kex") do
+      Error(error) => do
+        assert(!error.message.empty?)
+        match error.location do
+          Just(location) => do
+            assert(location.file == "broken.kex")
+            assert(location.startOffset == 0)
+          end
+          None => assert(false, "syntax error lost its source location")
+        end
+      end
+      Ok(_) => assert(false, "invalid source unexpectedly parsed")
+    end
+
+    match Kex.AST.parseFile("does-not-exist.kex") do
+      Error(error) => assert(error.location == None)
+      Ok(_) => assert(false, "missing file unexpectedly parsed")
+    end
+  end
+end

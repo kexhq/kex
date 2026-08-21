@@ -4,8 +4,11 @@
 #include "../src/beam/etf.hxx"
 #include "../src/beam/kexi.hxx"
 #include "../src/beam/kexi_registry.hxx"
+#include "../src/beam/term_builder.hxx"
+#include "../src/ast/convert.hxx"
 #include "../src/common/artifact_versions.hxx"
 #include "../src/lexer/lexer.hxx"
+#include "../src/interpreter/value_builder.hxx"
 #include "../src/parser/parser.hxx"
 #include "../src/semantic/analyzer.hxx"
 #include <filesystem>
@@ -128,6 +131,149 @@ int main() {
                 decodeEtf(bad);
                 test::assertTrue(false, "should have thrown");
             } catch (const EtfError&) {}
+        });
+    });
+
+    test::describe("AST term builder", []() {
+        test::it("uses the shared type-reference converter", []() {
+            kex::Lexer lexer("module T do\nvalue : Result<String, Integer>?\nend");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto& module = std::get<std::unique_ptr<kex::ast::ModuleDef>>(
+                program.items[0]);
+            auto& annotation =
+                std::get<std::unique_ptr<kex::ast::TypeAnnotation>>(
+                    module->body[0]);
+
+            TermBuilder builder;
+            kex::ast::Converter converter(builder);
+            auto term = converter.typeRef(*annotation->type);
+            auto& nullable = term->asTuple();
+            test::assertTrue(nullable[0]->isAtom("NullableType"));
+            auto& named = nullable[1]->asTuple();
+            test::assertTrue(named[0]->isAtom("NamedType"));
+            test::assertEqual(named[1]->asBinaryStr(), std::string("Result"));
+            test::assertEqual(named[2]->asList().size(), size_t(2));
+
+            kex::interpreter::ValueBuilder valueBuilder;
+            kex::ast::Converter valueConverter(valueBuilder);
+            auto value = valueConverter.typeRef(*annotation->type);
+            auto& nullableValue =
+                std::get<kex::interpreter::VariantValue>(value->data);
+            test::assertEqual(nullableValue.tag, std::string("NullableType"));
+            auto& namedValue = std::get<kex::interpreter::VariantValue>(
+                nullableValue.args[0]->data);
+            test::assertEqual(namedValue.tag, std::string("NamedType"));
+            test::assertEqual(
+                std::get<kex::interpreter::StringValue>(namedValue.args[0]->data)
+                    .value,
+                std::string("Result"));
+        });
+
+        test::it("uses the shared pattern converter", []() {
+            kex::Lexer lexer("let pick([Some(value), _]) = value");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(
+                program.items[0]);
+            auto& pattern = **function->clauses[0].params[0].pattern;
+
+            TermBuilder termBuilder;
+            kex::ast::Converter termConverter(termBuilder);
+            auto term = termConverter.patternRef(pattern);
+            auto& listPattern = term->asTuple();
+            test::assertTrue(listPattern[0]->isAtom("ListPattern"));
+            test::assertEqual(listPattern[1]->asList().size(), size_t(2));
+            test::assertTrue(
+                listPattern[1]->asList()[0]->asTuple()[0]->isAtom(
+                    "ConstructorPattern"));
+
+            kex::interpreter::ValueBuilder valueBuilder;
+            kex::ast::Converter valueConverter(valueBuilder);
+            auto value = valueConverter.patternRef(pattern);
+            auto& listValue =
+                std::get<kex::interpreter::VariantValue>(value->data);
+            test::assertEqual(listValue.tag, std::string("ListPattern"));
+            test::assertEqual(
+                std::get<kex::interpreter::ListValue>(listValue.args[0]->data)
+                    .elements.size(),
+                size_t(2));
+        });
+
+        test::it("uses the shared declaration converter", []() {
+            kex::Lexer lexer(
+                "# Select a value\nlet pick(value : String) : String = value");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+            auto& function = std::get<std::unique_ptr<kex::ast::FunctionDef>>(
+                program.items[0]);
+
+            TermBuilder termBuilder;
+            kex::ast::Converter termConverter(termBuilder);
+            auto term = termConverter.functionDef(
+                *function, "Select a value", "fixture.kex");
+            auto& node = term->asTuple();
+            test::assertTrue(node[0]->isAtom("FunctionDef"));
+            auto& info = node[1]->asTuple();
+            test::assertTrue(info[0]->isAtom("Kex.AST.FunctionInfo"));
+            test::assertEqual(info[1]->asBinaryStr(),
+                              std::string("pick"));
+            test::assertEqual(info[2]->asTuple()[1]->asBinaryStr(),
+                              std::string("Select a value"));
+            auto& location = info[6]->asTuple();
+            test::assertTrue(location[0]->isAtom("Kex.AST.Location"));
+            test::assertEqual(location[1]->asBinaryStr(),
+                              std::string("fixture.kex"));
+
+            auto wholeProgram = termConverter.program(
+                program, "fixture.kex", {{2, "Select a value"}});
+            auto& programRecord = wholeProgram->asTuple();
+            test::assertTrue(programRecord[0]->isAtom("Kex.AST.Program"));
+            test::assertEqual(programRecord[1]->asInt(), int64_t(1));
+            test::assertEqual(
+                programRecord[2]->asList().size(),
+                size_t(1));
+
+            kex::interpreter::ValueBuilder valueBuilder;
+            kex::ast::Converter valueConverter(valueBuilder);
+            auto value = valueConverter.functionDef(
+                *function, "Select a value", "fixture.kex");
+            auto& valueNode =
+                std::get<kex::interpreter::VariantValue>(value->data);
+            test::assertEqual(valueNode.tag, std::string("FunctionDef"));
+            auto& valueInfo =
+                std::get<kex::interpreter::RecordValue>(
+                    valueNode.args[0]->data);
+            test::assertEqual(
+                std::get<kex::interpreter::StringValue>(
+                    valueInfo.fields.at("name")->data).value,
+                std::string("pick"));
+        });
+
+        test::it("preserves named and block call arguments", []() {
+            kex::Lexer lexer(
+                "bundle \"app\" do\n"
+                "  tey(\"dep\", git: \"https://example.test/dep\")\n"
+                "end\n");
+            kex::Parser parser(lexer.tokenizeAll());
+            auto program = parser.parseProgram();
+
+            TermBuilder builder;
+            kex::ast::Converter converter(builder);
+            auto term = converter.program(program, "package.kex", {});
+            auto& mainNode = term->asTuple()[2]->asList()[0]->asTuple();
+            auto& mainInfo = mainNode[1]->asTuple();
+            test::assertTrue(mainInfo[0]->isAtom("Kex.AST.MainInfo"));
+            auto& bundle = mainInfo[3]->asList()[0]->asTuple();
+            test::assertTrue(bundle[0]->isAtom("Call"));
+            test::assertEqual(bundle.size(), size_t(5));
+            auto& block = bundle[4]->asTuple();
+            test::assertTrue(block[0]->isAtom("Just"));
+            auto& lambda = block[1]->asTuple();
+            auto& dependency = lambda[2]->asList()[0]->asTuple();
+            auto& named = dependency[3]->asList()[0]->asTuple();
+            test::assertTrue(named[0]->isAtom("Kex.AST.NamedArgument"));
+            test::assertEqual(named[1]->asBinaryStr(), std::string("git"));
         });
     });
 

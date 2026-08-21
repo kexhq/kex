@@ -444,8 +444,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
 
         // Optional suffix: Name?
         if (match(TokenType::Question)) {
+          auto startOffset = variant->location.startOffset;
           auto opt = std::make_unique<ast::TypeExpr>();
-          opt->location = variant->location;
+          opt->location = currentLocation();
+          opt->location.startOffset = startOffset;
           opt->kind = ast::OptionalType{std::move(variant)};
           variant = std::move(opt);
         }
@@ -454,8 +456,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         if (check(TokenType::Arrow)) {
           advance(); // ->
           auto right = parseTypeFunction();
+          auto startOffset = variant->location.startOffset;
           auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = variant->location;
+          funcType->location = currentLocation();
+          funcType->location.startOffset = startOffset;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
           return complete(std::move(funcType));
@@ -468,8 +472,10 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
         if (check(TokenType::Arrow)) {
           advance();
           auto right = parseTypeFunction();
+          auto startOffset = variant->location.startOffset;
           auto funcType = std::make_unique<ast::TypeExpr>();
-          funcType->location = variant->location;
+          funcType->location = currentLocation();
+          funcType->location.startOffset = startOffset;
           funcType->kind =
               ast::FunctionType{std::move(variant), std::move(right)};
           return complete(std::move(funcType));
@@ -1019,9 +1025,10 @@ auto Parser::parseTypeUnion() -> ast::TypeExprPtr {
   auto left = parseTypeFunction();
 
   while (match(TokenType::Pipe)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto unionType = std::make_unique<ast::TypeExpr>();
-    unionType->location = location;
+    unionType->location = currentLocation();
+    unionType->location.startOffset = startOffset;
     auto right = parseTypeFunction();
     unionType->kind = ast::UnionType{std::move(left), std::move(right)};
     left = std::move(unionType);
@@ -1034,9 +1041,10 @@ auto Parser::parseTypeFunction() -> ast::TypeExprPtr {
   auto left = parseTypeOr();
 
   if (match(TokenType::Arrow)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto funcType = std::make_unique<ast::TypeExpr>();
-    funcType->location = location;
+    funcType->location = currentLocation();
+    funcType->location.startOffset = startOffset;
     auto right = parseTypeFunction(); // right-associative
     funcType->kind = ast::FunctionType{std::move(left), std::move(right)};
     return complete(std::move(funcType));
@@ -1049,8 +1057,10 @@ auto Parser::parseTypePostfix() -> ast::TypeExprPtr {
   auto type = parseTypePrimary();
 
   if (match(TokenType::Question)) {
+    auto startOffset = type->location.startOffset;
     auto opt = std::make_unique<ast::TypeExpr>();
-    opt->location = type->location;
+    opt->location = currentLocation();
+    opt->location.startOffset = startOffset;
     opt->kind = ast::OptionalType{std::move(type)};
     return complete(std::move(opt));
   }
@@ -1095,7 +1105,7 @@ auto Parser::parseTypePrimary() -> ast::TypeExprPtr {
     expect(TokenType::RParen, "Expected ')' in tuple type");
     if (elements.size() == 1) {
       auto grouped = std::move(elements[0]);
-      grouped->location = type->location;
+      grouped->location.startOffset = type->location.startOffset;
       return complete(std::move(grouped)); // just grouping
     }
     type->kind = ast::TupleType{std::move(elements)};
@@ -1258,11 +1268,12 @@ auto Parser::parseOr() -> ast::ExprPtr {
   auto left = parseAnd();
 
   while (check(TokenType::PipePipe)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = peek().type;
     advance();
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseAnd();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
@@ -1275,10 +1286,11 @@ auto Parser::parseAnd() -> ast::ExprPtr {
   auto left = parseEquality();
 
   while (check(TokenType::AmpAmp)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     advance();
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseEquality();
     op->kind =
         ast::BinaryOp{std::move(left), TokenType::AmpAmp, std::move(right)};
@@ -1292,10 +1304,11 @@ auto Parser::parseEquality() -> ast::ExprPtr {
   auto left = parseComparison();
 
   while (check(TokenType::EqEq) || check(TokenType::NotEq)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseComparison();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
@@ -1309,10 +1322,11 @@ auto Parser::parseComparison() -> ast::ExprPtr {
 
   while (check(TokenType::LessThan) || check(TokenType::GreaterThan) ||
          check(TokenType::LessEq) || check(TokenType::GreaterEq)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseAddition();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
@@ -1325,10 +1339,11 @@ auto Parser::parseAddition() -> ast::ExprPtr {
   auto left = parseMultiplication();
 
   while (check(TokenType::Plus) || check(TokenType::Minus)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseMultiplication();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
@@ -1342,10 +1357,11 @@ auto Parser::parseMultiplication() -> ast::ExprPtr {
 
   while (check(TokenType::Star) || check(TokenType::Slash) ||
          check(TokenType::Percent)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseUnary();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     left = std::move(op);
@@ -1384,10 +1400,11 @@ auto Parser::parsePower() -> ast::ExprPtr {
   // Exponentiation is right-associative and binds more tightly than unary
   // negation: `2 ^ 3 ^ 2` is `2 ^ (3 ^ 2)`, while `-2 ^ 2` is `-(2 ^ 2)`.
   if (check(TokenType::Caret)) {
-    auto location = left->location;
+    auto startOffset = left->location.startOffset;
     auto opType = advance().type;
     auto op = std::make_unique<ast::Expr>();
-    op->location = location;
+    op->location = currentLocation();
+    op->location.startOffset = startOffset;
     auto right = parseUnary();
     op->kind = ast::BinaryOp{std::move(left), opType, std::move(right)};
     return complete(std::move(op));
@@ -1435,9 +1452,11 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     if (match(TokenType::Dot)) {
       // .try — postfix unwrap
       if (check(TokenType::Try)) {
+        auto startOffset = expr->location.startOffset;
         advance();
         auto tryExpr = std::make_unique<ast::Expr>();
-        tryExpr->location = expr->location;
+        tryExpr->location = currentLocation();
+        tryExpr->location.startOffset = startOffset;
         tryExpr->kind = ast::TryExpr{std::move(expr)};
         expr = complete(std::move(tryExpr));
         continue;
@@ -1479,7 +1498,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       bool mutating = match(TokenType::Bang);
 
       auto call = std::make_unique<ast::Expr>();
-      call->location = expr->location;
+      call->location = currentLocation();
+      call->location.startOffset = expr->location.startOffset;
 
       std::vector<ast::ExprPtr> args;
       std::vector<std::pair<std::string, ast::ExprPtr>> namedArgs;
@@ -1529,7 +1549,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
                 head = "Map";
               }
               auto mod = std::make_unique<ast::Expr>();
-              mod->location = ty->location;
+              mod->location = currentLocation();
+              mod->location.startOffset = ty->location.startOffset;
               mod->kind = ast::UpperIdentifier{std::move(head)};
               args.push_back(std::move(mod));
               targetType = std::move(ty);
@@ -1563,7 +1584,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       expect(TokenType::RBracket, "Expected ']' after index");
 
       auto call = std::make_unique<ast::Expr>();
-      call->location = expr->location;
+      call->location = currentLocation();
+      call->location.startOffset = expr->location.startOffset;
       // Desugar to method call: expr.get(key)
       std::vector<ast::ExprPtr> args;
       args.push_back(std::move(key));
@@ -1576,7 +1598,8 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
     // Range: expr..expr
     if (match(TokenType::DotDot)) {
       auto range = std::make_unique<ast::Expr>();
-      range->location = expr->location;
+      range->location = currentLocation();
+      range->location.startOffset = expr->location.startOffset;
       auto end = parseAddition();
       range->kind = ast::RangeExpr{std::move(expr), std::move(end)};
       expr = complete(std::move(range));
@@ -2598,7 +2621,7 @@ auto Parser::parseMatchClause() -> ast::MatchClause {
 auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
   // do...end block: required for multi-statement arm bodies.
   if (check(TokenType::Do)) {
-    auto location = currentLocation();
+    auto startOffset = currentLocation().startOffset;
     advance();
     skipNewlines();
     std::vector<ast::ExprPtr> body;
@@ -2608,7 +2631,8 @@ auto Parser::parseMatchClauseBody() -> ast::ExprPtr {
     }
     expect(TokenType::End, "Expected 'end' to close match clause body");
     auto blockExpr = std::make_unique<ast::Expr>();
-    blockExpr->location = location;
+    blockExpr->location = currentLocation();
+    blockExpr->location.startOffset = startOffset;
     blockExpr->kind = ast::BlockExpr{std::move(body)};
     return complete(std::move(blockExpr));
   }
@@ -2945,10 +2969,11 @@ auto Parser::parseReturnExpr() -> ast::ExprPtr {
   // special handling here — parseExpr() already produces
   // TrailingIf{EXPR, COND} for that on its own.
   if (check(TokenType::If)) {
-    auto ifLocation = currentLocation();
+    auto startOffset = currentLocation().startOffset;
     advance(); // if
     auto trailing = std::make_unique<ast::Expr>();
-    trailing->location = ifLocation;
+    trailing->location = currentLocation();
+    trailing->location.startOffset = startOffset;
     auto condition = parseExpr();
     trailing->kind = ast::TrailingIf{nullptr, std::move(condition)};
     expr->kind = ast::ReturnExpr{std::move(trailing)};
@@ -3385,7 +3410,7 @@ auto Parser::parseTupleOrGrouped() -> ast::ExprPtr {
 
   // Grouped expression: (expr)
   expect(TokenType::RParen, "Expected ')'");
-  first->location = loc;
+  first->location.startOffset = loc.startOffset;
   return complete(std::move(first));
 }
 
@@ -3525,7 +3550,7 @@ auto Parser::parsePatternPrimary() -> ast::PatternPtr {
     expect(TokenType::RParen, "Expected ')'");
     if (elements.size() == 1) {
       auto grouped = std::move(elements[0]);
-      grouped->location = loc;
+      grouped->location.startOffset = loc.startOffset;
       return complete(std::move(grouped));
     }
     pattern->kind = ast::TuplePattern{std::move(elements)};

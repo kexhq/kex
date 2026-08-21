@@ -1962,7 +1962,10 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     if (auto [purity, inserted] =
             m_overloadPurity.emplace(purityKey, def.isFoul);
         !inserted && purity->second != def.isFoul) {
-        error(def.location,
+        auto location = def.location;
+        if (def.isFoul)
+            location.column += 5; // point after `foul `, at the function name
+        error(location,
               "Overloads of `" + def.name +
               "` must all have the same purity");
     }

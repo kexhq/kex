@@ -1,7 +1,10 @@
 #include "beam/beam_file.hxx"
 #include "beam/collect_metadata.hxx"
+#include "beam/etf.hxx"
 #include "beam/kexi.hxx"
 #include "beam/kexi_registry.hxx"
+#include "beam/term_builder.hxx"
+#include "ast/convert.hxx"
 #include "common/artifact_versions.hxx"
 #include "common/prelude_tiers.hxx"
 #include "common/color.hxx"
@@ -1864,14 +1867,15 @@ auto printUsage(const char *progName) -> void {
       << "  -s, --summary     Print public API signatures (Kex syntax)\n"
       << "  -t, --types       With --check: dump inferred expression types\n"
       << "  -e, --emit-core   Emit Core Erlang (.core) — does not invoke erlc\n"
+      << "      --emit-ast    Emit the parsed Kex AST as ETF\n"
       << "      --expand      Print the AST after `compiled do` expansion\n"
       << "      --collapse-report\n"
       << "                    Report what `compiled do` chain collapse folded "
          "away, and why\n"
       << "                    the rest did not — the feature is invisible at "
          "runtime\n"
-      << "  -o <dir>          Output directory for -c / --emit-core (default: "
-         ".)\n"
+      << "  -o <path>         Output directory for -c / --emit-core, or output "
+         "file for --emit-ast\n"
       << "      --source-root <dir>\n"
       << "                    Add a module source root (repeatable)\n"
       << "      --allow-mocks Permit Mock.* outside a spec — it makes one part "
@@ -1941,6 +1945,8 @@ int main(int argc, char *argv[]) {
       {"summary", no_argument, nullptr, 's'},
       {"types", no_argument, nullptr, 't'},
       {"emit-core", no_argument, nullptr, 'e'},
+      {"emit-ast", no_argument, nullptr, 1011},
+      {"ast-filename", required_argument, nullptr, 1012},
       {"complete", required_argument, nullptr, 'K'},
       {"help", no_argument, nullptr, 'h'},
       {"version", no_argument, nullptr, 'v'},
@@ -1979,6 +1985,7 @@ int main(int argc, char *argv[]) {
   bool summaryMode = false;
   std::string completePrefix;
   std::string outputDir = ".";
+  std::string astFilename;
   bool outputDirExplicit = false;
   int opt;
 
@@ -2000,6 +2007,12 @@ int main(int argc, char *argv[]) {
       break;
     case 1010:
       allowMocks = true;
+      break;
+    case 1011:
+      mode = "emit-ast";
+      break;
+    case 1012:
+      astFilename = optarg;
       break;
     case 1007:
 #ifdef KEX_HAS_LSP
@@ -2149,6 +2162,15 @@ int main(int argc, char *argv[]) {
   // The BEAM runtime is a child process, so carry the CLI color choice over
   // explicitly. Console constants and the spec reporter share this setting.
   setenv("KEX_COLORS", kex::color::enabled ? "1" : "0", 1);
+  // Runtime services that invoke the compiler (currently Kex.AST) must use
+  // the toolchain that launched this process, not an unrelated `kex` found
+  // earlier on PATH. Preserve an explicit override for embedding/tests.
+  if (const char *configured = std::getenv("KEX");
+      !configured || !*configured) {
+    const auto currentExecutable =
+        kex::executableDirectory() / std::filesystem::path(argv[0]).filename();
+    setenv("KEX", currentExecutable.string().c_str(), 0);
+  }
 #endif
 
   if (mode == "lsp") {
@@ -3674,6 +3696,7 @@ int main(int argc, char *argv[]) {
   auto source = readFile(filepath);
   if (source.empty())
     return 1;
+  auto astDocs = kex::ast::extractDocComments(source);
 
   // Honour `# kex: no-check` pragma in the first few lines — any file that
   // contains it is treated as if --no-check was passed on the command line.
@@ -3723,7 +3746,32 @@ int main(int argc, char *argv[]) {
     // syntax error (see spec/error_if_with_do.kex, a real regression
     // case). In --check mode the SemanticDB re-parses and reports them
     // itself; printing here would duplicate every message.
-    if (!parser.diagnostics().empty() && (mode == "run" || mode == "compile")) {
+    if (!parser.diagnostics().empty() &&
+        (mode == "run" || mode == "compile" || mode == "emit-ast")) {
+      if (mode == "emit-ast") {
+        const auto &diagnostic = parser.diagnostics().front();
+        const auto logicalFilename =
+            astFilename.empty() ? filepath : astFilename;
+        kex::beam::TermBuilder builder;
+        auto location = builder.record("Location", {
+            {"file", builder.string(logicalFilename)},
+            {"line", builder.integer(int64_t{diagnostic.location.line})},
+            {"column", builder.integer(int64_t{diagnostic.location.column})},
+            {"startOffset", builder.integer(
+                int64_t{diagnostic.location.startOffset})},
+            {"endOffset", builder.integer(
+                int64_t{diagnostic.location.endOffset})},
+        });
+        auto error = builder.record("ParseError", {
+            {"message", builder.string(diagnostic.message)},
+            {"location", builder.just(std::move(location))},
+        });
+        auto result = builder.variant("Error", "Result", {std::move(error)});
+        auto bytes = kex::beam::encodeEtf(result);
+        std::cout.write(reinterpret_cast<const char *>(bytes.data()),
+                        static_cast<std::streamsize>(bytes.size()));
+        return 0;
+      }
       for (const auto &pd : parser.diagnostics()) {
         std::cerr << kex::color::apply(kex::color::gray) << pd.location.file
                   << ":" << pd.location.line << ":" << pd.location.column << ":"
@@ -3746,6 +3794,29 @@ int main(int argc, char *argv[]) {
 
     if (mode == "parse") {
       printAst(program);
+      return 0;
+    }
+
+    if (mode == "emit-ast") {
+      kex::beam::TermBuilder builder;
+      kex::ast::Converter converter(builder);
+      auto bytes = kex::beam::encodeEtf(
+          converter.program(program,
+                            astFilename.empty() ? filepath : astFilename,
+                            astDocs));
+      if (outputDirExplicit) {
+        std::ofstream output(outputDir, std::ios::binary);
+        if (!output) {
+          std::cerr << "error: cannot open AST output file: " << outputDir
+                    << "\n";
+          return 1;
+        }
+        output.write(reinterpret_cast<const char *>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+      } else {
+        std::cout.write(reinterpret_cast<const char *>(bytes.data()),
+                        static_cast<std::streamsize>(bytes.size()));
+      }
       return 0;
     }
 
