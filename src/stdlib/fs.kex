@@ -1,8 +1,8 @@
 module FS do
   type FilePath = String
   type FileModes = Read | Write | Append | ReadWrite
-  type ReadCapability = CanRead | CannotRead
-  type WriteCapability = CanWrite | CannotWrite
+  type ReadPermission = CanRead | CannotRead
+  type WritePermission = CanWrite | CannotWrite
   type FileError = OpenFailed(FilePath)
 
   module File do

@@ -14,6 +14,7 @@ namespace kex {
 static const std::unordered_map<std::string, TokenType> keywords = {
     {"after", TokenType::After},
     {"break", TokenType::Break},
+    {"capability", TokenType::Capability},
     {"compiled", TokenType::Compiled},
     {"do", TokenType::Do},
     {"elif", TokenType::Elif},
@@ -50,6 +51,7 @@ static const std::unordered_map<std::string, TokenType> keywords = {
     {"var", TokenType::Var},
     {"when", TokenType::When},
     {"while", TokenType::While},
+    {"with", TokenType::With},
 };
 
 // Every SourceLocation keeps a `string_view` of the file name, and an AST

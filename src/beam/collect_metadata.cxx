@@ -933,6 +933,31 @@ auto collectMetadata(const kex::ast::Program& program,
     chunk.metadata.role = opts.role;
     chunk.metadata.entryBackPointer = opts.entryBackPointer;
 
+    // Whether this module was declared `capability`. A consumer reads its
+    // stdlib interfaces from this chunk rather than from source, so the flag
+    // has to travel with it or a stdlib capability cannot be replaced by any
+    // importer (kexhq/kex#143).
+    if (!opts.moduleName.empty()) {
+        std::function<bool(const std::vector<ast::ModuleItem>&,
+                           const std::string&)> findNested;
+        std::function<bool(const ast::ModuleDef&)> visit =
+            [&](const ast::ModuleDef& mod) -> bool {
+            if (mod.name == opts.moduleName) {
+                chunk.metadata.isCapability = mod.isCapability;
+                return true;
+            }
+            for (const auto& item : mod.body)
+                if (const auto* nested =
+                        std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                    if (*nested && visit(**nested)) return true;
+            return false;
+        };
+        for (const auto& item : program.items)
+            if (const auto* mod =
+                    std::get_if<std::unique_ptr<ast::ModuleDef>>(&item))
+                if (*mod && visit(**mod)) break;
+    }
+
     if (!opts.noCheck) {
         if (opts.flattenModules)
             collectFlattenedProgram(program, chunk.typeInterface, chunk.metadata,

@@ -54,6 +54,12 @@ struct Process {
     // runs the entry closure calling into evalBody) starts from the right
     // scope.
     std::shared_ptr<Environment> savedEnv;
+    // This process's own capability substitutions, snapshotted from its
+    // spawner at spawn time and saved/restored around each resume() exactly
+    // like savedEnv. Per-process rather than evaluator-wide so a `with` in
+    // one process cannot silently change what another process's code means —
+    // a process spawned OUTSIDE a `with` must not see it (kexhq/kex#143).
+    std::vector<std::pair<std::string, ValuePtr>> savedCapabilities;
     // Set by send() only when a message arrives while this process is
     // genuinely blocked in receive with nothing matching — guards against
     // enqueueing the same process into the ready queue more than once.

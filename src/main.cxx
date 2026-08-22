@@ -1329,6 +1329,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportArity[name] = arity;
   for (const auto &[name, names] : overrides.exportParamNames)
     result.exportParamNames[name] = names;
+  for (const auto &name : overrides.foulExports)
+    result.foulExports.insert(name);
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
   for (const auto &[name, methods] : overrides.traitMethods)

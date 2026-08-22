@@ -1,0 +1,36 @@
+# A capability nested in a module, named and substituted by its qualified path.
+# This is the shape the stdlib needs: the capability boundary is the innermost
+# module owning effectful methods, so `FS.File` is one and `FS` is not —
+# `FS.Path` is pure string work with nothing to substitute.
+#
+# Runs on both backends. It did not until #182: once a `make` block defined a
+# method of the same name — which implementing a capability always does — BEAM
+# resolved `FS2.File.read(p)` through the receiver/UFCS machinery instead of the
+# module path, then lowered the dotted receiver `FS2.File` as a value, which a
+# module is not.
+
+module FS2 do
+  capability File do
+    foul read(path: String) -> String do
+      return "REAL:" + path
+    end
+  end
+end
+
+record FakeFiles do
+  canned : String
+end
+
+make FakeFiles, implement: FS2.File do
+  foul read(path: String) -> String = @canned + path
+end
+
+foul readFile(p: String) -> String = FS2.File.read(p)
+
+main do
+  IO.printLine(readFile("a.txt"))
+  with FS2.File = FakeFiles { canned: "FAKE:" } do
+    IO.printLine(readFile("a.txt"))
+  end
+  IO.printLine(readFile("a.txt"))
+end

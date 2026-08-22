@@ -438,6 +438,16 @@ struct UsingExpr {
     std::vector<ExprPtr> body; // empty for bare `using Module`
 };
 
+// `with FS.File = FakeFiles { ... } do ... end` — replaces a capability's
+// implementation for the lexical region of the body. The substitute must
+// provide what the capability declares; every call reaching the capability
+// from inside the region, however deep, sees it (kexhq/kex#143).
+struct WithExpr {
+    TypeName capability;      // e.g. FS.File
+    ExprPtr value;            // the replacement implementation
+    std::vector<ExprPtr> body;
+};
+
 struct Expr {
     SourceLocation location;
     std::variant<
@@ -485,7 +495,8 @@ struct Expr {
         TryingExpr,
         ErrorNode,
         GeneratedDecl,
-        UsingExpr
+        UsingExpr,
+        WithExpr
     > kind;
 };
 
@@ -683,6 +694,12 @@ struct ModuleDef {
     SourceLocation location;
     std::string name;
     std::vector<ModuleItem> body;
+    // `capability Name do ... end` — a module whose implementation may be
+    // replaced for a lexical region by `with Name = value do ... end`, and
+    // whose presence a compilation target may decline to provide. Every
+    // later phase treats it as the module it is; only substitution and
+    // requirement tracking consult this flag (kexhq/kex#143).
+    bool isCapability = false;
 };
 
 using TopLevelItem = std::variant<

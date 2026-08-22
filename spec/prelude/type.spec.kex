@@ -68,7 +68,7 @@ describe("Type") do
     assert(Type.of(42) == Type.named("Integer"))
     assert(Type.of(42) == Type.of(7))
     assert(Type.of(42) != Type.of("7"))
-    assert(Type.of([1]) == Type.with("List", [Type.named("Integer")]))
+    assert(Type.of([1]) == Type.generic("List", [Type.named("Integer")]))
     assert(Type.of(Point { x: 1, y: 2 }) == Type.named("Point"))
   end
 

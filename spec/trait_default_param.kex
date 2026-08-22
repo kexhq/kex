@@ -1,0 +1,30 @@
+# A trait-typed parameter may take a concrete default. `check()` validates every
+# FunctionDef before any make block, so while this default was being checked no
+# local trait conformance had been registered yet and it was rejected as
+# "expected FileStore, got RealFS" (kexhq/kex#175).
+#
+# This is the shape that makes dependency injection usable: the dependency is
+# invisible at production call sites and supplied only by a test.
+
+trait FileStore do
+  readFile : String -> String
+end
+
+record RealFS do end
+make RealFS, implement: FileStore do
+  let readFile(p: String) -> String = "real:" + p
+end
+
+record FakeFS do
+  tag : String
+end
+make FakeFS, implement: FileStore do
+  let readFile(p: String) -> String = @tag + p
+end
+
+let loadGreeting(path: String, fs: FileStore = RealFS {}) -> String = fs.readFile(path)
+
+main do
+  IO.printLine(loadGreeting("a.txt"))
+  IO.printLine(loadGreeting("a.txt", FakeFS { tag: "fake:" }))
+end

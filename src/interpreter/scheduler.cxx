@@ -54,6 +54,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     // Restore this process's own m_env cursor (not necessarily its root
     // scope — see Process::savedEnv) before handing it the C++ stack back.
     m_evaluator.m_env = proc.savedEnv;
+    auto callerCapabilities = std::move(m_evaluator.m_capabilityBindings);
+    m_evaluator.m_capabilityBindings = std::move(proc.savedCapabilities);
 
     proc.fiber->resume();
 
@@ -61,6 +63,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     // finished, or some nested scope if it yielded mid-expression) is
     // exactly what the next resume() of THIS process needs to see again.
     proc.savedEnv = m_evaluator.m_env;
+    proc.savedCapabilities = std::move(m_evaluator.m_capabilityBindings);
+    m_evaluator.m_capabilityBindings = std::move(callerCapabilities);
     m_current = prevCurrent;
 }
 
@@ -165,6 +169,7 @@ auto Scheduler::spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Env
     // closure-capture convention LambdaValue already uses).
     proc->env = std::make_shared<Environment>(closureEnv);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Evaluator* evalPtr = &m_evaluator;
     const std::vector<ast::ExprPtr>* bodyPtr = &body;
@@ -192,6 +197,7 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
     proc->id = id;
     proc->env = std::make_shared<Environment>(m_evaluator.m_env);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Scheduler* self = this;
     ProcessId spawner = m_current;
@@ -290,6 +296,7 @@ auto Scheduler::startSupervisor(std::vector<ValuePtr> childBlocks) -> ProcessId 
     proc->id = id;
     proc->env = std::make_shared<Environment>(m_evaluator.m_env);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Scheduler* self = this;
 

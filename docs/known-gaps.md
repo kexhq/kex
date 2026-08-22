@@ -213,21 +213,6 @@ compile path.
 `record_module_constructors.kex`, after `static do` was removed) were both in
 this list previously and now match.
 
-## No regex on the wasm build
-
-The wasm target has no PCRE2, so every `Regex` call raises "Regex is
-unavailable in this build". `spec/regex_basics.kex` and
-`spec/regex_compile_error.kex` carry `# kex: skip-wasm` for this reason.
-
-Fixing it means a vendored `third_party/pcre2-wasm` pipeline alongside
-`gmp-wasm`: a static build pinned to Emscripten 5.0.7 (see
-`third_party/gmp-wasm/README.md` for why that pin exists), with
-`-DPCRE2_SUPPORT_JIT=OFF` (wasm has no JIT — the analogue of GMP's
-`--disable-assembly`) and `-DPCRE2_SUPPORT_UNICODE=ON`, which is required
-rather than optional since it backs the `PCRE2_UTF|PCRE2_UCP` pinning that
-keeps `\d`/`\w` agreeing with the BEAM backend. PCRE2 is BSD-licensed, so it
-raises none of GMP's static-linking questions.
-
 ## Interpreter REPL prints a stray continuation prompt
 
 ```

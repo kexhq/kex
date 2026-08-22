@@ -567,7 +567,7 @@ Planned or incomplete:
 
 - Compiling Kex itself to WASM (today only the interpreter is compiled to wasm, for the in-browser REPL)
 - Typed processes (`Process<Message>`) and supervision (`Supervisor`) beyond the current primitives
-- `.kexo` binary IR / distribution format and a full module system across BEAM modules
+- A full module system across BEAM modules
 - `is?` / `as` type introspection and explicit conversion
 - Namespace/import resolution beyond `using` blocks
 - Compiled metaprogramming beyond the parser/design sketch

@@ -199,8 +199,11 @@ Regex.splitLimit("a,b,,", regex`,`, -1)   # ["a", "b", "", ""]
 - `Regex` carries only its `source` string; the compiled engine lives in a
   runtime cache keyed by that source. A compiled pattern bakes in the host's
   PCRE version, so it is never embedded in a distributed artifact.
-- **wasm build:** the in-browser build has no PCRE2, so every `Regex` call
-  raises "Regex is unavailable in this build" (`docs/known-gaps.md`).
+- **wasm build:** the in-browser build links a static PCRE2 from
+  `third_party/pcre2-wasm` (gitignored; see its README for the build recipe, and
+  `.github/workflows/ci.yml` for how CI caches it). `Regex` behaves the same
+  there as on native. CMake fails at configure time if the prebuilt library is
+  missing.
 - Both the bare (`` regex`…` ``) and module-qualified (`` Regex.regex`…` ``)
   tag spellings are supported and behave identically.
 

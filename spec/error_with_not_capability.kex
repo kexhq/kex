@@ -1,0 +1,48 @@
+# `with` may only replace a declared capability, and only with something that
+# implements it. All three of these used to be accepted silently (kexhq/kex#180):
+# a plain module is not substitutable, a misspelled name binds nothing while the
+# body still runs against the real implementation, and the replacement was never
+# checked against the interface at all.
+#
+# The body is also type-checked now — it was skipped entirely before, so any
+# code inside a `with` escaped the checker.
+
+capability Clock do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
+module Plain do
+  foul hello() -> String do
+    return "real"
+  end
+end
+
+record NotAClock do
+  x : Integer
+end
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+
+main do
+  with Plain = NotAClock { x: 1 } do
+    IO.printLine(Plain.hello())
+  end
+  with Cloc = NotAClock { x: 1 } do
+    IO.printLine("typo binds nothing")
+  end
+  with Clock = NotAClock { x: 1 } do
+    IO.printLine("wrong replacement")
+  end
+  with Clock = FrozenClock { at: 1 } do
+    let wrong: String = 99
+    IO.printLine(wrong)
+  end
+end

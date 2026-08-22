@@ -680,7 +680,37 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
 
     std::unordered_set<std::string> allFns;
     std::unordered_set<std::string> directlyFoul;
+    // The call graph is keyed by bare name, so two same-named functions in
+    // different modules share an entry. Foulness only ever widens, so that is
+    // safe there; a capability requirement would be REPORTED against a
+    // function that does not have it, so an ambiguous name is dropped rather
+    // than guessed at (kexhq/kex#143).
+    std::unordered_map<std::string, int> definitionCount;
     m_callGraph.clear();
+
+    // Which modules are capabilities has to be known before the walk, so a
+    // call into one can be recorded as a requirement (kexhq/kex#143).
+    m_capabilityModules.clear();
+    m_requiredCapabilities.clear();
+    {
+        std::function<void(const ast::ModuleDef&)> collectCapabilities =
+            [&](const ast::ModuleDef& module) {
+            if (module.isCapability) m_capabilityModules.insert(module.name);
+            for (const auto& mi : module.body)
+                std::visit([&](const auto& mn) {
+                    using MT = std::decay_t<decltype(mn)>;
+                    if constexpr (std::is_same_v<MT,
+                                                 std::unique_ptr<ast::ModuleDef>>)
+                        if (mn) collectCapabilities(*mn);
+                }, mi);
+        };
+        for (const auto& item : program.items)
+            std::visit([&](const auto& n) {
+                using T = std::decay_t<decltype(n)>;
+                if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>)
+                    if (n) collectCapabilities(*n);
+            }, item);
+    }
 
     // Walk an expression tree, collecting called function names and detecting
     // direct foul operations (spawn, receive, foul module method calls).
@@ -712,6 +742,11 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                     if (!receiverName.empty()
                         && isQualifiedCallFoul(receiverName, n.method))
                         hasFoulOp = true;
+                    // "" marks a requirement this function reaches itself,
+                    // as opposed to one inherited from a callee below.
+                    if (m_capabilityTarget && !receiverName.empty()
+                        && m_capabilityModules.count(receiverName))
+                        m_capabilityTarget->emplace(receiverName, "");
                 }
                 for (const auto& a : n.args) if (a) walkExpr(*a, calls, hasFoulOp);
                 for (const auto& [_, a] : n.namedArgs) if (a) walkExpr(*a, calls, hasFoulOp);
@@ -798,14 +833,17 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
             std::visit([&](const auto& n) {
                 using T = std::decay_t<decltype(n)>;
                 if constexpr (std::is_same_v<T, std::unique_ptr<ast::FunctionDef>>) {
-                    if (n) allFns.insert(n->name);
+                    if (n) { allFns.insert(n->name); definitionCount[n->name]++; }
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
                     if (n) {
                         for (const auto& mi : n->body) {
                             std::visit([&](const auto& mn) {
                                 using MT = std::decay_t<decltype(mn)>;
                                 if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                                    if (mn) allFns.insert(mn->name);
+                                    if (mn) {
+                                        allFns.insert(mn->name);
+                                        definitionCount[mn->name]++;
+                                    }
                                 }
                             }, mi);
                         }
@@ -820,9 +858,11 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
     auto processFn = [&](const ast::FunctionDef& def) {
         std::set<std::string> calls;
         bool hasFoulOp = def.isFoul;
+        m_capabilityTarget = &m_requiredCapabilities[def.name];
         for (const auto& clause : def.clauses)
             for (const auto& ex : clause.body)
                 if (ex) walkExpr(*ex, calls, hasFoulOp);
+        m_capabilityTarget = nullptr;
         calls.erase(def.name);
         m_callGraph[def.name] = std::move(calls);
         if (hasFoulOp) directlyFoul.insert(def.name);
@@ -839,17 +879,7 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                         std::visit([&](const auto& mn) {
                             using MT = std::decay_t<decltype(mn)>;
                             if constexpr (std::is_same_v<MT, std::unique_ptr<ast::FunctionDef>>) {
-                                if (mn) {
-                                    auto& def = *mn;
-                                    std::set<std::string> calls;
-                                    bool hasFoulOp = def.isFoul;
-                                    for (const auto& clause : def.clauses)
-                                        for (const auto& ex : clause.body)
-                                            if (ex) walkExpr(*ex, calls, hasFoulOp);
-                                    calls.erase(def.name);
-                                    m_callGraph[def.name] = std::move(calls);
-                                    if (hasFoulOp) directlyFoul.insert(def.name);
-                                }
+                                if (mn) processFn(*mn);
                             }
                         }, mi);
                     }
@@ -873,6 +903,37 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                 }
             }
         }
+    }
+
+    // Requirements propagate the same way foulness does, but each one keeps
+    // the callee that carried it in so the chain can be printed later.
+    {
+        bool spread = true;
+        while (spread) {
+            spread = false;
+            for (const auto& [fn, callees] : m_callGraph) {
+                for (const auto& callee : callees) {
+                    auto found = m_requiredCapabilities.find(callee);
+                    if (found == m_requiredCapabilities.end()) continue;
+                    for (const auto& [capability, _] : found->second) {
+                        auto& mine = m_requiredCapabilities[fn];
+                        if (mine.count(capability)) continue;
+                        mine.emplace(capability, callee);
+                        spread = true;
+                    }
+                }
+            }
+        }
+        // A name defined more than once in the unit cannot be attributed
+        // precisely, and over-reporting a requirement is worse than staying
+        // quiet about it.
+        for (const auto& [name, count] : definitionCount)
+            if (count > 1) m_requiredCapabilities.erase(name);
+        // A function that needs nothing should not appear at all.
+        for (auto it = m_requiredCapabilities.begin();
+             it != m_requiredCapabilities.end();)
+            it = it->second.empty() ? m_requiredCapabilities.erase(it)
+                                    : std::next(it);
     }
 
     // Re-walk guard expressions to reject foul calls, direct and transitive.
@@ -1059,7 +1120,17 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
 
 auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> void {
     const auto& resolved = m_checker.resolvedCalls();
-    if (resolved.empty()) return;
+    // No early return on an empty `resolved` map: the trait-receiver check
+    // below does not consult it, and a program whose only foul call goes
+    // through a trait has no resolved targets at all (kexhq/kex#172).
+
+    // A foul method reached through a VALUE receiver (`b.bang()`, `c.now()`)
+    // is invisible to the phase-1 purity check, which runs before type
+    // checking and so can only resolve module-qualified receivers by name.
+    // The resolved call target knows the answer, so record the first such
+    // call per function and report it below (kexhq/kex#172).
+    const ast::Expr* foulValueCall = nullptr;   // location lives on the Expr
+    std::string foulValueMethod;
 
     // Walk expression trees looking for MethodCall nodes with foul resolved targets.
     std::function<bool(const ast::Expr&)> hasFoulResolved =
@@ -1068,7 +1139,51 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 auto it = resolved.find(&n);
-                if (it != resolved.end() && it->second.isFoul) return true;
+                if (it != resolved.end() && it->second.isFoul) {
+                    // `IO.inspect` is the documented purity-exempt hatch.
+                    // A call phase 1 already reported must not be reported
+                    // twice — that is exactly the qualified-and-known-foul
+                    // case, which `receiverModuleName` alone cannot identify
+                    // (it returns the name of any lowercase identifier, so a
+                    // plain value receiver `b` looks module-qualified).
+                    bool alreadyReported = n.receiver
+                        && isQualifiedCallFoul(receiverModuleName(*n.receiver),
+                                               n.method);
+                    if (!foulValueCall && !alreadyReported
+                        && n.method != "inspect") {
+                        foulValueCall = &e;
+                        foulValueMethod = n.method;
+                    }
+                    return true;
+                }
+                // A trait-typed receiver dispatches dynamically, so the call
+                // has no single resolved target and the branch above never
+                // fires. The trait declaration states the effect, so consult
+                // it directly (kexhq/kex#172).
+                if (n.receiver) {
+                    if (auto recvType = m_checker.typeOf(n.receiver.get())) {
+                        // A trait-typed parameter is a ConstrainedType (a type
+                        // variable bound to the trait), not a NamedType — but
+                        // a value annotated with the trait directly is named.
+                        std::string traitName;
+                        if (auto* con =
+                                std::get_if<ConstrainedType>(&recvType->kind))
+                            traitName = con->traitName;
+                        else if (auto* named =
+                                std::get_if<NamedType>(&recvType->kind))
+                            traitName = named->name;
+                        if (!traitName.empty()
+                            && m_checker.isTrait(traitName)
+                            && m_checker.traitMethodIsFoul(traitName,
+                                                           n.method)) {
+                            if (!foulValueCall && n.method != "inspect") {
+                                foulValueCall = &e;
+                                foulValueMethod = n.method;
+                            }
+                            return true;
+                        }
+                    }
+                }
                 if (n.receiver && hasFoulResolved(*n.receiver)) return true;
                 for (const auto& a : n.args) if (a && hasFoulResolved(*a)) return true;
                 for (const auto& [_, a] : n.namedArgs) if (a && hasFoulResolved(*a)) return true;
@@ -1133,14 +1248,23 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
     // Check each function for newly discovered foul resolved calls.
     bool newFoul = false;
     auto checkFn = [&](const ast::FunctionDef& def) {
-        if (m_transitivelyFoul.count(def.name)) return;
-        for (const auto& clause : def.clauses)
+        bool known = m_transitivelyFoul.count(def.name) > 0;
+        foulValueCall = nullptr;
+        bool found = false;
+        for (const auto& clause : def.clauses) {
             for (const auto& ex : clause.body)
-                if (ex && hasFoulResolved(*ex)) {
-                    m_transitivelyFoul.insert(def.name);
-                    newFoul = true;
-                    return;
-                }
+                if (ex && hasFoulResolved(*ex)) { found = true; break; }
+            if (found) break;
+        }
+        if (found && !known) {
+            m_transitivelyFoul.insert(def.name);
+            newFoul = true;
+        }
+        if (!def.isFoul && foulValueCall) {
+            error(foulValueCall->location,
+                "Cannot call foul function '" + foulValueMethod +
+                "' from pure context");
+        }
     };
 
     for (const auto& item : program.items) {

@@ -718,6 +718,12 @@ public:
                     m_builder.boolean(node.isOperator),
                     m_builder.list(std::move(groups)),
                 });
+            } else if constexpr (std::is_same_v<T, WithExpr>) {
+                return expressionVariant("With", {
+                    m_builder.string(joinName(node.capability)),
+                    expressionPtr(node.value),
+                    expressionList(node.body),
+                });
             } else if constexpr (std::is_same_v<T, UsingExpr>) {
                 std::vector<Value> onlyNames;
                 for (const auto& name : node.onlyNames)

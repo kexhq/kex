@@ -1,6 +1,6 @@
 # Kex IR Format (`.kexo`)
 
-> 📋 **Design doc — not yet implemented.** The lowering IR exists in `src/ir/` but only emits Core Erlang; the `.kexo` binary distribution format described here is not built.
+> ❌ **Dropped — kept for reference only.** The `.kexo` binary distribution format described here is not built and is no longer planned. Tey distributes source (git-only, compiled locally; see `docs/plan_tey_pm.md`), and the lowering IR in `src/ir/` emits Core Erlang directly. Nothing below reflects committed design.
 
 ## Context
 
