@@ -521,6 +521,35 @@ struct Lowering {
                                one(std::move(list)))));
     }
 
+    // Same message, but a record field holding a function gets to answer
+    // first: `d.fetch(url)` should call it when nothing else claims the name.
+    // The method keeps precedence — reaching here means nothing did. The
+    // walker's dispatch fallback does the same (kexhq/kex#176). The field is
+    // read by name at runtime because the reason this call is unresolved is
+    // that lowering does not know the receiver's type.
+    auto undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver)
+        -> ExprPtr {
+        std::string loc;
+        if (currentLoc) loc = std::string(currentLoc->file) + ":"
+            + std::to_string(currentLoc->line) + ":"
+            + std::to_string(currentLoc->column) + ": ";
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> callArgs;
+        for (const auto& a : n.args) callArgs.push_back(atomize(a, binds));
+        for (const auto& [_, value] : n.namedArgs)
+            callArgs.push_back(atomize(value, binds));
+        if (n.block) callArgs.push_back(atomize(*n.block, binds));
+        auto argList = std::make_unique<Expr>();
+        argList->node = MakeList{std::move(callArgs), std::nullopt};
+        std::vector<ExprPtr> args;
+        args.push_back(std::move(receiver));
+        args.push_back(lit(LitKind::String, n.method));
+        args.push_back(std::move(argList));
+        args.push_back(lit(LitKind::String, loc));
+        return wrapLets(binds, callE("kex_io", "call_field_or_fail", 4,
+                                     std::move(args)));
+    }
+
     // A named argument no clause of the target declares. Dropping it would run
     // the call as if the label had never been written and hand back a
     // plausible-looking answer to a question nobody asked, so both backends
@@ -1659,12 +1688,24 @@ struct Lowering {
         if (auto requirements = fnTraitParams.find(n.name);
             requirements != fnTraitParams.end())
             for (const auto& [index, trait] : requirements->second) {
-                if (index >= n.args.size() || !n.args[index])
+                const ast::Expr* source =
+                    index < n.args.size() ? n.args[index].get() : nullptr;
+                // A trait-typed parameter with a default may be omitted at the
+                // call site, and then the dictionary comes from the default
+                // value — the same expression the loop above passes as the
+                // argument itself (kexhq/kex#175).
+                if (!source)
+                    if (auto defaults = fnDefaults.find(n.name);
+                        defaults != fnDefaults.end() &&
+                        index < defaults->second.size() &&
+                        defaults->second[index])
+                        source = defaults->second[index]->get();
+                if (!source)
                     throw LowerError(
                         "IR lower: missing source argument for " + trait +
                         " dictionary");
-                args.push_back(atomize_ir(
-                    makeTraitDictionary(trait, *n.args[index]), binds));
+                args.push_back(
+                    atomize_ir(makeTraitDictionary(trait, *source), binds));
             }
         if (n.name == "self" && args.empty() && !knownFns.count("self"))
             return callE("erlang", "self", 0, {});
@@ -2197,6 +2238,17 @@ struct Lowering {
                             source = n.args[argument - 1].get();
                     } else if (argument < n.args.size()) {
                         source = n.args[argument].get();
+                    }
+                    // Same as above: an omitted defaulted trait parameter
+                    // takes its dictionary from the default expression.
+                    if (!source) {
+                        const size_t index = resolved->second.passesReceiver
+                            ? (argument > 0 ? argument - 1 : 0) : argument;
+                        if (auto defaults = fnDefaults.find(n.method);
+                            defaults != fnDefaults.end() &&
+                            index < defaults->second.size() &&
+                            defaults->second[index])
+                            source = defaults->second[index]->get();
                     }
                     if (!source)
                         throw LowerError(
@@ -2938,7 +2990,7 @@ struct Lowering {
             return ret(wrapLets(binds, std::move(ex)));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
-        return ret(undefinedMethod(n.method, rv()));
+        return ret(undefinedMethodOrField(n, rv()));
     }
 
     // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
@@ -5818,12 +5870,25 @@ struct Lowering {
             auto wild = std::make_unique<Pattern>();
             wild->kind = PatKind::Wild;
             fallback.patterns.push_back(std::move(wild));
-            auto message = callE("erlang", "iolist_to_binary", 1,
-                one(makeListOf(
-                    lit(LitKind::String, "runtime error: Undefined method: " +
-                                          name + " for "),
-                    callE("kex_io", "value_type_name", 1, one(var("_a0"))))));
-            fallback.body = callE("erlang", "error", 1, one(std::move(message)));
+            // Last resort before raising: a record field may hold a function,
+            // and `d.fetch(url)` should call it. The method keeps precedence,
+            // which is exactly what reaching this fallback means — no clause
+            // matched the receiver. The walker's dispatch does the same
+            // (kexhq/kex#176). The field is read by name at runtime because
+            // the reason this call is unresolved is that lowering does not
+            // know the receiver's type.
+            std::vector<ExprPtr> fieldArgs;
+            for (int i = 1; i < arity; i++)
+                fieldArgs.push_back(var("_a" + std::to_string(i)));
+            auto fieldArgList = std::make_unique<Expr>();
+            fieldArgList->node = MakeList{std::move(fieldArgs), std::nullopt};
+            std::vector<ExprPtr> rescueArgs;
+            rescueArgs.push_back(var("_a0"));
+            rescueArgs.push_back(lit(LitKind::String, name));
+            rescueArgs.push_back(std::move(fieldArgList));
+            rescueArgs.push_back(lit(LitKind::String, ""));
+            fallback.body = callE("kex_io", "call_field_or_fail", 4,
+                                  std::move(rescueArgs));
             m.clauses.push_back(std::move(fallback));
         }
         auto body = std::make_unique<Expr>();

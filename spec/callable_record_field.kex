@@ -1,0 +1,28 @@
+# A record field holding a function is callable with dot syntax. The method
+# keeps precedence — the field is consulted only when nothing answered the
+# name — which is the call-side counterpart of the field/method rule
+# spec/record_field_method_collision.kex pins for READS (kexhq/kex#176).
+#
+# Both backends agree, which is the point: the walker consults the field in its
+# dispatch fallback, and BEAM does the same through kex_io:call_field_or_fail/4,
+# reading the field by name from the layout registry because the reason such a
+# call is unresolved is that lowering does not know the receiver's type. A name
+# that really is missing still raises the identical message on both.
+
+record Deps do
+  fetch : String -> String
+end
+
+let realFetch(url: String) -> String = "real:" + url
+
+main do
+  let real = Deps { fetch: ~realFetch }
+  IO.printLine(real.fetch("/x"))
+
+  let mock = Deps { fetch: { |u| "mock:" + u } }
+  IO.printLine(mock.fetch("/x"))
+
+  # Reading the field and calling the binding keeps working too.
+  let f = real.fetch
+  IO.printLine(f("/y"))
+end

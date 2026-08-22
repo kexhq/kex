@@ -1,0 +1,22 @@
+# A `foul` method reached through a VALUE receiver is a purity violation just
+# as a direct call is. The phase-1 purity check runs before type checking and
+# so can only resolve module-qualified receivers by name; these two forms went
+# unchecked entirely and ran their effects from a `let` (kexhq/kex#172).
+
+# (1) A plain make-block method — no trait involved.
+record Box do
+  n : Integer
+end
+
+make Box do
+  foul bang() -> Integer do
+    IO.printLine("effect!")
+    return @n
+  end
+end
+
+let readBox(b: Box) -> Integer = b.bang()
+
+main do
+  IO.printLine(readBox(Box { n: 3 }))
+end
