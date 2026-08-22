@@ -1331,6 +1331,8 @@ auto mergeExternalModules(const kex::ir::ExternalModules &base,
     result.exportParamNames[name] = names;
   for (const auto &name : overrides.foulExports)
     result.foulExports.insert(name);
+  for (const auto &name : overrides.capabilityModules)
+    result.capabilityModules.insert(name);
   for (const auto &[name, functions] : overrides.receiverFunctions)
     result.receiverFunctions[name] = functions;
   for (const auto &[name, methods] : overrides.traitMethods)

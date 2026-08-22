@@ -39,6 +39,11 @@ struct ExternalModules {
         // Concrete receiver name when the provider is type-specific. Empty
         // for generic trait fallbacks and structural receiver families.
         std::string receiverType;
+        // A foul receiver function takes the capability context, and a
+        // receiver call resolves through this table rather than through
+        // `exportToBeamFn` — so its foulness has to live here too
+        // (kexhq/kex#181).
+        bool isFoul = false;
     };
 
     std::unordered_map<std::string, std::string> nameToAtom;
@@ -50,6 +55,11 @@ struct ExternalModules {
     // cannot know that the prelude's `Task.start` is start/2 rather than
     // start/1 (kexhq/kex#181).
     std::unordered_set<std::string> foulExports;
+    // Source module names declared `capability` in another compiled unit. A
+    // consumer must recognise an imported capability to emit the substitution
+    // dispatch for it — otherwise `with FS.File = ...` silently keeps calling
+    // the real implementation (kexhq/kex#143).
+    std::unordered_set<std::string> capabilityModules;
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;

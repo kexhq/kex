@@ -1,5 +1,6 @@
 #include "collect_metadata.hxx"
 #include "../common/type_def_utils.hxx"
+#include <functional>
 #include <unordered_set>
 
 namespace kex::beam {
@@ -938,8 +939,6 @@ auto collectMetadata(const kex::ast::Program& program,
     // has to travel with it or a stdlib capability cannot be replaced by any
     // importer (kexhq/kex#143).
     if (!opts.moduleName.empty()) {
-        std::function<bool(const std::vector<ast::ModuleItem>&,
-                           const std::string&)> findNested;
         std::function<bool(const ast::ModuleDef&)> visit =
             [&](const ast::ModuleDef& mod) -> bool {
             if (mod.name == opts.moduleName) {

@@ -371,9 +371,7 @@ struct Lowering {
     // exactly what it did before. Going unconditional needs imported foulness
     // at the call site first — a consumer cannot know that the prelude's
     // `Task.start` became start/2 without it — see kexhq/kex#181.
-    auto threadsCapabilities() const -> bool {
-        return !capabilityModules.empty();
-    }
+    auto threadsCapabilities() const -> bool { return true; }
     // Top-level free function → its ordered parameter names ("" for an
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
@@ -512,6 +510,92 @@ struct Lowering {
         return callE("erlang", "error", 1,
                      one(callE("erlang", "iolist_to_binary", 1,
                                one(std::move(list)))));
+    }
+
+    // One capability-substitution dispatch, shared by every path that can
+    // reach a capability. Enumerating sites is how prelude capabilities
+    // stayed broken — a missed one compiles and silently calls the real
+    // implementation, which is the failure this feature exists to remove
+    // (kexhq/kex#143). Callers supply only how to build their own direct
+    // call for the miss case.
+    auto capabilityDispatch(
+        const std::string& capability, const std::string& method,
+        const std::vector<ast::ExprPtr>& sourceArgs,
+        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
+        -> ExprPtr {
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> lowered;
+        for (const auto& a : sourceArgs) lowered.push_back(atomize(a, binds));
+        return capabilityDispatchLowered(capability, method, std::move(lowered),
+                                         binds, directCall);
+    }
+
+    // The same dispatch where the arguments are already lowered — the
+    // qualified-call path builds its argument slots before it knows the
+    // target is a capability.
+    auto capabilityDispatchLowered(
+        const std::string& capability, const std::string& method,
+        std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
+        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
+        -> ExprPtr {
+        std::vector<std::string> argVars;
+        for (auto& a : loweredArgs) {
+            auto name = fresh("CapArg");
+            binds.push_back({name, std::move(a)});
+            argVars.push_back(name);
+        }
+        auto varsOf = [&]() {
+            std::vector<ExprPtr> out;
+            for (const auto& v : argVars) out.push_back(var(v));
+            return out;
+        };
+        std::vector<ExprPtr> getArgs;
+        getArgs.push_back(lit(LitKind::String, capability));
+        getArgs.push_back(currentContext());
+        getArgs.push_back(lit(LitKind::Atom, "undefined"));
+        Match m;
+        m.subjects.push_back(callE("maps", "get", 3, std::move(getArgs)));
+
+        MatchClause missing;
+        auto undef = std::make_unique<Pattern>();
+        undef->kind = PatKind::Lit;
+        undef->litKind = LitKind::Atom;
+        undef->litText = "undefined";
+        missing.patterns.push_back(std::move(undef));
+        missing.body = directCall(varsOf());
+        m.clauses.push_back(std::move(missing));
+
+        MatchClause replaced;
+        auto impl = fresh("Impl");
+        auto bound = std::make_unique<Pattern>();
+        bound->kind = PatKind::Var;
+        bound->name = impl;
+        replaced.patterns.push_back(std::move(bound));
+        auto passed = varsOf();
+        // A capability's members are foul, so the implementation takes the
+        // context too — the runtime dispatch hands it over as a direct call
+        // would.
+        passed.push_back(currentContext());
+        auto passedList = std::make_unique<Expr>();
+        passedList->node = MakeList{std::move(passed), std::nullopt};
+        std::vector<ExprPtr> dispatchArgs;
+        dispatchArgs.push_back(var(impl));
+        dispatchArgs.push_back(lit(LitKind::String, method));
+        dispatchArgs.push_back(std::move(passedList));
+        replaced.body =
+            callE("kex_io", "dispatch_method", 3, std::move(dispatchArgs));
+        m.clauses.push_back(std::move(replaced));
+
+        auto chosen = std::make_unique<Expr>();
+        chosen->node = std::move(m);
+        return wrapLets(binds, std::move(chosen));
+    }
+
+    // Is this name a capability, declared here or imported?
+    auto isCapabilityModule(const std::string& name) const -> bool {
+        return capabilityModules.count(name) > 0 ||
+               (externalModules &&
+                externalModules->capabilityModules.count(name) > 0);
     }
 
     // The context to hand a callee: whatever this function holds, or an empty
@@ -1575,6 +1659,17 @@ struct Lowering {
         if (full) {
             std::vector<ExprPtr> args;
             for (auto& s : slots) args.push_back(std::move(s.val));
+            // A fully applied call into a capability goes through the
+            // substitution dispatch. This is the path a PRELUDE capability
+            // takes — `ENV.get(...)` never reaches the receiver or module
+            // paths (kexhq/kex#143).
+            if (threadsCapabilities() && !n.module.empty() &&
+                isCapabilityModule(n.module))
+                return capabilityDispatchLowered(
+                    n.module, n.name, std::move(args), binds,
+                    [&](std::vector<ExprPtr> callArgs) {
+                        return buildCall(std::move(callArgs));
+                    });
             return wrapLets(binds, buildCall(std::move(args)));
         }
 
@@ -1996,8 +2091,10 @@ struct Lowering {
     // identical; only the place the dictionary is built moves.
     auto makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef> {
         if (def.dictionaryTraits.empty()) return std::nullopt;
+        const int contextSlots = def.hasCapabilityContext ? 1 : 0;
         const int wrapped =
-            def.arity - static_cast<int>(def.dictionaryTraits.size());
+            def.arity - static_cast<int>(def.dictionaryTraits.size()) -
+            contextSlots;
         if (wrapped < 0) return std::nullopt;
         std::vector<ExprPtr> args;
         std::vector<std::string> params;
@@ -2020,10 +2117,19 @@ struct Lowering {
             binds.push_back({name, std::move(dictionary)});
             args.push_back(var(name));
         }
+        // The context stays LAST, after the dictionaries the wrapper builds,
+        // so the wrapped function receives (args..., dictionaries..., context)
+        // — the order its own parameters were emitted in. The wrapper takes
+        // the context as its own trailing parameter and passes it through.
+        if (def.hasCapabilityContext) {
+            params.push_back(fresh("FwdCtx"));
+            args.push_back(var(params.back()));
+        }
         FunDef wrapper;
         wrapper.name = def.name;
-        wrapper.arity = wrapped;
+        wrapper.arity = wrapped + contextSlots;
         wrapper.exported = def.exported;
+        wrapper.hasCapabilityContext = def.hasCapabilityContext;
         FunClause clause;
         for (const auto& name : params) {
             auto pat = std::make_unique<Pattern>();
@@ -2231,6 +2337,26 @@ struct Lowering {
             // function: Outer.Inner" while the walker was right (kexhq/kex#182).
             // A bare receiver never had this problem, so only a dotted path
             // naming a module of this unit overrides the resolved target.
+            // A call into a capability must reach the substitution dispatch,
+            // which lives on the module-qualified path below. If the resolver
+            // claims it first the call goes straight to the real
+            // implementation and `with` silently does nothing — the fail-open
+            // this feature exists to prevent (kexhq/kex#143).
+            bool capabilityOwnsCall = false;
+            if (n.receiver) {
+                std::vector<std::string> segments;
+                if (modulePath(*n.receiver, segments) && !segments.empty()) {
+                    std::string joined;
+                    for (size_t i = 0; i < segments.size(); ++i) {
+                        if (i) joined += ".";
+                        joined += segments[i];
+                    }
+                    capabilityOwnsCall =
+                        capabilityModules.count(joined) > 0 ||
+                        (externalModules &&
+                         externalModules->capabilityModules.count(joined) > 0);
+                }
+            }
             bool modulePathOwnsCall = false;
             if (n.receiver) {
                 std::vector<std::string> segments;
@@ -2246,7 +2372,7 @@ struct Lowering {
             }
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
                 !stalePreludeTarget && !localFieldAccessor &&
-                !modulePathOwnsCall) {
+                !modulePathOwnsCall && !capabilityOwnsCall) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -2527,8 +2653,12 @@ struct Lowering {
                     // A call into a capability asks the context first and
                     // falls back to the capability's own body, which is what
                     // runs when nothing replaced it (kexhq/kex#181).
+                    const bool importedCapability =
+                        externalModules &&
+                        externalModules->capabilityModules.count(candidate) > 0;
                     if (it != moduleFunctions.end() && threadsCapabilities() &&
-                        capabilityModules.count(candidate) &&
+                        (capabilityModules.count(candidate) ||
+                         importedCapability) &&
                         n.namedArgs.empty() && !n.block) {
                         std::vector<Binding> binds;
                         std::vector<std::string> argVars;
@@ -2634,6 +2764,29 @@ struct Lowering {
                         if (candidate.empty()) continue;
                         auto qualKey = candidate + "." + n.method;
                         auto eit = externalModules->exportToBeamFn.find(qualKey);
+                        // This is the route a PRELUDE capability takes —
+                        // `ENV.get(...)` reaches neither the local module path
+                        // nor the receiver path (kexhq/kex#143).
+                        if (eit != externalModules->exportToBeamFn.end() &&
+                            threadsCapabilities() &&
+                            isCapabilityModule(candidate) &&
+                            n.namedArgs.empty() && !n.block) {
+                            auto ait = externalModules->nameToAtom.find(candidate);
+                            if (ait != externalModules->nameToAtom.end()) {
+                                const auto atom = ait->second;
+                                const auto beamFn = eit->second;
+                                const auto key = qualKey;
+                                return capabilityDispatch(
+                                    candidate, n.method, n.args,
+                                    [&](std::vector<ExprPtr> callArgs) {
+                                        const int ar =
+                                            static_cast<int>(callArgs.size());
+                                        return externalCallExpr(
+                                            key, atom, beamFn, ar,
+                                            std::move(callArgs));
+                                    });
+                            }
+                        }
                         if (eit != externalModules->exportToBeamFn.end()) {
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
@@ -2749,6 +2902,26 @@ struct Lowering {
                 && !(knownTypes.count(uid->name) && localMethods.count(n.method))) {
                 auto qualKey = uid->name + "." + n.method;
                 auto eit = externalModules->exportToBeamFn.find(qualKey);
+                // An imported capability reaches a consumer only through
+                // the external tables, never through `moduleFunctions`.
+                if (eit != externalModules->exportToBeamFn.end() &&
+                    threadsCapabilities() && isCapabilityModule(uid->name) &&
+                    n.namedArgs.empty() && !n.block) {
+                    auto ait = externalModules->nameToAtom.find(uid->name);
+                    if (ait != externalModules->nameToAtom.end()) {
+                        const auto atom = ait->second;
+                        const auto beamFn = eit->second;
+                        const auto key = qualKey;
+                        return capabilityDispatch(
+                            uid->name, n.method, n.args,
+                            [&](std::vector<ExprPtr> callArgs) {
+                                const int ar =
+                                    static_cast<int>(callArgs.size());
+                                return externalCallExpr(key, atom, beamFn, ar,
+                                                        std::move(callArgs));
+                            });
+                    }
+                }
                 if (eit != externalModules->exportToBeamFn.end()) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
@@ -3243,7 +3416,41 @@ struct Lowering {
         binds.push_back({name, std::move(e)});
         return var(name);
     }
+    mutable std::unordered_set<std::string> foulBackendTargets;
+    mutable bool foulBackendTargetsBuilt = false;
+    auto isFoulBackendTarget(const std::string& mod, const std::string& fn)
+        -> bool {
+        if (!externalModules) return false;
+
+        if (!foulBackendTargetsBuilt) {
+            foulBackendTargetsBuilt = true;
+            for (const auto& qualKey : externalModules->foulExports) {
+                auto dot = qualKey.find('.');
+                if (dot == std::string::npos) continue;
+                auto atom = externalModules->nameToAtom.find(qualKey.substr(0, dot));
+                auto beamFn = externalModules->exportToBeamFn.find(qualKey);
+                if (atom == externalModules->nameToAtom.end() ||
+                    beamFn == externalModules->exportToBeamFn.end()) continue;
+                foulBackendTargets.insert(atom->second + ":" + beamFn->second);
+            }
+            // Receiver functions resolve through their own table, so their
+            // foulness has to be folded in as well — `cli.run(...)` reaches
+            // the prelude this way, not through exportToBeamFn.
+            for (const auto& [_, providers] : externalModules->receiverFunctions)
+                for (const auto& provider : providers)
+                    if (provider.isFoul)
+                        foulBackendTargets.insert(provider.moduleAtom + ":" +
+                                                  provider.beamFunction);
+        }
+        return foulBackendTargets.count(mod + ":" + fn) > 0;
+    }
+
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
+        if (threadsCapabilities() && !mod.empty() &&
+            isFoulBackendTarget(mod, fn)) {
+            args.push_back(currentContext());
+            ++arity;
+        }
         if (std::getenv("KEX_DEBUG_TO2") && fn == "to" && mod.rfind("Kex.", 0) == 0)
             std::fprintf(stderr, "[callE] mod=%s fn=%s arity=%d\n",
                          mod.c_str(), fn.c_str(), arity);
@@ -5007,11 +5214,15 @@ struct Lowering {
         // default implementation, and giving them a context would change
         // 'Clock.now'/0 into /1 and break the very fallback dispatch uses.
         const bool foulDef = !group.empty() && group[0]->isFoul;
-        const bool wantsContext = threadsCapabilities() && foulDef &&
-            !capabilityModules.count(currentModulePath);
+        // A capability's own members are foul like any others and take the
+        // context too. Excluding them made their arity disagree with every
+        // threaded caller — the substitution dispatch passes the context
+        // through as well (kexhq/kex#181).
+        const bool wantsContext = threadsCapabilities() && foulDef;
         def.arity = explicitArity + dictionaryArity +
                     (implicitThisName.empty() ? 0 : 1) +
                     (wantsContext ? 1 : 0);
+        def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
         for (const auto* fn : group) {
@@ -6486,7 +6697,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
             // A capability's own members stay at their declared arity.
-            if (fd->isFoul && !module.isCapability) L.foulFns.insert(emitted);
+            if (fd->isFoul) L.foulFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;

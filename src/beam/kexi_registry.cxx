@@ -584,6 +584,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
             if (shortName.empty()) continue;
 
             ext.nameToAtom[shortName] = mod.beamAtom;
+            if (mod.chunk.metadata.isCapability)
+                ext.capabilityModules.insert(shortName);
 
             for (const auto& exp : mod.chunk.typeInterface.exports) {
                 auto qualKey = shortName + "." + exp.name;
@@ -631,7 +633,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                         vec.push_back({mod.beamAtom, receiverFn.beamFunction,
                                        receiverFn.beamArity,
                                        receiverFn.paramNames,
-                                       typeNameStr(receiverFn.receiverType)});
+                                       typeNameStr(receiverFn.receiverType),
+                                       receiverFn.isFoul});
                 }
             }
         }
