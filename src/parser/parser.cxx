@@ -697,23 +697,31 @@ auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
         peekNext().type == TokenType::Colon) {
       advance(); // "implement"
       advance(); // ":"
-      {
+      // A trait or capability declared inside a module is named by its
+      // qualified path (`FS.File`), which is how a nested ModuleDef is
+      // registered — so `implement:` has to consume one (kexhq/kex#179).
+      auto implementName = [&]() -> std::string {
         auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        if (tok.value.size() == 1)
-          error("Trait name '" + tok.value +
+        std::string name = tok.value;
+        while (check(TokenType::Dot) &&
+               peekNext().type == TokenType::UpperIdent) {
+          advance(); // "."
+          name += "." + expect(TokenType::UpperIdent,
+                               "Expected trait name after '.'").value;
+        }
+        // The reserved-letter rule is about a bare name; a qualified path
+        // whose last segment is one letter is not a type parameter.
+        if (name.size() == 1)
+          error("Trait name '" + name +
                 "' is a single uppercase letter — those are reserved for type "
                 "parameters");
-        def->implements.push_back(tok.value);
-      }
+        return name;
+      };
+      def->implements.push_back(implementName());
       while (check(TokenType::Comma) &&
              peekNext().type == TokenType::UpperIdent) {
         advance(); // ","
-        auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        if (tok.value.size() == 1)
-          error("Trait name '" + tok.value +
-                "' is a single uppercase letter — those are reserved for type "
-                "parameters");
-        def->implements.push_back(tok.value);
+        def->implements.push_back(implementName());
       }
     } else {
       m_pos = savedPos; // not an implement clause, backtrack
