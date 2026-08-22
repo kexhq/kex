@@ -908,6 +908,7 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
     std::function<void(const ast::ModuleDef&)> walk =
         [&](const ast::ModuleDef& module) {
         if (module.isCapability) {
+            m_capabilities.insert(module.name);
             TraitDef td;
             td.name = module.name;
             for (const auto& mi : module.body)
@@ -3000,6 +3001,37 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
                 return Type::named(node.name);
             return Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+            std::string capability;
+            for (size_t i = 0; i < node.capability.parts.size(); ++i) {
+                if (i) capability += ".";
+                capability += node.capability.parts[i];
+            }
+            // Only a declared capability may be replaced. Without this, any
+            // module is substitutable and the keyword means nothing, and a
+            // typo binds nothing while the body still runs against the real
+            // implementation — the silent-mock failure the feature exists to
+            // remove (kexhq/kex#180).
+            auto actual = node.value ? resolve(inferExpr(*node.value))
+                                     : Type::unknown();
+            if (!m_capabilities.count(capability)) {
+                error(expr.location,
+                      "'" + capability + "' is not a capability, so it cannot "
+                      "be replaced by 'with' — declare it as "
+                      "`capability " + capability + " do ... end`");
+            } else if (!std::holds_alternative<UnknownType>(actual->kind) &&
+                       !std::holds_alternative<TypeVar>(actual->kind) &&
+                       !satisfiesTrait(actual, capability)) {
+                // The replacement has to provide what the capability declares.
+                error(expr.location,
+                      "replacement for capability '" + capability +
+                      "' does not implement it: " + typeToString(actual));
+            }
+            pushScope();
+            auto bodyType = inferBody(node.body);
+            popScope();
+            return bodyType;
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;

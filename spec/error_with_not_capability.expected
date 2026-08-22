@@ -1,0 +1,5 @@
+spec/error_with_not_capability.kex:35:3: error: 'Plain' is not a capability, so it cannot be replaced by 'with' — declare it as `capability Plain do ... end`
+spec/error_with_not_capability.kex:38:3: error: 'Cloc' is not a capability, so it cannot be replaced by 'with' — declare it as `capability Cloc do ... end`
+spec/error_with_not_capability.kex:41:3: error: replacement for capability 'Clock' does not implement it: NotAClock
+spec/error_with_not_capability.kex:45:5: error: Type mismatch: expected String, got Integer
+Aborted: 4 type errors — fix before running (use --no-check to skip).

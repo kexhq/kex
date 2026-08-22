@@ -174,6 +174,10 @@ private:
         const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
     auto registerTraits(const ast::Program& program) -> void;
     auto registerCapabilityTraits(const ast::Program& program) -> void;
+    // Qualified names of every module declared `capability`. `with` may only
+    // name one of these, which is what keeps the substitutable vocabulary
+    // closed and enumerable (kexhq/kex#180).
+    std::unordered_set<std::string> m_capabilities;
     auto registerLocalConformances(const ast::Program& program) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;

@@ -5,6 +5,3 @@ nested inner: at 2
 nested outer: at 1
 spawned inside: at 7
 spawned outside: at 1000
-REAL:a.txt
-FAKE:a.txt
-REAL:a.txt

@@ -1,0 +1,40 @@
+# kex: skip-beam
+# A capability nested in a module, named and substituted by its qualified path.
+# This is the shape the stdlib needs: the capability boundary is the innermost
+# module owning effectful methods, so `FS.File` is one and `FS` is not —
+# `FS.Path` is pure string work with nothing to substitute.
+#
+# Skipped on BEAM. A nested module becomes its own BEAM module, so this
+# capability's `read` is `'Kex.FS2.File':read/1`, but the call reaches it
+# through the UFCS path on the BARE name — and that name still has the
+# capability context appended, producing a call to read/2 against a read/1.
+# The exclusion that keeps a capability's own members at their declared arity
+# is keyed on the enclosing module, which the bare-name UFCS path does not
+# consult. Top-level capabilities work on both backends
+# (spec/capabilities.kex); only this shape does not (kexhq/kex#181).
+
+module FS2 do
+  capability File do
+    foul read(path: String) -> String do
+      return "REAL:" + path
+    end
+  end
+end
+
+record FakeFiles do
+  canned : String
+end
+
+make FakeFiles, implement: FS2.File do
+  foul read(path: String) -> String = @canned + path
+end
+
+foul readFile(p: String) -> String = FS2.File.read(p)
+
+main do
+  IO.printLine(readFile("a.txt"))
+  with FS2.File = FakeFiles { canned: "FAKE:" } do
+    IO.printLine(readFile("a.txt"))
+  end
+  IO.printLine(readFile("a.txt"))
+end

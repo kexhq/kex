@@ -4,6 +4,7 @@
 #include "symbol.hxx"
 #include "typechecker.hxx"
 #include <optional>
+#include <map>
 #include <set>
 #include <string>
 #include <unordered_set>
@@ -40,6 +41,33 @@ public:
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    // Capabilities `name` needs, each mapped to the callee that carried the
+    // requirement in ("" when the function reaches it directly). Nothing is
+    // annotated, so this is the only place a reader can learn what a function
+    // needs — tooling displays it (kexhq/kex#143).
+    auto requiredCapabilities(const std::string& name) const
+        -> const std::map<std::string, std::string>* {
+        auto found = m_requiredCapabilities.find(name);
+        return found == m_requiredCapabilities.end() ? nullptr : &found->second;
+    }
+    // The chain that explains one requirement, innermost first:
+    //   {"deep", "stamp"}, {"stamp", ""}   for `deep requires Clock via stamp`.
+    auto capabilityChain(const std::string& name,
+                         const std::string& capability) const
+        -> std::vector<std::pair<std::string, std::string>> {
+        std::vector<std::pair<std::string, std::string>> chain;
+        std::string at = name;
+        std::set<std::string> seen;   // a cyclic call graph must still finish
+        while (!at.empty() && seen.insert(at).second) {
+            auto found = m_requiredCapabilities.find(at);
+            if (found == m_requiredCapabilities.end()) break;
+            auto entry = found->second.find(capability);
+            if (entry == found->second.end()) break;
+            chain.emplace_back(at, entry->second);
+            at = entry->second;
+        }
+        return chain;
+    }
     auto isTrait(const std::string& name) const -> bool {
         return m_checker.isTrait(name);
     }
@@ -113,6 +141,18 @@ private:
     // Post-typechecking enrichment: feed resolved call isFoul into the
     // transitive set and re-check guards.
     auto enrichEffectsFromResolvedCalls(const ast::Program& program) -> void;
+    // Qualified names of every module declared `capability` (kexhq/kex#143).
+    std::unordered_set<std::string> m_capabilityModules;
+    // Which capabilities each function needs, and why: the value maps a
+    // capability to the callee that introduced the requirement, or "" when
+    // the function reaches the capability itself. One witness per pair is
+    // enough to print the chain that explains an otherwise invisible
+    // requirement — nothing is annotated, so the explanation is the only
+    // place a reader can learn it.
+    std::map<std::string, std::map<std::string, std::string>>
+        m_requiredCapabilities;
+    // Set only while processFn walks one function's body.
+    std::map<std::string, std::string>* m_capabilityTarget = nullptr;
 
     // Loop control
     auto checkLoopControl(SourceLocation loc, const std::string& keyword) -> void;

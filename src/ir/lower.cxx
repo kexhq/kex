@@ -358,6 +358,18 @@ struct Lowering {
     // Top-level zero-parameter functions (e.g. `foul name do ... end`). A bare
     // reference to one (no parens) is a call `apply 'name'/0()`, not a var.
     std::unordered_set<std::string> zeroArgFns;
+    // Capability substitution threads one context — a map from capability
+    // name to implementation — through foul functions instead of keeping
+    // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
+    // declares a capability, so a program using none compiles unchanged.
+    std::unordered_set<std::string> foulFns;
+    std::unordered_set<std::string> capabilityModules;
+    // Name of the context variable in scope; empty means there is none, and
+    // a call from there passes a fresh empty map.
+    std::string currentContextVar;
+    auto threadsCapabilities() const -> bool {
+        return !capabilityModules.empty();
+    }
     // Top-level free function → its ordered parameter names ("" for an
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
@@ -496,6 +508,26 @@ struct Lowering {
         return callE("erlang", "error", 1,
                      one(callE("erlang", "iolist_to_binary", 1,
                                one(std::move(list)))));
+    }
+
+    // The context to hand a callee: whatever this function holds, or an empty
+    // map where there is none (a pure caller, or top level).
+    auto currentContext() -> ExprPtr {
+        if (!currentContextVar.empty()) return var(currentContextVar);
+        return callE("maps", "new", 0, {});
+    }
+    // Does a call to this name need the context appended?
+    auto callNeedsContext(const std::string& name) const -> bool {
+        return threadsCapabilities() && foulFns.count(name) > 0;
+    }
+    // Every local call goes through here so the context is appended in one
+    // place. Missing a call site shows up as `undef` at runtime rather than a
+    // compile error, so they must not be patched individually.
+    auto localCall(const std::string& name, std::vector<ExprPtr> args)
+        -> Call {
+        if (callNeedsContext(name)) args.push_back(currentContext());
+        const int arity = static_cast<int>(args.size());
+        return Call{"", name, arity, std::move(args), false};
     }
 
     // "Undefined method: m for T" with the receiver's runtime type, matching
@@ -838,7 +870,7 @@ struct Lowering {
                 if (!subst.count(n.name) &&
                     (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = Call{"", n.name, 0, {}, false};
+                    ex->node = localCall(n.name, {});
                     return ex;
                 }
                 // Uppercase bare name not a known constant → nullary ADT
@@ -867,7 +899,7 @@ struct Lowering {
                 if (!subst.count(n.name) &&
                     (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = Call{"", n.name, 0, {}, false};
+                    ex->node = localCall(n.name, {});
                     return ex;
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
@@ -1364,6 +1396,31 @@ struct Lowering {
                 requireNoOuterMutation(n.body, "while");
                 return lowerLoopCore(n.body, &n.condition, true,
                                      []() -> ExprPtr { return nullptr; });
+            } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+                std::string capability;
+                for (size_t i = 0; i < n.capability.parts.size(); ++i) {
+                    if (i) capability += ".";
+                    capability += n.capability.parts[i];
+                }
+                // A replacement is a value put into the context, not state:
+                // the body is lowered against the extended map, so there is
+                // nothing to restore and an escaping error cannot leak it.
+                std::vector<Binding> binds;
+                auto replacement = atomize(n.value, binds);
+                std::vector<ExprPtr> putArgs;
+                putArgs.push_back(lit(LitKind::String, capability));
+                putArgs.push_back(std::move(replacement));
+                putArgs.push_back(currentContext());
+                auto extended = fresh("Ctx");
+                auto saved = currentContextVar;
+                currentContextVar = extended;
+                auto body = lowerBody(n.body);
+                currentContextVar = saved;
+                return wrapLets(
+                    binds,
+                    makeLet(extended,
+                            callE("maps", "put", 3, std::move(putArgs)),
+                            std::move(body)));
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());
@@ -1480,7 +1537,7 @@ struct Lowering {
                                  + qualKey + "`");
             }
             auto ex = std::make_unique<Expr>();
-            ex->node = Call{"", n.name, ar, std::move(args), false};
+            ex->node = localCall(n.name, std::move(args));
             return ex;
         };
 
@@ -1648,8 +1705,7 @@ struct Lowering {
             }
             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
             auto ex = std::make_unique<Expr>();
-            int ar = (int)slots.size();
-            ex->node = Call{"", emittedName, ar, std::move(slots), false};
+            ex->node = localCall(emittedName, std::move(slots));
             return wrapLets(binds, std::move(ex));
         }
         std::vector<Binding> binds;
@@ -1740,14 +1796,14 @@ struct Lowering {
             // A real 0-arity FUNCTION `f()` stays a plain call below: its
             // result is returned as-is, never auto-applied.
             auto thunk = std::make_unique<Expr>();
-            thunk->node = Call{"", n.name, 0, {}, false};
+            thunk->node = localCall(n.name, {});
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
-            ex->node = Call{"", n.name, 0, {}, false};
+            ex->node = localCall(n.name, {});
         else if (knownFns.count(n.name))
-            ex->node = Call{"", n.name, arity, std::move(args), false};
+            ex->node = localCall(n.name, std::move(args));
         else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
-            ex->node = Call{"", imp->second, arity, std::move(args), false};
+            ex->node = localCall(imp->second, std::move(args));
         else if (subst.count(n.name))
             // A lexical binding (for example a `block` parameter) can hold a
             // callable value. Keep this indirect apply distinct from a truly
@@ -2418,6 +2474,56 @@ struct Lowering {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
                     auto qualKey = candidate + "." + n.method;
                     auto it = moduleFunctions.find(qualKey);
+                    // A call into a capability asks the context first and
+                    // falls back to the capability's own body, which is what
+                    // runs when nothing replaced it (kexhq/kex#181).
+                    if (it != moduleFunctions.end() && threadsCapabilities() &&
+                        capabilityModules.count(candidate) &&
+                        n.namedArgs.empty() && !n.block) {
+                        std::vector<Binding> binds;
+                        std::vector<std::string> argVars;
+                        for (const auto& a : n.args) {
+                            auto name = fresh("CapArg");
+                            binds.push_back({name, atomize(a, binds)});
+                            argVars.push_back(name);
+                        }
+                        auto argsFrom = [&](const std::string& lead) {
+                            std::vector<ExprPtr> out;
+                            if (!lead.empty()) out.push_back(var(lead));
+                            for (const auto& v : argVars) out.push_back(var(v));
+                            return out;
+                        };
+                        std::vector<ExprPtr> getArgs;
+                        getArgs.push_back(lit(LitKind::String, candidate));
+                        getArgs.push_back(currentContext());
+                        getArgs.push_back(lit(LitKind::Atom, "undefined"));
+                        auto impl = fresh("Impl");
+                        Match m;
+                        m.subjects.push_back(
+                            callE("maps", "get", 3, std::move(getArgs)));
+                        MatchClause missing;
+                        auto undef = std::make_unique<Pattern>();
+                        undef->kind = PatKind::Lit;
+                        undef->litKind = LitKind::Atom;
+                        undef->litText = "undefined";
+                        missing.patterns.push_back(std::move(undef));
+                        auto direct = std::make_unique<Expr>();
+                        direct->node = localCall(it->second, argsFrom(""));
+                        missing.body = std::move(direct);
+                        m.clauses.push_back(std::move(missing));
+                        MatchClause replaced;
+                        auto bound = std::make_unique<Pattern>();
+                        bound->kind = PatKind::Var;
+                        bound->name = impl;
+                        replaced.patterns.push_back(std::move(bound));
+                        auto dispatched = std::make_unique<Expr>();
+                        dispatched->node = localCall(n.method, argsFrom(impl));
+                        replaced.body = std::move(dispatched);
+                        m.clauses.push_back(std::move(replaced));
+                        auto chosen = std::make_unique<Expr>();
+                        chosen->node = std::move(m);
+                        return wrapLets(binds, std::move(chosen));
+                    }
                     if (it != moduleFunctions.end()) {
                         std::vector<Binding> binds;
                         if (!n.namedArgs.empty()) {
@@ -2650,7 +2756,7 @@ struct Lowering {
                 for (auto& a : args) callArgs.push_back(std::move(a));
                 int ar = static_cast<int>(callArgs.size());
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{"", callName, ar, std::move(callArgs), false};
+                ex->node = localCall(callName, std::move(callArgs));
                 return wrapLets(binds, std::move(ex));
             }
             if (auto rit = records.find(n.method); rit != records.end()) {
@@ -2986,7 +3092,7 @@ struct Lowering {
                                                  "", n.method, arity, args))
                 return ret(wrapLets(binds, std::move(dual)));
             auto ex = std::make_unique<Expr>();
-            ex->node = Call{"", n.method, arity, std::move(args), false};
+            ex->node = localCall(n.method, std::move(args));
             return ret(wrapLets(binds, std::move(ex)));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
@@ -4809,8 +4915,16 @@ struct Lowering {
             ++dictionaryArity;
             def.dictionaryTraits.push_back(currentMakeType);
         }
+        // Overloads of a name must share purity, so the group's first clause
+        // decides. A capability's OWN members are excluded: they are the
+        // default implementation, and giving them a context would change
+        // 'Clock.now'/0 into /1 and break the very fallback dispatch uses.
+        const bool foulDef = !group.empty() && group[0]->isFoul;
+        const bool wantsContext = threadsCapabilities() && foulDef &&
+            !capabilityModules.count(currentModulePath);
         def.arity = explicitArity + dictionaryArity +
-                    (implicitThisName.empty() ? 0 : 1);
+                    (implicitThisName.empty() ? 0 : 1) +
+                    (wantsContext ? 1 : 0);
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
         for (const auto* fn : group) {
@@ -4888,6 +5002,20 @@ struct Lowering {
                     traitDictionaries[implicitThisName][currentMakeType] =
                         dictionary;
                 }
+                // The context is the last parameter, after any trait
+                // dictionaries, and is in scope for the whole body so calls
+                // inside it pass it along (kexhq/kex#181).
+                auto savedContextVar = currentContextVar;
+                if (wantsContext) {
+                    auto contextName = fresh("Ctx");
+                    auto contextPat = std::make_unique<Pattern>();
+                    contextPat->kind = PatKind::Var;
+                    contextPat->name = contextName;
+                    fc.params.push_back(std::move(contextPat));
+                    currentContextVar = contextName;
+                } else {
+                    currentContextVar.clear();
+                }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 ExprPtr body = lowerBody(clause.body);
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
@@ -4897,6 +5025,7 @@ struct Lowering {
                 if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
                 else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
                 fc.body = std::move(body);
+                currentContextVar = savedContextVar;
                 declaredParamTypes = std::move(savedParamTypes);
                 def.clauses.push_back(std::move(fc));
             }
@@ -6110,6 +6239,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
+        if (fd.isFoul) L.foulFns.insert(fd.name);
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
             definedFnArities.insert(fd.name + "/" + arity);
@@ -6188,6 +6318,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             definedFns.insert(fd->name);
+            // A make-block method is a definition like any other, so if it is
+            // foul it takes the capability context and every call to it has
+            // to pass one — including the dispatch a replaced capability
+            // routes through (kexhq/kex#181).
+            if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->clauses.empty()) {
@@ -6256,12 +6391,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     std::function<void(const ast::ModuleDef&)> preModule;
     preModule = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
+        if (module.isCapability) L.capabilityModules.insert(path);
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
         auto preModuleFn = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
+            // A capability's own members stay at their declared arity.
+            if (fd->isFoul && !module.isCapability) L.foulFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;
