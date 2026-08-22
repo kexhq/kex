@@ -946,6 +946,26 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
                 if (node) walk(*node);
             }
         }, item);
+
+    // A capability declared in an imported module is not in this AST, so its
+    // interface is the only place its members are known. Registering it here
+    // is what lets a consumer write `with FS.File = ...` and
+    // `make Fake, implement: FS.File` against a capability it did not declare.
+    if (m_importedInterfaces)
+        for (const auto& [name, interface] : m_importedInterfaces->modules) {
+            if (!interface.isCapability) continue;
+            m_capabilities.insert(name);
+            if (m_traits.get(name)) continue;
+            TraitDef td;
+            td.name = name;
+            for (const auto& [member, overloads] : interface.exports) {
+                if (overloads.empty()) continue;
+                Signature sig = overloads.front().signature;
+                sig.name = member;
+                td.requiredMethods.push_back(std::move(sig));
+            }
+            m_traits.define(std::move(td));
+        }
 }
 
 auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void {

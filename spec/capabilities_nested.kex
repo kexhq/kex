@@ -1,17 +1,13 @@
-# kex: skip-beam
 # A capability nested in a module, named and substituted by its qualified path.
 # This is the shape the stdlib needs: the capability boundary is the innermost
 # module owning effectful methods, so `FS.File` is one and `FS` is not —
 # `FS.Path` is pure string work with nothing to substitute.
 #
-# Skipped on BEAM. A nested module becomes its own BEAM module, so this
-# capability's `read` is `'Kex.FS2.File':read/1`, but the call reaches it
-# through the UFCS path on the BARE name — and that name still has the
-# capability context appended, producing a call to read/2 against a read/1.
-# The exclusion that keeps a capability's own members at their declared arity
-# is keyed on the enclosing module, which the bare-name UFCS path does not
-# consult. Top-level capabilities work on both backends
-# (spec/capabilities.kex); only this shape does not (kexhq/kex#181).
+# Runs on both backends. It did not until #182: once a `make` block defined a
+# method of the same name — which implementing a capability always does — BEAM
+# resolved `FS2.File.read(p)` through the receiver/UFCS machinery instead of the
+# module path, then lowered the dotted receiver `FS2.File` as a value, which a
+# module is not.
 
 module FS2 do
   capability File do

@@ -3,7 +3,34 @@
            inspect/1, inspect_rendered/2, inspect_repl/1, inspect_value/1, inspect_plain/1, inspect_typed/2, to_string/1, to_string_optional/1,
            to_string_bin/1, env_map/0, register_display/2,
            mock_start/0, mock_input/1, mock_output/0, mock_clear/0,
-           mock_stop/0, value_type_name/1, call_field_or_fail/4]).
+           mock_stop/0, value_type_name/1, call_field_or_fail/4,
+           register_method_owners/1, dispatch_method/3]).
+
+%% register_method_owners/1 — each compiled unit reports which BEAM module
+%% owns the methods of the record tags it defines. Capability substitution
+%% needs this: the call site lives in one unit (the stdlib) while the value
+%% replacing it is implemented in another (the test), so the override cannot
+%% name a local function at compile time (kexhq/kex#181).
+register_method_owners(Owners) when is_map(Owners) ->
+    persistent_term:put(kex_method_owners,
+                        maps:merge(persistent_term:get(kex_method_owners, #{}),
+                                   Owners)),
+    ok.
+
+%% dispatch_method/3 — apply a method to a value whose implementing module is
+%% only known at runtime. The failure message matches the one every other
+%% dispatch path raises, so the two backends stay identical.
+dispatch_method(Receiver, Method, Args)
+  when is_tuple(Receiver), tuple_size(Receiver) > 0 ->
+    Tag = element(1, Receiver),
+    case maps:get(Tag, persistent_term:get(kex_method_owners, #{}), undefined) of
+        undefined -> undefined_method(Receiver, Method, <<>>);
+        Module ->
+            Name = binary_to_atom(Method, utf8),
+            erlang:apply(Module, Name, [Receiver | Args])
+    end;
+dispatch_method(Receiver, Method, _Args) ->
+    undefined_method(Receiver, Method, <<>>).
 
 %% call_field_or_fail/4 — the receiver dispatcher's last resort. A record field
 %% may hold a function, and `d.fetch(url)` should call it; the method keeps

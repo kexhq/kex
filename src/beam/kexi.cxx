@@ -475,6 +475,8 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         {Term::atom("adts"), Term::list(std::move(adts))},
         {Term::atom("method_ownership"), Term::list(std::move(ownership))},
         {Term::atom("public_exports"), Term::list(std::move(pubExports))},
+        {Term::atom("is_capability"),
+         chunk.metadata.isCapability ? Term::atom("true") : Term::atom("false")},
     });
     {
         auto& entries = std::get<Term::Map>(structural->value).pairs;
@@ -681,6 +683,8 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     if (auto mo = sm->mapGet("method_ownership"))
         for (const auto& o : mo->asList())
             chunk.metadata.methodOwnership.push_back(termToMethodOwnership(o));
+    if (auto cap = sm->mapGet("is_capability"))
+        chunk.metadata.isCapability = cap->isAtom("true");
     if (auto pe = sm->mapGet("public_exports"))
         for (const auto& e : pe->asList())
             chunk.metadata.publicExports.push_back(e->asBinaryStr());

@@ -589,6 +589,7 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 auto qualKey = shortName + "." + exp.name;
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
+                if (exp.isFoul) ext.foulExports.insert(qualKey);
                 if (!exp.paramNames.empty())
                     ext.exportParamNames[qualKey] = exp.paramNames;
             }
@@ -654,6 +655,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
             imported.sourceModule = sourceModule;
             imported.backendModule = module.beamAtom;
             imported.automaticImport = automaticModules.count(sourceModule) > 0;
+            imported.isCapability = module.chunk.metadata.isCapability;
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom, sourceModule));

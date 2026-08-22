@@ -179,6 +179,12 @@ struct KexiStructuralMetadata {
     std::vector<KexiTraitConformance> traitConformances;
     std::vector<KexiTraitDef> traitDefs;
     std::vector<std::string> publicExports;
+    // Declared `capability`, so an importer may replace it with `with` and
+    // implement it. Stdlib interfaces reach a consumer through this chunk
+    // rather than from source, so without carrying the flag here a stdlib
+    // capability is invisible to every program that imports it
+    // (kexhq/kex#143).
+    bool isCapability = false;
     // Present only on a package entry module. An empty id means that this
     // compilation unit does not carry package policy.
     kex::module::PackageMetadata package;

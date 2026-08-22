@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace kex::ir {
@@ -44,6 +45,11 @@ struct ExternalModules {
     std::unordered_map<std::string, std::string> exportToBeamFn;
     std::unordered_map<std::string, int> exportArity;
     std::unordered_map<std::string, std::vector<std::string>> exportParamNames;
+    // Imported exports that are `foul`. A foul function takes the capability
+    // context, so a call into one has to append it — without this a consumer
+    // cannot know that the prelude's `Task.start` is start/2 rather than
+    // start/1 (kexhq/kex#181).
+    std::unordered_set<std::string> foulExports;
     // Receiver functions are separate from ordinary module exports and are
     // populated only from package-declared provider modules.
     std::unordered_map<std::string, std::vector<ReceiverFunction>> receiverFunctions;
