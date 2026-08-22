@@ -10,8 +10,12 @@
 namespace kex::beam {
 
 static constexpr const char* KEXI_CHUNK_ID = "KexI";
-// 8: type exports retain distinct-type backing representations.
-static constexpr int KEXI_SCHEMA_VERSION = 8;
+// The schema is reset to 1: it had accreted to 8 across development, but
+// nothing was ever released, so every one of those bumps carried back-compat
+// branches for chunks that no consumer holds. Until there is a release, a
+// format change edits the format — it does not bump this. The reader still
+// rejects a chunk claiming a version it does not know.
+static constexpr int KEXI_SCHEMA_VERSION = 1;
 
 using Hash128 = std::array<uint8_t, 16>;
 
@@ -57,7 +61,7 @@ auto kexiUnknown() -> KexiTypePtr;
 
 struct KexiExport {
     std::string name;
-    std::string beamFunction; // emitted function name; v1 defaults to name
+    std::string beamFunction; // emitted function name
     int beamArity = 0;
     bool isFoul = false;
     std::vector<KexiTypePtr> paramTypes;
@@ -85,7 +89,7 @@ struct KexiMethod {
     bool isFoul = false;
     bool typeOnly = false; // annotation-only, no BEAM implementation
     std::vector<KexiTypePtr> paramTypes;
-    // Source parameter names excluding the receiver (KexI v5+).
+    // Source parameter names excluding the receiver.
     std::vector<std::string> paramNames;
     KexiTypePtr returnType;
     std::string beamFunction; // emitted BEAM function name

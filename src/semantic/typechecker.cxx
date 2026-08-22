@@ -291,6 +291,8 @@ auto TypeChecker::check(const ast::Program& program,
         for (const auto& trait : m_importedInterfaces->traits)
             m_traits.define(trait);
     registerTraits(program);
+    registerCapabilityTraits(program);
+    registerLocalConformances(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)
             m_traits.registerImplementation(c.typeName, c.traitName);
@@ -887,6 +889,99 @@ auto TypeChecker::representationsCompatible(const TypePtr& from,
             m_traits.satisfies(target, "Integer")) ||
            (m_traits.satisfies(source, "Float") &&
             m_traits.satisfies(target, "Float"));
+}
+
+// `check()` runs every FunctionDef before any make block (see its two-pass
+// comment), so while a function body is being checked no LOCAL trait
+// conformance has been registered yet — only imported ones and the builtins.
+// A trait-typed default parameter value therefore had nothing to match
+// against and was rejected (kexhq/kex#175). Registering the declared
+// (type, trait) pairs up front fixes that; `checkTraitImplementation` still
+// runs later and still reports a make block that fails to provide the
+// trait's required methods.
+// `capability Name do ... end` declares an interface AND its default
+// implementation in one. The interface half is a trait synthesized from the
+// module's own public functions, so `make Fake, implement: Name` works with
+// the machinery that already exists, and the bodies remain the default the
+// capability carries outside any `with` (kexhq/kex#143).
+auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void {
+    std::function<void(const ast::ModuleDef&)> walk =
+        [&](const ast::ModuleDef& module) {
+        if (module.isCapability) {
+            TraitDef td;
+            td.name = module.name;
+            for (const auto& mi : module.body)
+                std::visit([&](const auto& mn) {
+                    using MT = std::decay_t<decltype(mn)>;
+                    if constexpr (std::is_same_v<MT,
+                                                 std::unique_ptr<ast::FunctionDef>>) {
+                        if (!mn || mn->clauses.empty()) return;
+                        Signature sig;
+                        sig.name = mn->name;
+                        sig.isFoul = mn->isFoul;
+                        // Arity matters for conformance; the parameter types
+                        // stay permissive here because the capability's own
+                        // bodies are checked like any other module's.
+                        for (size_t i = 0; i < mn->clauses.front().params.size(); i++)
+                            sig.params.push_back(Type::unknown());
+                        sig.result = Type::unknown();
+                        td.requiredMethods.push_back(std::move(sig));
+                    }
+                }, mi);
+            m_traits.define(std::move(td));
+        }
+        for (const auto& mi : module.body)
+            std::visit([&](const auto& mn) {
+                using MT = std::decay_t<decltype(mn)>;
+                if constexpr (std::is_same_v<MT, std::unique_ptr<ast::ModuleDef>>) {
+                    if (mn) walk(*mn);
+                }
+            }, mi);
+    };
+    for (const auto& item : program.items)
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) walk(*node);
+            }
+        }, item);
+}
+
+auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void {
+    auto registerOne = [this](const ast::MakeDef& def) {
+        if (def.implements.empty() || !def.target) return;
+        std::string typeName;
+        if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind))
+            if (tn->parts.size() == 1) typeName = tn->parts[0];
+        if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
+            if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
+        if (typeName.empty()) return;
+        for (const auto& traitName : def.implements)
+            m_traits.registerImplementation(typeName, traitName);
+    };
+    std::function<void(const ast::ModuleDef&)> walkModule =
+        [&](const ast::ModuleDef& module) {
+        for (const auto& mi : module.body)
+            std::visit([&](const auto& mn) {
+                using MT = std::decay_t<decltype(mn)>;
+                if constexpr (std::is_same_v<MT, std::unique_ptr<ast::MakeDef>>) {
+                    if (mn) registerOne(*mn);
+                } else if constexpr (std::is_same_v<MT,
+                                                    std::unique_ptr<ast::ModuleDef>>) {
+                    if (mn) walkModule(*mn);
+                }
+            }, mi);
+    };
+    for (const auto& item : program.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) registerOne(*node);
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) walkModule(*node);
+            }
+        }, item);
+    }
 }
 
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
@@ -4610,7 +4705,7 @@ auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
                 return Type::named(owner->second);
             // Type ARGUMENTS are left alone: a phantom typestate parameter is
             // spelled with constructors too (`FileHandle<Write>`), and
-            // widening those to their ADT (`FileHandle<WriteCapability>`)
+            // widening those to their ADT (`FileHandle<WritePermission>`)
             // erases exactly the distinction the parameter exists to make.
             return type;
         }

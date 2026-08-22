@@ -139,6 +139,7 @@ auto Parser::syncToTopLevel() -> void {
     case TokenType::Let:
     case TokenType::Foul:
     case TokenType::Module:
+    case TokenType::Capability:
     case TokenType::Type:
     case TokenType::Record:
     case TokenType::Trait:
@@ -169,7 +170,7 @@ auto Parser::parseProgram() -> ast::Program {
 
   while (!atEnd()) {
     try {
-      if ((check(TokenType::Module) ||
+      if ((check(TokenType::Module) || check(TokenType::Capability) ||
            (check(TokenType::Foul) && peekNext().type == TokenType::Module)) &&
           program.items.empty()) {
         program.items.push_back(parseModuleDef(true));
@@ -191,7 +192,7 @@ auto Parser::parseProgram() -> ast::Program {
 }
 
 auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
-  if (check(TokenType::Module) ||
+  if (check(TokenType::Module) || check(TokenType::Capability) ||
       (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
     return parseModuleDef();
   }
@@ -282,7 +283,15 @@ auto Parser::parseModuleDef(bool allowStandalone,
           "function 'foul' at its own definition instead");
   }
 
-  expect(TokenType::Module, "Expected 'module'");
+  // `capability Name do ... end` is a module that may be substituted; it
+  // parses identically so every later phase sees the ModuleDef it already
+  // understands (kexhq/kex#143).
+  if (check(TokenType::Capability)) {
+    advance();
+    mod->isCapability = true;
+  } else {
+    expect(TokenType::Module, "Expected 'module'");
+  }
   auto moduleName = parseTypeName();
   for (size_t i = 0; i < moduleName.parts.size(); ++i) {
     if (i)
@@ -301,7 +310,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
   skipNewlines();
 
   while (!atEnd() && (standalone || !check(TokenType::End))) {
-    if (check(TokenType::Module) ||
+    if (check(TokenType::Module) || check(TokenType::Capability) ||
         (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
       mod->body.push_back(parseModuleDef(false, mod->name));
     } else if (check(TokenType::Type) ||
@@ -2007,6 +2016,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     return parseReturnExpr();
   if (check(TokenType::Spawn))
     return parseSpawnExpr();
+  if (check(TokenType::With))
+    return parseWithExpr();
   if (check(TokenType::Trying))
     return parseTryingExpr();
   if (check(TokenType::Break)) {
@@ -3056,6 +3067,30 @@ auto Parser::parseSpawnExpr() -> ast::ExprPtr {
   return expr;
 }
 
+// `with FS.File = FakeFiles { ... } do ... end` — substitute a capability's
+// implementation for the body's lexical region (kexhq/kex#143).
+auto Parser::parseWithExpr() -> ast::ExprPtr {
+  auto expr = std::make_unique<ast::Expr>();
+  expr->location = currentLocation();
+  expect(TokenType::With, "Expected 'with'");
+
+  ast::WithExpr node;
+  node.capability = parseTypeName();
+  expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
+  node.value = parseExpr();
+  expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
+  skipNewlines();
+
+  while (!check(TokenType::End) && !atEnd()) {
+    node.body.push_back(parseExpr());
+    skipNewlines();
+  }
+  expect(TokenType::End, "Expected 'end' to close with");
+
+  expr->kind = std::move(node);
+  return expr;
+}
+
 auto Parser::parseLambda() -> ast::ExprPtr {
   auto expr = std::make_unique<ast::Expr>();
   expr->location = currentLocation();
@@ -3978,6 +4013,7 @@ auto Parser::isAtExprStart() const -> bool {
   case TokenType::Var:
   case TokenType::Return:
   case TokenType::Spawn:
+  case TokenType::With:
   case TokenType::Do:
   case TokenType::Amp:
   case TokenType::Minus:

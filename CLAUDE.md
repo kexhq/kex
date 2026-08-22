@@ -58,4 +58,4 @@ Lexer, parser, AST, semantic analysis, tree-walk interpreter, the Elixir-style p
 
 Compile-time metaprogramming (`compiled do ... end`) is implemented: constants inlined at their use sites, `let %name` / `type %name` / `make %name` declaration generation, and builder-chain collapse that evaluates a fully-determined expression during compilation and reifies the result — carrying free runtime variables through as placeholders. `--collapse-report` says what collapsed and why the rest did not. See `docs/compiled-status.md`.
 
-Next: the `.kexo` binary IR/distribution format, a full module system, and packaging.
+Next: a full module system and packaging. (The `.kexo` binary IR/distribution format is dropped.)

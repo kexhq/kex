@@ -57,6 +57,20 @@ public:
             definition->requiredMethods.end(),
             [&](const auto& required) { return required.name == method; });
     }
+    // Does the trait declare this required method `foul`? A trait-typed
+    // receiver dispatches dynamically, so such a call has no single resolved
+    // target — the trait declaration is the only place its effect is stated.
+    auto traitMethodIsFoul(const std::string& trait,
+                           const std::string& method) const -> bool {
+        const auto* definition = m_traits.get(trait);
+        if (!definition) return false;
+        return std::any_of(
+            definition->requiredMethods.begin(),
+            definition->requiredMethods.end(),
+            [&](const auto& required) {
+                return required.name == method && required.isFoul;
+            });
+    }
     auto traitNeedsDictionary(const std::string& trait) const -> bool {
         const auto* definition = m_traits.get(trait);
         return definition && !definition->requiredMethods.empty();
@@ -159,6 +173,8 @@ private:
     auto bindPatternVars(
         const ast::Pattern& pat, TypePtr expected = nullptr) -> void;
     auto registerTraits(const ast::Program& program) -> void;
+    auto registerCapabilityTraits(const ast::Program& program) -> void;
+    auto registerLocalConformances(const ast::Program& program) -> void;
     auto checkFunctionDef(const ast::FunctionDef& def) -> void;
     auto checkMakeDef(const ast::MakeDef& def) -> void;
     auto checkTraitImplementation(const ast::MakeDef& def) -> void;

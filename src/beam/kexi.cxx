@@ -186,7 +186,7 @@ auto termToHash(const TermPtr& term) -> Hash128 {
     return h;
 }
 
-auto exportToTerm(const KexiExport& exp, int version) -> TermPtr {
+auto exportToTerm(const KexiExport& exp) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : exp.paramTypes) params.push_back(typeToTerm(p));
     std::vector<TermPtr> fields = {
@@ -196,14 +196,11 @@ auto exportToTerm(const KexiExport& exp, int version) -> TermPtr {
         Term::list(std::move(params)),
         typeToTerm(exp.returnType),
     };
-    if (version >= 2)
-        fields.push_back(Term::binary(
-            exp.beamFunction.empty() ? exp.name : exp.beamFunction));
-    if (version >= 3) {
-        std::vector<TermPtr> names;
-        for (const auto& n : exp.paramNames) names.push_back(Term::binary(n));
-        fields.push_back(Term::list(std::move(names)));
-    }
+    fields.push_back(Term::binary(
+        exp.beamFunction.empty() ? exp.name : exp.beamFunction));
+    std::vector<TermPtr> names;
+    for (const auto& n : exp.paramNames) names.push_back(Term::binary(n));
+    fields.push_back(Term::list(std::move(names)));
     return Term::tuple(std::move(fields));
 }
 
@@ -216,10 +213,9 @@ auto termToExport(const TermPtr& term) -> KexiExport {
     for (const auto& p : t[3]->asList())
         e.paramTypes.push_back(termToType(p));
     e.returnType = termToType(t[4]);
-    e.beamFunction = t.size() >= 6 ? t[5]->asBinaryStr() : e.name;
-    if (t.size() >= 7)
-        for (const auto& n : t[6]->asList())
-            e.paramNames.push_back(n->asBinaryStr());
+    e.beamFunction = t[5]->asBinaryStr();
+    for (const auto& n : t[6]->asList())
+        e.paramNames.push_back(n->asBinaryStr());
     return e;
 }
 
@@ -257,7 +253,7 @@ auto termToTypeExport(const TermPtr& term) -> KexiTypeExport {
     return te;
 }
 
-auto methodToTerm(const KexiMethod& m, int version) -> TermPtr {
+auto methodToTerm(const KexiMethod& m) -> TermPtr {
     std::vector<TermPtr> params;
     for (const auto& p : m.paramTypes) params.push_back(typeToTerm(p));
     std::vector<TermPtr> fields = {
@@ -270,11 +266,9 @@ auto methodToTerm(const KexiMethod& m, int version) -> TermPtr {
         Term::binary(m.beamFunction),
         m.typeOnly ? Term::atom("true") : Term::atom("false"),
     };
-    if (version >= 5) {
-        std::vector<TermPtr> names;
-        for (const auto& n : m.paramNames) names.push_back(Term::binary(n));
-        fields.push_back(Term::list(std::move(names)));
-    }
+    std::vector<TermPtr> names;
+    for (const auto& n : m.paramNames) names.push_back(Term::binary(n));
+    fields.push_back(Term::list(std::move(names)));
     return Term::tuple(std::move(fields));
 }
 
@@ -289,10 +283,9 @@ auto termToMethod(const TermPtr& term) -> KexiMethod {
         m.paramTypes.push_back(termToType(p));
     m.returnType = termToType(t[5]);
     m.beamFunction = t[6]->asBinaryStr();
-    m.typeOnly = t.size() >= 8 && t[7]->isAtom("true");
-    if (t.size() >= 9)
-        for (const auto& n : t[8]->asList())
-            m.paramNames.push_back(n->asBinaryStr());
+    m.typeOnly = t[7]->isAtom("true");
+    for (const auto& n : t[8]->asList())
+        m.paramNames.push_back(n->asBinaryStr());
     return m;
 }
 
@@ -451,11 +444,11 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
     // Type interface
     std::vector<TermPtr> exports, constants, types, methods;
     for (const auto& e : chunk.typeInterface.exports)
-        exports.push_back(exportToTerm(e, chunk.version));
+        exports.push_back(exportToTerm(e));
     for (const auto& c : chunk.typeInterface.constants) constants.push_back(constantToTerm(c));
     for (const auto& t : chunk.typeInterface.types) types.push_back(typeExportToTerm(t));
     for (const auto& m : chunk.typeInterface.methods)
-        methods.push_back(methodToTerm(m, chunk.version));
+        methods.push_back(methodToTerm(m));
 
     auto typeIface = Term::map({
         {Term::atom("exports"), Term::list(std::move(exports))},
@@ -483,7 +476,7 @@ auto chunkToTermWithoutHash(const KexiChunk& chunk) -> TermPtr {
         {Term::atom("method_ownership"), Term::list(std::move(ownership))},
         {Term::atom("public_exports"), Term::list(std::move(pubExports))},
     });
-    if (chunk.version >= 2) {
+    {
         auto& entries = std::get<Term::Map>(structural->value).pairs;
         entries.emplace_back(Term::atom("unit_id"),
                              Term::binary(chunk.metadata.unitId));
@@ -608,20 +601,18 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
 
     // Now build the full term with the hashes included.
     auto term = chunkToTermWithoutHash(chunk);
-    // v6+: {kexi, Version, InterfaceHash, ArtifactHash, SourceHash, BuildInfo,
-    //        TypeInterface, Structural}. Older schemas omit build metadata.
+    // {kexi, Version, InterfaceHash, ArtifactHash, SourceHash, BuildInfo,
+    //  TypeInterface, Structural}
     auto& inner = std::get<Term::Tuple>(term->value).elements;
-    if (chunk.version >= 6) {
-        auto buildInfo = Term::map({
-            {Term::atom("intrinsic_abi"),
-             Term::integer(chunk.intrinsicAbiVersion)},
-            {Term::atom("backend_representation"),
-             Term::integer(chunk.backendRepresentationVersion)},
-        });
-        inner.insert(inner.begin() + 2, std::move(buildInfo));
-        inner.insert(inner.begin() + 2, hashToTerm(chunk.sourceHash));
-        inner.insert(inner.begin() + 2, hashToTerm(chunk.artifactHash));
-    }
+    auto buildInfo = Term::map({
+        {Term::atom("intrinsic_abi"),
+         Term::integer(chunk.intrinsicAbiVersion)},
+        {Term::atom("backend_representation"),
+         Term::integer(chunk.backendRepresentationVersion)},
+    });
+    inner.insert(inner.begin() + 2, std::move(buildInfo));
+    inner.insert(inner.begin() + 2, hashToTerm(chunk.sourceHash));
+    inner.insert(inner.begin() + 2, hashToTerm(chunk.artifactHash));
     inner.insert(inner.begin() + 2, hashToTerm(hash));
 
     return encodeEtf(term);
@@ -630,7 +621,7 @@ auto serializeKexi(const KexiChunk& chunk) -> std::vector<uint8_t> {
 auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
     auto term = decodeEtf(data);
     auto& top = term->asTuple();
-    if (top.size() < 5 || !top[0]->isAtom("kexi"))
+    if (top.size() < 8 || !top[0]->isAtom("kexi"))
         throw EtfError("invalid KexI chunk: missing kexi tag");
 
     KexiChunk chunk;
@@ -643,19 +634,14 @@ auto deserializeKexi(const std::vector<uint8_t>& data) -> KexiChunk {
 
     chunk.interfaceHash = termToHash(top[2]);
 
-    size_t payloadIndex = 3;
-    if (chunk.version >= 6) {
-        if (top.size() < 8)
-            throw EtfError("invalid KexI v6 chunk: missing build metadata");
-        chunk.artifactHash = termToHash(top[3]);
-        chunk.sourceHash = termToHash(top[4]);
-        if (auto abi = top[5]->mapGet("intrinsic_abi"))
-            chunk.intrinsicAbiVersion = static_cast<int>(abi->asInt());
-        if (auto backend = top[5]->mapGet("backend_representation"))
-            chunk.backendRepresentationVersion =
-                static_cast<int>(backend->asInt());
-        payloadIndex = 6;
-    }
+    chunk.artifactHash = termToHash(top[3]);
+    chunk.sourceHash = termToHash(top[4]);
+    if (auto abi = top[5]->mapGet("intrinsic_abi"))
+        chunk.intrinsicAbiVersion = static_cast<int>(abi->asInt());
+    if (auto backend = top[5]->mapGet("backend_representation"))
+        chunk.backendRepresentationVersion =
+            static_cast<int>(backend->asInt());
+    const size_t payloadIndex = 6;
 
     // Type interface
     auto ti = top[payloadIndex];

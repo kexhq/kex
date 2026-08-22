@@ -32,7 +32,7 @@ the Go/Cargo/hex model instead.
 | Massive per-project tree; the same library copied 10× across projects | **Global cache** keyed by git URL + commit. Same `<url>@<commit>` exists once on disk, shared by every project. |
 | Flat hoisting → phantom dependencies | No flat namespace. Imports resolve through the cache root; the future loader gets one explicit `(url, commit)` table, not a hoisted pile. |
 | Diamond deps → multiple copies of "react" causing subtle bugs | **Single-version unification** (shards model): if two deps request the same package, the resolver picks one version or fails. No nested copies. |
-| `postinstall` scripts run arbitrary code on install | **No install scripts. Ever.** v1 packages are source trees; the future `.kexo`/`.kexi` binary mode is a sealed artifact, not an executable installer. hex and shards enforce the same rule. |
+| `postinstall` scripts run arbitrary code on install | **No install scripts. Ever.** Packages are source trees, never executable installers. hex and shards enforce the same rule. |
 | `package-lock.json` doesn't truly pin / churns | `tey.lock` pins `<url, commit, sha256>` — the content hash is **mandatory**, not advisory. |
 | `node_modules` freely editable, "works on my machine" | Cache entries are **read-only**. The only mutable state in a project is the lockfile. |
 
@@ -423,6 +423,8 @@ Estimated ~2–3k lines of Kex. The compiler-side cost (BEAM codegen maturity + 
 is tracked separately on the compiler track.
 
 ## Future: `.kexo` / `.kexi` binary distribution (hub-only)
+
+> ❌ **Dropped — kept for reference only.** `.kexo` is no longer planned; Tey distributes source. The supply-chain reasoning below (binding a binary to its source, rebuild attestation) is retained because it would apply to any future binary artifact, but nothing in this section is committed design. Note `.kexi` is unrelated and does exist — it is the `KexI` BEAM chunk (`src/beam/kexi.hxx`), not a distribution format.
 
 Tey's two dependency sources carry different trust models, and the policy splits along
 that line:

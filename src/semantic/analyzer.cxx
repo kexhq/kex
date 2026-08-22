@@ -1059,7 +1059,17 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
 
 auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> void {
     const auto& resolved = m_checker.resolvedCalls();
-    if (resolved.empty()) return;
+    // No early return on an empty `resolved` map: the trait-receiver check
+    // below does not consult it, and a program whose only foul call goes
+    // through a trait has no resolved targets at all (kexhq/kex#172).
+
+    // A foul method reached through a VALUE receiver (`b.bang()`, `c.now()`)
+    // is invisible to the phase-1 purity check, which runs before type
+    // checking and so can only resolve module-qualified receivers by name.
+    // The resolved call target knows the answer, so record the first such
+    // call per function and report it below (kexhq/kex#172).
+    const ast::Expr* foulValueCall = nullptr;   // location lives on the Expr
+    std::string foulValueMethod;
 
     // Walk expression trees looking for MethodCall nodes with foul resolved targets.
     std::function<bool(const ast::Expr&)> hasFoulResolved =
@@ -1068,7 +1078,51 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
             using T = std::decay_t<decltype(n)>;
             if constexpr (std::is_same_v<T, ast::MethodCall>) {
                 auto it = resolved.find(&n);
-                if (it != resolved.end() && it->second.isFoul) return true;
+                if (it != resolved.end() && it->second.isFoul) {
+                    // `IO.inspect` is the documented purity-exempt hatch.
+                    // A call phase 1 already reported must not be reported
+                    // twice — that is exactly the qualified-and-known-foul
+                    // case, which `receiverModuleName` alone cannot identify
+                    // (it returns the name of any lowercase identifier, so a
+                    // plain value receiver `b` looks module-qualified).
+                    bool alreadyReported = n.receiver
+                        && isQualifiedCallFoul(receiverModuleName(*n.receiver),
+                                               n.method);
+                    if (!foulValueCall && !alreadyReported
+                        && n.method != "inspect") {
+                        foulValueCall = &e;
+                        foulValueMethod = n.method;
+                    }
+                    return true;
+                }
+                // A trait-typed receiver dispatches dynamically, so the call
+                // has no single resolved target and the branch above never
+                // fires. The trait declaration states the effect, so consult
+                // it directly (kexhq/kex#172).
+                if (n.receiver) {
+                    if (auto recvType = m_checker.typeOf(n.receiver.get())) {
+                        // A trait-typed parameter is a ConstrainedType (a type
+                        // variable bound to the trait), not a NamedType — but
+                        // a value annotated with the trait directly is named.
+                        std::string traitName;
+                        if (auto* con =
+                                std::get_if<ConstrainedType>(&recvType->kind))
+                            traitName = con->traitName;
+                        else if (auto* named =
+                                std::get_if<NamedType>(&recvType->kind))
+                            traitName = named->name;
+                        if (!traitName.empty()
+                            && m_checker.isTrait(traitName)
+                            && m_checker.traitMethodIsFoul(traitName,
+                                                           n.method)) {
+                            if (!foulValueCall && n.method != "inspect") {
+                                foulValueCall = &e;
+                                foulValueMethod = n.method;
+                            }
+                            return true;
+                        }
+                    }
+                }
                 if (n.receiver && hasFoulResolved(*n.receiver)) return true;
                 for (const auto& a : n.args) if (a && hasFoulResolved(*a)) return true;
                 for (const auto& [_, a] : n.namedArgs) if (a && hasFoulResolved(*a)) return true;
@@ -1133,14 +1187,23 @@ auto Analyzer::enrichEffectsFromResolvedCalls(const ast::Program& program) -> vo
     // Check each function for newly discovered foul resolved calls.
     bool newFoul = false;
     auto checkFn = [&](const ast::FunctionDef& def) {
-        if (m_transitivelyFoul.count(def.name)) return;
-        for (const auto& clause : def.clauses)
+        bool known = m_transitivelyFoul.count(def.name) > 0;
+        foulValueCall = nullptr;
+        bool found = false;
+        for (const auto& clause : def.clauses) {
             for (const auto& ex : clause.body)
-                if (ex && hasFoulResolved(*ex)) {
-                    m_transitivelyFoul.insert(def.name);
-                    newFoul = true;
-                    return;
-                }
+                if (ex && hasFoulResolved(*ex)) { found = true; break; }
+            if (found) break;
+        }
+        if (found && !known) {
+            m_transitivelyFoul.insert(def.name);
+            newFoul = true;
+        }
+        if (!def.isFoul && foulValueCall) {
+            error(foulValueCall->location,
+                "Cannot call foul function '" + foulValueMethod +
+                "' from pure context");
+        }
     };
 
     for (const auto& item : program.items) {

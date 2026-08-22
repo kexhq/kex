@@ -373,6 +373,17 @@ private:
     std::unordered_map<std::string, std::vector<RuntimeSignature>>
         m_runtimeSignatures;
     std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
+    // Capability substitutions installed by `with Name = value do ... end`,
+    // innermost last. A stack rather than a map so nesting and restoration
+    // are automatic, and so the same capability may be replaced again inside
+    // an enclosing replacement (kexhq/kex#143).
+    std::vector<std::pair<std::string, ValuePtr>> m_capabilityBindings;
+    auto lookupCapability(const std::string& name) const -> ValuePtr {
+        for (auto it = m_capabilityBindings.rbegin();
+             it != m_capabilityBindings.rend(); ++it)
+            if (it->first == name) return it->second;
+        return nullptr;
+    }
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;
     std::vector<std::string> m_moduleRoots{"lib", "src"};

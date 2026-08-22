@@ -119,6 +119,7 @@ private:
     auto parseVarExpr() -> ast::ExprPtr;
     auto parseReturnExpr() -> ast::ExprPtr;
     auto parseSpawnExpr() -> ast::ExprPtr;
+    auto parseWithExpr() -> ast::ExprPtr;
     auto parseLambda() -> ast::ExprPtr;
     auto parseShorthandLambda() -> ast::ExprPtr;
     auto parseCurryExpr() -> ast::ExprPtr;

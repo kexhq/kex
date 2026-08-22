@@ -1,0 +1,77 @@
+# kex: skip-beam
+# `capability` + `with` — replacing a capability's implementation for a
+# lexical region (kexhq/kex#143). BEAM codegen does not implement either yet,
+# so this is walker-only for now.
+#
+# The point of the feature is what `stamp` and `deep` below do NOT do: they
+# declare no dependency, thread no parameter, and their call to `Clock.now()`
+# is written exactly as it would be in production. The substitution still
+# reaches them.
+
+type Msg = | Ask(Process)
+
+capability Clock do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+
+foul stamp() -> String = "at ${Clock.now()}"
+foul deep() -> String = "deep -> ${stamp()}"
+
+main do
+  # The capability's own bodies are the default outside any `with`.
+  IO.printLine(deep())
+
+  # Reaches through two calls that mention no capability.
+  with Clock = FrozenClock { at: 7 } do
+    IO.printLine(deep())
+  end
+
+  # ... and is gone again afterwards.
+  IO.printLine(deep())
+
+  # Nesting: the innermost replacement wins, and leaving it restores the outer.
+  with Clock = FrozenClock { at: 1 } do
+    with Clock = FrozenClock { at: 2 } do
+      IO.printLine("nested inner: ${stamp()}")
+    end
+    IO.printLine("nested outer: ${stamp()}")
+  end
+
+  # A process spawned INSIDE the region inherits the replacement.
+  with Clock = FrozenClock { at: 7 } do
+    let inner = spawn do
+      receive do
+        Ask(who) => who.send(stamp())
+      end
+    end
+    inner.send(Ask(Process.self))
+    receive do
+      v => IO.printLine("spawned inside: ${v}")
+    end
+  end
+
+  # A process spawned OUTSIDE it does not — a `with` in one process must never
+  # change what another process's code means, so bindings are per-process and
+  # snapshotted at spawn rather than shared.
+  let outer = spawn do
+    receive do
+      Ask(who) => who.send(stamp())
+    end
+  end
+  with Clock = FrozenClock { at: 7 } do
+    outer.send(Ask(Process.self))
+    receive do
+      v => IO.printLine("spawned outside: ${v}")
+    end
+  end
+end

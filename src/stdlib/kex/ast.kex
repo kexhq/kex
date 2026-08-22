@@ -173,6 +173,7 @@ module Kex.AST do
     | CurryPlaceholder
     | Curry(String, String?, Bool, [[Expression]])
     | Using(String, String?, [String], [String], [Expression])
+    | With(String, Expression, [Expression])
     | GeneratedDeclaration(Expression, GeneratedTemplate)
     | ErrorExpression(String)
     | Trying([Expression], RescueInfo)
