@@ -1,4 +1,12 @@
 # Operations concerning the running Kex system process.
+#
+# Deliberately NOT a capability, and `OS`/`BITWIDTH` stay pure. Faking the
+# reported OS only exercises a program's branching, not the platform behaviour
+# behind it — the file semantics, path rules and process handling that
+# actually differ are unaffected by the atom. Testing those means running on
+# the platform, which CI does across macOS, Ubuntu and Alpine. `Mock.System`
+# existed for this and had exactly one caller: the spec that tested it
+# (kexhq/kex#143).
 module System do
   # The operating system family the program is running on. A union of atoms
   # rather than an ADT: these are plain tags, and a `match` over them is

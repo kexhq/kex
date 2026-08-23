@@ -265,6 +265,17 @@ struct Lowering {
             }
         }
         if (records.count(name)) return name;
+        // The module whose `make` block named this type. A dispatcher is
+        // generated after the module walk, so `currentModulePath` no longer
+        // says where the name was written, and the suffix match below gives up
+        // when two modules share a last segment — `Mock.Response` and
+        // `Web.Response` do, which left the guard testing a bare `Response`
+        // tag that no value carries (kexhq/kex#143).
+        if (auto declaring = localTypeModules.find(name);
+            declaring != localTypeModules.end()) {
+            const auto candidate = declaring->second + "." + name;
+            if (records.count(candidate)) return candidate;
+        }
         // A qualified identity the record table does not know under that
         // spelling (a reified value carries the interpreter's `Boxes.Box`)
         // still names the record declared as its last segment.
@@ -3417,37 +3428,72 @@ struct Lowering {
         return var(name);
     }
     mutable std::unordered_set<std::string> foulBackendTargets;
+    // Module+function+arity combinations positively known to be PURE, which
+    // veto the name-level foul mark above.
+    mutable std::unordered_set<std::string> pureBackendTargets;
     mutable bool foulBackendTargetsBuilt = false;
-    auto isFoulBackendTarget(const std::string& mod, const std::string& fn)
-        -> bool {
+    // Foul by NAME, minus any arity known to be pure. One BEAM module holds
+    // both: a capability stand-in's `foul put(url, body)` and `Map`'s pure
+    // `put` are both `kex_prelude:put`, and marking the name alone appended a
+    // capability context to every `map.put(k, v)` — `kex_prelude:put/4`, which
+    // does not exist.
+    //
+    // Arity ALONE cannot decide it either: a capture (`~IO.printLine`) reaches
+    // here with the arity of the closure rather than of the call, and an
+    // overload set records only one arity per name, so keying on arity dropped
+    // the context from `ENV.get(key)` while keeping it for `get(key, default)`.
+    // Subtracting the arities that are positively known to be pure keeps every
+    // call that was right before and fixes the collisions (kexhq/kex#143).
+    auto isFoulBackendTarget(const std::string& mod, const std::string& fn,
+                             int arity) -> bool {
         if (!externalModules) return false;
 
         if (!foulBackendTargetsBuilt) {
             foulBackendTargetsBuilt = true;
-            for (const auto& qualKey : externalModules->foulExports) {
+            // Each entry is `Module.member/arity` — one per overload, since one
+            // name can be foul at some arities and pure at others.
+            for (const auto& entry : externalModules->foulExports) {
+                auto slash = entry.rfind('/');
+                if (slash == std::string::npos) continue;
+                const auto qualKey = entry.substr(0, slash);
                 auto dot = qualKey.find('.');
                 if (dot == std::string::npos) continue;
                 auto atom = externalModules->nameToAtom.find(qualKey.substr(0, dot));
                 auto beamFn = externalModules->exportToBeamFn.find(qualKey);
                 if (atom == externalModules->nameToAtom.end() ||
                     beamFn == externalModules->exportToBeamFn.end()) continue;
-                foulBackendTargets.insert(atom->second + ":" + beamFn->second);
+                foulBackendTargets.insert(foulKey(atom->second, beamFn->second));
             }
             // Receiver functions resolve through their own table, so their
             // foulness has to be folded in as well — `cli.run(...)` reaches
             // the prelude this way, not through exportToBeamFn.
             for (const auto& [_, providers] : externalModules->receiverFunctions)
-                for (const auto& provider : providers)
+                for (const auto& provider : providers) {
                     if (provider.isFoul)
-                        foulBackendTargets.insert(provider.moduleAtom + ":" +
-                                                  provider.beamFunction);
+                        foulBackendTargets.insert(
+                            foulKey(provider.moduleAtom, provider.beamFunction));
+                    else
+                        pureBackendTargets.insert(
+                            foulKey(provider.moduleAtom, provider.beamFunction,
+                                    provider.beamArity));
+                }
         }
-        return foulBackendTargets.count(mod + ":" + fn) > 0;
+        return foulBackendTargets.count(foulKey(mod, fn)) > 0 &&
+               pureBackendTargets.count(foulKey(mod, fn, arity)) == 0;
+    }
+
+    static auto foulKey(const std::string& mod, const std::string& fn)
+        -> std::string {
+        return mod + ":" + fn;
+    }
+    static auto foulKey(const std::string& mod, const std::string& fn, int arity)
+        -> std::string {
+        return mod + ":" + fn + "/" + std::to_string(arity);
     }
 
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
         if (threadsCapabilities() && !mod.empty() &&
-            isFoulBackendTarget(mod, fn)) {
+            isFoulBackendTarget(mod, fn, arity)) {
             args.push_back(currentContext());
             ++arity;
         }
@@ -3518,8 +3564,21 @@ struct Lowering {
             std::vector<ExprPtr> ownerPairs;
             for (const auto& [name, info] : records) {
                 (void)info;
+                // A record whose methods live in ANOTHER module of this build
+                // must name that module: claiming it here sent the dispatch to
+                // a function this one never defined, and a capability replaced
+                // by a stand-in from an opt-in module died `undef`
+                // (kexhq/kex#143). `localTypeModules` is keyed by the make
+                // target as written, which inside a module is the bare name.
+                std::string owner = moduleName;
+                auto declaring = localTypeModules.find(name);
+                if (declaring == localTypeModules.end())
+                    if (auto dot = name.rfind('.'); dot != std::string::npos)
+                        declaring = localTypeModules.find(name.substr(dot + 1));
+                if (declaring != localTypeModules.end())
+                    owner = "Kex." + declaring->second;
                 auto t = std::make_unique<Expr>();
-                t->node = MakeTuple{two(atomLit(name), atomLit(moduleName))};
+                t->node = MakeTuple{two(atomLit(name), atomLit(owner))};
                 ownerPairs.push_back(std::move(t));
             }
             body = makeLet(fresh("Own"),
@@ -5854,17 +5913,23 @@ struct Lowering {
             // ends at whichever one came first. With the default, a local
             // `showValue` forwarded `Just(50)` to `showValue/Showable` and
             // rendered the tuple.
+            // A `foul` method's last parameter is the hidden capability
+            // context, which the provider being forwarded to does not have:
+            // it lives one arity DOWN, and passing the context on hands it
+            // over as a user argument (kexhq/kex#143).
+            const int forwardArity =
+                def.arity - (def.hasCapabilityContext ? 1 : 0);
             auto provider = std::find_if(
                 candidates.begin(), candidates.end(),
                 [&](const auto& candidate) {
-                    return candidate.beamArity == def.arity &&
+                    return candidate.beamArity == forwardArity &&
                         candidate.beamFunction == first.name;
                 });
             if (provider == candidates.end())
                 provider = std::find_if(
                     candidates.begin(), candidates.end(),
                     [&](const auto& candidate) {
-                        return candidate.beamArity == def.arity;
+                        return candidate.beamArity == forwardArity;
                     });
             if (!alreadyTotal && provider != candidates.end()) {
                 FunClause fallback;
@@ -5874,11 +5939,12 @@ struct Lowering {
                     param->kind = PatKind::Var;
                     param->name = "_traitShadowFallback" + std::to_string(i);
                     fallback.params.push_back(std::move(param));
-                    args.push_back(
-                        var("_traitShadowFallback" + std::to_string(i)));
+                    if (i < forwardArity)
+                        args.push_back(
+                            var("_traitShadowFallback" + std::to_string(i)));
                 }
                 fallback.body = callE(provider->moduleAtom,
-                                      provider->beamFunction, def.arity,
+                                      provider->beamFunction, forwardArity,
                                       std::move(args));
                 def.clauses.push_back(std::move(fallback));
                 forwarded = true;
@@ -5894,12 +5960,17 @@ struct Lowering {
             def.name == first.name) {
             FunClause fallback;
             std::vector<ExprPtr> args;
+            // See forwardArity above: a foul method carries the capability
+            // context the provider knows nothing about.
+            const int noReceiverArity =
+                def.arity - (def.hasCapabilityContext ? 1 : 0);
             for (int i = 0; i < def.arity; ++i) {
                 auto param = std::make_unique<Pattern>();
                 param->kind = PatKind::Var;
                 param->name = "_noReceiver" + std::to_string(i);
                 fallback.params.push_back(std::move(param));
-                args.push_back(var("_noReceiver" + std::to_string(i)));
+                if (i < noReceiverArity)
+                    args.push_back(var("_noReceiver" + std::to_string(i)));
             }
             // Another module may own the same method name for a receiver this
             // one does not cover — `get` is Regex.Match's here and Map's in
@@ -5911,7 +5982,7 @@ struct Lowering {
                     externalModules->receiverFunctions.find(first.name);
                 if (candidates != externalModules->receiverFunctions.end())
                     for (const auto& candidate : candidates->second)
-                        if (candidate.beamArity == def.arity &&
+                        if (candidate.beamArity == noReceiverArity &&
                             candidate.beamFunction == first.name) {
                             provider = &candidate;
                             break;
@@ -5919,7 +5990,7 @@ struct Lowering {
             }
             if (provider)
                 fallback.body = callE(provider->moduleAtom,
-                                      provider->beamFunction, def.arity,
+                                      provider->beamFunction, noReceiverArity,
                                       std::move(args));
             else {
                 auto message = callE("erlang", "iolist_to_binary", 1,
@@ -6083,10 +6154,19 @@ struct Lowering {
         return def;
     }
 
+    // `genericFallbackArity` is the arity the fallback is called at, which is
+    // NOT the dispatcher's when the method is `foul`: every foul function
+    // carries a hidden capability context as its last parameter, and the
+    // prelude function being delegated to has no such parameter. Passing the
+    // context along handed it to the prelude as a user argument — `[..].count`
+    // reached `kex_prelude:count/2`, the `count(pred)` overload, with the
+    // context where the predicate goes, and died `badarg` (kexhq/kex#143).
     auto makeDispatcher(const std::string& name, int arity,
                         const std::vector<std::string>& owners,
                         const std::string& genericFallback = {},
-                        const std::string& genericFallbackModule = {}) -> FunDef {
+                        const std::string& genericFallbackModule = {},
+                        int genericFallbackArity = -1) -> FunDef {
+        if (genericFallbackArity < 0) genericFallbackArity = arity;
         FunDef def; def.name = name; def.arity = arity;
         FunClause fc;
         std::vector<ExprPtr> fwdArgs;
@@ -6287,10 +6367,10 @@ struct Lowering {
             wild->kind = PatKind::Wild;
             fallback.patterns.push_back(std::move(wild));
             std::vector<ExprPtr> args;
-            for (int i = 0; i < arity; ++i)
+            for (int i = 0; i < genericFallbackArity; ++i)
                 args.push_back(var("_a" + std::to_string(i)));
-            fallback.body = callE(genericFallbackModule, genericFallback, arity,
-                                  std::move(args));
+            fallback.body = callE(genericFallbackModule, genericFallback,
+                                  genericFallbackArity, std::move(args));
             m.clauses.push_back(std::move(fallback));
         } else if (traitFallbacks.empty()) {
             MatchClause fallback;
@@ -7341,6 +7421,40 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // duplicate function definitions are merged below.
                 std::string genericFallback;
                 std::string genericFallbackModule;
+                // A `foul` implementation's last parameter is the hidden
+                // capability context, so the prelude function this dispatcher
+                // falls back to lives one arity DOWN (see makeDispatcher).
+                const std::string mangledPrefix =
+                    receiverImplementationPrefix(name);
+                bool contextualOwners = false;
+                for (const auto& fn : mod.functions)
+                    if (fn.arity == arity &&
+                        fn.name.rfind(mangledPrefix, 0) == 0 &&
+                        fn.hasCapabilityContext) {
+                        contextualOwners = true;
+                        break;
+                    }
+                // A dispatcher can mix a foul owner with a PURE prelude
+                // fallback — `write` is Mock.Files' (foul, context-carrying)
+                // and FileHandle's (pure) at once. Prefer the context-stripped
+                // arity, but fall back to the plain one when nothing answers
+                // there, or the fallback goes missing and an opaque receiver
+                // dies with "Undefined method" (kexhq/kex#143).
+                int fallbackArity = contextualOwners ? arity - 1 : arity;
+                if (contextualOwners && L.externalModules) {
+                    auto external =
+                        L.externalModules->receiverFunctions.find(name);
+                    const bool answersStripped =
+                        external != L.externalModules->receiverFunctions.end() &&
+                        std::any_of(external->second.begin(),
+                                    external->second.end(),
+                                    [&](const auto& candidate) {
+                                        return candidate.beamArity ==
+                                                   fallbackArity &&
+                                               candidate.moduleAtom != mod.name;
+                                    });
+                    if (!answersStripped) fallbackArity = arity;
+                }
                 for (auto& function : mod.functions) {
                     if (function.name != name || function.arity != arity)
                         continue;
@@ -7354,7 +7468,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (external !=
                         L.externalModules->receiverFunctions.end()) {
                         for (const auto& candidate : external->second)
-                            if (candidate.beamArity == arity &&
+                            if (candidate.beamArity == fallbackArity &&
                                 candidate.beamFunction == name &&
                                 candidate.moduleAtom != mod.name) {
                                 genericFallbackModule = candidate.moduleAtom;
@@ -7362,7 +7476,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             }
                         if (genericFallbackModule.empty())
                         for (const auto& candidate : external->second) {
-                            if (candidate.beamArity != arity ||
+                            if (candidate.beamArity != fallbackArity ||
                                 candidate.moduleAtom == mod.name)
                                 continue;
                             if (genericFallbackModule.empty())
@@ -7390,7 +7504,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 L.externalModules->exportToBeamFn.end() &&
                             exportedArity !=
                                 L.externalModules->exportArity.end() &&
-                            exportedArity->second == arity &&
+                            exportedArity->second == fallbackArity &&
                             prelude !=
                                 L.externalModules->nameToAtom.end() &&
                             prelude->second != mod.name) {
@@ -7462,7 +7576,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 mod.functions.push_back(
                     L.makeDispatcher(name, arity, owners, genericFallback,
-                                     genericFallbackModule));
+                                     genericFallbackModule, fallbackArity));
             }
         }
     }

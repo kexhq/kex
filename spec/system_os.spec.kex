@@ -1,12 +1,21 @@
-# `System.OS` names the operating system family as an atom, `System.BITWIDTH`
-# the machine's pointer width, and `Mock.System` makes both claim to be
-# something else so a test for another system can run on this one. Both
-# backends answer with the same atom for the same machine.
+# `System.OS` names the operating system family as an atom and
+# `System.BITWIDTH` the machine's pointer width. Both are `foul`: reading the
+# machine is an effect, and the predicates derived from them inherit it.
+#
+# What is checked here is CONSISTENCY on whatever machine the suite runs on —
+# the atom and the predicates must agree, and the predicates must be mutually
+# exclusive. The atom itself is never printed, so the expected output holds
+# everywhere.
+#
+# There is deliberately no way to make the machine claim to be something else
+# (kexhq/kex#143). `Mock.System` used to do that and had exactly one caller:
+# this spec. Faking the reported OS exercises a program's branching, not the
+# platform behaviour behind it — the file semantics, path rules and process
+# handling that actually differ are unaffected by the atom. Testing those
+# means running on the platform, which CI does across macOS, Ubuntu and
+# Alpine.
 
 main do
-  # Real machine: the predicates agree with the atom, and are mutually
-  # exclusive. (The atom itself is not printed — the expected output has to
-  # hold wherever the suite runs.)
   let consistent = match System.OS do
     :macos   => System.macOS?
     :linux   => System.linux?
@@ -14,21 +23,9 @@ main do
     _        => !System.macOS? && !System.linux? && !System.windows?
   end
   IO.printLine("${consistent}")
+
   let flags = [System.macOS?, System.linux?, System.windows?]
   IO.printLine("${flags.count { |flag| flag } <= 1}")
   IO.printLine("${!(System.posix? && System.windows?)}")
   IO.printLine("${System.BITWIDTH >= 32}")
-
-  # Mocked: now the answers ARE deterministic, which is the point of the mock.
-  Mock.System.OS(:windows)
-  Mock.System.BITWIDTH(32)
-  IO.printLine("${System.OS} ${System.BITWIDTH}")
-  IO.printLine("${System.windows?} ${System.posix?} ${System.macOS?}")
-
-  Mock.System.OS(:linux)
-  IO.printLine("${System.OS} ${System.linux?} ${System.posix?}")
-
-  # Clearing hands the real machine back.
-  Mock.System.clear()
-  IO.printLine("${System.OS == :windows} ${System.BITWIDTH >= 32}")
 end

@@ -3085,7 +3085,14 @@ auto Parser::parseWithExpr() -> ast::ExprPtr {
   ast::WithExpr node;
   node.capability = parseTypeName();
   expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
+  // The replacement is followed by `do`, which a trailing-block expression
+  // would otherwise swallow: `with FS.File = fake do` parsed `do ... end` as a
+  // block argument to `fake` and then complained about the `end`. Same
+  // treatment an `if` condition gets, for the same reason.
+  const bool savedNoDoBlocks = m_noDoBlocks;
+  m_noDoBlocks = true;
   node.value = parseExpr();
+  m_noDoBlocks = savedNoDoBlocks;
   expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
   skipNewlines();
 

@@ -174,7 +174,7 @@ open(Path, Mode) ->
             end;
         _ ->
             prepare_mock_open(Path, Mode),
-            {'Ok', {'MockFileHandle', pth(Path)}}
+            {'Ok', {'FileHandle', mock, pth(Path)}}
     end.
 
 prepare_mock_open(Path, 'Write') ->
@@ -197,43 +197,43 @@ mode_flags(_)           -> [read, binary].
 %% Text I/O — mirrors IO.getLine / IO.get / IO.printLine / IO.print.
 
 %% getLine → String? (newline stripped, None at EOF).
-handle_getLine({'FileHandle', Dev, _}) ->
+handle_getLine({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read_line(Dev) of
         {ok, Line} -> {'Just', string:trim(Line, trailing, "\n")};
         _          -> 'None'
     end;
-handle_getLine({'MockFileHandle', Path}) -> mock_read_line(Path);
+handle_getLine({'FileHandle', mock, Path}) -> mock_read_line(Path);
 handle_getLine(_) -> 'None'.
 
 %% get → String? (single character, 'None' at EOF).
-handle_get({'FileHandle', Dev, _}) ->
+handle_get({'FileHandle', Dev, _}) when Dev =/= mock ->
     case file:read(Dev, 1) of
         {ok, <<C>>} -> {'Just', <<C>>};
         _           -> 'None'
     end;
-handle_get({'MockFileHandle', Path}) -> mock_read_char(Path);
+handle_get({'FileHandle', mock, Path}) -> mock_read_char(Path);
 handle_get(_) -> 'None'.
 
 %% printLine(content) → Bool (write + newline).
-handle_printLine({'FileHandle', Dev, _}, Content) ->
+handle_printLine({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
     file:write(Dev, [kex_io:to_string_bin(Content), $\n]) =:= ok;
-handle_printLine({'MockFileHandle', Path}, Content) ->
+handle_printLine({'FileHandle', mock, Path}, Content) ->
     mock_append(Path, <<(kex_io:to_string_bin(Content))/binary, "\n">>);
 handle_printLine(_, _) -> false.
 
 %% print(content) → Bool (write, no newline).
-handle_print({'FileHandle', Dev, _}, Content) ->
+handle_print({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
     file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
-handle_print({'MockFileHandle', Path}, Content) ->
+handle_print({'FileHandle', mock, Path}, Content) ->
     mock_append(Path, kex_io:to_string_bin(Content));
 handle_print(_, _) -> false.
 
 %% Binary/raw I/O.
 
 %% read → String? (remaining content).
-handle_read({'FileHandle', Dev, _}) ->
+handle_read({'FileHandle', Dev, _}) when Dev =/= mock ->
     {'Just', read_rest(Dev, <<>>)};
-handle_read({'MockFileHandle', Path}) -> {'Just', mock_read_rest(Path)};
+handle_read({'FileHandle', mock, Path}) -> {'Just', mock_read_rest(Path)};
 handle_read(_) -> 'None'.
 
 read_rest(Dev, Acc) ->
@@ -244,9 +244,9 @@ read_rest(Dev, Acc) ->
     end.
 
 %% write(data) → Bool (raw write).
-handle_write({'FileHandle', Dev, _}, Content) ->
+handle_write({'FileHandle', Dev, _}, Content) when Dev =/= mock ->
     file:write(Dev, kex_io:to_string_bin(Content)) =:= ok;
-handle_write({'MockFileHandle', Path}, Content) ->
+handle_write({'FileHandle', mock, Path}, Content) ->
     mock_append(Path, kex_io:to_string_bin(Content));
 handle_write(_, _) -> false.
 
@@ -259,20 +259,20 @@ mock_append(Path, Content) ->
 %% Lifecycle.
 
 %% atEnd? → Bool.
-'handle_atEnd?'({'FileHandle', Dev, _}) ->
+'handle_atEnd?'({'FileHandle', Dev, _}) when Dev =/= mock ->
     {ok, Pos} = file:position(Dev, cur),
     {ok, End} = file:position(Dev, eof),
     {ok, _} = file:position(Dev, {bof, Pos}),
     Pos >= End;
-'handle_atEnd?'({'MockFileHandle', Path}) ->
+'handle_atEnd?'({'FileHandle', mock, Path}) ->
     mock_pos(Path) >= byte_size(mock_content(Path));
 'handle_atEnd?'(_) -> true.
 
 %% close → Unit.
-handle_close({'FileHandle', Dev, _}) ->
+handle_close({'FileHandle', Dev, _}) when Dev =/= mock ->
     file:close(Dev),
     ok;
-handle_close({'MockFileHandle', _}) -> ok;
+handle_close({'FileHandle', mock, _}) -> ok;
 handle_close(_) -> ok.
 
 mock_pos(Path) ->

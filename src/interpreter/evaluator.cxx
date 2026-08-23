@@ -2415,6 +2415,24 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             for (const auto& [name, val] : node.fields) {
                 fields[name] = val ? eval(*val) : Value::none();
             }
+            // A qualified type from an opt-in module may not be loaded yet:
+            // the declaration alone is enough to name it, and that came from
+            // the interface. Its field DEFAULTS and its `make` block live in
+            // the source, so without loading, `Parsing.Input { input: "ab" }`
+            // came out missing `pos` and answered no methods at all — unless
+            // the file happened to say `using Parsing` (kexhq/kex#143).
+            if (auto dot = typeName.rfind('.');
+                dot != std::string::npos && !m_recordDefs.count(typeName)) {
+                const auto owner = typeName.substr(0, dot);
+                if (!m_moduleRegistry.contains(owner) &&
+                    !m_loadingModules.count(owner))
+                    try {
+                        ensureModuleLoaded(owner, expr.location, "");
+                    } catch (const RuntimeError&) {
+                        // Not a module that can be found — leave the
+                        // construction to report whatever is actually wrong.
+                    }
+            }
             // Apply declared field defaults (e.g. `pos : Int = 0`) for any
             // field this construction didn't specify explicitly.
             auto defIt = m_recordDefs.find(typeName);

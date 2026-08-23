@@ -479,12 +479,24 @@ auto exportFromSig(const std::string& name,
 void collectFromMakeDef(const kex::ast::MakeDef& md,
                         KexiTypeInterface& iface,
                         KexiStructuralMetadata& meta,
-                        const kex::semantic::Analyzer* analysis) {
+                        const kex::semantic::Analyzer* analysis,
+                        const std::string& modulePath = {}) {
     auto receiverType = convertTypeExpr(md.target);
     auto typeName = makeTargetName(receiverType);
     for (const auto& trait : md.implements) {
-        if (!typeName.empty())
-            meta.traitConformances.push_back({typeName, trait});
+        if (typeName.empty()) continue;
+        meta.traitConformances.push_back({typeName, trait});
+        // A record declared in a module is known by its QUALIFIED name, so the
+        // conformance has to be recorded under that too — otherwise `make
+        // Files, implement: FS.File` inside `module Mock` conformed a type
+        // called `Files` that nothing is, and a consumer's `with FS.File =
+        // Mock.Files { ... }` was rejected (kexhq/kex#143). Only the
+        // conformance is qualified: the RECEIVER type must stay as written,
+        // since qualifying it detaches an ADT's variants from their own
+        // methods (`Monday` stopped being a `Time.Weekday`).
+        if (!modulePath.empty())
+            meta.traitConformances.push_back(
+                {modulePath + "." + typeName, trait});
     }
     // Collect standalone type annotations (`:>` sigs) to patch missing
     // types and to surface pure signatures with no implementation.
@@ -705,7 +717,7 @@ void collectFromModuleBody(const std::vector<kex::ast::ModuleItem>& body,
             if constexpr (std::is_same_v<T, kex::ast::FunctionDef>) {
                 addFunction(*ptr);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, analysis);
+                collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                 collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {
@@ -839,7 +851,7 @@ void collectFlattenedModuleBody(
                                            hasInlineTraitParam(*ptr, analysis));
                 applyInlineTraitConstraints(exp, *ptr, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::MakeDef>) {
-                collectFromMakeDef(*ptr, iface, meta, analysis);
+                collectFromMakeDef(*ptr, iface, meta, analysis, modulePath);
             } else if constexpr (std::is_same_v<T, kex::ast::TraitDef>) {
                 collectFromTraitDef(*ptr, iface, meta, analysis);
             } else if constexpr (std::is_same_v<T, kex::ast::TypeDef>) {

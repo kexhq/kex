@@ -1,5 +1,17 @@
 # Mock — deterministic stand-ins for the world outside the program: the
-# filesystem, the network, the environment, the platform, the console.
+# filesystem, the network, the environment, the console.
+#
+# These are STATEFUL: `Mock.FS.File(path, content)` writes into a store the
+# real `FS.File` then reads back, so a test can write and read again, and
+# `clear()` undoes it. That state is global and lives until cleared, which is
+# what makes hook ordering and write/read round trips testable — and also what
+# makes two tests able to interfere.
+#
+# When a test only needs canned ANSWERS, replacing the capability is the
+# better tool: `with FS.File = MyFake { ... } do ... end` swaps the
+# implementation for one lexical region, holds no global state, needs no
+# clearing, and cannot leak into another test. See spec/capability_stdlib_fs.kex
+# for the shape of a stand-in (kexhq/kex#143).
 #
 # Opt-in on purpose (issue #144): this module used to ride along inside
 # http.kex, so `using HTTP` in the prelude made every Mock.* reachable from
@@ -11,7 +23,59 @@
 #
 # All Mock.* sub-modules live in a single `module Mock` block so merged
 # compilation units never see duplicate top-level `Mock` modules.
+# A stand-in's read hook: a path in, its content or `None` out.
+type Reader = FS.FilePath -> String?
+
+# An environment stand-in's lookup hook: a name in, its value or `None` out.
+type Lookup = String -> String?
+
 module Mock do
+  # A stand-in for the `FS.File` capability, for `with FS.File = ...`. Unlike
+  # the `Mock.*` functions below it holds no global state, needs no `clear()`,
+  # and cannot leak past its block. What it cannot do is change: `write` then
+  # `read` back is not something a value does, so a test needing that round
+  # trip still wants `Mock.FS` (kexhq/kex#143).
+  #
+  #   with FS.File = Mock.Files { files: {"kex.toml": "name = \"demo\""} } do
+  #     assert(loadConfig() == "demo")
+  #   end
+  #
+  # `onRead` takes over when a test needs an ANSWER rather than a fixture —
+  # content derived from the path, a failure on the third call, a record of
+  # what was asked for. It is consulted first and its `None` means "no such
+  # file", so a callback can model absence too.
+  record Files do
+    files  : Map<FS.FilePath, String> = {}
+    onRead : Reader? = None
+  end
+
+  # A stand-in for the `ENV` capability. A name simply left out of `vars` reads
+  # as unset, which is the whole reason `Mock.ENV.unset` exists — absence is an
+  # answer programs act on. `onGet` answers instead of the map when a test
+  # wants a rule rather than a fixture.
+  #
+  #   with ENV = Mock.Env { vars: {"HOME": "/fake"} } do
+  #     assert(configHome() == "/fake/.config")
+  #   end
+  record Env do
+    vars  : Map<String, String> = {}
+    onGet : Lookup? = None
+  end
+
+  # A stand-in for the `Http` capability: one canned response for every
+  # request, whatever the verb, URL or body. That is what a client test needs,
+  # being about what the program does WITH a response.
+  #
+  # NOT named `Http`: a record of that name is indistinguishable from the
+  # capability itself at a call site, and the `make` block binds to the
+  # capability rather than the record — every request then reaches the real
+  # network while the test looks like it is faking one.
+  record Response do
+    status  : Integer
+    body    : String
+    headers : Map<String, String> = {}
+  end
+
   module FS do
     File : FS.FilePath -> String -> Void
     Directory : FS.FilePath -> Void
@@ -74,26 +138,6 @@ module Mock do
     end
   end
 
-  # Makes the machine claim to be something else, so a test for another
-  # system's behaviour can run on this one. Setter per fact, like Mock.FS.
-  module System do
-    OS : System.OperatingSystem -> Void
-    BITWIDTH : Integer -> Void
-    clear : Void
-
-    foul OS(name: System.OperatingSystem) -> Void do
-      return Kex.Intrinsic.System.mockOS(name)
-    end
-
-    foul BITWIDTH(bits: Integer) -> Void do
-      return Kex.Intrinsic.System.mockBitWidth(bits)
-    end
-
-    foul clear() -> Void do
-      return Kex.Intrinsic.System.mockClear()
-    end
-  end
-
   module IO do
     foul start() -> Void do
       return Kex.Intrinsic.IO.ioMockStart()
@@ -126,5 +170,74 @@ module Mock do
     foul input(first, second, third, fourth) -> Void do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
     end
+  end
+  make Files, implement: FS.File do
+    # Named apart from `read`: `this.read(path)` would bind to the
+    # capability's own `read : FilePath -> String?`, not to this method.
+    foul cannedRead(path) = match @onRead do
+      Just(reader) => reader(path)
+      None         => @files.get(path)
+    end
+
+    foul read(path) = this.cannedRead(path)
+    foul readLines(path) = this.cannedRead(path).map { |content| content.lines }
+    foul feed(path) = this.cannedRead(path).map { |content| content.lines }
+    foul size(path) = this.cannedRead(path).map { |content| content.bytes.count }
+    foul exists?(path) = this.cannedRead(path) != None
+    foul file?(path) = this.cannedRead(path) != None
+    foul directory?(path) = false
+    foul absolute(path) = Just(path)
+
+    # A fake is a value, so there is nowhere for a write to go. Refusing is
+    # the honest answer and the useful one: a test that did not expect a
+    # write sees it fail rather than silently succeed.
+    foul open(path, mode) = Error(OpenFailed(path))
+    foul write(path, content) = false
+    foul append(path, content) = false
+    foul delete(path) = false
+    foul copy(src, dst) = false
+    foul rename(src, dst) = false
+  end
+
+  make Env, implement: ENV do
+    # Named apart from `get`: `this.get(key)` would bind to the capability's
+    # own `get`, not to this method.
+    foul lookup(key) = match @onGet do
+      Just(reader) => reader(key)
+      None         => @vars.get(key)
+    end
+
+    foul get(key) = this.lookup(key)
+    foul get(key, default) = this.lookup(key).or(default)
+    foul has?(key) = this.lookup(key) != None
+    foul keys = @vars.keys
+    foul values = @vars.values
+    foul count = @vars.count
+    foul each(f) = @vars.each(f)
+    foul entries = @vars.entries
+  end
+
+  make Response, implement: Http do
+    # The one canned response, built once and returned for every request.
+    let canned = Ok(HttpResponse {
+      status:  @status,
+      body:    @body,
+      headers: @headers
+    })
+
+    foul get(url) = this.canned
+    foul get(url, opts) = this.canned
+    foul post(url, body) = this.canned
+    foul post(url, body, opts) = this.canned
+    foul put(url, body) = this.canned
+    foul put(url, body, opts) = this.canned
+    foul patch(url, body) = this.canned
+    foul patch(url, body, opts) = this.canned
+    foul delete(url) = this.canned
+    foul delete(url, opts) = this.canned
+    foul head(url) = this.canned
+    foul head(url, opts) = this.canned
+    foul options(url) = this.canned
+    foul options(url, opts) = this.canned
   end
 end

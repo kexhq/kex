@@ -1381,7 +1381,6 @@ int main() {
                 {"Mock.FS.Directory(\"cache\")", "Mock.FS.Directory"},
                 {"Mock.FS.clear()", "Mock.FS.clear"},
                 {"Mock.ENV.set(\"HOME\", \"/tmp/elsewhere\")", "Mock.ENV.set"},
-                {"Mock.System.OS(:windows)", "Mock.System.OS"},
                 {"Mock.Http.start()", "Mock.Http.start"},
                 {"Mock.IO.start()", "Mock.IO.start"},
             };

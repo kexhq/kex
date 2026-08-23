@@ -591,7 +591,14 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                 auto qualKey = shortName + "." + exp.name;
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
-                if (exp.isFoul) ext.foulExports.insert(qualKey);
+                // Per OVERLOAD, arity included: `ENV.get` is both `get(key)`
+                // and `get(key, default)`, and `exportArity` keeps only one of
+                // them. Recording just the name made the consumer thread a
+                // capability context into whichever arity it happened to hold
+                // and skip the other (kexhq/kex#143).
+                if (exp.isFoul)
+                    ext.foulExports.insert(
+                        qualKey + "/" + std::to_string(exp.beamArity));
                 if (!exp.paramNames.empty())
                     ext.exportParamNames[qualKey] = exp.paramNames;
             }

@@ -969,7 +969,14 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
 }
 
 auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void {
-    auto registerOne = [this](const ast::MakeDef& def) {
+    // A record declared in a module is known by its QUALIFIED name, so a
+    // `make` block inside that module has to register its conformance under
+    // the same name. Registering the bare one left `make Files, implement:
+    // FS.File` inside `module Mock` conforming a type called `Files` that
+    // nothing is, and `with FS.File = Mock.Files { ... }` was rejected as not
+    // implementing the capability (kexhq/kex#143).
+    auto registerOne = [this](const ast::MakeDef& def,
+                              const std::string& modulePath) {
         if (def.implements.empty() || !def.target) return;
         std::string typeName;
         if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind))
@@ -977,19 +984,25 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
         if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
             if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
         if (typeName.empty()) return;
-        for (const auto& traitName : def.implements)
+        for (const auto& traitName : def.implements) {
             m_traits.registerImplementation(typeName, traitName);
+            if (!modulePath.empty())
+                m_traits.registerImplementation(modulePath + "." + typeName,
+                                                traitName);
+        }
     };
-    std::function<void(const ast::ModuleDef&)> walkModule =
-        [&](const ast::ModuleDef& module) {
+    std::function<void(const ast::ModuleDef&, const std::string&)> walkModule =
+        [&](const ast::ModuleDef& module, const std::string& prefix) {
+        const std::string path =
+            prefix.empty() ? module.name : prefix + "." + module.name;
         for (const auto& mi : module.body)
             std::visit([&](const auto& mn) {
                 using MT = std::decay_t<decltype(mn)>;
                 if constexpr (std::is_same_v<MT, std::unique_ptr<ast::MakeDef>>) {
-                    if (mn) registerOne(*mn);
+                    if (mn) registerOne(*mn, path);
                 } else if constexpr (std::is_same_v<MT,
                                                     std::unique_ptr<ast::ModuleDef>>) {
-                    if (mn) walkModule(*mn);
+                    if (mn) walkModule(*mn, path);
                 }
             }, mi);
     };
@@ -997,9 +1010,9 @@ auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void
         std::visit([&](const auto& node) {
             using T = std::decay_t<decltype(node)>;
             if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
-                if (node) registerOne(*node);
+                if (node) registerOne(*node, "");
             } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
-                if (node) walkModule(*node);
+                if (node) walkModule(*node, "");
             }
         }, item);
     }
@@ -2074,7 +2087,20 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     if (auto imports = m_functionImports.find(&def);
         imports != m_functionImports.end())
         m_declarationImports = imports->second;
-    const auto purityKey = m_currentModulePath + "\n" + def.name;
+    // Purity is scoped to the RECEIVER as well as the module: two types'
+    // methods are not overloads of each other, so `FileHandle`'s pure `read`
+    // and a `make Mock.Files` block's `foul read` are unrelated definitions
+    // that merely share a name (kexhq/kex#143).
+    //
+    // `declarationKey` stays module-scoped: it looks up standalone
+    // annotations, which are declared at module level and matched by name.
+    const auto declarationKey = m_currentModulePath + "\n" + def.name;
+    const auto purityKey =
+        m_currentModulePath + "\n" +
+        (m_inMakeBlock && m_currentMakeType
+             ? typeToString(m_currentMakeType) + "."
+             : std::string()) +
+        def.name;
     if (auto [purity, inserted] =
             m_overloadPurity.emplace(purityKey, def.isFoul);
         !inserted && purity->second != def.isFoul) {
@@ -2102,7 +2128,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // Pre-registered provisional sigs (for forward-reference/recursion) are
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
-    const auto scopedDeclared = m_scopedDeclaredSignatures.find(purityKey);
+    const auto scopedDeclared = m_scopedDeclaredSignatures.find(declarationKey);
     auto* declared = [&]() -> const Signature* {
         if (scopedDeclared == m_scopedDeclaredSignatures.end()) return nullptr;
         // A lone declaration is still the contract even when its arity is
@@ -2243,7 +2269,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
         if (declared && declared->params.size() != clause.params.size()) {
             bool hasMatchingAnnotation = false;
-            auto it = m_annotationArities.find(purityKey);
+            auto it = m_annotationArities.find(declarationKey);
             if (it != m_annotationArities.end()) {
                 hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
             }
@@ -4084,6 +4110,11 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
             const auto recordName = resolveRecordName(node.typeName);
+            // Naming a qualified record is a reference to its module: its
+            // `make` block and field defaults live in that source, and on BEAM
+            // the module has to be in the build at all (kexhq/kex#143).
+            if (recordName.rfind('.') != std::string::npos)
+                m_referencedModules.insert(recordName);
             auto record = m_recordFields.find(recordName);
             for (const auto& [fieldName, val] : node.fields) {
                 if (!val) continue;
@@ -5495,6 +5526,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // genuinely generic contract.
         bool anyUnknownParamCandidate = false;
         for (const auto& sig : *sigs) {
+            // A signature this call could not possibly reach says nothing
+            // about it. `write` is FileHandle's at 2 parameters and a
+            // capability stand-in's at 3, and letting the 3-parameter one
+            // count as an "unknown candidate" switched off the mismatch report
+            // for the 2-argument call — writing through a read-only handle
+            // stopped being an error the moment any such stand-in existed
+            // (kexhq/kex#143). Same range the overload match below uses.
+            const std::size_t requiredParams =
+                sig.requiredParams.value_or(sig.params.size());
+            if (argTypes.size() < requiredParams ||
+                argTypes.size() > sig.params.size())
+                continue;
             if (!sig.params.empty()) {
                 if (std::holds_alternative<ConstrainedType>(sig.params[0]->kind))
                     anyConstrainedFirstParam = true;

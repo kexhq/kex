@@ -23,6 +23,12 @@ make FrozenClock, implement: Clock do
   foul now() -> Integer = @at
 end
 
+# A bare identifier as the replacement. `do` opens a trailing block, so
+# `with Clock = spare do` parsed the block as an argument TO `spare` and then
+# failed on the `end` — the same trap an `if` condition has, and it gets the
+# same treatment.
+let spare = FrozenClock { at: 99 }
+
 foul stamp() -> String = "at ${Clock.now()}"
 foul deep() -> String = "deep -> ${stamp()}"
 
@@ -73,5 +79,9 @@ main do
     receive do
       v => IO.printLine("spawned outside: ${v}")
     end
+  end
+
+  with Clock = spare do
+    IO.printLine(deep())
   end
 end

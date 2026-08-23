@@ -1,0 +1,47 @@
+# `Mock.Files` — a ready-made stand-in for the `FS.File` capability
+# (kexhq/kex#143).
+#
+# A capability's members ARE its interface, so a hand-written stand-in has to
+# provide all fourteen of them. That is far too much to repeat in every test
+# that wants to fake one read, so it is written once in the stdlib. Nothing
+# here says `using Mock`: naming `Mock.Files` loads the module that defines it.
+#
+# The functions under test declare no dependency and thread nothing — their
+# `FS.File.read` calls are written exactly as they would be in production.
+
+using FS
+
+foul load(path: String) -> String = FS.File.read(path).or("(missing)")
+foul countLines(path: String) -> Integer = FS.File.readLines(path).or([]).count
+
+main do
+  # Canned content, keyed by path.
+  with FS.File = Mock.Files { files: {"kex.toml": "name = \"demo\"\n"} } do
+    IO.printLine(load("kex.toml"))
+    IO.printLine(countLines("kex.toml"))
+    IO.printLine(FS.File.size("kex.toml").or(-1))
+    IO.printLine(FS.File.exists?("kex.toml"))
+
+    # A path it was not given does not exist. Absence is an answer programs
+    # act on — a default, a disabled feature — so a stand-in has to produce it.
+    IO.printLine(load("absent.toml"))
+    IO.printLine(FS.File.exists?("absent.toml"))
+
+    # Writes are refused rather than silently accepted, so a test that did not
+    # expect one sees it fail instead of passing for the wrong reason.
+    IO.printLine(FS.File.write("kex.toml", "clobbered"))
+    IO.printLine(load("kex.toml"))
+  end
+
+  # `onRead` answers instead of a fixture: content derived from the path, and
+  # absence still expressible by returning None.
+  with FS.File = Mock.Files { onRead: Just({ |path| path.endsWith?(".md") then Just("# ${path}") else None }) } do
+    IO.printLine(load("readme.md"))
+    IO.printLine(load("notes.txt"))
+    IO.printLine(FS.File.exists?("readme.md"))
+    IO.printLine(FS.File.exists?("notes.txt"))
+  end
+
+  # Outside the region the real filesystem is back.
+  IO.printLine(FS.File.exists?("/definitely/not/here"))
+end

@@ -15,6 +15,6 @@ write(Handle, Content) -> kex_file:handle_write(Handle, Content).
 'eof?'(Handle) -> kex_file:'handle_atEnd?'(Handle).
 'atEnd?'(Handle) -> kex_file:'handle_atEnd?'(Handle).
 feed({'FileHandle', _, Path}) -> kex_file:feed(Path);
-feed({'MockFileHandle', Path}) -> kex_file:feed(Path);
+feed({'FileHandle', mock, Path}) -> kex_file:feed(Path);
 feed(_) -> 'None'.
 close(Handle) -> kex_file:handle_close(Handle).
