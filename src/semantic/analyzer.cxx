@@ -134,6 +134,10 @@ auto Analyzer::typeMap() const -> const std::unordered_map<const ast::Expr*, Typ
     return m_checker.typeMap();
 }
 
+auto Analyzer::assignmentTargetTypeOf(const ast::Expr* expr) const -> TypePtr {
+    return m_checker.assignmentTargetTypeOf(expr);
+}
+
 auto Analyzer::functionSignatures(const ast::FunctionDef* function) const
     -> const std::vector<Signature>* {
     return m_checker.functionSignatures(function);

@@ -715,6 +715,39 @@ int main() {
                        "inferred [String] local produced no dot completions: " +
                            result);
         });
+        it("understands functional updates in make blocks", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","languageId":"kex","version":1,"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> User do\n    new.age = new.age + 1\n    New { age: new.age }\n  end\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":5}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":8}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(responseForId(result, 2).find("new : User") !=
+                           std::string::npos,
+                       "implicit new hover omitted its make receiver type: " +
+                           result);
+            assertTrue(responseForId(result, 3).find(R"("label":"age")") !=
+                           std::string::npos,
+                       "new receiver produced no record field completions: " +
+                           result);
+            assertTrue(result.find("Undefined variable: new") ==
+                           std::string::npos,
+                       "LSP diagnosed the implicit new binding as undefined");
+        });
         it("keeps local navigation and pattern receiver completion semantic", []() {
             std::string messages;
             messages += frame(

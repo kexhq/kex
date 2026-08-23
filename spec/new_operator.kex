@@ -70,6 +70,34 @@ make Defaults do
   let retained -> Defaults = New { }
 end
 
+# `new` may also be a module function or a receiver method. Qualified calls
+# and `@new(...)` use call syntax, while bare `new` remains the implicit copy.
+module CollisionWeb do
+  record Server do
+    port : Integer
+  end
+
+  module Server do
+    let new(port: Integer) -> Server = Server { port: port }
+  end
+
+  make Server do
+    let new(delta: Integer) -> Server = New { port: @port + delta }
+
+    let throughReceiverMethod(delta: Integer) -> Server do
+      let called = @new(delta)
+      new.port = called.port + 1
+      return new
+    end
+
+    let throughModuleFunction(port: Integer) -> Server do
+      let called = Server.new(port)
+      new.port = called.port
+      return new
+    end
+  end
+end
+
 main do
   let original = Profile { name: "Ada", age: 18 }
   let spread = Profile { ...original, age: 40 }
@@ -101,4 +129,16 @@ main do
   IO.printLine(original.shadowed.name)
   IO.printLine(original.shadowed.age)
   IO.printLine(new.age)
+  let server = CollisionWeb.Server.new(8000)
+  IO.printLine(server.port)
+  IO.printLine(server.throughReceiverMethod(80).port)
+  IO.printLine(server.throughModuleFunction(9000).port)
+  var owned = CollisionWeb.Server.new(7000)
+  let returned = owned.throughReceiverMethod(5)
+  IO.printLine(owned.port)
+  IO.printLine(returned.port)
+  owned.throughReceiverMethod!(5)
+  IO.printLine(owned.port)
+  owned.new!(10)
+  IO.printLine(owned.port)
 end

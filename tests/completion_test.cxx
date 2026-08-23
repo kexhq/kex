@@ -417,6 +417,25 @@ int main() {
             assertTrue(has(matches, "localValue"),
                        "position-aware completion lost a local let binding");
         });
+        it("offers the implicit new binding inside make functions", []() {
+            SemanticDB db;
+            const std::string path = "/tmp/kex-lsp-new-scope.kex";
+            db.updateFile(path,
+                "record User do\n"
+                "  age : Integer\n"
+                "end\n"
+                "make User do\n"
+                "  let birthday -> User do\n"
+                "    new.age = new.age + 1\n"
+                "    new\n"
+                "  end\n"
+                "end\n");
+            auto matches = db.completionsAt(path, 7, 7, "ne");
+            assertTrue(has(matches, "new"),
+                       "make completion omitted the implicit new binding");
+            assertTrue(has(db.completionsFor("User."), "User.age"),
+                       "record receiver completion omitted its fields");
+        });
     });
 
     return runAll();

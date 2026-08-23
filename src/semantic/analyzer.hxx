@@ -41,6 +41,7 @@ public:
     // Presentation-widened `typeOf` — see TypeChecker::displayTypeOf.
     auto displayTypeOf(const ast::Expr* expr) const -> TypePtr;
     auto typeMap() const -> const std::unordered_map<const ast::Expr*, TypePtr>&;
+    auto assignmentTargetTypeOf(const ast::Expr* expr) const -> TypePtr;
     // Capabilities `name` needs, each mapped to the callee that carried the
     // requirement in ("" when the function reaches it directly). Nothing is
     // annotated, so this is the only place a reader can learn what a function

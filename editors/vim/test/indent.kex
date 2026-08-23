@@ -3,6 +3,8 @@
 
 using Parsing
 
+distinct type UserId = Integer
+
 type Weekday = Monday | Tuesday | Wednesday
   | Thursday | Friday
 
@@ -20,6 +22,12 @@ module Demo do
     show :> String
     let show(this) -> String do
       "point ${this.x}, `raw` and $`interp ${1 + 2}`"
+    end
+    let moved -> Point = New { x: @x + 1 }
+    let reset -> Point = This { x: 0, y: 0 }
+    let changed -> Point do
+      new.x = @x + 2
+      return new
     end
   end
 
@@ -75,6 +83,7 @@ module Demo do
 
     # A wrapped argument list indents one level, and its closer comes back.
     let record = Point {
+      ...other,
       x: 1,
       y: 2
     }

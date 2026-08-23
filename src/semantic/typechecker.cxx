@@ -3021,6 +3021,11 @@ auto TypeChecker::typeMap() const -> const std::unordered_map<const ast::Expr*, 
     return m_typeMap;
 }
 
+auto TypeChecker::assignmentTargetTypeOf(const ast::Expr* expr) const -> TypePtr {
+    auto it = m_assignmentTargetTypes.find(expr);
+    return it != m_assignmentTargetTypes.end() ? it->second : nullptr;
+}
+
 auto TypeChecker::functionSignatures(const ast::FunctionDef* function) const
     -> const std::vector<Signature>* {
     auto it = m_functionSignatures.find(function);
@@ -3297,6 +3302,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             auto varType = lookupVar(node.name);
+            if (varType) m_assignmentTargetTypes[&expr] = varType;
             if (!node.path.empty()) {
                 if (node.path.size() != 1) {
                     error(expr.location,
