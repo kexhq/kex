@@ -183,6 +183,11 @@ inline auto resolveSourceType(const ast::TypeExpr& expr,
             return std::make_shared<Type>(
                 Type{kex::semantic::UnionType{std::move(members)}});
         }
+        else if constexpr (std::is_same_v<T, ast::AtomType>) {
+            // Without this an atom literal in an interface signature came back
+            // as Unknown, so `:macos | :linux` printed as "? | ?".
+            return Type::atom(node.name);
+        }
         else { return Type::unknown(); }
     }, expr.kind);
 }

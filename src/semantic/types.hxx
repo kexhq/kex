@@ -18,6 +18,12 @@ struct PrimitiveType {
     // Bool` silently accepted a Char and `[Char]` reported itself as "String".
     enum Kind { Integer, Char, String, Bool, Atom, Unit };  // Integer = arbitrary precision
     Kind kind;
+    // For Atom only, and for DISPLAY only: the literal an atom type was
+    // written as (`:macos`), empty for a plain `Atom`. Without it a union of
+    // atom literals printed as "Atom | Atom | ...", one indistinguishable
+    // member per variant. Every comparison ignores it (typesEqual looks at
+    // `kind` alone), so `:macos` stays interchangeable with any other atom.
+    std::string atomName;
 };
 
 struct SizedIntType {
@@ -106,7 +112,7 @@ struct Type {
     static auto charT() -> TypePtr;
     static auto string() -> TypePtr;   // alias for list(charT())
     static auto boolean() -> TypePtr;
-    static auto atom() -> TypePtr;
+    static auto atom(std::string atomName = "") -> TypePtr;
     static auto unit() -> TypePtr;
     static auto unknown() -> TypePtr;
     static auto voidType() -> TypePtr;

@@ -19,8 +19,9 @@ auto Type::boolean() -> TypePtr {
     return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Bool}});
 }
 
-auto Type::atom() -> TypePtr {
-    return std::make_shared<Type>(Type{PrimitiveType{PrimitiveType::Atom}});
+auto Type::atom(std::string atomName) -> TypePtr {
+    return std::make_shared<Type>(
+        Type{PrimitiveType{PrimitiveType::Atom, std::move(atomName)}});
 }
 
 auto Type::unit() -> TypePtr {
@@ -140,7 +141,8 @@ auto typeToString(const TypePtr& type) -> std::string {
                 case PrimitiveType::Char: return "Char";
                 case PrimitiveType::String: return "String";
                 case PrimitiveType::Bool: return "Bool";
-                case PrimitiveType::Atom: return "Atom";
+                case PrimitiveType::Atom:
+                    return t.atomName.empty() ? "Atom" : ":" + t.atomName;
                 case PrimitiveType::Unit: return "Void";
             }
             return "?";
@@ -300,7 +302,10 @@ auto structuredTypeOf(const TypePtr& type) -> std::optional<StructuredType> {
         } else if constexpr (std::is_same_v<T, PrimitiveType>) {
             if (t.kind == PrimitiveType::Integer)
                 return StructuredType{"Integer", {}};
-            return StructuredType{typeToString(std::make_shared<Type>(Type{t})), {}};
+            // Reflection reports the RUNTIME type, so an atom answers "Atom"
+            // whatever literal its static type was written as.
+            return StructuredType{
+                typeToString(std::make_shared<Type>(Type{PrimitiveType{t.kind}})), {}};
         } else {
             return StructuredType{typeToString(std::make_shared<Type>(Type{t})), {}};
         }

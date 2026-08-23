@@ -75,7 +75,9 @@ auto convertTypeExprImpl(const kex::ast::TypeExpr& te) -> KexiTypePtr {
         } else if constexpr (std::is_same_v<T, kex::ast::BlockType>) {
             return kexiFunc({}, convertTypeExprImpl(*node.inner));
         } else if constexpr (std::is_same_v<T, kex::ast::AtomType>) {
-            return kexiPrimitive("Atom");
+            // ":macos", not "Atom": the literal is what makes a union of atom
+            // literals readable when a consumer prints the type back.
+            return kexiPrimitive(":" + node.name);
         }
         return kexiUnknown();
     }, te.kind);
@@ -96,7 +98,9 @@ auto convertSemanticType(const kex::semantic::TypePtr& type) -> KexiTypePtr {
                 case kex::semantic::PrimitiveType::Char: return kexiPrimitive("Char");
                 case kex::semantic::PrimitiveType::String: return kexiPrimitive("String");
                 case kex::semantic::PrimitiveType::Bool: return kexiPrimitive("Bool");
-                case kex::semantic::PrimitiveType::Atom: return kexiPrimitive("Atom");
+                case kex::semantic::PrimitiveType::Atom:
+                    return kexiPrimitive(node.atomName.empty()
+                                             ? "Atom" : ":" + node.atomName);
                 case kex::semantic::PrimitiveType::Unit: return kexiPrimitive("Void");
             }
         } else if constexpr (std::is_same_v<T, kex::semantic::SizedIntType>) {
