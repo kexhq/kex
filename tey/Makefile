@@ -20,7 +20,7 @@ ERL ?= $(shell dir=$$(dirname "$$(command -v erlc 2>/dev/null || echo erlc)"); \
 TEY_VERSION := $(shell sed -n 's/^ *version("\([^"]*\)").*/\1/p' package.kex)
 VERSION_SOURCE := src/tey/version.kex
 
-.PHONY: build install clean
+.PHONY: build check install clean
 
 # Regenerated whenever package.kex changes, and written only when the contents
 # would differ so an unchanged version does not force a recompile.
@@ -38,6 +38,9 @@ $(VERSION_SOURCE): package.kex Makefile
 build: $(VERSION_SOURCE)
 	mkdir -p $(EBIN)
 	$(KEX) --compile -o $(EBIN) src/main.kex
+
+check: $(VERSION_SOURCE)
+	$(KEX) -C --source-root src src/main.kex
 
 install: build
 	install -d $(DESTDIR)$(LIBDIR)/ebin $(DESTDIR)$(BINDIR)

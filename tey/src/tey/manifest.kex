@@ -15,6 +15,40 @@ record Target do
   entrypoint : String
 end
 
+# A project-specific command, run as `tey <name>`. Without these every package
+# grows a Makefile or a bin/ script beside package.kex for "the way you run the
+# linter", which the manifest — the one file a newcomer reads — says nothing
+# about.
+#
+# A name is one word, grouped with a colon: `db:migrate`, `assets:build`.
+record Command do
+  # Prefixed, like Dependency's fields, because a bare `run` field is read as
+  # OptionConfig's `run` method at every call site that has not pinned the
+  # receiver's type — `command.run` typechecked as "`run` expects 2 arguments,
+  # got 1" — and a bare `name` loses the same way to Weekday's.
+  commandName : String
+  # The command line. A first word ending in `.kex` is run through the selected
+  # toolchain with this package's source roots already in place; anything else
+  # is handed to `sh -c`, so a pipeline or an `&&` works.
+  commandRun : String
+  commandDescription : String = ""
+end
+
+# A toolchain package: the compiler executable plus the runtime and standard
+# library it was built with, installed together so the three can never drift
+# apart. Kex's own `package.kex` is the one that declares it — and a reader
+# that did not know the declaration could not run any tey command from the
+# compiler's own checkout, which is where it is most used.
+#
+# Fields are prefixed like Command's: a bare `compiler` would be read as a
+# method on an unpinned receiver before it is read as a field here.
+record Toolchain do
+  toolchainName : String
+  toolchainCompiler : String = ""
+  toolchainRuntime : String = ""
+  toolchainStdlib : String = ""
+end
+
 record ManifestPackage do
   name : String
   version : String = "0.1.0"
@@ -35,6 +69,21 @@ record ManifestPackage do
   entrypoint : String = "src/main.kex"
   manifestDependencies : [Dependency] = []
   targets : [Target] = []
+  commands : [Command] = []
+  manifestToolchain : Toolchain? = None
+end
+
+# The command names Tey answers itself. A `command(...)` may not take one of
+# them: `tey test` must mean the same thing in every checkout, so a manifest
+# that tries to redefine it is an error at read time rather than a silent
+# shadow. Kept here because the READER is what enforces it, and Tey.Cli cannot
+# be asked: it is built on this module, so reading the list off its declared
+# commands would be a cycle. The two have to be kept in step by hand — one
+# `.command(...)` in Tey.Cli, one name here (the first word is enough: `kex`
+# covers every `kex ...` subcommand).
+let reservedCommands -> [String] do
+  return ["add", "build", "clean", "help", "init", "install", "kex", "list",
+          "lock", "new", "run", "setup", "test", "update"]
 end
 
 # Reads a `package.kex`.
@@ -52,6 +101,8 @@ let read(text: String) -> ManifestPackage or! String do
   var entrypoint = "src/main.kex"
   var dependencies: [Dependency] = []
   var targets: [Target] = []
+  var commands: [Command] = []
+  var toolchain: Toolchain? = None
   var failures: [String] = []
 
   let program = match Kex.AST.parse(text, "package.kex") do
@@ -88,6 +139,39 @@ let read(text: String) -> ManifestPackage or! String do
         entrypoint: Tey.Manifest.named(named, "entrypoint").or(entrypoint)
       })
       ()
+      elif declaration == "command"
+      let commandName = Tey.Manifest.argument(arguments).or("")
+      let commandRun = Tey.Manifest.named(named, "run").or("")
+      if commandName == ""
+        failures.push!("every command must be named")
+        ()
+      elif commandName.contains?(" ")
+        # A name is ONE word on the command line. Grouping is spelled with a
+        # colon — `db:migrate`, `assets:build` — the separator every other
+        # package manager already taught people, and the one that survives a
+        # shell without quoting.
+        failures.push!("command `${commandName}` cannot contain a space; group with a colon, as in `db:migrate`")
+        ()
+      elif Tey.Manifest.reservedCommands.contains?(commandName)
+        # Loud, because the alternative is `tey test` meaning something
+        # different depending on which directory you are standing in.
+        failures.push!("`${commandName}` is a built-in command and cannot be redeclared")
+        ()
+      elif commandRun == ""
+        failures.push!("command `${commandName}` must declare run:")
+        ()
+      elif commands.any? { |existing| existing.commandName == commandName }
+        failures.push!("command `${commandName}` is declared twice")
+        ()
+      else
+        commands.push!(Command {
+          commandName: commandName,
+          commandRun: commandRun,
+          commandDescription: Tey.Manifest.named(named, "description").or("")
+        })
+        ()
+      end
+      ()
       elif declaration == "tey"
       let dependencyName = Tey.Manifest.argument(arguments).or("")
       let dependencyGit = Tey.Manifest.named(named, "git").or("")
@@ -112,6 +196,14 @@ let read(text: String) -> ManifestPackage or! String do
         manifestGroups: groups
       })
       ()
+      elif declaration == "toolchain"
+      toolchain = Just(Toolchain {
+        toolchainName: Tey.Manifest.argument(arguments).or("kex"),
+        toolchainCompiler: Tey.Manifest.named(named, "compiler").or(""),
+        toolchainRuntime: Tey.Manifest.named(named, "runtime").or(""),
+        toolchainStdlib: Tey.Manifest.named(named, "stdlib").or("")
+      })
+      ()
       else
       failures.push!("unknown declaration `${declaration}`")
       ()
@@ -126,9 +218,10 @@ let read(text: String) -> ManifestPackage or! String do
   return Error(failures.first.try) if !failures.empty?
   return Error("package.kex must declare bundle \"name\"") if name == ""
   Ok(ManifestPackage { name: name, version: version, description: description, license: license,
-                    packageKexRequirement: kexRequirement,
-                    packageOtpRequirement: otpRequirement,
-                    entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets })
+                     packageKexRequirement: kexRequirement,
+                     packageOtpRequirement: otpRequirement,
+                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
+                     commands: commands, manifestToolchain: toolchain })
 end
 
 private do

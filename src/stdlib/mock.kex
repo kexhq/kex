@@ -199,6 +199,7 @@ module Mock do
       return Kex.Intrinsic.IO.ioMockInput([first, second, third, fourth])
     end
   end
+
   make Files, implement: FS.File do
     # Named apart from `read`: `this.read(path)` would bind to the
     # capability's own `read : FilePath -> String?`, not to this method.

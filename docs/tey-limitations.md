@@ -42,6 +42,36 @@ They are kept explicit so temporary workarounds do not become accidental API.
   the clone lands in a sibling `<commit>.partial` directory and is renamed
   into place only once the checkout succeeds, so a failed or killed run
   leaves nothing reachable under the content-addressed name.)
+- `tey run` and `tey test` run on the BEAM (`-R`), the same backend
+  `tey build` compiles for, so a package is no longer built one way and tested
+  another. `--interpret` is the way back for a backend gap or a debugging
+  session. What is NOT solved is the cost: `-R` compiles before it runs, so
+  Tey's own five spec files take ~10s where the interpreter takes ~1.4s, and
+  nothing is cached between runs.
+- Both call sites buffer the child through `Process.run` and print after it
+  exits, so a long `tey test` shows nothing until it finishes and `tey run`
+  cannot be interactive at all. This needs a streaming `Process` API rather
+  than a change in Tey; the printing is in one place
+  (`Tey.Commands.report`) so that it is one edit when there is one.
+- Trailing arguments reach a program (`tey run one two`) or a package command
+  (`tey fmt src`), but FLAGS do not: Tey's own option parser claims what it
+  recognizes and rejects the rest, so `tey run --verbose` and `tey fmt --check`
+  report an unknown option instead of passing it on. `--` stops Tey's parsing
+  but what survives is then read by `kex` rather than by the program.
+- Bare `tey` and `tey --help` print the help from `Tey.Cli.dispatch` rather
+  than from `OptionConfig.run`, which reaches them through a `this.printHelp`
+  the BEAM backend emits at the wrong arity (kexhq/kex#192). The text is the
+  same; the early-out goes away when that call lowers correctly.
+- `command(name, run:, description:)` in the manifest declares a
+  project-specific command, run as `tey <name>`. A built-in name cannot be
+  redeclared (the reader refuses it), and Tey registers the declared ones with
+  the same option parser its own commands use, so they appear in `tey help`
+  and in the unknown-command message. Names namespace with `:`
+  (`command("db:migrate", ...)` → `tey db:migrate`). What is missing:
+  composition (`run: ["fmt", "test"]`), an inline Kex block instead of a
+  string, and any notion of a command that only makes sense in some
+  environments. A shell line is also split by `sh`, so `run:` inherits
+  whatever `sh` does with quoting.
 - `tey run`, `tey build` and `tey test` put every fetched dependency on the
   compiler's module search path, so `using Greet` resolves to the cached
   checkout — and a dependency the lockfile names but the cache lacks is

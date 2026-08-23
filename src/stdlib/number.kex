@@ -114,8 +114,6 @@ make Float do
   in? :> Range<Float> -> Bool
   let in?(range) = Kex.Intrinsic.List.member(this, range)
 
-
-
   # Returns the greatest integer ≤ this.
   floor :> Integer
   let floor = Kex.Intrinsic.Number.floor(this)

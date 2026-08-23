@@ -1,9 +1,16 @@
 module Tey.Cli
 
-using Tey.Commands, only: [add, build, clean, init, install, list, lock, runPackage, setupMergeDriver, test]
+using Tey.Commands, only: [add, build, clean, init, install, list, lock, runCommand, runPackage, setupMergeDriver, test]
+using Tey.Manifest, only: [Command]
 using Tey.Toolchain, only: [installSource, use]
 
-let parser -> OptionConfig do
+# Options AND commands in one declaration: OptionParser matches the command
+# words, strips them, and hands the handler what is left. Tey keeps no
+# dispatcher of its own, so the help text and what actually runs cannot drift
+# apart — they are read off the same list.
+#
+# `foul` because the handlers do things.
+foul parser -> OptionConfig do
   OptionParser.define("tey", "Package and Kex toolchain manager")
     .flag("help", Just('h'), "Show this help")
     .flag("version", Just('V'), "Show Tey and active Kex versions")
@@ -19,21 +26,107 @@ let parser -> OptionConfig do
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
     .flag("json", None, "Print `tey kex list` as one JSON document (needs --installed)")
+    .flag("interpret", None, "Run `tey run`, `tey test` and package commands on the interpreter, not the BEAM")
+    .command("new", "<name>", "create a Kex package in a new directory") do |options|
+      Tey.Cli.newPackage(options)
+    end
+    # Bare `tey init` names the package after the directory it is standing in;
+    # an argument overrides that, for a checkout whose directory name is not
+    # the package name.
+    .command("init", "[<name>]", "create a Kex package in this directory") do |options|
+      Tey.Commands.init(options.arguments.first.or(""), options.flagEnabled?("lib"))
+    end
+    .command("add", "<name> --git <url>", "add a Git dependency and update tey.lock") do |options|
+      match options.arguments.first do
+        None => Tey.Cli.incomplete("add", "<name>")
+        Just(name) => Tey.Commands.add(name, options)
+      end
+    end
+    .command("install", "", "fetch dependencies, and install this package's targets") do |options|
+      Tey.Commands.install(options.value("without", ""))
+    end
+    .command("update", "[<name>]", "re-resolve dependencies") do |_|
+      Tey.Commands.lock
+    end
+    # Git hands a merge driver three files (`%O %A %B`), so the command has
+    # arguments in that mode and none otherwise.
+    .command("lock", "", "resolve and write tey.lock") do |options|
+      Tey.Cli.lockCommand(options)
+    end
+    .command("list", "", "show locked dependencies") do |_|
+      Tey.Commands.list
+    end
+    .command("run", "[args...]", "run the package entrypoint on the BEAM") do |options|
+      Tey.Commands.runPackage(options.arguments, options.flagEnabled?("interpret"))
+    end
+    .command("build", "", "compile the package, and each target(...) into an executable") do |_|
+      Tey.Commands.build
+    end
+    .command("test", "", "run spec/*.spec.kex on the BEAM") do |options|
+      Tey.Commands.test(options.flagEnabled?("interpret"))
+    end
+    .command("clean", "[--cache]", "inspect or remove the global cache") do |options|
+      Tey.Commands.clean(options.flagEnabled?("cache"))
+    end
+    .command("setup merge-driver", "", "configure Git's tey.lock merge driver") do |options|
+      Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
+    end
+    .command("help", "", "show this help") do |_|
+      Tey.Cli.cli.printHelp
+    end
+    .command("kex list", "[--pre] [--installed] [--json]", "show Kex versions, newest first") do |options|
+      Tey.Cli.kexList(options)
+    end
+    # One handler for every `kex install` spelling: bare, `latest`, a version,
+    # and a source checkout with a version. They differ only in what follows
+    # the two command words, which is exactly what the handler receives.
+    .command("kex install", "[<version> | latest | <src> <version>]", "install a Kex toolchain") do |options|
+      Tey.Cli.kexInstall(options)
+    end
+    .command("kex uninstall", "<version>", "remove an installed Kex") do |options|
+      match options.arguments.first do
+        None => Tey.Cli.incomplete("kex uninstall", "<version>")
+        Just(version) => Tey.Cli.kexUninstall(version)
+      end
+    end
+    # `latest` selects the newest Kex this machine already has, so the way back
+    # to the current one is not "remember which number it was".
+    .command("kex use", "<version> | latest", "select an installed Kex toolchain") do |options|
+      match options.arguments.first do
+        None => Tey.Cli.incomplete("kex use", "<version>")
+        Just(selector) => Tey.Cli.kexUse(selector)
+      end
+    end
+    .command("kex which", "", "print the compiler the kex command runs") do |_|
+      Tey.Cli.kexWhich()
+    end
 end
 
+# The parser Tey actually runs: the declared commands, plus one for every
+# `command(...)` this package's manifest declares. Registering them here
+# rather than in a fallback is what gets them into `tey help`, into the
+# unknown-command message, and into argument stripping, for free.
+#
+# A package command can never shadow a built-in: the manifest reader refuses
+# those names outright (Tey.Manifest.reservedCommands).
+foul cli -> OptionConfig do
+  return Tey.Cli.packageCommands.reduce(Tey.Cli.parser) do |config, command|
+    let summary = command.commandDescription != "" then command.commandDescription else command.commandRun
+    config.command(command.commandName, "[args...]", summary) do |options|
+      Tey.Commands.runCommand(command, options.arguments, options.flagEnabled?("interpret"))
+    end
+  end
+end
+
+# The line is parsed once here to answer the two questions `run` cannot — is
+# this `--version`, and does it name a command Tey already answers — and then
+# handed to `run`, which parses it again and dispatches. A parse ERROR is left
+# to `run` as well: reporting it with the help text is the one policy every
+# tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
   match Tey.Cli.parser.parse(args) do
-    Error(error) => do
-      IO.printError("tey: ${OptionParser.errorMessage(error)}\n\n${Tey.Cli.parser.help}\n")
-      1
-    end
-    Ok(options) => do
-      return Tey.Cli.showVersion() if options.flagEnabled?("version")
-
-      return Tey.Cli.showHelp() if options.flagEnabled?("help") || options.arguments.empty?
-
-      Tey.Cli.dispatchCommand(options.arguments, options)
-    end
+    Error(_) => Tey.Cli.cli.run(args)
+    Ok(options) => Tey.Cli.dispatchParsed(args, options)
   end
 end
 
@@ -155,75 +248,24 @@ private do
     return 0
   end
 
-  foul showHelp -> Integer do
-    IO.printLine(Tey.Cli.parser.help)
-    # The block literal dedents by its own margin, so this list can sit
-    # with the code and still print flush left.
-    IO.printLine(`
-      Commands:
-        new <name> [--lib]       create a Kex package in a new directory
-        init [<name>] [--lib]    create a Kex package in this directory
-        add <name>               add a Git dependency and update tey.lock
-        install                  fetch dependencies, and install this package's targets
-        update [name]            re-resolve dependencies
-        lock                     resolve and write tey.lock
-        list                     show locked dependencies
-        run [args...]            run the package entrypoint
-        build                    compile the package, and each target(...) into an executable
-        test                     run spec/*.spec.kex
-        clean [--cache]          inspect or remove the global cache
-        setup merge-driver      configure Git's tey.lock merge driver
-        kex list [--pre]         show Kex versions, newest first
-        kex list --installed     show only the Kex toolchains on this machine
-        kex list --installed --json
-                                  print them as one JSON document, offline
-        kex install [<version>]  install a Kex (newest release by default)
-        kex install latest       install the newest release by name
-        kex install --pre        install the newest Kex of any channel
-        kex install <src> <version>
-                                 build and install from a source checkout
-        kex uninstall <version>  remove an installed Kex
-        kex use <version>        select an installed Kex toolchain
-        kex use latest           select the newest Kex already on this machine
-        kex which                print the compiler the kex command runs
-    `)
-    return 0
+
+  foul newPackage(options: ParsedOptions) -> Integer do
+    match options.arguments.first do
+      None => Tey.Cli.incomplete("new", "<name>")
+      Just(name) => Tey.Commands.new(name, options.flagEnabled?("lib"))
+    end
   end
 
-  foul dispatchCommand(["new", name], options: ParsedOptions) -> Integer do
-    Tey.Commands.new(name, options.flagEnabled?("lib"))
-  end
-  # Bare `tey init` names the package after the directory it is standing in;
-  # an argument overrides that, for a checkout whose directory name is not the
-  # package name.
-  foul dispatchCommand(["init"], options: ParsedOptions) -> Integer do
-    Tey.Commands.init("", options.flagEnabled?("lib"))
-  end
-  foul dispatchCommand(["init", name], options: ParsedOptions) -> Integer do
-    Tey.Commands.init(name, options.flagEnabled?("lib"))
-  end
-  foul dispatchCommand(["install"], options: ParsedOptions) -> Integer do
-    Tey.Commands.install(options.value("without", ""))
-  end
-  foul dispatchCommand(["lock"], _) -> Integer = Tey.Commands.lock
-  foul dispatchCommand(["lock", _, _, _], options: ParsedOptions) -> Integer do
-    options.flagEnabled?("merge-driver") then Tey.Commands.lock else Tey.Cli.unknown("lock")
-  end
-  foul dispatchCommand(["add", name], options: ParsedOptions) -> Integer = Tey.Commands.add(name, options)
-  foul dispatchCommand(["update"], _) -> Integer = Tey.Commands.lock
-  foul dispatchCommand(["update", _], _) -> Integer = Tey.Commands.lock
-  foul dispatchCommand(["list"], _) -> Integer = Tey.Commands.list
-  foul dispatchCommand(["build"], _) -> Integer = Tey.Commands.build
-  foul dispatchCommand(["run" | arguments], _) -> Integer = Tey.Commands.runPackage(arguments)
-  foul dispatchCommand(["test"], _) -> Integer = Tey.Commands.test
-  foul dispatchCommand(["clean"], options: ParsedOptions) -> Integer do
-    Tey.Commands.clean(options.flagEnabled?("cache"))
-  end
-  foul dispatchCommand(["setup", "merge-driver"], options: ParsedOptions) -> Integer do
-    Tey.Commands.setupMergeDriver(options.flagEnabled?("remove"))
+  # Bare, this writes tey.lock. Git hands a merge driver three files
+  # (`%O %A %B`) and `--merge-driver` says so, which is the only spelling that
+  # takes arguments at all.
+  foul lockCommand(options: ParsedOptions) -> Integer do
+    return Tey.Commands.lock if options.arguments.empty?
+    return Tey.Commands.lock if options.arguments.count == 3 && options.flagEnabled?("merge-driver")
+    Tey.Cli.unknown("lock")
   end
 
-  foul dispatchCommand(["kex", "list"], options: ParsedOptions) -> Integer do
+  foul kexList(options: ParsedOptions) -> Integer do
     # JSON is the offline half only, for now: `--json` over released versions
     # would have to touch the network and decide a shape for entries no tool
     # has asked to consume. Saying so beats half-doing it.
@@ -273,17 +315,34 @@ private do
     0
   end
 
-  # Bare `tey kex install` means "the current Kex", which is the newest
-  # STABLE one — an rc is not what someone who named no version is asking
-  # for. `--pre` says they are: it takes the newest of any channel, which
-  # during a pre-stability run may be the only thing published.
+  # Every `kex install` spelling, told apart by what follows the command
+  # words:
   #
-  # On a machine with nothing installed, the bundled Kex is that
-  # Kex: it is already on the disk, it is the version this Tey was shipped
-  # with, and taking it needs no network. Once something IS installed, this
-  # means the newest release again — otherwise the first upgrade would keep
-  # reinstalling the version the package manager shipped.
-  foul dispatchCommand(["kex", "install"], options: ParsedOptions) -> Integer do
+  #   (nothing)          the current Kex — the newest STABLE one, since an rc
+  #                      is not what someone who named no version is asking
+  #                      for. `--pre` says they are. On a machine with nothing
+  #                      installed the bundled Kex IS that Kex: already on the
+  #                      disk, the version this Tey shipped with, and no
+  #                      network. Once something is installed this means the
+  #                      newest release again, or the first upgrade would keep
+  #                      reinstalling what the package manager shipped.
+  #   latest             the same, by name — because "install the newest one"
+  #                      is a thing people type, and having to know that the
+  #                      way to say it is to say nothing is a poor answer. It
+  #                      also gets past the bundled-seed shortcut above.
+  #   <version>          exactly that one.
+  #   <src> <version>    build and install from a source checkout.
+  foul kexInstall(options: ParsedOptions) -> Integer do
+    match options.arguments do
+      [] => Tey.Cli.kexInstallCurrent(options)
+      ["latest"] => Tey.Cli.kexInstallLatest(options)
+      [version] => Tey.Cli.installKex(version)
+      [source, version] => Tey.Cli.kexInstallSource(source, version)
+      _ => Tey.Cli.unknown("kex install")
+    end
+  end
+
+  foul kexInstallCurrent(options: ParsedOptions) -> Integer do
     if Tey.Toolchain.installedVersions.empty? && Tey.Toolchain.bundled != None
       match Tey.Toolchain.installBundled do
         Ok(prefix) => do
@@ -297,9 +356,7 @@ private do
         end
       end
     end
-
-    let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
-    match newest do
+    match Tey.Cli.newestVersion(options) do
       Error(error) => do
         IO.printError("tey: ${error}\n")
         1
@@ -308,16 +365,8 @@ private do
     end
   end
 
-  # `latest` is the same thing a bare `tey kex install` means — the newest
-  # RELEASE, or the newest of any channel with `--pre`. It exists because
-  # "install the newest one" is a thing people type, and having to know that
-  # the way to say it is to say nothing is a poor answer. Naming it also gets
-  # past the bundled-seed shortcut a bare install takes on an empty machine:
-  # `tey kex install latest` fetches the newest release even when a bundled
-  # copy is sitting there unused.
-  foul dispatchCommand(["kex", "install", "latest"], options: ParsedOptions) -> Integer do
-    let newest = options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
-    match newest do
+  foul kexInstallLatest(options: ParsedOptions) -> Integer do
+    match Tey.Cli.newestVersion(options) do
       Error(error) => do
         IO.printError("tey: ${error}\n")
         1
@@ -329,25 +378,11 @@ private do
     end
   end
 
-  foul dispatchCommand(["kex", "install", version], _) -> Integer do
-    Tey.Cli.installKex(version)
+  foul newestVersion(options: ParsedOptions) -> String or! String do
+    options.flagEnabled?("pre") then Tey.Toolchain.latestIncludingPreReleases else Tey.Toolchain.latestStable
   end
 
-  foul dispatchCommand(["kex", "uninstall", version], _) -> Integer do
-    match Tey.Toolchain.uninstall(version) do
-      Ok(prefix) => do
-        IO.printLine("Removed Kex ${version} from ${prefix}")
-        IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
-        0
-      end
-      Error(error) => do
-        IO.printError("tey: ${error}\n")
-        1
-      end
-    end
-  end
-
-  foul dispatchCommand(["kex", "install", source, version], _) -> Integer do
+  foul kexInstallSource(source: String, version: String) -> Integer do
     match Tey.Toolchain.installSource(source, version) do
       Ok(prefix) => do
         IO.printLine("Installed and selected Kex ${version} at ${prefix}")
@@ -361,11 +396,25 @@ private do
     end
   end
 
-  # Prints the compiler `kex` would run, installing the bundled one
-  # if that has not happened yet. The dispatcher in bin/kex calls this when
-  # nothing is selected, which is what makes a fresh install runnable without
-  # a `tey` command being typed first.
-  foul dispatchCommand(["kex", "which"], _) -> Integer do
+  foul kexUninstall(version: String) -> Integer do
+    match Tey.Toolchain.uninstall(version) do
+      Ok(prefix) => do
+        IO.printLine("Removed Kex ${version} from ${prefix}")
+        IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
+        0
+      end
+      Error(error) => do
+        IO.printError("tey: ${error}\n")
+        1
+      end
+    end
+  end
+
+  # Prints the compiler `kex` would run, installing the bundled one if that has
+  # not happened yet. The dispatcher in bin/kex calls this when nothing is
+  # selected, which is what makes a fresh install runnable without a `tey`
+  # command being typed first.
+  foul kexWhich -> Integer do
     match Tey.Toolchain.resolved do
       Just(path) => do
         IO.printLine(path)
@@ -378,18 +427,16 @@ private do
     end
   end
 
-  # `latest` selects the newest Kex this machine already has, so the way back
-  # to the current one is not "remember which number it was".
-  foul dispatchCommand(["kex", "use", selector], _) -> Integer do
+  foul kexUse(selector: String) -> Integer do
     match Tey.Toolchain.resolveSelector(selector) do
       None => do
         IO.printError("tey: no Kex is installed; install one with `tey kex install`\n")
         1
       end
       Just(version) => do
-        # Asked BEFORE selecting, because selecting the bundled Kex
-        # installs it — and a line that said only "Using Kex 0.3.2" would hide
-        # that a copy had just been made.
+        # Asked BEFORE selecting, because selecting the bundled Kex installs
+        # it — and a line that said only "Using Kex 0.3.2" would hide that a
+        # copy had just been made.
         let alreadyInstalled = Tey.Toolchain.installed?(version)
         if Tey.Toolchain.use(version)
           if alreadyInstalled
@@ -407,10 +454,49 @@ private do
     end
   end
 
-  foul dispatchCommand([command | _], _) -> Integer do
-    Tey.Cli.unknown(command)
+  foul dispatchParsed(args: [String], options: ParsedOptions) -> Integer do
+    return Tey.Cli.showVersion() if options.flagEnabled?("version")
+    # `--help`, and a line with no command at all, are both `run`'s job — but
+    # its exits for them call `this.printHelp`, which the BEAM backend emits at
+    # the wrong arity, so the compiled `tey` answers `undef` (kexhq/kex#192).
+    # The text is the same from here; drop this once that call lowers right.
+    return Tey.Cli.cli.printHelp if options.flagEnabled?("help") || options.arguments.empty?
+    # A built-in needs no manifest, and reading one costs a `kex --emit-ast`
+    # per invocation — a price `bin/kex` would pay on every single `kex` call,
+    # since it asks `tey kex which` where the compiler is. So a package's own
+    # commands are resolved only for a line that names none of Tey's.
+    return Tey.Cli.parser.run(args) if Tey.Cli.builtin?(options.arguments)
+    return Tey.Cli.cli.run(args)
   end
-  foul dispatchCommand([], _) -> Integer = Tey.Cli.showHelp()
+
+  # Whether the line opens with a command Tey answers itself.
+  foul builtin?(arguments: [String]) -> Bool do
+    match OptionParser.commandFor(Tey.Cli.parser.commands, arguments) do
+      Just(_) => true
+      None => false
+    end
+  end
+
+  # The `command(...)` declarations of the package in this directory, or none
+  # outside a package. A manifest that does not READ is reported here rather
+  # than swallowed: the alternative is `tey fmt` answering "unknown command"
+  # while the real problem is a typo three lines up in package.kex.
+  foul packageCommands -> [Command] do
+    return [] if !FS.File.file?("package.kex")
+    match Tey.Commands.manifest do
+      Error(error) => do
+        IO.printError("tey: ${error}\n")
+        []
+      end
+      Ok(package) => package.commands
+    end
+  end
+
+
+  foul incomplete(command: String, missing: String) -> Integer do
+    IO.printError("tey: `tey ${command}` needs ${missing}\n")
+    1
+  end
 
   foul unknown(command: String) -> Integer do
     IO.printError("tey: unknown or incomplete command '${command}'\n")

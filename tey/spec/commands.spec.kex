@@ -1,0 +1,21 @@
+using Tey.Commands
+
+# Which backend `tey run` and `tey test` reach for.
+#
+# `tey build` compiles to the BEAM, so what a package IS built as and what it
+# is run and tested as have to be the same thing — processes, `Erlang.*`
+# interop and the String/Char representation all differ between the two
+# backends, and a spec suite green under the interpreter is no evidence about
+# the artifact that ships.
+describe("Tey.Commands.backendFlags") do
+  it("compiles and runs on the BEAM by default") do
+    assert(Tey.Commands.backendFlags(false) == ["-R"])
+  end
+
+  it("passes nothing extra under --interpret") do
+    # The escape hatch, for a backend gap or a debugging session: without a
+    # flag the toolchain tree-walks the source, which is what it did for
+    # everything before this.
+    assert(Tey.Commands.backendFlags(true) == [])
+  end
+end

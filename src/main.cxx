@@ -2073,7 +2073,11 @@ int main(int argc, char *argv[]) {
                                    cleanupError.message());
 
         for (const auto &module : modules) {
-          std::string cmd = erlcExecutable() + " +from_core -pa " + dir +
+          // -W0: erlc's warnings analyze the GENERATED Core Erlang, not Kex —
+          // they carry no source location (`no_file:`) and the emitter's dead
+          // statement-value lets make them inevitable. Real errors still fail
+          // the exit-code check below.
+          std::string cmd = erlcExecutable() + " +from_core -W0 -pa " + dir +
                             " -o " + dir + " " + dir + "/" +
                             module.emitted.moduleName + ".core";
           if (std::system(cmd.c_str()) != 0) return 1;
@@ -4095,7 +4099,14 @@ int main(int argc, char *argv[]) {
 
       int erlcRet = 0;
       for (size_t moduleIndex = 0; moduleIndex < corePaths.size(); ++moduleIndex) {
-        std::string coreCmd = erlcExecutable() + " +from_core -pa " +
+        // -W0: these warnings analyze the generated Core Erlang — locationless
+        // (`no_file:`) compiler-analysis noise the emitter's dead statement-
+        // value lets make inevitable ("a term is constructed, but never used",
+        // "this clause cannot match"). They cannot point back at Kex source,
+        // and the interpreter path below has always silenced them for exactly
+        // that reason. Real erlc failures still fail the exit-code check and
+        // are re-run loudly below.
+        std::string coreCmd = erlcExecutable() + " +from_core -W0 -pa " +
                               outputDir + " -o " + outputDir + " " +
                               corePaths[moduleIndex];
         if (!tempDir.empty()) {
