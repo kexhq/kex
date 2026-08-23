@@ -2067,7 +2067,9 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
 
-            // UFCS and free-call syntax share imported overloads.
+            // UFCS and free-call syntax share imported overloads. Named
+            // overloads need to be considered before the receiver's generic
+            // method so labels such as `in:` select the imported clause.
             if (auto imported = findImportedNamedOverload(
                     node.method, namedArgs, receiver))
                 return callFunction(*imported, std::move(args),
@@ -2083,8 +2085,15 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     if (const auto* named = std::get_if<semantic::NamedType>(
                             &found->second->kind)) {
                         const auto candidate = named->name + "::" + node.method;
-                        if (m_functionValues.count(candidate) ||
-                            m_env->get(candidate))
+                        const auto runtimeType = dispatchTypeName(receiver);
+                        const auto runtimeDot = runtimeType.rfind('.');
+                        const bool resolvedShortRecordMethod =
+                            runtimeDot != std::string::npos &&
+                            specificMethod == runtimeType.substr(runtimeDot + 1) +
+                                "::" + node.method;
+                        if (!resolvedShortRecordMethod &&
+                            (m_functionValues.count(candidate) ||
+                             m_env->get(candidate)))
                             specificMethod = candidate;
                     }
                 }
@@ -3336,6 +3345,14 @@ auto Evaluator::receiverArgumentOffset(const std::string& functionName,
     auto scope = functionName.substr(0, separator);
     auto receiverType = dispatchTypeName(args[0]);
     if (scope == receiverType) return 1;
+    // Module-owned records retain their qualified runtime identity
+    // (`CollisionWeb.Server`), while a make block written as `make Server`
+    // registers `Server::method`. Method resolution applies this same
+    // last-segment fallback; arity matching must count its implicit receiver
+    // too, or the result depends on which same-named import is encountered.
+    if (const auto dot = receiverType.rfind('.'); dot != std::string::npos &&
+        scope == receiverType.substr(dot + 1))
+        return 1;
 
     auto parent = m_variantParent.find(receiverType);
     return parent != m_variantParent.end() && scope == parent->second ? 1 : 0;
@@ -3493,8 +3510,17 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
     // and otherwise dispatch on the last segment.
     if (const auto dot = receiverType.rfind('.'); dot != std::string::npos) {
         const auto qualified = receiverType + "::" + method;
-        if (!m_env->get(qualified) && !m_functionValues.count(qualified))
-            receiverType = receiverType.substr(dot + 1);
+        const auto shortType = receiverType.substr(dot + 1);
+        const auto shortQualified = shortType + "::" + method;
+        // A module function can have the same qualified name as its record
+        // (`module Server; let new(...)`) while `make Server` registers the
+        // actual receiver method under the short type. Presence of that
+        // namespace function must not suppress receiver-method fallback.
+        const bool shortMethod = m_functionDefs.contains(shortQualified) ||
+            m_runtimeSignatures.contains(shortQualified);
+        if ((!m_env->get(qualified) && !m_functionValues.count(qualified)) ||
+            shortMethod)
+            receiverType = std::move(shortType);
     }
     auto typed = receiverType + "::" + method;
     const bool protocolMethod = std::any_of(
@@ -3543,15 +3569,18 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
         auto matchesDefinition = [&](const std::string& candidate) {
             auto defs = m_functionDefs.find(candidate);
             if (defs == m_functionDefs.end()) return false;
+            const auto receiverOffset = receiverArgumentOffset(candidate, *args);
             for (const auto* def : defs->second) {
                 if (!def) continue;
                 for (const auto& clause : def->clauses) {
-                    if (clause.params.size() != args->size()) continue;
+                    if (clause.params.size() + receiverOffset != args->size())
+                        continue;
                     bool allMatch = true;
                     for (size_t i = 0; i < clause.params.size(); ++i) {
                         const auto& param = clause.params[i];
                         if (!param.type || !*param.type) continue;
-                        if (!runtimeTypeMatches((*args)[i], **param.type)) {
+                        if (!runtimeTypeMatches((*args)[i + receiverOffset],
+                                                **param.type)) {
                             allMatch = false;
                             break;
                         }
@@ -3600,11 +3629,11 @@ auto Evaluator::resolveMethodName(const ValuePtr& receiver,
             if (matches(candidate)) imported = std::move(candidate);
             break;
         }
-        if (!imported.empty()) return imported;
         if ((typedMatches ||
              (protocolMethod && typedExists && !typedHasSignatures)) &&
             makeMethodInScope(typed))
             return typed;
+        if (!imported.empty()) return imported;
     }
 
     if (m_env->get(typed) && makeMethodInScope(typed)) return typed;
