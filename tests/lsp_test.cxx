@@ -636,7 +636,7 @@ int main() {
             // the file, which is what makes hover work here too.
             //
             // Every declaration the vocabulary defines appears below, and
-            // `group` and `toolchain` are the last two it declares: a
+            // `tey` and `toolchain` are the last two it declares: a
             // vocabulary file that stops parsing part way through loses the
             // declarations after the break and fails this test.
             std::string messages;
@@ -645,11 +645,13 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex","languageId":"kex","version":1,"text":"bundle \"demo\" do\n  version(\"0.1.0\")\n  description(\"A Kex package\")\n  license(\"MIT\")\n  kex(\">= 0.3.0\")\n  otp(\">= 26\")\n  entrypoint(\"src/main.kex\")\n  target(\"demo\")\n  command(\"check\", run: \"make check\", description: \"Type-check\")\n  toolchain(\"demo\", compiler: \"bin/demo\")\n  tey(\"greet\", git: \"https://example.com/g.git\", tag: \"v0.1.0\")\n  group :dev do\n    tey(\"mock\", git: \"https://example.com/m.git\", branch: \"main\")\n  end\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":1,"character":4}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-pkg/package.kex"},"position":{"line":8,"character":4}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -661,6 +663,8 @@ int main() {
                        "the manifest vocabulary was reported as undefined");
             assertTrue(result.find("version : String -> Void") != std::string::npos,
                        "hovering a manifest declaration showed no signature");
+            assertTrue(result.find("command : String") != std::string::npos,
+                       "hovering a manifest command declaration showed no signature");
         });
 
         it("prefers an at-field over an unrelated receiver method", []() {
