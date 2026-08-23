@@ -1,0 +1,29 @@
+# kex: skip-beam
+# A crash inside a spawned process is reported as the CRASH, not as the
+# scheduler's view of what happened next (kexhq/kex#174).
+#
+# The child's error used to be discarded outright — `catch (...) { exitValue =
+# none }` — so the parent blocked forever on a reply that could never come and
+# the program reported `deadlock: no process is runnable` at `:0:0`. Same
+# defect, same line of code as in the main process, but with no message, no
+# receiver type and no location.
+#
+# BEAM already reported the real error here, so this is also a backend-parity
+# fix; it is `skip-beam` only because the two spell the report differently — an
+# Erlang error report against a Kex diagnostic — not because BEAM gets it
+# wrong.
+
+type Msg = | Ping(Process)
+
+main do
+  let worker = spawn do
+    receive do
+      Ping(who) => who.send(10 / 0)
+    end
+  end
+
+  worker.send(Ping(Process.self))
+  receive do
+    reply => IO.printLine("got ${reply}")
+  end
+end

@@ -1,0 +1,26 @@
+# A mocked file handle IS a `FileHandle` (kexhq/kex#143).
+#
+# On BEAM the mock handle used to carry its own tag, `MockFileHandle`, a type
+# parallel to the real one. Nothing matched it except the hand-written clauses
+# in kex_file.erl, so it worked only while no generated dispatcher existed for
+# those method names — the moment one did, `handle.write(...)` fell through
+# every clause and died with "Undefined method: write for Tuple". It is now a
+# `FileHandle` whose device is `mock`, so one type answers everywhere.
+
+using FS
+
+main do
+  Mock.FS.File("typed.txt", "first\nsecond\n")
+
+  let reader = FS.File.open("typed.txt", FS.Read).try
+  IO.printLine(reader.getLine.or("(none)"))
+  IO.printLine(reader.readLine.or("(none)"))
+  reader.close
+
+  let writer = FS.File.open("out.txt", FS.Write).try
+  IO.printLine(writer.write("written"))
+  writer.close
+  IO.printLine(FS.File.read("out.txt").or("(missing)"))
+
+  Mock.FS.clear()
+end

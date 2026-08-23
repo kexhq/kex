@@ -187,6 +187,7 @@ public:
 private:
     auto resumeProcess(ProcessId id) -> void;
     auto driveUntilFinished(ProcessId target) -> ValuePtr;
+    auto firstProcessError() const -> std::exception_ptr;
     auto fireExpiredTimeouts() -> void;
 
     Evaluator& m_evaluator;
