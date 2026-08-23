@@ -1,0 +1,185 @@
+# RDoc-style doc-comment text → structured documentation (typed).
+#
+# A doc comment is free prose followed by directive paragraphs:
+#
+#   # Sums all elements. Returns +0+ for an empty list.
+#   #
+#   # @param f [X -> Number] maps each element
+#   # @return [Number]
+#   # @example
+#   #   [1, 2].sum   # => 3
+#
+# Inline `+code+` pairs are rewritten to `` `code` ``. The result is a
+# Docgen.Model.Doc record.
+
+module Docgen.Rdoc do
+  using Docgen.Model, only: [Doc, Param, Return, Example, emptyDoc]
+
+  record Bracketed do
+    content : String
+    rest : String
+  end
+
+  foul parseDoc(text: String) -> Doc? do
+    if text.empty?
+      return None
+    end
+    let lines = rewritePlusPairs(text, "").split("\n")
+    let blocks = splitParagraphs(lines, [], [])
+    return classifyBlocks(blocks, "", [], None, [], None)
+  end
+
+  foul parseOrEmpty(text: String) -> Doc do
+    match parseDoc(text) do
+      Just(doc) => doc
+      None => emptyDoc()
+    end
+  end
+
+  foul rewritePlusPairs(s: String, accum: String) -> String do
+    match s.indexOf('+') do
+      None => accum + s
+      Just(start) => do
+        let rest = s.drop(start + 1)
+        match rest.indexOf('+') do
+          None => accum + s
+          Just(endOffset) => do
+            let inner = rest.take(endOffset)
+            let tail = rest.drop(endOffset + 1)
+            let head = s.take(start)
+            return rewritePlusPairs(tail, accum + head + "`" + inner + "`")
+          end
+        end
+      end
+    end
+  end
+
+  # Splits lines into paragraphs (blocks) separated by blank lines.
+  foul splitParagraphs(lines: [String], current: [String], accum: [[String]]) -> [[String]] do
+    if lines.empty?
+      if current.empty?
+        return accum
+      end
+      return accum + [current]
+    end
+    let line = lines.first.or("")
+    let rest = lines.drop(1)
+    if line.trim.empty?
+      if current.empty?
+        return splitParagraphs(rest, [], accum)
+      end
+      return splitParagraphs(rest, [], accum + [current])
+    end
+    return splitParagraphs(rest, current + [line], accum)
+  end
+
+  foul classifyBlocks(blocks: [[String]], summary: String, params: [Param],
+                      returns: Return?, examples: [Example],
+                      deprecated: String?) -> Doc? do
+    if blocks.empty?
+      return Just(Doc {
+        summary: summary,
+        params: params,
+        returns: returns,
+        examples: examples,
+        deprecated: deprecated
+      })
+    end
+    let block = blocks.first.or([])
+    let rest = blocks.drop(1)
+    let first = block.first.or("")
+    if first.startsWith?("@param")
+      return classifyBlocks(rest, summary, params + [parseParam(block)], returns, examples, deprecated)
+    end
+    if first.startsWith?("@return")
+      return classifyBlocks(rest, summary, params, Just(parseReturn(block)), examples, deprecated)
+    end
+    if first.startsWith?("@example")
+      return classifyBlocks(rest, summary, params, returns, examples + [parseExample(block)], deprecated)
+    end
+    if first.startsWith?("@deprecated")
+      return classifyBlocks(rest, summary, params, returns, examples, Just(block.drop(1).join(" ")))
+    end
+    if first.startsWith?("@")
+      return classifyBlocks(rest, summary, params, returns, examples, deprecated)
+    end
+    # Prose block: the first becomes the summary, later ones join it as
+    # further paragraphs.
+    let joined = block.join(" ")
+    let nextSummary = if summary.empty?
+      joined
+    else
+      summary + "\n\n" + joined
+    end
+    return classifyBlocks(rest, nextSummary, params, returns, examples, deprecated)
+  end
+
+  # @param name [Type] description
+  foul parseParam(lines: [String]) -> Param do
+    let body = (lines.first.or("")).drop(7).trim
+    match body.indexOf(' ') do
+      None => Param { name: body, typeName: "", description: "" }
+      Just(nameEnd) => do
+        let name = body.take(nameEnd)
+        let tail = body.drop(nameEnd + 1).trim
+        match parseBracketed(tail) do
+          None => Param { name: name, typeName: "", description: tail }
+          Just(parsed) => do
+            let description = parsed.rest.trim
+            return Param { name: name, typeName: parsed.content, description: description }
+          end
+        end
+      end
+    end
+  end
+
+  # @return [Type] description
+  foul parseReturn(lines: [String]) -> Return do
+    let body = (lines.first.or("")).drop(8).trim
+    match parseBracketed(body) do
+      None => Return { typeName: "", description: body }
+      Just(parsed) => Return { typeName: parsed.content, description: parsed.rest.trim }
+    end
+  end
+
+  foul parseExample(lines: [String]) -> Example do
+    let caption = (lines.first.or("")).drop(9).trim
+    let code = lines.drop(1).join("\n")
+    return Example { caption: caption, code: code }
+  end
+
+  # "[...]" prefix → Bracketed. None when the text does not open with a
+  # bracketed group.
+  foul parseBracketed(s: String) -> Bracketed? do
+    if s.empty?
+      return None
+    end
+    if s.first.or('?') != '['
+      return None
+    end
+    match findClosingBracket(s, 1, 1) do
+      None => None
+      Just(endIndex) => do
+        let content = s.take(endIndex).drop(1)
+        let rest = s.drop(endIndex + 1)
+        return Just(Bracketed { content: content, rest: rest })
+      end
+    end
+  end
+
+  foul findClosingBracket(s: String, index: Integer, depth: Integer) -> Integer? do
+    if index >= s.count
+      return None
+    end
+    let c = s.get(index).or('?')
+    let nextDepth = match c do
+      '[' => depth + 1
+      ']' => depth - 1
+      _ => depth
+    end
+    if nextDepth == 0
+      return Just(index)
+    end
+    return findClosingBracket(s, index + 1, nextDepth)
+  end
+end

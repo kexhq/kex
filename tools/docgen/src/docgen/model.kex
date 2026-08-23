@@ -1,0 +1,202 @@
+# The canonical documentation model.
+#
+# Extraction produces these records; Markdown, JSON and the search index are
+# all derived from them. Field names avoid `type` (a keyword after `.`), so
+# every field is dot-accessible; JSON keys are chosen at the emission
+# boundary in Docgen.Json.
+
+module Docgen.Model do
+  # ── Documentation (parsed RDoc) ──────────────────────────────────────────
+
+  record Param do
+    name : String
+    typeName : String
+    description : String
+  end
+
+  record Return do
+    typeName : String
+    description : String
+  end
+
+  record Example do
+    caption : String
+    code : String
+  end
+
+  record Doc do
+    summary : String
+    params : [Param]
+    returns : Return?
+    examples : [Example]
+    deprecated : String?
+  end
+
+  foul emptyDoc() -> Doc do
+    return Doc { summary: "", params: [], returns: None, examples: [], deprecated: None }
+  end
+
+  # ── Entities ─────────────────────────────────────────────────────────────
+
+  record VariantEntry do
+    name : String
+    fields : [String]
+  end
+
+  record FieldEntry do
+    name : String
+    typeName : String
+    hasDefault : Bool
+  end
+
+  record TypeEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    parents : [String]
+    variants : [VariantEntry]?
+    doc : Doc
+    line : Integer
+  end
+
+  record RecordEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    fields : [FieldEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record TraitEntry do
+    name : String
+    qualifiedName : String
+    typeParams : [String]
+    functions : [FunctionEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record MakeEntry do
+    target : String
+    isFinal : Bool
+    implements : [String]
+    functions : [FunctionEntry]
+    doc : Doc
+    line : Integer
+  end
+
+  record ModuleEntry do
+    name : String
+    qualifiedName : String
+    children : [Entity]
+    doc : Doc
+    line : Integer
+  end
+
+  record FunctionEntry do
+    name : String
+    qualifiedName : String
+    signatures : [String]
+    clauseCount : Integer
+    doc : Doc
+    line : Integer
+  end
+
+  record ConstantEntry do
+    name : String
+    qualifiedName : String
+    typeName : String
+    doc : Doc
+    line : Integer
+  end
+
+  type Entity
+    = TypeDecl(TypeEntry)
+    | RecordDecl(RecordEntry)
+    | TraitDecl(TraitEntry)
+    | MakeDecl(MakeEntry)
+    | ModuleDecl(ModuleEntry)
+    | FuncDecl(FunctionEntry)
+    | ConstDecl(ConstantEntry)
+
+  # ── Pages and packages ───────────────────────────────────────────────────
+
+  record SourcePage do
+    source : String
+    urlPath : String
+    title : String
+    entities : [Entity]
+  end
+
+  record PackageModel do
+    package : String
+    version : String
+    label : String
+    baseUrl : String
+    generatedAt : String
+    pages : [SourcePage]
+  end
+
+  # A flattened search row: one per entity (and per function inside traits,
+  # makes and modules), joining name/kind/signature to the page URL.
+  record SearchEntry do
+    name : String
+    qualifiedName : String
+    kind : String
+    signatures : [String]
+    summary : String
+    urlPath : String
+    line : Integer
+  end
+
+  # The kind label used in indexes and JSON for each entity variant.
+  foul kindOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(_) => "type"
+      RecordDecl(_) => "record"
+      TraitDecl(_) => "trait"
+      MakeDecl(_) => "make"
+      ModuleDecl(_) => "module"
+      FuncDecl(_) => "function"
+      ConstDecl(_) => "constant"
+    end
+  end
+
+  # The primary display name of an entity (a make's is its target type).
+  foul nameOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(e) => e.name
+      RecordDecl(e) => e.name
+      TraitDecl(e) => e.name
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.name
+      FuncDecl(e) => e.name
+      ConstDecl(e) => e.name
+    end
+  end
+
+  foul qualifiedNameOf(entity: Entity) -> String do
+    match entity do
+      TypeDecl(e) => e.qualifiedName
+      RecordDecl(e) => e.qualifiedName
+      TraitDecl(e) => e.qualifiedName
+      MakeDecl(e) => e.target
+      ModuleDecl(e) => e.qualifiedName
+      FuncDecl(e) => e.qualifiedName
+      ConstDecl(e) => e.qualifiedName
+    end
+  end
+
+  foul lineOf(entity: Entity) -> Integer do
+    match entity do
+      TypeDecl(e) => e.line
+      RecordDecl(e) => e.line
+      TraitDecl(e) => e.line
+      MakeDecl(e) => e.line
+      ModuleDecl(e) => e.line
+      FuncDecl(e) => e.line
+      ConstDecl(e) => e.line
+    end
+  end
+end

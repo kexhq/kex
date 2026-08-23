@@ -313,6 +313,7 @@ module Kex.AST do
 
   record MakeInfo do
     target : TypeRef
+    doc : String?
     isFinal : Bool
     implements : [TypeRef]
     body : [Node]

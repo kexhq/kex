@@ -1,0 +1,243 @@
+# Model records → JSON artifacts. This is the single boundary where typed
+# records become plain maps (atom keys, JSON-ready values) so JSON.stringify
+# can serialise them: model.json (the full model) and search.json (a flat
+# index for dynamic name/kind/type search on the docs site).
+
+module Docgen.Json do
+  using Docgen.Model, only: [Entity, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, Doc, SourcePage, PackageModel, SearchEntry, kindOf, nameOf, qualifiedNameOf, lineOf]
+
+  # ── model.json ───────────────────────────────────────────────────────────
+
+  foul modelJson(model: PackageModel) -> String do
+    return JSON.stringify({
+      package: model.package,
+      version: model.version,
+      label: labelOrPackage(model),
+      baseUrl: model.baseUrl,
+      generatedAt: model.generatedAt,
+      pages: model.pages.map { |p| pageValue(p) }
+    })
+  end
+
+  foul labelOrPackage(model: PackageModel) -> String do
+    if model.label.empty?
+      return model.package
+    end
+    return model.label
+  end
+
+  foul pageValue(page: SourcePage) -> Any do
+    return {
+      source: page.source,
+      urlPath: page.urlPath,
+      title: page.title,
+      entities: page.entities.map { |e| entityValue(e) }
+    }
+  end
+
+  foul entityValue(e: Entity) -> Any do
+    match e do
+      TypeDecl(entry) => {
+        kind: "type",
+        name: entry.name,
+        qualifiedName: entry.qualifiedName,
+        typeParams: entry.typeParams,
+        parents: entry.parents,
+        variants: variantsValue(entry.variants),
+        doc: docValue(entry.doc),
+        line: entry.line
+      }
+      RecordDecl(entry) => do
+        # The annotation keeps `.fields` on the record — unannotated, UFCS
+        # resolves it to the prelude's `Type.fields` reflection helper.
+        let typed: RecordEntry = entry
+        return {
+          kind: "record",
+          name: typed.name,
+          qualifiedName: typed.qualifiedName,
+          typeParams: typed.typeParams,
+          fields: fieldValues(typed.fields),
+          doc: docValue(typed.doc),
+          line: typed.line
+        }
+      end
+      TraitDecl(entry) => {
+        kind: "trait",
+        name: entry.name,
+        qualifiedName: entry.qualifiedName,
+        typeParams: entry.typeParams,
+        functions: entry.functions.map { |f| functionValue(f) },
+        doc: docValue(entry.doc),
+        line: entry.line
+      }
+      MakeDecl(entry) => {
+        kind: "make",
+        name: entry.target,
+        target: entry.target,
+        isFinal: entry.isFinal,
+        implements: entry.implements,
+        functions: entry.functions.map { |f| functionValue(f) },
+        doc: docValue(entry.doc),
+        line: entry.line
+      }
+      ModuleDecl(entry) => {
+        kind: "module",
+        name: entry.name,
+        qualifiedName: entry.qualifiedName,
+        children: entry.children.map { |c| entityValue(c) },
+        doc: docValue(entry.doc),
+        line: entry.line
+      }
+      FuncDecl(entry) => functionValue(entry)
+      ConstDecl(entry) => {
+        kind: "constant",
+        name: entry.name,
+        qualifiedName: entry.qualifiedName,
+        "type": entry.typeName,
+        doc: docValue(entry.doc),
+        line: entry.line
+      }
+    end
+  end
+
+  foul variantsValue(variants: [VariantEntry]?) -> Any do
+    match variants do
+      Just(vs) => vs.map { |v| { name: v.name, fields: v.fields } }
+      None => None
+    end
+  end
+
+  foul fieldValue(f: FieldEntry) -> Any do
+    return { name: f.name, "type": f.typeName, hasDefault: f.hasDefault }
+  end
+
+  # A named helper so the lambda's element type comes from the [FieldEntry]
+  # parameter, not from the surrounding map literal's value type.
+  foul fieldValues(fields: [FieldEntry]) -> Any do
+    return fields.map { |f| fieldValue(f) }
+  end
+
+  foul functionValue(f: FunctionEntry) -> Any do
+    return {
+      kind: "function",
+      name: f.name,
+      qualifiedName: f.qualifiedName,
+      signatures: f.signatures,
+      clauseCount: f.clauseCount,
+      doc: docValue(f.doc),
+      line: f.line
+    }
+  end
+
+  foul docValue(doc: Doc) -> Any do
+    return {
+      summary: doc.summary,
+      params: doc.params.map { |p| { name: p.name, "type": p.typeName, description: p.description } },
+      returns: returnsValue(doc),
+      examples: doc.examples.map { |ex| { caption: ex.caption, code: ex.code } },
+      deprecated: doc.deprecated
+    }
+  end
+
+  foul returnsValue(doc: Doc) -> Any do
+    match doc.returns do
+      Just(r) => do
+        let value: Any = { "type": r.typeName, description: r.description }
+        return value
+      end
+      None => do
+        let value: Any = None
+        return value
+      end
+    end
+  end
+
+  # ── search.json ──────────────────────────────────────────────────────────
+
+  foul searchJson(model: PackageModel) -> String do
+    return JSON.stringify({
+      package: model.package,
+      version: model.version,
+      generatedAt: model.generatedAt,
+      entries: searchEntries(model).map { |entry| searchValue(entry) }
+    })
+  end
+
+  foul searchEntries(model: PackageModel) -> [SearchEntry] do
+    let perPage = model.pages.map { |p| pageSearchEntries(p) }
+    return perPage.flatten
+  end
+
+  foul pageSearchEntries(page: SourcePage) -> [SearchEntry] do
+    let perEntity = page.entities.map { |e| entitySearchEntries(e, page) }
+    return perEntity.flatten
+  end
+
+  foul entitySearchEntries(e: Entity, page: SourcePage) -> [SearchEntry] do
+    let own = [SearchEntry {
+      name: nameOf(e),
+      qualifiedName: qualifiedNameOf(e),
+      kind: kindOf(e),
+      signatures: entitySignatures(e),
+      summary: entitySummary(e),
+      urlPath: page.urlPath,
+      line: lineOf(e)
+    }]
+    return own + childSearchEntries(e, page)
+  end
+
+  foul childSearchEntries(e: Entity, page: SourcePage) -> [SearchEntry] do
+    match e do
+      TraitDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
+      MakeDecl(entry) => entry.functions.map { |f| functionSearchEntry(f, page) }
+      ModuleDecl(entry) => (entry.children.map { |c| entitySearchEntries(c, page) }).reduce([], { |accum, entries| accum + entries })
+      _ => []
+    end
+  end
+
+  foul functionSearchEntry(f: FunctionEntry, page: SourcePage) -> SearchEntry do
+    return SearchEntry {
+      name: f.name,
+      qualifiedName: f.qualifiedName,
+      kind: "function",
+      signatures: f.signatures,
+      summary: f.doc.summary,
+      urlPath: page.urlPath,
+      line: f.line
+    }
+  end
+
+  foul searchValue(entry: SearchEntry) -> Any do
+    return {
+      name: entry.name,
+      qualifiedName: entry.qualifiedName,
+      kind: entry.kind,
+      signatures: entry.signatures,
+      summary: entry.summary,
+      urlPath: entry.urlPath,
+      line: entry.line
+    }
+  end
+
+  foul entitySignatures(e: Entity) -> [String] do
+    match e do
+      FuncDecl(entry) => entry.signatures
+      TraitDecl(entry) => (entry.functions.map { |f| f.signatures }).flatten
+      MakeDecl(entry) => (entry.functions.map { |f| f.signatures }).flatten
+      ModuleDecl(entry) => (entry.children.map { |c| entitySignatures(c) }).flatten
+      _ => []
+    end
+  end
+
+  foul entitySummary(e: Entity) -> String do
+    match e do
+      TypeDecl(entry) => entry.doc.summary
+      RecordDecl(entry) => entry.doc.summary
+      TraitDecl(entry) => entry.doc.summary
+      MakeDecl(entry) => entry.doc.summary
+      ModuleDecl(entry) => entry.doc.summary
+      FuncDecl(entry) => entry.doc.summary
+      ConstDecl(entry) => entry.doc.summary
+    end
+  end
+end

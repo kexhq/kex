@@ -1,0 +1,415 @@
+# Kex.AST nodes → the typed entity model (Docgen.Model).
+#
+# Declaration bodies interleave TypeAnnotations (`name : type`) with
+# FunctionDefs (`let name(args) ...`); overloads repeat both. Functions are
+# collected per name as PendingFunction records (annotations + parameter
+# lists kept apart), then finalised once the body is fully walked, because
+# pairing an annotation's curried type with a clause's parameter names needs
+# both sides.
+
+module Docgen.Extract do
+  using Docgen.Model, only: [Entity, TypeDecl, RecordDecl, TraitDecl, MakeDecl, ModuleDecl, FuncDecl, ConstDecl, TypeEntry, RecordEntry, TraitEntry, MakeEntry, ModuleEntry, FunctionEntry, ConstantEntry, VariantEntry, FieldEntry, SourcePage, Doc]
+
+  # ── Entry point ──────────────────────────────────────────────────────────
+
+  foul fileEntities(items: [Kex.AST.Node]) -> [Entity] do
+    return entitiesIn(items, "")
+  end
+
+  foul pageFor(source: String, items: [Kex.AST.Node]) -> SourcePage do
+    let entities = fileEntities(items)
+    return SourcePage {
+      source: source,
+      urlPath: stripExt(source),
+      title: titleCase(stripExt(source)),
+      entities: entities
+    }
+  end
+
+  # ── Body walking ─────────────────────────────────────────────────────────
+
+  foul entitiesIn(body: [Kex.AST.Node], prefix: String) -> [Entity] do
+    return finalize(bodyEntities(body, prefix, []))
+  end
+
+  # Accumulator entries: finished entities or functions still collecting.
+  type Pending
+    = Done(Entity)
+    | PendingFn(PendingFunction)
+
+  record PendingFunction do
+    name : String
+    qualifiedName : String
+    annotations : [Kex.AST.AnnotationInfo]
+    paramLists : [[String]]
+    clauseCount : Integer
+    doc : Doc
+    line : Integer
+  end
+
+  foul bodyEntities(body: [Kex.AST.Node], prefix: String, accum: [Pending]) -> [Pending] do
+    if body.empty?
+      return accum
+    end
+    let head = body.first.or(None)
+    let rest = body.drop(1)
+    match head do
+      TypeDef(info) => bodyEntities(rest, prefix, accum + [Done(typeEntity(info, prefix))])
+      RecordDef(info) => bodyEntities(rest, prefix, accum + [Done(recordEntity(info, prefix))])
+      TraitDef(info) => bodyEntities(rest, prefix, accum + [Done(traitEntity(info, prefix))])
+      MakeDef(info) => bodyEntities(rest, prefix, accum + [Done(makeEntity(info))])
+      ModuleDef(info) => bodyEntities(rest, prefix, accum + [Done(moduleEntity(info, prefix))])
+      TypeAnnotation(info) => bodyEntities(rest, prefix, noteAnnotation(accum, info, prefix))
+      FunctionDef(info) => bodyEntities(rest, prefix, noteFunction(accum, info, prefix))
+      ConstantDef(info) => bodyEntities(rest, prefix, accum + [Done(constantEntity(info, prefix))])
+      _ => bodyEntities(rest, prefix, accum)
+    end
+  end
+
+  foul finalize(accum: [Pending]) -> [Entity] do
+    return accum.map { |p| finalizeOne(p) }
+  end
+
+  foul finalizeOne(p: Pending) -> Entity do
+    match p do
+      Done(entity) => entity
+      PendingFn(fn) => FuncDecl(finalizeFunction(fn))
+    end
+  end
+
+  # ── Per-kind entities ────────────────────────────────────────────────────
+
+  foul typeEntity(info: Kex.AST.TypeInfo, prefix: String) -> Entity do
+    let variants = match info.variants do
+      Just(vs) => Just(vs.map { |v| variantEntry(v) })
+      None => None
+    end
+    return TypeDecl(TypeEntry {
+      name: info.name,
+      qualifiedName: qualify(prefix, info.name),
+      typeParams: info.typeParams,
+      parents: info.parents.map { |p| typeText(p) },
+      variants: variants,
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  # A named helper (rather than an inline lambda) so the element type of
+  # `v.fields` comes from VariantInfo, not from VariantEntry's [String].
+  foul variantEntry(v: Kex.AST.VariantInfo) -> VariantEntry do
+    return VariantEntry { name: v.name, fields: v.fields.map { |f| typeText(f) } }
+  end
+
+  foul recordEntity(info: Kex.AST.RecordInfo, prefix: String) -> Entity do
+    return RecordDecl(RecordEntry {
+      name: info.name,
+      qualifiedName: qualify(prefix, info.name),
+      typeParams: info.typeParams,
+      fields: info.fields.map { |f|
+        FieldEntry { name: f.name, typeName: fieldTypeName(f), hasDefault: f.hasDefault }
+      },
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  foul traitEntity(info: Kex.AST.TraitInfo, prefix: String) -> Entity do
+    return TraitDecl(TraitEntry {
+      name: info.name,
+      qualifiedName: qualify(prefix, info.name),
+      typeParams: info.typeParams,
+      functions: functionEntries(info.body),
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  foul makeEntity(info: Kex.AST.MakeInfo) -> Entity do
+    return MakeDecl(MakeEntry {
+      target: typeText(info.target),
+      isFinal: info.isFinal,
+      implements: info.implements.map { |t| typeText(t) },
+      functions: functionEntries(info.body),
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  foul moduleEntity(info: Kex.AST.ModuleInfo, prefix: String) -> Entity do
+    let nested = qualify(prefix, info.name)
+    return ModuleDecl(ModuleEntry {
+      name: info.name,
+      qualifiedName: nested,
+      children: entitiesIn(info.items, nested),
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  foul constantEntity(info: Kex.AST.ConstantInfo, prefix: String) -> Entity do
+    return ConstDecl(ConstantEntry {
+      name: info.name,
+      qualifiedName: qualify(prefix, info.name),
+      typeName: annotationTypeOf(info),
+      doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+      line: info.location.line
+    })
+  end
+
+  # ── Function collection ──────────────────────────────────────────────────
+
+  foul functionEntries(body: [Kex.AST.Node]) -> [FunctionEntry] do
+    let entities = entitiesIn(body, "")
+    let grouped = entities.map { |e|
+      match e do
+        FuncDecl(fn) => [fn]
+        _ => []
+      end
+    }
+    return grouped.reduce([], { |accum, group| accum + group })
+  end
+
+  foul noteAnnotation(accum: [Pending], info: Kex.AST.AnnotationInfo, prefix: String) -> [Pending] do
+    match findPending(accum, info.name) do
+      None => accum + [PendingFn(PendingFunction {
+        name: info.name,
+        qualifiedName: qualify(prefix, info.name),
+        annotations: [info],
+        paramLists: [],
+        clauseCount: 0,
+        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        line: info.location.line
+      })]
+      Just(_) => accum.map { |p| addAnnotation(p, info) }
+    end
+  end
+
+  foul addAnnotation(p: Pending, info: Kex.AST.AnnotationInfo) -> Pending do
+    match p do
+      PendingFn(fn) => do
+        if fn.name != info.name
+          return p
+        end
+        let doc = if fn.doc.summary.empty?
+          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+        else
+          fn.doc
+        end
+        return PendingFn(PendingFunction {
+          name: fn.name,
+          qualifiedName: fn.qualifiedName,
+          annotations: fn.annotations + [info],
+          paramLists: fn.paramLists,
+          clauseCount: fn.clauseCount,
+          doc: doc,
+          line: fn.line
+        })
+      end
+      _ => p
+    end
+  end
+
+  foul noteFunction(accum: [Pending], info: Kex.AST.FunctionInfo, prefix: String) -> [Pending] do
+    let paramNames = clauseParamNames(info.clauses.first)
+    match findPending(accum, info.name) do
+      None => accum + [PendingFn(PendingFunction {
+        name: info.name,
+        qualifiedName: qualify(prefix, info.name),
+        annotations: [],
+        paramLists: [paramNames],
+        clauseCount: info.clauses.count,
+        doc: Docgen.Rdoc.parseOrEmpty(info.doc.or("")),
+        line: info.location.line
+      })]
+      Just(_) => accum.map { |p| addClause(p, info, paramNames) }
+    end
+  end
+
+  foul addClause(p: Pending, info: Kex.AST.FunctionInfo, paramNames: [String]) -> Pending do
+    match p do
+      PendingFn(fn) => do
+        if fn.name != info.name
+          return p
+        end
+        let doc = if fn.doc.summary.empty?
+          Docgen.Rdoc.parseOrEmpty(info.doc.or(""))
+        else
+          fn.doc
+        end
+        return PendingFn(PendingFunction {
+          name: fn.name,
+          qualifiedName: fn.qualifiedName,
+          annotations: fn.annotations,
+          paramLists: fn.paramLists + [paramNames],
+          clauseCount: fn.clauseCount + info.clauses.count,
+          doc: doc,
+          line: fn.line
+        })
+      end
+      _ => p
+    end
+  end
+
+  foul findPending(accum: [Pending], name: String) -> Integer? do
+    return indexedFind(accum, name, 0)
+  end
+
+  foul indexedFind(accum: [Pending], name: String, index: Integer) -> Integer? do
+    if accum.empty?
+      return None
+    end
+    let head = accum.first.or(None)
+    let rest = accum.drop(1)
+    match head do
+      PendingFn(fn) => if fn.name == name then Just(index) else indexedFind(rest, name, index + 1) end
+      _ => indexedFind(rest, name, index + 1)
+    end
+  end
+
+  foul finalizeFunction(fn: PendingFunction) -> FunctionEntry do
+    return FunctionEntry {
+      name: fn.name,
+      qualifiedName: fn.qualifiedName,
+      signatures: fn.annotations.map { |a| renderSignature(a, fn.paramLists) },
+      clauseCount: fn.clauseCount,
+      doc: fn.doc,
+      line: fn.line
+    }
+  end
+
+  # ── Signature rendering ──────────────────────────────────────────────────
+  #
+  # The annotation type is curried (`FilePath -> Read -> Result<...>`); a
+  # clause's parameter list says how many arguments the function really
+  # takes, so single-parameter layers are absorbed until the arity matches,
+  # and the flattened parameter types are paired with the clause's names.
+
+  foul renderSignature(info: Kex.AST.AnnotationInfo, paramLists: [[String]]) -> String do
+    let ref = annotationRef(info)
+    match matchingParamList(ref, paramLists) do
+      Just(names) => "${info.name}${renderFlattened(ref, names)}"
+      None => "${info.name} : ${typeText(ref)}"
+    end
+  end
+
+  foul annotationRef(info: Kex.AST.AnnotationInfo) -> Kex.AST.TypeRef do
+    match info do
+      Kex.AST.AnnotationInfo { type: t } => t
+    end
+  end
+
+  foul renderFlattened(ref: Kex.AST.TypeRef, names: [String]) -> String do
+    let flattened = flattenToArity(ref, names.count)
+    match flattened do
+      FunctionType(params, result) => "(${pairParams(params, names)}) -> ${typeText(result)}"
+      _ => "() -> ${typeText(flattened)}"
+    end
+  end
+
+  foul matchingParamList(ref: Kex.AST.TypeRef, paramLists: [[String]]) -> [String]? do
+    return paramLists.find { |names| paramsMatch(ref, names) }
+  end
+
+  foul paramsMatch(ref: Kex.AST.TypeRef, names: [String]) -> Bool do
+    match flattenToArity(ref, names.count) do
+      FunctionType(params, _) => params.count == names.count
+      _ => names.empty?
+    end
+  end
+
+  foul pairParams(params: [Kex.AST.TypeRef], names: [String]) -> String do
+    return indexedPairs(params, names).join(", ")
+  end
+
+  foul indexedPairs(params: [Kex.AST.TypeRef], names: [String]) -> [String] do
+    if params.empty?
+      return names
+    end
+    if names.empty?
+      return params.map { |p| typeText(p) }
+    end
+    let head = "${names.first.or("_")}: ${typeTextOpt(params.first)}"
+    return [head] + indexedPairs(params.drop(1), names.drop(1))
+  end
+
+  # Absorbs single-parameter curried layers while more than one argument
+  # remains. `(FilePath) -> (Read) -> R` with arity 2 becomes
+  # `(FilePath, Read) -> R`.
+  foul flattenToArity(ref: Kex.AST.TypeRef, arity: Integer) -> Kex.AST.TypeRef do
+    if arity <= 1
+      return ref
+    end
+    match ref do
+      FunctionType([only], FunctionType(innerParams, innerResult)) => do
+        let absorbed = FunctionType([only] + innerParams, innerResult)
+        return flattenToArity(absorbed, arity - 1)
+      end
+      _ => ref
+    end
+  end
+
+  # ── AST accessors and helpers ────────────────────────────────────────────
+  #
+  # `type` is a keyword after `.`, so typed-record access goes through
+  # pattern matching instead.
+
+  foul clauseParamNames(clause: Kex.AST.ClauseInfo?) -> [String] do
+    match clause do
+      Just(c) => c.params.map { |p| paramName(p) }
+      None => []
+    end
+  end
+
+  foul paramName(p: Kex.AST.ParamInfo) -> String do
+    match p do
+      Kex.AST.ParamInfo { name: Just(n) } => n
+      Kex.AST.ParamInfo { name: None, pattern: Just(pattern) } => pattern.to(String).or("_")
+      _ => "_"
+    end
+  end
+
+  foul annotationTypeOf(info: Kex.AST.ConstantInfo) -> String do
+    match info do
+      Kex.AST.ConstantInfo { type: Just(t) } => typeText(t)
+      _ => ""
+    end
+  end
+
+  foul fieldTypeName(f: Kex.AST.FieldInfo) -> String do
+    match f do
+      Kex.AST.FieldInfo { type: t } => typeText(t)
+    end
+  end
+
+  foul typeText(ref: Kex.AST.TypeRef) -> String do
+    return ref.to(String).or("?")
+  end
+
+  foul typeTextOpt(ref: Kex.AST.TypeRef?) -> String do
+    match ref do
+      Just(r) => r.to(String).or("?")
+      None => "?"
+    end
+  end
+
+  foul qualify(prefix: String, name: String) -> String do
+    if prefix.empty?
+      name
+    else
+      "${prefix}.${name}"
+    end
+  end
+
+  foul stripExt(name: String) -> String do
+    return name.take(name.count - 4) if name.endsWith?(".kex")
+    return name
+  end
+
+  foul titleCase(s: String) -> String do
+    if s.empty?
+      return s
+    end
+    return s.get(0).upperCase + s.drop(1)
+  end
+end

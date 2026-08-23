@@ -1,0 +1,183 @@
+# The build driver: scan → extract → PackageModel, then emit everything
+# derived from it — model.json, search.json, Markdown pages, manifest,
+# versions, llms.txt/llms-full.txt, robots.txt and sitemap.xml.
+
+module Docgen.Index do
+  using Docgen.Model, only: [PackageModel, SourcePage, kindOf, nameOf, lineOf]
+
+  foul buildCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+    let source = optString(parsed.values.get("source"))
+    let out = optString(parsed.values.get("out"))
+    let pkg = optString(parsed.values.get("package"))
+    let versionArg = optString(parsed.values.get("version"))
+    let version = if versionArg.empty? then Kex.Kernel.VERSION.release else versionArg end
+    if source.empty?
+      IO.printError("docgen: --source is required")
+      return 1
+    end
+    if out.empty?
+      IO.printError("docgen: --out is required")
+      return 1
+    end
+    let files = Docgen.Scan.sourceFiles(source)
+    if files.empty?
+      IO.printError("docgen: no .kex files found in ${source}")
+      return 1
+    end
+    let versionDir = FS.Path.join(FS.Path.join(out, pkg), version)
+    let _ = FS.Directory.create(versionDir)
+    IO.printLine("docgen: ${files.count} file(s) => ${versionDir}")
+    let pages = buildPages(files, source)
+    if pages.empty?
+      IO.printError("docgen: no files parsed successfully")
+      return 1
+    end
+    let model = PackageModel {
+      package: pkg,
+      version: version,
+      label: optString(parsed.values.get("label")),
+      baseUrl: optString(parsed.values.get("base-url")),
+      generatedAt: DateTime.now().iso,
+      pages: pages
+    }
+    let _ = FS.File.write(FS.Path.join(out, "model.json"), Docgen.Json.modelJson(model))
+    let _ = FS.File.write(FS.Path.join(out, "search.json"), Docgen.Json.searchJson(model))
+    let written = writePages(pages, versionDir, model)
+    writeIndexFiles(pages, model, out)
+    IO.printLine("docgen: wrote ${written} page(s), model.json and search.json")
+    return 0
+  end
+
+  foul optString(value: String?) -> String do
+    return value.or("")
+  end
+
+  # ── Page construction ────────────────────────────────────────────────────
+
+  foul buildPages(files: [String], sourceDir: String) -> [SourcePage] do
+    return buildPagesLoop(files, sourceDir, [])
+  end
+
+  foul buildPagesLoop(files: [String], sourceDir: String, pages: [SourcePage]) -> [SourcePage] do
+    if files.empty?
+      return pages
+    end
+    let fileName = files.first.or("")
+    let rest = files.drop(1)
+    let fullPath = FS.Path.join(sourceDir, fileName)
+    match Kex.AST.parseFile(fullPath) do
+      Ok(Kex.AST.Program { items }) => do
+        let page = Docgen.Extract.pageFor(fileName, items)
+        IO.printLine("  ok ${fileName} (${page.entities.count} entities)")
+        return buildPagesLoop(rest, sourceDir, pages + [page])
+      end
+      Error(Kex.AST.ParseError { message: msg }) => do
+        IO.printError("  fail ${fileName}: ${msg}")
+        return buildPagesLoop(rest, sourceDir, pages)
+      end
+    end
+  end
+
+  # ── Output files ─────────────────────────────────────────────────────────
+
+  foul writePages(pages: [SourcePage], versionDir: String, model: PackageModel) -> Integer do
+    let count = pages.reduce(0, { |n, page|
+      let outPath = FS.Path.join(versionDir, page.urlPath + ".md")
+      ensureDirectory(FS.Path.join(versionDir, dirNameOf(page.urlPath)))
+      let _ = FS.File.write(outPath, Docgen.Markdown.pageMarkdown(page, model))
+      n + 1
+    })
+    return count
+  end
+
+  # "kex/ast" → "kex"; "fs" → "" (already inside versionDir).
+  foul dirNameOf(urlPath: String) -> String do
+    let parts = urlPath.split("/")
+    if parts.count <= 1
+      return ""
+    end
+    return parts.take(parts.count - 1).join("/")
+  end
+
+  foul ensureDirectory(path: String) -> () do
+    return () if path.empty?
+    let _ = FS.Directory.create(path)
+    return ()
+  end
+
+  foul writeIndexFiles(pages: [SourcePage], model: PackageModel, out: String) -> () do
+    let _ = FS.File.write(FS.Path.join(out, "manifest.json"), manifestJson(pages))
+    let _ = FS.File.write(FS.Path.join(out, "versions.json"), versionsJson(model))
+    let _ = FS.File.write(FS.Path.join(out, "llms.txt"), llmsTxt(pages, model))
+    let _ = FS.File.write(FS.Path.join(out, "llms-full.txt"), llmsFullTxt(pages, model))
+    let _ = FS.File.write(FS.Path.join(out, "robots.txt"), robotsTxt(model.baseUrl))
+    let _ = FS.File.write(FS.Path.join(out, "sitemap.xml"), sitemapXml(pages, model))
+    IO.printLine("docgen: wrote index files")
+    return ()
+  end
+
+  foul manifestJson(pages: [SourcePage]) -> String do
+    return JSON.stringify(pages.map { |p|
+      {
+        path: p.urlPath,
+        title: p.title,
+        source: p.source,
+        entities: p.entities.map { |e| { kind: kindOf(e), name: nameOf(e), line: lineOf(e) } }
+      }
+    })
+  end
+
+  foul versionsJson(model: PackageModel) -> String do
+    let label = if model.label.empty? then model.package else model.label end
+    return JSON.stringify({
+      versions: [
+        {
+          id: model.version,
+          label: label,
+          generatedAt: model.generatedAt,
+          package: model.package
+        }
+      ]
+    })
+  end
+
+  foul llmsTxt(pages: [SourcePage], model: PackageModel) -> String do
+    let label = if model.label.empty? then model.package else model.label end
+    let root = normalizeBaseUrl(model.baseUrl)
+    let header = "# ${label} ${model.version}\n\nGenerated by kex docgen at ${model.generatedAt}.\n\n## Pages\n\n"
+    let links = pages.map { |p| "- [${p.title}](${root}/${p.urlPath})" }.join("\n")
+    return header + links + "\n"
+  end
+
+  foul llmsFullTxt(pages: [SourcePage], model: PackageModel) -> String do
+    let texts = pages.map { |p| Docgen.Markdown.pageMarkdown(p, model) }
+    return texts.join("\n\n---\n\n") + "\n"
+  end
+
+  foul robotsTxt(baseUrl: String) -> String do
+    if baseUrl.empty?
+      return "User-agent: *\nAllow: /\n"
+    end
+    return "User-agent: *\nAllow: /\nSitemap: ${normalizeBaseUrl(baseUrl)}/sitemap.xml\n"
+  end
+
+  foul sitemapXml(pages: [SourcePage], model: PackageModel) -> String do
+    let root = normalizeBaseUrl(model.baseUrl)
+    let urls = pages.map { |p|
+      "  <url>\n    <loc>${root}/${p.urlPath}</loc>\n    <lastmod>${model.generatedAt}</lastmod>\n  </url>"
+    }.join("\n")
+    return [
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n",
+      "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+      urls,
+      "\n</urlset>\n"
+    ].join("")
+  end
+
+  foul normalizeBaseUrl(url: String) -> String do
+    if url.endsWith?("/")
+      return url.take(url.count - 1)
+    end
+    return url
+  end
+end

@@ -1,5 +1,3 @@
-# kex: no-check
-
 describe("Mock.IO — lifecycle") do
   it("start activates mock mode") do
     Mock.IO.start()

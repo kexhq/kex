@@ -1,0 +1,62 @@
+# Serves a generated output directory over HTTP (BEAM backend: kex -R).
+
+module Docgen.Serve do
+  record ServedFile do
+    route : String
+    path : String
+  end
+
+  foul serveCommand(parsed: OptionParser.ParsedOptions) -> Integer do
+    let out = parsed.values.get("out").or("")
+    let port = Integer.parse(parsed.values.get("port").or("4322")).or(4322)
+    if out.empty?
+      IO.printError("docgen: --out is required")
+      return 1
+    end
+    let files = collectServeFiles(out, "/")
+    if files.empty?
+      IO.printError("docgen: no files to serve in ${out}")
+      return 1
+    end
+    IO.printLine("docgen: serving ${files.count} file(s) on http://localhost:${port}")
+    let server = files.reduce(Web.Server.new(port), { |s, f| s.get(f.route, fileHandler(f.path)) })
+    match server.start() do
+      Ok(_) => return 0
+      Error(msg) => do
+        IO.printError("docgen: server failed: ${msg}")
+        return 1
+      end
+    end
+  end
+
+  foul collectServeFiles(dir: String, prefix: String) -> [ServedFile] do
+    let names = FS.Directory.files(dir).or([])
+    let subdirs = FS.Directory.directories(dir).or([])
+    let fileEntries = names.map { |n|
+      ServedFile { route: FS.Path.join(prefix, n), path: FS.Path.join(dir, n) }
+    }
+    let subEntries = subdirs.map { |d| collectServeFiles(FS.Path.join(dir, d), FS.Path.join(prefix, d)) }.flatten
+    return fileEntries + subEntries
+  end
+
+  foul serveFile(req: Web.Request, filePath: String) -> Web.Response do
+    match FS.File.read(filePath) do
+      Just(content) => do
+        let contentType = contentTypeFor(filePath)
+        return Web.Response { status: 200, headers: { "Content-Type": contentType }, body: content }
+      end
+      None => return Web.Response.notFound()
+    end
+  end
+
+  foul contentTypeFor(path: String) -> String do
+    return "text/markdown; charset=utf-8" if path.endsWith?(".md")
+    return "application/json" if path.endsWith?(".json")
+    return "application/xml" if path.endsWith?(".xml")
+    return "text/plain; charset=utf-8"
+  end
+
+  foul fileHandler(filePath: String) -> (Web.Request -> Web.Response) do
+    return { |req| serveFile(req, filePath) }
+  end
+end

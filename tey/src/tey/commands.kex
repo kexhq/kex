@@ -197,10 +197,13 @@ end
 
 foul runPackage(extra: [String], interpret?: Bool) -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
+  # The literal `--` stops kex's own option parsing: without it, program
+  # arguments that look like flags (`--source`, `--out`) are permuted into
+  # kex's options and rejected as unrecognized.
   Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
                                   [...Tey.Commands.backendFlags(interpret?),
-                                   ...Tey.Commands.dependencyRoots,
-                                   package.entrypoint, ...extra]))
+                                   ...Tey.Commands.sourceRoots,
+                                   package.entrypoint, "--", ...extra]))
 end
 
 # `tey <name>` for a `command(...)` the manifest declares.
@@ -212,6 +215,8 @@ end
 # behave the way the same line behaves in a terminal, pipes and `&&` included.
 # Trailing arguments are passed as "$@" rather than pasted into the string, so
 # `tey fmt --check` cannot be re-split by the shell.
+#
+# The `--` before the arguments plays the same role as in runPackage.
 foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer do
   let words = command.commandRun.split(" ").filter { |word| word != "" }
   let entry = words.first.or("")
@@ -219,7 +224,7 @@ foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer 
     return Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
                                            [...Tey.Commands.backendFlags(interpret?),
                                             ...Tey.Commands.sourceRoots,
-                                            entry, ...words.drop(1), ...extra]))
+                                            entry, "--", ...words.drop(1), ...extra]))
   end
   # Tey's own bin directory goes FIRST on the command's PATH, so a `kex` in a
   # shell line means the toolchain this package selected rather than whatever
