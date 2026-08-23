@@ -2,7 +2,7 @@ module Tey.Commands
 
 using Tey.Cache, only: [fetch, packagePath, root, verify]
 using Tey.Lockfile, only: [LockState, decode, encode]
-using Tey.Manifest, only: [ManifestPackage, read]
+using Tey.Manifest, only: [Command, ManifestPackage, read]
 using Tey.Resolver, only: [resolvePackage]
 using Tey.Toolchain, only: [kex]
 
@@ -184,20 +184,49 @@ foul librarySources -> [String] do
     .map { |path| "src/${path}" }
 end
 
-foul runPackage(extra: [String]) -> Integer do
+# What `tey build` produces is what ships, so what `tey run` and `tey test`
+# exercise has to be the same thing. `-R` compiles and runs on the BEAM;
+# without it the toolchain tree-walks the source, and processes, `Erlang.*`
+# interop and the String/Char representation differ enough between the two
+# that a green interpreter run says nothing about the built package.
+#
+# `--interpret` is the way back, for a backend gap or a debugging session.
+let backendFlags(interpret?: Bool) -> [String] do
+  return interpret? then [] else ["-R"]
+end
+
+foul runPackage(extra: [String], interpret?: Bool) -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
-  match Process.run(Tey.Toolchain.kex, [...Tey.Commands.dependencyRoots, package.entrypoint, ...extra]) do
-    Error(error) => Tey.Commands.fail(error)
-    Ok(result) => do
-      if result.stdout != ""
-        IO.print(result.stdout)
-      end
-      if result.stderr != ""
-        IO.printError(result.stderr)
-      end
-      result.exitCode
-    end
+  Tey.Commands.report(Process.run(Tey.Toolchain.kex,
+                                  [...Tey.Commands.backendFlags(interpret?),
+                                   ...Tey.Commands.dependencyRoots,
+                                   package.entrypoint, ...extra]))
+end
+
+# `tey <name>` for a `command(...)` the manifest declares.
+#
+# A `.kex` script is run through the SELECTED toolchain with this package's
+# source roots already in place — the same environment `tey run` gives, so a
+# release script can `using` the package it is releasing. Anything else is a
+# shell line: `sh -c` is what makes `command("fmt", run: "kex --format src")`
+# behave the way the same line behaves in a terminal, pipes and `&&` included.
+# Trailing arguments are passed as "$@" rather than pasted into the string, so
+# `tey fmt --check` cannot be re-split by the shell.
+foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer do
+  let words = command.commandRun.split(" ").filter { |word| word != "" }
+  let entry = words.first.or("")
+  if entry.endsWith?(".kex")
+    return Tey.Commands.report(Process.run(Tey.Toolchain.kex,
+                                           [...Tey.Commands.backendFlags(interpret?),
+                                            ...Tey.Commands.sourceRoots,
+                                            entry, ...words.drop(1), ...extra]))
   end
+  # Tey's own bin directory goes FIRST on the command's PATH, so a `kex` in a
+  # shell line means the toolchain this package selected rather than whatever
+  # else the machine has installed — the same promise `tey run` makes. "tey"
+  # names $0, which is what a shell error message quotes.
+  let line = "PATH=\"${Tey.Toolchain.binDirectory}:$PATH\"; ${command.commandRun} \"$@\""
+  Tey.Commands.report(Process.run("sh", ["-c", line, "tey", ...extra]))
 end
 
 foul list -> Integer do
@@ -230,24 +259,14 @@ foul build -> Integer do
   if !FS.Directory.create(Tey.Commands.outputDirectory)
     return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
   end
-  let status = match Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
-                                        ...Tey.Commands.sourceRoots, ...units]) do
-    Error(error) => return Tey.Commands.fail(error)
-    Ok(result) => do
-      if result.stdout != ""
-        IO.print(result.stdout)
-      end
-      if result.stderr != ""
-        IO.printError(result.stderr)
-      end
-      result.exitCode
-    end
-  end
+  let status = Tey.Commands.report(
+    Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+                                    ...Tey.Commands.sourceRoots, ...units]))
   return status if status != 0
   Tey.Commands.buildTargets(package)
 end
 
-foul test -> Integer do
+foul test(interpret?: Bool) -> Integer do
   let specs = FS.Directory.files("spec").or([])
     .filter { |path| path.endsWith?(".spec.kex") }
     .sort
@@ -261,19 +280,14 @@ foul test -> Integer do
   # `spec/greet.spec.kex` calling `Greet.greeting` died with `Undefined
   # function`, which reads like a bug in the package rather than a missing
   # compiler flag.
-  let roots = Tey.Commands.sourceRoots
+  let roots = [...Tey.Commands.backendFlags(interpret?), ...Tey.Commands.sourceRoots]
   specs.each do |spec|
-    let result = match Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]) do
-      Error(error) => return Tey.Commands.fail(error)
-      Ok(value) => value
-    end
-    if result.stdout != ""
-      IO.print(result.stdout)
-    end
-    if result.stderr != ""
-      IO.printError(result.stderr)
-    end
-    status = result.exitCode if result.exitCode != 0
+    # A spec that could not even be STARTED is reported and counted as a
+    # failure like any other, rather than abandoning the files after it: a
+    # suite that stops at the first problem tells you about one problem.
+    let outcome = Tey.Commands.report(Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]))
+    status = outcome if outcome != 0
+    ()
   end
   status
 end
@@ -531,11 +545,20 @@ private do
     # first `tey test` said "No specs found" — the on-ramp taught nothing and
     # left the author to discover the spec layout from a doc.
     let source = (library then libraryModule else application).substitute(fields)
+    # The commented `command(...)` is the one line of this file that teaches
+    # something the author would otherwise never learn was possible: the
+    # scripts a project needs belong in the manifest, not in a Makefile beside
+    # it. Commented, because a scaffold must not ship a command that does not
+    # run.
     let manifestText = `
       bundle "$NAME$" do
         version("0.1.0")
         description("A Kex package")
         kex(">= 0.3.0")
+
+        # Project commands, run as "tey NAME" and listed by "tey help":
+        # command("bench", run: "script/bench.kex", description: "Run the benchmarks")
+
       $ENTRY$end
     `.substitute(fields)
     # The resolver finds a module by lowercasing its name and looking for that
@@ -581,6 +604,23 @@ private do
     match FS.File.read("tey.lock") do
       None => Error("tey.lock not found; run `tey lock`")
       Just(text) => Tey.Lockfile.decode(text)
+    end
+  end
+
+  # A child's output, and its status as this command's status. `Process.run`
+  # buffers, so nothing appears until the child exits — the reason a long
+  # `tey test` looks stalled and an interactive `tey run` cannot be
+  # interactive. Fixing that needs a streaming Process API rather than a
+  # change here; keeping the printing in ONE place is what makes it a single
+  # edit when there is one (kexhq/kex#187).
+  foul report(outcome: ProcessResult or! String) -> Integer do
+    match outcome do
+      Error(error) => Tey.Commands.fail(error)
+      Ok(result) => do
+        IO.print(result.stdout) if result.stdout != ""
+        IO.printError(result.stderr) if result.stderr != ""
+        result.exitCode
+      end
     end
   end
 

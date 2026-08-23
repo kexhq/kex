@@ -269,3 +269,116 @@ describe("Tey.Manifest.read — the whole format") do
     end
   end
 end
+
+# `command(name, run:, description:)` — the manifest's answer to the Makefile
+# every package used to grow beside it. What matters here is that a declaration
+# can never take a name Tey already answers: `tey test` must mean the same
+# thing in every checkout, and a manifest that tries to change that has to say
+# so loudly rather than win quietly.
+describe("Tey.Manifest.read — commands") do
+  it("reads a command's name, line and description") do
+    let package = Tey.Manifest.read(`
+      bundle "app" do
+        command("fmt", run: "kex --format src", description: "Format the sources")
+      end
+    `).try
+    assert(package.commands.count == 1)
+    let command = package.commands.first.try
+    assert(command.commandName == "fmt")
+    assert(command.commandRun == "kex --format src")
+    assert(command.commandDescription == "Format the sources")
+  end
+
+  it("leaves the description empty when there is none") do
+    let package = Tey.Manifest.read(`
+      bundle "app" do
+        command("release", run: "script/release.kex")
+      end
+    `).try
+    assert(package.commands.first.try.commandDescription == "")
+  end
+
+  it("keeps declared commands in order") do
+    let package = Tey.Manifest.read(`
+      bundle "app" do
+        command("fmt", run: "kex --format src")
+        command("release", run: "script/release.kex")
+      end
+    `).try
+    assert(package.commands.map { |command| command.commandName } == ["fmt", "release"])
+  end
+
+  it("has no commands when the manifest declares none") do
+    let package = Tey.Manifest.read(`
+      bundle "app" do
+        version("0.1.0")
+      end
+    `).try
+    assert(package.commands == [])
+  end
+
+  it("refuses to redeclare a built-in command") do
+    # A silent shadow would make `tey test` mean something different depending
+    # on which directory you are standing in.
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      bundle "app" do
+        command("test", run: "make test")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("built-in"), "unexpected error: ${message}")
+      Ok(_) => assert(false, "unexpectedly accepted a command shadowing `tey test`")
+    end
+  end
+
+  it("takes a colon-namespaced name") do
+    # `:` is the separator every other package manager already taught people,
+    # and it survives a shell without quoting.
+    let package = Tey.Manifest.read(`
+      bundle "app" do
+        command("db:migrate", run: "script/migrate.kex")
+      end
+    `).try
+    assert(package.commands.first.try.commandName == "db:migrate")
+  end
+
+  it("refuses a name with a space in it") do
+    # It would be two words on the command line, and the second would look
+    # like an argument. The colon is the way to group.
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      bundle "app" do
+        command("db migrate", run: "script/migrate.kex")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("colon"), "unexpected error: ${message}")
+      Ok(_) => assert(false, "unexpectedly accepted a two-word command name")
+    end
+  end
+
+  it("refuses a command with no run:") do
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      bundle "app" do
+        command("fmt", description: "Format the sources")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("run:"), "unexpected error: ${message}")
+      Ok(_) => assert(false, "unexpectedly accepted a command with nothing to run")
+    end
+  end
+
+  it("refuses the same command twice") do
+    # Two answers to one name; the second would silently never run.
+    let outcome: ManifestPackage or! String = Tey.Manifest.read(`
+      bundle "app" do
+        command("fmt", run: "kex --format src")
+        command("fmt", run: "make fmt")
+      end
+    `)
+    match outcome do
+      Error(message) => assert(message.contains?("twice"), "unexpected error: ${message}")
+      Ok(_) => assert(false, "unexpectedly accepted a command declared twice")
+    end
+  end
+end

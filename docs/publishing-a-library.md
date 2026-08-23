@@ -78,10 +78,46 @@ than going missing.
 
 ```sh
 tey build     # compiles src/ into ebin/
-tey test      # runs spec/*.spec.kex
+tey test      # runs spec/*.spec.kex, on the BEAM
 ```
 
-Both see the package's own `src/` and every fetched dependency. **`tey test`
+Both see the package's own `src/` and every fetched dependency, and both mean
+the BEAM: what `tey build` produces is what ships, so a spec suite that proves
+anything has to run the same way. `tey test --interpret` (and `tey run
+--interpret`) tree-walks the source instead — for a backend gap, or a
+debugging session.
+
+## Name the commands your package needs
+
+The other things a package needs run — the formatter, the migration, the
+release script — go in the manifest rather than in a `Makefile` beside it:
+
+```kex
+bundle "greet" do
+  version("0.1.0")
+
+  command("fmt", run: "kex --format src", description: "Format the sources")
+  command("db:migrate", run: "script/migrate.kex")
+  command("release", run: "script/release.kex")
+end
+```
+
+`tey fmt` runs it, and trailing arguments are appended (`tey fmt src`). A name
+is one word; group related ones with a colon — `db:migrate`, `assets:build` —
+the separator other package managers already use, and one that needs no
+quoting in a shell. A
+`run:` whose first word ends in `.kex` is run through the toolchain Tey
+selected, with the package's source roots already in place — the same
+environment `tey run` gives, so a release script can `using` the package it is
+releasing. Anything else is a shell line, so pipes and `&&` work, with Tey's
+own `bin` directory first on its `PATH`.
+
+`tey help` lists them under the built-in ones, which is where someone looks
+who has just cloned the repository. A built-in name (`test`, `build`, …)
+cannot be redeclared: `tey test` means the same thing in every checkout, and a
+manifest that tries to change that is an error at read time.
+
+**`tey test`
 exits non-zero when a spec fails** — so a CI job that runs it is a CI job that
 can actually fail. (Before Kex 0.3.5 it did not, which made every downstream
 CI green regardless of what the specs said. If you are pinning an older

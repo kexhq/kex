@@ -5,4 +5,10 @@ bundle "tey" do
   license("MIT")
   entrypoint("src/main.kex")
   target("tey")
+
+  # Tey's own commands, which are also the working example of the feature.
+  command("check", run: "make check",
+          description: "Type-check the sources without running them")
+  command("beams", run: "make build",
+          description: "Compile into ebin/, the way the Makefile does")
 end

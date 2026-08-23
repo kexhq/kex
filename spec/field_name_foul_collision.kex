@@ -1,0 +1,37 @@
+# kex: run-beam
+# A record field whose name is also a `foul` function of another arity
+# (kexhq/kex#191).
+#
+# A bare field read lowers to this module's synthesized `patch/1` accessor.
+# The capability context was appended on the NAME alone, so the call went out
+# as `patch/2` — the arity of the foul function — while only `patch/1` was
+# defined, and erlc refused the whole module with "undefined function
+# patch/2". The walker read the field fine throughout.
+#
+# `Http.patch/2,3` and `Mock.Http.patch/2,3` are the pair that made this real:
+# a spec that mocks anything pulls Mock in, and Tey's `SemanticVersion.patch`
+# then stopped compiling.
+
+record Vsn do
+  major : Integer
+  patch : Integer
+end
+
+# Foul, of another arity, sharing the name. Nothing about it is a capability —
+# one foul function is enough.
+foul patch(target: String, body: String) -> String do
+  return "${target}+${body}"
+end
+
+let newer?(a: Vsn, b: Vsn) -> Bool do
+  return a.patch > b.patch
+end
+
+main do
+  let old = Vsn { major: 1, patch: 2 }
+  let new = Vsn { major: 1, patch: 7 }
+  IO.printLine(new.patch)
+  IO.printLine(newer?(new, old))
+  # The function of the same name is untouched by any of it.
+  IO.printLine(patch("a", "b"))
+end

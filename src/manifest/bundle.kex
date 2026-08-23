@@ -43,6 +43,19 @@ end
 let target(name: String, entrypoint: String = "") -> Void do
 end
 
+# A project-specific command, run as `tey <name>` and listed by
+# `tey help`. A `run:` whose first word ends in `.kex` goes through the
+# selected toolchain with the package's source roots in place; anything else
+# is a shell line. Trailing arguments are appended, so `tey fmt src` reaches
+# it. A name is one word, grouped with a colon (`db:migrate`); a name Tey
+# already answers (`test`, `build`, …) is refused.
+#
+# @example
+#   command("fmt", run: "kex --format src", description: "Format the sources")
+#   command("db:migrate", run: "script/migrate.kex")
+let command(name: String, run: String = "", description: String = "") -> Void do
+end
+
 # A Git dependency, pinned by exactly one of `tag:`, `branch:` or `ref:`.
 #
 # @example

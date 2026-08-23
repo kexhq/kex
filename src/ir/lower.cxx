@@ -332,6 +332,10 @@ struct Lowering {
     // at that arity — otherwise it emits `apply 'get'/3` for a function that
     // was never defined (the make block only had get/2), which erlc rejects.
     std::unordered_set<std::string> localMethodArities;
+    // Field names whose `name/1` in this module is the SYNTHESIZED record
+    // accessor rather than a function someone wrote. Such a call never takes
+    // a capability context, whatever else the name means at another arity.
+    std::unordered_set<std::string> accessorFields;
     // Make-method trailing defaults, indexed by explicit parameter position.
     std::unordered_map<std::string, std::vector<const ast::ExprPtr*>> methodDefaults;
     // Cross-type method-name collisions: a method name → the make-block type
@@ -640,9 +644,21 @@ struct Lowering {
         if (!currentContextVar.empty()) return var(currentContextVar);
         return callE("maps", "new", 0, {});
     }
-    // Does a call to this name need the context appended?
-    auto callNeedsContext(const std::string& name) const -> bool {
-        return threadsCapabilities() && foulFns.count(name) > 0;
+    // Does a call to this name, at this arity, need the context appended?
+    //
+    // The arity matters because `foulFns` is keyed by NAME: a bare field read
+    // lowers to the synthesized `name/1` accessor (makeAccessors), which is
+    // not foul and takes no context — yet a foul function of the same name at
+    // ANOTHER arity made the call go out as `patch/2` while only `patch/1`
+    // existed, and erlc refused the module. `Mock`'s `foul patch(url, body)`
+    // against a record's `patch` field is exactly that pair (kexhq/kex#191).
+    // Only the synthesized accessor is exempted (`accessorFields`): where a
+    // real `name/1` is defined, no accessor is emitted, and if that function
+    // is foul the call still takes its context.
+    auto callNeedsContext(const std::string& name, int arity) const -> bool {
+        if (!threadsCapabilities() || foulFns.count(name) == 0) return false;
+        if (arity == 1 && accessorFields.count(name)) return false;
+        return true;
     }
     // Every local call goes through here so the context is appended in one
     // place. Missing a call site shows up as `undef` at runtime rather than a
@@ -672,7 +688,8 @@ struct Lowering {
     }
     auto localCall(const std::string& name, std::vector<ExprPtr> args)
         -> Call {
-        if (callNeedsContext(name)) args.push_back(currentContext());
+        if (callNeedsContext(name, static_cast<int>(args.size())))
+            args.push_back(currentContext());
         const int arity = static_cast<int>(args.size());
         return Call{"", name, arity, std::move(args), false};
     }
@@ -6994,6 +7011,12 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         if (blocked) continue;
         L.localMethods.insert(field);
         L.localMethodArities.insert(field + "/1");
+        // Remember that this `field/1` is the SYNTHESIZED accessor rather than
+        // a function someone wrote — the condition is makeAccessors' own. No
+        // capability context is ever appended to it (kexhq/kex#191), and that
+        // is only sound while nothing else owns the name at arity 1.
+        if (!(definedFns.count(field) && definedFnArities.count(field + "/1")))
+            L.accessorFields.insert(field);
     }
 
     // Buffer consecutive same-name top-level functions so they group into one
