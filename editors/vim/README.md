@@ -87,6 +87,25 @@ vim.api.nvim_create_autocmd('FileType', {
 })
 ```
 
+## Source roots
+
+The server searches the file's own `lib`/`src`, then the locked dependencies
+of the nearest enclosing `package.kex` — read out of its `tey.lock`, exactly
+the roots `tey build` passes the compiler — then the standard library. A
+dependency `tey install` has fetched is therefore complete, hoverable and
+navigable with no configuration.
+
+For the layouts no lock file describes — a vendored tree, a monorepo sibling —
+name the directories yourself. Relative paths resolve from the root the server
+was given:
+
+```lua
+vim.lsp.config('kex', {
+  init_options = { sourceRoots = { '../vendor/greeter/src' } },
+})
+vim.lsp.enable('kex')
+```
+
 ## What's in the box
 
 | File | Purpose |
