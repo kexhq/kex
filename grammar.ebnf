@@ -257,7 +257,7 @@ expr
                                                       be byte-adjacent *)
   | LOWER_IDENT block                            (* function call with block *)
   | LOWER_IDENT LPAREN args RPAREN block         (* function call with args and block *)
-  | UPPER_IDENT LBRACE record_init RBRACE        (* record construction *)
+  | UPPER_IDENT LBRACE record_init? RBRACE       (* record construction; This/New resolve in make blocks *)
   | expr binary_op expr                          (* binary operation *)
   | unary_op expr                                (* unary operation *)
   | LPAREN expr ( COMMA expr )+ RPAREN           (* tuple *)
@@ -327,7 +327,8 @@ map_items = map_entry ( COMMA map_entry )* ;
 (* Later entries win, so a spread overrides what precedes it. *)
 map_entry = expr COLON expr | spread ;
 
-record_init = record_field_init ( COMMA record_field_init )* ;
+record_init = record_init_item ( COMMA record_init_item )* ;
+record_init_item = record_field_init | DOT_DOT_DOT expr ;
 
 record_field_init
   = LOWER_IDENT COLON expr
@@ -380,7 +381,7 @@ let_expr = LET pattern ( COLON type_expr )? EQUALS expr ;
 
 var_expr = VAR LOWER_IDENT ( COLON type_expr )? EQUALS expr ;
 
-assign_expr = LOWER_IDENT EQUALS expr ;
+assign_expr = LOWER_IDENT ( DOT LOWER_IDENT )* EQUALS expr ;
 
 return_expr = RETURN expr ;
 

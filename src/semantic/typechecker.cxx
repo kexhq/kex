@@ -562,9 +562,15 @@ auto TypeChecker::registerRecordFields(const ast::Program& program,
         const auto previousModule = m_currentModulePath;
         m_currentModulePath = owner;
         for (const auto& field : record.fields)
-            fields[field.name] = field.type
+        {
+            auto fieldType = field.type
                 ? resolveTypeExpr(*field.type, noGenerics)
                 : Type::unknown();
+            fields[field.name] = fieldType;
+            if ((!field.defaultValue || !*field.defaultValue) &&
+                !std::holds_alternative<OptionalType>(fieldType->kind))
+                m_requiredRecordFields[name].insert(field.name);
+        }
         m_currentModulePath = previousModule;
     };
     std::function<void(const ast::ModuleDef&)> registerModule;
@@ -2281,6 +2287,12 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     for (size_t ci = 0; ci < def.clauses.size(); ci++) {
         const auto& clause = def.clauses[ci];
         pushScope();
+        if (m_inMakeBlock && m_currentMakeType) {
+            auto receiver = resolve(m_currentMakeType);
+            if (auto* named = std::get_if<NamedType>(&receiver->kind);
+                named && m_recordFields.count(resolveRecordName(named->name)))
+                defineVar("new", m_currentMakeType);
+        }
         std::unordered_map<std::string, TypePtr> genericVars;
         std::vector<TypePtr> paramTypes;
         for (size_t pi = 0; pi < clause.params.size(); pi++) {
@@ -3052,6 +3064,8 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             auto type = lookupVar(node.name);
             if (!type) {
+                if (node.name == "new" && m_inMakeBlock && m_currentMakeType)
+                    error(expr.location, "`new` requires a record receiver");
                 return Type::unknown();
             }
             return type;
@@ -3283,6 +3297,33 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             auto valueType = node.value ? inferExpr(*node.value) : Type::unknown();
             auto varType = lookupVar(node.name);
+            if (!node.path.empty()) {
+                if (node.path.size() != 1) {
+                    error(expr.location,
+                          "nested record-field assignment is not supported yet");
+                    return Type::unit();
+                }
+                auto resolvedVar = varType ? resolve(varType) : Type::unknown();
+                auto* named = std::get_if<NamedType>(&resolvedVar->kind);
+                auto record = named
+                    ? m_recordFields.find(resolveRecordName(named->name))
+                    : m_recordFields.end();
+                if (record == m_recordFields.end()) {
+                    error(expr.location, "field assignment requires a record binding");
+                    return Type::unit();
+                }
+                auto field = record->second.find(node.path.front());
+                if (field == record->second.end()) {
+                    error(expr.location, "record `" + named->name +
+                                             "` has no field `" +
+                                             node.path.front() + "`");
+                } else if (!containsOpenType(valueType) &&
+                           !containsOpenType(field->second) &&
+                           !argMatchesParam(valueType, field->second)) {
+                    typeMismatch(expr.location, field->second, valueType);
+                }
+                return Type::unit();
+            }
             if (varType && !std::holds_alternative<UnknownType>(varType->kind) &&
                 !std::holds_alternative<TypeVar>(varType->kind)) {
                 if (!argMatchesParam(valueType, varType) &&
@@ -4154,7 +4195,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // Check each value against the field's DECLARED type. Without
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
-            const auto recordName = resolveRecordName(node.typeName);
+            std::string sourceName = node.typeName;
+            if (sourceName == "This" || sourceName == "New") {
+                if (!m_inMakeBlock || !m_currentMakeType) {
+                    error(expr.location, "`" + sourceName +
+                                             "` construction requires a make block receiver");
+                    return Type::unknown();
+                }
+                auto receiver = resolve(m_currentMakeType);
+                auto* named = std::get_if<NamedType>(&receiver->kind);
+                if (!named || !m_recordFields.count(resolveRecordName(named->name))) {
+                    error(expr.location, "`" + sourceName +
+                                             "` requires a record receiver");
+                    return Type::unknown();
+                }
+                sourceName = named->name;
+            }
+            const auto recordName = resolveRecordName(sourceName);
             // Naming a qualified record is a reference to its MODULE: the
             // record's `make` block and field defaults live in that source,
             // and on BEAM the module has to be in the build at all
@@ -4164,9 +4221,23 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             if (auto dot = recordName.rfind('.'); dot != std::string::npos)
                 m_referencedModules.insert(recordName.substr(0, dot));
             auto record = m_recordFields.find(recordName);
-            for (const auto& [fieldName, val] : node.fields) {
+            bool hasSpread = node.typeName == "New";
+            std::unordered_set<std::string> supplied;
+            for (const auto& entry : node.fields) {
+                const auto& fieldName = entry.name;
+                const auto& val = entry.value;
                 if (!val) continue;
                 auto valueType = resolve(inferExpr(*val));
+                if (entry.spread) {
+                    hasSpread = true;
+                    if (!containsOpenType(valueType) &&
+                        !argMatchesParam(valueType, Type::named(recordName)))
+                        error(val->location, "record spread expects `" +
+                                                 sourceName + "`, but got " +
+                                                 typeToString(valueType));
+                    continue;
+                }
+                supplied.insert(fieldName);
                 if (record == m_recordFields.end()) continue;
                 auto declared = record->second.find(fieldName);
                 // An unknown field name used to be skipped, which made a
@@ -4193,7 +4264,7 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                         layout += available[i];
                     }
                     error(val->location,
-                          "record `" + node.typeName + "` has no field `" +
+                          "record `" + sourceName + "` has no field `" +
                           fieldName + "` — it has " +
                           (layout.empty() ? "no fields" : layout));
                     continue;
@@ -4210,9 +4281,25 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     continue;
                 if (!argMatchesParam(valueType, expected))
                     error(val->location,
-                          "`" + node.typeName + "." + fieldName +
+                          "`" + sourceName + "." + fieldName +
                           "` expects " + typeToString(expected) + ", but got " +
                           typeToString(valueType));
+            }
+            if (!hasSpread) {
+                std::vector<std::string> missing;
+                for (const auto& required : m_requiredRecordFields[recordName])
+                    if (!supplied.count(required)) missing.push_back(required);
+                std::sort(missing.begin(), missing.end());
+                if (!missing.empty()) {
+                    std::string names;
+                    for (std::size_t i = 0; i < missing.size(); ++i) {
+                        if (i) names += ", ";
+                        names += "`" + missing[i] + "`";
+                    }
+                    error(expr.location, "missing mandatory field" +
+                                             std::string(missing.size() == 1 ? " " : "s ") +
+                                             names + " constructing `" + sourceName + "`");
+                }
             }
             // `recordName` is `node.typeName` itself when no declaration was
             // found, so the resolved identity is always the right answer here:

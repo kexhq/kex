@@ -221,9 +221,20 @@ struct TaggedLiteral {
     int bodyEndOffset = -1;
 };
 
+struct RecordEntry {
+    std::string name;
+    ExprPtr value;
+    // `Point { ...p, x: 1 }`. Entries remain ordered because later fields and
+    // spreads override earlier ones.
+    bool spread = false;
+};
+
 struct RecordConstruction {
+    // `This` and `New` are retained here and resolved against the enclosing
+    // make target by semantic analysis/backends. `New` additionally seeds the
+    // construction from `this`.
     std::string typeName;
-    std::vector<std::pair<std::string, ExprPtr>> fields;
+    std::vector<RecordEntry> fields;
 };
 
 struct BinaryOp {
@@ -327,6 +338,9 @@ struct VarExpr {
 
 struct AssignExpr {
     std::string name;
+    // Empty for `x = value`; `{ "field" }` for `x.field = value`. Nested
+    // paths are represented for forward compatibility but rejected for now.
+    std::vector<std::string> path;
     ExprPtr value;
 };
 

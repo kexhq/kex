@@ -1,0 +1,2 @@
+spec/error_new_fields.kex:8:35: error: record `Point` has no field `z` — it has x, y
+spec/error_new_fields.kex:9:35: error: `Point.x` expects Integer, but got String

@@ -166,6 +166,7 @@ private:
     TypeChecker m_checker;
     const ImportedInterfaces* m_importedInterfaces = nullptr;
     bool m_inFoulContext = false;
+    bool m_inMakeBlock = false;
 
     // break/next bind to the nearest enclosing Loop marker, but a Closure
     // marker in between makes them illegal — they don't cross into a

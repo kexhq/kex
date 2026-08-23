@@ -751,10 +751,10 @@ int main() {
             assertTrue(construction != nullptr, "reifies to a RecordConstruction");
             assertEqual(construction->fields.size(), std::size_t{3},
                         "every field survives");
-            assertEqual(construction->fields[0].first, std::string("zebra"),
+            assertEqual(construction->fields[0].name, std::string("zebra"),
                         "declaration order, not alphabetical");
-            assertEqual(construction->fields[1].first, std::string("middle"), "");
-            assertEqual(construction->fields[2].first, std::string("apple"), "");
+            assertEqual(construction->fields[1].name, std::string("middle"), "");
+            assertEqual(construction->fields[2].name, std::string("apple"), "");
         });
 
         it("falls back to a reproducible order for an unknown record", []() {
@@ -775,12 +775,48 @@ int main() {
             assertTrue(construction != nullptr, "reifies to a RecordConstruction");
             // Alphabetical: the fields live in an unordered_map, and identical
             // builds must not emit different code.
-            assertEqual(construction->fields[0].first, std::string("apple"), "");
-            assertEqual(construction->fields[1].first, std::string("zebra"), "");
+            assertEqual(construction->fields[0].name, std::string("apple"), "");
+            assertEqual(construction->fields[1].name, std::string("zebra"), "");
         });
     });
 
     describe("IR Core Erlang lowering — branch state", []() {
+        it("adds no Core Erlang work for an unused implicit new binding", []() {
+            auto out = emitIr(
+                "record Point do\n"
+                "  x : Integer\n"
+                "end\n"
+                "make Point do\n"
+                "  let identity -> Point = this\n"
+                "end\n",
+                "new_cost");
+            assertEqual(countOccurrences(out, "updateRecord"), std::size_t{0},
+                        "no record update helper is emitted");
+            assertEqual(countOccurrences(out, "<new>"), std::size_t{0},
+                        "the receiver alias is compile-time only");
+        });
+
+        it("fully-overriding New emits byte-identically to explicit construction", []() {
+            const std::string prefix =
+                "record Point do\n"
+                "  x : Integer\n"
+                "  y : Integer\n"
+                "end\n"
+                "make Point do\n";
+            auto viaNew = emitIr(
+                prefix +
+                    "  let replaced(v: Integer) -> Point = New { x: v, y: v }\n"
+                    "end\n",
+                "new_full_override");
+            auto explicitRecord = emitIr(
+                prefix +
+                    "  let replaced(v: Integer) -> Point = Point { x: v, y: v }\n"
+                    "end\n",
+                "new_full_override");
+            assertEqual(viaNew, explicitRecord,
+                        "New must not read this or materialize an intermediate");
+        });
+
         it("preserves both reassigned variables after if and elif branches", []() {
             auto output = runIrOnBeam(
                 "main do\n"

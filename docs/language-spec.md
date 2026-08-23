@@ -1024,6 +1024,47 @@ make Circle do
 end
 ```
 
+### Functional record updates: `New`, `new`, and `This`
+
+Record make blocks provide two ways to start from their receiver. `New { … }`
+is an expression whose unlisted fields come from `this`. The mutable local
+`new` initially refers to the same value; assigning one of its fields rebuilds
+the record and rebinds only that local. Records themselves remain immutable.
+
+```kex
+make User do
+  let birthday -> User = New { age: @age + 1 }
+
+  let renamedAndActivated(name: String) -> User do
+    new.name = name
+    new.active? = true
+    return new
+  end
+end
+```
+
+`New { age: 1 }` is equivalent to `This { ...this, age: 1 }`. A fully
+overriding `New` does not read `this`; otherwise each omitted field is read
+directly from the receiver, without constructing an intermediate record.
+
+`This { … }` constructs the enclosing record from its declared defaults rather
+than from the receiver. Mandatory fields must be supplied; omitted optional
+fields become `None`. Both `New` and implicit `new` require a record receiver.
+Outside a make block, `new` is an ordinary, non-reserved variable name.
+
+Record spread is also available independently of make blocks. Entries are
+applied left to right, so later spreads and fields win:
+
+```kex
+let moved = Point { ...point, x: 10.0 }
+let merged = Point { x: 0.0, ...moved, y: 5.0 }
+```
+
+Field assignment works on any mutable record binding and is functional
+rebinding sugar: `value.x = 1` replaces `value` with a fresh copy. Repeated
+assignment and assignment in branches and loops are legal. Nested assignment
+paths such as `value.owner.name = "Ada"` are not supported.
+
 ### Pattern Matching on `this` (`@` patterns)
 
 Make methods can pattern-match on `this` directly using `@`:

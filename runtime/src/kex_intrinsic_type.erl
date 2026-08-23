@@ -6,7 +6,24 @@
 %% answer can be taken apart. Both consult the same display registry, which is
 %% what lets a tagged tuple be recognised as a record or an ADT variant.
 -module(kex_intrinsic_type).
--export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1]).
+-export(['ofValue'/1, 'fieldsOf'/1, 'constructorsOf'/1, 'updateRecord'/3]).
+
+'updateRecord'(Record, Field, Value) when is_tuple(Record), tuple_size(Record) > 0 ->
+    Tag = element(1, Record),
+    case record_fields(Tag) of
+        Fields when is_list(Fields) ->
+            case index_of(Field, Fields, 2) of
+                {ok, Index} -> setelement(Index, Record, Value);
+                error -> erlang:error({unknown_record_field, Tag, Field})
+            end;
+        _ -> erlang:error({field_assignment_requires_record, Record})
+    end;
+'updateRecord'(Record, _Field, _Value) ->
+    erlang:error({field_assignment_requires_record, Record}).
+
+index_of(_Wanted, [], _Index) -> error;
+index_of(Wanted, [Wanted | _], Index) -> {ok, Index};
+index_of(Wanted, [_ | Rest], Index) -> index_of(Wanted, Rest, Index + 1).
 
 'ofValue'(X) -> type_of(X).
 

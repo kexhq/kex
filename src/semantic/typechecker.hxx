@@ -358,6 +358,9 @@ private:
     // chains (`user.name`, `point.x`) returns the declared field type.
     std::unordered_map<std::string,
                        std::unordered_map<std::string, TypePtr>> m_recordFields;
+    // Fields without a default whose declared type is not Optional.
+    std::unordered_map<std::string, std::unordered_set<std::string>>
+        m_requiredRecordFields;
     auto registerRecordFields(const ast::Program& program,
                               bool namesOnly = false) -> void;
     auto resolveRecordName(const std::string& name) const -> std::string;

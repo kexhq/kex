@@ -1,0 +1,11 @@
+# kex: check-only
+record Point do
+  x : Integer
+end
+
+let copy(p: Point) -> Point = New { x: p.x }
+let defaults -> Point = This { x: 0 }
+
+main do
+  IO.printLine(new)
+end

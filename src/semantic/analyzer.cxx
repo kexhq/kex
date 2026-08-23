@@ -253,6 +253,8 @@ auto Analyzer::analyzeRecordDef(const ast::RecordDef& def) -> void {
 
 auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
     m_symbols.pushScope(m_inFoulContext);
+    const bool previousMake = m_inMakeBlock;
+    m_inMakeBlock = true;
 
     for (const auto& item : def.body) {
         std::visit([this](const auto& node) {
@@ -267,6 +269,7 @@ auto Analyzer::analyzeMakeDef(const ast::MakeDef& def) -> void {
         }, item);
     }
 
+    m_inMakeBlock = previousMake;
     m_symbols.popScope();
 }
 
@@ -281,6 +284,9 @@ auto Analyzer::analyzeFunctionDef(const ast::FunctionDef& def) -> void {
 
     for (const auto& clause : def.clauses) {
         m_symbols.pushScope(m_inFoulContext);
+        if (m_inMakeBlock)
+            m_symbols.define(Symbol{"new", SymbolKind::Variable, false, true,
+                                    true, def.location});
 
         // Register parameters as variables
         for (const auto& param : clause.params) {
@@ -374,6 +380,8 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         else if constexpr (std::is_same_v<T, ast::AssignExpr>) {
             if (node.value) analyzeExpr(*node.value);
             auto* sym = m_symbols.lookup(node.name);
+            if (!sym && m_inMakeBlock && node.name == "new") return;
+            if (!sym && node.name == "new") return; // ResolvePass owns its diagnostic.
             if (!sym) {
                 error(expr.location, "Undefined variable: " + node.name);
             } else if (!sym->isMutable) {
@@ -382,7 +390,7 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
         }
         else if constexpr (std::is_same_v<T, ast::Identifier>) {
             auto* sym = m_symbols.lookup(node.name);
-            if (!sym && node.name != "_") {
+            if (!sym && node.name != "_" && node.name != "new") {
                 error(expr.location, "Undefined identifier: " + node.name);
             }
         }
@@ -580,8 +588,8 @@ auto Analyzer::analyzeExpr(const ast::Expr& expr) -> void {
             if (node.end) analyzeExpr(*node.end);
         }
         else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-            for (const auto& [_, val] : node.fields) {
-                if (val) analyzeExpr(*val);
+            for (const auto& field : node.fields) {
+                if (field.value) analyzeExpr(*field.value);
             }
         }
         else if constexpr (std::is_same_v<T, ast::TrailingIf>) {
@@ -822,7 +830,8 @@ auto Analyzer::computeTransitiveEffects(const ast::Program& program) -> void {
                         if (arg && !std::holds_alternative<ast::CurryPlaceholder>(arg->kind))
                             walkExpr(*arg, calls, hasFoulOp);
             } else if constexpr (std::is_same_v<T, ast::RecordConstruction>) {
-                for (const auto& [_, v] : n.fields) if (v) walkExpr(*v, calls, hasFoulOp);
+                for (const auto& field : n.fields)
+                    if (field.value) walkExpr(*field.value, calls, hasFoulOp);
             }
         }, e.kind);
     };

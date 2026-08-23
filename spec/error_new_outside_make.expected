@@ -1,0 +1,3 @@
+spec/error_new_outside_make.kex:10:16: error: `new` requires a record receiver (or an explicit local binding)
+spec/error_new_outside_make.kex:6:31: error: `New` construction requires a make block receiver
+spec/error_new_outside_make.kex:7:25: error: `This` construction requires a make block receiver
