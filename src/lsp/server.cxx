@@ -2653,6 +2653,11 @@ private:
                                   symbol->name.size();
         if (!symbol && moduleQualifier.empty())
             symbol = m_db.findSymbol(lookupName, document.path);
+        // A source-recognized lexical binding always shadows global/module
+        // symbols, even when inference could not produce a hover entry for
+        // it. Returning no type is preferable to claiming that a lambda
+        // parameter named `name` is the unrelated `Weekday.name` method.
+        if (lexicalReference && !resolvedSymbolAtPosition) symbol = nullptr;
 
         std::string detail;
         std::string documentation;

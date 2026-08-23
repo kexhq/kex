@@ -328,6 +328,37 @@ int main() {
                        hover.find("String.lines") == std::string::npos,
                        "local lines hover included String.lines documentation");
         });
+        it("keeps value-lambda parameters local on hover", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex","languageId":"kex","version":1,"text":"let makeGreeter(prefix: String) do\n  return { |name| \"${prefix}, ${name}!\" }\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex"},"position":{"line":1,"character":13}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-closure-name.kex"},"position":{"line":1,"character":32}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            for (const auto id : {2, 3}) {
+                const auto response = responseForId(result, id);
+                assertTrue(response.find("name : A") != std::string::npos,
+                           "lambda parameter hover lost its local generic type: " +
+                               response);
+                assertTrue(response.find("Weekday") == std::string::npos,
+                           "lambda parameter hover leaked Weekday.name: " +
+                               response);
+            }
+        });
         it("uses imported signatures for standard-library method hovers", []() {
             std::string messages;
             messages += frame(

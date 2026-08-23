@@ -4143,7 +4143,15 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                     ? resolveTypeExpr(**param.type, genericVars)
                     : freshTypeVar();
                 paramTypes.push_back(pt);
-                if (param.name != "_") defineVar(param.name, pt);
+                if (param.name != "_") {
+                    defineVar(param.name, pt);
+                    // Value-position lambdas need the same tooling binding as
+                    // contextual/trailing blocks. Without it `{ |name| ... }`
+                    // had no local hover entry and the LSP fell through to an
+                    // unrelated exported symbol with the same name.
+                    m_patternBindings.push_back(
+                        {param.name, expr.location, pt});
+                }
             }
             m_blockDepth++;
             auto bodyType = inferBody(node.body);
