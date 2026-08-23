@@ -10,6 +10,7 @@
 #include "../semantic/db.hxx"
 #include "../semantic/types.hxx"
 #include "../validation/tag_validator.hxx"
+#include "tey_roots.hxx"
 
 #include <lsp/connection.h>
 #include <lsp/io/stream.h>
@@ -96,7 +97,19 @@ auto uriPath(const ::lsp::DocumentUri& uri) -> std::string {
     return uri.isFileUri() ? uri.fsPath() : uri.toString();
 }
 
-auto moduleRootsFor(const std::string& filepath) -> std::vector<std::string> {
+void appendRoot(std::vector<std::string>& roots, std::string root) {
+    if (std::find(roots.begin(), roots.end(), root) == roots.end())
+        roots.push_back(std::move(root));
+}
+
+// The search path for a document, in the order `tey` gives the compiler: the
+// document's own `lib`/`src` first, then anything the editor configured, then
+// the locked dependencies of the enclosing tey package, then the standard
+// library. Own-first is deliberate — a package that shadows a dependency's
+// module name means its own (tey/src/tey/commands.kex, `sourceRoots`).
+auto moduleRootsFor(const std::string& filepath,
+                    const std::vector<std::string>& configured)
+    -> std::vector<std::string> {
     namespace fs = std::filesystem;
     std::error_code ec;
     auto sourceDir = fs::weakly_canonical(filepath, ec).parent_path();
@@ -109,9 +122,43 @@ auto moduleRootsFor(const std::string& filepath) -> std::vector<std::string> {
             roots.push_back(candidate.string());
     }
     if (roots.empty()) roots.push_back(sourceDir.string());
+    for (const auto& root : configured) appendRoot(roots, root);
+    for (auto& root : teyDependencyRoots(filepath)) appendRoot(roots, std::move(root));
     for (auto& root : standardLibraryModuleRoots())
-        if (std::find(roots.begin(), roots.end(), root) == roots.end())
-            roots.push_back(std::move(root));
+        appendRoot(roots, std::move(root));
+    return roots;
+}
+
+// `initializationOptions: {"sourceRoots": ["..."]}` — extra module roots from
+// the editor's own configuration. An escape hatch for the layouts no
+// convention covers: a vendored tree, a monorepo sibling, a checkout that is
+// not a tey package. Relative entries resolve against the first workspace
+// folder, which is what an editor's project-local settings file means by one.
+auto configuredSourceRoots(const ::lsp::InitializeParams& params)
+    -> std::vector<std::string> {
+    if (!params.initializationOptions) return {};
+    const auto& options = *params.initializationOptions;
+    if (!options.isObject()) return {};
+    const auto* entries = options.object().find("sourceRoots");
+    if (!entries || !entries->isArray()) return {};
+    std::filesystem::path base;
+    if (params.workspaceFolders && !params.workspaceFolders->isNull() &&
+        !params.workspaceFolders->value().empty() &&
+        params.workspaceFolders->value().front().uri.isFileUri())
+        base = params.workspaceFolders->value().front().uri.fsPath();
+    else if (!params.rootUri.isNull() && params.rootUri->isFileUri())
+        base = params.rootUri->fsPath();
+    std::vector<std::string> roots;
+    for (const auto& entry : entries->array()) {
+        if (!entry.isString() || entry.string().empty()) continue;
+        std::filesystem::path root(entry.string());
+        if (root.is_relative() && !base.empty()) root = base / root;
+        std::error_code ec;
+        // Silently dropped rather than reported: a stale entry in a shared
+        // settings file should not turn into a diagnostic on every file.
+        if (std::filesystem::is_directory(root, ec) && !ec)
+            roots.push_back(root.lexically_normal().string());
+    }
     return roots;
 }
 
@@ -1775,6 +1822,7 @@ private:
         } else if (!params.rootUri.isNull() && params.rootUri->isFileUri()) {
             m_workspaceRoots.push_back(params.rootUri->fsPath());
         }
+        m_configuredSourceRoots = configuredSourceRoots(params);
         return {
             .capabilities = {
                 .positionEncoding = ::lsp::PositionEncodingKind::UTF16,
@@ -1795,6 +1843,14 @@ private:
                 .version = versionNumber(),
             },
         };
+    }
+
+    // Every module-root derivation in the server goes through here, so a
+    // dependency reachable to `tey build` is reachable to completion, hover,
+    // go-to-definition and diagnostics alike.
+    auto documentModuleRoots(const std::string& path) const
+        -> std::vector<std::string> {
+        return moduleRootsFor(path, m_configuredSourceRoots);
     }
 
     void verifyInitialized() const {
@@ -1826,10 +1882,16 @@ private:
                     moduleRoots.push_back(candidate.string());
             }
         }
-        for (const auto& root : standardLibraryModuleRoots())
-            if (std::find(moduleRoots.begin(), moduleRoots.end(), root) ==
-                moduleRoots.end())
-                moduleRoots.push_back(root);
+        for (const auto& root : m_configuredSourceRoots)
+            appendRoot(moduleRoots, root);
+        // The index answers `textDocument/references` across the workspace; a
+        // reference living in a dependency is only findable if the dependency
+        // resolves here too.
+        for (const auto& root : m_workspaceRoots)
+            for (auto& dependency : teyDependencyRoots(root))
+                appendRoot(moduleRoots, std::move(dependency));
+        for (auto& root : standardLibraryModuleRoots())
+            appendRoot(moduleRoots, std::move(root));
         m_referenceDb.setModuleRoots(std::move(moduleRoots));
 
         const std::unordered_set<std::string> ignored{
@@ -1964,7 +2026,7 @@ private:
         // that triggers member completion.
         document.localReceiverTypes = std::move(previousReceiverTypes);
         document.documentation = sourceDocumentation(document.text);
-        m_db.setModuleRoots(moduleRootsFor(path));
+        m_db.setModuleRoots(documentModuleRoots(path));
         m_db.updateFile(path, document.text, specCompanions(path));
         m_referenceIndexReady = false;
         m_referenceIndexWord.clear();
@@ -2198,7 +2260,7 @@ private:
                 });
             if (analyzed && !hasError) {
                 auto validation = validation::validateTaggedLiterals(
-                    state->ast, analyzer, moduleRootsFor(document.path));
+                    state->ast, analyzer, documentModuleRoots(document.path));
                 diagnostics.insert(diagnostics.end(),
                                    std::make_move_iterator(validation.begin()),
                                    std::make_move_iterator(validation.end()));
@@ -2289,7 +2351,7 @@ private:
                     receiver.valid) {
                     if (auto qualifier = receiverQualifier(
                             found->second, receiver, cursor, &m_interfaces,
-                            moduleRootsFor(found->second.path));
+                            documentModuleRoots(found->second.path));
                         !qualifier.empty()) {
                         query.dbQuery = qualifier + "." +
                             text.substr(receiver.dot + 1,
@@ -2600,7 +2662,7 @@ private:
                 receiver.valid)
                 if (auto qualifier = receiverQualifier(
                         document, receiver, wordEnd, &m_interfaces,
-                        moduleRootsFor(document.path));
+                        documentModuleRoots(document.path));
                     !qualifier.empty())
                     if (const auto* record =
                             m_db.findSymbol(qualifier, document.path);
@@ -3238,6 +3300,7 @@ private:
     semantic::SemanticDB m_referenceDb;
     std::unordered_map<std::string, Document> m_documents;
     std::vector<std::string> m_workspaceRoots;
+    std::vector<std::string> m_configuredSourceRoots;
     std::vector<IndexedCallReference> m_indexedCallReferences;
     std::vector<std::string> m_referenceIndexedPaths;
     bool m_referenceIndexReady = false;

@@ -86,6 +86,16 @@ In full, the compiler is the first of:
 | --- | --- | --- |
 | `kex.toolchain` | *(empty)* | Toolchain the language server runs: empty follows this package's `tey.lock` and then Tey's selection, `tey` follows Tey's selection alone, a version such as `0.4.0` pins one Tey has installed, an absolute path runs your own build. Set it with **Kex: Select Toolchain**. |
 | `kex.executablePath` | `kex` | Compiler used by the language server, overriding Tey and `kex.toolchain`. Relative paths resolve from the workspace root. |
+| `kex.sourceRoots` | *(empty)* | Extra directories searched for `using` modules, on top of the workspace's own `lib`/`src`. Relative paths resolve from the workspace root. Tey dependencies need nothing here — the server reads those from `tey.lock`. |
+
+### Modules from dependencies
+
+A package's dependencies resolve on their own: the server finds the nearest
+`package.kex`, reads its `tey.lock`, and searches each locked dependency's
+`src/` in the Tey cache — the same roots `tey build` passes the compiler. Run
+`tey install` and a dependency's modules hover, complete and navigate like
+your own. `kex.sourceRoots` is for the layouts no lock file describes:
+vendored trees, monorepo siblings, a checkout that is not a Tey package.
 
 ## Commands
 

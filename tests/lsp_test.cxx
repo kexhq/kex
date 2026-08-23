@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include "test.hxx"
 #include "../src/lsp/server.hxx"
+#include "../src/lsp/tey_roots.hxx"
 
 #include <sstream>
 #include <string>
@@ -865,6 +866,97 @@ int main() {
             fs::remove(root / "tools.kex");
             fs::remove(root / "z_consumer.kex");
             fs::remove(root);
+        });
+        // What `tey build` sees and the editor did not: a dependency's
+        // modules, reachable through the roots `tey.lock` names.
+        it("resolves modules from a tey package's locked dependencies", []() {
+            namespace fs = std::filesystem;
+            const fs::path root = "/tmp/kex-lsp-tey-package";
+            const fs::path cache = root / "cache";
+            const std::string git = "https://example.invalid/greeter.git";
+            const std::string commit = "0123456789abcdef0123456789abcdef01234567";
+            fs::remove_all(root);
+            fs::create_directories(root / "app" / "src");
+            setenv("TEY_CACHE", cache.string().c_str(), 1);
+            const fs::path dependencySource =
+                fs::path(kex::lsp::teyCachePackagePath(git, commit)) / "src";
+            fs::create_directories(dependencySource);
+            {
+                std::ofstream greeter(dependencySource / "greeter.kex");
+                greeter << "module Greeter\n\n"
+                           "let hello(name: String) -> String = \"hello \" + name\n";
+                std::ofstream manifest(root / "app" / "package.kex");
+                manifest << "bundle \"app\"\n";
+                std::ofstream lock(root / "app" / "tey.lock");
+                lock << "{\n  \"version\": 1,\n"
+                        "  \"kex\": {\"requirement\": \">= 0.1.0\", \"version\": \"0.1.0\"},\n"
+                        "  \"deps\": {\n    \"greeter\": {\"git\": \"" << git
+                     << "\", \"resolved\": \"v1.0.0\", \"commit\": \"" << commit
+                     << "\", \"sha256\": \"\", \"groups\": []}\n  }\n}\n";
+            }
+            const std::string source =
+                "using Greeter, only: [hello]\\nmain do\\n  IO.printLine(hello(\\\"world\\\"))\\nend\\n";
+            const std::string uri =
+                "file:///tmp/kex-lsp-tey-package/app/src/main.kex";
+            const auto session = [&](const char* extraInitOptions) {
+                std::string messages;
+                messages += frame(
+                    std::string(R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-tey-package/app",)") +
+                    extraInitOptions + R"("capabilities":{}}})");
+                messages += frame(
+                    R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+                messages += frame(
+                    R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":")" +
+                    uri + R"(","languageId":"kex","version":1,"text":")" +
+                    source + R"("}}})");
+                messages += frame(
+                    R"({"jsonrpc":"2.0","id":2,"method":"textDocument/definition","params":{"textDocument":{"uri":")" +
+                    uri + R"("},"position":{"line":2,"character":16}}})");
+                messages += frame(R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+                messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+                std::istringstream input(messages);
+                std::ostringstream output;
+                assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+                return output.str();
+            };
+
+            const auto resolved = session("");
+            assertTrue(resolved.find("module not found in source roots") ==
+                           std::string::npos,
+                       "a locked dependency's module was still unreachable");
+            assertTrue(resolved.find("Undefined function: `hello`") ==
+                           std::string::npos,
+                       "a locked dependency's function was still undefined");
+            assertTrue(responseForId(resolved, 2).find("greeter.kex") !=
+                           std::string::npos,
+                       "go-to-definition did not reach the dependency source");
+
+            // A dependency the cache does not hold degrades to the old
+            // behaviour rather than erroring — `tey install` is the answer,
+            // and the resolver's own warning says so.
+            fs::remove_all(cache);
+            const auto missing = session("");
+            assertTrue(missing.find("module not found in source roots") !=
+                           std::string::npos,
+                       "an unfetched dependency did not fall back to the resolver warning");
+
+            // The escape hatch: roots the editor names directly, for the
+            // layouts no lockfile describes.
+            fs::create_directories(root / "vendor" / "greeter" / "src");
+            fs::rename(root / "app" / "tey.lock", root / "app" / "tey.lock.off");
+            {
+                std::ofstream greeter(root / "vendor" / "greeter" / "src" / "greeter.kex");
+                greeter << "module Greeter\n\n"
+                           "let hello(name: String) -> String = \"hello \" + name\n";
+            }
+            const auto configured = session(
+                R"("initializationOptions":{"sourceRoots":["../vendor/greeter/src"]},)");
+            assertTrue(configured.find("Undefined function: `hello`") ==
+                           std::string::npos,
+                       "initializationOptions sourceRoots were ignored");
+
+            unsetenv("TEY_CACHE");
+            fs::remove_all(root);
         });
     });
     return runAll();

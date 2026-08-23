@@ -56,6 +56,12 @@
           "default": "kex",
           "markdownDescription": "Kex compiler executable used by the language server. Setting this **overrides Tey**: it wins over `#kex.toolchain#` and over whatever `tey kex use` has selected. Relative paths are resolved from the workspace root. Leave it unset to let Tey choose."
         },
+        "kex.sourceRoots": {
+          "type": "array",
+          "items": {"type": "string"},
+          "default": [],
+          "markdownDescription": "Extra directories the language server searches for `using` modules, on top of the workspace's own `lib`/`src`. Relative paths resolve from the workspace root. A Tey package's dependencies need nothing here — the server reads those from `tey.lock`. Use this for vendored trees, monorepo siblings, and other layouts no lock file describes."
+        },
         "kex.toolchain": {
           "type": "string",
           "default": "",

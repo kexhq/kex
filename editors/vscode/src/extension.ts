@@ -146,6 +146,10 @@ async function startLanguageServer(context: vscode.ExtensionContext): Promise<vo
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ scheme: 'file', language: 'kex' }],
     synchronize: { fileEvents: sourceWatcher },
+    // Extra module roots, for the layouts no convention covers. A tey
+    // package's dependencies need nothing here — the server reads those out
+    // of `tey.lock` itself.
+    initializationOptions: { sourceRoots: configuredSourceRoots() },
     // One channel for the life of the extension. A fresh `LanguageClient` per
     // restart otherwise creates a fresh "Kex Language Server" output channel
     // per restart, and an afternoon of rebuilds fills the Output dropdown with
@@ -198,6 +202,17 @@ async function startLanguageServer(context: vscode.ExtensionContext): Promise<vo
   } catch (error) {
     if (mine === generation) showFailed(resolved, error);
   }
+}
+
+/**
+ * `kex.sourceRoots`, as the server wants them: relative entries stay relative
+ * so the server resolves them against the workspace folder it was given.
+ */
+function configuredSourceRoots(): string[] {
+  const configured = vscode.workspace.getConfiguration('kex').get<string[]>('sourceRoots');
+  return Array.isArray(configured)
+    ? configured.filter((root) => typeof root === 'string' && root.length > 0)
+    : [];
 }
 
 /**
@@ -533,6 +548,9 @@ export function activate(context: vscode.ExtensionContext): void {
       const resolved = resolveToolchain(workspaceFolder());
       if (resolved.command !== currentBinary) scheduleRestart(context, true);
     }
+    // Source roots reach the server through `initialize`, so a changed list
+    // only takes effect on a fresh connection.
+    if (event.affectsConfiguration('kex.sourceRoots')) scheduleRestart(context, true);
   }));
 
   void startLanguageServer(context);
