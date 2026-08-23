@@ -964,6 +964,19 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
                 sig.name = member;
                 td.requiredMethods.push_back(std::move(sig));
             }
+            // `exports` is a hash map, so the loop above yields its members in
+            // an order that differs between standard-library implementations.
+            // A trait's required methods are its DICTIONARY LAYOUT — slot i
+            // means one method to whoever builds the dictionary and another to
+            // whoever indexes it — so an unsorted list makes the emitted code
+            // depend on the host's hash order. It built and passed on macOS
+            // and died `badarg` on Linux, on both glibc and musl
+            // (kexhq/kex#143).
+            std::sort(td.requiredMethods.begin(), td.requiredMethods.end(),
+                      [](const Signature& a, const Signature& b) {
+                          if (a.name != b.name) return a.name < b.name;
+                          return a.params.size() < b.params.size();
+                      });
             m_traits.define(std::move(td));
         }
 }
@@ -4132,11 +4145,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
             const auto recordName = resolveRecordName(node.typeName);
-            // Naming a qualified record is a reference to its module: its
-            // `make` block and field defaults live in that source, and on BEAM
-            // the module has to be in the build at all (kexhq/kex#143).
-            if (recordName.rfind('.') != std::string::npos)
-                m_referencedModules.insert(recordName);
+            // Naming a qualified record is a reference to its MODULE: the
+            // record's `make` block and field defaults live in that source,
+            // and on BEAM the module has to be in the build at all
+            // (kexhq/kex#143). The module is the qualifier, not the record —
+            // inserting `Mock.Files` here put a type name into a list of
+            // modules to compile.
+            if (auto dot = recordName.rfind('.'); dot != std::string::npos)
+                m_referencedModules.insert(recordName.substr(0, dot));
             auto record = m_recordFields.find(recordName);
             for (const auto& [fieldName, val] : node.fields) {
                 if (!val) continue;

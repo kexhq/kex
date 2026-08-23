@@ -3587,8 +3587,20 @@ struct Lowering {
                 std::string owner = moduleName;
                 auto declaring = localTypeModules.find(name);
                 if (declaring == localTypeModules.end())
-                    if (auto dot = name.rfind('.'); dot != std::string::npos)
-                        declaring = localTypeModules.find(name.substr(dot + 1));
+                    if (auto dot = name.rfind('.'); dot != std::string::npos) {
+                        // `localTypeModules` is keyed by the make target as
+                        // written, which inside a module is the BARE name — so
+                        // a tail lookup can answer for a DIFFERENT module's
+                        // same-named record. Accept it only when the module it
+                        // names actually reconstructs this record's qualified
+                        // identity, or `Web.Response` gets registered as owned
+                        // by whichever module declared the last `Response`
+                        // (kexhq/kex#143).
+                        auto tail = localTypeModules.find(name.substr(dot + 1));
+                        if (tail != localTypeModules.end() &&
+                            tail->second + "." + name.substr(dot + 1) == name)
+                            declaring = tail;
+                    }
                 if (declaring != localTypeModules.end())
                     owner = "Kex." + declaring->second;
                 auto t = std::make_unique<Expr>();

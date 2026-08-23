@@ -1119,7 +1119,14 @@ auto resolveBeamDeps(kex::ast::Program &program,
     // program; otherwise discovery stops after one qualified-reference hop.
     kex::semantic::Analyzer dependencyAnalysis(interfaces);
     (void)dependencyAnalysis.analyze(prog);
-    for (const auto &name : dependencyAnalysis.referencedModules()) {
+    // Sorted: `referencedModules` is a hash set, and this list decides what
+    // gets compiled and in what order. Iterating it directly made the build
+    // depend on the host's hash order (kexhq/kex#143).
+    auto referenced = dependencyAnalysis.referencedModules();
+    std::vector<std::string> referencedOrdered(referenced.begin(),
+                                               referenced.end());
+    std::sort(referencedOrdered.begin(), referencedOrdered.end());
+    for (const auto &name : referencedOrdered) {
       const bool automatic = interfaces && [&] {
         const auto imported = interfaces->modules.find(name);
         return imported != interfaces->modules.end() &&
