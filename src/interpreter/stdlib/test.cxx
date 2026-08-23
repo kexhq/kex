@@ -105,6 +105,13 @@ auto Evaluator::registerTestBuiltins() -> void {
         if (!fn || !fn->native) {
             line = indent + "? " + label + " (no block)\n";
         } else {
+            // Mock state set during this test — by a `before` hook or by the
+            // body — is discarded when the test ends, so a forgotten
+            // `Mock.FS.clear()` cannot leak into the next one. Captured BEFORE
+            // the `before` hooks so per-test setup is undone too, while
+            // anything a `before(:all)` established outside this block
+            // survives (kexhq/kex#143).
+            auto savedMocks = captureMocks();
             std::exception_ptr failure;
             auto run = [&](const ValuePtr& hook) {
                 auto* hookFn = std::get_if<FunctionValue>(&hook->data);
@@ -131,6 +138,7 @@ auto Evaluator::registerTestBuiltins() -> void {
                     }
                 }
             }
+            restoreMocks(std::move(savedMocks));
             if (!failure) {
                 m_testsPassed++;
                 line = indent + color::apply(color::green) + "\xE2\x9C\x93" +

@@ -16,7 +16,7 @@
          'handle_atEnd?'/1, handle_close/1,
          dir_current/0, dir_home/0, dir_create/1, dir_delete/1, dir_delete_all/1,
          dir_list/1, dir_files/1, dir_directories/1, 'dir_exists?'/1, 'dir_file?'/1,
-         mock_file/2, mock_dir/1, mock_clear/0]).
+         mock_file/2, mock_dir/1, mock_clear/0, mock_files/1, mock_on_read/1]).
 
 %% ── Mock.FS registry ────────────────────────────────────────────────────
 mock_file(Path, Content) ->
@@ -24,6 +24,23 @@ mock_file(Path, Content) ->
     put({kex_mock_file, P}, kex_io:to_string_bin(Content)),
     put({kex_mock_pos, P}, 0),
     put(kex_mock_files, lists:usort([P | plist(kex_mock_files)])),
+    ok.
+
+%% The whole fixture in one call, the same shape `Mock.Files { files: ... }`
+%% takes (kexhq/kex#143).
+mock_files(Entries) when is_map(Entries) ->
+    maps:foreach(fun(Path, Content) -> mock_file(Path, Content) end, Entries),
+    ok;
+mock_files(_) -> ok.
+
+%% Answer reads by RULE rather than from a fixture. Consulted before the map by
+%% mock_content/1 below, and a `None` means "no such file", so absence is
+%% expressible too.
+mock_on_read(Fun) when is_function(Fun, 1) ->
+    put(kex_mock_on_read, Fun),
+    ok;
+mock_on_read(_) ->
+    erase(kex_mock_on_read),
     ok.
 
 mock_dir(Path) ->
@@ -35,10 +52,23 @@ mock_clear() ->
     [erase({kex_mock_pos, P}) || P <- plist(kex_mock_files)],
     erase(kex_mock_files),
     erase(kex_mock_dirs),
+    erase(kex_mock_on_read),
     ok.
 
 plist(K) -> case get(K) of undefined -> []; L -> L end.
-mock_content(P) -> get({kex_mock_file, pth(P)}).
+%% Every mocked read funnels through here, so the `onRead` rule only needs
+%% applying once.
+mock_content(P) ->
+    case get(kex_mock_on_read) of
+        undefined -> get({kex_mock_file, pth(P)});
+        Fun ->
+            case Fun(pth(P)) of
+                {'Just', Content} -> kex_io:to_string_bin(Content);
+                'None' -> undefined;
+                undefined -> undefined;
+                Other -> kex_io:to_string_bin(Other)
+            end
+    end.
 mocked_dir(P) -> lists:member(pth(P), plist(kex_mock_dirs)).
 
 %% Normalize any Kex String shape (binary or [Char]) to a binary path.

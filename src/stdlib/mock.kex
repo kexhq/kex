@@ -81,6 +81,24 @@ module Mock do
     Directory : FS.FilePath -> Void
     clear : Void
 
+    # The whole fixture in one call, the same shape `Mock.Files { files: ... }`
+    # takes — one line instead of one per file (kexhq/kex#143).
+    files : Map<FS.FilePath, String> -> Void
+
+    # Answer reads by RULE rather than from a fixture: content derived from
+    # the path, a failure on the third call, a record of what was asked for.
+    # Consulted before the map, and returning `None` means "no such file", so
+    # absence is expressible too.
+    onRead : Reader -> Void
+
+    foul files(entries: Map<FS.FilePath, String>) -> Void do
+      return Kex.Intrinsic.FS.files(entries)
+    end
+
+    foul onRead(reader: Reader) -> Void do
+      return Kex.Intrinsic.FS.onRead(reader)
+    end
+
     foul File(path: FS.FilePath, content: String) -> Void do
       return Kex.Intrinsic.FS.file(path, content)
     end
@@ -124,6 +142,16 @@ module Mock do
     set : String -> String -> Void
     unset : String -> Void
     clear : Void
+
+    # The whole overlay in one call, the same shape `Mock.Env { vars: ... }`
+    # takes (kexhq/kex#143). There is no `onGet` here: global `ENV` is a
+    # materialised Map, so there is nothing for a callback to intercept — use
+    # `with ENV = Mock.Env { onGet: ... }` when a rule is what you want.
+    vars : Map<String, String> -> Void
+
+    foul vars(entries: Map<String, String>) -> Void do
+      return Kex.Intrinsic.Env.mockVars(entries)
+    end
 
     foul set(name: String, value: String) -> Void do
       return Kex.Intrinsic.Env.mockSet(name, value)

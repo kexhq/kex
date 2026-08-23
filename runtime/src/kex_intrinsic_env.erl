@@ -6,7 +6,7 @@
 -module(kex_intrinsic_env).
 -export(['get'/1, 'getWithDefault'/2, 'has?'/1, 'keys'/0, 'values'/0,
          'count'/0, 'each'/1, 'entries'/0,
-         mockSet/2, mockUnset/1, mockClear/0]).
+         mockSet/2, mockUnset/1, mockClear/0, mockVars/1]).
 
 'get'(K) ->
     M = kex_io:env_map(),
@@ -41,6 +41,13 @@
 %% process dictionary like the file and IO mocks. kex_io:env_map/0 applies it,
 %% so every ENV function sees the same answer. Test-only like every Mock.*
 %% intrinsic (issue #144).
+%% The whole overlay in one call, the same shape `Mock.Env { vars: ... }`
+%% takes (kexhq/kex#143).
+mockVars(Entries) when is_map(Entries) ->
+    maps:foreach(fun(Name, Value) -> mockSet(Name, Value) end, Entries),
+    'Kex.Unit';
+mockVars(_) -> 'Kex.Unit'.
+
 mockSet(Name, Value) ->
     kex_test:require_mocks_allowed(<<"Mock.ENV.set">>),
     Overlay = case erlang:get(kex_mock_env) of undefined -> #{}; M -> M end,
