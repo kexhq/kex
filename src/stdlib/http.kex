@@ -16,7 +16,10 @@ record HttpOptions do
   timeout : Integer = 30000
 end
 
-module Http do
+# A capability: every member performs a real network request, so a test can
+# replace it for a lexical region with `with Http = ...` rather than mutating
+# global mock state (kexhq/kex#143).
+capability Http do
   get     : String -> Result<HttpResponse, HttpError>
   get     : String -> HttpOptions -> Result<HttpResponse, HttpError>
   foul get(url) = Kex.Intrinsic.Http.get(url)
