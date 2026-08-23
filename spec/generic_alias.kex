@@ -1,0 +1,54 @@
+# A `type` alias whose right-hand side is an APPLIED GENERIC is transparent,
+# like any other alias (kexhq/kex#173).
+#
+# `FileHandle<CanRead, CannotWrite>` parses much like a constructor
+# (`Name<args>` against `Name(args)`), so the alias fell through the
+# transparent-alias path and became an opaque type of its own — one that
+# matched not even the type it aliases. That made typestate unusable through a
+# name: the whole point of `ReadOnlyFile` is to say the permission once.
+
+using FS
+
+type ReadOnlyFile  = FileHandle<CanRead, CannotWrite>
+type WriteOnlyFile = FileHandle<CannotRead, CanWrite>
+type Pathish       = String
+type Numbers       = [Integer]
+
+# Exact match through the alias.
+foul useExact(h: FileHandle<CanRead, CannotWrite>) -> String = "exact"
+foul viaAlias(h: ReadOnlyFile) -> String = useExact(h)
+
+# And against a GENERIC signature: `readLine : FileHandle<CanRead, A> -> String?`
+# accepts the alias because the alias IS that applied type.
+foul peekable(h: ReadOnlyFile) -> Bool = true
+
+# An alias of a non-generic type was always transparent; it still is.
+let showPath(p: Pathish) -> Integer = p.length
+let total(ns: Numbers) -> Number = ns.sum
+
+# A constructor-shaped single variant is still an ADT, not an alias — the
+# distinction the leading `|` exists for.
+type Solo = | Boom
+type Wrapped = Box(Integer)
+
+let describe(s: Solo) -> String = match s do
+  Boom => "boom"
+end
+
+let unwrap(w: Wrapped) -> Integer = match w do
+  Box(n) => n
+end
+
+main do
+  IO.printLine(showPath("abcd"))
+  IO.printLine(total([1, 2, 3]))
+  IO.printLine(describe(Boom))
+  IO.printLine(unwrap(Box(41) )+ 1)
+
+  # The aliases above are used in signatures that the checker accepted; that
+  # acceptance IS the assertion. Transparency does not erase the refinement:
+  # `writeThrough(h: ReadOnlyFile) = h.write(...)` is still a type error,
+  # reported against `FileHandle<CanRead, CannotWrite>` — see
+  # spec/error_readonly_alias_write.kex.
+  IO.printLine("aliases resolved")
+end

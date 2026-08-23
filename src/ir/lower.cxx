@@ -2269,8 +2269,22 @@ struct Lowering {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
             bool localTypeShadows = false;
-            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
-                localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
+            // A local method only shadows a resolved target when it is
+            // defined FOR THIS receiver — the same requirement the
+            // static-type branch below states. `localMethods` alone let an
+            // unrelated method of the same name capture a call on a name that
+            // is both a module and a record: `DateTime.now` inside a
+            // `capability Clock do foul now()` became `apply 'now'/1`, calling
+            // itself, and hung the moment any `make ..., implement: Clock`
+            // existed to put `now` in `localMethods` (kexhq/kex#143).
+            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
+                const auto owners = methodOwners.find(n.method);
+                localTypeShadows =
+                    knownTypes.count(uid->name) && localMethods.count(n.method) &&
+                    owners != methodOwners.end() &&
+                    std::find(owners->second.begin(), owners->second.end(),
+                              uid->name) != owners->second.end();
+            }
             if (auto* id = std::get_if<ast::Identifier>(&n.receiver->kind))
                 localTypeShadows = id->name == "this";
             if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))

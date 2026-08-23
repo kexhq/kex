@@ -438,7 +438,8 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
             }
           }
           expect(TokenType::RParen, "Expected ')' after variant args");
-          variant->kind = ast::GenericType{std::move(name), std::move(args)};
+          variant->kind =
+              ast::GenericType{std::move(name), std::move(args), false};
         } else if (match(TokenType::LessThan)) {
           std::vector<ast::TypeExprPtr> args;
           args.push_back(parseTypeExpr());

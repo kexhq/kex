@@ -26,6 +26,12 @@ struct TypeName {
 struct GenericType {
     TypeName name;
     std::vector<TypeExprPtr> args;
+    // `Name<args>` (an applied generic) or `Name(args)` (an ADT constructor).
+    // Both parse to this node, and only the brackets tell them apart: in a
+    // `type` declaration `Box(Integer)` declares a variant while
+    // `FileHandle<CanRead, CannotWrite>` aliases an applied type. Discarding
+    // the distinction made every such alias opaque (kexhq/kex#173).
+    bool applied = true;
 };
 
 struct FunctionType {

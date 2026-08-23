@@ -1,0 +1,37 @@
+# A capability's DEFAULT body, reached after a `with` region ends
+# (kexhq/kex#143).
+#
+# `DateTime` is both a module and a record, so a call to `DateTime.now` was
+# eligible for the "a local type shadows a resolved target" rule — and that
+# rule only asked whether SOME local method of that name existed, not whether
+# it belonged to this receiver. Declaring `make FrozenClock, implement: Clock`
+# puts `now` in that set, so `DateTime.now` inside the capability's own body
+# lowered to `apply 'now'/1`: it called itself, and the program hung on BEAM
+# with no diagnostic. Without an implementation present it compiled correctly,
+# which is what made it invisible.
+
+capability Clock do
+  foul now() -> Integer do
+    return DateTime.now.epochSeconds
+  end
+end
+
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+
+foul stamp() -> String = "at ${Clock.now()}"
+
+main do
+  with Clock = FrozenClock { at: 7 } do
+    IO.printLine(stamp())
+  end
+
+  # The real implementation again — the one that recursed.
+  IO.printLine(Clock.now() > 0)
+  IO.printLine(DateTime.now.epochSeconds > 0)
+end

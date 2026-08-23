@@ -1085,8 +1085,19 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
                 // immediately, before falling through to the constructor check.
                 // A leading `|` opts out, declaring a one-variant ADT instead.
                 if (node->variants->size() == 1 && !node->leadingPipe) {
-                    auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
+                    const auto& only = (*node->variants)[0]->kind;
+                    // An APPLIED generic is transparent too. `type ReadOnlyFile
+                    // = FileHandle<CanRead, CannotWrite>` looks
+                    // constructor-shaped to the check below — `Name<args>`
+                    // parses much like `Name(args)` — so it fell through and
+                    // became an opaque type of its own, matching not even the
+                    // type it aliases (kexhq/kex#173).
+                    const auto* generic = std::get_if<ast::GenericType>(&only);
+                    if (std::holds_alternative<ast::TypeName>(only) ||
+                        (generic && generic->applied)) {
+                        m_typeAliases[node->name] = typeDefToType(*node);
+                        return;
+                    }
                 }
                 // Only register as alias if no variant is constructor-shaped.
                 for (const auto& v : *node->variants) {
@@ -1145,8 +1156,19 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
                 // immediately, before falling through to the constructor check.
                 // A leading `|` opts out, declaring a one-variant ADT instead.
                 if (node->variants->size() == 1 && !node->leadingPipe) {
-                    auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
+                    const auto& only = (*node->variants)[0]->kind;
+                    // An APPLIED generic is transparent too. `type ReadOnlyFile
+                    // = FileHandle<CanRead, CannotWrite>` looks
+                    // constructor-shaped to the check below — `Name<args>`
+                    // parses much like `Name(args)` — so it fell through and
+                    // became an opaque type of its own, matching not even the
+                    // type it aliases (kexhq/kex#173).
+                    const auto* generic = std::get_if<ast::GenericType>(&only);
+                    if (std::holds_alternative<ast::TypeName>(only) ||
+                        (generic && generic->applied)) {
+                        m_typeAliases[node->name] = typeDefToType(*node);
+                        return;
+                    }
                 }
                 for (const auto& v : *node->variants) {
                     if (extractConstructorName(v)) return;
@@ -6252,6 +6274,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::unordered_set<std::string> shown;
     for (const auto& sig : sortedSigs) {
         if (anyConcreteSig && isVacuousSig(&sig)) continue;
+        // An un-annotated signature this call could not reach is noise, not a
+        // suggestion. The stdlib ships capability stand-ins, so `write` also
+        // names `Mock.Files -> Any -> Any -> Bool`, and printing that under a
+        // 2-argument error told the reader to consider a method taking three
+        // (kexhq/kex#143). A CONCRETE overload at another arity still earns
+        // its line — `split : String -> [String]` is worth seeing even when
+        // the call passed two arguments.
+        const std::size_t requiredParams =
+            sig.requiredParams.value_or(sig.params.size());
+        const bool arityCannotMatch = argTypes.size() < requiredParams ||
+                                      argTypes.size() > sig.params.size();
+        if (arityCannotMatch &&
+            std::any_of(sig.params.begin(), sig.params.end(),
+                        mentionsUnknownType))
+            continue;
         auto rendered = displaySignature(name, sig);
         if (!shown.insert(rendered).second) continue;
         message += "\n\n" + rendered;
