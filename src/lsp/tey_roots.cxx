@@ -133,6 +133,10 @@ struct CacheEntry {
 
 } // namespace
 
+auto teyPackageDirectory(const std::string& start) -> std::string {
+    return packageDirectoryFor(start).string();
+}
+
 auto teyCachePackagePath(const std::string& gitUrl, const std::string& commit)
     -> std::string {
     // Content-addressed by source URL, then by commit: two packages sharing a

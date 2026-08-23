@@ -962,6 +962,50 @@ int main() {
             unsetenv("TEY_CACHE");
             fs::remove_all(root);
         });
+
+        it("resolves a module nested under its package's src", []() {
+            namespace fs = std::filesystem;
+            // `tey build` passes the package root's `src/` as the source
+            // root, so a module file at `src/tey/commands.kex` answers to
+            // `Tey.Commands`. A document BESIDE it (`src/tey/cli.kex`) used
+            // to fall back to its own directory as the root, where
+            // `tey/commands.kex` does not exist — every `using` line warned
+            // "module not found in source roots" while the same file built.
+            const fs::path root = "/tmp/kex-lsp-tey-nested";
+            fs::remove_all(root);
+            fs::create_directories(root / "app" / "src" / "tey");
+            {
+                std::ofstream manifest(root / "app" / "package.kex");
+                manifest << "bundle \"app\"\n";
+                std::ofstream commands(root / "app" / "src" / "tey" / "commands.kex");
+                commands << "module Tey.Commands\n\n"
+                            "let greet(name: String) -> String = \"hi \" + name\n";
+            }
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":"file:///tmp/kex-lsp-tey-nested/app","capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            const std::string source =
+                "using Tey.Commands, only: [greet]\\nmain do\\n  IO.printLine(greet(\\\"world\\\"))\\nend\\n";
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-tey-nested/app/src/tey/cli.kex","languageId":"kex","version":1,"text":")" +
+                source + R"("}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("module not found in source roots") ==
+                           std::string::npos,
+                       "a sibling module in the package's src was not found");
+            assertTrue(result.find("Undefined function: `greet`") ==
+                           std::string::npos,
+                       "a sibling module's function was still undefined");
+            fs::remove_all(root);
+        });
     });
     return runAll();
 }

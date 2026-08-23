@@ -5,6 +5,13 @@
 
 namespace kex::lsp {
 
+// The directory of the nearest enclosing `package.kex`, walking up from
+// `start`, or empty when the file belongs to no tey package. The package's
+// own `src/` is the first `--source-root` a build of it passes (tey's
+// `sourceRoots`), so the editor has to find the same directory or a nested
+// module's `using` lines cannot resolve.
+auto teyPackageDirectory(const std::string& start) -> std::string;
+
 // The `--source-root` list `tey` would pass for a file inside a tey package:
 // one entry per locked dependency, `${cache}/src/<source>/<commit>/src`.
 //

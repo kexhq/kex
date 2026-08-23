@@ -103,10 +103,13 @@ void appendRoot(std::vector<std::string>& roots, std::string root) {
 }
 
 // The search path for a document, in the order `tey` gives the compiler: the
-// document's own `lib`/`src` first, then anything the editor configured, then
-// the locked dependencies of the enclosing tey package, then the standard
-// library. Own-first is deliberate — a package that shadows a dependency's
-// module name means its own (tey/src/tey/commands.kex, `sourceRoots`).
+// document's own `lib`/`src` first, then the enclosing tey package's `src`
+// (a module nested under `src/tey/…` resolves against the package root's
+// `src/`, which is the first root `tey build` itself passes), then anything
+// the editor configured, then the locked dependencies of the enclosing tey
+// package, then the standard library. Own-first is deliberate — a package
+// that shadows a dependency's module name means its own
+// (tey/src/tey/commands.kex, `sourceRoots`).
 auto moduleRootsFor(const std::string& filepath,
                     const std::vector<std::string>& configured)
     -> std::vector<std::string> {
@@ -120,6 +123,21 @@ auto moduleRootsFor(const std::string& filepath,
         ec.clear();
         if (fs::is_directory(candidate, ec) && !ec)
             roots.push_back(candidate.string());
+    }
+    // The document's own directory only when it is itself the module root: a
+    // file beside its modules (`src/foo.kex` next to `using Foo`) keeps
+    // resolving. For anything deeper, the package roots below are the answer
+    // and the directory itself would only shadow.
+    const auto packageDirectory = teyPackageDirectory(filepath);
+    if (roots.empty() && packageDirectory.empty())
+        roots.push_back(sourceDir.string());
+    if (!packageDirectory.empty()) {
+        for (const auto* relative : {"lib", "src"}) {
+            const auto candidate = fs::path(packageDirectory) / relative;
+            ec.clear();
+            if (fs::is_directory(candidate, ec) && !ec)
+                appendRoot(roots, candidate.string());
+        }
     }
     if (roots.empty()) roots.push_back(sourceDir.string());
     for (const auto& root : configured) appendRoot(roots, root);
