@@ -382,3 +382,45 @@ describe("Tey.Manifest.read — commands") do
     end
   end
 end
+
+# `toolchain(name, compiler:, runtime:, stdlib:)` — what makes a package a
+# compiler distribution rather than a library or an application. Kex's own
+# package.kex declares it, so a tey that cannot read it cannot run commands in
+# the compiler's own checkout — the exact place tey is developed.
+describe("Tey.Manifest.read — toolchain declarations") do
+  it("reads a toolchain's name and parts") do
+    let package = Tey.Manifest.read(`
+      bundle "kex" do
+        version("0.3.0")
+        toolchain("kex", compiler: "bin/kex", runtime: "share/kex/runtime",
+                  stdlib: "share/kex/stdlib")
+      end
+    `).try
+    let toolchain = package.manifestToolchain.try
+    assert(toolchain.toolchainName == "kex")
+    assert(toolchain.toolchainCompiler == "bin/kex")
+    assert(toolchain.toolchainRuntime == "share/kex/runtime")
+    assert(toolchain.toolchainStdlib == "share/kex/stdlib")
+  end
+
+  it("leaves the parts empty when only the name is given") do
+    let package = Tey.Manifest.read(`
+      bundle "kex" do
+        toolchain("kex")
+      end
+    `).try
+    let toolchain = package.manifestToolchain.try
+    assert(toolchain.toolchainCompiler == "")
+    assert(toolchain.toolchainRuntime == "")
+    assert(toolchain.toolchainStdlib == "")
+  end
+
+  it("has no toolchain when the manifest declares none") do
+    let package = Tey.Manifest.read(`
+      bundle "greet" do
+        version("0.1.0")
+      end
+    `).try
+    assert(package.manifestToolchain == None)
+  end
+end

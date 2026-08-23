@@ -34,6 +34,21 @@ record Command do
   commandDescription : String = ""
 end
 
+# A toolchain package: the compiler executable plus the runtime and standard
+# library it was built with, installed together so the three can never drift
+# apart. Kex's own `package.kex` is the one that declares it — and a reader
+# that did not know the declaration could not run any tey command from the
+# compiler's own checkout, which is where it is most used.
+#
+# Fields are prefixed like Command's: a bare `compiler` would be read as a
+# method on an unpinned receiver before it is read as a field here.
+record Toolchain do
+  toolchainName : String
+  toolchainCompiler : String = ""
+  toolchainRuntime : String = ""
+  toolchainStdlib : String = ""
+end
+
 record ManifestPackage do
   name : String
   version : String = "0.1.0"
@@ -55,6 +70,7 @@ record ManifestPackage do
   manifestDependencies : [Dependency] = []
   targets : [Target] = []
   commands : [Command] = []
+  manifestToolchain : Toolchain? = None
 end
 
 # The command names Tey answers itself. A `command(...)` may not take one of
@@ -86,6 +102,7 @@ let read(text: String) -> ManifestPackage or! String do
   var dependencies: [Dependency] = []
   var targets: [Target] = []
   var commands: [Command] = []
+  var toolchain: Toolchain? = None
   var failures: [String] = []
 
   let program = match Kex.AST.parse(text, "package.kex") do
@@ -179,6 +196,14 @@ let read(text: String) -> ManifestPackage or! String do
         manifestGroups: groups
       })
       ()
+      elif declaration == "toolchain"
+      toolchain = Just(Toolchain {
+        toolchainName: Tey.Manifest.argument(arguments).or("kex"),
+        toolchainCompiler: Tey.Manifest.named(named, "compiler").or(""),
+        toolchainRuntime: Tey.Manifest.named(named, "runtime").or(""),
+        toolchainStdlib: Tey.Manifest.named(named, "stdlib").or("")
+      })
+      ()
       else
       failures.push!("unknown declaration `${declaration}`")
       ()
@@ -193,10 +218,10 @@ let read(text: String) -> ManifestPackage or! String do
   return Error(failures.first.try) if !failures.empty?
   return Error("package.kex must declare bundle \"name\"") if name == ""
   Ok(ManifestPackage { name: name, version: version, description: description, license: license,
-                    packageKexRequirement: kexRequirement,
-                    packageOtpRequirement: otpRequirement,
-                    entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
-                    commands: commands })
+                     packageKexRequirement: kexRequirement,
+                     packageOtpRequirement: otpRequirement,
+                     entrypoint: entrypoint, manifestDependencies: dependencies, targets: targets,
+                     commands: commands, manifestToolchain: toolchain })
 end
 
 private do
