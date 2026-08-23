@@ -6,6 +6,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
     switch (type) {
         case TokenType::After: return "after";
         case TokenType::Break: return "break";
+        case TokenType::Capability: return "capability";
         case TokenType::Compiled: return "compiled";
         case TokenType::Do: return "do";
         case TokenType::Elif: return "elif";
@@ -43,6 +44,7 @@ auto tokenTypeName(TokenType type) -> std::string_view {
         case TokenType::Var: return "var";
         case TokenType::When: return "when";
         case TokenType::While: return "while";
+        case TokenType::With: return "with";
         case TokenType::Arrow: return "->";
         case TokenType::FatArrow: return "=>";
         case TokenType::Amp: return "&";

@@ -64,7 +64,7 @@ handle(Cmd) ->
     end.
 
 load_module(Nonce, Mod, BeamFile) ->
-    case catch begin
+    try begin
         {ok, Bin} = file:read_file(BeamFile),
         code:load_binary(list_to_atom(Mod), BeamFile, Bin)
     end of
@@ -72,6 +72,10 @@ load_module(Nonce, Mod, BeamFile) ->
             sentinel(Nonce, ok);
         Else ->
             io:format("load failed: ~p~n", [Else]),
+            sentinel(Nonce, error)
+    catch
+        _:Reason ->
+            io:format("load failed: ~p~n", [Reason]),
             sentinel(Nonce, error)
     end.
 
@@ -88,7 +92,7 @@ eval_module(Nonce, Mod) ->
     end.
 
 exec_expr(Nonce, Expr) ->
-    case catch begin
+    try begin
         {ok, Tokens, _} = erl_scan:string(Expr ++ "."),
         {ok, Forms} = erl_parse:parse_exprs(Tokens),
         {value, _Val, _Bs} = erl_eval:exprs(Forms, erl_eval:new_bindings())
@@ -96,6 +100,10 @@ exec_expr(Nonce, Expr) ->
         {value, _, _} -> sentinel(Nonce, ok);
         Else ->
             io:format("exec failed: ~p~n", [Else]),
+            sentinel(Nonce, error)
+    catch
+        _:Reason ->
+            io:format("exec failed: ~p~n", [Reason]),
             sentinel(Nonce, error)
     end.
 
