@@ -72,10 +72,10 @@ syn match kexHashKey /\%(,\)\@<=\s*\zs[a-z_][A-Za-z0-9_?!]*\ze\s*:\%([:>=]\)\@!/
 syn match kexImplement /\<implement\>\%(\s*:\)\@=/
 
 " ===== Keywords and types =====
-syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return spawn then timeout try trying using var when while
+syn keyword kexKeyword after break compiled do elif else end export final foul if let loop main match next private public receive rescue return spawn then timeout try trying using var when while with
 syn keyword kexConstant true false None
 syn keyword kexThis this
-syn keyword kexStorage module record type trait make
+syn keyword kexStorage module record type trait make capability
 syn keyword kexBuiltinType Any Atom Bool Byte Char Float Float32 Float64 Int Integer Int8 Int16 Int32 Int64 List Map Optional Process Result Stream String UInt8 UInt16 UInt32 UInt64 Void
 syn match kexType /\<[A-Z][A-Za-z0-9_]*\>/
 

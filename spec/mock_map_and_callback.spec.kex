@@ -1,0 +1,54 @@
+# `Mock.FS` and `Mock.ENV` take a map, and `Mock.FS` takes a callback
+# (kexhq/kex#143).
+#
+# The stateful mocks now accept the same shapes as the value stand-ins
+# (`Mock.Files { files: ..., onRead: ... }`), so choosing between global mock
+# state and a scoped replacement no longer means learning two APIs.
+#
+# `Mock.ENV` has no `onGet`: global `ENV` is a materialised Map, so there is
+# nothing for a callback to intercept. `with ENV = Mock.Env { onGet: ... }` is
+# the way to answer environment reads by rule.
+#
+# Paths here are absolute and invented on purpose — `readme.md` would match the
+# repository's real `README.md` on a case-insensitive filesystem.
+
+using FS
+
+describe("Mock.FS.files") do
+  it("registers a whole fixture in one call") do
+    Mock.FS.files({"/kexmock/a.txt": "alpha", "/kexmock/b.txt": "beta"})
+    assert(FS.File.read("/kexmock/a.txt").or("") == "alpha")
+    assert(FS.File.read("/kexmock/b.txt").or("") == "beta")
+    assert(FS.File.exists?("/kexmock/a.txt"))
+  end
+
+  it("does not leak into the next test") do
+    assert(FS.File.read("/kexmock/a.txt") == None)
+  end
+end
+
+describe("Mock.FS.onRead") do
+  it("answers by rule, and None means absent") do
+    Mock.FS.onRead({ |path| path.endsWith?(".md") then Just("# ${path}") else None })
+    assert(FS.File.read("/kexmock/guide.md").or("") == "# /kexmock/guide.md")
+    assert(FS.File.read("/kexmock/notes.txt") == None)
+    assert(FS.File.exists?("/kexmock/guide.md"))
+    assert(!FS.File.exists?("/kexmock/notes.txt"))
+  end
+
+  it("is discarded with the rest of the mock state") do
+    assert(FS.File.read("/kexmock/guide.md") == None, "callback leaked between tests")
+  end
+end
+
+describe("Mock.ENV.vars") do
+  it("registers a whole overlay in one call") do
+    Mock.ENV.vars({"KEX_MAP_A": "1", "KEX_MAP_B": "2"})
+    assert(ENV.get("KEX_MAP_A", "?") == "1")
+    assert(ENV.get("KEX_MAP_B", "?") == "2")
+  end
+
+  it("does not leak into the next test") do
+    assert(!ENV.has?("KEX_MAP_A"))
+  end
+end

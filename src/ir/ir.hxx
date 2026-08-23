@@ -219,6 +219,12 @@ struct FunDef {
     // also emits a wrapper at that arity which fills the dictionaries with the
     // provider's generic dispatcher — see makeDictionaryWrapper.
     std::vector<std::string> dictionaryTraits;
+    // Whether a trailing capability-context parameter follows the trait
+    // dictionaries. The dictionary wrapper has to know: it derives its own
+    // parameter count from `arity` minus the dictionaries, and would
+    // otherwise swallow the context slot and pass the dictionary in its
+    // place (kexhq/kex#181).
+    bool hasCapabilityContext = false;
 };
 
 struct Module {

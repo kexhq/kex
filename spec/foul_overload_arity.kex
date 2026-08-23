@@ -1,0 +1,29 @@
+# Each OVERLOAD of a foul export carries the capability context, not just
+# whichever arity happened to be recorded (kexhq/kex#143).
+#
+# Every foul function takes the context as a hidden trailing parameter, and a
+# consumer learns which imported functions are foul from the interface. That
+# record kept one arity per NAME, so `ENV.get` — which is both `get(key)` and
+# `get(key, default)` — had the context threaded into one form and dropped
+# from the other. On BEAM the dropped one called a function that does not
+# exist: `undef`, with nothing to say which call it was.
+
+foul home() -> String = ENV.get("HOME", "(unset)")
+
+main do
+  with ENV = Mock.Env { vars: {"HOME": "/fake", "LANG": "C"} } do
+    # One argument, then two — the two overloads of the same foul name.
+    IO.printLine(ENV.get("HOME"))
+    IO.printLine(home())
+    IO.printLine(ENV.get("NOT_SET", "fallback"))
+
+    # And the rest of the surface, each its own arity.
+    IO.printLine(ENV.has?("LANG"))
+    IO.printLine(ENV.count)
+    IO.printLine(ENV.keys.sort.join(","))
+  end
+
+  # The real environment still answers both overloads.
+  IO.printLine(ENV.get("PATH") != None)
+  IO.printLine(ENV.get("NOTHING_IS_SET_TO_THIS", "fallback"))
+end

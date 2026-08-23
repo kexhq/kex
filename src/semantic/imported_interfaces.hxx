@@ -38,6 +38,11 @@ struct ImportedModuleInterface {
     std::string sourceModule;
     std::string backendModule;
     bool automaticImport = false;
+    // Declared `capability`, so an importer may replace it with `with` and
+    // implement it with `make ..., implement:`. Without this crossing the
+    // module boundary a stdlib capability is invisible to every consumer
+    // (kexhq/kex#143).
+    bool isCapability = false;
     std::unordered_map<std::string, std::vector<ImportedFunction>> exports;
 };
 

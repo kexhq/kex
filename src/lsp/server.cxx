@@ -1135,6 +1135,20 @@ auto functionDetail(const ast::FunctionDef& function,
         if (signature.isFoul || function.isFoul) result += "foul ";
         result += analyzer.displaySignature(function.name, signature);
     }
+    // A capability requirement is written nowhere in the source — that is the
+    // point of the feature — so hover is where a reader learns it, together
+    // with the chain that explains why this function has it (kexhq/kex#143).
+    if (const auto* capabilities =
+            analyzer.requiredCapabilities(function.name)) {
+        for (const auto& [capability, _] : *capabilities) {
+            result += "\nrequires " + capability;
+            for (const auto& [caller, via] :
+                 analyzer.capabilityChain(function.name, capability))
+                result += via.empty()
+                    ? "\n  \u2190 " + caller + " uses " + capability
+                    : "\n  \u2190 " + caller + " calls " + via;
+        }
+    }
     return result;
 }
 

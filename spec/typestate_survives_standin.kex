@@ -1,0 +1,29 @@
+# kex: check-only
+# FileHandle's typestate holds even though the stdlib ships a stand-in that
+# defines the same method names (kexhq/kex#143).
+#
+# `Mock.Files` implements `FS.File`, so `write`, `read` and `size` each gained
+# another candidate — un-annotated, since a `make` block's methods carry no
+# signatures. `anyUnknownParamCandidate` scanned EVERY candidate sharing the
+# name, including ones the call could never reach, and one such candidate
+# switched off the mismatch report for the whole name. Writing through a
+# read-only handle silently stopped being an error.
+#
+# The rule is arity: a signature the call cannot reach says nothing about it.
+# `Mock.Files.write` takes three parameters; this call passes two.
+
+using FS
+
+foul writeToReader(path: String) -> Bool do
+  let reader = FS.File.open(path, FS.Read).try
+  return reader.write("no")
+end
+
+foul readFromWriter(path: String) -> String? do
+  let writer = FS.File.open(path, FS.Write).try
+  return writer.read
+end
+
+main do
+  IO.printLine("unreachable")
+end

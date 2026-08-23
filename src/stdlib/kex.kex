@@ -128,16 +128,22 @@ module Kex do
   end
 end
 
-# Returns the pretty-printed representation of any value — the same form the
-# REPL echoes. Universal: reachable on every type through UFCS.
+# Returns the pretty-printed representation of any value as a STRING — the
+# same form the REPL echoes. Universal: reachable on every type through UFCS.
+#
+# Named apart from `inspect`, which prints and returns its INPUT so it can be
+# dropped into a pipeline. Both spellings used to be called `inspect`, and
+# which one a call reached depended on whether it was written `x.inspect` or
+# `IO.inspect(x)` — so `[1, 2].inspect.count` answered 24, the length of the
+# rendered string, rather than 2.
 #
 # @param value [A]
 # @return [String]
 #
 # @example
-#   [1, 2].inspect          # => "[1, 2]"
-#   { a: 1 }.inspect        # => "{ a: 1 }"
-#   Just("hi").inspect      # => "Just(\"hi\")"
+#   [1, 2].inspected          # => "[1, 2]"
+#   { a: 1 }.inspected        # => "{ a: 1 }"
+#   Just("hi").inspected      # => "Just(\"hi\")"
 module Kex.Interface do
   # Reads the KexI interface chunk of a compiled Kex module — its typed public
   # surface — and answers the decoded term, or None when the file has no such
@@ -157,4 +163,16 @@ module Kex.Interface do
   let read(path) = Kex.Intrinsic.Interface.read(path)
 end
 
-let inspect(value: Inspectable) = value.inspectValue(Console.enabled?)
+let inspected(value: Inspectable) = value.inspectValue(Console.enabled?)
+
+# Prints the pretty-printed form of +value+ to stderr and returns +value+
+# unchanged, so it can be dropped into any pipeline without changing what
+# flows through it. The same operation as `IO.inspect`, reachable by UFCS.
+#
+# @param value [A]
+# @return [A]
+#
+# @example
+#   xs.map(~double).inspect.filter(~even?)
+inspect : A -> A
+let inspect(value) = IO.inspect(value)

@@ -1,0 +1,44 @@
+# A `foul` make-block method whose name is also a prelude receiver method
+# (kexhq/kex#143).
+#
+# Every foul function carries a hidden capability context as its last
+# parameter, so `bag.count` is `count/2` on BEAM while the prelude's is
+# `count/1`. Lowering forwards a receiver its own clauses reject to whichever
+# module owns the name — and it looked that provider up at the FOUL arity,
+# finding `kex_prelude:count/2`, the `count(pred)` overload. The context went
+# in where the predicate goes and the call died `badarg`, with the walker
+# answering correctly all along.
+#
+# Capability implementations are foul top to bottom, which is what made this
+# common: `values`, `keys`, `count` and `entries` are all both capability
+# methods and Map methods. The bug needs no capability, though — one foul
+# method is enough, which is what this pins.
+
+record Bag do
+  vars : Map<String, String>
+end
+
+make Bag do
+  foul count = @vars.count
+  foul values = @vars.values
+  foul entries = @vars.entries
+end
+
+# Erases the static type, so the call can only be answered by dispatching on
+# the runtime value — the path that has to forward to the prelude.
+let opaque(x: Any) -> Any = x
+
+main do
+  let bag = Bag { vars: {"HOME": "/home/kex", "LANG": "C"} }
+
+  # The method itself still wins for its own receiver.
+  IO.printLine(bag.count)
+  IO.printLine(bag.values.sort.join(","))
+
+  # A receiver the method's clauses reject falls through to the prelude, which
+  # takes no context.
+  IO.printLine(opaque(bag).entries.count)
+  IO.printLine([1, 2, 3].count)
+  IO.printLine({"a": 1}.values.count)
+  IO.printLine(opaque([4, 5]).count)
+end

@@ -31,7 +31,11 @@ module Type do
   # `Type.of(x) == Type.named("Date")`.
   let named(name: String) -> Type = Type { name: name, args: [], pure: true }
 
-  let with(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
+  # The same, for a type that takes arguments:
+  # `Type.of([1]) == Type.generic("List", [Type.named("Integer")])`.
+  # Renamed from `Type.with` when `with` became the capability-substitution
+  # keyword (kexhq/kex#143).
+  let generic(name: String, args: [Type]) -> Type = Type { name: name, args: args, pure: true }
 
   # A function type: parameters followed by the result, the way a signature
   # is written — `Type.function([Type.named("String")], Type.named("String"))`.

@@ -48,6 +48,21 @@ auto Evaluator::registerEnvBuiltins() -> void {
         return Value::unit();
     });
 
+    // Mock.ENV.vars({name: value, ...}) -> Void — the whole overlay in one
+    // call, matching how `Mock.Env { vars: ... }` is written (kexhq/kex#143).
+    defineIntrinsic("Env::mockVars", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.ENV.vars");
+        if (args.empty()) return Value::unit();
+        if (auto* map = std::get_if<MapValue>(&args[0]->data))
+            for (const auto& [key, value] : map->entries) {
+                if (!key || !value) continue;
+                m_mockEnv[key->toString()] = value->toString();
+                m_mockEnvUnset.erase(key->toString());
+            }
+        rebuildEnvMap();
+        return Value::unit();
+    });
+
     defineIntrinsic("Env::mockClear", [this](std::vector<ValuePtr>) -> ValuePtr {
         requireMocksAllowed("Mock.ENV.clear");
         m_mockEnv.clear();

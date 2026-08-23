@@ -660,8 +660,12 @@ auto Evaluator::registerListBuiltins() -> void {
         return Value::list(std::move(result));
     });
 
-    // inspect() — pretty-printed representation of any value (UFCS on all types)
-    definePublic("inspect", [](std::vector<ValuePtr> args) -> ValuePtr {
+    // inspected() — the pretty-printed representation of any value, as a
+    // STRING (UFCS on all types). Named apart from `inspect`, which prints and
+    // returns its INPUT so it can sit in a pipeline: both were called
+    // `inspect`, so `[1, 2].inspect.count` answered 24 — the length of the
+    // rendered string — rather than 2 (kexhq/kex#143).
+    definePublic("inspected", [](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::string("()");
         return Value::string(args[0]->inspect());
     });

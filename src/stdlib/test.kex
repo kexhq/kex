@@ -55,11 +55,16 @@ it : String -> Block<Void> -> Void
 # +before(:each) { ... }+ run before every test; +before(:all) { ... }+ runs
 # once before the group's tests, following RSpec's scope convention.
 before : Block<Void> -> Void
+# The scoped form the runtime has always accepted, and the paragraph above has
+# always documented, but which was never declared — so every spec using
+# `before(:all)` had to be `# kex: no-check` (kexhq/kex#143).
+before : Atom -> Block<Void> -> Void
 
 # Registers cleanup for the current group. +after { ... }+ defaults to +:each+;
 # +after(:all) { ... }+ runs once when the group finishes. Cleanup is
 # unconditional, and inner per-test hooks run before outer hooks.
 after : Block<Void> -> Void
+after : Atom -> Block<Void> -> Void
 
 # Throws a runtime error if +value+ is falsy, failing the enclosing +it+.
 # The optional +message+ is included in the failure output.

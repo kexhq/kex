@@ -1862,7 +1862,22 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 }
             }
 
-            auto receiver = (!isNamespaceCall && node.receiver) ? eval(*node.receiver) : Value::none();
+            // `Clock.now()` inside `with Clock = FrozenClock { ... }` must
+            // reach the replacement. Turning it into an ordinary value
+            // receiver sends it through the same UFCS dispatch a method call
+            // on that record would take (kexhq/kex#143).
+            ValuePtr capabilityOverride;
+            if (node.receiver)
+                if (auto path = qualifiedPath(*node.receiver))
+                    if (auto bound = lookupCapability(*path)) {
+                        capabilityOverride = bound;
+                        isNamespaceCall = false;
+                        namespaceName.clear();
+                    }
+            auto receiver = capabilityOverride
+                ? capabilityOverride
+                : ((!isNamespaceCall && node.receiver) ? eval(*node.receiver)
+                                                       : Value::none());
 
             // Namespace access: ModuleValue (registered modules like IO, Math,
             // File, Integer) or empty-record placeholders for user record types
@@ -2074,6 +2089,27 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             // METHOD — `d.iso` where `d` is a Result reads as "no `iso` for a
             // Result", not as a missing global. The BEAM dispatcher's
             // fallback clause words it identically.
+            // A record field may hold a function, and `d.fetch(url)` should
+            // call it. The method keeps precedence — this is only consulted
+            // when nothing answered the name — which matches the field/method
+            // rule spec/record_field_method_collision.kex fixes for READS
+            // (kexhq/kex#176). `args` is moved into callFunction below, so
+            // copy it first, and only when such a field actually exists.
+            const FunctionValue* callableField = nullptr;
+            if (receiver)
+                if (auto* record = std::get_if<RecordValue>(&receiver->data)) {
+                    auto field = record->fields.find(node.method);
+                    if (field != record->fields.end() && field->second)
+                        callableField =
+                            std::get_if<FunctionValue>(&field->second->data);
+                }
+            // UFCS put the receiver at args[0]; a field's function is a
+            // plain value, not a method, so it takes only the explicit
+            // arguments.
+            std::vector<ValuePtr> fieldArgs;
+            if (callableField && !args.empty())
+                fieldArgs.assign(args.begin() + 1, args.end());
+
             try {
                 return callFunction(mangledName, std::move(args),
                                     std::move(namedArgs), expr.location);
@@ -2094,6 +2130,8 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                     throw RuntimeError("Undefined function: " + qualified,
                                        expr.location);
                 }
+                if (callableField && callableField->native)
+                    return callableField->native(std::move(fieldArgs));
                 if (!receiver) throw;
                 throw RuntimeError("Undefined method: " + mangledName + " for " +
                                        receiver->typeName(),
@@ -2376,6 +2414,24 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
             std::unordered_map<std::string, ValuePtr> fields;
             for (const auto& [name, val] : node.fields) {
                 fields[name] = val ? eval(*val) : Value::none();
+            }
+            // A qualified type from an opt-in module may not be loaded yet:
+            // the declaration alone is enough to name it, and that came from
+            // the interface. Its field DEFAULTS and its `make` block live in
+            // the source, so without loading, `Parsing.Input { input: "ab" }`
+            // came out missing `pos` and answered no methods at all — unless
+            // the file happened to say `using Parsing` (kexhq/kex#143).
+            if (auto dot = typeName.rfind('.');
+                dot != std::string::npos && !m_recordDefs.count(typeName)) {
+                const auto owner = typeName.substr(0, dot);
+                if (!m_moduleRegistry.contains(owner) &&
+                    !m_loadingModules.count(owner))
+                    try {
+                        ensureModuleLoaded(owner, expr.location, "");
+                    } catch (const RuntimeError&) {
+                        // Not a module that can be found — leave the
+                        // construction to report whatever is actually wrong.
+                    }
             }
             // Apply declared field defaults (e.g. `pos : Int = 0`) for any
             // field this construction didn't specify explicitly.
@@ -2672,6 +2728,26 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
         }
         else if constexpr (std::is_same_v<T, ast::ReceiveExpr>) {
             return m_scheduler->blockingReceive(node);
+        }
+        else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+            std::string capabilityName;
+            for (size_t i = 0; i < node.capability.parts.size(); ++i) {
+                if (i) capabilityName += ".";
+                capabilityName += node.capability.parts[i];
+            }
+            auto replacement = node.value ? eval(*node.value) : Value::none();
+            m_capabilityBindings.emplace_back(capabilityName, replacement);
+            // Pop on the way out however the body leaves — a `return`, a
+            // `break`, or a raised error must not leak the substitution into
+            // the code that follows.
+            struct Pop {
+                std::vector<std::pair<std::string, ValuePtr>>& stack;
+                ~Pop() { stack.pop_back(); }
+            } pop{m_capabilityBindings};
+            auto result = Value::none();
+            for (const auto& item : node.body)
+                if (item) result = eval(*item);
+            return result;
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             std::string moduleName;

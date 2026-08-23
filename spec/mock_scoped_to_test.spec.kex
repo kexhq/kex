@@ -1,0 +1,64 @@
+# Mock state is discarded at the end of each `it` (kexhq/kex#143).
+#
+# Mock state is global and lives until cleared, so every block needed a
+# `before { Mock.FS.clear() }` / `after { Mock.FS.clear() }` pair, a forgotten
+# `clear` leaked into the next test, and specs could not run in parallel. The
+# test runner already knows where a test begins and ends, so it captures mock
+# state there and gives it back — no signatures change and no new concept is
+# introduced.
+#
+# Note what is deliberately absent below: any clearing at all.
+
+using FS
+
+describe("mock state is scoped to the test") do
+  it("sets a file mock and never clears it") do
+    Mock.FS.File("leaked.txt", "from the first test")
+    assert(FS.File.read("leaked.txt").or("") == "from the first test")
+  end
+
+  it("does not see the previous test's file mock") do
+    assert(FS.File.read("leaked.txt") == None, "FS mock leaked between tests")
+  end
+
+  it("sets an ENV mock and never clears it") do
+    assert(!ENV.has?("KEX_LEAK_PROBE"))
+    Mock.ENV.set("KEX_LEAK_PROBE", "1")
+    assert(ENV.get("KEX_LEAK_PROBE", "") == "1")
+  end
+
+  it("does not see the previous test's ENV mock") do
+    assert(!ENV.has?("KEX_LEAK_PROBE"), "ENV mock leaked between tests")
+  end
+end
+
+# A `before(:all)` runs once, OUTSIDE any single test, so what it establishes
+# has to survive every test in the block — the capture must not undo it.
+describe("before(:all) state survives") do
+  before(:all) do
+    Mock.FS.File("all-hook.txt", "once")
+  end
+
+  it("sees it in the first test") do
+    assert(FS.File.read("all-hook.txt").or("") == "once")
+  end
+
+  it("still sees it in the second") do
+    assert(FS.File.read("all-hook.txt").or("") == "once")
+  end
+end
+
+# A per-test `before` re-runs for each test, so its state is per-test too.
+describe("before(:each) state is re-established") do
+  before do
+    Mock.FS.File("each-hook.txt", "every time")
+  end
+
+  it("sees it") do
+    assert(FS.File.read("each-hook.txt").or("") == "every time")
+  end
+
+  it("sees it again, freshly") do
+    assert(FS.File.read("each-hook.txt").or("") == "every time")
+  end
+end

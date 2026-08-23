@@ -172,6 +172,41 @@ public:
     auto setMocksAllowed(bool allowed) -> void;
     auto mocksAllowed() const -> bool { return m_mocksAllowed; }
 
+    // Every mock's state, captured so a test can be given it back at the end
+    // of its `it` block. Mock state is global and lives until cleared, which
+    // is what made a forgotten `Mock.FS.clear()` leak into the next test and
+    // kept specs from running in parallel (kexhq/kex#143).
+    struct MockState {
+        std::unordered_map<std::string, std::string> files;
+        std::unordered_set<std::string> dirs;
+        ValuePtr fileReader;
+        bool io = false;
+        std::string ioOutput;
+        std::deque<std::string> ioInput;
+        bool http = false;
+        std::deque<ValuePtr> httpResponses;
+        std::unordered_map<std::string, std::string> env;
+        std::unordered_set<std::string> envUnset;
+    };
+    auto captureMocks() const -> MockState {
+        return MockState{m_mockFiles, m_mockDirs, m_mockFileReader, m_mockIO,
+                         m_mockIOOutput, m_mockIOInputLines, m_mockHttp,
+                         m_mockHttpResponses, m_mockEnv, m_mockEnvUnset};
+    }
+    auto restoreMocks(MockState saved) -> void {
+        m_mockFiles = std::move(saved.files);
+        m_mockDirs = std::move(saved.dirs);
+        m_mockFileReader = std::move(saved.fileReader);
+        m_mockIO = saved.io;
+        m_mockIOOutput = std::move(saved.ioOutput);
+        m_mockIOInputLines = std::move(saved.ioInput);
+        m_mockHttp = saved.http;
+        m_mockHttpResponses = std::move(saved.httpResponses);
+        m_mockEnv = std::move(saved.env);
+        m_mockEnvUnset = std::move(saved.envUnset);
+        rebuildEnvMap();
+    }
+
 private:
     // Top-level
     auto execTopLevel(const ast::TopLevelItem& item) -> void;
@@ -373,6 +408,17 @@ private:
     std::unordered_map<std::string, std::vector<RuntimeSignature>>
         m_runtimeSignatures;
     std::unordered_map<std::string, ModuleEntry> m_moduleRegistry;
+    // Capability substitutions installed by `with Name = value do ... end`,
+    // innermost last. A stack rather than a map so nesting and restoration
+    // are automatic, and so the same capability may be replaced again inside
+    // an enclosing replacement (kexhq/kex#143).
+    std::vector<std::pair<std::string, ValuePtr>> m_capabilityBindings;
+    auto lookupCapability(const std::string& name) const -> ValuePtr {
+        for (auto it = m_capabilityBindings.rbegin();
+             it != m_capabilityBindings.rend(); ++it)
+            if (it->first == name) return it->second;
+        return nullptr;
+    }
     std::vector<PendingExport> m_pendingExports;
     std::unordered_set<std::string> m_loadingModules;
     std::vector<std::string> m_moduleRoots{"lib", "src"};
@@ -419,6 +465,14 @@ private:
     std::unordered_map<std::string, std::string> m_mockFiles;
     std::unordered_set<std::string> m_mockDirs;
 
+    // Mock.FS.onRead — answers by RULE rather than from a fixture: content
+    // derived from the path, a failure on the third call, a record of what was
+    // asked for. Consulted before the map, and its `None` means "no such
+    // file", so a callback can model absence too (kexhq/kex#143).
+    ValuePtr m_mockFileReader;
+    auto mockFileContent(const std::string& path)
+        -> std::optional<std::string>;
+
     // See setMocksAllowed. Denied by default: an Evaluator used for
     // compile-time evaluation (compiled do, tagged-literal validation) is
     // exactly the place a dependency must not be able to install a mock.
@@ -440,8 +494,6 @@ private:
 
     // Mock.System — what the machine claims to be. Unset means "ask the real
     // one", which is why these are optionals rather than defaulted values.
-    std::optional<std::string> m_mockOS;
-    std::optional<int64_t> m_mockBitWidth;
 
     // describe/it/assert (registerTestBuiltins) — nesting depth for
     // indentation, and pass/fail counters for the summary line printed

@@ -1,0 +1,13 @@
+mock state is scoped to the test
+  ✓ sets a file mock and never clears it
+  ✓ does not see the previous test's file mock
+  ✓ sets an ENV mock and never clears it
+  ✓ does not see the previous test's ENV mock
+before(:all) state survives
+  ✓ sees it in the first test
+  ✓ still sees it in the second
+before(:each) state is re-established
+  ✓ sees it
+  ✓ sees it again, freshly
+
+8 passed, 0 failed

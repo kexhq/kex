@@ -54,6 +54,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     // Restore this process's own m_env cursor (not necessarily its root
     // scope — see Process::savedEnv) before handing it the C++ stack back.
     m_evaluator.m_env = proc.savedEnv;
+    auto callerCapabilities = std::move(m_evaluator.m_capabilityBindings);
+    m_evaluator.m_capabilityBindings = std::move(proc.savedCapabilities);
 
     proc.fiber->resume();
 
@@ -61,6 +63,8 @@ auto Scheduler::resumeProcess(ProcessId id) -> void {
     // finished, or some nested scope if it yielded mid-expression) is
     // exactly what the next resume() of THIS process needs to see again.
     proc.savedEnv = m_evaluator.m_env;
+    proc.savedCapabilities = std::move(m_evaluator.m_capabilityBindings);
+    m_evaluator.m_capabilityBindings = std::move(callerCapabilities);
     m_current = prevCurrent;
 }
 
@@ -85,6 +89,19 @@ auto Scheduler::fireExpiredTimeouts() -> void {
     }
 }
 
+// The error of the lowest-numbered process that died with one — process ids
+// are handed out in spawn order, so this is the first crash, which is the one
+// most likely to have caused the rest.
+auto Scheduler::firstProcessError() const -> std::exception_ptr {
+    std::exception_ptr found;
+    ProcessId bestId = 0;
+    for (const auto& [id, proc] : m_processes) {
+        if (!proc || !proc->error) continue;
+        if (!found || id < bestId) { found = proc->error; bestId = id; }
+    }
+    return found;
+}
+
 auto Scheduler::driveUntilFinished(ProcessId target) -> ValuePtr {
     while (true) {
         auto it = m_processes.find(target);
@@ -94,9 +111,14 @@ auto Scheduler::driveUntilFinished(ProcessId target) -> ValuePtr {
 
         if (m_ready.empty()) {
             if (m_timeouts.empty()) {
-                // Nothing runnable, nothing pending — a real deadlock: some
-                // process in the chain is blocked on a receive nothing will
-                // ever satisfy.
+                // Nothing runnable, nothing pending. Usually that is a
+                // process that crashed, leaving whoever waits on its reply
+                // blocked forever — so report the CRASH, which names the
+                // method, the type and the source location, rather than the
+                // scheduler's second-order view of it (kexhq/kex#174).
+                if (auto cause = firstProcessError()) std::rethrow_exception(cause);
+                // Nothing crashed: a genuine deadlock, where some process in
+                // the chain waits on a message no one will ever send.
                 throw RuntimeError("deadlock: no process is runnable", SourceLocation{});
             }
             // Nothing runnable *right now*, but some process's `receive
@@ -165,6 +187,7 @@ auto Scheduler::spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Env
     // closure-capture convention LambdaValue already uses).
     proc->env = std::make_shared<Environment>(closureEnv);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Evaluator* evalPtr = &m_evaluator;
     const std::vector<ast::ExprPtr>* bodyPtr = &body;
@@ -176,6 +199,13 @@ auto Scheduler::spawn(const std::vector<ast::ExprPtr>& body, std::shared_ptr<Env
             procPtr->exitValue = ret.value();
         } catch (...) {
             rethrowIfForcedUnwind();
+            // A child's crash does not abort the parent — that is the
+            // process model — but the error is KEPT, because a parent then
+            // blocking forever on a reply that can never come is reported as
+            // "deadlock", and the crash is the reason. Without this the cause
+            // was discarded and only the consequence was ever seen, with no
+            // message and no location (kexhq/kex#174).
+            procPtr->error = std::current_exception();
             procPtr->exitValue = Value::none();
         }
         procPtr->finished = true;
@@ -192,6 +222,7 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
     proc->id = id;
     proc->env = std::make_shared<Environment>(m_evaluator.m_env);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Scheduler* self = this;
     ProcessId spawner = m_current;
@@ -290,6 +321,7 @@ auto Scheduler::startSupervisor(std::vector<ValuePtr> childBlocks) -> ProcessId 
     proc->id = id;
     proc->env = std::make_shared<Environment>(m_evaluator.m_env);
     proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
     Process* procPtr = proc.get();
     Scheduler* self = this;
 

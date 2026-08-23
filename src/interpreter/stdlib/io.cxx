@@ -57,11 +57,41 @@ auto Evaluator::registerIOBuiltins() -> void {
         return Value::unit();
     });
 
-    defineDual("IO::inspect", [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
+    // Registered under BOTH `IO.inspect` and the bare `inspect` UFCS name, so
+    // the two spellings are one operation — printing the value and returning
+    // it unchanged. They used to be different functions, and which one a call
+    // reached depended on how it was written (kexhq/kex#143). Mock.IO capture
+    // lives here, so it covers both.
+    auto inspectValue = [this, protocolText](std::vector<ValuePtr> args) -> ValuePtr {
         if (args.empty()) return Value::unit();
         const auto& val = args[0];
         const auto rendered = protocolText(
             val, "inspectValue", {Value::boolean(kex::color::enabled)});
+        if (m_mockIO) {
+            m_mockIOOutput += rendered + " : " + val->typeName() + "\n";
+        } else {
+            std::cerr << rendered << " "
+                      << kex::color::apply(kex::color::gray) << ":"
+                      << kex::color::apply(kex::color::reset) << " "
+                      << kex::color::apply(kex::color::cyan) << val->typeName()
+                      << kex::color::apply(kex::color::reset) << "\n";
+        }
+        return val;
+    };
+    defineDual("IO::inspect", inspectValue);
+    definePublic("inspect", inspectValue);
+
+    // The rendering half, for the Kex-level `inspect` in kex.kex: the caller
+    // has already produced the text through the Inspectable protocol, so this
+    // only writes it. BEAM has had `kex_intrinsic_io:inspectRendered/2` all
+    // along; the walker never did, because its `IO.inspect` is native and the
+    // Kex body was dead code there (kexhq/kex#143). Mock.IO capture is applied
+    // here too, so a mocked run sees `.inspect` output like any other.
+    defineIntrinsic("IO::inspectRendered", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::unit();
+        const auto& val = args[0];
+        const std::string rendered =
+            args.size() > 1 && args[1] ? args[1]->toString() : val->inspect();
         if (m_mockIO) {
             m_mockIOOutput += rendered + " : " + val->typeName() + "\n";
         } else {
@@ -110,7 +140,6 @@ auto Evaluator::registerIOBuiltins() -> void {
     // same machine, and anything unmodelled is `:unknown` rather than a name
     // the union does not cover.
     defineIntrinsic("System::os", [this](std::vector<ValuePtr>) -> ValuePtr {
-        if (m_mockOS) return Value::atom(*m_mockOS);
 #if defined(_WIN32)
         return Value::atom("windows");
 #elif defined(__EMSCRIPTEN__)
@@ -133,7 +162,6 @@ auto Evaluator::registerIOBuiltins() -> void {
     // System.bitWidth() — the machine's pointer width in bits. The BEAM
     // answers from its word size; here it IS the pointer size.
     defineIntrinsic("System::bitWidth", [this](std::vector<ValuePtr>) -> ValuePtr {
-        if (m_mockBitWidth) return Value::integer(*m_mockBitWidth);
         return Value::integer(static_cast<int64_t>(sizeof(void*) * 8));
     });
 
@@ -141,28 +169,6 @@ auto Evaluator::registerIOBuiltins() -> void {
     // for Windows behaviour can run on this one. Same shape as Mock.FS: a
     // setter per fact, and one `clear` that hands everything back. Test-only
     // like every Mock.* intrinsic (issue #144).
-    defineIntrinsic("System::mockOS", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        requireMocksAllowed("Mock.System.OS");
-        if (!args.empty())
-            if (auto* atom = std::get_if<AtomValue>(&args[0]->data))
-                m_mockOS = atom->name;
-        return Value::unit();
-    });
-
-    defineIntrinsic("System::mockBitWidth", [this](std::vector<ValuePtr> args) -> ValuePtr {
-        requireMocksAllowed("Mock.System.BITWIDTH");
-        if (!args.empty())
-            if (auto* width = std::get_if<IntValue>(&args[0]->data))
-                m_mockBitWidth = width->value;
-        return Value::unit();
-    });
-
-    defineIntrinsic("System::mockClear", [this](std::vector<ValuePtr>) -> ValuePtr {
-        requireMocksAllowed("Mock.System.clear");
-        m_mockOS.reset();
-        m_mockBitWidth.reset();
-        return Value::unit();
-    });
 
     // die(msg) — print msg to stderr and terminate the process.
     {

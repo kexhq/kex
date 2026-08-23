@@ -1,0 +1,16 @@
+# kex: check-only
+# An alias of an applied generic is transparent, but transparency is not
+# erasure: the refinement it names is still enforced (kexhq/kex#173).
+#
+# The error names the underlying type rather than the alias, which is the
+# useful wording — it says which permission is missing.
+
+using FS
+
+type ReadOnlyFile = FileHandle<CanRead, CannotWrite>
+
+foul writeThrough(h: ReadOnlyFile) -> Bool = h.write("no")
+
+main do
+  IO.printLine("unreachable")
+end

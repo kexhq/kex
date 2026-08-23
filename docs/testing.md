@@ -8,10 +8,53 @@ Testing is a library, not a language feature. `describe`, `it`, `before`, and
 runs inner-to-outer in reverse declaration order. `Mock.FS` and `Mock.Http` are
 also implemented; `using Test` and the `kex test` subcommand remain aspirational.
 
+## Replacing the world: two options
+
+The filesystem, the environment and the network are **capabilities** — modules
+whose implementation can be replaced for a lexical region with `with`. That is
+the option to reach for first:
+
+```kex
+with FS.File = Mock.Files { files: {"kex.toml": "name = \"demo\""} } do
+  assert(loadConfig() == "demo")
+end
+```
+
+`loadConfig` declares no dependency and threads no parameter; its
+`FS.File.read` call is written exactly as it is in production. That is the
+point — if faking the filesystem meant rewriting the call site, the code under
+test would no longer be the code that ships.
+
+A replacement is a value, so it holds no global state, needs no clearing,
+cannot leak past its block, and two regions can use different ones at the same
+time. The stdlib ships one for each capability so a test does not have to spell
+out every member by hand:
+
+| Capability | Stand-in | Callback |
+| --- | --- | --- |
+| `FS.File` | `Mock.Files { files: … }` | `onRead` |
+| `ENV` | `Mock.Env { vars: … }` | `onGet` |
+| `Http` | `Mock.Response { status:, body:, headers: }` | — |
+
+The callback is for when a test wants a rule rather than a fixture — content
+derived from the path, a variable that only exists under a prefix, a failure on
+the third call. It governs the whole surface, not just the one method a test
+happens to call: `onRead` answers `exists?`, `size`, `readLines` and `feed`
+too. Returning `None` means "not there", so a callback can model absence as
+well as presence, which matters because absence is an answer programs act on —
+a default path, a disabled feature.
+
+Writes are refused rather than silently accepted. A test that did not expect
+one sees it fail instead of passing for the wrong reason.
+
+What a value cannot do is **change**. A test that writes and then reads back,
+or one whose `before`/`after` hooks observe an artifact across separate blocks,
+still needs the stateful `Mock.*` functions below.
+
 ## Mocks are test-only
 
 A mock lets one part of a program lie to another about the filesystem, the
-environment, the platform, the network, or the console — and the lie is global
+environment, the network, or the console — and the lie is global
 and invisible at the call that believes it: `FS.File.read(configPath)` reviews
 as safe no matter who mocked that path. So `Mock.*` is refused unless the run
 is a test:
@@ -29,6 +72,17 @@ cannot be hijacked by a dependency that calls `Mock.ENV.set` at load time.
 
 `Mock` is also no longer part of the automatic prelude. Qualified use
 (`Mock.FS.File(...)`) loads it on demand, like any other opt-in stdlib module.
+
+The gate covers the mock *functions*, which mutate global state. The stand-ins
+above are ordinary records and reach no intrinsic, so they need no grant — a
+program using `with FS.File = Mock.Files { … }` runs anywhere, which is what
+makes them usable in an example as well as a spec.
+
+There is deliberately no `Mock.System`. Faking the reported OS only exercises a
+program's branching, not the platform behaviour behind it: the file semantics,
+path rules and process handling that actually differ are unaffected by the
+atom. Testing those means running on the platform, which CI does across macOS,
+Ubuntu and Alpine.
 
 ## Syntax
 

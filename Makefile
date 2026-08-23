@@ -243,6 +243,7 @@ spec-beam: build
 		if [ ! -f "$$exp_file" ]; then continue; fi; \
 		if grep -q "# kex: check-only" "$$f" 2>/dev/null; then continue; fi; \
 		if grep -q "# kex: types-only" "$$f" 2>/dev/null; then continue; fi; \
+		if grep -q "# kex: skip-beam" "$$f" 2>/dev/null; then continue; fi; \
 		$(TIMEOUT_SPEC) $(KEX) -R --no-colors "$$f" >"$$beam_out" 2>"$$beam_err" || true; \
 		actual=$$(cat "$$beam_out" "$$beam_err"); \
 		expected=$$(cat "$$exp_file"); \

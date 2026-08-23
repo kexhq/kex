@@ -401,6 +401,34 @@ int main() {
             assertTrue(result.find("A documented local value.") != std::string::npos,
                        "local binding documentation was not available at a reference");
         });
+        it("shows the capability a function needs and why", []() {
+            // Nothing in `deep`'s source mentions Clock — it is inherited two
+            // calls down — so hover is the only place a reader can learn it.
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer do\n    return 1000\n  end\nend\nfoul stamp() -> Integer = Clock.now()\nfoul deep() -> Integer = stamp()\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":6,"character":6}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(result.find("requires Clock") != std::string::npos,
+                       "hover did not report the inherited capability");
+            assertTrue(result.find("deep calls stamp") != std::string::npos,
+                       "hover did not explain where the requirement came from");
+            assertTrue(result.find("stamp uses Clock") != std::string::npos,
+                       "hover did not reach the end of the chain");
+        });
         it("identifies traits as traits and type constraints", []() {
             std::string messages;
             messages += frame(

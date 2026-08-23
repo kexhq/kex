@@ -94,6 +94,15 @@ module Demo do
   end
 end
 
+capability Clock do
+  foul now() -> Integer do
+    return 1000
+  end
+end
+
 main do
   Demo.log("hello")
+  with Clock = FrozenClock { at: 7 } do
+    Demo.log("frozen")
+  end
 end

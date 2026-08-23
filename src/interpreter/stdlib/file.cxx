@@ -52,12 +52,16 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (!flags) return Value::none();
 
         // Check mock first: if mocked, create an in-memory-backed handle
-        auto mockIt = m_mockFiles.find(path);
-        bool isMocked = mockIt != m_mockFiles.end();
+        auto mocked = mockFileContent(path);
+        bool isMocked = mocked.has_value();
         if (isMocked) {
-            if (*mode == "Write") mockIt->second.clear();
+            // Seed the in-memory map so the handle's cursor operations below
+            // work against a concrete buffer, whether the content came from
+            // the fixture map or from an `onRead` rule.
+            if (*mode == "Write") *mocked = std::string{};
+            m_mockFiles[path] = *mocked;
             m_mockFiles["__mock_pos__" + path] =
-                *mode == "Append" ? std::to_string(mockIt->second.size()) : "0";
+                *mode == "Append" ? std::to_string(mocked->size()) : "0";
         }
 
         std::shared_ptr<std::fstream> fs;
@@ -275,9 +279,8 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
-        auto it = m_mockFiles.find(pathStr->value);
-        if (it != m_mockFiles.end())
-            return Value::just(Value::string(it->second));
+        if (auto mocked = mockFileContent(pathStr->value))
+            return Value::just(Value::string(*mocked));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::ostringstream buf;
@@ -323,7 +326,7 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
-        if (m_mockFiles.count(pathStr->value)) return Value::boolean(true);
+        if (mockFileContent(pathStr->value)) return Value::boolean(true);
         std::error_code ec;
         return Value::boolean(std::filesystem::exists(pathStr->value, ec) &&
                               std::filesystem::is_regular_file(pathStr->value, ec));
@@ -395,9 +398,9 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
-        auto mockIt = m_mockFiles.find(pathStr->value);
-        if (mockIt != m_mockFiles.end())
-            return Value::just(Value::list(splitLines(mockIt->second)));
+        auto mocked = mockFileContent(pathStr->value);
+        if (mocked)
+            return Value::just(Value::list(splitLines((*mocked))));
         std::ifstream file(pathStr->value, std::ios::binary);
         if (!file.is_open()) return Value::none();
         std::vector<ValuePtr> result;
@@ -413,9 +416,9 @@ auto Evaluator::registerFileBuiltins() -> void {
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
         auto lines = std::make_shared<std::vector<std::string>>();
-        auto mockIt = m_mockFiles.find(pathStr->value);
-        if (mockIt != m_mockFiles.end()) {
-            std::istringstream ss(mockIt->second);
+        auto mocked = mockFileContent(pathStr->value);
+        if (mocked) {
+            std::istringstream ss((*mocked));
             std::string line;
             while (std::getline(ss, line)) lines->push_back(line);
         } else {
@@ -439,10 +442,10 @@ auto Evaluator::registerFileBuiltins() -> void {
         if (args.empty()) return Value::none();
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::none();
-        auto mockIt = m_mockFiles.find(pathStr->value);
-        if (mockIt != m_mockFiles.end())
+        auto mocked = mockFileContent(pathStr->value);
+        if (mocked)
             return Value::just(
-                Value::integer(static_cast<int64_t>(mockIt->second.size())));
+                Value::integer(static_cast<int64_t>((*mocked).size())));
         std::error_code ec;
         auto sz = std::filesystem::file_size(pathStr->value, ec);
         if (ec) return Value::none();
@@ -518,7 +521,7 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
         if (args.empty()) return Value::boolean(false);
         auto* pathStr = std::get_if<StringValue>(&args[0]->data);
         if (!pathStr) return Value::boolean(false);
-        if (m_mockFiles.count(pathStr->value)) return Value::boolean(true);
+        if (mockFileContent(pathStr->value)) return Value::boolean(true);
         std::error_code ec;
         return Value::boolean(std::filesystem::exists(pathStr->value, ec) &&
                               std::filesystem::is_regular_file(pathStr->value, ec));
@@ -685,6 +688,32 @@ auto Evaluator::registerDirectoryBuiltins() -> void {
     });
 }
 
+// A mocked file's content: the `onRead` callback when one is installed,
+// otherwise the in-memory map. The callback wins so a rule can override a
+// fixture, and its `None` means the file does not exist (kexhq/kex#143).
+auto Evaluator::mockFileContent(const std::string& path)
+    -> std::optional<std::string> {
+    if (m_mockFileReader) {
+        if (auto* fn = std::get_if<FunctionValue>(&m_mockFileReader->data);
+            fn && fn->native) {
+            auto answer = fn->native({Value::string(path)});
+            if (!answer) return std::nullopt;
+            // `Just(content)` is a hit, `None` a miss — the same Optional the
+            // real `FS.File.read` answers with.
+            if (auto* variant = std::get_if<VariantValue>(&answer->data)) {
+                if (variant->tag == "None" || variant->args.empty())
+                    return std::nullopt;
+                return variant->args[0] ? variant->args[0]->toString()
+                                        : std::string{};
+            }
+            return answer->toString();
+        }
+    }
+    auto found = m_mockFiles.find(path);
+    if (found == m_mockFiles.end()) return std::nullopt;
+    return found->second;
+}
+
 auto Evaluator::registerMockBuiltins() -> void {
     // Mock.FS.File(path, content) -> Void  — register an in-memory file
     auto mockFile = [this](std::vector<ValuePtr> args) -> ValuePtr {
@@ -711,9 +740,30 @@ auto Evaluator::registerMockBuiltins() -> void {
         requireMocksAllowed("Mock.FS.clear");
         m_mockFiles.clear();
         m_mockDirs.clear();
+        m_mockFileReader = nullptr;
         return Value::unit();
     };
 
+    // Mock.FS.files({path: content, ...}) -> Void — the whole fixture in one
+    // call, matching how `Mock.Files { files: ... }` is written.
+    auto mockFiles = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.FS.files");
+        if (args.empty()) return Value::unit();
+        if (auto* map = std::get_if<MapValue>(&args[0]->data))
+            for (const auto& [key, value] : map->entries)
+                if (key && value) m_mockFiles[key->toString()] = value->toString();
+        return Value::unit();
+    };
+
+    // Mock.FS.onRead(fn) -> Void — answer reads by rule instead of fixture.
+    auto mockOnRead = [this](std::vector<ValuePtr> args) -> ValuePtr {
+        requireMocksAllowed("Mock.FS.onRead");
+        m_mockFileReader = args.empty() ? nullptr : args[0];
+        return Value::unit();
+    };
+
+    defineIntrinsic("FS::files", std::move(mockFiles));
+    defineIntrinsic("FS::onRead", std::move(mockOnRead));
     defineIntrinsic("FS::file", std::move(mockFile));
     defineIntrinsic("FS::directory", std::move(mockDirectory));
     defineIntrinsic("FS::clear", std::move(mockClear));

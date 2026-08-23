@@ -586,6 +586,7 @@ inline auto sourceSemanticInterfaces(const std::vector<std::string>& sourceFiles
             ifaces.modules[mod.name].backendModule =
                 backendModuleFor(mod.name);
             ifaces.modules[mod.name].automaticImport = automaticImport;
+            ifaces.modules[mod.name].isCapability = mod.isCapability;
             // `foul` is written on the definition, never on the annotation
             // above it — `foul name : T` is the foul VALUE-binding form, so
             // an arrow signature cannot carry the marker. An annotated

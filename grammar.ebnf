@@ -15,6 +15,7 @@ standalone_module = MODULE type_name NEWLINE top_level_item* ;
 
 top_level_item
   = module_def
+  | capability_def
   | type_def
   | record_def
   | make_def
@@ -29,10 +30,18 @@ top_level_item
 
 module_def = MODULE UPPER_IDENT DO module_body END ;
 
+(* A capability is a module whose implementation may be replaced for a lexical
+   region by `with` (see with_expr), and whose presence a compilation target
+   may decline to provide. It parses exactly like a module — the public
+   function signatures also form the interface an implementation must satisfy,
+   and the bodies are what runs outside any `with`. *)
+capability_def = CAPABILITY UPPER_IDENT DO module_body END ;
+
 module_body = module_item* ;
 
 module_item
   = module_def
+  | capability_def
   | type_def
   | record_def
   | make_def
@@ -265,6 +274,7 @@ expr
   | assign_expr
   | return_expr
   | spawn_expr
+  | with_expr
   | break_expr
   | next_expr
   | lambda
@@ -378,6 +388,15 @@ return_expr = RETURN expr ;
 
 spawn_expr = SPAWN DO body END ;
 
+(* ===== Capability substitution ===== *)
+
+(* `with FS.File = FakeFiles { … } do … end` — every call reaching the named
+   capability from inside the body, however deep, sees the replacement; the
+   functions in between declare nothing and thread nothing. Bindings are
+   per-process and are snapshotted at spawn, so a process spawned inside the
+   region inherits the replacement and one spawned outside it never sees. *)
+with_expr = WITH type_name EQUALS expr DO body END ;
+
 (* break/next apply to the nearest enclosing while/loop only — not to
    each blocks or other closures. Using them inside a closure (a do-block
    passed to a function) or outside a loop is a compile error. *)
@@ -479,6 +498,7 @@ arg
 AFTER    = "after" ;
 BLOCK    = "Block" ;
 BREAK    = "break" ;
+CAPABILITY = "capability" ;
 COMPILED = "compiled" ;
 DO       = "do" ;
 ELIF     = "elif" ;
@@ -511,6 +531,7 @@ USING    = "using" ;
 VAR      = "var" ;
 WHEN     = "when" ;
 WHILE    = "while" ;
+WITH     = "with" ;
 
 (* Symbols *)
 ARROW        = "->" ;   (* types only: function type, return annotation *)

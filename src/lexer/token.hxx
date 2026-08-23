@@ -25,6 +25,8 @@ enum class TokenType {
     Make,
     Match,
     Module,
+    Capability,
+    With,
     Next,
     None,
     Private,

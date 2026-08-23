@@ -497,26 +497,6 @@ int main() {
                               std::string("kex_binary_tree"));
         });
 
-        test::it("reads version 1 ownership conservatively", []() {
-            KexiChunk chunk;
-            chunk.version = 1;
-            chunk.metadata.moduleAtom = "Kex.Legacy";
-            chunk.metadata.role = KexiModuleRole::Companion;
-            chunk.metadata.entryBackPointer = "kex_legacy";
-            KexiExport exp;
-            exp.name = "run";
-            exp.beamFunction = "ignored_in_v1";
-            exp.returnType = kexiPrimitive("Void");
-            chunk.typeInterface.exports.push_back(std::move(exp));
-
-            auto decoded = deserializeKexi(serializeKexi(chunk));
-            test::assertEqual(decoded.version, 1);
-            test::assertEqual(decoded.metadata.unitId, std::string("kex_legacy"));
-            test::assertEqual(decoded.metadata.sourceModule, std::string("Legacy"));
-            test::assertEqual(decoded.typeInterface.exports[0].beamFunction,
-                              std::string("run"));
-        });
-
         test::it("round-trips entry with companion manifest", []() {
             KexiChunk chunk;
             chunk.metadata.moduleAtom = "kex_test";

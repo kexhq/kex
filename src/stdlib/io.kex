@@ -1,4 +1,4 @@
-module IO do
+capability IO do
   # Writes each argument to stdout followed by a newline.
   # Multiple arguments are printed consecutively with no separator.
   #
@@ -23,7 +23,7 @@ module IO do
   # Treated as pure by the type checker — purity checking ignores this call.
   #
   # @example
-  #   xs.map(~double).inspect.filter(~even?)
+  #   xs.map(~double).inspect.filter(~even?)   # `inspected` gives the String
   inspect : A -> A
   let inspect(val: Inspectable) do
     Kex.Intrinsic.IO.inspectRendered(

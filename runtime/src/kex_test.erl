@@ -64,7 +64,15 @@ describe(Name, Fun) ->
 it(Name, Fun) ->
     Depth = get_depth(),
     Indent = indent(Depth),
-    case run_case(Fun) of
+    %% Mock state set during this test — by a `before` hook or by the body —
+    %% is discarded when the test ends, so a forgotten `Mock.FS.clear()` cannot
+    %% leak into the next one. Captured BEFORE the hooks run, so per-test setup
+    %% is undone too while anything a `before(:all)` established outside this
+    %% block survives (kexhq/kex#143).
+    SavedMocks = capture_mocks(),
+    Result = run_case(Fun),
+    restore_mocks(SavedMocks),
+    case Result of
         ok ->
             inc(kex_test_passed),
             io:format("~s~ts~ts~ts ~ts~n", [Indent, kex_intrinsic_console:'Green'(),
@@ -75,6 +83,23 @@ it(Name, Fun) ->
                       [16#2717], kex_intrinsic_console:'Reset'(), kex_io:to_string(Name), Msg])
     end,
     'None'.
+
+%% Every mock keeps its state in the process dictionary, under an atom key
+%% beginning `kex_mock_` or a tuple whose first element is one (the per-path
+%% `{kex_mock_file, Path}` entries).
+is_mock_key(Key) when is_atom(Key) ->
+    lists:prefix("kex_mock_", atom_to_list(Key));
+is_mock_key(Key) when is_tuple(Key), tuple_size(Key) > 0 ->
+    is_mock_key(element(1, Key));
+is_mock_key(_) -> false.
+
+capture_mocks() ->
+    [Entry || {Key, _} = Entry <- erlang:get(), is_mock_key(Key)].
+
+restore_mocks(Saved) ->
+    [erase(Key) || {Key, _} <- erlang:get(), is_mock_key(Key)],
+    [put(Key, Value) || {Key, Value} <- Saved],
+    ok.
 
 before(Fun) -> register_hook(before, each, Fun).
 before(Scope, Fun) -> register_hook(before, Scope, Fun).

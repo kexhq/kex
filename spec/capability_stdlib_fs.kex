@@ -1,0 +1,49 @@
+# The point of the whole capability feature: replacing a STDLIB capability for
+# a lexical region, with no global mock state (kexhq/kex#143).
+#
+# `FS.File` is declared `capability` in src/stdlib/fs.kex — a one-word change,
+# because the module was already the right shape: every member is `foul` and
+# reaches the real filesystem. `FS.Path` deliberately stays a plain module,
+# being pure string work with no implementation to substitute.
+#
+# Nothing here mutates global state, nothing needs clearing afterwards, and the
+# replacement cannot leak out of the block. `load` below declares no
+# dependency and threads nothing — its call to `FS.File.read` is written
+# exactly as it would be in production.
+
+using FS
+
+record FakeFiles do
+  canned : String
+end
+
+# A stand-in must provide everything the capability declares — the capability's
+# members ARE the interface, so a fake cannot quietly omit one.
+make FakeFiles, implement: FS.File do
+  foul read(path) = Just(@canned)
+  foul open(path, mode) = Error(OpenFailed(path))
+  foul write(path, content) = false
+  foul append(path, content) = false
+  foul exists?(path) = true
+  foul file?(path) = true
+  foul directory?(path) = false
+  foul delete(path) = false
+  foul copy(src, dst) = false
+  foul rename(src, dst) = false
+  foul readLines(path) = [@canned]
+  foul feed(path) = []
+  foul size(path) = 0
+  foul absolute(path) = Just(path)
+end
+
+foul load(p: String) -> String = FS.File.read(p).or("(missing)")
+
+main do
+  with FS.File = FakeFiles { canned: "from the fake" } do
+    IO.printLine(load("/etc/hosts"))
+    IO.printLine(FS.File.exists?("/definitely/not/here"))
+  end
+
+  # Outside the region the real filesystem is back — this path does not exist.
+  IO.printLine(FS.File.exists?("/definitely/not/here"))
+end

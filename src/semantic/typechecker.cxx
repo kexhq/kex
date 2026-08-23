@@ -291,6 +291,8 @@ auto TypeChecker::check(const ast::Program& program,
         for (const auto& trait : m_importedInterfaces->traits)
             m_traits.define(trait);
     registerTraits(program);
+    registerCapabilityTraits(program);
+    registerLocalConformances(program);
     if (m_importedInterfaces)
         for (const auto& c : m_importedInterfaces->traitConformances)
             m_traits.registerImplementation(c.typeName, c.traitName);
@@ -889,6 +891,156 @@ auto TypeChecker::representationsCompatible(const TypePtr& from,
             m_traits.satisfies(target, "Float"));
 }
 
+// `check()` runs every FunctionDef before any make block (see its two-pass
+// comment), so while a function body is being checked no LOCAL trait
+// conformance has been registered yet — only imported ones and the builtins.
+// A trait-typed default parameter value therefore had nothing to match
+// against and was rejected (kexhq/kex#175). Registering the declared
+// (type, trait) pairs up front fixes that; `checkTraitImplementation` still
+// runs later and still reports a make block that fails to provide the
+// trait's required methods.
+// `capability Name do ... end` declares an interface AND its default
+// implementation in one. The interface half is a trait synthesized from the
+// module's own public functions, so `make Fake, implement: Name` works with
+// the machinery that already exists, and the bodies remain the default the
+// capability carries outside any `with` (kexhq/kex#143).
+auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void {
+    std::function<void(const ast::ModuleDef&)> walk =
+        [&](const ast::ModuleDef& module) {
+        if (module.isCapability) {
+            m_capabilities.insert(module.name);
+            TraitDef td;
+            td.name = module.name;
+            for (const auto& mi : module.body)
+                std::visit([&](const auto& mn) {
+                    using MT = std::decay_t<decltype(mn)>;
+                    if constexpr (std::is_same_v<MT,
+                                                 std::unique_ptr<ast::FunctionDef>>) {
+                        if (!mn || mn->clauses.empty()) return;
+                        // A capability's INTERFACE is its `foul` members. A
+                        // pure member performs no effect, so there is nothing
+                        // for a stand-in to substitute and no reason to make
+                        // one implement it — `IO.inspect` is deliberately pure
+                        // (it is the debug hatch purity checking ignores) and
+                        // requiring it would have kept `IO` from being a
+                        // capability at all (kexhq/kex#143).
+                        if (!mn->isFoul) return;
+                        Signature sig;
+                        sig.name = mn->name;
+                        sig.isFoul = mn->isFoul;
+                        // Arity matters for conformance; the parameter types
+                        // stay permissive here because the capability's own
+                        // bodies are checked like any other module's.
+                        for (size_t i = 0; i < mn->clauses.front().params.size(); i++)
+                            sig.params.push_back(Type::unknown());
+                        sig.result = Type::unknown();
+                        td.requiredMethods.push_back(std::move(sig));
+                    }
+                }, mi);
+            m_traits.define(std::move(td));
+        }
+        for (const auto& mi : module.body)
+            std::visit([&](const auto& mn) {
+                using MT = std::decay_t<decltype(mn)>;
+                if constexpr (std::is_same_v<MT, std::unique_ptr<ast::ModuleDef>>) {
+                    if (mn) walk(*mn);
+                }
+            }, mi);
+    };
+    for (const auto& item : program.items)
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) walk(*node);
+            }
+        }, item);
+
+    // A capability declared in an imported module is not in this AST, so its
+    // interface is the only place its members are known. Registering it here
+    // is what lets a consumer write `with FS.File = ...` and
+    // `make Fake, implement: FS.File` against a capability it did not declare.
+    if (m_importedInterfaces)
+        for (const auto& [name, interface] : m_importedInterfaces->modules) {
+            if (!interface.isCapability) continue;
+            m_capabilities.insert(name);
+            if (m_traits.get(name)) continue;
+            TraitDef td;
+            td.name = name;
+            for (const auto& [member, overloads] : interface.exports) {
+                if (overloads.empty()) continue;
+                // Foul members only — see the local branch above.
+                if (!overloads.front().signature.isFoul) continue;
+                Signature sig = overloads.front().signature;
+                sig.name = member;
+                td.requiredMethods.push_back(std::move(sig));
+            }
+            // `exports` is a hash map, so the loop above yields its members in
+            // an order that differs between standard-library implementations.
+            // A trait's required methods are its DICTIONARY LAYOUT — slot i
+            // means one method to whoever builds the dictionary and another to
+            // whoever indexes it — so an unsorted list makes the emitted code
+            // depend on the host's hash order. It built and passed on macOS
+            // and died `badarg` on Linux, on both glibc and musl
+            // (kexhq/kex#143).
+            std::sort(td.requiredMethods.begin(), td.requiredMethods.end(),
+                      [](const Signature& a, const Signature& b) {
+                          if (a.name != b.name) return a.name < b.name;
+                          return a.params.size() < b.params.size();
+                      });
+            m_traits.define(std::move(td));
+        }
+}
+
+auto TypeChecker::registerLocalConformances(const ast::Program& program) -> void {
+    // A record declared in a module is known by its QUALIFIED name, so a
+    // `make` block inside that module has to register its conformance under
+    // the same name. Registering the bare one left `make Files, implement:
+    // FS.File` inside `module Mock` conforming a type called `Files` that
+    // nothing is, and `with FS.File = Mock.Files { ... }` was rejected as not
+    // implementing the capability (kexhq/kex#143).
+    auto registerOne = [this](const ast::MakeDef& def,
+                              const std::string& modulePath) {
+        if (def.implements.empty() || !def.target) return;
+        std::string typeName;
+        if (auto* tn = std::get_if<ast::TypeName>(&def.target->kind))
+            if (tn->parts.size() == 1) typeName = tn->parts[0];
+        if (auto* gt = std::get_if<ast::GenericType>(&def.target->kind))
+            if (gt->name.parts.size() == 1) typeName = gt->name.parts[0];
+        if (typeName.empty()) return;
+        for (const auto& traitName : def.implements) {
+            m_traits.registerImplementation(typeName, traitName);
+            if (!modulePath.empty())
+                m_traits.registerImplementation(modulePath + "." + typeName,
+                                                traitName);
+        }
+    };
+    std::function<void(const ast::ModuleDef&, const std::string&)> walkModule =
+        [&](const ast::ModuleDef& module, const std::string& prefix) {
+        const std::string path =
+            prefix.empty() ? module.name : prefix + "." + module.name;
+        for (const auto& mi : module.body)
+            std::visit([&](const auto& mn) {
+                using MT = std::decay_t<decltype(mn)>;
+                if constexpr (std::is_same_v<MT, std::unique_ptr<ast::MakeDef>>) {
+                    if (mn) registerOne(*mn, path);
+                } else if constexpr (std::is_same_v<MT,
+                                                    std::unique_ptr<ast::ModuleDef>>) {
+                    if (mn) walkModule(*mn, path);
+                }
+            }, mi);
+    };
+    for (const auto& item : program.items) {
+        std::visit([&](const auto& node) {
+            using T = std::decay_t<decltype(node)>;
+            if constexpr (std::is_same_v<T, std::unique_ptr<ast::MakeDef>>) {
+                if (node) registerOne(*node, "");
+            } else if constexpr (std::is_same_v<T, std::unique_ptr<ast::ModuleDef>>) {
+                if (node) walkModule(*node, "");
+            }
+        }, item);
+    }
+}
+
 auto TypeChecker::registerTraits(const ast::Program& program) -> void {
     for (const auto& item : program.items) {
         std::visit([this](const auto& node) {
@@ -956,8 +1108,19 @@ auto TypeChecker::registerTypeAliases(const ast::Program& program) -> void {
                 // immediately, before falling through to the constructor check.
                 // A leading `|` opts out, declaring a one-variant ADT instead.
                 if (node->variants->size() == 1 && !node->leadingPipe) {
-                    auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
+                    const auto& only = (*node->variants)[0]->kind;
+                    // An APPLIED generic is transparent too. `type ReadOnlyFile
+                    // = FileHandle<CanRead, CannotWrite>` looks
+                    // constructor-shaped to the check below — `Name<args>`
+                    // parses much like `Name(args)` — so it fell through and
+                    // became an opaque type of its own, matching not even the
+                    // type it aliases (kexhq/kex#173).
+                    const auto* generic = std::get_if<ast::GenericType>(&only);
+                    if (std::holds_alternative<ast::TypeName>(only) ||
+                        (generic && generic->applied)) {
+                        m_typeAliases[node->name] = typeDefToType(*node);
+                        return;
+                    }
                 }
                 // Only register as alias if no variant is constructor-shaped.
                 for (const auto& v : *node->variants) {
@@ -1016,8 +1179,19 @@ auto TypeChecker::registerTypeAliasesInModule(const ast::ModuleDef& mod) -> void
                 // immediately, before falling through to the constructor check.
                 // A leading `|` opts out, declaring a one-variant ADT instead.
                 if (node->variants->size() == 1 && !node->leadingPipe) {
-                    auto* tn = std::get_if<ast::TypeName>(&(*node->variants)[0]->kind);
-                    if (tn) { m_typeAliases[node->name] = typeDefToType(*node); return; }
+                    const auto& only = (*node->variants)[0]->kind;
+                    // An APPLIED generic is transparent too. `type ReadOnlyFile
+                    // = FileHandle<CanRead, CannotWrite>` looks
+                    // constructor-shaped to the check below — `Name<args>`
+                    // parses much like `Name(args)` — so it fell through and
+                    // became an opaque type of its own, matching not even the
+                    // type it aliases (kexhq/kex#173).
+                    const auto* generic = std::get_if<ast::GenericType>(&only);
+                    if (std::holds_alternative<ast::TypeName>(only) ||
+                        (generic && generic->applied)) {
+                        m_typeAliases[node->name] = typeDefToType(*node);
+                        return;
+                    }
                 }
                 for (const auto& v : *node->variants) {
                     if (extractConstructorName(v)) return;
@@ -1958,7 +2132,20 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     if (auto imports = m_functionImports.find(&def);
         imports != m_functionImports.end())
         m_declarationImports = imports->second;
-    const auto purityKey = m_currentModulePath + "\n" + def.name;
+    // Purity is scoped to the RECEIVER as well as the module: two types'
+    // methods are not overloads of each other, so `FileHandle`'s pure `read`
+    // and a `make Mock.Files` block's `foul read` are unrelated definitions
+    // that merely share a name (kexhq/kex#143).
+    //
+    // `declarationKey` stays module-scoped: it looks up standalone
+    // annotations, which are declared at module level and matched by name.
+    const auto declarationKey = m_currentModulePath + "\n" + def.name;
+    const auto purityKey =
+        m_currentModulePath + "\n" +
+        (m_inMakeBlock && m_currentMakeType
+             ? typeToString(m_currentMakeType) + "."
+             : std::string()) +
+        def.name;
     if (auto [purity, inserted] =
             m_overloadPurity.emplace(purityKey, def.isFoul);
         !inserted && purity->second != def.isFoul) {
@@ -1986,7 +2173,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
     // Pre-registered provisional sigs (for forward-reference/recursion) are
     // in m_userSignatures but NOT in m_annotationDeclared, so they don't
     // affect param-type selection or return-type verification here.
-    const auto scopedDeclared = m_scopedDeclaredSignatures.find(purityKey);
+    const auto scopedDeclared = m_scopedDeclaredSignatures.find(declarationKey);
     auto* declared = [&]() -> const Signature* {
         if (scopedDeclared == m_scopedDeclaredSignatures.end()) return nullptr;
         // A lone declaration is still the contract even when its arity is
@@ -2127,7 +2314,7 @@ auto TypeChecker::checkFunctionDef(const ast::FunctionDef& def) -> void {
         }
         if (declared && declared->params.size() != clause.params.size()) {
             bool hasMatchingAnnotation = false;
-            auto it = m_annotationArities.find(purityKey);
+            auto it = m_annotationArities.find(declarationKey);
             if (it != m_annotationArities.end()) {
                 hasMatchingAnnotation = it->second.count(clause.params.size()) > 0;
             }
@@ -2905,6 +3092,37 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
                 m_adtVariants.count(node.name) || m_typeAliases.count(node.name))
                 return Type::named(node.name);
             return Type::unknown();
+        }
+        else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+            std::string capability;
+            for (size_t i = 0; i < node.capability.parts.size(); ++i) {
+                if (i) capability += ".";
+                capability += node.capability.parts[i];
+            }
+            // Only a declared capability may be replaced. Without this, any
+            // module is substitutable and the keyword means nothing, and a
+            // typo binds nothing while the body still runs against the real
+            // implementation — the silent-mock failure the feature exists to
+            // remove (kexhq/kex#180).
+            auto actual = node.value ? resolve(inferExpr(*node.value))
+                                     : Type::unknown();
+            if (!m_capabilities.count(capability)) {
+                error(expr.location,
+                      "'" + capability + "' is not a capability, so it cannot "
+                      "be replaced by 'with' — declare it as "
+                      "`capability " + capability + " do ... end`");
+            } else if (!std::holds_alternative<UnknownType>(actual->kind) &&
+                       !std::holds_alternative<TypeVar>(actual->kind) &&
+                       !satisfiesTrait(actual, capability)) {
+                // The replacement has to provide what the capability declares.
+                error(expr.location,
+                      "replacement for capability '" + capability +
+                      "' does not implement it: " + typeToString(actual));
+            }
+            pushScope();
+            auto bodyType = inferBody(node.body);
+            popScope();
+            return bodyType;
         }
         else if constexpr (std::is_same_v<T, ast::UsingExpr>) {
             ImportSelection selection;
@@ -3937,6 +4155,14 @@ auto TypeChecker::inferExpr(const ast::Expr& expr) -> TypePtr {
             // this, `User { name: 42 }` on `name : String` was accepted and
             // only surfaced later — or not at all.
             const auto recordName = resolveRecordName(node.typeName);
+            // Naming a qualified record is a reference to its MODULE: the
+            // record's `make` block and field defaults live in that source,
+            // and on BEAM the module has to be in the build at all
+            // (kexhq/kex#143). The module is the qualifier, not the record —
+            // inserting `Mock.Files` here put a type name into a list of
+            // modules to compile.
+            if (auto dot = recordName.rfind('.'); dot != std::string::npos)
+                m_referencedModules.insert(recordName.substr(0, dot));
             auto record = m_recordFields.find(recordName);
             for (const auto& [fieldName, val] : node.fields) {
                 if (!val) continue;
@@ -4610,7 +4836,7 @@ auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
                 return Type::named(owner->second);
             // Type ARGUMENTS are left alone: a phantom typestate parameter is
             // spelled with constructors too (`FileHandle<Write>`), and
-            // widening those to their ADT (`FileHandle<WriteCapability>`)
+            // widening those to their ADT (`FileHandle<WritePermission>`)
             // erases exactly the distinction the parameter exists to make.
             return type;
         }
@@ -5348,6 +5574,18 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
         // genuinely generic contract.
         bool anyUnknownParamCandidate = false;
         for (const auto& sig : *sigs) {
+            // A signature this call could not possibly reach says nothing
+            // about it. `write` is FileHandle's at 2 parameters and a
+            // capability stand-in's at 3, and letting the 3-parameter one
+            // count as an "unknown candidate" switched off the mismatch report
+            // for the 2-argument call — writing through a read-only handle
+            // stopped being an error the moment any such stand-in existed
+            // (kexhq/kex#143). Same range the overload match below uses.
+            const std::size_t requiredParams =
+                sig.requiredParams.value_or(sig.params.size());
+            if (argTypes.size() < requiredParams ||
+                argTypes.size() > sig.params.size())
+                continue;
             if (!sig.params.empty()) {
                 if (std::holds_alternative<ConstrainedType>(sig.params[0]->kind))
                     anyConstrainedFirstParam = true;
@@ -6062,6 +6300,21 @@ auto TypeChecker::checkCall(const std::string& name, const std::vector<TypePtr>&
     std::unordered_set<std::string> shown;
     for (const auto& sig : sortedSigs) {
         if (anyConcreteSig && isVacuousSig(&sig)) continue;
+        // An un-annotated signature this call could not reach is noise, not a
+        // suggestion. The stdlib ships capability stand-ins, so `write` also
+        // names `Mock.Files -> Any -> Any -> Bool`, and printing that under a
+        // 2-argument error told the reader to consider a method taking three
+        // (kexhq/kex#143). A CONCRETE overload at another arity still earns
+        // its line — `split : String -> [String]` is worth seeing even when
+        // the call passed two arguments.
+        const std::size_t requiredParams =
+            sig.requiredParams.value_or(sig.params.size());
+        const bool arityCannotMatch = argTypes.size() < requiredParams ||
+                                      argTypes.size() > sig.params.size();
+        if (arityCannotMatch &&
+            std::any_of(sig.params.begin(), sig.params.end(),
+                        mentionsUnknownType))
+            continue;
         auto rendered = displaySignature(name, sig);
         if (!shown.insert(rendered).second) continue;
         message += "\n\n" + rendered;

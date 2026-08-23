@@ -1,11 +1,16 @@
 module FS do
   type FilePath = String
   type FileModes = Read | Write | Append | ReadWrite
-  type ReadCapability = CanRead | CannotRead
-  type WriteCapability = CanWrite | CannotWrite
+  type ReadPermission = CanRead | CannotRead
+  type WritePermission = CanWrite | CannotWrite
   type FileError = OpenFailed(FilePath)
 
-  module File do
+  # A capability: every member reaches the real filesystem, so a test can
+  # replace the whole thing for a lexical region with `with FS.File = ...`
+  # instead of mutating global mock state (kexhq/kex#143). The boundary is here
+  # rather than on `FS`, because `FS.Path` below is pure string work with no
+  # implementation to substitute.
+  capability File do
     open : FilePath -> Read -> Result<FileHandle<CanRead, CannotWrite>, FileError>
     open : FilePath -> Write -> Result<FileHandle<CannotRead, CanWrite>, FileError>
     open : FilePath -> Append -> Result<FileHandle<CannotRead, CanWrite>, FileError>
@@ -265,5 +270,5 @@ module FS do
   end
 end
 
-# Mock.FS declarations are in mock.kex alongside Mock.Http, Mock.ENV,
-# Mock.System and Mock.IO.
+# Mock.FS declarations are in mock.kex alongside Mock.Http, Mock.ENV and
+# Mock.IO.

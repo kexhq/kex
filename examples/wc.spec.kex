@@ -1,41 +1,76 @@
 # kex: no-check
-# Specs for wc.kex — exercises wordCount and sumCounts via Mock.FS.
+# Specs for wc.kex — exercises wordCount and sumCounts against a replaced
+# `FS.File` capability, so no real files are involved (kexhq/kex#143).
+#
+# `wc.kex` is untouched by this: `wordCount` declares no dependency and its
+# `FS.File.exists?`/`readLines`/`size` calls are written exactly as they are
+# in production. The replacement is what changes underneath them, and it
+# cannot outlive its block — there is nothing to clear afterwards.
 
 using FS
 
+record FakeFiles do
+  files : Map<String, String>
+end
+
+make FakeFiles, implement: FS.File do
+  foul read(path) = @files.get(path)
+
+  # `String.lines` already drops one trailing newline rather than reporting an
+  # empty final line, which is what the real `readLines` does too.
+  foul readLines(path) = @files.get(path).map { |content| content.lines }
+
+  foul size(path) = @files.get(path).map { |content| content.bytes.count }
+  foul exists?(path) = @files.has?(path)
+  foul file?(path) = @files.has?(path)
+
+  foul open(path, mode) = Error(OpenFailed(path))
+  foul write(path, content) = false
+  foul append(path, content) = false
+  foul directory?(path) = false
+  foul delete(path) = false
+  foul copy(src, dst) = false
+  foul rename(src, dst) = false
+  foul feed(path) = []
+  foul absolute(path) = Just(path)
+end
+
+let noFiles = FakeFiles { files: {} }
+
 describe("wordCount") do
   it("counts lines, words, and bytes") do
-    Mock.FS.File("a.txt", "hello world\nfoo bar baz\n")
-    let counts = wordCount("a.txt")
-    assert(counts.first.or(-1) == 2)
-    assert(counts.second.or(-1) == 5)
-    assert(counts.third.or(-1) == 24)
-    Mock.FS.clear()
+    with FS.File = FakeFiles { files: {"a.txt": "hello world\nfoo bar baz\n"} } do
+      let counts = wordCount("a.txt")
+      assert(counts.first.or(-1) == 2)
+      assert(counts.second.or(-1) == 5)
+      assert(counts.third.or(-1) == 24)
+    end
   end
 
   it("counts a single line with no trailing newline") do
-    Mock.FS.File("b.txt", "one two three")
-    let counts = wordCount("b.txt")
-    assert(counts.first.or(-1) == 1)
-    assert(counts.second.or(-1) == 3)
-    Mock.FS.clear()
+    with FS.File = FakeFiles { files: {"b.txt": "one two three"} } do
+      let counts = wordCount("b.txt")
+      assert(counts.first.or(-1) == 1)
+      assert(counts.second.or(-1) == 3)
+    end
   end
 
   it("returns zeros for an empty file") do
-    Mock.FS.File("empty.txt", "")
-    let counts = wordCount("empty.txt")
-    assert(counts.first.or(-1) == 0)
-    assert(counts.second.or(-1) == 0)
-    assert(counts.third.or(-1) == 0)
-    Mock.FS.clear()
+    with FS.File = FakeFiles { files: {"empty.txt": ""} } do
+      let counts = wordCount("empty.txt")
+      assert(counts.first.or(-1) == 0)
+      assert(counts.second.or(-1) == 0)
+      assert(counts.third.or(-1) == 0)
+    end
   end
 
   it("returns zeros for a missing file") do
-    Mock.FS.clear()
-    let counts = wordCount("/no/such/file.txt")
-    assert(counts.first.or(-1) == 0)
-    assert(counts.second.or(-1) == 0)
-    assert(counts.third.or(-1) == 0)
+    with FS.File = noFiles do
+      let counts = wordCount("/no/such/file.txt")
+      assert(counts.first.or(-1) == 0)
+      assert(counts.second.or(-1) == 0)
+      assert(counts.third.or(-1) == 0)
+    end
   end
 end
 

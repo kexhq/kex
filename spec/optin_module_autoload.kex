@@ -1,0 +1,21 @@
+# A qualified reference loads the module that defines the type, without
+# `using` (kexhq/kex#143).
+#
+# Naming `Parsing.Input` was enough to CONSTRUCT one — the declaration comes
+# from the compiled interface — but its field defaults and its `make` block
+# live in the source, which was never loaded. So `pos` came back missing and
+# every method was "Undefined method", unless the file happened to say
+# `using Parsing`. The fix loads the module at construction, which is the only
+# point where both are still needed, and it had to land on BOTH backends at
+# once: applying it to one produced a divergence rather than a fix.
+
+main do
+  # `pos : Integer = 0` is a DEFAULT declared in parsing.kex. Reading it back
+  # is what proves the module was loaded, not just its declaration seen.
+  let cursor = Parsing.Input { input: "ab" }
+  IO.printLine(cursor.pos)
+
+  # ...and its make block answers, which is the other half.
+  IO.printLine(cursor.peek)
+  IO.printLine(cursor.advance.pos)
+end

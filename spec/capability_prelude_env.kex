@@ -1,0 +1,54 @@
+# A PRELUDE capability replaced for a lexical region (kexhq/kex#143).
+#
+# `FS.File` (spec/capability_stdlib_fs.kex) is opt-in, so `using FS` merges its
+# source into the program and its calls resolve locally. `ENV` is in the
+# prelude and reaches a consumer only through the compiled interface, which is
+# a different lowering route — this spec pins that route, because when it was
+# missing `with ENV = ...` compiled, ran, and silently used the real
+# environment. Failing open like that is the exact thing capabilities exist to
+# prevent, so it is worth a test of its own.
+
+record FakeEnv do
+  vars : Map<String, String>
+end
+
+make FakeEnv, implement: ENV do
+  foul get(key) = @vars.get(key)
+  foul get(key, default) = @vars.get(key).or(default)
+  foul has?(key) = @vars.has?(key)
+  foul keys = @vars.keys
+  foul values = @vars.values
+  foul count = @vars.count
+  foul each(f) = Void
+  foul entries = @vars.entries
+end
+
+# Declares no dependency and threads nothing; its `ENV.get` is written exactly
+# as it would be in production.
+foul home() -> String = ENV.get("HOME", "(unset)")
+
+main do
+  with ENV = FakeEnv { vars: {"HOME": "/fake/home"} } do
+    IO.printLine(home())
+    IO.printLine(ENV.has?("NOTHING_IS_SET_TO_THIS"))
+
+    # The replacement covers the WHOLE surface, not just the lookup a test
+    # happens to call: `has?`, `keys` and `count` answer from the same
+    # environment `get` does. A partial overlay would let a program branch on
+    # `count` or `keys` and see the real process environment mid-test.
+    IO.printLine(ENV.count)
+    IO.printLine(ENV.keys.join(","))
+    IO.printLine(ENV.values.join(","))
+    IO.printLine(ENV.entries.count)
+
+    # Absence is an answer programs act on — a default path, a disabled
+    # feature — so a replacement has to be able to produce it, not only
+    # produce values. PATH is always set in a real process; here it is not.
+    IO.printLine(ENV.has?("PATH"))
+    IO.printLine(ENV.get("PATH", "absent"))
+  end
+
+  # Outside the region the real environment is back — HOME is always set, and
+  # the invented name never is.
+  IO.printLine(ENV.has?("NOTHING_IS_SET_TO_THIS"))
+end

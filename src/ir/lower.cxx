@@ -265,6 +265,17 @@ struct Lowering {
             }
         }
         if (records.count(name)) return name;
+        // The module whose `make` block named this type. A dispatcher is
+        // generated after the module walk, so `currentModulePath` no longer
+        // says where the name was written, and the suffix match below gives up
+        // when two modules share a last segment — `Mock.Response` and
+        // `Web.Response` do, which left the guard testing a bare `Response`
+        // tag that no value carries (kexhq/kex#143).
+        if (auto declaring = localTypeModules.find(name);
+            declaring != localTypeModules.end()) {
+            const auto candidate = declaring->second + "." + name;
+            if (records.count(candidate)) return candidate;
+        }
         // A qualified identity the record table does not know under that
         // spelling (a reified value carries the interpreter's `Boxes.Box`)
         // still names the record declared as its last segment.
@@ -358,6 +369,20 @@ struct Lowering {
     // Top-level zero-parameter functions (e.g. `foul name do ... end`). A bare
     // reference to one (no parens) is a call `apply 'name'/0()`, not a var.
     std::unordered_set<std::string> zeroArgFns;
+    // Capability substitution threads one context — a map from capability
+    // name to implementation — through foul functions instead of keeping
+    // per-process state (kexhq/kex#181). Nothing is emitted unless the unit
+    // declares a capability, so a program using none compiles unchanged.
+    std::unordered_set<std::string> foulFns;
+    std::unordered_set<std::string> capabilityModules;
+    // Name of the context variable in scope; empty means there is none, and
+    // a call from there passes a fresh empty map.
+    std::string currentContextVar;
+    // Threading is per-unit for now: a unit that declares no capability emits
+    // exactly what it did before. Going unconditional needs imported foulness
+    // at the call site first — a consumer cannot know that the prelude's
+    // `Task.start` became start/2 without it — see kexhq/kex#181.
+    auto threadsCapabilities() const -> bool { return true; }
     // Top-level free function → its ordered parameter names ("" for an
     // unnamed/pattern param). Lets a call with named args reorder them into
     // positional slots.
@@ -498,6 +523,160 @@ struct Lowering {
                                one(std::move(list)))));
     }
 
+    // One capability-substitution dispatch, shared by every path that can
+    // reach a capability. Enumerating sites is how prelude capabilities
+    // stayed broken — a missed one compiles and silently calls the real
+    // implementation, which is the failure this feature exists to remove
+    // (kexhq/kex#143). Callers supply only how to build their own direct
+    // call for the miss case.
+    auto capabilityDispatch(
+        const std::string& capability, const std::string& method,
+        const std::vector<ast::ExprPtr>& sourceArgs,
+        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
+        -> ExprPtr {
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> lowered;
+        for (const auto& a : sourceArgs) lowered.push_back(atomize(a, binds));
+        return capabilityDispatchLowered(capability, method, std::move(lowered),
+                                         binds, directCall);
+    }
+
+    // The same dispatch where the arguments are already lowered — the
+    // qualified-call path builds its argument slots before it knows the
+    // target is a capability.
+    auto capabilityDispatchLowered(
+        const std::string& capability, const std::string& method,
+        std::vector<ExprPtr> loweredArgs, std::vector<Binding>& binds,
+        const std::function<ExprPtr(std::vector<ExprPtr>)>& directCall)
+        -> ExprPtr {
+        std::vector<std::string> argVars;
+        for (auto& a : loweredArgs) {
+            auto name = fresh("CapArg");
+            binds.push_back({name, std::move(a)});
+            argVars.push_back(name);
+        }
+        auto varsOf = [&]() {
+            std::vector<ExprPtr> out;
+            for (const auto& v : argVars) out.push_back(var(v));
+            return out;
+        };
+        std::vector<ExprPtr> getArgs;
+        getArgs.push_back(lit(LitKind::String, capability));
+        getArgs.push_back(currentContext());
+        getArgs.push_back(lit(LitKind::Atom, "undefined"));
+        Match m;
+        m.subjects.push_back(callE("maps", "get", 3, std::move(getArgs)));
+
+        MatchClause missing;
+        auto undef = std::make_unique<Pattern>();
+        undef->kind = PatKind::Lit;
+        undef->litKind = LitKind::Atom;
+        undef->litText = "undefined";
+        missing.patterns.push_back(std::move(undef));
+        missing.body = directCall(varsOf());
+        m.clauses.push_back(std::move(missing));
+
+        MatchClause replaced;
+        auto impl = fresh("Impl");
+        auto bound = std::make_unique<Pattern>();
+        bound->kind = PatKind::Var;
+        bound->name = impl;
+        replaced.patterns.push_back(std::move(bound));
+        auto passed = varsOf();
+        // A capability's members are foul, so the implementation takes the
+        // context too — the runtime dispatch hands it over as a direct call
+        // would.
+        passed.push_back(currentContext());
+        auto passedList = std::make_unique<Expr>();
+        passedList->node = MakeList{std::move(passed), std::nullopt};
+        std::vector<ExprPtr> dispatchArgs;
+        dispatchArgs.push_back(var(impl));
+        dispatchArgs.push_back(lit(LitKind::String, method));
+        dispatchArgs.push_back(std::move(passedList));
+        replaced.body =
+            callE("kex_io", "dispatch_method", 3, std::move(dispatchArgs));
+        m.clauses.push_back(std::move(replaced));
+
+        auto chosen = std::make_unique<Expr>();
+        chosen->node = std::move(m);
+        return wrapLets(binds, std::move(chosen));
+    }
+
+    // Is this name a capability, declared here or imported?
+    auto isCapabilityModule(const std::string& name) const -> bool {
+        return capabilityModules.count(name) > 0 ||
+               (externalModules &&
+                externalModules->capabilityModules.count(name) > 0);
+    }
+
+    // Is `method` part of `capability`'s substitutable INTERFACE? Only its
+    // `foul` members are — a pure member performs no effect, so there is
+    // nothing to replace, and routing it through the substitution dispatch
+    // actively breaks it: that dispatch passes the source arguments only, so
+    // `IO.inspect(v)` lost the trait dictionary its `Inspectable` parameter
+    // needs and rendered structurally instead of calling the user's
+    // `inspectValue` (kexhq/kex#143).
+    auto capabilityInterfaceHas(const std::string& capability,
+                                const std::string& method) const -> bool {
+        // `foulExports` records exactly the foul exports, one entry per
+        // overload as `Module.member/arity` — which is the interface.
+        if (externalModules &&
+            externalModules->capabilityModules.count(capability)) {
+            const auto prefix = capability + "." + method + "/";
+            return std::any_of(externalModules->foulExports.begin(),
+                               externalModules->foulExports.end(),
+                               [&](const std::string& entry) {
+                                   return entry.rfind(prefix, 0) == 0;
+                               });
+        }
+        // Declared in this unit: `foulFns` carries the names marked `foul`.
+        if (capabilityModules.count(capability)) return foulFns.count(method) > 0;
+        return true;
+    }
+
+    // The context to hand a callee: whatever this function holds, or an empty
+    // map where there is none (a pure caller, or top level).
+    auto currentContext() -> ExprPtr {
+        if (!currentContextVar.empty()) return var(currentContextVar);
+        return callE("maps", "new", 0, {});
+    }
+    // Does a call to this name need the context appended?
+    auto callNeedsContext(const std::string& name) const -> bool {
+        return threadsCapabilities() && foulFns.count(name) > 0;
+    }
+    // Every local call goes through here so the context is appended in one
+    // place. Missing a call site shows up as `undef` at runtime rather than a
+    // compile error, so they must not be patched individually.
+    // A call into another compiled unit. An imported foul function takes the
+    // capability context exactly as a local one does, and the consumer only
+    // learns that from the interface — so every external call goes through
+    // here (kexhq/kex#181).
+    auto externalCallExpr(const std::string& qualKey, const std::string& atom,
+                          const std::string& beamFunction, int arity,
+                          std::vector<ExprPtr> args) -> ExprPtr {
+        // The context is NOT appended here yet. Doing so is only correct once
+        // the unit being called also threads — the prelude declares no
+        // capability today, so its foul functions are still at their original
+        // arity and appending here made every capability program fail with
+        // `undef`. This append and dropping the gate have to land together
+        // (kexhq/kex#181). `foulExports` carries the information the append
+        // will need.
+        (void)qualKey;
+        return callE(atom, beamFunction, arity, std::move(args));
+    }
+    auto localCallExpr(const std::string& name, std::vector<ExprPtr> args)
+        -> ExprPtr {
+        auto e = std::make_unique<Expr>();
+        e->node = localCall(name, std::move(args));
+        return e;
+    }
+    auto localCall(const std::string& name, std::vector<ExprPtr> args)
+        -> Call {
+        if (callNeedsContext(name)) args.push_back(currentContext());
+        const int arity = static_cast<int>(args.size());
+        return Call{"", name, arity, std::move(args), false};
+    }
+
     // "Undefined method: m for T" with the receiver's runtime type, matching
     // the walker exactly. The type has to be read at runtime (the reason this
     // call is unresolved is that lowering does not know it), so the message is
@@ -519,6 +698,35 @@ struct Lowering {
         return callE("erlang", "error", 1,
                      one(callE("erlang", "iolist_to_binary", 1,
                                one(std::move(list)))));
+    }
+
+    // Same message, but a record field holding a function gets to answer
+    // first: `d.fetch(url)` should call it when nothing else claims the name.
+    // The method keeps precedence — reaching here means nothing did. The
+    // walker's dispatch fallback does the same (kexhq/kex#176). The field is
+    // read by name at runtime because the reason this call is unresolved is
+    // that lowering does not know the receiver's type.
+    auto undefinedMethodOrField(const ast::MethodCall& n, ExprPtr receiver)
+        -> ExprPtr {
+        std::string loc;
+        if (currentLoc) loc = std::string(currentLoc->file) + ":"
+            + std::to_string(currentLoc->line) + ":"
+            + std::to_string(currentLoc->column) + ": ";
+        std::vector<Binding> binds;
+        std::vector<ExprPtr> callArgs;
+        for (const auto& a : n.args) callArgs.push_back(atomize(a, binds));
+        for (const auto& [_, value] : n.namedArgs)
+            callArgs.push_back(atomize(value, binds));
+        if (n.block) callArgs.push_back(atomize(*n.block, binds));
+        auto argList = std::make_unique<Expr>();
+        argList->node = MakeList{std::move(callArgs), std::nullopt};
+        std::vector<ExprPtr> args;
+        args.push_back(std::move(receiver));
+        args.push_back(lit(LitKind::String, n.method));
+        args.push_back(std::move(argList));
+        args.push_back(lit(LitKind::String, loc));
+        return wrapLets(binds, callE("kex_io", "call_field_or_fail", 4,
+                                     std::move(args)));
     }
 
     // A named argument no clause of the target declares. Dropping it would run
@@ -809,7 +1017,7 @@ struct Lowering {
                 if (!subst.count(n.name) &&
                     (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = Call{"", n.name, 0, {}, false};
+                    ex->node = localCall(n.name, {});
                     return ex;
                 }
                 // Uppercase bare name not a known constant → nullary ADT
@@ -838,7 +1046,7 @@ struct Lowering {
                 if (!subst.count(n.name) &&
                     (topLevelConstants.count(n.name) || zeroArgFns.count(n.name))) {
                     auto ex = std::make_unique<Expr>();
-                    ex->node = Call{"", n.name, 0, {}, false};
+                    ex->node = localCall(n.name, {});
                     return ex;
                 }
                 // Bare capitalized name = nullary ADT constructor / None-like
@@ -1335,6 +1543,31 @@ struct Lowering {
                 requireNoOuterMutation(n.body, "while");
                 return lowerLoopCore(n.body, &n.condition, true,
                                      []() -> ExprPtr { return nullptr; });
+            } else if constexpr (std::is_same_v<T, ast::WithExpr>) {
+                std::string capability;
+                for (size_t i = 0; i < n.capability.parts.size(); ++i) {
+                    if (i) capability += ".";
+                    capability += n.capability.parts[i];
+                }
+                // A replacement is a value put into the context, not state:
+                // the body is lowered against the extended map, so there is
+                // nothing to restore and an escaping error cannot leak it.
+                std::vector<Binding> binds;
+                auto replacement = atomize(n.value, binds);
+                std::vector<ExprPtr> putArgs;
+                putArgs.push_back(lit(LitKind::String, capability));
+                putArgs.push_back(std::move(replacement));
+                putArgs.push_back(currentContext());
+                auto extended = fresh("Ctx");
+                auto saved = currentContextVar;
+                currentContextVar = extended;
+                auto body = lowerBody(n.body);
+                currentContextVar = saved;
+                return wrapLets(
+                    binds,
+                    makeLet(extended,
+                            callE("maps", "put", 3, std::move(putArgs)),
+                            std::move(body)));
             } else {
                 throw LowerError(std::string("IR lower: unimplemented expr node ")
                                  + typeid(T).name());
@@ -1439,19 +1672,19 @@ struct Lowering {
                 // function of a module in this compilation unit, else an
                 // export of a separately compiled one.
                 if (auto it = moduleFunctions.find(qualKey); it != moduleFunctions.end())
-                    return callE("", it->second, ar, std::move(args));
+                    return localCallExpr(it->second, std::move(args));
                 if (externalModules) {
                     auto eit = externalModules->exportToBeamFn.find(qualKey);
                     auto ait = externalModules->nameToAtom.find(n.module);
                     if (eit != externalModules->exportToBeamFn.end()
                         && ait != externalModules->nameToAtom.end())
-                        return callE(ait->second, eit->second, ar, std::move(args));
+                        return externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args));
                 }
                 throw LowerError("IR lower: unknown module function in `~"
                                  + qualKey + "`");
             }
             auto ex = std::make_unique<Expr>();
-            ex->node = Call{"", n.name, ar, std::move(args), false};
+            ex->node = localCall(n.name, std::move(args));
             return ex;
         };
 
@@ -1462,6 +1695,17 @@ struct Lowering {
         if (full) {
             std::vector<ExprPtr> args;
             for (auto& s : slots) args.push_back(std::move(s.val));
+            // A fully applied call into a capability goes through the
+            // substitution dispatch. This is the path a PRELUDE capability
+            // takes — `ENV.get(...)` never reaches the receiver or module
+            // paths (kexhq/kex#143).
+            if (threadsCapabilities() && !n.module.empty() &&
+                isCapabilityModule(n.module))
+                return capabilityDispatchLowered(
+                    n.module, n.name, std::move(args), binds,
+                    [&](std::vector<ExprPtr> callArgs) {
+                        return buildCall(std::move(callArgs));
+                    });
             return wrapLets(binds, buildCall(std::move(args)));
         }
 
@@ -1589,7 +1833,7 @@ struct Lowering {
                                 for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                                 int ar = static_cast<int>(slots.size());
                                 return wrapLets(binds,
-                                    callE(ait->second, eit->second, ar, std::move(slots)));
+                                    externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
                             }
                         }
                     }
@@ -1619,8 +1863,7 @@ struct Lowering {
             }
             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
             auto ex = std::make_unique<Expr>();
-            int ar = (int)slots.size();
-            ex->node = Call{"", emittedName, ar, std::move(slots), false};
+            ex->node = localCall(emittedName, std::move(slots));
             return wrapLets(binds, std::move(ex));
         }
         std::vector<Binding> binds;
@@ -1659,12 +1902,24 @@ struct Lowering {
         if (auto requirements = fnTraitParams.find(n.name);
             requirements != fnTraitParams.end())
             for (const auto& [index, trait] : requirements->second) {
-                if (index >= n.args.size() || !n.args[index])
+                const ast::Expr* source =
+                    index < n.args.size() ? n.args[index].get() : nullptr;
+                // A trait-typed parameter with a default may be omitted at the
+                // call site, and then the dictionary comes from the default
+                // value — the same expression the loop above passes as the
+                // argument itself (kexhq/kex#175).
+                if (!source)
+                    if (auto defaults = fnDefaults.find(n.name);
+                        defaults != fnDefaults.end() &&
+                        index < defaults->second.size() &&
+                        defaults->second[index])
+                        source = defaults->second[index]->get();
+                if (!source)
                     throw LowerError(
                         "IR lower: missing source argument for " + trait +
                         " dictionary");
-                args.push_back(atomize_ir(
-                    makeTraitDictionary(trait, *n.args[index]), binds));
+                args.push_back(
+                    atomize_ir(makeTraitDictionary(trait, *source), binds));
             }
         if (n.name == "self" && args.empty() && !knownFns.count("self"))
             return callE("erlang", "self", 0, {});
@@ -1699,14 +1954,14 @@ struct Lowering {
             // A real 0-arity FUNCTION `f()` stays a plain call below: its
             // result is returned as-is, never auto-applied.
             auto thunk = std::make_unique<Expr>();
-            thunk->node = Call{"", n.name, 0, {}, false};
+            thunk->node = localCall(n.name, {});
             ex->node = CallIndirect{std::move(thunk), std::move(args), false};
         } else if (zeroArgThunk)
-            ex->node = Call{"", n.name, 0, {}, false};
+            ex->node = localCall(n.name, {});
         else if (knownFns.count(n.name))
-            ex->node = Call{"", n.name, arity, std::move(args), false};
+            ex->node = localCall(n.name, std::move(args));
         else if (auto imp = moduleImports.find(n.name); imp != moduleImports.end())
-            ex->node = Call{"", imp->second, arity, std::move(args), false};
+            ex->node = localCall(imp->second, std::move(args));
         else if (subst.count(n.name))
             // A lexical binding (for example a `block` parameter) can hold a
             // callable value. Keep this indirect apply distinct from a truly
@@ -1872,8 +2127,10 @@ struct Lowering {
     // identical; only the place the dictionary is built moves.
     auto makeDictionaryWrapper(const FunDef& def) -> std::optional<FunDef> {
         if (def.dictionaryTraits.empty()) return std::nullopt;
+        const int contextSlots = def.hasCapabilityContext ? 1 : 0;
         const int wrapped =
-            def.arity - static_cast<int>(def.dictionaryTraits.size());
+            def.arity - static_cast<int>(def.dictionaryTraits.size()) -
+            contextSlots;
         if (wrapped < 0) return std::nullopt;
         std::vector<ExprPtr> args;
         std::vector<std::string> params;
@@ -1896,10 +2153,19 @@ struct Lowering {
             binds.push_back({name, std::move(dictionary)});
             args.push_back(var(name));
         }
+        // The context stays LAST, after the dictionaries the wrapper builds,
+        // so the wrapped function receives (args..., dictionaries..., context)
+        // — the order its own parameters were emitted in. The wrapper takes
+        // the context as its own trailing parameter and passes it through.
+        if (def.hasCapabilityContext) {
+            params.push_back(fresh("FwdCtx"));
+            args.push_back(var(params.back()));
+        }
         FunDef wrapper;
         wrapper.name = def.name;
-        wrapper.arity = wrapped;
+        wrapper.arity = wrapped + contextSlots;
         wrapper.exported = def.exported;
+        wrapper.hasCapabilityContext = def.hasCapabilityContext;
         FunClause clause;
         for (const auto& name : params) {
             auto pat = std::make_unique<Pattern>();
@@ -2028,8 +2294,22 @@ struct Lowering {
             // Local types shadow prelude-resolved calls (a user `record Parser`
             // must win over the prelude `module Parser`).
             bool localTypeShadows = false;
-            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind))
-                localTypeShadows = knownTypes.count(uid->name) && localMethods.count(n.method);
+            // A local method only shadows a resolved target when it is
+            // defined FOR THIS receiver — the same requirement the
+            // static-type branch below states. `localMethods` alone let an
+            // unrelated method of the same name capture a call on a name that
+            // is both a module and a record: `DateTime.now` inside a
+            // `capability Clock do foul now()` became `apply 'now'/1`, calling
+            // itself, and hung the moment any `make ..., implement: Clock`
+            // existed to put `now` in `localMethods` (kexhq/kex#143).
+            if (auto* uid = std::get_if<ast::UpperIdentifier>(&n.receiver->kind)) {
+                const auto owners = methodOwners.find(n.method);
+                localTypeShadows =
+                    knownTypes.count(uid->name) && localMethods.count(n.method) &&
+                    owners != methodOwners.end() &&
+                    std::find(owners->second.begin(), owners->second.end(),
+                              uid->name) != owners->second.end();
+            }
             if (auto* id = std::get_if<ast::Identifier>(&n.receiver->kind))
                 localTypeShadows = id->name == "this";
             if (std::holds_alternative<ast::ThisExpr>(n.receiver->kind))
@@ -2100,8 +2380,50 @@ struct Lowering {
             const bool localFieldAccessor =
                 n.args.empty() && n.namedArgs.empty() && !n.block &&
                 !n.mutating && fieldAccessors.count(n.method);
+            // `Outer.Inner.greet(n)` is a call INTO a module, but once any
+            // make block defines a method of the same name the resolver picks
+            // that receiver method and the dotted path is then lowered as a
+            // value — which a module is not, so it died with "Undefined
+            // function: Outer.Inner" while the walker was right (kexhq/kex#182).
+            // A bare receiver never had this problem, so only a dotted path
+            // naming a module of this unit overrides the resolved target.
+            // A call into a capability must reach the substitution dispatch,
+            // which lives on the module-qualified path below. If the resolver
+            // claims it first the call goes straight to the real
+            // implementation and `with` silently does nothing — the fail-open
+            // this feature exists to prevent (kexhq/kex#143).
+            bool capabilityOwnsCall = false;
+            std::string capabilityTarget;
+            if (n.receiver) {
+                std::vector<std::string> segments;
+                if (modulePath(*n.receiver, segments) && !segments.empty()) {
+                    std::string joined;
+                    for (size_t i = 0; i < segments.size(); ++i) {
+                        if (i) joined += ".";
+                        joined += segments[i];
+                    }
+                    capabilityOwnsCall =
+                        isCapabilityModule(joined) &&
+                        capabilityInterfaceHas(joined, n.method);
+                    if (capabilityOwnsCall) capabilityTarget = joined;
+                }
+            }
+            bool modulePathOwnsCall = false;
+            if (n.receiver) {
+                std::vector<std::string> segments;
+                if (modulePath(*n.receiver, segments) && segments.size() >= 2) {
+                    std::string joined;
+                    for (size_t i = 0; i < segments.size(); ++i) {
+                        if (i) joined += ".";
+                        joined += segments[i];
+                    }
+                    modulePathOwnsCall =
+                        moduleFunctions.count(joined + "." + n.method) > 0;
+                }
+            }
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
-                !stalePreludeTarget && !localFieldAccessor) {
+                !stalePreludeTarget && !localFieldAccessor &&
+                !modulePathOwnsCall) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -2186,8 +2508,12 @@ struct Lowering {
                     const int localArity = static_cast<int>(args.size());
                     return wrapLets(
                         binds,
-                        callE("", n.method, localArity, std::move(args)));
+                        localCallExpr(n.method, std::move(args)));
                 }
+                // Everything appended from here on is a trait dictionary,
+                // not a source argument — the two branches of a capability
+                // dispatch need them separated (see the terminal call below).
+                const size_t sourceArgCount = args.size();
                 for (const auto& [argument, trait] :
                      resolved->second.traitDictionaries) {
                     const ast::Expr* source = nullptr;
@@ -2197,6 +2523,17 @@ struct Lowering {
                             source = n.args[argument - 1].get();
                     } else if (argument < n.args.size()) {
                         source = n.args[argument].get();
+                    }
+                    // Same as above: an omitted defaulted trait parameter
+                    // takes its dictionary from the default expression.
+                    if (!source) {
+                        const size_t index = resolved->second.passesReceiver
+                            ? (argument > 0 ? argument - 1 : 0) : argument;
+                        if (auto defaults = fnDefaults.find(n.method);
+                            defaults != fnDefaults.end() &&
+                            index < defaults->second.size() &&
+                            defaults->second[index])
+                            source = defaults->second[index]->get();
                     }
                     if (!source)
                         throw LowerError(
@@ -2264,6 +2601,34 @@ struct Lowering {
                         backendFunction = std::move(exact);
                     else if (knownFns.count(byReceiver))
                         backendFunction = std::move(byReceiver);
+                }
+                // Same as externalCallExpr: the imported-foul append belongs
+                // with dropping the gate, not before it (kexhq/kex#181).
+                if (!capabilityTarget.empty()) {
+                    // The two branches take DIFFERENT arguments. The real
+                    // implementation is an ordinary function and wants its
+                    // trait dictionaries; a stand-in is a `make` block method,
+                    // which is unannotated and takes none. Splitting them here
+                    // is what lets a capability have a trait-constrained
+                    // parameter at all — `IO.printLine(msg: Showable)` is the
+                    // first, and without this its dictionary went missing and
+                    // every value rendered structurally instead of through the
+                    // user's `showValue` (kexhq/kex#143).
+                    std::vector<ExprPtr> dictionaries;
+                    for (size_t i = sourceArgCount; i < args.size(); ++i)
+                        dictionaries.push_back(std::move(args[i]));
+                    args.resize(sourceArgCount);
+                    auto module = resolved->second.backendModule;
+                    auto function = backendFunction;
+                    const int arity = resolved->second.backendArity;
+                    return capabilityDispatchLowered(
+                        capabilityTarget, n.method, std::move(args), binds,
+                        [&](std::vector<ExprPtr> direct) {
+                            for (auto& dictionary : dictionaries)
+                                direct.push_back(std::move(dictionary));
+                            return callE(module, function, arity,
+                                         std::move(direct));
+                        });
                 }
                 return wrapLets(
                     binds,
@@ -2366,6 +2731,79 @@ struct Lowering {
                     if (candidate.empty() || !tried.insert(candidate).second) continue;
                     auto qualKey = candidate + "." + n.method;
                     auto it = moduleFunctions.find(qualKey);
+                    // A call into a capability asks the context first and
+                    // falls back to the capability's own body, which is what
+                    // runs when nothing replaced it (kexhq/kex#181).
+                    const bool importedCapability =
+                        externalModules &&
+                        externalModules->capabilityModules.count(candidate) > 0;
+                    if (it != moduleFunctions.end() && threadsCapabilities() &&
+                        (capabilityModules.count(candidate) ||
+                         importedCapability) &&
+                        n.namedArgs.empty() && !n.block) {
+                        std::vector<Binding> binds;
+                        std::vector<std::string> argVars;
+                        for (const auto& a : n.args) {
+                            auto name = fresh("CapArg");
+                            binds.push_back({name, atomize(a, binds)});
+                            argVars.push_back(name);
+                        }
+                        auto argsFrom = [&](const std::string& lead) {
+                            std::vector<ExprPtr> out;
+                            if (!lead.empty()) out.push_back(var(lead));
+                            for (const auto& v : argVars) out.push_back(var(v));
+                            return out;
+                        };
+                        std::vector<ExprPtr> getArgs;
+                        getArgs.push_back(lit(LitKind::String, candidate));
+                        getArgs.push_back(currentContext());
+                        getArgs.push_back(lit(LitKind::Atom, "undefined"));
+                        auto impl = fresh("Impl");
+                        Match m;
+                        m.subjects.push_back(
+                            callE("maps", "get", 3, std::move(getArgs)));
+                        MatchClause missing;
+                        auto undef = std::make_unique<Pattern>();
+                        undef->kind = PatKind::Lit;
+                        undef->litKind = LitKind::Atom;
+                        undef->litText = "undefined";
+                        missing.patterns.push_back(std::move(undef));
+                        auto direct = std::make_unique<Expr>();
+                        direct->node = localCall(it->second, argsFrom(""));
+                        missing.body = std::move(direct);
+                        m.clauses.push_back(std::move(missing));
+                        MatchClause replaced;
+                        auto bound = std::make_unique<Pattern>();
+                        bound->kind = PatKind::Var;
+                        bound->name = impl;
+                        replaced.patterns.push_back(std::move(bound));
+                        // Runtime dispatch: the implementation replacing the
+                        // capability is typically defined in a different unit
+                        // from this call site, so there is no local symbol to
+                        // name (kexhq/kex#181).
+                        std::vector<ExprPtr> passed;
+                        for (const auto& v : argVars) passed.push_back(var(v));
+                        // A capability's members are foul by construction, so
+                        // the implementation takes the context too — the
+                        // runtime dispatch has to hand it over just as a
+                        // direct call would.
+                        passed.push_back(currentContext());
+                        auto passedList = std::make_unique<Expr>();
+                        passedList->node =
+                            MakeList{std::move(passed), std::nullopt};
+                        std::vector<ExprPtr> dispatchArgs;
+                        dispatchArgs.push_back(var(impl));
+                        dispatchArgs.push_back(lit(LitKind::String, n.method));
+                        dispatchArgs.push_back(std::move(passedList));
+                        auto dispatched =
+                            callE("kex_io", "dispatch_method", 3,
+                                  std::move(dispatchArgs));
+                        replaced.body = std::move(dispatched);
+                        m.clauses.push_back(std::move(replaced));
+                        auto chosen = std::make_unique<Expr>();
+                        chosen->node = std::move(m);
+                        return wrapLets(binds, std::move(chosen));
+                    }
                     if (it != moduleFunctions.end()) {
                         std::vector<Binding> binds;
                         if (!n.namedArgs.empty()) {
@@ -2388,13 +2826,13 @@ struct Lowering {
                             }
                             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                             int ar = static_cast<int>(slots.size());
-                            return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                            return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                         }
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
                         int ar = static_cast<int>(args.size());
-                        return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+                        return wrapLets(binds, localCallExpr(it->second, std::move(args)));
                     }
                 }
                 // External loaded modules: BinaryTree.fromList → 'Kex.BinaryTree':fromList
@@ -2407,6 +2845,29 @@ struct Lowering {
                         if (candidate.empty()) continue;
                         auto qualKey = candidate + "." + n.method;
                         auto eit = externalModules->exportToBeamFn.find(qualKey);
+                        // This is the route a PRELUDE capability takes —
+                        // `ENV.get(...)` reaches neither the local module path
+                        // nor the receiver path (kexhq/kex#143).
+                        if (eit != externalModules->exportToBeamFn.end() &&
+                            threadsCapabilities() &&
+                            isCapabilityModule(candidate) &&
+                            n.namedArgs.empty() && !n.block) {
+                            auto ait = externalModules->nameToAtom.find(candidate);
+                            if (ait != externalModules->nameToAtom.end()) {
+                                const auto atom = ait->second;
+                                const auto beamFn = eit->second;
+                                const auto key = qualKey;
+                                return capabilityDispatch(
+                                    candidate, n.method, n.args,
+                                    [&](std::vector<ExprPtr> callArgs) {
+                                        const int ar =
+                                            static_cast<int>(callArgs.size());
+                                        return externalCallExpr(
+                                            key, atom, beamFn, ar,
+                                            std::move(callArgs));
+                                    });
+                            }
+                        }
                         if (eit != externalModules->exportToBeamFn.end()) {
                             auto ait = externalModules->nameToAtom.find(candidate);
                             if (ait != externalModules->nameToAtom.end()) {
@@ -2432,14 +2893,14 @@ struct Lowering {
                                     for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                                     int ar = static_cast<int>(slots.size());
                                     return wrapLets(binds,
-                                        callE(ait->second, eit->second, ar, std::move(slots)));
+                                        externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
                                 }
                                 std::vector<ExprPtr> args;
                                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                                 if (n.block) args.push_back(atomize(*n.block, binds));
                                 int ar = static_cast<int>(args.size());
                                 return wrapLets(binds,
-                                    callE(ait->second, eit->second, ar, std::move(args)));
+                                    externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
                             }
                         }
                     }
@@ -2506,13 +2967,13 @@ struct Lowering {
                     }
                     for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                     int ar = static_cast<int>(slots.size());
-                    return wrapLets(binds, callE("", it->second, ar, std::move(slots)));
+                    return wrapLets(binds, localCallExpr(it->second, std::move(slots)));
                 }
                 std::vector<ExprPtr> args;
                 for (const auto& a : n.args) args.push_back(atomize(a, binds));
                 if (n.block) args.push_back(atomize(*n.block, binds));
                 int ar = static_cast<int>(args.size());
-                return wrapLets(binds, callE("", it->second, ar, std::move(args)));
+                return wrapLets(binds, localCallExpr(it->second, std::move(args)));
             }
             // External module dispatch — but skip when the receiver names a
             // local type that owns this method (local types shadow prelude
@@ -2522,6 +2983,26 @@ struct Lowering {
                 && !(knownTypes.count(uid->name) && localMethods.count(n.method))) {
                 auto qualKey = uid->name + "." + n.method;
                 auto eit = externalModules->exportToBeamFn.find(qualKey);
+                // An imported capability reaches a consumer only through
+                // the external tables, never through `moduleFunctions`.
+                if (eit != externalModules->exportToBeamFn.end() &&
+                    threadsCapabilities() && isCapabilityModule(uid->name) &&
+                    n.namedArgs.empty() && !n.block) {
+                    auto ait = externalModules->nameToAtom.find(uid->name);
+                    if (ait != externalModules->nameToAtom.end()) {
+                        const auto atom = ait->second;
+                        const auto beamFn = eit->second;
+                        const auto key = qualKey;
+                        return capabilityDispatch(
+                            uid->name, n.method, n.args,
+                            [&](std::vector<ExprPtr> callArgs) {
+                                const int ar =
+                                    static_cast<int>(callArgs.size());
+                                return externalCallExpr(key, atom, beamFn, ar,
+                                                        std::move(callArgs));
+                            });
+                    }
+                }
                 if (eit != externalModules->exportToBeamFn.end()) {
                     auto ait = externalModules->nameToAtom.find(uid->name);
                     if (ait != externalModules->nameToAtom.end()) {
@@ -2546,14 +3027,14 @@ struct Lowering {
                             for (auto& s : slots) if (!s) s = lit(LitKind::None, "none");
                             int ar = static_cast<int>(slots.size());
                             return wrapLets(binds,
-                                callE(ait->second, eit->second, ar, std::move(slots)));
+                                externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(slots)));
                         }
                         std::vector<ExprPtr> args;
                         for (const auto& a : n.args) args.push_back(atomize(a, binds));
                         if (n.block) args.push_back(atomize(*n.block, binds));
                         int ar = static_cast<int>(args.size());
                         return wrapLets(binds,
-                            callE(ait->second, eit->second, ar, std::move(args)));
+                            externalCallExpr(qualKey, ait->second, eit->second, ar, std::move(args)));
                     }
                 }
             }
@@ -2598,7 +3079,7 @@ struct Lowering {
                 for (auto& a : args) callArgs.push_back(std::move(a));
                 int ar = static_cast<int>(callArgs.size());
                 auto ex = std::make_unique<Expr>();
-                ex->node = Call{"", callName, ar, std::move(callArgs), false};
+                ex->node = localCall(callName, std::move(callArgs));
                 return wrapLets(binds, std::move(ex));
             }
             if (auto rit = records.find(n.method); rit != records.end()) {
@@ -2765,7 +3246,7 @@ struct Lowering {
                                                  "", imported->second, arity,
                                                  args))
                 return ret(std::move(dual));
-            return ret(callE("", imported->second, arity, std::move(args)));
+            return ret(localCallExpr(imported->second, std::move(args)));
         }
 
         // A local method only claims the call when it is defined at THIS
@@ -2934,11 +3415,11 @@ struct Lowering {
                                                  "", n.method, arity, args))
                 return ret(wrapLets(binds, std::move(dual)));
             auto ex = std::make_unique<Expr>();
-            ex->node = Call{"", n.method, arity, std::move(args), false};
+            ex->node = localCall(n.method, std::move(args));
             return ret(wrapLets(binds, std::move(ex)));
         }
         // External loaded module methods (UFCS): tree.size → 'Kex.BinaryTree':'Tree.size'(tree)
-        return ret(undefinedMethod(n.method, rv()));
+        return ret(undefinedMethodOrField(n, rv()));
     }
 
     // record TypeName { f: v, ... } → {'TypeName', <fields in declared order,
@@ -3016,7 +3497,76 @@ struct Lowering {
         binds.push_back({name, std::move(e)});
         return var(name);
     }
+    mutable std::unordered_set<std::string> foulBackendTargets;
+    // Module+function+arity combinations positively known to be PURE, which
+    // veto the name-level foul mark above.
+    mutable std::unordered_set<std::string> pureBackendTargets;
+    mutable bool foulBackendTargetsBuilt = false;
+    // Foul by NAME, minus any arity known to be pure. One BEAM module holds
+    // both: a capability stand-in's `foul put(url, body)` and `Map`'s pure
+    // `put` are both `kex_prelude:put`, and marking the name alone appended a
+    // capability context to every `map.put(k, v)` — `kex_prelude:put/4`, which
+    // does not exist.
+    //
+    // Arity ALONE cannot decide it either: a capture (`~IO.printLine`) reaches
+    // here with the arity of the closure rather than of the call, and an
+    // overload set records only one arity per name, so keying on arity dropped
+    // the context from `ENV.get(key)` while keeping it for `get(key, default)`.
+    // Subtracting the arities that are positively known to be pure keeps every
+    // call that was right before and fixes the collisions (kexhq/kex#143).
+    auto isFoulBackendTarget(const std::string& mod, const std::string& fn,
+                             int arity) -> bool {
+        if (!externalModules) return false;
+
+        if (!foulBackendTargetsBuilt) {
+            foulBackendTargetsBuilt = true;
+            // Each entry is `Module.member/arity` — one per overload, since one
+            // name can be foul at some arities and pure at others.
+            for (const auto& entry : externalModules->foulExports) {
+                auto slash = entry.rfind('/');
+                if (slash == std::string::npos) continue;
+                const auto qualKey = entry.substr(0, slash);
+                auto dot = qualKey.find('.');
+                if (dot == std::string::npos) continue;
+                auto atom = externalModules->nameToAtom.find(qualKey.substr(0, dot));
+                auto beamFn = externalModules->exportToBeamFn.find(qualKey);
+                if (atom == externalModules->nameToAtom.end() ||
+                    beamFn == externalModules->exportToBeamFn.end()) continue;
+                foulBackendTargets.insert(foulKey(atom->second, beamFn->second));
+            }
+            // Receiver functions resolve through their own table, so their
+            // foulness has to be folded in as well — `cli.run(...)` reaches
+            // the prelude this way, not through exportToBeamFn.
+            for (const auto& [_, providers] : externalModules->receiverFunctions)
+                for (const auto& provider : providers) {
+                    if (provider.isFoul)
+                        foulBackendTargets.insert(
+                            foulKey(provider.moduleAtom, provider.beamFunction));
+                    else
+                        pureBackendTargets.insert(
+                            foulKey(provider.moduleAtom, provider.beamFunction,
+                                    provider.beamArity));
+                }
+        }
+        return foulBackendTargets.count(foulKey(mod, fn)) > 0 &&
+               pureBackendTargets.count(foulKey(mod, fn, arity)) == 0;
+    }
+
+    static auto foulKey(const std::string& mod, const std::string& fn)
+        -> std::string {
+        return mod + ":" + fn;
+    }
+    static auto foulKey(const std::string& mod, const std::string& fn, int arity)
+        -> std::string {
+        return mod + ":" + fn + "/" + std::to_string(arity);
+    }
+
     auto callE(std::string mod, std::string fn, int arity, std::vector<ExprPtr> args) -> ExprPtr {
+        if (threadsCapabilities() && !mod.empty() &&
+            isFoulBackendTarget(mod, fn, arity)) {
+            args.push_back(currentContext());
+            ++arity;
+        }
         if (std::getenv("KEX_DEBUG_TO2") && fn == "to" && mod.rfind("Kex.", 0) == 0)
             std::fprintf(stderr, "[callE] mod=%s fn=%s arity=%d\n",
                          mod.c_str(), fn.c_str(), arity);
@@ -3048,7 +3598,8 @@ struct Lowering {
     // layouts and variant arities — only the compiler knows which tuples are
     // records/variants, and the runtime needs that to render
     // `Name { field: value }` / `Tag(args)` instead of plain tuples.
-    auto withDisplayInfo(ExprPtr body) -> ExprPtr {
+    auto withDisplayInfo(ExprPtr body, const std::string& moduleName = "")
+        -> ExprPtr {
         bool anyVariant = !variantArity.empty();
         if (records.empty() && !anyVariant) return std::move(body);
         auto atomLit = [&](const std::string& s) { return lit(LitKind::Atom, s); };
@@ -3074,6 +3625,48 @@ struct Lowering {
             auto t = std::make_unique<Expr>();
             t->node = MakeTuple{two(atomLit(tag), std::move(metadata))};
             varPairs.push_back(std::move(t));
+        }
+        // Which module implements the methods of the records defined here.
+        // A capability's override branch cannot name a local function — the
+        // value replacing it is implemented in another unit — so it dispatches
+        // through this registry instead (kexhq/kex#181).
+        if (!moduleName.empty() && !records.empty()) {
+            std::vector<ExprPtr> ownerPairs;
+            for (const auto& [name, info] : records) {
+                (void)info;
+                // A record whose methods live in ANOTHER module of this build
+                // must name that module: claiming it here sent the dispatch to
+                // a function this one never defined, and a capability replaced
+                // by a stand-in from an opt-in module died `undef`
+                // (kexhq/kex#143). `localTypeModules` is keyed by the make
+                // target as written, which inside a module is the bare name.
+                std::string owner = moduleName;
+                auto declaring = localTypeModules.find(name);
+                if (declaring == localTypeModules.end())
+                    if (auto dot = name.rfind('.'); dot != std::string::npos) {
+                        // `localTypeModules` is keyed by the make target as
+                        // written, which inside a module is the BARE name — so
+                        // a tail lookup can answer for a DIFFERENT module's
+                        // same-named record. Accept it only when the module it
+                        // names actually reconstructs this record's qualified
+                        // identity, or `Web.Response` gets registered as owned
+                        // by whichever module declared the last `Response`
+                        // (kexhq/kex#143).
+                        auto tail = localTypeModules.find(name.substr(dot + 1));
+                        if (tail != localTypeModules.end() &&
+                            tail->second + "." + name.substr(dot + 1) == name)
+                            declaring = tail;
+                    }
+                if (declaring != localTypeModules.end())
+                    owner = "Kex." + declaring->second;
+                auto t = std::make_unique<Expr>();
+                t->node = MakeTuple{two(atomLit(name), atomLit(owner))};
+                ownerPairs.push_back(std::move(t));
+            }
+            body = makeLet(fresh("Own"),
+                           callE("kex_io", "register_method_owners", 1,
+                                 one(mapFrom(std::move(ownerPairs)))),
+                           std::move(body));
         }
         return makeLet(fresh("Disp"),
             callE("kex_io", "register_display", 2,
@@ -4757,8 +5350,20 @@ struct Lowering {
             ++dictionaryArity;
             def.dictionaryTraits.push_back(currentMakeType);
         }
+        // Overloads of a name must share purity, so the group's first clause
+        // decides. A capability's OWN members are excluded: they are the
+        // default implementation, and giving them a context would change
+        // 'Clock.now'/0 into /1 and break the very fallback dispatch uses.
+        const bool foulDef = !group.empty() && group[0]->isFoul;
+        // A capability's own members are foul like any others and take the
+        // context too. Excluding them made their arity disagree with every
+        // threaded caller — the substitution dispatch passes the context
+        // through as well (kexhq/kex#181).
+        const bool wantsContext = threadsCapabilities() && foulDef;
         def.arity = explicitArity + dictionaryArity +
-                    (implicitThisName.empty() ? 0 : 1);
+                    (implicitThisName.empty() ? 0 : 1) +
+                    (wantsContext ? 1 : 0);
+        def.hasCapabilityContext = wantsContext;
         auto savedModulePath = currentModulePath;
         auto savedTraitDictionaries = traitDictionaries;
         for (const auto* fn : group) {
@@ -4836,6 +5441,20 @@ struct Lowering {
                     traitDictionaries[implicitThisName][currentMakeType] =
                         dictionary;
                 }
+                // The context is the last parameter, after any trait
+                // dictionaries, and is in scope for the whole body so calls
+                // inside it pass it along (kexhq/kex#181).
+                auto savedContextVar = currentContextVar;
+                if (wantsContext) {
+                    auto contextName = fresh("Ctx");
+                    auto contextPat = std::make_unique<Pattern>();
+                    contextPat->kind = PatKind::Var;
+                    contextPat->name = contextName;
+                    fc.params.push_back(std::move(contextPat));
+                    currentContextVar = contextName;
+                } else {
+                    currentContextVar.clear();
+                }
                 for (const auto& [nm, _] : prefix) subst[nm] = nm;
                 ExprPtr body = lowerBody(clause.body);
                 for (auto it = prefix.rbegin(); it != prefix.rend(); ++it)
@@ -4845,6 +5464,7 @@ struct Lowering {
                 if (clause.rescue) body = wrapWithTryCatch(std::move(body), *clause.rescue);
                 else if (irHasEscapingTryThrow(body)) body = wrapPropagateTryError(std::move(body));
                 fc.body = std::move(body);
+                currentContextVar = savedContextVar;
                 declaredParamTypes = std::move(savedParamTypes);
                 def.clauses.push_back(std::move(fc));
             }
@@ -5375,17 +5995,23 @@ struct Lowering {
             // ends at whichever one came first. With the default, a local
             // `showValue` forwarded `Just(50)` to `showValue/Showable` and
             // rendered the tuple.
+            // A `foul` method's last parameter is the hidden capability
+            // context, which the provider being forwarded to does not have:
+            // it lives one arity DOWN, and passing the context on hands it
+            // over as a user argument (kexhq/kex#143).
+            const int forwardArity =
+                def.arity - (def.hasCapabilityContext ? 1 : 0);
             auto provider = std::find_if(
                 candidates.begin(), candidates.end(),
                 [&](const auto& candidate) {
-                    return candidate.beamArity == def.arity &&
+                    return candidate.beamArity == forwardArity &&
                         candidate.beamFunction == first.name;
                 });
             if (provider == candidates.end())
                 provider = std::find_if(
                     candidates.begin(), candidates.end(),
                     [&](const auto& candidate) {
-                        return candidate.beamArity == def.arity;
+                        return candidate.beamArity == forwardArity;
                     });
             if (!alreadyTotal && provider != candidates.end()) {
                 FunClause fallback;
@@ -5395,11 +6021,12 @@ struct Lowering {
                     param->kind = PatKind::Var;
                     param->name = "_traitShadowFallback" + std::to_string(i);
                     fallback.params.push_back(std::move(param));
-                    args.push_back(
-                        var("_traitShadowFallback" + std::to_string(i)));
+                    if (i < forwardArity)
+                        args.push_back(
+                            var("_traitShadowFallback" + std::to_string(i)));
                 }
                 fallback.body = callE(provider->moduleAtom,
-                                      provider->beamFunction, def.arity,
+                                      provider->beamFunction, forwardArity,
                                       std::move(args));
                 def.clauses.push_back(std::move(fallback));
                 forwarded = true;
@@ -5415,12 +6042,17 @@ struct Lowering {
             def.name == first.name) {
             FunClause fallback;
             std::vector<ExprPtr> args;
+            // See forwardArity above: a foul method carries the capability
+            // context the provider knows nothing about.
+            const int noReceiverArity =
+                def.arity - (def.hasCapabilityContext ? 1 : 0);
             for (int i = 0; i < def.arity; ++i) {
                 auto param = std::make_unique<Pattern>();
                 param->kind = PatKind::Var;
                 param->name = "_noReceiver" + std::to_string(i);
                 fallback.params.push_back(std::move(param));
-                args.push_back(var("_noReceiver" + std::to_string(i)));
+                if (i < noReceiverArity)
+                    args.push_back(var("_noReceiver" + std::to_string(i)));
             }
             // Another module may own the same method name for a receiver this
             // one does not cover — `get` is Regex.Match's here and Map's in
@@ -5432,7 +6064,7 @@ struct Lowering {
                     externalModules->receiverFunctions.find(first.name);
                 if (candidates != externalModules->receiverFunctions.end())
                     for (const auto& candidate : candidates->second)
-                        if (candidate.beamArity == def.arity &&
+                        if (candidate.beamArity == noReceiverArity &&
                             candidate.beamFunction == first.name) {
                             provider = &candidate;
                             break;
@@ -5440,7 +6072,7 @@ struct Lowering {
             }
             if (provider)
                 fallback.body = callE(provider->moduleAtom,
-                                      provider->beamFunction, def.arity,
+                                      provider->beamFunction, noReceiverArity,
                                       std::move(args));
             else {
                 auto message = callE("erlang", "iolist_to_binary", 1,
@@ -5604,10 +6236,19 @@ struct Lowering {
         return def;
     }
 
+    // `genericFallbackArity` is the arity the fallback is called at, which is
+    // NOT the dispatcher's when the method is `foul`: every foul function
+    // carries a hidden capability context as its last parameter, and the
+    // prelude function being delegated to has no such parameter. Passing the
+    // context along handed it to the prelude as a user argument — `[..].count`
+    // reached `kex_prelude:count/2`, the `count(pred)` overload, with the
+    // context where the predicate goes, and died `badarg` (kexhq/kex#143).
     auto makeDispatcher(const std::string& name, int arity,
                         const std::vector<std::string>& owners,
                         const std::string& genericFallback = {},
-                        const std::string& genericFallbackModule = {}) -> FunDef {
+                        const std::string& genericFallbackModule = {},
+                        int genericFallbackArity = -1) -> FunDef {
+        if (genericFallbackArity < 0) genericFallbackArity = arity;
         FunDef def; def.name = name; def.arity = arity;
         FunClause fc;
         std::vector<ExprPtr> fwdArgs;
@@ -5808,22 +6449,35 @@ struct Lowering {
             wild->kind = PatKind::Wild;
             fallback.patterns.push_back(std::move(wild));
             std::vector<ExprPtr> args;
-            for (int i = 0; i < arity; ++i)
+            for (int i = 0; i < genericFallbackArity; ++i)
                 args.push_back(var("_a" + std::to_string(i)));
-            fallback.body = callE(genericFallbackModule, genericFallback, arity,
-                                  std::move(args));
+            fallback.body = callE(genericFallbackModule, genericFallback,
+                                  genericFallbackArity, std::move(args));
             m.clauses.push_back(std::move(fallback));
         } else if (traitFallbacks.empty()) {
             MatchClause fallback;
             auto wild = std::make_unique<Pattern>();
             wild->kind = PatKind::Wild;
             fallback.patterns.push_back(std::move(wild));
-            auto message = callE("erlang", "iolist_to_binary", 1,
-                one(makeListOf(
-                    lit(LitKind::String, "runtime error: Undefined method: " +
-                                          name + " for "),
-                    callE("kex_io", "value_type_name", 1, one(var("_a0"))))));
-            fallback.body = callE("erlang", "error", 1, one(std::move(message)));
+            // Last resort before raising: a record field may hold a function,
+            // and `d.fetch(url)` should call it. The method keeps precedence,
+            // which is exactly what reaching this fallback means — no clause
+            // matched the receiver. The walker's dispatch does the same
+            // (kexhq/kex#176). The field is read by name at runtime because
+            // the reason this call is unresolved is that lowering does not
+            // know the receiver's type.
+            std::vector<ExprPtr> fieldArgs;
+            for (int i = 1; i < arity; i++)
+                fieldArgs.push_back(var("_a" + std::to_string(i)));
+            auto fieldArgList = std::make_unique<Expr>();
+            fieldArgList->node = MakeList{std::move(fieldArgs), std::nullopt};
+            std::vector<ExprPtr> rescueArgs;
+            rescueArgs.push_back(var("_a0"));
+            rescueArgs.push_back(lit(LitKind::String, name));
+            rescueArgs.push_back(std::move(fieldArgList));
+            rescueArgs.push_back(lit(LitKind::String, ""));
+            fallback.body = callE("kex_io", "call_field_or_fail", 4,
+                                  std::move(rescueArgs));
             m.clauses.push_back(std::move(fallback));
         }
         auto body = std::make_unique<Expr>();
@@ -6045,6 +6699,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         }
     auto preFn = [&](const ast::FunctionDef& fd) {
         definedFns.insert(fd.name);
+        if (fd.isFoul) L.foulFns.insert(fd.name);
         if (!fd.clauses.empty()) {
             const auto arity = std::to_string(fd.clauses[0].params.size());
             definedFnArities.insert(fd.name + "/" + arity);
@@ -6123,6 +6778,11 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
         auto collectMethod = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             definedFns.insert(fd->name);
+            // A make-block method is a definition like any other, so if it is
+            // foul it takes the capability context and every call to it has
+            // to pass one — including the dispatch a replaced capability
+            // routes through (kexhq/kex#181).
+            if (fd->isFoul) L.foulFns.insert(fd->name);
             definedFnArities.insert(
                 fd->name + "/" + std::to_string(beamArity(fd)));
             if (!fd->clauses.empty()) {
@@ -6191,12 +6851,15 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
     std::function<void(const ast::ModuleDef&)> preModule;
     preModule = [&](const ast::ModuleDef& module) {
         const auto& path = module.name;
+        if (module.isCapability) L.capabilityModules.insert(path);
         std::set<std::string> declaredTypes;
         kex::collectDeclaredTypeNames(module.body, declaredTypes);
         auto preModuleFn = [&](const ast::FunctionDef* fd) {
             if (!fd) return;
             const std::string emitted = mangleModuleMember(path, fd->name);
             definedFns.insert(emitted);
+            // A capability's own members stay at their declared arity.
+            if (fd->isFoul) L.foulFns.insert(emitted);
             L.moduleFunctions[path + "." + fd->name] = emitted;
             if (!fd->clauses.empty()) {
                 std::vector<std::string> pnames;
@@ -6452,7 +7115,8 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                         fc.params.push_back(std::move(p));
                     }
                     if (node->rescue) body = L.wrapWithTryCatch(std::move(body), *node->rescue);
-                    fc.body = L.withTestSummary(L.withDisplayInfo(std::move(body)));
+                    fc.body = L.withTestSummary(
+                        L.withDisplayInfo(std::move(body), mod.name));
                     def.clauses.push_back(std::move(fc));
                     mod.functions.push_back(std::move(def));
                     mod.hasMain = true;
@@ -6694,7 +7358,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
             return let;
         };
         fc.body = L.withTestSummary(L.withDisplayInfo(
-            bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0)));
+            bareExprs.empty() ? lit(LitKind::Atom, "ok") : chain(0), mod.name));
         def.clauses.push_back(std::move(fc));
         mod.functions.push_back(std::move(def));
         mod.hasMain = true; mod.mainArity = 0;
@@ -6839,6 +7503,40 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 // duplicate function definitions are merged below.
                 std::string genericFallback;
                 std::string genericFallbackModule;
+                // A `foul` implementation's last parameter is the hidden
+                // capability context, so the prelude function this dispatcher
+                // falls back to lives one arity DOWN (see makeDispatcher).
+                const std::string mangledPrefix =
+                    receiverImplementationPrefix(name);
+                bool contextualOwners = false;
+                for (const auto& fn : mod.functions)
+                    if (fn.arity == arity &&
+                        fn.name.rfind(mangledPrefix, 0) == 0 &&
+                        fn.hasCapabilityContext) {
+                        contextualOwners = true;
+                        break;
+                    }
+                // A dispatcher can mix a foul owner with a PURE prelude
+                // fallback — `write` is Mock.Files' (foul, context-carrying)
+                // and FileHandle's (pure) at once. Prefer the context-stripped
+                // arity, but fall back to the plain one when nothing answers
+                // there, or the fallback goes missing and an opaque receiver
+                // dies with "Undefined method" (kexhq/kex#143).
+                int fallbackArity = contextualOwners ? arity - 1 : arity;
+                if (contextualOwners && L.externalModules) {
+                    auto external =
+                        L.externalModules->receiverFunctions.find(name);
+                    const bool answersStripped =
+                        external != L.externalModules->receiverFunctions.end() &&
+                        std::any_of(external->second.begin(),
+                                    external->second.end(),
+                                    [&](const auto& candidate) {
+                                        return candidate.beamArity ==
+                                                   fallbackArity &&
+                                               candidate.moduleAtom != mod.name;
+                                    });
+                    if (!answersStripped) fallbackArity = arity;
+                }
                 for (auto& function : mod.functions) {
                     if (function.name != name || function.arity != arity)
                         continue;
@@ -6852,7 +7550,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                     if (external !=
                         L.externalModules->receiverFunctions.end()) {
                         for (const auto& candidate : external->second)
-                            if (candidate.beamArity == arity &&
+                            if (candidate.beamArity == fallbackArity &&
                                 candidate.beamFunction == name &&
                                 candidate.moduleAtom != mod.name) {
                                 genericFallbackModule = candidate.moduleAtom;
@@ -6860,7 +7558,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                             }
                         if (genericFallbackModule.empty())
                         for (const auto& candidate : external->second) {
-                            if (candidate.beamArity != arity ||
+                            if (candidate.beamArity != fallbackArity ||
                                 candidate.moduleAtom == mod.name)
                                 continue;
                             if (genericFallbackModule.empty())
@@ -6888,7 +7586,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                                 L.externalModules->exportToBeamFn.end() &&
                             exportedArity !=
                                 L.externalModules->exportArity.end() &&
-                            exportedArity->second == arity &&
+                            exportedArity->second == fallbackArity &&
                             prelude !=
                                 L.externalModules->nameToAtom.end() &&
                             prelude->second != mod.name) {
@@ -6960,7 +7658,7 @@ auto lowerProgram(const ast::Program& prog, const std::string& fileStem,
                 }
                 mod.functions.push_back(
                     L.makeDispatcher(name, arity, owners, genericFallback,
-                                     genericFallbackModule));
+                                     genericFallbackModule, fallbackArity));
             }
         }
     }

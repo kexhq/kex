@@ -1,0 +1,25 @@
+# The same hole through a TRAIT-typed receiver. This one has no single resolved
+# call target at all — dispatch is dynamic — so the trait declaration is the
+# only place the effect is stated, and it has to be consulted (kexhq/kex#172).
+#
+# #143 rests on exactly this: capability modules dispatch through trait-shaped
+# interfaces, so an unchecked `foul` here would hide effects rather than track
+# them.
+
+trait Clock do
+  foul now : Integer
+end
+
+record FrozenClock do
+  t : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @t
+end
+
+let stamp(c: Clock) -> String = "at ${c.now()}"
+
+main do
+  IO.printLine(stamp(FrozenClock { t: 7 }))
+end

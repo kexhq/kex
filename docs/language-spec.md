@@ -1239,6 +1239,72 @@ Reading global `ENV` is foul because it is ambient process input. `main` also
 receives the immutable environment snapshot as an explicit parameter; passing
 that map to a helper preserves purity.
 
+### Capabilities (`capability` / `with`)
+
+A **capability** is a module whose implementation can be replaced for a
+lexical region. It is declared like a module, with one keyword changed:
+
+```kex
+capability Clock do
+  foul now() -> Integer do
+    return DateTime.now.epochSeconds
+  end
+end
+```
+
+The bodies are the real implementation and run wherever nothing replaces them.
+The member signatures are simultaneously the interface a stand-in must satisfy,
+so a replacement is written as an ordinary `make` block:
+
+```kex
+record FrozenClock do
+  at : Integer
+end
+
+make FrozenClock, implement: Clock do
+  foul now() -> Integer = @at
+end
+```
+
+`with` replaces the implementation for a region:
+
+```kex
+foul stamp() -> String = "at ${Clock.now()}"
+foul deep()  -> String = "deep -> ${stamp()}"
+
+with Clock = FrozenClock { at: 7 } do
+  IO.printLine(deep())       # deep -> at 7
+end
+IO.printLine(deep())         # the real clock again
+```
+
+`stamp` and `deep` declare no dependency, take no extra parameter, and their
+call to `Clock.now()` is written exactly as it would be in production. The
+substitution still reaches them: it is threaded as one hidden context value
+that every `foul` function carries.
+
+Rules:
+
+- Only a module declared `capability` may appear on the left of `with`. A
+  non-capability, or a typo, is a compile error rather than a silent no-op.
+- A stand-in must implement **every** member — the members are the interface.
+- Bindings are **per-process**, snapshotted at `spawn`. A process spawned
+  inside the region inherits the replacement; one spawned outside never sees
+  it, so a `with` in one process cannot change what another process's code
+  means.
+- Replacement is lexical and cannot outlive its block, including when an error
+  escapes it.
+- Both backends agree.
+
+The boundary is the innermost module that owns effectful members, so `FS.File`
+and `FS.Directory` are capabilities while `FS` is not — `FS.Path` is pure
+string manipulation with nothing to substitute.
+
+> **Two senses of the word.** This is unrelated to the *target* capabilities in
+> `docs/compilation.md`, which are the effects a build target is allowed to
+> provide (`capabilities: [IO]`). That feature is still unimplemented; this one
+> is a language construct about substituting an implementation.
+
 ---
 
 ## 18. Processes

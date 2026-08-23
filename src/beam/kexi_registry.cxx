@@ -12,7 +12,6 @@ namespace {
 
 auto incompatibleBuild(const KexiChunk& chunk, const std::string& label)
     -> std::optional<LoadError> {
-    if (chunk.version < 6) return std::nullopt;
     if (chunk.intrinsicAbiVersion != kex::kIntrinsicAbiVersion)
         return LoadError{label + " uses private intrinsic ABI " +
             std::to_string(chunk.intrinsicAbiVersion) + ", but this toolchain "
@@ -241,8 +240,7 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
         return errors;
     }
 
-    if (entryChunk.version >= 6 &&
-        computeArtifactHash(bf) != entryChunk.artifactHash) {
+    if (computeArtifactHash(bf) != entryChunk.artifactHash) {
         errors.push_back({
             "entry implementation digest mismatch — rebuild the compiled unit"});
         return errors;
@@ -310,8 +308,7 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             return errors;
         }
 
-        if (compChunk.version >= 6 &&
-            computeArtifactHash(compBf) != compChunk.artifactHash) {
+        if (computeArtifactHash(compBf) != compChunk.artifactHash) {
             errors.push_back({
                 "companion '" + comp.beamAtom +
                 "' implementation digest mismatch — rebuild the compiled unit"});
@@ -345,7 +342,7 @@ auto KexiRegistry::loadUnit(const std::string& beamPath)
             return errors;
         }
 
-        if (compChunk.version >= 2 && compChunk.metadata.sourceModule.empty()) {
+        if (compChunk.metadata.sourceModule.empty()) {
             errors.push_back({
                 "companion '" + comp.beamAtom +
                 "' has no source module identity"});
@@ -587,11 +584,21 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
             if (shortName.empty()) continue;
 
             ext.nameToAtom[shortName] = mod.beamAtom;
+            if (mod.chunk.metadata.isCapability)
+                ext.capabilityModules.insert(shortName);
 
             for (const auto& exp : mod.chunk.typeInterface.exports) {
                 auto qualKey = shortName + "." + exp.name;
                 ext.exportToBeamFn[qualKey] = exp.beamFunction;
                 ext.exportArity[qualKey] = exp.beamArity;
+                // Per OVERLOAD, arity included: `ENV.get` is both `get(key)`
+                // and `get(key, default)`, and `exportArity` keeps only one of
+                // them. Recording just the name made the consumer thread a
+                // capability context into whichever arity it happened to hold
+                // and skip the other (kexhq/kex#143).
+                if (exp.isFoul)
+                    ext.foulExports.insert(
+                        qualKey + "/" + std::to_string(exp.beamArity));
                 if (!exp.paramNames.empty())
                     ext.exportParamNames[qualKey] = exp.paramNames;
             }
@@ -633,7 +640,8 @@ auto KexiRegistry::buildExternalModules() const -> kex::ir::ExternalModules {
                         vec.push_back({mod.beamAtom, receiverFn.beamFunction,
                                        receiverFn.beamArity,
                                        receiverFn.paramNames,
-                                       typeNameStr(receiverFn.receiverType)});
+                                       typeNameStr(receiverFn.receiverType),
+                                       receiverFn.isFoul});
                 }
             }
         }
@@ -657,6 +665,7 @@ auto KexiRegistry::buildSemanticInterfaces() const
             imported.sourceModule = sourceModule;
             imported.backendModule = module.beamAtom;
             imported.automaticImport = automaticModules.count(sourceModule) > 0;
+            imported.isCapability = module.chunk.metadata.isCapability;
             for (const auto& exported : module.chunk.typeInterface.exports)
                 imported.exports[exported.name].push_back(
                     importedFunction(exported, module.beamAtom, sourceModule));

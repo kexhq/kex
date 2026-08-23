@@ -1,0 +1,29 @@
+# A call into a NESTED module must still reach the module, even when some make
+# block defines a method with the same name. BEAM used to resolve the call
+# through the receiver/UFCS machinery instead and then lower the dotted receiver
+# `Outer.Inner` as a value — which a module is not — so it died with
+# "Undefined function: Outer.Inner" while the walker was right (kexhq/kex#182).
+#
+# A bare receiver never had the problem; only a dotted path did. No capability
+# is involved here, though the capability work is what exposed it: implementing
+# a capability always creates a make method sharing the member's name.
+
+module Outer do
+  module Inner do
+    foul greet(name: String) -> String do
+      return "hi " + name
+    end
+  end
+end
+
+record Loud do end
+make Loud do
+  foul greet(name: String) -> String = "HI " + name
+end
+
+foul use(n: String) -> String = Outer.Inner.greet(n)
+
+main do
+  IO.printLine(use("x"))
+  IO.printLine(Loud {}.greet("y"))
+end

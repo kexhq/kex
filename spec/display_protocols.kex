@@ -17,11 +17,11 @@ main do
   let clock = Clock { text: "11:33:56" }
   IO.printLine(render(clock))
   IO.printLine(clock)
-  IO.printLine(clock.inspect)
+  IO.printLine(clock.inspected)
   IO.printLine(clock.to(String).or("missing"))
 
   # Inspectable is universal and preserves the structural fallback.
-  IO.printLine(Plain { value: 7 }.inspect)
+  IO.printLine(Plain { value: 7 }.inspected)
 
   # Primitive and standard constructed values retain today's presentation.
   IO.printLine(42)

@@ -139,6 +139,7 @@ auto Parser::syncToTopLevel() -> void {
     case TokenType::Let:
     case TokenType::Foul:
     case TokenType::Module:
+    case TokenType::Capability:
     case TokenType::Type:
     case TokenType::Record:
     case TokenType::Trait:
@@ -169,7 +170,7 @@ auto Parser::parseProgram() -> ast::Program {
 
   while (!atEnd()) {
     try {
-      if ((check(TokenType::Module) ||
+      if ((check(TokenType::Module) || check(TokenType::Capability) ||
            (check(TokenType::Foul) && peekNext().type == TokenType::Module)) &&
           program.items.empty()) {
         program.items.push_back(parseModuleDef(true));
@@ -191,7 +192,7 @@ auto Parser::parseProgram() -> ast::Program {
 }
 
 auto Parser::parseTopLevelItem() -> ast::TopLevelItem {
-  if (check(TokenType::Module) ||
+  if (check(TokenType::Module) || check(TokenType::Capability) ||
       (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
     return parseModuleDef();
   }
@@ -282,7 +283,15 @@ auto Parser::parseModuleDef(bool allowStandalone,
           "function 'foul' at its own definition instead");
   }
 
-  expect(TokenType::Module, "Expected 'module'");
+  // `capability Name do ... end` is a module that may be substituted; it
+  // parses identically so every later phase sees the ModuleDef it already
+  // understands (kexhq/kex#143).
+  if (check(TokenType::Capability)) {
+    advance();
+    mod->isCapability = true;
+  } else {
+    expect(TokenType::Module, "Expected 'module'");
+  }
   auto moduleName = parseTypeName();
   for (size_t i = 0; i < moduleName.parts.size(); ++i) {
     if (i)
@@ -301,7 +310,7 @@ auto Parser::parseModuleDef(bool allowStandalone,
   skipNewlines();
 
   while (!atEnd() && (standalone || !check(TokenType::End))) {
-    if (check(TokenType::Module) ||
+    if (check(TokenType::Module) || check(TokenType::Capability) ||
         (check(TokenType::Foul) && peekNext().type == TokenType::Module)) {
       mod->body.push_back(parseModuleDef(false, mod->name));
     } else if (check(TokenType::Type) ||
@@ -429,7 +438,8 @@ auto Parser::parseTypeDef() -> std::unique_ptr<ast::TypeDef> {
             }
           }
           expect(TokenType::RParen, "Expected ')' after variant args");
-          variant->kind = ast::GenericType{std::move(name), std::move(args)};
+          variant->kind =
+              ast::GenericType{std::move(name), std::move(args), false};
         } else if (match(TokenType::LessThan)) {
           std::vector<ast::TypeExprPtr> args;
           args.push_back(parseTypeExpr());
@@ -688,23 +698,31 @@ auto Parser::parseMakeImplements(ast::MakeDef &into) -> void {
         peekNext().type == TokenType::Colon) {
       advance(); // "implement"
       advance(); // ":"
-      {
+      // A trait or capability declared inside a module is named by its
+      // qualified path (`FS.File`), which is how a nested ModuleDef is
+      // registered — so `implement:` has to consume one (kexhq/kex#179).
+      auto implementName = [&]() -> std::string {
         auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        if (tok.value.size() == 1)
-          error("Trait name '" + tok.value +
+        std::string name = tok.value;
+        while (check(TokenType::Dot) &&
+               peekNext().type == TokenType::UpperIdent) {
+          advance(); // "."
+          name += "." + expect(TokenType::UpperIdent,
+                               "Expected trait name after '.'").value;
+        }
+        // The reserved-letter rule is about a bare name; a qualified path
+        // whose last segment is one letter is not a type parameter.
+        if (name.size() == 1)
+          error("Trait name '" + name +
                 "' is a single uppercase letter — those are reserved for type "
                 "parameters");
-        def->implements.push_back(tok.value);
-      }
+        return name;
+      };
+      def->implements.push_back(implementName());
       while (check(TokenType::Comma) &&
              peekNext().type == TokenType::UpperIdent) {
         advance(); // ","
-        auto tok = expect(TokenType::UpperIdent, "Expected trait name");
-        if (tok.value.size() == 1)
-          error("Trait name '" + tok.value +
-                "' is a single uppercase letter — those are reserved for type "
-                "parameters");
-        def->implements.push_back(tok.value);
+        def->implements.push_back(implementName());
       }
     } else {
       m_pos = savedPos; // not an implement clause, backtrack
@@ -2007,6 +2025,8 @@ auto Parser::parsePrimary() -> ast::ExprPtr {
     return parseReturnExpr();
   if (check(TokenType::Spawn))
     return parseSpawnExpr();
+  if (check(TokenType::With))
+    return parseWithExpr();
   if (check(TokenType::Trying))
     return parseTryingExpr();
   if (check(TokenType::Break)) {
@@ -3056,6 +3076,37 @@ auto Parser::parseSpawnExpr() -> ast::ExprPtr {
   return expr;
 }
 
+// `with FS.File = FakeFiles { ... } do ... end` — substitute a capability's
+// implementation for the body's lexical region (kexhq/kex#143).
+auto Parser::parseWithExpr() -> ast::ExprPtr {
+  auto expr = std::make_unique<ast::Expr>();
+  expr->location = currentLocation();
+  expect(TokenType::With, "Expected 'with'");
+
+  ast::WithExpr node;
+  node.capability = parseTypeName();
+  expect(TokenType::Equals, "Expected '=' after the capability name in 'with'");
+  // The replacement is followed by `do`, which a trailing-block expression
+  // would otherwise swallow: `with FS.File = fake do` parsed `do ... end` as a
+  // block argument to `fake` and then complained about the `end`. Same
+  // treatment an `if` condition gets, for the same reason.
+  const bool savedNoDoBlocks = m_noDoBlocks;
+  m_noDoBlocks = true;
+  node.value = parseExpr();
+  m_noDoBlocks = savedNoDoBlocks;
+  expect(TokenType::Do, "Expected 'do' after the 'with' replacement");
+  skipNewlines();
+
+  while (!check(TokenType::End) && !atEnd()) {
+    node.body.push_back(parseExpr());
+    skipNewlines();
+  }
+  expect(TokenType::End, "Expected 'end' to close with");
+
+  expr->kind = std::move(node);
+  return expr;
+}
+
 auto Parser::parseLambda() -> ast::ExprPtr {
   auto expr = std::make_unique<ast::Expr>();
   expr->location = currentLocation();
@@ -3978,6 +4029,7 @@ auto Parser::isAtExprStart() const -> bool {
   case TokenType::Var:
   case TokenType::Return:
   case TokenType::Spawn:
+  case TokenType::With:
   case TokenType::Do:
   case TokenType::Amp:
   case TokenType::Minus:

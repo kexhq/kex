@@ -1,0 +1,11 @@
+Mock.FS.files
+  ✓ registers a whole fixture in one call
+  ✓ does not leak into the next test
+Mock.FS.onRead
+  ✓ answers by rule, and None means absent
+  ✓ is discarded with the rest of the mock state
+Mock.ENV.vars
+  ✓ registers a whole overlay in one call
+  ✓ does not leak into the next test
+
+6 passed, 0 failed
