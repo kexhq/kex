@@ -1527,6 +1527,33 @@ int main() {
         });
     });
 
+    describe("Types — atom literals", []() {
+        using namespace kex::semantic;
+
+        it("prints an atom literal type as the literal", []() {
+            assertEqual(typeToString(Type::atom("macos")), std::string(":macos"));
+            assertEqual(typeToString(Type::atom()), std::string("Atom"));
+        });
+
+        it("prints a union of atom literals member by member", []() {
+            auto union_ = std::make_shared<Type>(Type{UnionType{
+                {Type::atom("macos"), Type::atom("linux"), Type::atom("windows")}}});
+            assertEqual(typeToString(union_),
+                        std::string(":macos | :linux | :windows"));
+        });
+
+        it("keeps every atom literal interchangeable with Atom", []() {
+            assertTrue(typesEqual(Type::atom("macos"), Type::atom()));
+            assertTrue(typesEqual(Type::atom("macos"), Type::atom("linux")));
+        });
+
+        it("reflects an atom literal type as Atom", []() {
+            auto structured = structuredTypeOf(Type::atom("macos"));
+            assertTrue(structured.has_value());
+            assertEqual(structured->name, std::string("Atom"));
+        });
+    });
+
     describe("Types — numeric tower", []() {
         using namespace kex::semantic;
 

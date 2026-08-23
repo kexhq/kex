@@ -64,6 +64,11 @@ auto semanticType(const KexiTypePtr& type, TypeVarMap& vars) -> kex::semantic::T
         if (type->name == "Char") return Type::charT();
         if (type->name == "String") return Type::string();
         if (type->name == "Bool") return Type::boolean();
+        // A `:macos`-shaped name is an atom LITERAL type: the leading colon is
+        // how the metadata spells one, so a union of them reads back as
+        // `:macos | :linux | ...` rather than `Atom | Atom | ...`.
+        if (type->name.size() > 1 && type->name[0] == ':')
+            return Type::atom(type->name.substr(1));
         if (type->name == "Atom") return Type::atom();
         if (type->name == "Void") return Type::unit();
         if (type->name == "Number") return Type::constrained("Number", "Number");

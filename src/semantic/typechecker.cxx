@@ -1766,7 +1766,7 @@ auto TypeChecker::resolveTypeExpr(const ast::TypeExpr& typeExpr,
             return std::make_shared<Type>(Type{UnionType{std::move(members)}});
         }
         else if constexpr (std::is_same_v<T, ast::AtomType>) {
-            return Type::atom();
+            return Type::atom(node.name);
         }
         else if constexpr (std::is_same_v<T, ast::GenericVar>) {
             auto it = genericVars.find(node.name);
