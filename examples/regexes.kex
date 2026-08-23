@@ -117,7 +117,7 @@ foul demoBulk do
   let pairs = text.scan(regex`(\w+)=(\d+)`).map do |m|
     (m.get(1, ""), Integer.parse(m.get(2, "")).or(0))
   end
-  IO.printLine(pairs.inspect)         # [("cat", 1), ("dog", 2), ("bird", 3)]
+  IO.printLine(pairs.inspected)         # [("cat", 1), ("dog", 2), ("bird", 3)]
 
   # replace with a plain literal — no magic substitution syntax.
   let masked = "call 555-1234 now".replace(regex`\d{3}-\d{4}`, "***-****")
@@ -132,8 +132,8 @@ foul demoBulk do
   # split on a pattern — Ruby's semantics (trailing empties dropped, leading
   # kept, capture groups interleaved). The limit form is Regex.splitLimit.
   let fields = "a, b ,c,  d".split(regex`\s*,\s*`)
-  IO.printLine(fields.inspect)        # ["a", "b", "c", "d"]
-  IO.printLine(Regex.splitLimit("a,b,c", regex`,`, 2).inspect)   # ["a", "b,c"]
+  IO.printLine(fields.inspected)        # ["a", "b", "c", "d"]
+  IO.printLine(Regex.splitLimit("a,b,c", regex`,`, 2).inspected)   # ["a", "b,c"]
 end
 
 # ─── A real-ish use: parse a log line, guard with the match ──────────────────

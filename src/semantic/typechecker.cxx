@@ -917,6 +917,14 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
                     if constexpr (std::is_same_v<MT,
                                                  std::unique_ptr<ast::FunctionDef>>) {
                         if (!mn || mn->clauses.empty()) return;
+                        // A capability's INTERFACE is its `foul` members. A
+                        // pure member performs no effect, so there is nothing
+                        // for a stand-in to substitute and no reason to make
+                        // one implement it — `IO.inspect` is deliberately pure
+                        // (it is the debug hatch purity checking ignores) and
+                        // requiring it would have kept `IO` from being a
+                        // capability at all (kexhq/kex#143).
+                        if (!mn->isFoul) return;
                         Signature sig;
                         sig.name = mn->name;
                         sig.isFoul = mn->isFoul;
@@ -960,6 +968,8 @@ auto TypeChecker::registerCapabilityTraits(const ast::Program& program) -> void 
             td.name = name;
             for (const auto& [member, overloads] : interface.exports) {
                 if (overloads.empty()) continue;
+                // Foul members only — see the local branch above.
+                if (!overloads.front().signature.isFoul) continue;
                 Signature sig = overloads.front().signature;
                 sig.name = member;
                 td.requiredMethods.push_back(std::move(sig));

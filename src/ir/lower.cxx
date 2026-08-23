@@ -609,6 +609,31 @@ struct Lowering {
                 externalModules->capabilityModules.count(name) > 0);
     }
 
+    // Is `method` part of `capability`'s substitutable INTERFACE? Only its
+    // `foul` members are — a pure member performs no effect, so there is
+    // nothing to replace, and routing it through the substitution dispatch
+    // actively breaks it: that dispatch passes the source arguments only, so
+    // `IO.inspect(v)` lost the trait dictionary its `Inspectable` parameter
+    // needs and rendered structurally instead of calling the user's
+    // `inspectValue` (kexhq/kex#143).
+    auto capabilityInterfaceHas(const std::string& capability,
+                                const std::string& method) const -> bool {
+        // `foulExports` records exactly the foul exports, one entry per
+        // overload as `Module.member/arity` — which is the interface.
+        if (externalModules &&
+            externalModules->capabilityModules.count(capability)) {
+            const auto prefix = capability + "." + method + "/";
+            return std::any_of(externalModules->foulExports.begin(),
+                               externalModules->foulExports.end(),
+                               [&](const std::string& entry) {
+                                   return entry.rfind(prefix, 0) == 0;
+                               });
+        }
+        // Declared in this unit: `foulFns` carries the names marked `foul`.
+        if (capabilityModules.count(capability)) return foulFns.count(method) > 0;
+        return true;
+    }
+
     // The context to hand a callee: whatever this function holds, or an empty
     // map where there is none (a pure caller, or top level).
     auto currentContext() -> ExprPtr {
@@ -2368,6 +2393,7 @@ struct Lowering {
             // implementation and `with` silently does nothing — the fail-open
             // this feature exists to prevent (kexhq/kex#143).
             bool capabilityOwnsCall = false;
+            std::string capabilityTarget;
             if (n.receiver) {
                 std::vector<std::string> segments;
                 if (modulePath(*n.receiver, segments) && !segments.empty()) {
@@ -2377,9 +2403,9 @@ struct Lowering {
                         joined += segments[i];
                     }
                     capabilityOwnsCall =
-                        capabilityModules.count(joined) > 0 ||
-                        (externalModules &&
-                         externalModules->capabilityModules.count(joined) > 0);
+                        isCapabilityModule(joined) &&
+                        capabilityInterfaceHas(joined, n.method);
+                    if (capabilityOwnsCall) capabilityTarget = joined;
                 }
             }
             bool modulePathOwnsCall = false;
@@ -2397,7 +2423,7 @@ struct Lowering {
             }
             if (resolved != resolvedCalls->end() && !localTypeShadows &&
                 !stalePreludeTarget && !localFieldAccessor &&
-                !modulePathOwnsCall && !capabilityOwnsCall) {
+                !modulePathOwnsCall) {
                 std::vector<Binding> binds;
                 std::vector<ExprPtr> args;
                 if (resolved->second.passesReceiver)
@@ -2484,6 +2510,10 @@ struct Lowering {
                         binds,
                         localCallExpr(n.method, std::move(args)));
                 }
+                // Everything appended from here on is a trait dictionary,
+                // not a source argument — the two branches of a capability
+                // dispatch need them separated (see the terminal call below).
+                const size_t sourceArgCount = args.size();
                 for (const auto& [argument, trait] :
                      resolved->second.traitDictionaries) {
                     const ast::Expr* source = nullptr;
@@ -2574,6 +2604,32 @@ struct Lowering {
                 }
                 // Same as externalCallExpr: the imported-foul append belongs
                 // with dropping the gate, not before it (kexhq/kex#181).
+                if (!capabilityTarget.empty()) {
+                    // The two branches take DIFFERENT arguments. The real
+                    // implementation is an ordinary function and wants its
+                    // trait dictionaries; a stand-in is a `make` block method,
+                    // which is unannotated and takes none. Splitting them here
+                    // is what lets a capability have a trait-constrained
+                    // parameter at all — `IO.printLine(msg: Showable)` is the
+                    // first, and without this its dictionary went missing and
+                    // every value rendered structurally instead of through the
+                    // user's `showValue` (kexhq/kex#143).
+                    std::vector<ExprPtr> dictionaries;
+                    for (size_t i = sourceArgCount; i < args.size(); ++i)
+                        dictionaries.push_back(std::move(args[i]));
+                    args.resize(sourceArgCount);
+                    auto module = resolved->second.backendModule;
+                    auto function = backendFunction;
+                    const int arity = resolved->second.backendArity;
+                    return capabilityDispatchLowered(
+                        capabilityTarget, n.method, std::move(args), binds,
+                        [&](std::vector<ExprPtr> direct) {
+                            for (auto& dictionary : dictionaries)
+                                direct.push_back(std::move(dictionary));
+                            return callE(module, function, arity,
+                                         std::move(direct));
+                        });
+                }
                 return wrapLets(
                     binds,
                     callE(resolved->second.backendModule,

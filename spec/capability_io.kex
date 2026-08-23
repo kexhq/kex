@@ -1,0 +1,67 @@
+# `IO` is a capability: printing and reading can be replaced for a region
+# (kexhq/kex#143).
+#
+# This is the one that matters most for testing, and it was the last to
+# convert. `IO` has ten `foul` members and one PURE one — `inspect`, which is
+# deliberately exempt from purity checking so it can be dropped into a pure
+# pipeline. Requiring a stand-in to implement it would have meant either making
+# it `foul`, destroying the reason it exists, or leaving `IO` a plain module.
+#
+# The rule: a capability's INTERFACE is its `foul` members. A pure member
+# performs no effect, so there is nothing to substitute. `Canned` below
+# implements the ten and not `inspect`, and that is a complete implementation.
+
+record Canned do
+  stdin : String
+end
+
+make Canned, implement: IO do
+  # Every write is discarded; every read answers from the record.
+  foul printLine(msg) = @stdin
+  foul printLine = @stdin
+  foul print(msg) = @stdin
+  foul print = @stdin
+  foul printError(msg) = @stdin
+  foul printError = @stdin
+  foul warn(msg) = @stdin
+  foul warning(msg) = @stdin
+  foul getLine = Just(@stdin)
+  foul get = Just("c")
+end
+
+# Declares no dependency and threads nothing: written exactly as in production.
+foul chatty() -> Void do
+  IO.printLine("suppressed stdout")
+  IO.printError("suppressed stderr")
+end
+
+main do
+  IO.printLine("before")
+
+  with IO = Canned { stdin: "canned line" } do
+    # None of this reaches the terminal — including the call that mentions no
+    # capability at all.
+    chatty()
+    IO.printLine("also suppressed")
+    IO.warn("suppressed warning")
+  end
+
+  # Reading is replaced too, which is what makes stdin-driven code testable
+  # without a pipe. `with` yields its body's value, so the captured line can be
+  # printed out here by the REAL IO.
+  let line = with IO = Canned { stdin: "canned line" } do
+    IO.getLine.or("(none)")
+  end
+  IO.printLine(line)
+
+  let ch = with IO = Canned { stdin: "x" } do
+    IO.get.or("(none)")
+  end
+  IO.printLine(ch)
+
+  # `Canned` implements the ten foul members and NOT `inspect`, and the
+  # conformance check accepts it — that omission is the assertion, and this
+  # program failing to compile is how a regression would show up.
+
+  IO.printLine("after")
+end
