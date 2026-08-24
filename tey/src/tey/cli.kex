@@ -135,10 +135,31 @@ end
 # to `run` as well: reporting it with the help text is the one policy every
 # tool built on OptionParser shares.
 foul dispatch(args: [String]) -> Integer do
+  Tey.Cli.announceToolchain
   match Tey.Cli.parser.parse(args) do
     Error(_) => Tey.Cli.cli.run(args)
     Ok(options) => Tey.Cli.dispatchParsed(args, options)
   end
+end
+
+# Tells the rest of the process which compiler Tey selected.
+#
+# `Kex.AST` — which is how a `package.kex` is read at all — shells out to the
+# compiler named by `$KEX`, falling back to whatever `kex` PATH happens to
+# hold. Tey is started by `erl`, not by `kex`, so nothing had set that: a
+# manifest was parsed by an unrelated compiler if one was on PATH, and by none
+# at all otherwise — which is why a package's commands silently vanished from
+# `tey help` on a machine where `kex` was installed only inside the Tey home.
+#
+# An explicit `$KEX` is left alone: someone who set it means it, and that is
+# the documented override the compiler itself honours.
+foul announceToolchain -> Void do
+  return () if ENV.get("KEX", "") != ""
+  let compiler = Tey.Toolchain.kex
+  # "kex" is the resolver's own last resort, meaning "hope PATH has one".
+  # Passing that on says nothing PATH does not already say.
+  return () if compiler == "kex"
+  ENV.set("KEX", compiler)
 end
 
 private do
