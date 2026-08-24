@@ -75,7 +75,15 @@ foul parser -> OptionConfig do
     .command("help", "[--json]", "show this help") do |options|
       Tey.Cli.help(options.flagEnabled?("json"))
     end
-    .command("kex list", "[--pre] [--installed] [--json]", "show Kex versions, newest first") do |options|
+    # Bare `tey kex` lists, rather than reporting the group name as an
+    # unknown command. A group with subcommands is still a word somebody
+    # types on its own, and the useful answer to "tey kex" is the same one
+    # `tey kex list` gives. Declaring both is what `commandFor`'s
+    # longest-match rule is for: `kex install` still reaches its own handler.
+    .command("kex", "", "show Kex versions, newest first") do |options|
+      Tey.Cli.kexList(options)
+    end
+    .command("kex list", "[--pre] [--installed] [--json]", "the same listing, spelled out") do |options|
       Tey.Cli.kexList(options)
     end
     # One handler for every `kex install` spelling: bare, `latest`, a version,
@@ -137,12 +145,12 @@ private do
   foul installKex(version: String) -> Integer do
     match Tey.Toolchain.installRelease(version) do
       Ok(prefix) => do
-        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
         Tey.Cli.reportShim(version)
         0
       end
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
     end
@@ -160,13 +168,18 @@ private do
 
   # "* 0.3.0  installed, selected" — the marker is the selected one, so the
   # active version is findable by eye in a long list.
+  # The selected toolchain is the one answer a reader is usually looking for,
+  # so it carries the marker AND the colour; the notes beside a version are
+  # metadata and stay dim.
   let versionLine(version: String, installed: [String], selected: String) -> String do
-    let marker = version == selected then "*" else " "
+    let current = version == selected
+    let marker = current then "${Console.GREEN}*${Console.RESET}" else " "
+    let shown = current then "${Console.BOLD}${version}${Console.RESET}" else version
     let channel = Tey.Semver.stable?(version) then [] else ["pre-release"]
     let notes = installed.contains?(version) then [...channel, "installed"] else channel
-    let all = version == selected then [...notes, "selected"] else notes
-    return "${marker} ${version}" if all.empty?
-    return "${marker} ${version}  ${all.join(", ")}"
+    let all = current then [...notes, "selected"] else notes
+    return "${marker} ${shown}" if all.empty?
+    return "${marker} ${shown}  ${Console.DIM}${all.join(", ")}${Console.RESET}"
   end
 
   # The offline listing: what is on this machine, newest first, in the same
@@ -176,18 +189,20 @@ private do
   foul listInstalled -> Integer do
     let toolchains = Tey.Toolchain.selectableToolchains
     if toolchains.empty?
-      IO.printLine("No Kex toolchains installed")
+      IO.printLine("${Console.DIM}No Kex toolchains installed${Console.RESET}")
       return 0
     end
     let selected = Tey.Toolchain.selected.or("")
     toolchains.each do |toolchain|
-      let marker = toolchain.version == selected then "*" else " "
+      let current = toolchain.version == selected
+      let marker = current then "${Console.GREEN}*${Console.RESET}" else " "
+      let shown = current then "${Console.BOLD}${toolchain.version}${Console.RESET}" else toolchain.version
       let notes = toolchain.bundled? then ["bundled, not installed"] else []
-      let line = notes.empty? then "${marker} ${toolchain.version}" else "${marker} ${toolchain.version}  ${notes.join(", ")}"
+      let line = notes.empty? then "${marker} ${shown}" else "${marker} ${shown}  ${Console.DIM}${notes.join(", ")}${Console.RESET}"
       IO.printLine(line)
     end
     if !Tey.Toolchain.selectionHealthy?
-      IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
     end
     Tey.Cli.reportShim(selected)
     0
@@ -247,7 +262,7 @@ private do
       Just(revision) => "${Kex.Kernel.VERSION.release}, ${revision}"
       None => Kex.Kernel.VERSION.release
     end
-    IO.printLine("tey ${Tey.Version.number} (Kex ${kex})")
+    IO.printLine("${Console.BOLD}tey${Console.RESET} ${Tey.Version.number} ${Console.DIM}(Kex ${kex})${Console.RESET}")
     return 0
   end
 
@@ -307,7 +322,7 @@ private do
     # has asked to consume. Saying so beats half-doing it.
     if options.flagEnabled?("json")
       if !options.flagEnabled?("installed")
-        IO.printError("tey: --json needs --installed; released versions have no JSON form\n")
+        IO.printError("${Console.RED}error:${Console.RESET} --json needs --installed; released versions have no JSON form\n")
         return 1
       end
       return Tey.Cli.listInstalledJson()
@@ -317,7 +332,7 @@ private do
       Error(error) => do
         # A release list needs the network; the installed ones do not, and
         # they are the half a user can still act on.
-        IO.printError("tey: could not read released versions: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} could not read released versions: ${error}\n")
         []
       end
       Ok(versions) => versions
@@ -334,7 +349,7 @@ private do
       versions = all.filter { |version| Tey.Semver.stable?(version) || installed.contains?(version) }
     end
     if versions.empty?
-      IO.printLine("No Kex versions found")
+      IO.printLine("${Console.DIM}No Kex versions found${Console.RESET}")
       return 0
     end
     let selected = Tey.Toolchain.selected.or("")
@@ -342,11 +357,11 @@ private do
       IO.printLine(Tey.Cli.versionLine(version, installed, selected))
     end
     if !Tey.Toolchain.selectionHealthy?
-      IO.printError("tey: Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
+      IO.printError("${Console.RED}error:${Console.RESET} Kex ${selected} is selected but not installed; pick another with `tey kex use <version>`\n")
     end
     let hidden = all.count - versions.count
     IO.printLine("") if hidden > 0
-    IO.printLine("${hidden} pre-release(s) hidden; pass --pre to see them") if hidden > 0
+    IO.printLine("${Console.DIM}${hidden} pre-release(s) hidden; pass --pre to see them${Console.RESET}") if hidden > 0
     Tey.Cli.reportShim(selected)
     0
   end
@@ -382,19 +397,19 @@ private do
     if Tey.Toolchain.installedVersions.empty? && Tey.Toolchain.bundled != None
       match Tey.Toolchain.installBundled do
         Ok(prefix) => do
-          IO.printLine("Installed and selected the bundled Kex, at ${prefix}")
+          IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected the bundled Kex, ${Console.DIM}at ${prefix}${Console.RESET}")
           Tey.Cli.reportShim(Tey.Toolchain.selected.or(""))
           return 0
         end
         Error(error) => do
-          IO.printError("tey: ${error}\n")
+          IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
           return 1
         end
       end
     end
     match Tey.Cli.newestVersion(options) do
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
       Ok(version) => Tey.Cli.installKex(version)
@@ -404,7 +419,7 @@ private do
   foul kexInstallLatest(options: ParsedOptions) -> Integer do
     match Tey.Cli.newestVersion(options) do
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
       Ok(version) => do
@@ -421,12 +436,12 @@ private do
   foul kexInstallSource(source: String, version: String) -> Integer do
     match Tey.Toolchain.installSource(source, version) do
       Ok(prefix) => do
-        IO.printLine("Installed and selected Kex ${version} at ${prefix}")
+        IO.printLine("${Console.GREEN}Installed${Console.RESET} and selected Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}at ${prefix}${Console.RESET}")
         Tey.Cli.reportShim(version)
         0
       end
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
     end
@@ -435,12 +450,12 @@ private do
   foul kexUninstall(version: String) -> Integer do
     match Tey.Toolchain.uninstall(version) do
       Ok(prefix) => do
-        IO.printLine("Removed Kex ${version} from ${prefix}")
+        IO.printLine("${Console.GREEN}Removed${Console.RESET} Kex ${Console.BOLD}${version}${Console.RESET} ${Console.DIM}from ${prefix}${Console.RESET}")
         IO.printLine("No Kex is selected; pick one with `tey kex use <version>`") if Tey.Toolchain.selected == None
         0
       end
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         1
       end
     end
@@ -457,7 +472,7 @@ private do
         0
       end
       None => do
-        IO.printError("tey: no Kex is installed\n")
+        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed\n")
         1
       end
     end
@@ -466,7 +481,7 @@ private do
   foul kexUse(selector: String) -> Integer do
     match Tey.Toolchain.resolveSelector(selector) do
       None => do
-        IO.printError("tey: no Kex is installed; install one with `tey kex install`\n")
+        IO.printError("${Console.RED}error:${Console.RESET} no Kex is installed; install one with `tey kex install`\n")
         1
       end
       Just(version) => do
@@ -483,7 +498,7 @@ private do
           Tey.Cli.reportShim(version)
           0
         else
-          IO.printError("tey: Kex ${version} is not installed\n")
+          IO.printError("${Console.RED}error:${Console.RESET} Kex ${version} is not installed\n")
           1
         end
       end
@@ -521,7 +536,7 @@ private do
     return [] if !FS.File.file?("package.kex")
     match Tey.Commands.manifest do
       Error(error) => do
-        IO.printError("tey: ${error}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${error}\n")
         []
       end
       Ok(package) => package.commands
@@ -548,12 +563,12 @@ private do
 
 
   foul incomplete(command: String, missing: String) -> Integer do
-    IO.printError("tey: `tey ${command}` needs ${missing}\n")
+    IO.printError("${Console.RED}error:${Console.RESET} `tey ${command}` needs ${missing}\n")
     1
   end
 
   foul unknown(command: String) -> Integer do
-    IO.printError("tey: unknown or incomplete command '${command}'\n")
+    IO.printError("${Console.RED}error:${Console.RESET} unknown or incomplete command '${command}'\n")
     1
   end
 end

@@ -4,7 +4,7 @@
 -module(kex_intrinsic_process).
 -export(['send'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1, run/2]).
+          self/0, exit/2, register/2, whereis/1, run/2, stream/2]).
 
 %% Execute a program and capture its output with the streams KEPT APART, the
 %% same result the tree walker produces.
@@ -56,6 +56,74 @@ run_split(Shell, Executable, Arguments, Fifo) ->
     {Status, Out} = collect_port(Port, []),
     Err = await_stderr(Reader, Fifo),
     {'Ok', {'ProcessResult', Status, Out, Err}}.
+
+%% Process.stream — run a program and let its output through AS IT ARRIVES,
+%% answering only the exit code.
+%%
+%% `run/2` above captures both streams and can only answer once the child has
+%% exited, so anything long-running shows nothing and then dumps everything at
+%% the end — `tey test` and a package's own commands looked stalled for their
+%% whole run (kexhq/kex#187).
+%%
+%% stderr is folded into stdout (`stderr_to_stdout`) rather than separated the
+%% way `run/2` does it: the two are being written straight through to the same
+%% terminal, so keeping them apart would only reorder them against each other.
+%%
+%% Unlike the tree walker — which forks and lets the child inherit the real
+%% descriptors — a port is a pipe, so a child that asks whether it is talking
+%% to a terminal is told no, and may drop its own colours. Live output is
+%% worth that; a child whose colours matter can be told explicitly.
+stream(Command, Args) ->
+    case os:find_executable(unicode:characters_to_list(Command)) of
+        false -> {'Error', <<"executable not found">>};
+        Executable ->
+            Arguments = [unicode:characters_to_list(A) || A <- Args],
+            Port = open_port({spawn_executable, Executable},
+                             [binary, exit_status, use_stdio, stderr_to_stdout,
+                              hide, {args, Arguments}]),
+            %% A child that READS is as common as one that writes — `tey repl`
+            %% and `tey run` on a program that asks a question both do — and a
+            %% port's stdin is written by the parent rather than inherited, so
+            %% without this the child prints its prompt and then waits for
+            %% input that can never arrive. The feeder reads this process's
+            %% own stdin and forwards it, in its own process so that waiting
+            %% for a line never stops the output loop below.
+            Feeder = spawn(fun() -> feed_port(Port) end),
+            Status = pump_port(Port),
+            %% The child is gone; whatever the feeder is waiting for is no
+            %% longer wanted, and leaving it blocked on stdin would eat the
+            %% next thing typed at Tey itself.
+            erlang:exit(Feeder, kill),
+            {'Ok', Status}
+    end.
+
+feed_port(Port) ->
+    case io:get_line('') of
+        eof -> ok;
+        {error, _} -> ok;
+        Line ->
+            %% `port_command` raises once the child has exited, which is a
+            %% race this cannot avoid: the line was typed before the exit
+            %% arrived. Losing it is correct — there is nobody to read it.
+            try erlang:port_command(Port, unicode:characters_to_binary(Line)) of
+                true -> feed_port(Port)
+            catch
+                _:_ -> ok
+            end
+    end.
+
+%% Every chunk the child writes goes straight out, and the loop ends with the
+%% exit status. `put_chars` with a binary keeps the bytes exactly as the child
+%% wrote them, so a partial UTF-8 sequence split across two chunks still ends
+%% up correct on the terminal.
+pump_port(Port) ->
+    receive
+        {Port, {data, Bin}} ->
+            io:put_chars(Bin),
+            pump_port(Port);
+        {Port, {exit_status, Status}} ->
+            Status
+    end.
 
 run_merged(Executable, Arguments) ->
     Port = open_port({spawn_executable, Executable},
