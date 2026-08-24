@@ -127,7 +127,10 @@ beyond the slot signatures, it has failed its purpose.
   - **`::>` is not a function type.** `fetch ::> String -> Reply<Session?>`
     describes a protocol entry, not a `String -> Reply<Session?>` value.
 
-- **`::>` annotates slots that have a `from`.** The rule is mechanical —
+- **`::>` optionally annotates slots that have a `from`.** An inline `slot`
+  signature is already complete and is the normal single-clause form. A
+  separate annotation is useful for multi-clause slots; writing both is
+  allowed only when their types agree. When present, the rule is mechanical —
   **colons count implicit parameters**: `:` binds none, `:>` binds
   `this : This`, `::>` binds `this : This` and `from : From<T>`. Casts annotate
   with `:>`, since they have no `from`; `::>` on a cast is an error.
@@ -364,6 +367,11 @@ deciding alongside the general exhaustiveness story — `todos.txt` already note
 that literal and tuple exhaustiveness are missed today.
 
 ### Annotating slots — `::>` (decided)
+
+These annotations are optional. `slot fetch(id: String) -> Reply<Session?>`
+defines the complete protocol on its own. The separate form is primarily for
+grouping one signature above several clauses; it must not force users to repeat
+that signature on each implementation.
 
 
 `:>` means "implicit `This` as first param" (grammar.ebnf:177). For a `let` that

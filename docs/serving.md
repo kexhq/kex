@@ -4,33 +4,30 @@
 owns that state in a server process and returns a `Server<State>` handle.
 
 ```kex
-record Counter do
-  count : Integer = 0
+record ShoppingList do
+  items : [String] = []
 end
 
-serving Counter do
-  slot get -> Reply<Integer> = { reply: @count }
+serving ShoppingList do
+  slot items -> Reply<[String]> = { reply: @items }
 
-  slot increment(by: Integer) -> Reply<Integer> do
-    new.count = @count + by
-    return { new, reply: new.count }
+  slot add(item: String) -> Reply<Integer> do
+    new.items = [item | @items]
+    return { new, reply: new.items.count }
   end
 
-  slot reset(to: Integer) -> Void do
-    new.count = to
-    new
-  end
+  slot clear -> Void = New { items: [] }
 end
 ```
 
 A slot returning `Reply<T>` is a synchronous call. A slot returning `Void` is
-an asynchronous cast. Calling the slot on a `Server<Counter>` checks its name
-and arguments at compile time:
+an asynchronous cast. Calling the slot on a `Server<ShoppingList>` checks its
+name and arguments at compile time:
 
 ```kex
-let counter = Process.spawn(Counter {})
-counter.increment(12)                 # Result<Integer, CallError>
-counter.reset(0)                      # enqueued; returns immediately
+let groceries = Process.spawn(ShoppingList {})
+groceries.add("coffee")              # Result<Integer, CallError>
+groceries.clear()                     # enqueued; returns immediately
 ```
 
 Calls are foul because they send and wait. Casts are foul because they send.
@@ -42,7 +39,7 @@ sent by the same process.
 The inline declaration is sufficient:
 
 ```kex
-slot get -> Reply<Integer> = { reply: @count }
+slot items -> Reply<[String]> = { reply: @items }
 ```
 
 For multi-clause slots, a separate annotation may be clearer:
@@ -79,9 +76,9 @@ Calls use the first applicable timeout:
 3. 5000 milliseconds.
 
 ```kex
-counter.increment(12, within: 10_000)
-let patient = counter.within(30_000)
-patient.get()
+groceries.add("coffee", within: 10_000)
+let patient = groceries.within(30_000)
+patient.items()
 ```
 
 Timeouts return `Error(Timeout)`; stopped or failed servers use the other
@@ -105,9 +102,9 @@ must use `from`; casts have no caller and cannot use it.
 ## Erlang and Elixir interoperability
 
 On BEAM, a Kex server is an OTP `gen_server`. Slots use ordinary tuple request
-terms, so foreign callers can send `{increment, 5}` with `gen_server:call/2`
-or `{reset, 0}` with `gen_server:cast/2`. Only declared slots are exposed;
-ordinary helper methods are not request handlers.
+terms, so foreign callers can send `{add, <<"coffee">>}` with
+`gen_server:call/2` or the atom `clear` with `gen_server:cast/2`. Only declared
+slots are exposed; ordinary helper methods are not request handlers.
 
 The full rationale, rejected alternatives, and deferred supervision work live
 in [the serving design plan](serving-plan.md).

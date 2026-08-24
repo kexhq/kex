@@ -44,7 +44,7 @@ main do
   end
 
   # No `after` at all: blocks until a message matches.
-  server.send(:ping)
+  server.sendFrom(:ping)
   receive do
     :pong => IO.printLine("blocked until :pong")
   end
