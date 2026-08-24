@@ -2663,6 +2663,20 @@ private:
         std::string detail;
         std::string documentation;
         std::string selectedCallDetail;
+        std::string thisTypeDetail;
+        // `This` is a compiler-owned type placeholder whose meaning is the
+        // target of the surrounding `make` block. It has no standalone type
+        // declaration for ordinary symbol lookup to find, but the method
+        // symbol on the same signature line records that make target.
+        if (lookupName == "This")
+            if (const auto* state = m_db.fileState(document.path))
+                for (const auto& candidate : state->symbols)
+                    if (!candidate.makeTarget.empty() &&
+                        candidate.definition.line ==
+                            static_cast<int>(params.position.line + 1)) {
+                        thisTypeDetail = "This : " + candidate.makeTarget;
+                        break;
+                    }
         // `using FS` names a MODULE, and nothing downstream knows that: the
         // symbol search resolved `FS` to whatever else carried the name and
         // hovering an import reported an unrelated declaration from the same
@@ -2774,6 +2788,9 @@ private:
             symbol = nullptr;
         } else if (!shorthandFieldType.empty()) {
             detail = "@" + word.text + " : " + shorthandFieldType;
+            symbol = nullptr;
+        } else if (!thisTypeDetail.empty()) {
+            detail = std::move(thisTypeDetail);
             symbol = nullptr;
         } else if (primitiveTypeReference) {
             detail = "type " + word.text;

@@ -753,13 +753,21 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","languageId":"kex","version":1,"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> User do\n    new.age = new.age + 1\n    New { age: new.age }\n  end\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex","languageId":"kex","version":1,"text":"record User do\n  age : Integer\nend\nmake User do\n  let birthday -> This do\n    new.age = this.age + 1\n    New { age: new.age }\n  end\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":5}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":8}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":6,"character":5}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":16}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":6,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":4,"character":18}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":7,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-new.kex"},"position":{"line":5,"character":19}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":8,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -775,6 +783,21 @@ int main() {
                            std::string::npos,
                        "new receiver produced no record field completions: " +
                            result);
+            assertTrue(responseForId(result, 4).find("New") != std::string::npos &&
+                           responseForId(result, 4).find("User") !=
+                               std::string::npos,
+                       "New hover omitted its functional-update type: " + result);
+            assertTrue(responseForId(result, 5).find("this : User") !=
+                           std::string::npos,
+                       "implicit this hover omitted its make receiver type: " +
+                           result);
+            assertTrue(responseForId(result, 6).find("User") !=
+                           std::string::npos,
+                       "This hover omitted its concrete make type: " + result);
+            assertTrue(responseForId(result, 7).find(R"("label":"age")") !=
+                           std::string::npos,
+                       "this receiver produced no record field completions: " +
+                           result);
             assertTrue(result.find("Undefined variable: new") ==
                            std::string::npos,
                        "LSP diagnosed the implicit new binding as undefined");
@@ -786,15 +809,21 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","languageId":"kex","version":1,"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.later(1)\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":5,"character":5}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":6,"character":6}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":10}}})");
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":4,"character":14}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","id":5,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":11}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex","version":2},"contentChanges":[{"text":"record Counter do\n  count : Integer = 0\nend\nserving Counter do\n  foul slot later(value: Integer) -> Reply<Integer> do\n    new.count = value\n    from.reply(new.count)\n    { new }\n  end\nend\nmain do\n  let counter = Process.spawn(Counter {})\n  counter.\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":6,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-serving.kex"},"position":{"line":12,"character":10}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":7,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -808,12 +837,59 @@ int main() {
             assertTrue(responseForId(result, 3).find("From<Integer>") !=
                            std::string::npos,
                        "serving from hover omitted its reply type: " + result);
-            assertTrue(responseForId(result, 4).find(R"("filterText":"later")") !=
+            assertTrue(responseForId(result, 4).find("later") != std::string::npos &&
+                           responseForId(result, 4).find("Reply<Integer>") !=
+                               std::string::npos,
+                       "slot declaration hover omitted its signature: " + result);
+            assertTrue(responseForId(result, 5).find("later") != std::string::npos &&
+                           responseForId(result, 5).find("CallError") !=
+                               std::string::npos,
+                       "remote slot hover omitted its Result/CallError projection: " +
+                           result);
+            assertTrue(responseForId(result, 6).find(R"("filterText":"later")") !=
                            std::string::npos,
                        "Server<Counter> produced no slot completion: " + result);
             assertTrue(result.find("Undefined variable: new") == std::string::npos &&
                            result.find("Undefined variable: from") == std::string::npos,
                        "LSP diagnosed an implicit serving binding as undefined: " +
+                           result);
+        });
+        it("hovers and completes typed process handles", []() {
+            std::string messages;
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"processId":null,"rootUri":null,"capabilities":{}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex","languageId":"kex","version":1,"text":"type Message = :hello\nfoul worker -> Process<Message> do\n  spawn do true end\nend\nmain do\n  let process = worker()\n  process.send(:hello)\nend\n"}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex"},"position":{"line":5,"character":7}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex"},"position":{"line":6,"character":11}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","method":"textDocument/didChange","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex","version":2},"contentChanges":[{"text":"type Message = :hello\nfoul worker -> Process<Message> do\n  spawn do true end\nend\nmain do\n  let process = worker()\n  process.\nend\n"}]}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-process.kex"},"position":{"line":6,"character":10}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
+            messages += frame(R"({"jsonrpc":"2.0","method":"exit"})");
+
+            std::istringstream input(messages);
+            std::ostringstream output;
+            assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
+            const auto result = output.str();
+            assertTrue(responseForId(result, 2).find("process : Process<:hello>") !=
+                           std::string::npos,
+                       "typed process binding hover omitted its message type: " + result);
+            assertTrue(responseForId(result, 3).find("send") != std::string::npos &&
+                           responseForId(result, 3).find("Process<A>") !=
+                               std::string::npos,
+                       "typed process method hover omitted its signature: " + result);
+            assertTrue(responseForId(result, 4).find(R"("filterText":"send")") !=
+                           std::string::npos &&
+                           responseForId(result, 4).find(
+                               R"("filterText":"sendFrom")") != std::string::npos,
+                       "Process<Message> produced no message-method completions: " +
                            result);
         });
         it("keeps local navigation and pattern receiver completion semantic", []() {

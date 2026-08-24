@@ -5168,8 +5168,12 @@ auto TypeChecker::displayTypeOf(const ast::Expr* expr) const -> TypePtr {
             return types;
         };
         if (auto* named = std::get_if<NamedType>(&type->kind)) {
+            // A parameterized name is a type application, not a nullary ADT
+            // constructor occurrence.  In particular, Process<Message> must
+            // not widen through the unrelated prelude constructor `Process`
+            // to its owning `Feature` ADT in editor-facing types.
             if (auto owner = m_adtOfConstructor.find(named->name);
-                owner != m_adtOfConstructor.end() &&
+                named->typeArgs.empty() && owner != m_adtOfConstructor.end() &&
                 owner->second != named->name)
                 return Type::named(owner->second);
             // Type ARGUMENTS are left alone: a phantom typestate parameter is
