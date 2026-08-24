@@ -236,6 +236,19 @@ auto Evaluator::registerProcessBuiltins() -> void {
         return Value::process(m_scheduler->currentProcessId(), m_scheduler.get());
     });
 
+    defineDual("Process::spawn", [this](std::vector<ValuePtr> args) -> ValuePtr {
+        if (args.empty()) return Value::none();
+        return Value::server(m_scheduler->startServer(args[0]), m_scheduler.get());
+    });
+
+    defineIntrinsic("Process::reply", [](std::vector<ValuePtr> args) -> ValuePtr {
+        return Value::record("Reply", {{"reply", args.empty() ? Value::unit() : args[0]}});
+    });
+
+    defineIntrinsic("Process::cast", [](std::vector<ValuePtr>) -> ValuePtr {
+        return Value::unit();
+    });
+
     // Private receiver primitives. The public methods are defined by
     // process.kex and call these category-qualified identities.
     defineIntrinsic("Process::send", [this](std::vector<ValuePtr> args) -> ValuePtr {

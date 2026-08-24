@@ -83,6 +83,14 @@ struct ProcessValue { uint64_t pid; class Scheduler* scheduler; };
 // and `.await` dispatches unambiguously without a tag check.
 struct TaskValue { uint64_t pid; class Scheduler* scheduler; };
 
+// Typed handle for a process-backed serving state machine.  The state itself
+// lives in the server fiber; copying/configuring a handle never copies it.
+struct ServerValue {
+    uint64_t pid;
+    class Scheduler* scheduler;
+    int64_t timeoutMs = 5000;
+};
+
 struct ListValue { std::vector<ValuePtr> elements; };
 struct TupleValue { std::vector<ValuePtr> elements; };
 struct MapValue { std::vector<std::pair<ValuePtr, ValuePtr>> entries; };
@@ -155,6 +163,7 @@ struct Value {
         ModuleValue,
         ProcessValue,
         TaskValue,
+        ServerValue,
         ListValue,
         TupleValue,
         MapValue,
@@ -191,6 +200,8 @@ struct Value {
     static auto module(std::string name) -> ValuePtr;
     static auto process(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
     static auto task(uint64_t pid, class Scheduler* scheduler) -> ValuePtr;
+    static auto server(uint64_t pid, class Scheduler* scheduler,
+                       int64_t timeoutMs = 5000) -> ValuePtr;
     static auto list(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto tuple(std::vector<ValuePtr> elems) -> ValuePtr;
     static auto record(std::string type, std::unordered_map<std::string, ValuePtr> fields) -> ValuePtr;

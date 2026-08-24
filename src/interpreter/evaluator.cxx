@@ -1903,6 +1903,31 @@ auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
                 : ((!isNamespaceCall && node.receiver) ? eval(*node.receiver)
                                                        : Value::none());
 
+            // Serving calls cross the scheduler boundary.  The state is owned
+            // by the server fiber; the handle only contributes its default
+            // timeout, with `within:` overriding this one call.
+            if (auto* server = std::get_if<ServerValue>(&receiver->data)) {
+                if (node.method == "within") {
+                    if (node.args.size() != 1) throw RuntimeError("Server.within expects one timeout", expr.location);
+                    auto timeout = eval(*node.args[0]);
+                    auto* milliseconds = std::get_if<IntValue>(&timeout->data);
+                    if (!milliseconds) throw RuntimeError("Server.within expects Integer milliseconds", expr.location);
+                    return Value::server(server->pid, server->scheduler, milliseconds->value);
+                }
+                if (node.method == "alive?") return Value::boolean(server->scheduler->isAlive(server->pid));
+                std::vector<ValuePtr> slotArgs;
+                for (const auto& arg : node.args) slotArgs.push_back(arg ? eval(*arg) : Value::none());
+                std::optional<int64_t> timeout = server->timeoutMs;
+                for (const auto& [name, value] : node.namedArgs) if (name == "within") {
+                    auto configured = value ? eval(*value) : Value::none();
+                    if (auto* ms = std::get_if<IntValue>(&configured->data)) timeout = ms->value;
+                    else if (auto* atom = std::get_if<AtomValue>(&configured->data); atom && atom->name == "infinity") timeout.reset();
+                }
+                auto result = server->scheduler->callServer(server->pid, node.method,
+                                                            std::move(slotArgs), timeout);
+                return result ? *result : Value::error(Value::atom("timeout"));
+            }
+
             // Namespace access: ModuleValue (registered modules like IO, Math,
             // File, Integer) or empty-record placeholders for user record types
             // used as static-method namespaces (Vector2D, etc.).

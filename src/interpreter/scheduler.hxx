@@ -155,6 +155,11 @@ public:
     // returns nullopt if timeoutMs elapses first. Used by Task::await.
     auto awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
 
+    auto startServer(ValuePtr state) -> ProcessId;
+    auto callServer(ProcessId server, std::string method,
+                    std::vector<ValuePtr> args,
+                    std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr>;
+
     // A plain cooperative sleep — registers a timeout for the currently-
     // running process and yields until it fires. Used by the supervisor
     // poll loop below; any message that happens to arrive during the sleep
@@ -195,6 +200,7 @@ private:
     std::unordered_map<ProcessId, std::unique_ptr<Process>> m_processes;
     std::deque<ProcessId> m_ready;
     ProcessId m_current = 0;
+    uint64_t m_nextServerCall = 1;
 
     struct TimeoutEntry {
         ProcessId pid;

@@ -253,6 +253,108 @@ auto Scheduler::startTask(ValuePtr blockFn) -> ProcessId {
     return id;
 }
 
+auto Scheduler::startServer(ValuePtr initialState) -> ProcessId {
+    ProcessId id = m_nextId++;
+    auto proc = std::make_unique<Process>();
+    proc->id = id;
+    proc->env = std::make_shared<Environment>(m_evaluator.m_env);
+    proc->savedEnv = proc->env;
+    proc->savedCapabilities = m_evaluator.m_capabilityBindings;
+    Process* procPtr = proc.get();
+    Scheduler* self = this;
+
+    proc->fiber = std::make_unique<Fiber>([self, procPtr, state = std::move(initialState)]() mutable {
+        try {
+            while (true) {
+                if (procPtr->mailbox.empty()) {
+                    procPtr->blockedOnReceive = true;
+                    Fiber::yieldToScheduler();
+                    continue;
+                }
+                auto envelope = procPtr->mailbox.front();
+                procPtr->mailbox.pop_front();
+                auto* request = std::get_if<TupleValue>(&envelope->data);
+                if (!request || request->elements.size() != 5) continue;
+                auto* tag = std::get_if<AtomValue>(&request->elements[0]->data);
+                auto* ref = std::get_if<IntValue>(&request->elements[1]->data);
+                auto* method = std::get_if<StringValue>(&request->elements[2]->data);
+                auto* arguments = std::get_if<ListValue>(&request->elements[3]->data);
+                auto* caller = std::get_if<ProcessValue>(&request->elements[4]->data);
+                if (!tag || tag->name != "server_call" || !ref || !method ||
+                    !arguments || !caller) continue;
+
+                std::vector<ValuePtr> callArgs{state};
+                callArgs.insert(callArgs.end(), arguments->elements.begin(), arguments->elements.end());
+                auto transition = self->m_evaluator.callFunction(
+                    self->m_evaluator.resolveMethodName(state, method->value, &callArgs),
+                    std::move(callArgs), {}, SourceLocation{});
+                ValuePtr reply = transition;
+                if (auto* record = std::get_if<RecordValue>(&transition->data)) {
+                    if (auto next = record->fields.find("state"); next != record->fields.end()) state = next->second;
+                    if (auto value = record->fields.find("reply"); value != record->fields.end()) reply = value->second;
+                } else if (auto* map = std::get_if<MapValue>(&transition->data)) {
+                    for (const auto& [key, value] : map->entries) {
+                        auto* name = std::get_if<StringValue>(&key->data);
+                        if (!name) continue;
+                        if (name->value == "state" || name->value == "new") state = value;
+                        if (name->value == "reply") reply = value;
+                    }
+                }
+                self->send(caller->pid, Value::tuple({Value::atom("server_reply"),
+                    Value::integer(ref->value), Value::ok(reply)}));
+            }
+        } catch (...) {
+            rethrowIfForcedUnwind();
+            procPtr->error = std::current_exception();
+            procPtr->exitValue = Value::none();
+        }
+        procPtr->finished = true;
+    });
+    m_processes.emplace(id, std::move(proc));
+    m_ready.push_back(id);
+    return id;
+}
+
+auto Scheduler::callServer(ProcessId server, std::string method,
+                           std::vector<ValuePtr> args,
+                           std::optional<int64_t> timeoutMs)
+    -> std::optional<ValuePtr> {
+    const auto caller = m_current;
+    const auto ref = m_nextServerCall++;
+    if (!send(server, Value::tuple({Value::atom("server_call"), Value::integer(ref),
+                                   Value::string(std::move(method)), Value::list(std::move(args)),
+                                   Value::process(caller, this)})))
+        return Value::error(Value::atom("no_process"));
+    auto it = m_processes.find(caller);
+    if (it == m_processes.end()) return std::nullopt;
+    auto& proc = *it->second;
+    const auto generation = ++proc.waitGeneration;
+    bool registered = false;
+    const auto deadline = timeoutMs
+        ? std::optional{std::chrono::steady_clock::now() + std::chrono::milliseconds(*timeoutMs)}
+        : std::nullopt;
+    while (true) {
+        for (size_t i = 0; i < proc.mailbox.size(); ++i) {
+            auto* response = std::get_if<TupleValue>(&proc.mailbox[i]->data);
+            if (!response || response->elements.size() != 3) continue;
+            auto* tag = std::get_if<AtomValue>(&response->elements[0]->data);
+            auto* gotRef = std::get_if<IntValue>(&response->elements[1]->data);
+            if (!tag || tag->name != "server_reply" || !gotRef || gotRef->value != static_cast<int64_t>(ref)) continue;
+            auto result = response->elements[2];
+            proc.mailbox.erase(proc.mailbox.begin() + static_cast<long>(i));
+            return result;
+        }
+        if (deadline && !registered) {
+            m_timeouts.emplace(*deadline, TimeoutEntry{caller, generation});
+            registered = true;
+        }
+        proc.blockedOnReceive = true;
+        proc.wokeByTimeout = false;
+        Fiber::yieldToScheduler();
+        if (proc.wokeByTimeout) { proc.wokeByTimeout = false; return std::nullopt; }
+    }
+}
+
 auto Scheduler::awaitTaskMessage(ProcessId taskId, std::optional<int64_t> timeoutMs) -> std::optional<ValuePtr> {
     auto it = m_processes.find(m_current);
     if (it == m_processes.end()) return std::nullopt;

@@ -1537,7 +1537,7 @@ auto Parser::parsePostfixTail(ast::ExprPtr expr) -> ast::ExprPtr {
       if (!check(TokenType::LowerIdent) && !check(TokenType::UpperIdent) &&
           !check(TokenType::End) && !check(TokenType::Type) &&
           !check(TokenType::Match) && !check(TokenType::Loop) &&
-          !check(TokenType::Timeout)) {
+          !check(TokenType::Timeout) && !check(TokenType::Spawn)) {
         error("Expected method or module name after '.'");
       }
       auto methodTok = advance();

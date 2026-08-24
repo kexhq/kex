@@ -16,6 +16,10 @@ record Server<X> do
 end
 
 module Process do
+  # Starts a process-backed server for the serving implementation attached to X.
+  spawn : X -> Server<X>
+  foul spawn(state) = Kex.Intrinsic.Process.spawn(state)
+
   # Run an executable directly with an argv vector. No shell is involved.
   # Output is captured as UTF-8 strings; a non-zero child status is still a
   # successful ProcessResult, while failure to start the child is Error.

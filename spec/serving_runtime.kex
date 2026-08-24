@@ -1,0 +1,19 @@
+# kex: interpreter-only
+
+record Counter do
+  count : Integer = 0
+end
+
+serving Counter do
+  get ::> Reply<Integer>
+  slot get -> Reply<Integer> = Kex.Intrinsic.Process.reply(@count)
+end
+
+main do
+  let counter = Process.spawn(Counter { count: 12 })
+  assert(counter.get() == Ok(12), "server call should return its reply")
+  assert(counter.get(within: 1000) == Ok(12), "per-call timeout should preserve the reply")
+  let patient = counter.within(10_000)
+  assert(patient.get() == Ok(12), "configured handles should address the same server")
+  assert(patient.alive?, "the server process should remain alive across calls")
+end

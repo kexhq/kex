@@ -644,6 +644,13 @@ int main() {
     });
 
     describe("Parser — Expressions", []() {
+        it("allows spawn as a callable member name", []() {
+            auto program = parse("main do\n  Process.spawn(1)\nend");
+            auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
+            auto& call = std::get<ast::MethodCall>(main->body[0]->kind);
+            assertEqual(call.method, std::string("spawn"));
+        });
+
         it("parses let binding", []() {
             auto program = parse("main do\n  let x = 5\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);
