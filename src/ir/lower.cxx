@@ -2381,6 +2381,39 @@ struct Lowering {
                 }
             }
             auto resolved = resolvedCalls->find(&n);
+            const bool resolvedServerSlot = resolved != resolvedCalls->end() &&
+                !resolved->second.localDispatchTypes.empty() &&
+                resolved->second.localDispatchTypes.front().rfind("Server<", 0) == 0;
+            if (resolvedServerSlot) {
+                std::vector<Binding> binds;
+                auto server = atomize(n.receiver, binds);
+                std::vector<ExprPtr> handlerArgs;
+                const auto stateName = fresh("ServerState");
+                handlerArgs.push_back(var(stateName));
+                for (const auto& arg : n.args)
+                    handlerArgs.push_back(atomize(arg, binds));
+                if (n.block) handlerArgs.push_back(atomize(*n.block, binds));
+
+                Lambda handler;
+                handler.params = {stateName};
+                handler.body = localCallExpr(resolved->second.backendFunction,
+                                             std::move(handlerArgs));
+                auto handlerExpr = std::make_unique<Expr>();
+                handlerExpr->node = std::move(handler);
+                auto handlerName = fresh("ServerHandler");
+                binds.push_back({handlerName, std::move(handlerExpr)});
+
+                ExprPtr timeout = lit(LitKind::Atom, "default");
+                for (const auto& [name, value] : n.namedArgs)
+                    if (name == "within") timeout = atomize(value, binds);
+                std::vector<ExprPtr> callArgs;
+                callArgs.push_back(std::move(server));
+                callArgs.push_back(var(handlerName));
+                callArgs.push_back(std::move(timeout));
+                return wrapLets(
+                    binds, callE("kex_intrinsic_process", "server_call", 3,
+                                 std::move(callArgs)));
+            }
             // Semantic analysis has already applied lexical `using` policy
             // and argument-type specificity. Once it names an imported
             // target, source-import priority must not override that choice.

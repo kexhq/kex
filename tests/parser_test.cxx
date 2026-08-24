@@ -651,6 +651,16 @@ int main() {
             assertEqual(call.method, std::string("spawn"));
         });
 
+        it("allows spawn as a module function name", []() {
+            auto program = parse(
+                "module Process do\n"
+                "  spawn : X -> X\n"
+                "  foul spawn(value) = value\n"
+                "end\n");
+            auto& module = std::get<std::unique_ptr<ast::ModuleDef>>(program.items[0]);
+            assertEqual(module->body.size(), size_t(2));
+        });
+
         it("parses let binding", []() {
             auto program = parse("main do\n  let x = 5\nend");
             auto& main = std::get<std::unique_ptr<ast::MainBlock>>(program.items[0]);

@@ -2,9 +2,12 @@
 %% intrinsics. Thin wrappers over Erlang BIFs with Kex's message format.
 %% Receiver is the first argument.
 -module(kex_intrinsic_process).
+-behaviour(gen_server).
 -export(['send'/2, 'sendFrom'/2, 'link'/1, 'unlink'/1, 'monitor'/1, 'alive?'/1, 'await'/2,
           'demonitor'/1,
-          self/0, exit/2, register/2, whereis/1, run/2, stream/2]).
+          self/0, exit/2, register/2, whereis/1, run/2, stream/2,
+          spawn/1, server_call/3, reply/1, cast/0]).
+-export([init/1, handle_call/3, handle_cast/2]).
 
 %% Execute a program and capture its output with the streams KEPT APART, the
 %% same result the tree walker produces.
@@ -48,7 +51,7 @@ run_split(Shell, Executable, Arguments, Fifo) ->
     %% still being drained meanwhile — otherwise a child that filled one
     %% pipe while we waited on the other would stall.
     Collector = erlang:self(),
-    Reader = spawn(fun() -> Collector ! {kex_stderr, erlang:self(), read_fifo(Fifo)} end),
+    Reader = erlang:spawn(fun() -> Collector ! {kex_stderr, erlang:self(), read_fifo(Fifo)} end),
     Script = "exec \"$0\" \"$@\" 2>'" ++ Fifo ++ "'",
     Port = open_port({spawn_executable, Shell},
                      [binary, exit_status, use_stdio, hide,
@@ -206,7 +209,7 @@ await_stderr(Reader, Fifo) ->
     receive
         {kex_stderr, Reader, Data} -> Data
     after 100 ->
-        _ = spawn(fun() ->
+        _ = erlang:spawn(fun() ->
                       case file:open(Fifo, [write, binary, raw]) of
                           {ok, Handle} -> file:close(Handle);
                           _            -> ok
@@ -263,3 +266,40 @@ register(Pid, Name) -> erlang:register(Name, Pid).
 
 %% Process.whereis(name) — look up a registered process by name.
 whereis(Name) -> erlang:whereis(Name).
+
+%% A typed Kex Server<X> is represented by the ordinary Server record tuple.
+%% The process itself is a real OTP gen_server; slot-specific code arrives as
+%% a closure so this generic callback module can serve every Kex state type.
+spawn(State) ->
+    case gen_server:start_link(?MODULE, State, []) of
+        {ok, Pid} -> {'Server', Pid, 5000};
+        {error, Reason} -> erlang:error(Reason)
+    end.
+
+server_call({'Server', Pid, DefaultTimeout}, Fun, Timeout) ->
+    Effective = case Timeout of default -> DefaultTimeout; _ -> Timeout end,
+    try gen_server:call(Pid, {kex_serving_call, Fun}, Effective) of
+        Reply -> {'Ok', Reply}
+    catch
+        exit:{timeout, _} -> {'Error', 'Timeout'};
+        exit:{noproc, _} -> {'Error', 'NoProcess'};
+        exit:_ -> {'Error', 'CallFailed'}
+    end.
+
+reply(Value) -> {'Reply', Value}.
+cast() -> ok.
+
+init(State) -> {ok, State}.
+
+handle_call({kex_serving_call, Fun}, _From, State) ->
+    case Fun(State) of
+        {'Reply', Reply} -> {reply, Reply, State};
+        {'Transition', Next, Reply} -> {reply, Reply, Next};
+        Other -> erlang:error({invalid_serving_reply, Other})
+    end.
+
+handle_cast({kex_serving_cast, Fun}, State) ->
+    case Fun(State) of
+        {'Transition', Next, _} -> {noreply, Next};
+        _ -> {noreply, State}
+    end.

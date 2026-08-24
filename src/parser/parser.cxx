@@ -344,7 +344,8 @@ auto Parser::parseModuleDef(bool allowStandalone,
       mod->body.push_back(parseFunctionDef(true));
     } else if (check(TokenType::Let)) {
       mod->body.push_back(parseFunctionDef());
-    } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent)) {
+    } else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
+               check(TokenType::Spawn)) {
       mod->body.push_back(parseTypeAnnotation());
     } else {
       error("Unexpected token in module body: " +
@@ -817,7 +818,7 @@ auto Parser::parseFunctionDef(bool isFoul)
   // keyword-as-name, splice ident, or operator
   else if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
            check(TokenType::Loop) || check(TokenType::Match) ||
-           check(TokenType::SpliceIdent)) {
+           check(TokenType::Spawn) || check(TokenType::SpliceIdent)) {
     // A splice keeps its `%` so callers can tell `let %name(...)` (the name
     // is computed at compile time) from an ordinary `let name(...)`. The
     // lexer strips the sigil, so it is restored here.
@@ -1016,7 +1017,7 @@ auto Parser::parseTypeAnnotation() -> std::unique_ptr<ast::TypeAnnotation> {
   auto ann = std::make_unique<ast::TypeAnnotation>();
   ann->location = currentLocation();
   if (check(TokenType::LowerIdent) || check(TokenType::UpperIdent) ||
-      check(TokenType::After))
+      check(TokenType::After) || check(TokenType::Spawn))
     ann->name = advance().value;
   else
     error("Expected name");
