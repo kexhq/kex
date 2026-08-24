@@ -1,0 +1,314 @@
+# Sets are immutable collections of distinct elements. Mutation methods
+# (suffixed `!`) return a new set and rebind the receiver variable — they do
+# not modify in place. Membership is structural equality, the same equality
+# `==` and Map keys use, so records and tuples are compared by value.
+#
+# Two flavours, differing only in how they store their elements:
+#
+#   Set           sorted, so iteration is in ascending element order and the
+#                 elements must be Orderable.
+#   UnorderedSet  hash-backed, so membership does not pay for ordering and
+#                 the elements need only be comparable. Iteration order is
+#                 unspecified — never write a test against it.
+#
+# Both wrap structures the runtime already has (a list and a map), so no set
+# is opaque: `.items` is always a real list you can hand to anything.
+
+# The invariant every Set method preserves: `items` is sorted and duplicate
+# free. Build one with `Set.from` rather than by hand — the record literal
+# does no deduplication.
+record Set<A> do
+  items : [A] = []
+end
+
+# The invariant every UnorderedSet method preserves: `slots` maps each member
+# to `true` and holds nothing else. Its keys ARE the elements.
+record UnorderedSet<A> do
+  slots : {A: Bool} = {}
+end
+
+module Set do
+  # Builds a set from any list, discarding duplicates and sorting what is
+  # left. Deduplication goes through a Map rather than `List.uniq`: map keys
+  # are unique under exactly the structural equality a set wants, and each
+  # element costs one insertion instead of a scan of everything kept so far.
+  #
+  # @example
+  #   Set.from([3, 1, 2, 3])   # => Set(1, 2, 3)
+  #   Set.from("hello".chars)  # => Set('e', 'h', 'l', 'o')
+  let from(items: [A]) -> Set<A> do
+    let unique = Kex.Intrinsic.Map.fromEntries(items.map { |x| (x, true) })
+    return Set { items: unique.keys.sort }
+  end
+
+  # The empty set. Also the Monoid identity.
+  #
+  # @example
+  #   Set.empty.empty?   # => true
+  let empty -> Set<A> = Set { items: [] }
+end
+
+module UnorderedSet do
+  # Builds an unordered set from any list, discarding duplicates. Nothing is
+  # sorted, so this does not require Orderable elements.
+  #
+  # @example
+  #   UnorderedSet.from([3, 1, 2, 3]).count   # => 3
+  let from(items: [A]) -> UnorderedSet<A> do
+    return UnorderedSet { slots: Kex.Intrinsic.Map.fromEntries(items.map { |x| (x, true) }) }
+  end
+
+  # The empty unordered set. Also the Monoid identity.
+  let empty -> UnorderedSet<A> = UnorderedSet { slots: {} }
+end
+
+make Set<A>, implement: Enumerable, Foldable, Monoid, Showable do
+  # Enumerable primitive: fold over the elements in ascending order.
+  # Collection-producing operations come from Enumerable and traversal
+  # queries from Foldable; the set-returning ones are overridden below,
+  # because Enumerable's defaults answer with a list.
+  let reduce(acc, f) = @items.reduce(acc, f)
+
+  # Sets form a Monoid under union.
+  let identity = Set { items: [] }
+  let combine(other) = this.union(other)
+
+  # Returns `true` if `value` is a member.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).contains?(2)   # => true
+  contains? :> A -> Bool
+  let contains?(value) = @items.contains?(value)
+
+  # The number of distinct elements.
+  #
+  # @example
+  #   Set.from([1, 1, 2]).count   # => 2
+  count :> Integer
+  let count = @items.count
+
+  # Returns `true` if the set has no elements.
+  empty? :> Bool
+  let empty? = @items.empty?
+
+  # Returns a new set with `value` added. No-op if it is already a member.
+  # Use `add!` to rebind the receiver variable.
+  #
+  # @example
+  #   Set.from([1, 2]).add(3)   # => Set(1, 2, 3)
+  add :> A -> Set<A>
+  let add(value) = this.contains?(value) then this else Set { items: (@items + [value]).sort }
+
+  # Returns a new set without `value`. No-op if it is not a member.
+  # Use `delete!` to rebind the receiver variable.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).delete(2)   # => Set(1, 3)
+  delete :> A -> Set<A>
+  let delete(value) = Set { items: @items.reject { |x| x == value } }
+
+  # Every element of either set.
+  #
+  # @example
+  #   Set.from([1, 2]).union(Set.from([2, 3]))   # => Set(1, 2, 3)
+  union :> Set<A> -> Set<A>
+  let union(other) = Set.from(@items + other.items)
+
+  # The elements both sets share.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).intersect(Set.from([2, 3, 4]))   # => Set(2, 3)
+  intersect :> Set<A> -> Set<A>
+  let intersect(other) = Set { items: @items.filter { |x| other.contains?(x) } }
+
+  # The elements of this set that `other` does not have.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).difference(Set.from([2]))   # => Set(1, 3)
+  difference :> Set<A> -> Set<A>
+  let difference(other) = Set { items: @items.reject { |x| other.contains?(x) } }
+
+  # The elements in exactly one of the two sets.
+  #
+  # @example
+  #   Set.from([1, 2]).symmetricDifference(Set.from([2, 3]))   # => Set(1, 3)
+  symmetricDifference :> Set<A> -> Set<A>
+  let symmetricDifference(other) = this.difference(other).union(other.difference(this))
+
+  # Returns `true` if every element of this set is in `other`.
+  #
+  # @example
+  #   Set.from([1, 2]).subset?(Set.from([1, 2, 3]))   # => true
+  subset? :> Set<A> -> Bool
+  let subset?(other) = @items.all? { |x| other.contains?(x) }
+
+  # Returns `true` if this set has every element of `other`.
+  superset? :> Set<A> -> Bool
+  let superset?(other) = other.subset?(this)
+
+  # Returns `true` if the two sets share no element.
+  #
+  # @example
+  #   Set.from([1, 2]).disjoint?(Set.from([3]))   # => true
+  disjoint? :> Set<A> -> Bool
+  let disjoint?(other) = !@items.any? { |x| other.contains?(x) }
+
+  # `+` unions, with either another set or a plain list — `xs + [y]` is the
+  # everyday way to add one element without naming a method.
+  #
+  # @example
+  #   Set.from([1, 2]) + [3]              # => Set(1, 2, 3)
+  #   Set.from([1]) + Set.from([2])       # => Set(1, 2)
+  let +(other: Set<A>) -> Set<A> = this.union(other)
+  let +(other: [A]) -> Set<A> = Set.from(@items + other)
+
+  # `-` removes, taking either another set or a plain list.
+  #
+  # @example
+  #   Set.from([1, 2, 3]) - [2]           # => Set(1, 3)
+  let -(other: Set<A>) -> Set<A> = this.difference(other)
+  let -(other: [A]) -> Set<A> = this.difference(Set.from(other))
+
+  # Set overrides the collection-returning HOFs: Enumerable's defaults answer
+  # with a list, and mapping a set should give back a set. `map` may collapse
+  # elements — `Set.from([1, -1]).map { |x| x.abs }` has one member, not two.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).map { |x| x * 2 }        # => Set(2, 4, 6)
+  map :> (A -> B) -> Set<B>
+  let map(f) = Set.from(@items.map(f))
+
+  # Returns a new set keeping only the elements `pred` accepts.
+  #
+  # @example
+  #   Set.from([1, 2, 3]).filter { |x| x > 1 }   # => Set(2, 3)
+  filter :> (A -> Bool) -> Set<A>
+  let filter(pred) = Set { items: @items.filter(pred) }
+
+  # Returns a new set without the elements `pred` accepts.
+  reject :> (A -> Bool) -> Set<A>
+  let reject(pred) = Set { items: @items.reject(pred) }
+
+  # The elements as a sorted list. This is the field itself — a set is not
+  # opaque, and handing its items to list code costs nothing.
+  #
+  # @example
+  #   Set.from([3, 1, 2]).items   # => [1, 2, 3]
+
+  # Equality is membership, and the sorted-unique invariant makes that a
+  # plain list comparison.
+  let ==(other: Set<A>) -> Bool = @items == other.items
+
+  # Sets print as `Set(...)` in element order rather than exposing the record
+  # layout behind them.
+  showValue :> String
+  let showValue = "Set(${@items.map { |x| x.showValue }.join(", ")})"
+end
+
+make Set<A>, implement: Blankable do
+  blank? :> Bool
+  let blank? = @items.empty?
+end
+
+make UnorderedSet<A>, implement: Enumerable, Foldable, Monoid, Showable do
+  # Enumerable primitive: fold over the elements. The order is whatever the
+  # underlying map hands back — unspecified, and not to be relied on.
+  let reduce(acc, f) = @slots.keys.reduce(acc, f)
+
+  # Unordered sets form a Monoid under union.
+  let identity = UnorderedSet { slots: {} }
+  let combine(other) = this.union(other)
+
+  # Returns `true` if `value` is a member. This is the operation the flavour
+  # exists for: a map lookup, with no ordering to maintain.
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).contains?(2)   # => true
+  contains? :> A -> Bool
+  let contains?(value) = @slots.has?(value)
+
+  # The number of distinct elements.
+  count :> Integer
+  let count = @slots.count
+
+  # Returns `true` if the set has no elements.
+  empty? :> Bool
+  let empty? = @slots.empty?
+
+  # The elements as a list, in unspecified order.
+  #
+  # @example
+  #   UnorderedSet.from([1, 2, 3]).items.sort   # => [1, 2, 3]
+  items :> [A]
+  let items = @slots.keys
+
+  # Returns a new set with `value` added. Use `add!` to rebind the receiver.
+  add :> A -> UnorderedSet<A>
+  let add(value) = UnorderedSet { slots: @slots.put(value, true) }
+
+  # Returns a new set without `value`. Use `delete!` to rebind the receiver.
+  delete :> A -> UnorderedSet<A>
+  let delete(value) = UnorderedSet { slots: @slots.delete(value) }
+
+  # Every element of either set.
+  union :> UnorderedSet<A> -> UnorderedSet<A>
+  let union(other) = UnorderedSet { slots: @slots.merge(other.slots) }
+
+  # The elements both sets share.
+  intersect :> UnorderedSet<A> -> UnorderedSet<A>
+  let intersect(other) = UnorderedSet.from(@slots.keys.filter { |x| other.contains?(x) })
+
+  # The elements of this set that `other` does not have.
+  difference :> UnorderedSet<A> -> UnorderedSet<A>
+  let difference(other) = UnorderedSet.from(@slots.keys.reject { |x| other.contains?(x) })
+
+  # The elements in exactly one of the two sets.
+  symmetricDifference :> UnorderedSet<A> -> UnorderedSet<A>
+  let symmetricDifference(other) = this.difference(other).union(other.difference(this))
+
+  # Returns `true` if every element of this set is in `other`.
+  subset? :> UnorderedSet<A> -> Bool
+  let subset?(other) = @slots.keys.all? { |x| other.contains?(x) }
+
+  # Returns `true` if this set has every element of `other`.
+  superset? :> UnorderedSet<A> -> Bool
+  let superset?(other) = other.subset?(this)
+
+  # Returns `true` if the two sets share no element.
+  disjoint? :> UnorderedSet<A> -> Bool
+  let disjoint?(other) = !@slots.keys.any? { |x| other.contains?(x) }
+
+  # `+` unions, with either another set or a plain list.
+  let +(other: UnorderedSet<A>) -> UnorderedSet<A> = this.union(other)
+  let +(other: [A]) -> UnorderedSet<A> = this.union(UnorderedSet.from(other))
+
+  # `-` removes, taking either another set or a plain list.
+  let -(other: UnorderedSet<A>) -> UnorderedSet<A> = this.difference(other)
+  let -(other: [A]) -> UnorderedSet<A> = this.difference(UnorderedSet.from(other))
+
+  # The collection-returning HOFs answer with a set, not a list.
+  map :> (A -> B) -> UnorderedSet<B>
+  let map(f) = UnorderedSet.from(@slots.keys.map(f))
+
+  filter :> (A -> Bool) -> UnorderedSet<A>
+  let filter(pred) = UnorderedSet.from(@slots.keys.filter(pred))
+
+  reject :> (A -> Bool) -> UnorderedSet<A>
+  let reject(pred) = UnorderedSet.from(@slots.keys.reject(pred))
+
+  # Equality is membership. The backing maps hold the same `true` for every
+  # key, so comparing them compares exactly the element sets — and does not
+  # depend on the unspecified iteration order the way comparing `items`
+  # would.
+  let ==(other: UnorderedSet<A>) -> Bool = @slots == other.slots
+
+  # Printed in sorted order where the elements allow it, so the rendering of
+  # a value is not at the mercy of map internals.
+  showValue :> String
+  let showValue = "UnorderedSet(${@slots.keys.map { |x| x.showValue }.sort.join(", ")})"
+end
+
+make UnorderedSet<A>, implement: Blankable do
+  blank? :> Bool
+  let blank? = @slots.empty?
+end

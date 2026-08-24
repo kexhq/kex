@@ -26,8 +26,10 @@ inline constexpr std::array<std::string_view, 3> kPreludeTier2 = {
 };
 // time.kex comes after units.kex: Date/Time/DateTime are built on the
 // Duration record the unit system declares.
-inline constexpr std::array<std::string_view, 6> kPreludeTier3 = {
-    "list.kex", "map.kex", "units.kex", "time.kex", "type.kex",
+// set.kex comes after list.kex and map.kex: both set flavours are built on a
+// list and a map rather than on any set primitive of their own.
+inline constexpr std::array<std::string_view, 7> kPreludeTier3 = {
+    "list.kex", "map.kex", "set.kex", "units.kex", "time.kex", "type.kex",
     "optionparser.kex",
 };
 
