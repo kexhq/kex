@@ -490,6 +490,12 @@ private:
     // from `set` because "absent" is an answer a program can depend on.
     std::unordered_map<std::string, std::string> m_mockEnv;
     std::unordered_set<std::string> m_mockEnvUnset;
+    // The environment snapshot the `ENV` capability reads: the real
+    // environment with the mock overlay applied, rebuilt whenever either
+    // changes. Held here rather than bound as a global `ENV` — that binding
+    // shadowed the capability declared in env.kex, so `ENV.get` answered
+    // through Map dispatch and `ENV.set` had nowhere to go.
+    ValuePtr m_envMap;
     auto rebuildEnvMap() -> void;
 
     // Mock.System — what the machine claims to be. Unset means "ask the real

@@ -44,6 +44,9 @@ Brewfile.lock.json
 
 # Scratch files left behind by an interrupted `make spec` IO test run
 spec/io_scratch.txt
+# Written into the working directory by spec/mock_file_handle_identity.spec.kex
+# on every `make spec`, so it reappears the moment the suite runs.
+out.txt
 
 # BEAM/Erlang build artifacts
 *.core

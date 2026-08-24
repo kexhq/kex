@@ -1291,12 +1291,18 @@ int main() {
             assertEqual(output, std::string("ab\n"));
         });
 
+        // `String?`, so the line arrives wrapped: `Just("hello")`. It used to
+        // come back bare, which made the declared type a lie and
+        // `match ... Just(x)` match nothing (kexhq/kex#197).
         it("IO.getLine reads a line from stdin", []() {
             std::istringstream input("hello\n");
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
             auto result = run("main do\n  IO.getLine()\nend\n");
             std::cin.rdbuf(prevCin);
-            assertEqual(std::get<StringValue>(result->data).value, std::string("hello"));
+            const auto& line = std::get<VariantValue>(result->data);
+            assertEqual(line.tag, std::string("Just"));
+            assertEqual(std::get<StringValue>(line.args.at(0)->data).value,
+                        std::string("hello"));
         });
 
         it("IO.getLine returns None at EOF", []() {
@@ -1312,7 +1318,10 @@ int main() {
             auto* prevCin = std::cin.rdbuf(input.rdbuf());
             auto result = run("main do\n  IO.get()\nend\n");
             std::cin.rdbuf(prevCin);
-            assertEqual(std::get<StringValue>(result->data).value, std::string("a"));
+            const auto& character = std::get<VariantValue>(result->data);
+            assertEqual(character.tag, std::string("Just"));
+            assertEqual(std::get<StringValue>(character.args.at(0)->data).value,
+                        std::string("a"));
         });
 
         it("IO.get returns None at EOF", []() {

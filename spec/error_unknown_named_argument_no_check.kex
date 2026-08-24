@@ -1,0 +1,17 @@
+# kex: no-check
+# The runtime check behind the compile-time one in
+# error_unknown_named_argument.kex. Resolution reports the label statically,
+# but `--no-check` skips that pass and a callee whose declaration is opaque
+# carries no labels to check against — so dropping the runtime error would
+# leave both cases silently running the wrong clause.
+#
+# Both backends report it: the walker in `callFunction`, BEAM by lowering the
+# call to the same runtime error, so a program that never reaches the line
+# still compiles — with the same message and source location on both.
+let render(text: String) = "[${text}]"
+let render(text: String, width: Integer) = "[${text} @${width}]"
+
+main do
+  IO.printLine(render("hi", width: 8))
+  IO.printLine(render("hi", height: 8))
+end

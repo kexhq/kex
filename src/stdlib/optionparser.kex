@@ -22,6 +22,12 @@ record CommandSpec do
   description : String = ""
   usage : String = ""
   handler : CommandHandler
+  # The help heading this command is listed under. "" is the tool's own
+  # `Commands:` block; anything else gets its own heading, in the order the
+  # sections were first declared. Commands a tool discovers at runtime — a
+  # package manifest's own — are not the tool's vocabulary, and a reader who
+  # cannot tell which is which has to guess where to file a bug.
+  section : String = ""
 end
 
 record OptionConfig do
@@ -63,8 +69,7 @@ make OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: StringValue,
                               description: description, default: default,
                               required?: required? }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   let integer(long: String, short: Char?, description: String,
@@ -72,15 +77,13 @@ make OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: IntegerValue,
                               description: description, default: default,
                               required?: required? }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   let flag(long: String, short: Char?, description: String) -> OptionConfig do
     let option = OptionSpec { long: long, short: short, kind: FlagValue,
                               description: description, default: Just("false") }
-    OptionConfig { name: @name, description: @description,
-                   options: [...@options, option], commands: @commands }
+    New { options: [...@options, option] }
   end
 
   # Declares a command. `usage` is what the help line shows after the name
@@ -88,15 +91,23 @@ make OptionConfig do
   let command(name: String, description: String, handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: "", handler: handler }
-    OptionConfig { name: @name, description: @description,
-                   options: @options, commands: [...@commands, spec] }
+    New { commands: [...@commands, spec] }
   end
 
   let command(name: String, usage: String, description: String, handler: CommandHandler) -> OptionConfig do
     let spec = CommandSpec { name: name, description: description,
                              usage: usage, handler: handler }
-    OptionConfig { name: @name, description: @description,
-                   options: @options, commands: [...@commands, spec] }
+    New { commands: [...@commands, spec] }
+  end
+
+  # The same, listed under its own help heading rather than with the tool's
+  # built-ins. `section:` is a label at the call site so the fourth string
+  # cannot be mistaken for the description.
+  let command(name: String, usage: String, description: String, section: String,
+              handler: CommandHandler) -> OptionConfig do
+    let spec = CommandSpec { name: name, description: description,
+                             usage: usage, handler: handler, section: section }
+    New { commands: [...@commands, spec] }
   end
 
   let parse(args: [String]) -> Result<ParsedOptions, OptionParseError> do
@@ -110,7 +121,7 @@ make OptionConfig do
   foul run(args: [String]) -> Integer do
     let options = match this.parse(args) do
       Error(error) => do
-        IO.printError("${@name}: ${OptionParser.errorMessage(error)}\n\n${this.help}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} ${OptionParser.errorMessage(error)}\n\n${this.help}\n")
         return 1
       end
       Ok(value) => value
@@ -119,7 +130,7 @@ make OptionConfig do
     match OptionParser.commandFor(@commands, options.arguments) do
       None => do
         return this.printHelp if options.arguments.empty?
-        IO.printError("${@name}: unknown or incomplete command '${options.arguments.first.or("")}'\n\n${this.help}\n")
+        IO.printError("${Console.RED}error:${Console.RESET} unknown or incomplete command '${Console.BOLD}${options.arguments.first.or("")}${Console.RESET}'\n\n${this.help}\n")
         return 1
       end
       Just(found) => do
@@ -138,28 +149,52 @@ make OptionConfig do
     return 0
   end
 
+  # The help text, styled. Every escape comes from `Console`, which the
+  # runtime blanks under `--no-colors` and `KEX_COLORS=0`, so the same code
+  # produces plain text down a pipe and this needs no second rendering path.
+  #
+  # Widths are measured on the UNSTYLED label throughout: an escape sequence
+  # has a length that a terminal does not draw, so padding computed from a
+  # coloured string lines the columns up on paper and nowhere else.
   let help -> String do
-    let title = @description == "" then @name else "${@name} — ${@description}"
+    let name = "${Console.BOLD}${@name}${Console.RESET}"
+    let title = @description == "" then name else "${name} — ${@description}"
     let lines = @options.map do |option|
       let short = match option.short do
-        Just(value) => "-${value}, "
+        Just(value) => "${Console.CYAN}-${value}${Console.RESET}, "
         None => "    "
       end
-      let required = option.required? then " (required)" else ""
+      let required = option.required? then " ${Console.YELLOW}(required)${Console.RESET}" else ""
       let default = match option.default do
-        Just(value) => option.kind == FlagValue then "" else " [default: ${value}]"
+        Just(value) => option.kind == FlagValue then "" else " ${Console.DIM}[default: ${value}]${Console.RESET}"
         None => ""
       end
-      "  ${short}--${option.long}  ${option.description}${required}${default}"
+      "  ${short}${Console.CYAN}--${option.long}${Console.RESET}  ${option.description}${required}${default}"
     end
-    let optionsText = "${title}\n\nOptions:\n${lines.join("\n")}"
+    let optionsText = "${title}\n\n${Console.BOLD}Options:${Console.RESET}\n${lines.join("\n")}"
     return optionsText if @commands.empty?
-    let width = @commands.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
-    let commandLines = @commands.map do |command|
-      let label = OptionParser.commandLabel(command)
-      "  ${label}${" ".repeat(width - label.count)}  ${command.description}"
+    let blocks = @commands.map { |command| command.section }.uniq.map do |section|
+      let own = section == ""
+      let heading = own then "Commands:" else "${section}:"
+      # A section exists to say "these came from somewhere else", so its NAMES
+      # carry their own colour — that is what a reader scans. The heading
+      # stays plain bold like every other heading on the page.
+      let nameColor = own then Console.BLUE else Console.MAGENTA
+      let listed = @commands.filter { |command| command.section == section }
+      # Each block is its own table: a section of short names should not be
+      # pushed across the page by the longest built-in three headings up.
+      let width = listed.map { |command| OptionParser.commandLabel(command).count }.max.or(0)
+      let commandLines = listed.map do |command|
+        let label = OptionParser.commandLabel(command)
+        # The name is the thing to type; the usage beside it is a shape to
+        # read, so it is dimmed rather than given a colour of its own.
+        let styled = "${nameColor}${command.name}${Console.RESET}"
+        let usage = command.usage == "" then "" else " ${Console.DIM}${command.usage}${Console.RESET}"
+        "  ${styled}${usage}${" ".repeat(width - label.count)}  ${command.description}"
+      end
+      "${Console.BOLD}${heading}${Console.RESET}\n${commandLines.join("\n")}"
     end
-    "${optionsText}\n\nCommands:\n${commandLines.join("\n")}"
+    return "${optionsText}\n\n${blocks.join("\n\n")}"
   end
 end
 

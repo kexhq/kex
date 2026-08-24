@@ -165,6 +165,70 @@ auto Evaluator::registerProcessBuiltins() -> void {
 #endif
     });
 
+
+    // Process.stream — run a child on THIS process's stdout and stderr, and
+    // answer only its exit code.
+    //
+    // `Process.run` captures both streams and can only hand them back once
+    // the child has exited, so anything long-running shows a blank terminal
+    // and then dumps everything at the end: `tey test` and a package's own
+    // commands looked stalled for their whole run (kexhq/kex#187). Here the
+    // child simply inherits the descriptors, so its output is the parent's
+    // output, in real time and with its own buffering and colour decisions
+    // intact — a child that checks for a terminal still sees one.
+    //
+    // Nothing is captured, by definition. Callers that need the text keep
+    // using `run`; callers that need a person to watch progress use this.
+    defineIntrinsic("Process::stream", [](std::vector<ValuePtr> args) -> ValuePtr {
+#ifdef __EMSCRIPTEN__
+        return Value::error(Value::string("process execution is unavailable in wasm"));
+#else
+        if (args.size() != 2)
+            return Value::error(Value::string("Process.stream expects a command and argument list"));
+        const auto* command = std::get_if<StringValue>(&args[0]->data);
+        const auto* list = std::get_if<ListValue>(&args[1]->data);
+        if (!command || !list)
+            return Value::error(Value::string("Process.stream expects (String, [String])"));
+
+        std::vector<std::string> strings;
+        strings.reserve(list->elements.size() + 1);
+        strings.push_back(command->value);
+        for (const auto& value : list->elements) {
+            const auto* string = std::get_if<StringValue>(&value->data);
+            if (!string)
+                return Value::error(Value::string("Process.stream arguments must be strings"));
+            strings.push_back(string->value);
+        }
+
+        if (!executableExists(strings.front()))
+            return Value::error(Value::string("executable not found"));
+
+        // The parent's own buffers are flushed first: anything printed
+        // before this call is still sitting in them, and the child writes
+        // straight to the descriptor — without this the child's first line
+        // can appear above a banner that was printed before it.
+        std::fflush(stdout);
+        std::fflush(stderr);
+
+        const pid_t child = fork();
+        if (child == 0) {
+            std::vector<char*> argv;
+            argv.reserve(strings.size() + 1);
+            for (auto& string : strings) argv.push_back(string.data());
+            argv.push_back(nullptr);
+            execvp(argv[0], argv.data());
+            _exit(127);
+        }
+        if (child < 0)
+            return Value::error(Value::string("could not start process"));
+
+        int status = 0;
+        while (waitpid(child, &status, 0) < 0 && errno == EINTR) {}
+        const int exitCode = WIFEXITED(status) ? WEXITSTATUS(status)
+                                              : 128 + WTERMSIG(status);
+        return Value::ok(Value::integer(exitCode));
+#endif
+    });
     // Walker-native scheduler fallback. This can be called from concurrently
     // scheduled processes, where entering a Kex wrapper would mutate the
     // evaluator's shared environment frame.

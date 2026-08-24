@@ -5,7 +5,7 @@
 %% the corresponding map operation.
 -module(kex_intrinsic_env).
 -export(['get'/1, 'getWithDefault'/2, 'has?'/1, 'keys'/0, 'values'/0,
-         'count'/0, 'each'/1, 'entries'/0,
+         'count'/0, 'each'/1, 'entries'/0, 'set'/2, 'unset'/1,
          mockSet/2, mockUnset/1, mockClear/0, mockVars/1]).
 
 'get'(K) ->
@@ -17,6 +17,36 @@
 
 'getWithDefault'(K, Default) ->
     maps:get(K, kex_io:env_map(), Default).
+
+%% ENV.set(Name, Value) — set a variable in THIS process and in the children
+%% it starts. `os:putenv/2` changes the emulator's own environment, which is
+%% what `open_port({spawn_executable, ...})` hands to a child.
+%%
+%% The reason this exists: a program that shells out sometimes has to decide
+%% what the child sees. Tey knows which compiler it selected and has to hand
+%% that to `Kex.AST`, which reads `$KEX` — without a setter the only channel
+%% between them is whatever PATH happens to hold, and a manifest was being
+%% parsed by an unrelated `kex` or by none at all.
+'set'(Name, Value) ->
+    N = unicode:characters_to_list(Name),
+    case N of
+        "" -> 'Kex.Unit';
+        _ ->
+            %% An `=` in the NAME would write a variable nobody can read back.
+            case lists:member($=, N) of
+                true -> 'Kex.Unit';
+                false ->
+                    os:putenv(N, unicode:characters_to_list(Value)),
+                    'Kex.Unit'
+            end
+    end.
+
+%% ENV.unset(Name) — remove a variable from this process and its children.
+'unset'(Name) ->
+    case unicode:characters_to_list(Name) of
+        "" -> 'Kex.Unit';
+        N -> os:unsetenv(N), 'Kex.Unit'
+    end.
 
 'has?'(K) ->
     maps:is_key(K, kex_io:env_map()).

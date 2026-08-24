@@ -17,7 +17,7 @@ foul lock -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   let resolved = match Tey.Resolver.resolvePackage(package) do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
   if FS.File.write("tey.lock", Tey.Lockfile.encode(resolved))
-    IO.printLine("Locked ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
+    IO.printLine("${Console.GREEN}Locked${Console.RESET} ${resolved.lockedDependencies.count} package(s) with Kex ${resolved.kexVersion}")
     0
   else
     Tey.Commands.fail("could not write tey.lock")
@@ -77,12 +77,12 @@ foul install(without: String) -> Integer do
     end
     match Tey.Cache.verify(dependency) do
       Error(error) => return Tey.Commands.fail(error)
-      Ok(_) => IO.printLine("Installed ${Tey.Lockfile.dependencyName(dependency)} at ${path}")
+      Ok(_) => IO.printLine("${Console.GREEN}Installed${Console.RESET} ${Tey.Lockfile.dependencyName(dependency)} ${Console.DIM}at ${path}${Console.RESET}")
     end
   end
   let omitted = state.lockedDependencies.count - wanted.count
-  IO.printLine("Installed ${wanted.count} package(s)") if omitted == 0
-  IO.printLine("Installed ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
+  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s)") if omitted == 0
+  IO.printLine("${Console.GREEN}Installed${Console.RESET} ${wanted.count} package(s), ${omitted} omitted by --without ${without}") if omitted > 0
   Tey.Commands.installTargets
 end
 
@@ -113,7 +113,7 @@ foul installTargets -> Integer do
     let built = "${Tey.Commands.outputDirectory}/${target.name}"
     let installed = "${binDirectory}/${target.name}"
     if FS.File.copy(built, installed) && Tey.Commands.runStatus("chmod", ["+x", installed]) == 0
-      IO.printLine("Installed ${target.name} to ${installed}")
+      IO.printLine("${Console.GREEN}Installed${Console.RESET} ${target.name} ${Console.DIM}to ${installed}${Console.RESET}")
     else
       failures = Tey.Commands.fail("could not install ${target.name} to ${installed}")
     end
@@ -139,7 +139,7 @@ foul dependencyRoots -> [String] do
       # No lockfile at all. Only worth saying when the package actually
       # declares dependencies — a package with none needs nothing.
       match Tey.Commands.manifest do
-        Ok(package) => IO.printError("tey: no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
+        Ok(package) => IO.printError("${Console.RED}error:${Console.RESET} no tey.lock; run `tey install`\n") if !package.manifestDependencies.empty?
         Error(_) => ()
       end
       return []
@@ -159,7 +159,7 @@ foul dependencyRoots -> [String] do
     ()
   end
   if !missing.empty?
-    IO.printError("tey: ${missing.join(", ")} not in the cache; run `tey install`\n")
+    IO.printError("${Console.RED}error:${Console.RESET} ${missing.join(", ")} not in the cache; run `tey install`\n")
   end
   return roots
 end
@@ -197,7 +197,7 @@ end
 
 foul runPackage(extra: [String], interpret?: Bool) -> Integer do
   let package = match Tey.Commands.manifest do Error(error) => return Tey.Commands.fail(error) Ok(value) => value end
-  Tey.Commands.report(Process.run(Tey.Toolchain.kex,
+  Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
                                   [...Tey.Commands.backendFlags(interpret?),
                                    ...Tey.Commands.dependencyRoots,
                                    package.entrypoint, ...extra]))
@@ -216,7 +216,7 @@ foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer 
   let words = command.commandRun.split(" ").filter { |word| word != "" }
   let entry = words.first.or("")
   if entry.endsWith?(".kex")
-    return Tey.Commands.report(Process.run(Tey.Toolchain.kex,
+    return Tey.Commands.report(Process.stream(Tey.Toolchain.kex,
                                            [...Tey.Commands.backendFlags(interpret?),
                                             ...Tey.Commands.sourceRoots,
                                             entry, ...words.drop(1), ...extra]))
@@ -226,7 +226,7 @@ foul runCommand(command: Command, extra: [String], interpret?: Bool) -> Integer 
   # else the machine has installed — the same promise `tey run` makes. "tey"
   # names $0, which is what a shell error message quotes.
   let line = "PATH=\"${Tey.Toolchain.binDirectory}:$PATH\"; ${command.commandRun} \"$@\""
-  Tey.Commands.report(Process.run("sh", ["-c", line, "tey", ...extra]))
+  Tey.Commands.report(Process.stream("sh", ["-c", line, "tey", ...extra]))
 end
 
 foul list -> Integer do
@@ -260,8 +260,8 @@ foul build -> Integer do
     return Tey.Commands.fail("could not create ${Tey.Commands.outputDirectory}")
   end
   let status = Tey.Commands.report(
-    Process.run(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
-                                    ...Tey.Commands.sourceRoots, ...units]))
+    Process.stream(Tey.Toolchain.kex, ["--compile", "-o", Tey.Commands.outputDirectory,
+                                       ...Tey.Commands.sourceRoots, ...units]))
   return status if status != 0
   Tey.Commands.buildTargets(package)
 end
@@ -271,7 +271,7 @@ foul test(interpret?: Bool) -> Integer do
     .filter { |path| path.endsWith?(".spec.kex") }
     .sort
   if specs.empty?
-    IO.printLine("No specs found")
+    IO.printLine("${Console.DIM}No specs found${Console.RESET}")
     return 0
   end
   var status = 0
@@ -285,7 +285,7 @@ foul test(interpret?: Bool) -> Integer do
     # A spec that could not even be STARTED is reported and counted as a
     # failure like any other, rather than abandoning the files after it: a
     # suite that stops at the first problem tells you about one problem.
-    let outcome = Tey.Commands.report(Process.run(Tey.Toolchain.kex, [...roots, "spec/${spec}"]))
+    let outcome = Tey.Commands.report(Process.stream(Tey.Toolchain.kex, [...roots, "spec/${spec}"]))
     status = outcome if outcome != 0
     ()
   end
@@ -298,7 +298,7 @@ foul clean(all?: Bool) -> Integer do
     return 0
   end
   if FS.Directory.deleteAll(Tey.Cache.root)
-    IO.printLine("Removed ${Tey.Cache.root}")
+    IO.printLine("${Console.GREEN}Removed${Console.RESET} ${Tey.Cache.root}")
     0
   else
     Tey.Commands.fail("could not remove ${Tey.Cache.root}")
@@ -321,16 +321,22 @@ end
 # creates. The pair with `init` below follows what `git init` and `cargo new`
 # already taught everyone: `new` makes the directory, `init` adopts the one
 # you are standing in.
-foul new(name: String, library: Bool) -> Integer do
-  if FS.File.file?("${name}/package.kex")
-    return Tey.Commands.fail("'${name}' already holds a package.kex")
+foul new(directory: String, library: Bool) -> Integer do
+  # The argument is a DIRECTORY, and the package is named after its last
+  # component: `tey new /tmp/ooo` makes `ooo` in `/tmp/ooo`.
+  let name = Tey.Commands.packageNameIn(directory)
+  if name == ""
+    return Tey.Commands.fail("'${directory}' names no package; pass a directory with a name in it")
   end
-  if !FS.Directory.create(name)
+  if FS.File.file?("${directory}/package.kex")
+    return Tey.Commands.fail("'${directory}' already holds a package.kex")
+  end
+  if !FS.Directory.create(directory)
     return Tey.Commands.fail("could not create project '${name}'")
   end
-  let status = Tey.Commands.scaffold(name, name, library)
+  IO.printLine(Tey.Commands.creating(name, library, directory))
+  let status = Tey.Commands.scaffold(directory, name, library)
   return status if status != 0
-  IO.printLine("Created ${name}")
   0
 end
 
@@ -349,9 +355,9 @@ foul init(name: String, library: Bool) -> Integer do
   if chosen == ""
     return Tey.Commands.fail("could not name the package after this directory; pass a name")
   end
+  IO.printLine(Tey.Commands.creating(chosen, library, "."))
   let status = Tey.Commands.scaffold(".", chosen, library)
   return status if status != 0
-  IO.printLine("Initialized ${chosen} in this directory")
   0
 end
 
@@ -425,6 +431,18 @@ private do
     end
   end
 
+  # The package name inside a path: `tey new /tmp/ooo` makes `ooo` in
+  # `/tmp/ooo`, the way every other scaffolder reads its argument.
+  #
+  # Without this the whole path WAS the name: it reached the manifest as
+  # `bundle "/tmp/ooo"`, and for a library it reached the module name too, so
+  # the source file was written to `/tmp/ooo/src//tmp/ooo.kex` — a path whose
+  # parent does not exist. The scaffold failed halfway, after having created
+  # the directories and the manifest.
+  let packageNameIn(path: String) -> String do
+    return path.split("/").filter { |part| part != "" }.last.or("")
+  end
+
   # The last component of the working directory — the package name `tey init`
   # picks when nobody names one. A trailing separator would otherwise make
   # this empty, and `/` has no last component at all.
@@ -450,16 +468,25 @@ private do
     # $T$ stands in for a backtick. A raw string is delimited by backticks,
     # so a Markdown code fence cannot be written inside one — and Markdown
     # without fences is not much of a README.
-    let libraryUsage = `
-      ## Use it
 
-      In the depending package's $T$package.kex$T$:
+    # What a visitor to the repository page needs first: how to get this
+    # package into THEIR package. Shared by both variants — an application is
+    # still a package somebody can depend on, and a README that only says how
+    # to run it locally leaves the reader to guess the manifest line.
+    let dependency = `
+      ## Add it to your project
+
+      In your own package's $T$package.kex$T$:
 
       $T$$T$$T$kex
       tey("$NAME$", git: "https://github.com/you/$NAME$", tag: "~> 0.1")
       $T$$T$$T$
 
-      Then $T$tey install$T$, and in the source:
+      Then $T$tey install$T$. The tag is the release, and $T$~> 0.1$T$ takes the
+      newest $T$0.1.x$T$ — Tey resolves it against this repository's tags.
+    `
+    let libraryUsage = `
+      ## Use it
 
       $T$$T$$T$kex
       using $MODULE$
@@ -475,8 +502,7 @@ private do
       git tag v0.1.0 && git push origin v0.1.0
       $T$$T$$T$
 
-      The tag is the release: Tey resolves $T$tag: "~> 0.1"$T$ by listing this
-      repository's tags. Keep it in step with $T$version$T$ in $T$package.kex$T$.
+      Keep the tag in step with $T$version$T$ in $T$package.kex$T$.
     `
     let applicationUsage = `
       ## Run it
@@ -486,7 +512,10 @@ private do
       tey run
       $T$$T$$T$
     `
-    let usage = library then libraryUsage else applicationUsage
+    # A library is USED by depending on it, so the manifest line comes first
+    # and the `using` example follows it. An application is run, so its own
+    # instructions lead and the dependency line is the footnote.
+    let usage = library then "${dependency}${libraryUsage}" else "${applicationUsage}${dependency}"
     let body = `
       # $NAME$
 
@@ -500,7 +529,23 @@ private do
       tey test      # run spec/*.spec.kex
       $T$$T$$T$
 
-      $USAGE$`
+      $USAGE$
+      ## Your own commands
+
+      A package can add commands to Tey. Declare them in $T$package.kex$T$:
+
+      $T$$T$$T$kex
+      command("bench", run: "script/bench.kex", description: "Run the benchmarks")
+      command("fmt", run: "kex --format src", description: "Format the sources")
+      $T$$T$$T$
+
+      They run as $T$tey bench$T$ and $T$tey fmt$T$ from anywhere in the package, are
+      listed under **Package commands** in $T$tey help$T$, and show up as tasks in
+      editors that ask Tey what this project can do. A $T$run:$T$ whose first word
+      ends in $T$.kex$T$ is run by Kex; anything else is a shell command line.
+
+      Built-in names ($T$build$T$, $T$test$T$, $T$run$T$, ...) cannot be redeclared, so
+      $T$tey test$T$ means the same thing in every package.`
     # Two passes, and they cannot be one: substitution runs in sorted key
     # order, so `$USAGE$` would be spliced in LAST — after the placeholders
     # it contains had already been looked for — and the usage section would
@@ -510,11 +555,81 @@ private do
                .substitute(fields.merge({"$T$": "`"}))
   end
 
+  # The line above the file list: what is being made, and where. `tey new`
+  # printed nothing until it had finished, so six files appeared as one line
+  # of output after the fact.
+  let creating(name: String, library: Bool, directory: String) -> String do
+    let kind = library then "a library" else "an application"
+    let place = directory == "." then "this directory" else directory
+    return "${Console.BOLD}Creating${Console.RESET} ${kind} package ${Console.CYAN}${name}${Console.RESET} in ${place}"
+  end
+
+  # One scaffolded path: the verb, then the path as it looks from inside the
+  # package. Right-aligned in a narrow column the way a generator log is, so
+  # the verbs line up and the paths all start at the same place — the list is
+  # then scannable without being read.
+  #
+  # Six wide, which is `create`, and every other verb is shorter. Green for
+  # what was written, yellow for what was left alone because something was
+  # already there, dim for what was already exactly right.
+  foul report(verb: String, directory: String, path: String) -> Void do
+    let inside = path.startsWith?("${directory}/")
+    let shown = inside then path.drop(directory.count + 1) else path
+    let color = match verb do
+      "create" => Console.GREEN
+      "skip" => Console.YELLOW
+      _ => Console.DIM
+    end
+    let padding = " ".repeat(6 - verb.count)
+    IO.printLine("  ${padding}${color}${verb}${Console.RESET}  ${shown}")
+  end
+
+  # Writes a scaffolded file and says so, in one step.
+  #
+  # One step deliberately: a separate list of "what was created" printed
+  # beside the code that creates it is a list that goes stale the first time a
+  # template is added. What the user is told is what actually happened.
+  #
+  # A file already there is never overwritten. `tey init` exists FOR a
+  # directory somebody already has — a checkout with its own README.md and
+  # .gitignore is the normal case, not the exception — and it used to replace
+  # both with the scaffold's, silently, with no way to get them back. Keeping
+  # the file and saying so is the only safe default; the scaffold's version is
+  # a starting point, and the one on disk is somebody's work.
+  foul writeCreated(directory: String, path: String, contents: String) -> Bool do
+    match FS.File.read(path) do
+      Just(existing) => do
+        Tey.Commands.report(existing == contents then "exist" else "skip", directory, path)
+        return true
+      end
+      None => ()
+    end
+    return false if !FS.File.write(path, contents)
+    Tey.Commands.report("create", directory, path)
+    true
+  end
+
+  # The same for a directory, so the tree appears in the order it is built
+  # rather than as a set of files whose parents were never mentioned. An
+  # existing directory is not a collision: a scaffold writing INTO `src/` is
+  # exactly what `tey init` on a source tree should do.
+  foul createDirectory(directory: String, path: String) -> Bool do
+    if FS.Directory.directory?(path)
+      Tey.Commands.report("exist", directory, path)
+      return true
+    end
+    return false if !FS.Directory.create(path)
+    Tey.Commands.report("create", directory, path)
+    true
+  end
+
   # Writes a package into `directory`. Shared by `new` and `init` so the two
   # cannot drift into producing different packages — the bug that shape of
   # duplication always ends in.
   foul scaffold(directory: String, name: String, library: Bool) -> Integer do
-    if !FS.Directory.create("${directory}/src") || !FS.Directory.create("${directory}/spec")
+    let sources = Tey.Commands.createDirectory(directory, "${directory}/src")
+    let specs = Tey.Commands.createDirectory(directory, "${directory}/spec")
+    if !sources || !specs
       return Tey.Commands.fail("could not create project '${name}'")
     end
     let moduleName = Tey.Commands.moduleNameFor(name)
@@ -568,7 +683,9 @@ private do
     # package whose own spec could not see it.
     let moduleFile = moduleName.lowerCase
     let sourcePath = library then "${directory}/src/${moduleFile}.kex" else "${directory}/src/main.kex"
-    if !FS.File.write("${directory}/package.kex", manifestText) || !FS.File.write(sourcePath, source)
+    let wroteManifest = Tey.Commands.writeCreated(directory, "${directory}/package.kex", manifestText)
+    let wroteSource = Tey.Commands.writeCreated(directory, sourcePath, source)
+    if !wroteManifest || !wroteSource
       return Tey.Commands.fail("could not write project '${name}'")
     end
     if library
@@ -579,7 +696,7 @@ private do
           end
         end
       `.substitute(fields)
-      if !FS.File.write("${directory}/spec/${moduleFile}.spec.kex", spec)
+      if !Tey.Commands.writeCreated(directory, "${directory}/spec/${moduleFile}.spec.kex", spec)
         return Tey.Commands.fail("could not write project '${name}'")
       end
     end
@@ -588,15 +705,16 @@ private do
     # IS the distribution: there is no registry rendering a description
     # somewhere else. Generated with the manifest's own description so the two
     # start out saying the same thing.
-    if !FS.File.write("${directory}/README.md", Tey.Commands.readme(fields, library))
+    if !Tey.Commands.writeCreated(directory, "${directory}/README.md",
+                                  Tey.Commands.readme(fields, library))
       return Tey.Commands.fail("could not write project '${name}'")
     end
-    FS.File.write("${directory}/.gitattributes", "tey.lock merge=tey\n")
+    Tey.Commands.writeCreated(directory, "${directory}/.gitattributes", "tey.lock merge=tey\n")
     # tey.lock IS committed — only build output is ignored. erl_crash.dump is
     # not build output but it lands in the project root the same way: the BEAM
     # writes one wherever it died, and nobody wants it in a commit.
-    FS.File.write("${directory}/.gitignore",
-                  "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
+    Tey.Commands.writeCreated(directory, "${directory}/.gitignore",
+                              "${Tey.Commands.outputDirectory}/\nerl_crash.dump\n")
     0
   end
 
@@ -607,20 +725,18 @@ private do
     end
   end
 
-  # A child's output, and its status as this command's status. `Process.run`
-  # buffers, so nothing appears until the child exits — the reason a long
-  # `tey test` looks stalled and an interactive `tey run` cannot be
-  # interactive. Fixing that needs a streaming Process API rather than a
-  # change here; keeping the printing in ONE place is what makes it a single
-  # edit when there is one (kexhq/kex#187).
-  foul report(outcome: ProcessResult or! String) -> Integer do
+  # A child's output, and its status as this command's status.
+  #
+  # `Process.stream`, not `Process.run`: the child writes through to this
+  # terminal as it goes, so a `tey test` that takes two minutes shows its
+  # progress for two minutes instead of a blank screen and then everything at
+  # once. Nothing is captured, which is right for every caller here — these
+  # are commands a person is watching, not output to be read back
+  # (kexhq/kex#187).
+  foul report(outcome: Integer or! String) -> Integer do
     match outcome do
       Error(error) => Tey.Commands.fail(error)
-      Ok(result) => do
-        IO.print(result.stdout) if result.stdout != ""
-        IO.printError(result.stderr) if result.stderr != ""
-        result.exitCode
-      end
+      Ok(code) => code
     end
   end
 
@@ -631,8 +747,11 @@ private do
     end
   end
 
+  # Failures are red and say `error:` rather than just `tey:` — a message on
+  # stderr competing with a compiler's own output has to be findable at a
+  # glance, and `tey:` alone reads like a prefix rather than a problem.
   foul fail(message: String) -> Integer do
-    IO.printError("tey: ${message}\n")
+    IO.printError("${Console.RED}error:${Console.RESET} ${message}\n")
     1
   end
 end

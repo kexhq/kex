@@ -95,13 +95,16 @@ describe("IO.printError (mocked)") do
   end
 end
 
+# `String?`, so a staged line arrives as `Just("first")`. It used to arrive
+# unwrapped, which made `match ... Just(x)` match nothing anywhere
+# (kexhq/kex#197).
 describe("IO.getLine (mocked)") do
   it("returns staged input lines in order") do
     Mock.IO.start()
     Mock.IO.input("first", "second", "third")
-    assert(IO.getLine() == "first")
-    assert(IO.getLine() == "second")
-    assert(IO.getLine() == "third")
+    assert(IO.getLine() == Just("first"))
+    assert(IO.getLine() == Just("second"))
+    assert(IO.getLine() == Just("third"))
     Mock.IO.stop()
   end
 
@@ -118,16 +121,16 @@ describe("IO.getLine (mocked)") do
     Mock.IO.start()
     Mock.IO.input("a")
     Mock.IO.input("b")
-    assert(IO.getLine() == "a")
-    assert(IO.getLine() == "b")
+    assert(IO.getLine() == Just("a"))
+    assert(IO.getLine() == Just("b"))
     Mock.IO.stop()
   end
 
   it("accepts a list of input lines") do
     Mock.IO.start()
     Mock.IO.input(["left", "right"])
-    assert(IO.getLine() == "left")
-    assert(IO.getLine() == "right")
+    assert(IO.getLine() == Just("left"))
+    assert(IO.getLine() == Just("right"))
     Mock.IO.stop()
   end
 end
@@ -136,8 +139,8 @@ describe("IO.get (mocked)") do
   it("reads one character at a time from staged input") do
     Mock.IO.start()
     Mock.IO.input("hi")
-    assert(IO.get() == "h")
-    assert(IO.get() == "i")
+    assert(IO.get() == Just("h"))
+    assert(IO.get() == Just("i"))
     Mock.IO.stop()
   end
 
@@ -174,8 +177,11 @@ describe("IO — mixed read and write (mocked)") do
   it("simulates reading multiple inputs and computing") do
     Mock.IO.start()
     Mock.IO.input("3", "4")
-    let a = IO.getLine().to(Integer).or(0)
-    let b = IO.getLine().to(Integer).or(0)
+    # `getLine` answers `String?`, so the line comes out of the Optional before
+    # it is converted — `Just("3").to(Integer)` is a conversion of the option,
+    # not of the string inside it.
+    let a = IO.getLine().or("").to(Integer).or(0)
+    let b = IO.getLine().or("").to(Integer).or(0)
     IO.printLine(a + b)
     assert(Mock.IO.output() == "7\n")
     Mock.IO.stop()

@@ -14,6 +14,15 @@ module Process do
   run : String -> [String] -> Result<ProcessResult, String>
   foul run(command, args) = Kex.Intrinsic.Process.run(command, args)
 
+  # Run an executable with the CALLER's stdout and stderr, so its output
+  # appears as it is produced rather than in one block when it exits. Answers
+  # the exit code; nothing is captured — that is the trade, and it is what a
+  # long-running child a person is watching needs (kexhq/kex#187).
+  #
+  # `run` remains the one to use when the output is data to be READ.
+  stream : String -> [String] -> Result<Integer, String>
+  foul stream(command, args) = Kex.Intrinsic.Process.stream(command, args)
+
   exec : String -> [String] -> Integer
   foul exec(command, args) = match Process.run(command, args) do
     Ok(result) => result.exitCode

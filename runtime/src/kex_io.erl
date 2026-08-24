@@ -106,7 +106,12 @@ print_error(X) ->
         false -> io:format(standard_error, "~ts~n", [to_string(X)]), 'Kex.Unit'
     end.
 
-%% IO.readLine — read a line from stdin, returns a String (UTF-8 binary).
+%% IO.getLine — read a line from stdin.
+%% Both answer `String?` — `{'Just', Bin}` or `'None'` at end of input — as
+%% io.kex has always declared. They used to answer the line ITSELF, tagging
+%% only `None`, so the type was really `String | None`: `match ... Just(x)`
+%% matched nothing, and only `.or(...)` worked, because `Optional.or`'s
+%% catch-all returns whatever it is handed (kexhq/kex#197).
 read_line() ->
     case mock_active() of
         true -> mock_take_line();
@@ -114,12 +119,13 @@ read_line() ->
             case io:get_line("") of
                 eof -> 'None';
                 {error, _} -> 'None';
-                Line -> unicode:characters_to_binary(string:trim(Line, trailing, "\n"))
+                Line -> {'Just', unicode:characters_to_binary(string:trim(Line, trailing, "\n"))}
             end
     end.
 
 %% IO.get — read one Unicode character, sharing the mock input queue used by
 %% read_line/0. The terminal fallback asks the IO server for one character.
+%% `String?` on the same terms as read_line/0 (kexhq/kex#197).
 read_char() ->
     case mock_active() of
         true -> mock_take_char();
@@ -127,7 +133,7 @@ read_char() ->
             case io:get_chars("", 1) of
                 eof -> 'None';
                 {error, _} -> 'None';
-                Chars -> unicode:characters_to_binary(Chars)
+                Chars -> {'Just', unicode:characters_to_binary(Chars)}
             end
     end.
 
@@ -297,16 +303,20 @@ mock_append(X, Suffix) ->
     mock_call({append, <<Text/binary, Suffix/binary>>}),
     'Kex.Unit'.
 
+%% The queue answers 'None' when it is empty, which is already the Optional's
+%% empty case — wrapping THAT would produce `Just(None)`.
 mock_take_line() ->
     case mock_call(take_line) of
         no_mock -> 'None';
-        Line -> Line
+        'None' -> 'None';
+        Line -> {'Just', Line}
     end.
 
 mock_take_char() ->
     case mock_call(take_char) of
         no_mock -> 'None';
-        Char -> Char
+        'None' -> 'None';
+        Char -> {'Just', Char}
     end.
 
 %% IO.inspect — print "<value> : <Type>" with ANSI colours, returns value.

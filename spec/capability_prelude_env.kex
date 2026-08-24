@@ -21,6 +21,12 @@ make FakeEnv, implement: ENV do
   foul count = @vars.count
   foul each(f) = Void
   foul entries = @vars.entries
+  # A replacement covers the WHOLE capability, writes included: a stand-in
+  # that could not answer `set` would let a program's write reach the real
+  # environment, which is what the substitution exists to prevent. This one
+  # is a fixture, so a write goes nowhere.
+  foul set(name, value) = Void
+  foul unset(name) = Void
 end
 
 # Declares no dependency and threads nothing; its `ENV.get` is written exactly

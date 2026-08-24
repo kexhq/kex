@@ -9,6 +9,25 @@ record SemanticVersion do
   preRelease : String = ""
 end
 
+# SemanticVersion is Comparable, so `a.compare(b)` answers Less/Equal/Greater
+# like every other ordered type in the stdlib, and ordering reads as an
+# ordering rather than as sign arithmetic on -1/0/1.
+make SemanticVersion, implement: Comparable do
+  let compare(other: SemanticVersion) -> Ordering do
+    return Less if this.major < other.major
+    return Greater if this.major > other.major
+    return Less if this.minor < other.minor
+    return Greater if this.minor > other.minor
+    return Less if this.patch < other.patch
+    return Greater if this.patch > other.patch
+    # Same numbers: a release beats any pre-release of it.
+    return Equal if this.preRelease == other.preRelease
+    return Greater if this.preRelease == ""
+    return Less if other.preRelease == ""
+    return Tey.Semver.comparePreRelease(this.preRelease, other.preRelease)
+  end
+end
+
 let parseVersion(text: String) -> SemanticVersion? do
   let unprefixed = text.startsWith?("v") then text.drop(1) else text
   # Build metadata (`+deadbeef`) says nothing about precedence, so it is
@@ -42,20 +61,6 @@ let stable?(text: String) -> Bool do
     Just(version) => return version.preRelease == ""
     None => return false
   end
-end
-
-let compareVersions(a: SemanticVersion, b: SemanticVersion) -> Integer do
-  return -1 if a.major < b.major
-  return 1 if a.major > b.major
-  return -1 if a.minor < b.minor
-  return 1 if a.minor > b.minor
-  return -1 if a.patch < b.patch
-  return 1 if a.patch > b.patch
-  # Same numbers: a release beats any pre-release of it.
-  return 0 if a.preRelease == b.preRelease
-  return 1 if a.preRelease == ""
-  return -1 if b.preRelease == ""
-  return Tey.Semver.comparePreRelease(a.preRelease, b.preRelease)
 end
 
 let satisfies(versionText: String, requirement: String) -> Bool do
@@ -144,7 +149,7 @@ end
 # displace a release.
 let newer?(a: String, b: String) -> Bool do
   match (Tey.Semver.parseVersion(a), Tey.Semver.parseVersion(b)) do
-    (Just(left), Just(right)) => return Tey.Semver.compareVersions(left, right) > 0
+    (Just(left), Just(right)) => return left.compare(right) == Greater
     (Just(_), None) => return true
     (None, Just(_)) => return false
     _ => return false
@@ -168,16 +173,13 @@ end
 private do
   # Two pre-releases of the same version: channel first, then its number, so
   # `rc.2` beats `rc.1` beats `beta.9`.
-  let comparePreRelease(a: String, b: String) -> Integer do
-    let leftRank = Tey.Semver.channelRank(Tey.Semver.channelOf(a))
-    let rightRank = Tey.Semver.channelRank(Tey.Semver.channelOf(b))
-    return -1 if leftRank < rightRank
-    return 1 if leftRank > rightRank
-    let leftNumber = Tey.Semver.channelNumber(a)
-    let rightNumber = Tey.Semver.channelNumber(b)
-    return -1 if leftNumber < rightNumber
-    return 1 if leftNumber > rightNumber
-    return 0
+  let comparePreRelease(a: String, b: String) -> Ordering do
+    # `channelRank` stays an Integer — it is a rank, not a comparison — so the
+    # two pairs are ordered through Number.compare (algebra.kex).
+    let rank = Tey.Semver.channelRank(Tey.Semver.channelOf(a))
+      .compare(Tey.Semver.channelRank(Tey.Semver.channelOf(b)))
+    return rank if rank != Equal
+    return Tey.Semver.channelNumber(a).compare(Tey.Semver.channelNumber(b))
   end
 
   # "rc.1" and "rc1" both name the rc channel; anything else is its own name.
@@ -219,15 +221,15 @@ private do
     let raw = clause.startsWith?(op) then clause.drop(op.count) else clause
     let wanted = Tey.Semver.parseVersion(raw)
     return false if wanted == None
-    let order = Tey.Semver.compareVersions(version, wanted.try)
+    let order = version.compare(wanted.try)
     match op do
-      ">=" => order >= 0
-      "<=" => order <= 0
-      ">" => order > 0
-      "<" => order < 0
-      "=" => order == 0
-      "^" => order >= 0 && version.major == wanted.try.major
-      "~>" => order >= 0 && version.major == wanted.try.major && version.minor == wanted.try.minor
+      ">=" => order != Less
+      "<=" => order != Greater
+      ">" => order == Greater
+      "<" => order == Less
+      "=" => order == Equal
+      "^" => order != Less && version.major == wanted.try.major
+      "~>" => order != Less && version.major == wanted.try.major && version.minor == wanted.try.minor
       _ => false
     end
   end

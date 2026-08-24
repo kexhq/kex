@@ -29,6 +29,14 @@ type Reader = FS.FilePath -> String?
 # An environment stand-in's lookup hook: a name in, its value or `None` out.
 type Lookup = String -> String?
 
+# An environment stand-in's WRITE hook: the name and the value a program set.
+# A `Mock.Env` is an immutable record, so a write cannot land in its `vars` —
+# and it must not reach the real environment, or a test would leak a variable
+# into the next one and into anything the suite starts. The hook is how a test
+# observes the write instead: record it, assert on it, or ignore it, which is
+# what `None` does.
+type Writer = String -> String -> Void
+
 module Mock do
   # A stand-in for the `FS.File` capability, for `with FS.File = ...`. Unlike
   # the `Mock.*` functions below it holds no global state, needs no `clear()`,
@@ -60,6 +68,7 @@ module Mock do
   record Env do
     vars  : Map<String, String> = {}
     onGet : Lookup? = None
+    onSet : Writer? = None
   end
 
   # A stand-in for the `Http` capability: one canned response for every
@@ -244,6 +253,21 @@ module Mock do
     foul count = @vars.count
     foul each(f) = @vars.each(f)
     foul entries = @vars.entries
+
+    # A write goes to `onSet` or nowhere. It must NOT reach the real
+    # environment: a substituted ENV is the whole point of the mock, and a
+    # test that set a variable would otherwise leak it into the next one and
+    # into every process the suite starts. `vars` cannot take it either — a
+    # record is immutable — so a test that cares about writes supplies the
+    # hook, and one that does not gets a write that goes quietly nowhere.
+    foul set(name, value) = match @onSet do
+      Just(writer) => writer(name, value)
+      None         => ()
+    end
+    foul unset(name) = match @onSet do
+      Just(writer) => writer(name, "")
+      None         => ()
+    end
   end
 
   make Response, implement: Http do

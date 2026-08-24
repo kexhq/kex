@@ -2,10 +2,15 @@
 # ignoring it would run `render` as if the label had never been written and
 # hand back a plausible-looking answer to a question nobody asked.
 #
-# Both backends report it: the walker in `callFunction`, BEAM by lowering the
-# call to the same runtime error, so a program that never reaches the line
-# still compiles — with the same message and source location on both.
+# Reported at COMPILE time, by name resolution, against the union of the
+# labels every clause of the name declares (plus the imported overloads', so
+# `to(String, in: Kilo)` stays legal). Catching it here rather than when the
+# line runs is what puts it in front of an editor: a `package.kex` is READ and
+# never run, so `command("fmt", runn: ...)` used to reach nobody until Tey
+# refused the manifest.
 #
+# The runtime check remains the backstop for what static resolution cannot
+# see — see error_unknown_named_argument_no_check.kex.
 let render(text: String) = "[${text}]"
 let render(text: String, width: Integer) = "[${text} @${width}]"
 

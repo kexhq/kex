@@ -9,4 +9,23 @@ bundle "kex" do
   # runtime/*.beam and stdlib/*.kex always come from this same version.
   toolchain("kex", compiler: "bin/kex", runtime: "share/kex/runtime",
             stdlib: "share/kex/stdlib")
+
+  # Kex's own commands, which are also the working example of the feature.
+  # Each one wraps a Makefile target that somebody would otherwise have to
+  # know about: `tey help` lists them under **Package commands**, and an
+  # editor asking Tey what this project can do gets the same list.
+  #
+  # None of these may be named `build`, `test` or `run` — those are Tey's own
+  # and cannot be redeclared, which is what keeps `tey test` meaning the same
+  # thing in every package.
+  command("specs", run: "make spec",
+          description: "Run the spec suite on the tree-walking interpreter")
+  command("beam", run: "make spec-beam",
+          description: "Run the same suite through the BEAM backend")
+  command("wasm", run: "make test-wasm",
+          description: "Build the Emscripten target and run its suite")
+  command("repl", run: "make repl",
+          description: "Start the REPL on the freshly built compiler")
+  command("tey", run: "make build-tey",
+          description: "Rebuild Tey and ./tey-run from this checkout")
 end
