@@ -1,13 +1,13 @@
 describe("Web.Server configuration") do
   it("creates a server on the requested port") do
-    let server = Web.Server.new(9090)
+    let server = Web.Server.build(9090)
     assert(server.port == 9090)
     assert(server.routes.empty?)
   end
 
   it("mounts routes in declaration order") do
     let handler = { |request| Web.Response.text(request.path) }
-    let server = Web.Server.new(9090)
+    let server = Web.Server.build(9090)
       .get("/", handler)
       .post("/items", handler)
       .mount("/health", handler)
@@ -22,7 +22,7 @@ describe("Web.Server configuration") do
 
   it("supports all route helpers") do
     let handler = { |_| Web.Response.text("ok") }
-    let server = Web.Server.new(9090)
+    let server = Web.Server.build(9090)
       .put("/resource", handler)
       .patch("/resource", handler)
       .delete("/resource", handler)

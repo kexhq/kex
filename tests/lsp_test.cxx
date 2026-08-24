@@ -442,11 +442,15 @@ int main() {
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"initialized","params":{}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer do\n    return 1000\n  end\nend\nfoul stamp() -> Integer = Clock.now()\nfoul deep() -> Integer = stamp()\n"}}})");
+                R"({"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex","languageId":"kex","version":1,"text":"capability Clock do\n  foul now() -> Integer do\n    return 1000\n  end\nend\nfoul stamp() -> Integer = Clock.now()\nfoul deep() -> Integer = stamp()\nmain do\n  with Clo\nend\n"}}})");
             messages += frame(
                 R"({"jsonrpc":"2.0","id":2,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":6,"character":6}}})");
             messages += frame(
-                R"({"jsonrpc":"2.0","id":3,"method":"shutdown"})");
+                R"({"jsonrpc":"2.0","id":3,"method":"textDocument/completion","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":8,"character":10}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":4,"method":"textDocument/hover","params":{"textDocument":{"uri":"file:///tmp/kex-lsp-caps.kex"},"position":{"line":0,"character":12}}})");
+            messages += frame(
+                R"({"jsonrpc":"2.0","id":5,"method":"shutdown"})");
             messages += frame(
                 R"({"jsonrpc":"2.0","method":"exit"})");
 
@@ -460,6 +464,12 @@ int main() {
                        "hover did not explain where the requirement came from");
             assertTrue(result.find("stamp uses Clock") != std::string::npos,
                        "hover did not reach the end of the chain");
+            assertTrue(result.find(R"("detail":"capability Clock","kind":22,"label":"Clock")") !=
+                           std::string::npos,
+                       "with completion did not restrict and identify capabilities");
+            assertTrue(result.find(R"(```kex\ncapability Clock\n```)") !=
+                           std::string::npos,
+                       "capability hover was shown as a normal module");
         });
         it("identifies traits as traits and type constraints", []() {
             std::string messages;
@@ -482,12 +492,12 @@ int main() {
             std::ostringstream output;
             assertEqual(kex::lsp::run(input, output, testRuntimeBeamDir()), 0);
             const auto result = output.str();
-            assertTrue(result.find(R"(type LocalCapability\ntrait LocalCapability)") !=
+            assertTrue(result.find(R"(```kex\ntrait LocalCapability\n```)") !=
                            std::string::npos,
-                       "local trait hover did not expose its dual trait/type role");
+                       "local trait hover was shown as a normal type");
             assertTrue(result.find("A local capability.") != std::string::npos,
                        "local trait hover omitted documentation");
-            assertTrue(result.find(R"(type Enumerable\ntrait Enumerable)") !=
+            assertTrue(result.find(R"(```kex\ntrait Enumerable\n```)") !=
                            std::string::npos,
                        "imported trait hover was shown only as a type");
         });

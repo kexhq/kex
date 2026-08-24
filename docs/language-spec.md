@@ -1968,7 +1968,7 @@ Build a server immutably, then `start`:
 
 ```kex
 main do
-  let server = Web.Server.new(8080)
+  let server = Web.Server.build(8080)
     .get("/") { |req| Web.Response.text("hello") }
     .get("/api") { |req| Web.Response.json("{\"ok\":true}") }
   match server.start() do

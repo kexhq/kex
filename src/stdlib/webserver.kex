@@ -82,7 +82,7 @@ record Server do
 end
 
 module Server do
-  let new(port: Integer) -> Server do
+  let build(port: Integer) -> Server do
     return Server { port: port }
   end
 end

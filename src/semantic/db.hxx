@@ -22,6 +22,7 @@ struct SymbolInfo {
     std::vector<SourceLocation> references;
     std::string module;             // owning module, "" for top-level
     bool isFoul = false;
+    bool isCapability = false;
     bool isServingSlot = false;
     bool isExported = true;
     std::vector<std::pair<std::string, TypePtr>> params;

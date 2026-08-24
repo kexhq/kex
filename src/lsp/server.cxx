@@ -350,6 +350,62 @@ auto completionByteColumn(const std::string& source, unsigned int line,
         byteOffsetForUtf16Column(source, start, end, character) - start + 1);
 }
 
+// If the cursor is naming the left-hand side of `with Capability = ...`,
+// return the text already typed. The replacement expression after `=` is an
+// ordinary expression and deliberately falls through to normal completion.
+auto withTargetPrefix(const std::string& source, unsigned int line,
+                      unsigned int utf16Column) -> std::optional<std::string> {
+    size_t lineStart = 0;
+    for (unsigned int current = 0; current < line; ++current) {
+        const auto newline = source.find('\n', lineStart);
+        if (newline == std::string::npos) return std::nullopt;
+        lineStart = newline + 1;
+    }
+    const auto lineEndPosition = source.find('\n', lineStart);
+    const auto lineEnd = lineEndPosition == std::string::npos
+        ? source.size() : lineEndPosition;
+    const auto cursor = byteOffsetForUtf16Column(
+        source, lineStart, lineEnd, utf16Column);
+    auto beforeCursor = std::string_view(source).substr(
+        lineStart, cursor - lineStart);
+    const auto first = beforeCursor.find_first_not_of(" \t");
+    if (first != std::string_view::npos) beforeCursor.remove_prefix(first);
+    if (beforeCursor == "with") return std::string{};
+    if (beforeCursor.rfind("with ", 0) != 0) return std::nullopt;
+    auto target = beforeCursor.substr(5);
+    while (!target.empty() && std::isspace(
+               static_cast<unsigned char>(target.front())))
+        target.remove_prefix(1);
+    if (target.find('=') != std::string_view::npos) return std::nullopt;
+    return std::string(target);
+}
+
+auto capabilityCompletions(const semantic::SemanticDB& db,
+                           const semantic::ImportedInterfaces& interfaces,
+                           const std::string& path,
+                           std::string_view prefix)
+    -> ::lsp::Array<::lsp::CompletionItem> {
+    ::lsp::Array<::lsp::CompletionItem> result;
+    std::unordered_set<std::string> added;
+    auto add = [&](const std::string& name) {
+        if (name.rfind(prefix, 0) != 0 || !added.insert(name).second) return;
+        result.push_back({
+            .label = name,
+            .kind = ::lsp::CompletionItemKind::Struct,
+            .detail = "capability " + name,
+            .filterText = name,
+            .insertText = name,
+        });
+    };
+    for (const auto& symbol : db.symbolsFor(path))
+        if (symbol.kind == semantic::SymbolKind::Module && symbol.isCapability)
+            add(symbol.module.empty()
+                ? symbol.name : symbol.module + "." + symbol.name);
+    for (const auto& [name, interface] : interfaces.modules)
+        if (interface.isCapability) add(name);
+    return result;
+}
+
 auto sourceLocalReceiverQualifier(const std::string& source,
                                   std::string_view receiver,
                                   size_t beforeOffset) -> std::string {
@@ -2409,6 +2465,12 @@ private:
                                              params.position.line,
                                              params.position.character);
 
+        if (auto target = withTargetPrefix(found->second.text,
+                                           params.position.line,
+                                           params.position.character))
+            return capabilityCompletions(m_db, m_interfaces,
+                                         found->second.path, *target);
+
         // Inside a typed record literal only fields are legal. Generic lexical
         // completion here floods `New { ... }` with every function, module and
         // trait in scope, even though none can be written as a record key.
@@ -2867,6 +2929,20 @@ private:
             const bool foulCompletion = !signatures.empty() &&
                 signatures.front().rfind("foul ", 0) == 0;
             const bool slotCompletion = localSymbol && localSymbol->isServingSlot;
+            const auto importedModule = qualifier.empty()
+                ? m_interfaces.modules.find(leaf) : m_interfaces.modules.end();
+            const bool capabilityCompletion =
+                (localSymbol && localSymbol->kind == semantic::SymbolKind::Module &&
+                 localSymbol->isCapability) ||
+                (importedModule != m_interfaces.modules.end() &&
+                 importedModule->second.isCapability);
+            const bool traitCompletion =
+                (localSymbol && localSymbol->kind == semantic::SymbolKind::Trait) ||
+                std::any_of(m_interfaces.traits.begin(), m_interfaces.traits.end(),
+                            [&](const auto& trait) { return trait.name == leaf; });
+            const bool moduleCompletion =
+                (localSymbol && localSymbol->kind == semantic::SymbolKind::Module) ||
+                importedModule != m_interfaces.modules.end();
             ::lsp::CompletionItem item{
                 .label = slotCompletion
                     ? (foulCompletion ? "foul slot " : "slot ") + leaf
@@ -2876,11 +2952,21 @@ private:
                     ? ::lsp::CompletionItemKind::Field
                     : slotCompletion
                     ? ::lsp::CompletionItemKind::Event
+                    : capabilityCompletion
+                    ? ::lsp::CompletionItemKind::Struct
+                    : traitCompletion
+                    ? ::lsp::CompletionItemKind::Interface
+                    : moduleCompletion
+                    ? ::lsp::CompletionItemKind::Module
                     : !leaf.empty() &&
                                 std::isupper(static_cast<unsigned char>(leaf.front()))
                             ? ::lsp::CompletionItemKind::Class
                             : ::lsp::CompletionItemKind::Function,
-                .detail = signatureDetail.empty() ? match : signatureDetail,
+                .detail = capabilityCompletion
+                    ? "capability " + match
+                    : traitCompletion
+                    ? "trait " + match
+                    : signatureDetail.empty() ? match : signatureDetail,
                 .filterText = leaf,
                 .insertText = std::move(leaf),
             };
@@ -3094,6 +3180,14 @@ private:
         semantic::TypeChecker traitLookup(&m_interfaces);
         const bool traitName = traitLookup.isTrait(lookupName) ||
             (symbol && symbol->kind == semantic::SymbolKind::Trait);
+        const auto capabilityLookup = m_interfaces.modules.find(
+            moduleQualifier.empty() ? lookupName
+                                    : moduleQualifier + "." + lookupName);
+        const bool capabilityName =
+            (symbol && symbol->kind == semantic::SymbolKind::Module &&
+             symbol->isCapability) ||
+            (capabilityLookup != m_interfaces.modules.end() &&
+             capabilityLookup->second.isCapability);
         const auto* importedAdt = moduleQualifier.empty()
             ? importedAdtNamed(m_interfaces, lookupName) : nullptr;
         const auto* constructorAdt = moduleQualifier.empty()
@@ -3210,8 +3304,11 @@ private:
             detail = "type " + word.text;
             if (traitName) detail += "\ntrait " + word.text;
             symbol = nullptr;
+        } else if (capabilityName) {
+            detail = "capability " + (moduleQualifier.empty()
+                ? word.text : moduleQualifier + "." + word.text);
         } else if (traitName && moduleQualifier.empty()) {
-            detail = "type " + word.text + "\ntrait " + word.text;
+            detail = "trait " + word.text;
         } else if (symbol && symbol->kind == semantic::SymbolKind::Type &&
                    (symbol->detail.rfind("type ", 0) == 0 ||
                     symbol->detail.rfind("distinct type ", 0) == 0) &&
@@ -3364,7 +3461,8 @@ private:
                 }
         if (detail.empty() && symbol) {
             const char* kind = "symbol";
-            if (symbol->kind == semantic::SymbolKind::Module) kind = "module";
+            if (symbol->kind == semantic::SymbolKind::Module)
+                kind = symbol->isCapability ? "capability" : "module";
             else if (symbol->kind == semantic::SymbolKind::Type) kind = "type";
             else if (symbol->kind == semantic::SymbolKind::Trait) kind = "trait";
             else if (symbol->kind == semantic::SymbolKind::Record) kind = "record";
@@ -3513,20 +3611,37 @@ private:
                           const std::vector<semantic::TypePtr>& types,
                           const semantic::TypePtr& result,
                           bool addWithin = false) {
+            auto displayedNames = names;
+            // Type-only `:>` declarations carry no parameter names in their
+            // interface metadata even though the matching implementation does
+            // (`at :> Integer` / `let at(i)`). Completion already recovers
+            // those names from the stdlib source index; signature help must do
+            // the same or it renders a misleading `at()` signature.
+            if (displayedNames.empty())
+                if (auto known = m_standardParameterNames.find(method);
+                    known != m_standardParameterNames.end()) {
+                    const auto visibleCount = types.size() -
+                        (hasReceiver && !types.empty() ? 1 : 0);
+                    for (const auto& candidate : known->second)
+                        if (candidate.size() == visibleCount) {
+                            displayedNames = candidate;
+                            break;
+                        }
+                }
             ::lsp::Array<::lsp::ParameterInformation> parameters;
             std::string label = method + "(";
-            const size_t offset = types.size() > names.size()
-                ? types.size() - names.size() : 0;
-            for (size_t i = 0; i < names.size(); ++i) {
+            const size_t offset = types.size() > displayedNames.size()
+                ? types.size() - displayedNames.size() : 0;
+            for (size_t i = 0; i < displayedNames.size(); ++i) {
                 if (i) label += ", ";
-                const auto parameter = names[i] + ": " +
+                const auto parameter = displayedNames[i] + ": " +
                     (i + offset < types.size()
                         ? semantic::typeToString(types[i + offset]) : "Any");
                 label += parameter;
                 parameters.push_back({.label = parameter});
             }
             if (addWithin) {
-                if (!names.empty()) label += ", ";
+                if (!displayedNames.empty()) label += ", ";
                 label += "within: Integer?";
                 parameters.push_back({
                     .label = ::lsp::String{"within: Integer?"}});

@@ -2113,6 +2113,20 @@ int main() {
         });
     });
 
+    describe("Semantic — reserved next-state binding", []() {
+        it("rejects pure functions named new and recommends build", []() {
+            assertTrue(hasError(
+                "let new(value: Integer) = value\n",
+                "`new` is reserved for the next-state binding; use a name "
+                "such as `build` for constructor functions"));
+        });
+
+        it("does not reserve new as an effectful command name", []() {
+            assertTrue(noErrors(
+                "foul new(value: Integer) -> Integer = value\n"));
+        });
+    });
+
     describe("Semantic — standalone type annotations", []() {
         it("rejects unknown types in bare declarations in every declaration scope", []() {
             assertTrue(hasError("value : MissingType\nlet value = 1\n",

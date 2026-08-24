@@ -1,0 +1,4 @@
+# kex: check-only
+# `new` is the compiler-owned next-state binding in make and serving blocks.
+# Constructor helpers use an ordinary, intention-revealing name instead.
+let new(value: Integer) -> Integer = value

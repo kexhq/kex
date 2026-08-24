@@ -1,0 +1,1 @@
+spec/error_reserved_new_function.kex:4:1: error: `new` is reserved for the next-state binding; use a name such as `build` for constructor functions

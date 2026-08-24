@@ -140,6 +140,7 @@ auto CollectPass::collectModule(const ast::ModuleDef& mod) -> void {
             ? mod.name
             : mod.name.substr(separator + 1);
     moduleInfo.kind = SymbolKind::Module;
+    moduleInfo.isCapability = mod.isCapability;
     moduleInfo.definition = mod.location;
     moduleInfo.module = parentModule;
     moduleInfo.type = Type::unknown();

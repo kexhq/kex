@@ -25,7 +25,7 @@ let echo(request: Web.Request) -> Web.Response do
 end
 
 main do
-  let server = Web.Server.new(8080)
+  let server = Web.Server.build(8080)
     .get("/", ~home)
     .get("/hello", ~hello)
     .post("/echo", ~echo)
