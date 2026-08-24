@@ -1901,10 +1901,20 @@ struct Lowering {
         }
         std::vector<Binding> binds;
         // describe/it: the testing DSL → kex_test, block as a 0-arg fun.
+        // The call's own source location travels with it as a third argument:
+        // an editor's test tree needs to know which line a case is written on,
+        // and by the time this is a fun in a .beam nothing else remembers
+        // (kexhq/kex#199). Captured before atomize recurses, since lowering the
+        // arguments moves `currentLoc` into them.
         if ((n.name == "describe" || n.name == "it") && n.block && n.args.size() == 1) {
+            auto where = sourceLocationTuple();
             auto name = atomize(n.args[0], binds);
             auto fn = atomize(*n.block, binds);
-            return wrapLets(binds, callE("kex_test", n.name, 2, two(std::move(name), std::move(fn))));
+            std::vector<ExprPtr> args;
+            args.push_back(std::move(name));
+            args.push_back(std::move(fn));
+            args.push_back(std::move(where));
+            return wrapLets(binds, callE("kex_test", n.name, 3, std::move(args)));
         }
         // before/after hooks register a 0-arg block in the current describe;
         // an optional :each/:all atom selects its scope.
@@ -1917,11 +1927,16 @@ struct Lowering {
             return wrapLets(binds, callE("kex_test", n.name, arity, std::move(args)));
         }
         // assert(cond[, msg]) — a plain global builtin, not a local function.
+        // Lowered to the located form so a failure can name the line it
+        // happened on (kexhq/kex#199); kex_test:assert/1,2 remain for callers
+        // that have no location to give, the BEAM REPL among them.
         if (n.name == "assert" && !n.args.empty() && !n.block) {
+            auto where = sourceLocationTuple();
             std::vector<ExprPtr> as;
             for (const auto& a : n.args) as.push_back(atomize(a, binds));
+            as.push_back(std::move(where));
             int ar = static_cast<int>(as.size());
-            return wrapLets(binds, callE("kex_test", "assert", ar, std::move(as)));
+            return wrapLets(binds, callE("kex_test", "assert_at", ar, std::move(as)));
         }
         std::vector<ExprPtr> args;
         for (const auto& a : n.args) args.push_back(atomize(a, binds));
@@ -3604,6 +3619,20 @@ struct Lowering {
 
     // ---- IR construction helpers -----------------------------------------
     auto litInt(long v) -> ExprPtr { return lit(LitKind::Int, std::to_string(v)); }
+    // `{<<"file.kex">>, Line, Column}` for the expression being lowered, or the
+    // atom `none` where the AST carries no location (generated code). Used by
+    // the testing DSL — see the describe/it case in lowerFunctionCall.
+    auto sourceLocationTuple() -> ExprPtr {
+        if (!currentLoc || currentLoc->line <= 0)
+            return lit(LitKind::Atom, "none");
+        std::vector<ExprPtr> parts;
+        parts.push_back(lit(LitKind::String, std::string(currentLoc->file)));
+        parts.push_back(litInt(currentLoc->line));
+        parts.push_back(litInt(currentLoc->column));
+        auto tuple = std::make_unique<Expr>();
+        tuple->node = MakeTuple{std::move(parts)};
+        return tuple;
+    }
     auto one(ExprPtr a) -> std::vector<ExprPtr> {
         std::vector<ExprPtr> v; v.push_back(std::move(a)); return v;
     }

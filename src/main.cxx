@@ -337,6 +337,33 @@ static auto exitStatusOf(int waitStatus) -> int {
   return waitStatus == 0 ? 0 : 1;
 }
 
+// `kex_test:configure(Mode, Filters), ` for the `-eval` the BEAM runner
+// builds, or "" for an ordinary run (kexhq/kex#199). Like the Mock.* grant
+// next to it, the reporting mode is the RUNNER's to set: an emitted .beam
+// handed straight to `erl` prints the ✓/✗ prose a person reads.
+static auto beamTestGate(
+    kex::interpreter::Evaluator::TestReportMode mode,
+    const std::vector<std::string> &filters) -> std::string {
+  using Mode = kex::interpreter::Evaluator::TestReportMode;
+  if (mode == Mode::Pretty && filters.empty()) return "";
+  std::string modeAtom = mode == Mode::Json    ? "json"
+                         : mode == Mode::List  ? "list"
+                                               : "pretty";
+  std::string list;
+  for (const auto &filter : filters) {
+    if (!list.empty()) list += ",";
+    // An Erlang binary literal inside an -eval string: only `"` and `\` can
+    // end it early, and both survive as themselves once escaped.
+    list += "<<\"";
+    for (char c : filter) {
+      if (c == '"' || c == '\\') list += '\\';
+      list += c;
+    }
+    list += "\"/utf8>>";
+  }
+  return "kex_test:configure(" + modeAtom + ", [" + list + "]), ";
+}
+
 static auto shellSingleQuote(const std::string &s) -> std::string {
   std::string out = "'";
   for (char c : s) {
@@ -1894,6 +1921,17 @@ auto printUsage(const char *progName) -> void {
       << "                    program lie to another, so it is off unless the "
          "entry\n"
       << "                    file is a *.spec.kex or you ask for it here\n"
+      << "      --test-json   Report describe/it as one JSON record per case "
+         "(with\n"
+      << "                    source locations), instead of the ✓/✗ prose\n"
+      << "      --test-list   List the cases as JSON WITHOUT running any of "
+         "them\n"
+      << "      --test-only <name>\n"
+      << "                    Run only this case, or this describe. `name` is "
+         "the\n"
+      << "                    full path — `outer > inner > case` — or a bare "
+         "label.\n"
+      << "                    Repeatable\n"
       << "  -h, --help        Show this help\n"
       << "  -v, --version     Show version\n"
       << "      --info        Print this build's details as JSON, for tools\n"
@@ -1974,6 +2012,15 @@ int main(int argc, char *argv[]) {
       // here. Long-only and deliberately verbose — nobody should reach for
       // it by habit.
       {"allow-mocks", no_argument, nullptr, 1010},
+      // The testing DSL, said in JSON rather than in prose (kexhq/kex#199).
+      // `--test-json` replaces the ✓/✗ lines with one record per case —
+      // including the FILE and LINE of the `it` and of the failure, which is
+      // the part only the runner can know and the part an editor's inline
+      // decoration needs. `--test-list` discovers the cases without running
+      // any of them, and `--test-only` runs one (repeatable).
+      {"test-json", no_argument, nullptr, 1013},
+      {"test-list", no_argument, nullptr, 1014},
+      {"test-only", required_argument, nullptr, 1015},
       {"lsp", no_argument, nullptr, 1007},
       // Print the AST AFTER compile-time expansion of `compiled do` blocks —
       // i.e. what the type checker and both backends actually see. `--parse`
@@ -2004,6 +2051,8 @@ int main(int argc, char *argv[]) {
   bool skipPrelude = false;
   bool collapseReport = false;
   bool allowMocks = false;
+  auto testReportMode = kex::interpreter::Evaluator::TestReportMode::Pretty;
+  std::vector<std::string> testFilters;
   while ((opt = getopt_long(argc, argv, "rnlcCiRjspethvK:o:", longOptions,
                             nullptr)) != -1) {
     switch (opt) {
@@ -2018,6 +2067,15 @@ int main(int argc, char *argv[]) {
       break;
     case 1010:
       allowMocks = true;
+      break;
+    case 1013:
+      testReportMode = kex::interpreter::Evaluator::TestReportMode::Json;
+      break;
+    case 1014:
+      testReportMode = kex::interpreter::Evaluator::TestReportMode::List;
+      break;
+    case 1015:
+      testFilters.emplace_back(optarg);
       break;
     case 1011:
       mode = "emit-ast";
@@ -3662,6 +3720,7 @@ int main(int argc, char *argv[]) {
         "io:setopts(standard_io, [{encoding, unicode}]), "
         "io:setopts(standard_error, [{encoding, unicode}]), " +
         (allowMocks ? "kex_test:allow_mocks(), " : "") +
+        beamTestGate(testReportMode, testFilters) +
         "try {ok,_Bin}=file:read_file(\"" + absBeamPath +
         "\"), "
         "code:load_binary('" +
@@ -4262,8 +4321,9 @@ int main(int argc, char *argv[]) {
         // which is what makes a compiled program un-hijackable. main/0 runs in
         // this process, so the process-dictionary flag covers exactly it.
         const std::string mockGate =
-            (allowMocks || isSpecEntry(filepath)) ? "kex_test:allow_mocks(), "
-                                                  : "";
+            ((allowMocks || isSpecEntry(filepath)) ? "kex_test:allow_mocks(), "
+                                                   : "") +
+            beamTestGate(testReportMode, testFilters);
         std::string mainCall =
             result.mainArity == 1
                 ? beamOtpFloorGuard() + utf8Io + mockGate + "try " + loadExpr + "'" +
@@ -4357,6 +4417,8 @@ int main(int argc, char *argv[]) {
       // Mock.* is denied by default — a spec earns it by being a spec, and
       // anything else has to say --allow-mocks (issue #144).
       evaluator.setMocksAllowed(allowMocks || isSpecEntry(filepath));
+      evaluator.setTestReportMode(testReportMode);
+      evaluator.setTestFilters(testFilters);
       if (runAnalyzed) {
         evaluator.setStaticTypeOfCalls(&runAnalyzer.staticTypeOfCalls());
         evaluator.setExpressionTypes(&runAnalyzer.typeMap());

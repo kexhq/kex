@@ -26,7 +26,9 @@ foul parser -> OptionConfig do
     .flag("merge-driver", None, "Run `tey lock` as a Git merge driver")
     .flag("pre", None, "Include pre-releases in `tey kex list` and `tey kex install`")
     .flag("installed", None, "Restrict `tey kex list` to toolchains on this machine")
-    .flag("json", None, "Print `tey kex list` or `tey commands` as one JSON document")
+    .flag("json", None, "Print `tey kex list`, `tey commands`, or `tey test` as JSON")
+    .flag("list", None, "List `tey test` cases as JSON without running any of them")
+    .string("only", None, "Run one `tey test` case, or one describe, by name", None, false)
     .flag("interpret", None, "Run `tey run`, `tey test` and package commands on the interpreter, not the BEAM")
     .command("new", "<name>", "create a Kex package in a new directory") do |options|
       Tey.Cli.newPackage(options)
@@ -63,8 +65,16 @@ foul parser -> OptionConfig do
     .command("build", "", "compile the package, and each target(...) into an executable") do |_|
       Tey.Commands.build
     end
-    .command("test", "", "run spec/*.spec.kex on the BEAM") do |options|
-      Tey.Commands.test(options.flagEnabled?("interpret"))
+    # A named spec runs alone; with none named the whole `spec/` directory
+    # runs, which is what `tey test` has always meant. `--json`/`--list`/
+    # `--only` are the machine-readable half an editor's test tree drives
+    # (kexhq/kex#199) — Tey is the one that knows the package's source roots,
+    # so it is what a tool should call rather than `kex` directly.
+    .command("test", "[<spec>...] [--json] [--list] [--only <name>]",
+             "run spec/*.spec.kex on the BEAM") do |options|
+      Tey.Commands.test(options.arguments, options.flagEnabled?("interpret"),
+                        options.flagEnabled?("json"), options.flagEnabled?("list"),
+                        options.value("only", ""))
     end
     .command("clean", "[--cache]", "inspect or remove the global cache") do |options|
       Tey.Commands.clean(options.flagEnabled?("cache"))

@@ -266,12 +266,46 @@ foul build -> Integer do
   Tey.Commands.buildTargets(package)
 end
 
-foul test(interpret?: Bool) -> Integer do
-  let specs = FS.Directory.files("spec").or([])
+# How `tey test` should REPORT, as compiler flags (kexhq/kex#199).
+#
+# `--json` and `--list` are for a tool reading the run rather than a person
+# watching it: one JSON record per case, carrying the file and line of the `it`
+# and of the failure, and — with `--list` — the cases discovered without any of
+# them being run. `--only <name>` narrows the run to one case or one group.
+#
+# Tey does not interpret any of it: the flags are the compiler's, the records
+# are the compiler's, and this is the mapping from what a person typed to what
+# the compiler is asked. Which is the point — an editor drives `tey test`
+# because Tey knows the package's source roots, not because it wants Tey to
+# reformat the answer (docs/testing.md).
+let testReportingFlags(json?: Bool, list?: Bool, only: String) -> [String] do
+  # `--list` wins over `--json`: discovery IS a JSON mode, and asking for both
+  # is asking for the one that runs nothing.
+  let mode = list? then ["--test-list"] else (json? then ["--test-json"] else [])
+  let filter = only == "" then [] else ["--test-only", only]
+  return [...mode, ...filter]
+end
+
+# The spec files to run: the ones named on the line, or every `spec/*.spec.kex`
+# when none were. Naming one is what an editor's per-file ▶ needs — and what
+# anyone debugging a single suite in a package with thirty of them wants.
+foul testSpecs(requested: [String]) -> [String] do
+  return requested if !requested.empty?
+  return FS.Directory.files("spec").or([])
     .filter { |path| path.endsWith?(".spec.kex") }
     .sort
+    .map { |path| "spec/${path}" }
+end
+
+foul test(requested: [String], interpret?: Bool, json?: Bool, list?: Bool,
+          only: String) -> Integer do
+  let specs = Tey.Commands.testSpecs(requested)
+  let machineReadable? = json? || list?
   if specs.empty?
-    IO.printLine("${Console.DIM}No specs found${Console.RESET}")
+    # Silent in the machine-readable modes: their output is records, and a
+    # sentence in the middle of them is something a reader has to be taught to
+    # skip. An empty run reports itself by having no records.
+    IO.printLine("${Console.DIM}No specs found${Console.RESET}") if !machineReadable?
     return 0
   end
   var status = 0
@@ -280,12 +314,13 @@ foul test(interpret?: Bool) -> Integer do
   # `spec/greet.spec.kex` calling `Greet.greeting` died with `Undefined
   # function`, which reads like a bug in the package rather than a missing
   # compiler flag.
-  let roots = [...Tey.Commands.backendFlags(interpret?), ...Tey.Commands.sourceRoots]
+  let roots = [...Tey.Commands.backendFlags(interpret?), ...Tey.Commands.sourceRoots,
+               ...Tey.Commands.testReportingFlags(json?, list?, only)]
   specs.each do |spec|
     # A spec that could not even be STARTED is reported and counted as a
     # failure like any other, rather than abandoning the files after it: a
     # suite that stops at the first problem tells you about one problem.
-    let outcome = Tey.Commands.report(Process.stream(Tey.Toolchain.kex, [...roots, "spec/${spec}"]))
+    let outcome = Tey.Commands.report(Process.stream(Tey.Toolchain.kex, [...roots, spec]))
     status = outcome if outcome != 0
     ()
   end

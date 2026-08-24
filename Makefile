@@ -119,7 +119,7 @@ web-demo: build-wasm
 # Every suite gates, on both backends: a walker/BEAM difference is a build
 # failure, not a note.
 test-all: test spec spec-prelude spec-stdlib \
-          spec-beam spec-prelude-beam spec-stdlib-beam
+          spec-beam spec-prelude-beam spec-stdlib-beam spec-test-json
 
 SHELL := /bin/bash
 
@@ -290,6 +290,42 @@ spec-wasm: build-wasm
 	done; \
 	echo ""; \
 	echo "  $$passed passing, $$failed failing"; \
+	[ $$failed -eq 0 ]
+
+# The machine-readable reporting modes of kexhq/kex#199 — what an editor's
+# test explorer reads. Each mode is checked against a golden AND, separately,
+# the two backends are diffed against each other: the shape is a contract, and
+# a tool cannot care which backend ran the suite. Durations are normalised
+# away; nothing else is, deliberately — the source locations are the whole
+# point of these records, so a drift in them must fail here.
+#
+# The fixture lives in spec/test_explorer/ rather than spec/, so the suites
+# that glob `spec/*.kex` leave it alone: it fails two cases on purpose.
+TEST_JSON_FIXTURE := spec/test_explorer/reporting.spec.kex
+TEST_JSON_NORMALISE := sed -E 's/"durationMs":[0-9.]+/"durationMs":0/'
+
+spec-test-json: build
+	@echo "Checking the JSON test-reporting modes (--test-json/--test-list/--test-only)..."
+	@failed=0; \
+	for case in "json:--test-json" "list:--test-list" \
+	            "only:--test-json --test-only 'reporting > nested'"; do \
+		name=$${case%%:*}; flags=$${case#*:}; \
+		golden="spec/test_explorer/reporting.$$name.expected"; \
+		walker=$$(eval $(TIMEOUT_SPEC) $(KEX) --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
+		beam=$$(eval $(TIMEOUT_SPEC) $(KEX) -R --no-colors $$flags "$(TEST_JSON_FIXTURE)" 2>&1 | $(TEST_JSON_NORMALISE)); \
+		expected=$$(cat "$$golden"); \
+		for backend in walker beam; do \
+			actual=$$(if [ "$$backend" = walker ]; then echo "$$walker"; else echo "$$beam"; fi); \
+			if [ "$$actual" = "$$expected" ]; then \
+				printf "  \033[32m✓\033[0m %s (%s)\n" "$$name" "$$backend"; \
+			else \
+				printf "  \033[31m✗\033[0m %s (%s differs from %s)\n" "$$name" "$$backend" "$$golden"; \
+				diff <(echo "$$actual") <(echo "$$expected") | head -10 | sed 's/^/    /'; \
+				failed=$$((failed + 1)); \
+			fi; \
+		done; \
+	done; \
+	echo ""; \
 	[ $$failed -eq 0 ]
 
 spec-stdlib: build

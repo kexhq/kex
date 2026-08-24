@@ -350,6 +350,20 @@ public:
     // say how many without re-parsing the summary line.
     auto testsFailed() const -> int { return m_testsFailed; }
 
+    // How the describe/it DSL reports itself (kexhq/kex#199). `Pretty` is the
+    // ✓/✗ prose a person reads; `Json` is one JSON record per case on stdout,
+    // for an editor's test tree; `List` discovers cases WITHOUT running any
+    // body, which is what a test explorer needs before the first run.
+    enum class TestReportMode { Pretty, Json, List };
+    auto setTestReportMode(TestReportMode mode) -> void { m_testReportMode = mode; }
+    auto testReportMode() const -> TestReportMode { return m_testReportMode; }
+    // Run only the cases whose full name path (enclosing describes plus the
+    // `it` label) equals one of these, or sits underneath one of them. Empty
+    // means "run everything".
+    auto setTestFilters(std::vector<std::string> filters) -> void {
+        m_testFilters = std::move(filters);
+    }
+
     // `Type.of(x)` sites the checker typed concretely (see
     // TypeChecker::staticTypeOfCalls). Optional: without analysis — `--no-check`
     // — the table is simply absent and every `Type.of` asks the value.
@@ -515,6 +529,32 @@ private:
         std::vector<ValuePtr> afterAll;
     };
     std::vector<TestHookScope> m_testHookScopes;
+
+    // Structured reporting (kexhq/kex#199). The path is the stack of enclosing
+    // `describe` labels; a case's full name is that plus its own label.
+    TestReportMode m_testReportMode = TestReportMode::Pretty;
+    std::vector<std::string> m_testFilters;
+    std::vector<std::string> m_testPath;
+    // The `it`/`describe` call currently being dispatched — the DSL's natives
+    // receive only their arguments, so the call site is handed to them here.
+    SourceLocation m_lastCallLocation;
+    // While an `it` body runs: whether we are inside one at all, and where the
+    // most recent `assert` was written. That assert is where a failure happened
+    // as far as the file's reader is concerned — but only if it is in the spec
+    // file: `Assert.equal`'s own `assert` lives in the stdlib, and pointing an
+    // editor's decoration there would be useless, so the `it` itself is the
+    // fallback. kex_test:failure_location/1 makes the same choice on BEAM.
+    bool m_inTestCase = false;
+    SourceLocation m_lastTestFileLocation;
+    auto reportTestCase(const std::vector<std::string>& path, const char* status,
+                        double durationMs, const std::string& message,
+                        SourceLocation caseLoc, SourceLocation failLoc) -> void;
+    auto reportTestDiscovery(const std::vector<std::string>& path,
+                             const char* kind, SourceLocation loc) -> void;
+    auto reportTestSummary() -> void;
+    auto testCaseSelected(const std::vector<std::string>& path, bool isGroup) const
+        -> bool;
+    auto emitTestRecord(const std::string& json) -> void;
 };
 
 } // namespace kex::interpreter

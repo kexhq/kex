@@ -26,6 +26,11 @@ and an Elixir-style process model. Try the language in your browser at [kex.run]
 - **Completion** — functions after `.`, and top-level names, with signatures and
   overload counts.
 - **Go to definition** and **find references**.
+- **Test explorer** — every `describe`/`it` in a `*.spec.kex` file in the
+  Testing view, runnable per case, with a failure marked on the line that
+  produced it.
+- **Package commands as tasks** — whatever this package's `package.kex`
+  declares, offered where VS Code offers tasks.
 - **Syntax highlighting** for Kex's full grammar.
 
 ## Requirements
@@ -87,6 +92,32 @@ In full, the compiler is the first of:
 | `kex.toolchain` | *(empty)* | Toolchain the language server runs: empty follows this package's `tey.lock` and then Tey's selection, `tey` follows Tey's selection alone, a version such as `0.4.0` pins one Tey has installed, an absolute path runs your own build. Set it with **Kex: Select Toolchain**. |
 | `kex.executablePath` | `kex` | Compiler used by the language server, overriding Tey and `kex.toolchain`. Relative paths resolve from the workspace root. |
 | `kex.sourceRoots` | *(empty)* | Extra directories searched for `using` modules, on top of the workspace's own `lib`/`src`. Relative paths resolve from the workspace root. Tey dependencies need nothing here — the server reads those from `tey.lock`. |
+| `kex.testExplorer.backend` | `auto` | Which backend the Testing view runs on: `auto` follows the runner (the BEAM under Tey, the interpreter otherwise), or say `walker`/`beam` outright. Both report identical results. |
+
+### The Testing view
+
+Open the Testing view and every `*.spec.kex` file in the workspace is listed;
+expanding one asks the runner what is inside it — a discovery pass that runs
+the file's `describe` blocks but no `it` body — so a spec that generates its
+cases in a loop is listed exactly as it will run. ▶ on a case runs that one
+case; ▶ on a `describe` or a file runs everything under it. A failure is marked
+on the line that produced it.
+
+In a Tey package the runner is **Tey**, from the package root:
+
+```
+tey test spec/greet.spec.kex --list
+tey test spec/greet.spec.kex --json --only "outer > inner > case"
+```
+
+because only Tey knows the package's source roots — its own `src/` and every
+locked dependency's — and `tey test` is how the suite is run everywhere else.
+Outside a package it is the compiler directly, with the same flags under their
+compiler spelling (`--test-list`, `--test-json`, `--test-only`).
+
+Either way the flags belong to the tools, not to this extension: run those
+lines in a terminal and you get the same records. `--only` in particular is
+worth knowing by hand when one case in a long file is failing.
 
 ### Modules from dependencies
 

@@ -1,0 +1,37 @@
+# Fixture for the machine-readable test reporting of kexhq/kex#199 — the
+# `--test-json`, `--test-list` and `--test-only` modes an editor's test
+# explorer drives the runner with.
+#
+# It is not run by the ordinary spec targets (they glob `spec/*.kex`, and this
+# lives a directory down). `make spec-test-json` runs it through BOTH backends
+# and diffs the records: the walker and the BEAM runner must say the same thing
+# about the same file, because an editor cannot care which one ran the suite.
+#
+# So: every construct whose reporting could plausibly diverge belongs here —
+# nesting, a passing case, a failing one with a message, a failure raised from
+# a stdlib helper rather than a bare `assert`, and a `before` hook.
+
+describe "reporting" do
+  it "reports a passing case" do
+    assert(1 + 1 == 2)
+  end
+
+  it "reports a failing case with its message" do
+    assert(1 + 1 == 3, "two plus two is not five")
+  end
+
+  describe "nested" do
+    before do
+      # A hook runs before the case and must not be reported as a case itself.
+      assert(true)
+    end
+
+    it "reports a case nested one level down" do
+      Assert.equal(3 * 4, 12)
+    end
+
+    it "reports a failure raised inside a stdlib helper" do
+      Assert.equal(2 + 2, 5)
+    end
+  end
+end

@@ -97,7 +97,10 @@ auto Evaluator::execute(const ast::Program& program) -> ValuePtr {
 
     // describe/it/assert summary — only printed if any `it` ran, so
     // programs that don't use the testing DSL see no extra output.
-    if (m_testsPassed + m_testsFailed > 0) {
+    if (m_testReportMode == TestReportMode::Json) {
+        reportTestSummary();
+    } else if (m_testsPassed + m_testsFailed > 0 &&
+               m_testReportMode == TestReportMode::Pretty) {
         std::string summary = "\n" + std::to_string(m_testsPassed) + " passed, "
             + std::to_string(m_testsFailed) + " failed\n";
         m_output += summary;
@@ -1452,6 +1455,22 @@ auto Evaluator::evalBody(const std::vector<ast::ExprPtr>& body) -> ValuePtr {
 
 auto Evaluator::eval(const ast::Expr& expr) -> ValuePtr {
     checkDeadline();
+    // Inside an `it` body, remember where the last `assert` was written, so a
+    // failure can be reported at a line an editor can decorate (kexhq/kex#199).
+    // Costs one comparison outside tests, where m_inTestCase is false.
+    //
+    // Asserts only — not every subexpression, and not every call. The assert is
+    // the place a reader would point at, rather than the comparison inside its
+    // argument; and it is exactly what the BEAM side can report (see
+    // kex_test:assert_at/2,3), so both backends name the same line for the same
+    // failure. Every assert is recorded, wherever it lives; whether the one that
+    // failed belongs to the SPEC FILE is decided when the case ends (see the
+    // `it` builtin), exactly as kex_test:failure_location/1 decides it on BEAM.
+    if (m_inTestCase && expr.location.line > 0) {
+        if (const auto* call = std::get_if<ast::FunctionCall>(&expr.kind);
+            call && call->name == "assert")
+            m_lastTestFileLocation = expr.location;
+    }
     return std::visit([this, &expr](const auto& node) -> ValuePtr {
         using T = std::decay_t<decltype(node)>;
 
@@ -3189,6 +3208,9 @@ auto Evaluator::callFunction(const std::string& name, std::vector<ValuePtr> args
     // boundaries, the same kind of safe point BEAM itself uses, so a compute-bound process that never calls
     // `receive` still gives other processes a turn periodically.
     m_scheduler->tickReduction();
+    // The testing DSL's natives are handed only their arguments; `it` needs the
+    // call site to tell an editor where the case is (kexhq/kex#199).
+    if (loc.line > 0) m_lastCallLocation = loc;
 
     std::string lookupName = name;
     if (!m_currentModule.empty() && name.find("::") == std::string::npos) {
