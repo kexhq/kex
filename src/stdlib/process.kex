@@ -70,10 +70,33 @@ make Pid do
   let unlink = Kex.Intrinsic.Process.unlink(this)
 
   # Starts monitoring this process. Returns a reference for +demonitor+.
-  monitor :> Void
+  monitor :> Reference
   let monitor = Kex.Intrinsic.Process.monitor(this)
 
   # Returns +true+ if the process is currently alive.
+  alive? :> Bool
+  let alive? = Kex.Intrinsic.Process.alive?(this)
+end
+
+# A spawned Process<X> is a typed process handle backed by the same runtime pid.
+# It therefore supports the ordinary pid lifecycle operations without erasing
+# its message type.
+make Process<X> do
+  send :> X -> Void
+  let send(msg) = Kex.Intrinsic.Process.send(this, msg)
+
+  sendFrom :> X -> Void
+  let sendFrom(msg) = Kex.Intrinsic.Process.sendFrom(this, msg)
+
+  link :> Void
+  let link = Kex.Intrinsic.Process.link(this)
+
+  unlink :> Void
+  let unlink = Kex.Intrinsic.Process.unlink(this)
+
+  monitor :> Reference
+  let monitor = Kex.Intrinsic.Process.monitor(this)
+
   alive? :> Bool
   let alive? = Kex.Intrinsic.Process.alive?(this)
 end
